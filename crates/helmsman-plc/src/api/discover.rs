@@ -1,22 +1,27 @@
 //! The Devices tab's "On the network" and the device library
 //! (`devices-repo`, interview 2026-11-02).
 //!
-//! - `POST /api/devices/discover` (token or session): one `ListIdentity`
+//! - `POST /api/devices/discover` (token or session): one scan, every
+//!   protocol the box speaks, read-only on the network. One `ListIdentity`
 //!   broadcast ([`helmsman_io::resolve::discover`]) and the host's ARP
-//!   table read after it; every EtherNet/IP device that answered, with
-//!   its address, MAC when known, identity, product name, whether a device
-//!   of the running map already binds it, and the library's match when
-//!   there is one. Read-only on the network: the one request is all that
-//!   is sent. One sweep runs at a time (a second asker gets 409), and the
-//!   last result is answered from memory for [`FRESH`] unless `?fresh=1`.
-//!   With `?modbus=1` the Modbus identification probe runs beside the
-//!   sweep ([`helmsman_io::resolve::probe_modbus`]: Read Device
-//!   Identification, FC 43/14, to TCP 502 of the hosts in the ARP table
-//!   and no others, bounded in hosts, concurrency and time; read-only), and
-//!   the answer gains `modbus`: each device that answered, with its
-//!   address, MAC, `VendorName`, `ProductCode`, revision, the
-//!   `modbus=VENDOR:PRODUCT` a map may name it by, whether the running map
-//!   binds it, and the library's match by `identity.modbus`.
+//!   table read after it; the Modbus identification probe beside it
+//!   ([`helmsman_io::resolve::probe_modbus`]: Read Device Identification,
+//!   FC 43/14, to TCP 502 of the hosts in the ARP table and no others,
+//!   bounded in hosts, concurrency and time); and, in a build with
+//!   `profinet-io` when the running map names an interface (`if=`), one
+//!   PROFINET DCP Identify on it. One sweep runs at a time (a second asker
+//!   gets 409), and the last result is answered from memory for [`FRESH`]
+//!   unless `?fresh=1`. (`?modbus=1`, which used to switch the probe on, is
+//!   accepted and ignored.)
+//!
+//!   The answer's `found` is the list to show: one entry per device, the
+//!   answers that share a MAC joined (an entry without a MAC is keyed by
+//!   its address), each with every identity it answered (`identities`:
+//!   `protocol`, `address`, the vendor and product fields), whether a
+//!   device of the running map already binds it (`mapped`) and the
+//!   library's match. `protocols` says per protocol whether it was looked
+//!   for and, when not, why in words. The per-protocol lists stay for one
+//!   release: `devices` (EtherNet/IP) and `modbus`.
 //! - `GET /api/devices/library?vendor=V&product=P[&address=A]`, or
 //!   `?q=text`: the library's matches, each with the map lines of its
 //!   `enip.map` (or the one map it has) with `ADDR` replaced by `address`
@@ -32,7 +37,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use helmsman_io::resolve::{self, Identity, ModbusProbe, ModbusSeen, Resolver, Seen};
+use helmsman_io::resolve::{self, Identity, ModbusProbe, ModbusSeen, ProfinetSeen, Resolver, Seen};
 use helmsman_project::devlib::{self, Entry, Index};
 use helmsman_project::iomap;
 use serde_json::{Value as Json, json};
@@ -67,8 +72,8 @@ pub struct Discovery {
     pub window: Duration,
     /// The library index's URL; `None`: no library.
     pub library: Option<String>,
-    /// The Modbus identification probe `?modbus=1` runs; `None`: none
-    /// (`?modbus=1` answers 501).
+    /// The Modbus identification probe a scan runs; `None`: none (the
+    /// answer says Modbus was not looked for).
     pub modbus: Option<ModbusProbe>,
     /// The ARP table the scan reads MACs from and the probe takes its
     /// hosts from.
@@ -122,13 +127,15 @@ impl Discovery {
     }
 }
 
-/// One scan's result: the `ListIdentity` answers and, when it was asked
-/// for, the Modbus probe's.
+/// One scan's result: what each protocol answered (`None`: not looked
+/// for) and the words for each protocol saying whether it was.
 #[derive(Clone)]
 struct Scan {
     at: Instant,
     seen: Vec<Seen>,
     modbus: Option<Vec<ModbusSeen>>,
+    profinet: Option<Vec<ProfinetSeen>>,
+    protocols: Vec<Json>,
 }
 
 /// What the API keeps between calls.
@@ -331,15 +338,65 @@ fn seen_json(s: &Seen, mapped: Option<&str>, library: Option<&Entry>) -> Json {
     })
 }
 
-/// One scan, one at a time: the sweep to `target` and, when
-/// `want_modbus`, the Modbus probe beside it (the probe's bound,
-/// `ModbusProbe::total` plus one host's deadline, is then the wait). Kept
-/// as the last result.
+/// How long a PROFINET DCP Identify listens at least: stations spread
+/// their answers over up to a second.
+#[cfg(feature = "profinet-io")]
+const PROFINET_WINDOW: Duration = Duration::from_millis(1500);
+
+/// One PROFINET DCP Identify on `interface`, or why there was none.
+#[cfg(feature = "profinet-io")]
+fn profinet_probe(interface: Option<&str>, window: Duration) -> Result<Vec<ProfinetSeen>, String> {
+    let Some(interface) = interface else {
+        return Err(
+            "no network interface is known (a profinet-io device line in the map names one with if=)".into(),
+        );
+    };
+    resolve::probe_profinet(interface, window.max(PROFINET_WINDOW)).map_err(|e| e.to_string())
+}
+
+/// Without `profinet-io` the build cannot send the frame.
+#[cfg(not(feature = "profinet-io"))]
+fn profinet_probe(_interface: Option<&str>, _window: Duration) -> Result<Vec<ProfinetSeen>, String> {
+    Err("this build cannot send raw Ethernet frames (it is built without profinet-io)".into())
+}
+
+/// The interface the running map's PROFINET devices name (`if=`), the
+/// first one; the simulated ones (`if=sim`) are on none.
+fn profinet_interface(devices: &[iomap::MapDevice]) -> Option<String> {
+    devices
+        .iter()
+        .filter(|d| d.driver == "profinet-io")
+        .find_map(|d| {
+            d.params
+                .iter()
+                .find(|(k, v)| k == "if" && v != "sim")
+                .map(|(_, v)| v.clone())
+        })
+}
+
+/// What a scan says about one protocol: looked for, or not and why.
+fn protocol_json(protocol: &str, looked: Result<(), String>) -> Json {
+    match looked {
+        Ok(()) => json!({ "protocol": protocol, "looked": true }),
+        Err(why) => json!({ "protocol": protocol, "looked": false, "why": why }),
+    }
+}
+
+/// One scan, one at a time: the sweep to `target`, the Modbus probe when
+/// the box has one and the PROFINET Identify beside it (the longest
+/// bound, the probe's `ModbusProbe::total` plus one host's deadline, is
+/// then the wait). A probe that fails is a protocol not looked for, with
+/// the reason; only the sweep failing fails the scan. Kept as the last
+/// result.
 ///
 /// # Errors
 /// The status, the reason and the audit line: 409 while another scan
-/// runs, 502 when the sweep or the probe failed.
-fn scan(st: &State, target: SocketAddrV4, want_modbus: bool) -> Result<Scan, (u16, String, &'static str)> {
+/// runs, 502 when the sweep failed.
+fn scan(
+    st: &State,
+    target: SocketAddrV4,
+    interface: Option<&str>,
+) -> Result<Scan, (u16, String, &'static str)> {
     let Ok(_one) = st.running.try_lock() else {
         return Err((
             409,
@@ -348,30 +405,194 @@ fn scan(st: &State, target: SocketAddrV4, want_modbus: bool) -> Result<Scan, (u1
         ));
     };
     let r = st.cfg.resolver(Some(target));
-    let (swept, probed) = std::thread::scope(|s| {
-        let probe = want_modbus.then(|| s.spawn(|| resolve::probe_modbus(&r)));
+    let (swept, probed, pn) = std::thread::scope(|s| {
+        let probe = st
+            .cfg
+            .modbus
+            .is_some()
+            .then(|| s.spawn(|| resolve::probe_modbus(&r)));
+        let pn = s.spawn(|| profinet_probe(interface, st.cfg.window));
         let swept = resolve::discover(&r);
         let probed = probe.map(|h| {
             h.join()
                 .unwrap_or_else(|_| Err(std::io::Error::other("the probe failed")))
         });
-        (swept, probed)
+        let pn = pn.join().unwrap_or_else(|_| Err("the Identify failed".into()));
+        (swept, probed, pn)
     });
     let seen = swept.map_err(|e| (502, format!("the scan failed: {e}"), "discover: failed"))?;
-    let modbus = probed.transpose().map_err(|e| {
-        (
-            502,
-            format!("the Modbus probe failed: {e}"),
-            "discover: modbus failed",
-        )
-    })?;
+    let (modbus, modbus_says) = match probed {
+        Some(Ok(v)) => (Some(v), Ok(())),
+        Some(Err(e)) => (
+            None,
+            Err(format!("Modbus was not looked for: the probe failed: {e}")),
+        ),
+        None => (
+            None,
+            Err("Modbus was not looked for: this box does not probe for Modbus devices".into()),
+        ),
+    };
+    let (profinet, profinet_says) = match pn {
+        Ok(v) => (Some(v), Ok(())),
+        Err(e) => (None, Err(format!("PROFINET was not looked for: {e}"))),
+    };
     let scan = Scan {
         at: Instant::now(),
         seen,
         modbus,
+        profinet,
+        protocols: vec![
+            protocol_json("ethernet-ip", Ok(())),
+            protocol_json("modbus-tcp", modbus_says),
+            protocol_json("profinet", profinet_says),
+        ],
     };
     *st.last.lock().unwrap_or_else(PoisonError::into_inner) = Some(scan.clone());
     Ok(scan)
+}
+
+/// One protocol's answer from a scan.
+#[derive(Clone, Copy)]
+enum Item<'a> {
+    Enip(&'a Seen),
+    Modbus(&'a ModbusSeen),
+    Profinet(&'a ProfinetSeen),
+}
+
+impl Item<'_> {
+    fn mac(self) -> Option<[u8; 6]> {
+        match self {
+            Item::Enip(s) => s.mac,
+            Item::Modbus(s) => s.mac,
+            Item::Profinet(s) => Some(s.mac),
+        }
+    }
+
+    fn address(self) -> Option<Ipv4Addr> {
+        match self {
+            Item::Enip(s) => Some(s.address),
+            Item::Modbus(s) => Some(s.address),
+            Item::Profinet(s) => s.address,
+        }
+    }
+
+    fn json(self) -> Json {
+        match self {
+            Item::Enip(s) => json!({
+                "protocol": "ethernet-ip",
+                "address": s.address.to_string(),
+                "vendor_id": s.vendor_id, "product_code": s.product_code,
+                "device_type": s.device_type,
+                "revision": format!("{}.{}", s.revision.0, s.revision.1),
+                "serial": format!("{:#010x}", s.serial),
+                "product_name": s.product_name,
+                "identity": s.cip(),
+            }),
+            Item::Modbus(s) => json!({
+                "protocol": "modbus-tcp",
+                "address": s.address.to_string(),
+                "vendor_name": s.identification.vendor_name,
+                "product_code": s.identification.product_code,
+                "revision": s.identification.revision,
+                "identity": s.identity().to_string(),
+            }),
+            Item::Profinet(s) => json!({
+                "protocol": "profinet",
+                "address": s.address.map(|a| a.to_string()),
+                "name": s.name,
+                "vendor_id": s.vendor_id, "device_id": s.device_id,
+                "type_of_station": s.type_of_station,
+                "identity": s.mac_text(),
+            }),
+        }
+    }
+}
+
+/// The answers of a scan grouped into devices: answers that share a MAC
+/// are one device; one without a MAC joins the device at its address, or
+/// is a device of its own keyed by that address. Each group keeps the
+/// order EtherNet/IP, Modbus, PROFINET; the groups are in address order
+/// (a device without an address last), then MAC.
+fn group<'a>(seen: &'a [Seen], modbus: &'a [ModbusSeen], profinet: &'a [ProfinetSeen]) -> Vec<Vec<Item<'a>>> {
+    let mut items: Vec<Item<'a>> = seen.iter().map(Item::Enip).collect();
+    items.extend(modbus.iter().map(Item::Modbus));
+    items.extend(profinet.iter().map(Item::Profinet));
+    // With a MAC first, so one without joins the device it belongs to.
+    items.sort_by_key(|i| i.mac().is_none());
+    let mut groups: Vec<Vec<Item<'a>>> = Vec::new();
+    for it in items {
+        let at = groups.iter().position(|g| match it.mac() {
+            Some(m) => g.iter().any(|x| x.mac() == Some(m)),
+            None => it.address().is_some() && g.iter().any(|x| x.address() == it.address()),
+        });
+        match at {
+            Some(i) => groups[i].push(it),
+            None => groups.push(vec![it]),
+        }
+    }
+    for g in &mut groups {
+        g.sort_by_key(|i| match i {
+            Item::Enip(_) => 0,
+            Item::Modbus(_) => 1,
+            Item::Profinet(_) => 2,
+        });
+    }
+    groups.sort_by_key(|g| {
+        (
+            g.iter().find_map(|i| i.address()).is_none(),
+            g.iter().find_map(|i| i.address()),
+            g.iter().find_map(|i| i.mac()),
+        )
+    });
+    groups
+}
+
+/// One device of the answer's `found`.
+fn found_json(
+    g: &[Item<'_>],
+    map: &[iomap::MapDevice],
+    address_of: &dyn Fn(&str) -> Option<String>,
+    index: Option<&Index>,
+) -> Json {
+    let address = g.iter().find_map(|i| i.address());
+    let mac = g.iter().find_map(|i| i.mac());
+    let found = Found {
+        address: address.unwrap_or(Ipv4Addr::UNSPECIFIED),
+        mac,
+        cip: g.iter().find_map(|i| match i {
+            Item::Enip(s) => Some((s.vendor_id, s.product_code, s.serial)),
+            _ => None,
+        }),
+        modbus: g.iter().find_map(|i| match i {
+            Item::Modbus(s) => Some((
+                s.identification.vendor_name.as_str(),
+                s.identification.product_code.as_str(),
+            )),
+            _ => None,
+        }),
+    };
+    let mapped = map
+        .iter()
+        .find(|d| binds(d, &found, address_of))
+        .map(|d| d.name.as_str());
+    let library = index.and_then(|ix| {
+        g.iter().find_map(|i| match i {
+            Item::Enip(s) => ix
+                .lookup(s.vendor_id, s.product_code, &s.product_name)
+                .map(|e| entry_json(e, "enip-io")),
+            Item::Modbus(s) => ix
+                .lookup_modbus(&s.identification.vendor_name, &s.identification.product_code)
+                .map(|e| entry_json(e, "modbus-tcp")),
+            Item::Profinet(_) => None,
+        })
+    });
+    json!({
+        "mac": mac.map(|m| Identity::Mac(m).to_string().trim_start_matches("mac=").to_string()),
+        "address": address.map(|a| a.to_string()),
+        "identities": g.iter().map(|i| i.json()).collect::<Vec<_>>(),
+        "mapped": mapped,
+        "library": library,
+    })
 }
 
 /// `POST /api/devices/discover`.
@@ -384,35 +605,33 @@ pub(super) fn post(req: &Request, ctx: &Ctx) -> Response {
     let Some(target) = st.cfg.sweep else {
         return refused(501, "this box does not scan its network", "discover: off");
     };
-    let flag = |name: &str| req.query.iter().any(|(k, v)| k == name && v == "1");
-    let fresh = flag("fresh");
-    let want_modbus = flag("modbus");
-    if want_modbus && st.cfg.modbus.is_none() {
-        return refused(
-            501,
-            "this box does not probe for Modbus devices",
-            "discover: modbus off",
-        );
-    }
-    let cached = st
-        .last
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
-        .filter(|c| !fresh && c.at.elapsed() < FRESH && (!want_modbus || c.modbus.is_some()));
-    let Scan { at, seen, modbus } = if let Some(c) = cached {
-        c
-    } else {
-        match scan(st, target, want_modbus) {
-            Ok(s) => s,
-            Err((status, why, detail)) => return refused(status, &why, detail),
-        }
-    };
+    // `?modbus=1` is accepted and ignored: the probe always runs now.
+    let fresh = req.query.iter().any(|(k, v)| k == "fresh" && v == "1");
     let map = ctx
         .running()
         .and_then(|cs| cs.io_map)
         .map(|t| iomap::skim(&t))
         .unwrap_or_default();
+    let cached = st
+        .last
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+        .filter(|c| !fresh && c.at.elapsed() < FRESH);
+    let Scan {
+        at,
+        seen,
+        modbus,
+        profinet,
+        protocols,
+    } = if let Some(c) = cached {
+        c
+    } else {
+        match scan(st, target, profinet_interface(&map.devices).as_deref()) {
+            Ok(s) => s,
+            Err((status, why, detail)) => return refused(status, &why, detail),
+        }
+    };
     let address_of = |name: &str| ctx.box_.devices.address(name);
     let index = st.index();
     let devices: Vec<Json> = seen
@@ -431,35 +650,44 @@ pub(super) fn post(req: &Request, ctx: &Ctx) -> Response {
             seen_json(s, mapped, hit)
         })
         .collect();
+    let modbus_list = modbus.as_deref().unwrap_or_default();
+    let pn_list = profinet.as_deref().unwrap_or_default();
+    let found: Vec<Json> = group(&seen, modbus_list, pn_list)
+        .iter()
+        .map(|g| found_json(g, &map.devices, &address_of, index.as_ref().ok()))
+        .collect();
     let mut body = json!({
+        "found": found,
+        "protocols": protocols,
         "devices": devices,
         "age_ms": u64::try_from(at.elapsed().as_millis()).unwrap_or(u64::MAX),
         "library": match &index { Ok(i) => json!({ "devices": i.devices.len() }), Err(e) => json!({ "unavailable": e }) },
     });
-    let mut detail = format!("discover: {} device(s), read-only", seen.len());
-    if want_modbus && let Some(found) = &modbus {
-        let list: Vec<Json> = found
-            .iter()
-            .map(|s| {
-                let f = Found::from(s);
-                let mapped = map
-                    .devices
-                    .iter()
-                    .find(|d| binds(d, &f, &address_of))
-                    .map(|d| d.name.as_str());
-                let hit = index.as_ref().ok().and_then(|i| {
-                    i.lookup_modbus(&s.identification.vendor_name, &s.identification.product_code)
-                });
-                modbus_json(s, mapped, hit)
-            })
-            .collect();
-        body["modbus"] = Json::Array(list);
-        detail = format!(
-            "discover: {} device(s) and {} Modbus (FC 43/14), read-only",
-            seen.len(),
-            found.len()
+    if let Some(list) = &modbus {
+        body["modbus"] = Json::Array(
+            list.iter()
+                .map(|s| {
+                    let f = Found::from(s);
+                    let mapped = map
+                        .devices
+                        .iter()
+                        .find(|d| binds(d, &f, &address_of))
+                        .map(|d| d.name.as_str());
+                    let hit = index.as_ref().ok().and_then(|i| {
+                        i.lookup_modbus(&s.identification.vendor_name, &s.identification.product_code)
+                    });
+                    modbus_json(s, mapped, hit)
+                })
+                .collect(),
         );
     }
+    let detail = format!(
+        "discover: {} device(s), {} EtherNet/IP, {} Modbus (FC 43/14), {} PROFINET, read-only",
+        found.len(),
+        seen.len(),
+        modbus_list.len(),
+        pn_list.len()
+    );
     match audit(ctx, req, 200, &detail) {
         Some(_) => Response::json(200, &body),
         None => audit_full(),
@@ -505,4 +733,130 @@ pub(super) fn library(req: &Request, ctx: &Ctx) -> Response {
         })
         .collect();
     Response::json(200, &json!({ "matches": out }))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use helmsman_io::modbus::DeviceIdentification;
+
+    const A: [u8; 6] = [0, 0x90, 0xe8, 0, 0, 0xa];
+    const B: [u8; 6] = [0, 0x90, 0xe8, 0, 0, 0xb];
+
+    fn enip(last: u8, mac: Option<[u8; 6]>) -> Seen {
+        Seen {
+            address: Ipv4Addr::new(10, 0, 0, last),
+            mac,
+            vendor_id: 991,
+            product_code: 515,
+            device_type: 7,
+            revision: (3, 1),
+            serial: u32::from(last),
+            product_name: "E1213".into(),
+        }
+    }
+
+    fn modbus(last: u8, mac: Option<[u8; 6]>) -> ModbusSeen {
+        ModbusSeen {
+            address: Ipv4Addr::new(10, 0, 0, last),
+            mac,
+            identification: DeviceIdentification {
+                vendor_name: "Moxa".into(),
+                product_code: "E1213".into(),
+                revision: "V3.1".into(),
+                conformity: 1,
+            },
+        }
+    }
+
+    fn pn(last: Option<u8>, mac: [u8; 6]) -> ProfinetSeen {
+        ProfinetSeen {
+            mac,
+            address: last.map(|l| Ipv4Addr::new(10, 0, 0, l)),
+            name: "rio".into(),
+            vendor_id: 1,
+            device_id: 2,
+            type_of_station: "t".into(),
+        }
+    }
+
+    fn shape(g: &[Vec<Item<'_>>]) -> Vec<Vec<&'static str>> {
+        g.iter()
+            .map(|g| {
+                g.iter()
+                    .map(|i| match i {
+                        Item::Enip(_) => "enip",
+                        Item::Modbus(_) => "modbus",
+                        Item::Profinet(_) => "profinet",
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Answers that share a MAC are one device; two MACs are two devices.
+    #[test]
+    fn a_shared_mac_is_one_device_and_two_macs_are_two() {
+        let e = [enip(9, Some(B)), enip(5, Some(A))];
+        let m = [modbus(5, Some(A)), modbus(9, Some(B))];
+        let p = [pn(Some(5), A)];
+        let g = group(&e, &m, &p);
+        assert_eq!(
+            shape(&g),
+            [vec!["enip", "modbus", "profinet"], vec!["enip", "modbus"]]
+        );
+        // Address order: .5 (A) before .9 (B).
+        assert_eq!(g[0][0].address(), Some(Ipv4Addr::new(10, 0, 0, 5)));
+        assert_eq!(g[1][0].mac(), Some(B));
+    }
+
+    /// Different MACs on the same pair of protocols never merge, and an
+    /// answer without a MAC is keyed by its address: it joins the device
+    /// at that address and otherwise stands alone.
+    #[test]
+    fn an_answer_without_a_mac_is_keyed_by_its_address() {
+        let e = [enip(5, Some(A)), enip(7, None)];
+        let m = [modbus(5, None), modbus(7, None), modbus(8, None)];
+        let g = group(&e, &m, &[]);
+        assert_eq!(
+            shape(&g),
+            [vec!["enip", "modbus"], vec!["enip", "modbus"], vec!["modbus"]]
+        );
+        assert_eq!(g[0][0].mac(), Some(A));
+        assert_eq!(g[1][0].mac(), None);
+        // The same address with two different MACs is two devices.
+        let e = [enip(5, Some(A)), enip(5, Some(B))];
+        assert_eq!(group(&e, &[], &[]).len(), 2);
+    }
+
+    /// A PROFINET station that has no IP address yet is still a device
+    /// (last), and the answer has nothing for it to hide.
+    #[test]
+    fn a_station_without_an_address_is_listed_last() {
+        let e = [enip(5, Some(A))];
+        let p = [pn(None, B)];
+        let g = group(&e, &[], &p);
+        assert_eq!(shape(&g), [vec!["enip"], vec!["profinet"]]);
+        assert_eq!(g[1][0].json()["address"], Json::Null);
+    }
+
+    #[test]
+    fn the_interface_comes_from_a_real_profinet_device_line() {
+        let dev = |driver: &str, params: &[(&str, &str)]| iomap::MapDevice {
+            name: "d".into(),
+            driver: driver.into(),
+            endpoint: "x".into(),
+            params: params.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect(),
+            settings: Vec::new(),
+        };
+        assert_eq!(profinet_interface(&[]), None);
+        assert_eq!(profinet_interface(&[dev("enip-io", &[("if", "en0")])]), None);
+        assert_eq!(profinet_interface(&[dev("profinet-io", &[("if", "sim")])]), None);
+        assert_eq!(
+            profinet_interface(&[
+                dev("profinet-io", &[("if", "sim")]),
+                dev("profinet-io", &[("if", "en7")])
+            ]),
+            Some("en7".into())
+        );
+    }
 }

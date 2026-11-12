@@ -14,7 +14,7 @@
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
 //! GET  /api/devices                       device links: up, down (why), unknown, address
 //! GET  /api/adapter                       the box's EtherNet/IP adapter: {protocol, bind, on}; `bind` is the address it listens on, absent when it is off
-//! POST /api/devices/discover              token or session: one ListIdentity sweep; every EtherNet/IP device on the LAN, mapped or not, with the library's match (see [`discover`])
+//! POST /api/devices/discover              token or session: one scan of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
 //! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
