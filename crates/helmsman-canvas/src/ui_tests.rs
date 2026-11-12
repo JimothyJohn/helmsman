@@ -295,6 +295,9 @@ mod glyphs_and_help {
         h.wait(0.2);
         h.app.sim.as_mut().unwrap().session.fault = Some("division by zero at line 7".into());
         h.wait(0.2);
+        h.press("bottom messages");
+        // The panel takes the tab's height: let it settle.
+        h.wait(0.2);
         h.press("fault copy");
         assert_eq!(
             h.copied.last().map(String::as_str),
@@ -1293,10 +1296,100 @@ mod chrome {
         h.press("right");
         assert!(!h.app.chrome.right);
         h.wait(0.5);
-        assert!(!h.has("tab io"), "the tabs fold with the panel");
         // Remembered per browser: what the app saves reads back the same.
         let back = Chrome::restored(&h.app.chrome.saved());
         assert_eq!((back.left, back.right, back.pane), (false, false, Pane::Code));
+    }
+
+    /// Nick, 2026-11-11: a folded pane keeps its tabs as glyphs down the
+    /// strip, and a click on one opens the pane on that tab.
+    #[test]
+    fn a_folded_panes_strip_keeps_its_tabs_and_each_opens_the_pane_on_it() {
+        let mut h = Harness::new(App::sim());
+        h.press("left");
+        h.press("right");
+        h.wait(0.5);
+        assert!(!h.app.chrome.left && !h.app.chrome.right);
+        for key in ["pane files", "pane devices", "pane code", "tab io", "tab claude"] {
+            let r = h.rect(key);
+            let edge = if key.starts_with("pane") { 0.0 } else { h.size.x };
+            assert!(
+                (r.center().x - edge).abs() <= STRIP,
+                "{key} is on its strip: {r:?}"
+            );
+            assert!(
+                r.width() >= 24.0 && r.height() >= 24.0,
+                "{key} is a target: {r:?}"
+            );
+        }
+        h.press("pane devices");
+        h.wait(0.5);
+        assert!(h.app.chrome.left, "the pane opens");
+        assert_eq!(h.app.chrome.pane, Pane::Devices, "on the tab clicked");
+        h.press("tab claude");
+        h.wait(0.5);
+        assert!(h.app.chrome.right, "the panel opens");
+        assert_eq!(h.app.chrome.tab, Tab::Claude);
+        // The chevron under them still opens a pane where it was.
+        h.press("left");
+        h.wait(0.5);
+        h.press("left");
+        h.wait(0.5);
+        assert!(h.app.chrome.left);
+        assert_eq!(h.app.chrome.pane, Pane::Devices);
+    }
+
+    /// Nick, 2026-11-11: nothing is said in a line under the menus. What
+    /// needs saying is in the Messages tab, which goes red on an error
+    /// (pulsing at first), stays red while the error stands or is unread,
+    /// and opens the bottom panel if it was shut.
+    #[test]
+    fn an_error_is_in_the_messages_tab_which_goes_red_and_opens_a_shut_panel() {
+        use crate::editor::Bottom;
+        use crate::messages::FLASH;
+        let mut h = Harness::new(App::sim());
+        h.wait(0.2);
+        let top = h.app.chrome.diagram.top();
+        let log = |h: &Harness| {
+            let l = &h.app.sim.as_ref().unwrap().log;
+            (l.alarm(h.time, false), l.flashing(h.time))
+        };
+        assert_eq!(log(&h), (None, false), "nothing wrong, nothing red");
+        // The bottom panel shut: a fault opens it on the Messages.
+        h.app.chrome.trend = false;
+        h.wait(0.2);
+        h.app.sim.as_mut().unwrap().session.fault = Some("division by zero at line 7".into());
+        h.wait(0.2);
+        h.wait(0.5);
+        assert!(h.app.chrome.trend, "the panel opened");
+        assert_eq!(h.app.chrome.bottom, Bottom::Messages);
+        assert!(h.has("fault"), "the fault is in the tab");
+        assert!(h.rect("fault").top() > h.rect("bottom messages").bottom());
+        let now = h.app.chrome.diagram.top();
+        assert!(
+            (now - top).abs() < 0.5,
+            "no line pushed the page down: {top} to {now}"
+        );
+        let (alarm, flashing) = log(&h);
+        assert!(alarm.is_some() && flashing, "red and pulsing");
+        // On the Trend tab the fault still stands: red, steady once the
+        // pulse is over, and it never stops while the fault is there.
+        h.press("bottom trend");
+        h.wait(FLASH + 0.5);
+        let l = &h.app.sim.as_ref().unwrap().log;
+        assert!(!l.flashing(h.time), "the pulse ends");
+        assert!(l.alarm(h.time, true).is_some(), "red while the fault stands");
+        // A new error while looking at the Trend: unread, so red on its
+        // own account until the Messages are looked at.
+        let at = h.time;
+        h.app.sim.as_mut().unwrap().session.fault = None;
+        h.app.sim.as_mut().unwrap().log.error(at, "deploy refused");
+        h.wait(FLASH + 0.5);
+        assert!(log(&h).0.is_some(), "unread: red");
+        assert_eq!(h.app.chrome.bottom, Bottom::Trend, "an open panel keeps its tab");
+        h.press("bottom messages");
+        h.wait(0.2);
+        assert_eq!(log(&h), (None, false), "read, and nothing stands");
     }
 
     #[test]

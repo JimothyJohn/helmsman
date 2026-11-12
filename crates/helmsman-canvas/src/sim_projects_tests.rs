@@ -270,6 +270,8 @@ fn download_then_upload_round_trips_in_the_simulation_and_with_the_box() {
 fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     let mut app = App::sim();
     app.sim = Some(PlaygroundView::with_storage(Box::new(Broken)));
+    // What the page has to say is in the Messages tab.
+    app.chrome.bottom = crate::editor::Bottom::Messages;
     let ctx = egui::Context::default();
     for k in 0..30 {
         frame(&ctx, &mut app, f64::from(k) / 60.0);
@@ -612,7 +614,7 @@ fn the_log_keeps_refused_deploys_faults_and_state_changes() {
         errors.iter().any(|e| e.contains("Deploy of broken refused")),
         "{errors:?}"
     );
-    assert!(v.log.label().contains("error"), "{}", v.log.label());
+    assert!(v.log.errors() > 0, "{}", v.log.text());
     let before = v.log.len();
     let ctx = eframe::egui::Context::default();
     let input = eframe::egui::RawInput {

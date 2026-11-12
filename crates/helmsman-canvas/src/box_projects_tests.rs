@@ -928,6 +928,7 @@ fn a_stale_save_is_a_409_and_reload_brings_the_boxs_text() {
     );
     // The toolbar offers Reload; it brings the box's text.
     let mut h = Harness::new(c, None);
+    h.press("bottom messages");
     h.press("reload");
     let reqs = h.sent();
     for q in reqs {
@@ -1096,6 +1097,7 @@ fn compile_errors_name_file_and_line_and_a_click_opens_it_there() {
         Some("main.st")
     );
     assert_eq!(h.app.chrome.line, Some(6));
+    h.press("bottom messages");
     assert!(h.app.chrome.rect("deploy failed").is_some());
 }
 

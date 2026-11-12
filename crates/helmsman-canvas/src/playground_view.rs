@@ -1529,6 +1529,10 @@ impl Body for PlaygroundView {
             || self.proj.storage_problem.is_some()
     }
 
+    fn alarm(&self) -> bool {
+        self.session.fault.is_some() || self.proj.notice.as_ref().is_some_and(|(_, error)| *error)
+    }
+
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = &self.session.fault {

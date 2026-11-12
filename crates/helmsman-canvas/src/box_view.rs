@@ -1737,6 +1737,12 @@ impl Body for BoxView {
             || self.on_box.problem.is_some()
     }
 
+    fn alarm(&self) -> bool {
+        self.state.scan.as_ref().is_some_and(|s| s.fault.is_some())
+            || matches!(self.projects.deploy, Deploy::Failed(_))
+            || self.projects.notice.as_ref().is_some_and(|(_, error)| *error)
+    }
+
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {

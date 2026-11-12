@@ -13,6 +13,7 @@ use eframe::egui::{
     text::LayoutJob, text_edit::TextEditState,
 };
 
+use crate::glyphs::Icon;
 use crate::st_view::TAP;
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
@@ -21,7 +22,9 @@ use crate::tips::Tip;
 pub const CHROME_KEY: &str = "helmsman-canvas/editor";
 
 /// Width of a collapsed sidebar, points.
-pub const STRIP: f32 = 30.0;
+pub const STRIP: f32 = 40.0;
+/// The side of a tab's glyph in a pane's header row, points.
+pub const TAB: f32 = TAP * 0.75;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
@@ -49,8 +52,17 @@ impl Tab {
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Io => "The program's inputs and outputs with their live values.",
-            Self::Claude => "Ask the agent about the program, or have it propose a change.",
+            Self::Io => "I/O: the program's inputs and outputs with their live values.",
+            Self::Claude => "Agent: ask the agent about the program, or have it propose a change.",
+        }
+    }
+
+    /// The tab's glyph (Nick, 2026-11-11: glyphs, the tooltip names them).
+    #[must_use]
+    pub const fn icon(self) -> Icon {
+        match self {
+            Self::Io => Icon::Io,
+            Self::Claude => Icon::Agent,
         }
     }
 
@@ -71,6 +83,28 @@ pub enum Bottom {
 }
 
 impl Bottom {
+    /// Every tab, left to right.
+    pub const ALL: [Self; 2] = [Self::Trend, Self::Messages];
+
+    #[must_use]
+    pub const fn icon(self) -> Icon {
+        match self {
+            Self::Trend => Icon::Trend,
+            Self::Messages => Icon::Messages,
+        }
+    }
+
+    /// The tab button's tooltip.
+    #[must_use]
+    pub const fn tip(self) -> &'static str {
+        match self {
+            Self::Trend => "Trend: pinned signals over time (Alt+Shift+2).",
+            Self::Messages => {
+                "Messages: what needs saying now and what happened (connections, deploys, faults and errors), newest last. Red while an error stands or one has come in since you last looked."
+            }
+        }
+    }
+
     const fn key(self) -> &'static str {
         match self {
             Self::Trend => "trend",
@@ -95,24 +129,24 @@ impl Pane {
     /// Every tab, left to right.
     pub const ALL: [Self; 3] = [Self::Files, Self::Devices, Self::Code];
 
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Files => "Files",
-            Self::Devices => "Devices",
-            Self::Code => "Code",
-        }
-    }
-
     /// The tab button's tooltip.
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Files => "The projects and the open one's files (Alt+Shift+0 opens or shuts it).",
+            Self::Files => "Files: the projects and the open one's files (Alt+Shift+0 opens or shuts it).",
             Self::Devices => {
-                "The I/O map: the remote modules and their points (Alt+Shift+4 opens or shuts it)."
+                "Devices: the I/O map, the remote modules and their points (Alt+Shift+4 opens or shuts it)."
             }
-            Self::Code => "The Structured Text of the open file (Alt+Shift+1 opens or shuts it).",
+            Self::Code => "Code: the Structured Text of the open file (Alt+Shift+1 opens or shuts it).",
+        }
+    }
+
+    #[must_use]
+    pub const fn icon(self) -> Icon {
+        match self {
+            Self::Files => Icon::Files,
+            Self::Devices => Icon::Devices,
+            Self::Code => Icon::Code,
         }
     }
 
@@ -532,9 +566,13 @@ pub trait Body {
     /// Whether [`Self::notices`] has anything to say.
     fn has_notices(&self) -> bool;
     /// What needs saying now (a fault, a deploy under way or refused, a
-    /// stale file with its Reload): a line under the header, only while
-    /// there is one.
+    /// stale file with its Reload): the first rows of the Messages tab,
+    /// only while there is one (Nick, 2026-11-11: not a line under the
+    /// header).
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// Whether one of them is an error that still stands (a fault, a
+    /// refused save or deploy): the Messages tab stays red while it does.
+    fn alarm(&self) -> bool;
     /// The left pane's Files tab: the projects, the open one's files and
     /// the program tree.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
@@ -555,8 +593,41 @@ pub trait Body {
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
 }
 
-/// A collapsed sidebar's strip as one button: a chevron pointing `left`
-/// or right, the strip's full height, tinted under the pointer.
+/// A tab of a collapsed sidebar, as [`strip`] draws it.
+struct StripTab {
+    icon: Icon,
+    /// Its hit's name, as in the open pane's header.
+    key: String,
+    tip: &'static str,
+    on: bool,
+}
+
+/// A collapsed sidebar's strip (Nick, 2026-11-11): the pane's tabs as
+/// glyphs down it, each opening the pane on that tab, and under them the
+/// rest of the strip as one button that opens it where it was. Returns
+/// the tab clicked, if one was, and the button.
+fn strip(
+    ui: &mut egui::Ui,
+    tabs: &[StripTab],
+    left: bool,
+    hover: &str,
+    hits: &mut Vec<(String, Rect)>,
+) -> (Option<usize>, egui::Response) {
+    let mut picked = None;
+    let side = ui.available_width().clamp(STRIP - 16.0, TAB);
+    for (k, t) in tabs.iter().enumerate() {
+        let r =
+            crate::glyphs::tab(ui, t.icon, side, t.on, None).tip(format!("{} Opens the pane on it.", t.tip));
+        hits.push((t.key.clone(), r.rect));
+        if r.clicked() {
+            picked = Some(k);
+        }
+    }
+    (picked, strip_toggle(ui, left, hover))
+}
+
+/// The rest of a collapsed sidebar's strip as one button: a chevron
+/// pointing `left` or right, tinted under the pointer.
 fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
     let size = Vec2::new(
         ui.available_width().max(STRIP - 8.0),
@@ -598,11 +669,6 @@ fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
 
 /// One frame of the Editor.
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
-    if body.has_notices() {
-        egui::Panel::top("ed-notices").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
-        });
-    }
     let mut hits = Vec::new();
     let mut left = chrome.left;
     let mut pane = chrome.pane;
@@ -625,7 +691,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 // A double click on a tab hides the pane too (Nick, 2026-11-07).
                 ui.horizontal(|ui| {
                     for p in Pane::ALL {
-                        let r = crate::theme::tab(ui, pane == p, p.label(), Vec2::new(0.0, TAP * 0.75))
+                        let r = crate::glyphs::tab(ui, p.icon(), TAB, pane == p, None)
                             .tip(format!("{} Double-click hides the pane.", p.tip()));
                         hits.push((format!("pane {}", p.key()), r.rect));
                         if r.clicked() {
@@ -660,7 +726,18 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 }
                 t
             } else {
-                Some(strip_toggle(ui, false, "Shows the pane."))
+                let tabs = Pane::ALL.map(|p| StripTab {
+                    icon: p.icon(),
+                    key: format!("pane {}", p.key()),
+                    tip: p.tip(),
+                    on: pane == p,
+                });
+                let (picked, t) = strip(ui, &tabs, false, "Shows the pane.", &mut hits);
+                if let Some(k) = picked {
+                    pane = Pane::ALL[k];
+                    hide = true;
+                }
+                Some(t)
             };
             if let Some(t) = toggle {
                 hits.push(("left".to_string(), t.rect));
@@ -705,7 +782,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 ui.horizontal(|ui| {
                     t = Some(header_toggle(ui, false, "Hides the panel (Alt+Shift+3)."));
                     for &k in tabs {
-                        let r = crate::theme::tab(ui, tab == k, k.label(), Vec2::new(0.0, TAP * 0.75))
+                        let r = crate::glyphs::tab(ui, k.icon(), TAB, tab == k, None)
                             .tip(format!("{} Double-click hides the panel.", k.tip()));
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
@@ -720,7 +797,21 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 body.tab(ui, tab, chrome);
                 t
             } else {
-                Some(strip_toggle(ui, true, "Shows the panel (Alt+Shift+3)."))
+                let strip_tabs: Vec<StripTab> = tabs
+                    .iter()
+                    .map(|&k| StripTab {
+                        icon: k.icon(),
+                        key: format!("tab {}", k.key()),
+                        tip: k.tip(),
+                        on: tab == k,
+                    })
+                    .collect();
+                let (picked, t) = strip(ui, &strip_tabs, true, "Shows the panel (Alt+Shift+3).", &mut hits);
+                if let Some(k) = picked {
+                    tab = tabs[k];
+                    hide_right = true;
+                }
+                Some(t)
             };
             if let Some(t) = toggle {
                 hits.push(("right".to_string(), t.rect));
@@ -738,6 +829,21 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     chrome.tab = tab;
     chrome.hits.extend(hits);
 
+    // The Messages tab is where every notice and error is (Nick,
+    // 2026-11-11): red while an error stands or has come in unread, and
+    // pulsing for a few seconds after a new one. A new error opens the
+    // panel if it was shut, so it is never out of sight.
+    let now = ui.input(|i| i.time);
+    let standing = body.alarm();
+    let alarm = body.messages().alarm(now, standing);
+    if body.messages().take_fresh() && !chrome.trend {
+        chrome.trend = true;
+        chrome.bottom = Bottom::Messages;
+    }
+    if body.messages().flashing(now) {
+        ui.ctx().request_repaint();
+    }
+    let errors = body.messages().errors();
     let mut trend = chrome.trend;
     egui::Panel::bottom("ed-trend")
         .resizable(true)
@@ -745,35 +851,37 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         // 200 the plot under them had 50.
         .default_size(280.0)
         .show_collapsible(ui, &mut trend, |ui| {
-            // Tabs: Trend | Messages (errors counted on the tab).
-            let label = body.messages().label();
             ui.horizontal(|ui| {
-                for (b, text, key, tip) in [
-                    (
-                        Bottom::Trend,
-                        "Trend".to_string(),
-                        "bottom trend",
-                        "Pinned signals over time (Alt+Shift+2).",
-                    ),
-                    (
-                        Bottom::Messages,
-                        label,
-                        "bottom messages",
-                        "What happened: connections, deploys, faults and errors, newest last.",
-                    ),
-                ] {
-                    let r =
-                        crate::theme::tab(ui, chrome.bottom == b, &text, Vec2::new(64.0, TAP * 0.6)).tip(tip);
-                    chrome.hit(key, r.rect);
+                for b in Bottom::ALL {
+                    let alarm = alarm.filter(|_| b == Bottom::Messages);
+                    let r = crate::glyphs::tab(ui, b.icon(), TAB, chrome.bottom == b, alarm).tip(b.tip());
+                    chrome.hit(format!("bottom {}", b.key()), r.rect);
                     if r.clicked() {
                         chrome.bottom = b;
                     }
+                }
+                if errors > 0 {
+                    let red = theme(ui).ink(crate::st_view::brand::RED);
+                    let r = ui
+                        .label(egui::RichText::new(errors.to_string()).strong().color(red))
+                        .tip(if errors == 1 {
+                            "One error in the Messages.".to_string()
+                        } else {
+                            format!("{errors} errors in the Messages.")
+                        });
+                    chrome.hit("bottom errors", r.rect);
                 }
             });
             ui.separator();
             match chrome.bottom {
                 Bottom::Trend => body.trend(ui, chrome),
-                Bottom::Messages => body.messages().ui(ui, chrome),
+                Bottom::Messages => {
+                    if body.has_notices() {
+                        ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
+                        ui.separator();
+                    }
+                    body.messages().ui(ui, chrome);
+                }
             }
         });
     chrome.trend = trend;
