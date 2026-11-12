@@ -76,7 +76,10 @@ this; change it here first when a decision changes.
   the project when the map loads (2026-11-02, `device-import`); under the
   map's devices, "On the network": Scan asks the box for one ListIdentity
   sweep (`POST /api/devices/discover`; the simulation answers with its
-  simulated E1213) and lists every device that answered, with whether a
+  simulated E1213; since 2026-11-11 the same request also asks Modbus
+  and, where the build has it, PROFINET, and answers `found`, one entry
+  per device however many protocols it answered on; the tab still reads
+  the older `devices` list) and lists every device that answered, with whether a
   map device binds it and what the public device library knows of it
   (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
   then by vendor and model text; `--devices-index` points a box at

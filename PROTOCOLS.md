@@ -97,7 +97,7 @@ workers at once; 3 needs both; 4 and 5 follow 3.
   error at load. The six-copies rule applies.
 - Docs: ARCHITECTURE `profile`, the map format in `text`.
 
-### [ ] 2. One Scan, every protocol
+### [x] 2. One Scan, every protocol
 
 - `POST /api/devices/discover` runs EtherNet/IP and Modbus
   identification by default (drop the `?modbus=1` switch, keep the
