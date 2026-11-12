@@ -222,6 +222,8 @@ pub struct Chrome {
     pub colors: Vec<(String, usize)>,
     /// The style hints of the file in the Code tab (`crate::st_hints`).
     pub hints: crate::st_hints::Hints,
+    /// The blocks folded in the Code tab (`crate::st_fold`).
+    pub folds: crate::st_fold::Folds,
 }
 
 impl Default for Chrome {
@@ -244,6 +246,7 @@ impl Default for Chrome {
             wrap: true,
             colors: Vec::new(),
             hints: crate::st_hints::Hints::default(),
+            folds: crate::st_fold::Folds::default(),
         }
     }
 }
@@ -1005,10 +1008,37 @@ pub fn st_editor(
     let now = ui.input(|i| i.time);
     let hinted: Vec<helmsman_iec::hints::Hint> = chrome.hints.of(text.as_str(), now).to_vec();
     let hints: Vec<(u32, u32)> = hinted.iter().map(|h| (h.pos.line, h.pos.col)).collect();
+    // Folding (`crate::st_fold`): a folded block's inner lines are laid
+    // out with no height. A fold opens when a line inside it has to be
+    // seen: a problem's, the one a block click went to, the caret moving
+    // in; and all of them while the find box is open, so every match shows.
+    let blocks = crate::st_fold::foldable(text.as_str());
+    let caret = TextEditState::load(ui.ctx(), id)
+        .and_then(|s| s.cursor.char_range())
+        .map(|r| {
+            let ends = text
+                .as_str()
+                .chars()
+                .take(r.primary.index.into())
+                .filter(|c| *c == '\n')
+                .count();
+            u32::try_from(ends + 1).unwrap_or(u32::MAX)
+        });
+    let shown: Vec<u32> = diags
+        .iter()
+        .chain(warns)
+        .map(|(l, _)| *l)
+        .chain(chrome.line)
+        .collect();
+    if found.is_some() {
+        chrome.folds.open_all();
+    }
+    let folded = chrome.folds.settle(id, &blocks, &shown, caret);
     let lines = Lines {
         errors: diags,
         warnings: warns,
         hints: &hints,
+        folded: &folded,
     };
     let marks: Vec<(std::ops::Range<usize>, Color32)> = found
         .as_ref()
@@ -1035,10 +1065,13 @@ pub fn st_editor(
             ui.horizontal_top(|ui| {
                 let digit = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
                 let gutter_w = digit * 3.0;
+                // The fold arrows' column, left of the line numbers.
+                let arrow_w = (digit * 1.4).ceil();
                 // Slack for the editor's own margin and the scroll bar: wider
                 // than the pane and a resizable pane grows to fit, every frame.
                 let wrap = if wrap_on {
-                    (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0)
+                    (ui.available_width() - gutter_w - arrow_w - 2.0 * ui.spacing().item_spacing.x - 32.0)
+                        .max(60.0)
                 } else {
                     f32::INFINITY
                 };
@@ -1059,6 +1092,11 @@ pub fn st_editor(
                 let galley = ui.fonts_mut(|f| f.layout_job(job));
                 let mut gutter = LayoutJob::default();
                 for (n, number) in numbering(galley.rows.iter().map(|r| r.ends_with_newline)) {
+                    if crate::st_fold::hidden(&folded, u32::try_from(n).unwrap_or(u32::MAX)) {
+                        // A row of no height, as the code beside it has.
+                        gutter.append("\n", 0.0, gone(&font));
+                        continue;
+                    }
                     let bad = diags.iter().any(|(l, _)| *l as usize == n);
                     let here = at.is_some_and(|l| l as usize == n);
                     let warned = warns.iter().any(|(l, _)| *l as usize == n);
@@ -1081,6 +1119,7 @@ pub fn st_editor(
                     gutter.append(&label, 0.0, TextFormat::simple(font.clone(), color));
                 }
                 gutter.wrap.max_width = f32::INFINITY;
+                fold_arrows(ui, id, &galley, arrow_w, row, &blocks, &folded, chrome);
                 ui.label(gutter);
                 // Wrap off: the editor is as wide as its longest line (plus
                 // its margins) and the scroll area scrolls to it; the pane
@@ -1114,6 +1153,7 @@ pub fn st_editor(
                 }
                 removed_rules(ui, &out, &agent.removed, chrome);
                 hint_tips(ui, &out, &hinted, chrome);
+                fold_marks(ui, &out, &folded, &font, chrome);
                 out.response.response
             })
             .inner
@@ -1157,6 +1197,143 @@ pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str
         .inner
         .tip(tip);
     chrome.hit("code file", r.rect);
+}
+
+/// The format of a line a fold hides: laid out, so the text edit still
+/// holds it, with no height and no ink.
+fn gone(font: &FontId) -> TextFormat {
+    TextFormat {
+        line_height: Some(0.0),
+        ..TextFormat::simple(font.clone(), Color32::TRANSPARENT)
+    }
+}
+
+/// The top of each source line's first row in `galley`, by line number
+/// less one, and the bottom of the last row.
+fn line_tops(galley: &egui::Galley) -> (Vec<f32>, f32) {
+    let mut tops = Vec::new();
+    let mut first = true;
+    for r in &galley.rows {
+        if first {
+            tops.push(r.rect().top());
+        }
+        first = r.ends_with_newline;
+    }
+    (tops, galley.rows.last().map_or(0.0, |r| r.rect().bottom()))
+}
+
+/// The fold arrows (Nick, 2026-11-11: an arrow in the gutter on every
+/// block that folds): a column `width` wide and as tall as the code, an
+/// arrow on the first line of each block, pointing down while the block
+/// is open and right while it is folded. A click folds or opens it. The
+/// hits are `fold <line>`.
+#[allow(clippy::too_many_arguments)]
+fn fold_arrows(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    galley: &egui::Galley,
+    width: f32,
+    row: f32,
+    blocks: &[crate::st_fold::Foldable],
+    folded: &[crate::st_fold::Foldable],
+    chrome: &mut Chrome,
+) {
+    let (column, _) = ui.allocate_exact_size(Vec2::new(width, galley.size().y), Sense::hover());
+    let (tops, _) = line_tops(galley);
+    let t = theme(ui);
+    for b in blocks {
+        // An arrow on a line that is itself folded away has nowhere to be.
+        if crate::st_fold::hidden(folded, b.first) {
+            continue;
+        }
+        let Some(top) = tops.get(b.first.saturating_sub(1) as usize) else {
+            continue;
+        };
+        let rect = Rect::from_min_size(
+            Pos2::new(column.left(), column.top() + top),
+            Vec2::new(width, row),
+        );
+        let shut = chrome.folds.folded(b.first);
+        let tip = if shut {
+            format!("Opens this block: {} line(s) are folded away.", b.hides())
+        } else {
+            format!(
+                "Folds this block: its {} line(s) are hidden until you open it again.",
+                b.hides()
+            )
+        };
+        let r = ui
+            .interact(rect, id.with(("fold", b.first)), Sense::click())
+            .on_hover_text(tip);
+        chrome.hit(format!("fold {}", b.first), rect);
+        let color = if r.hovered() { t.accent } else { t.muted };
+        let c = rect.center();
+        let s = (width * 0.32).min(row * 0.22);
+        let points = if shut {
+            vec![
+                Pos2::new(c.x - s * 0.6, c.y - s),
+                Pos2::new(c.x + s * 0.8, c.y),
+                Pos2::new(c.x - s * 0.6, c.y + s),
+            ]
+        } else {
+            vec![
+                Pos2::new(c.x - s, c.y - s * 0.6),
+                Pos2::new(c.x + s, c.y - s * 0.6),
+                Pos2::new(c.x, c.y + s * 0.8),
+            ]
+        };
+        ui.painter()
+            .add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+        if r.clicked() {
+            chrome.folds.toggle(b.first);
+        }
+    }
+}
+
+/// After the first line of each folded block: how many lines it hides.
+/// The hits are `folded <line>`.
+fn fold_marks(
+    ui: &egui::Ui,
+    out: &egui::text_edit::TextEditOutput,
+    folded: &[crate::st_fold::Foldable],
+    font: &FontId,
+    chrome: &mut Chrome,
+) {
+    let t = theme(ui);
+    for b in folded {
+        // Folded inside an outer fold: not on screen.
+        if crate::st_fold::hidden(folded, b.first) {
+            continue;
+        }
+        // The last row of the block's first line.
+        let mut line = 1;
+        let mut end = None;
+        for r in &out.galley.rows {
+            if line == b.first {
+                end = Some(r.rect());
+            }
+            if r.ends_with_newline {
+                line += 1;
+            }
+            if line > b.first {
+                break;
+            }
+        }
+        let Some(end) = end else { continue };
+        let at = out.galley_pos + Vec2::new(end.right() + 10.0, end.center().y);
+        let rect = ui.painter().text(
+            at,
+            egui::Align2::LEFT_CENTER,
+            if b.hides() == 1 {
+                "… 1 line".to_string()
+            } else {
+                format!("… {} lines", b.hides())
+            },
+            font.clone(),
+            t.muted,
+        );
+        chrome.hit(format!("folded {}", b.first), rect);
+    }
 }
 
 /// A style hint's colour: a calm blue, apart from the red of an error
@@ -1300,6 +1477,9 @@ pub struct Lines<'a> {
     /// Style hints (`helmsman_iec::hints`): the lightest mark, and only
     /// on a line with no error or warning.
     pub hints: &'a [(u32, u32)],
+    /// The blocks folded (`crate::st_fold`): their inner lines are laid
+    /// out with no height.
+    pub folded: &'a [crate::st_fold::Foldable],
 }
 
 /// The ST as a layout wrapped at `wrap` points: a line with a diagnostic
@@ -1346,6 +1526,10 @@ pub fn highlight(
         let n = u32::try_from(k + 1).unwrap_or(u32::MAX);
         let line_base = base;
         base += line.len();
+        if crate::st_fold::hidden(lines.folded, n) {
+            job.append(line, 0.0, gone(font));
+            continue;
+        }
         let error = diags.iter().find(|(l, _)| *l == n);
         let warn = warns.iter().find(|(l, _)| *l == n);
         let hint = lines.hints.iter().find(|(l, _)| *l == n);

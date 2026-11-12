@@ -161,7 +161,14 @@ label is drawn, the icon stands alone at a readable size.
   marked on the line as you type; the program running does not change
   until you deploy. A hint is underlined in blue: a variable that is
   never used, one that is set and never read, or a variable assigned to
-  itself. Hover its line for what it says. A hint never stops a deploy. The word-wrap button beside the file name wraps long
+  itself. Hover its line for what it says. A hint never stops a deploy. An
+  arrow in the gutter stands on the first line of every block that
+  folds: a program or function block, a VAR section, an IF, a CASE or a
+  loop. Click it to fold the block to its first and last lines, with a
+  note of how many lines are hidden, and click it again to open it. A
+  folded block opens by itself when a line inside it has to be seen: an
+  error or a warning, a line you jumped to, the caret moving into it, or
+  a search. The word-wrap button beside the file name wraps long
   lines at the pane's width, or, off, keeps each line on one row with a
   scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
