@@ -24,6 +24,9 @@ use crate::tips::Tip;
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
+/// Under the Agent's box while the free chat answers it.
+const FREE_NOTICE: &str = "Free to try during the early release. What you type is sent to a hosted \
+     model through our relay, so leave out anything confidential.";
 /// Trend line colours, in signal order (the last, white, is the page's ink
 /// in light mode).
 const TREND: [Color32; TREND_SIGNALS] = [
@@ -48,6 +51,12 @@ pub struct Link {
     /// Answers stopped.
     #[cfg(not(target_arch = "wasm32"))]
     pub aborted: usize,
+    /// Requests sent with no answer expected (the survey).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub posted: Vec<Request>,
+    /// The free chats asked whether they are open, by address.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub free_checks: Vec<String>,
 }
 
 impl Link {
@@ -78,6 +87,29 @@ impl Link {
             let _ = ctx;
             self.inbox.push(crate::claude::Incoming::Proxy(false));
         }
+    }
+
+    /// Asks the free chat at `base` whether it is open. Natively there is
+    /// no network here: a test hands the answer in through `inbox`.
+    fn check_free(&mut self, base: &str, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        self.web.check_free(base, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = ctx;
+            self.free_checks.push(base.to_string());
+        }
+    }
+
+    /// Sends a request that expects no answer (the survey). In the
+    /// browser nothing of the link is needed for that; natively the
+    /// request is kept for the tests.
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::unused_self))]
+    fn post(&mut self, req: Request) {
+        #[cfg(target_arch = "wasm32")]
+        crate::web::post_and_forget(req);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.posted.push(req);
     }
 
     fn drain(&mut self) -> Vec<crate::claude::Incoming> {
@@ -112,6 +144,10 @@ pub struct PlaygroundView {
     pub chat: Chat,
     pub link: Link,
     proxy_asked: bool,
+    /// The free chat was asked whether it is open.
+    free_asked: bool,
+    /// The survey's "other" field while it is typed.
+    survey_other: String,
     /// The device library's index, fetched when the Devices tab scans.
     #[cfg(target_arch = "wasm32")]
     library: crate::web::TextFetch,
@@ -194,6 +230,8 @@ impl PlaygroundView {
             chat: Chat::new(store),
             link: Link::default(),
             proxy_asked: false,
+            free_asked: false,
+            survey_other: String::new(),
             #[cfg(target_arch = "wasm32")]
             library: crate::web::TextFetch::default(),
             log: crate::messages::Log::default(),
@@ -1316,6 +1354,12 @@ impl PlaygroundView {
             self.proxy_asked = true;
             self.link.check_proxy(ctx);
         }
+        if !self.free_asked
+            && let Some(base) = self.chat.free_base().map(str::to_string)
+        {
+            self.free_asked = true;
+            self.link.check_free(&base, ctx);
+        }
         #[cfg(target_arch = "wasm32")]
         if let Some(r) = self.library.take() {
             match r.and_then(|t| helmsman_project::devlib::Index::parse(&t)) {
@@ -2002,7 +2046,14 @@ impl PlaygroundView {
             // Room for the scroll bar: a full-width field plus the bar is
             // wider than the panel, and a resizable panel grows to fit.
             ui.set_max_width(ui.available_width() - 12.0);
+            // The free chat: no key and no model to choose. Closed, it
+            // says so and asks its one question in place of the chat box.
+            let free = self.chat.free_base().is_some();
+            if free && self.free_closed_ui(ui, chrome) {
+                return;
+            }
             match self.chat.proxy {
+                _ if free => {}
                 Proxy::Yes => {
                     ui.label(RichText::new("Using the local proxy").color(t.muted))
                         .tip("The API key stays on this machine.");
@@ -2013,27 +2064,9 @@ impl PlaygroundView {
                 }
                 Proxy::No => self.key_ui(ui, chrome),
             }
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Model").color(t.muted))
-                    .tip("The model that answers. A larger one is slower and costs more.");
-                // No wider than the panel: a row that overflows a resizable
-                // panel widens it every frame. `width` is only a floor, so
-                // the selected text is truncated to the room (2026-11-08:
-                // with two tabs the panel is narrower than this row was).
-                egui::ComboBox::from_id_salt("pg-model")
-                    .width((ui.available_width() - 40.0).max(60.0))
-                    .wrap_mode(egui::TextWrapMode::Truncate)
-                    // The name alone: the note in brackets is in the list.
-                    .selected_text(self.chat.model.label().split(" (").next().unwrap_or_default())
-                    .show_ui(ui, |ui| {
-                        for m in Model::ALL {
-                            ui.selectable_value(&mut self.chat.model, m, m.label())
-                                .tip(format!("Answers with {}.", m.label()));
-                        }
-                    })
-                    .response
-                    .tip("The model that answers. A larger one is slower and costs more.");
-            });
+            if !free {
+                self.model_ui(ui);
+            }
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
             let view = crate::instruct::View {
@@ -2048,6 +2081,111 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
+            if free {
+                ui.add_space(6.0);
+                let r = ui
+                    .label(RichText::new(FREE_NOTICE).color(t.muted))
+                    .tip("Nothing you type is kept by the relay. It counts requests so that misuse can be stopped.");
+                chrome.hit("agent free notice", r.rect);
+            }
+        });
+    }
+
+    /// The free chat while it is closed or cannot be reached: what
+    /// happened, and once, which service the visitor would want here.
+    /// `false` when it is open or still being asked (the chat box shows).
+    fn free_closed_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) -> bool {
+        use crate::claude::{Free, SURVEY_CHOICES, SURVEY_OTHER_CHARS};
+        let t = theme(ui);
+        let (text, tip) = match self.chat.free {
+            Free::Open | Free::Checking => return false,
+            Free::Closed { reopens: true } => (
+                "The free chat has used up its turns for now. It opens again by itself, usually within a day.",
+                "The free chat runs on a small daily allowance shared by everyone who tries the playground.",
+            ),
+            Free::Closed { reopens: false } => (
+                "The free chat is closed for now. It opens again once we have looked at some unusual traffic.",
+                "The free chat closes itself when it sees far more requests than people trying the playground would send.",
+            ),
+            Free::Unreachable => (
+                "The free chat cannot be reached from here. The editor, the diagram and the simulation work without it.",
+                "The page could not reach the relay that answers the Agent. A firewall or an ad blocker can cause this.",
+            ),
+        };
+        let r = ui.label(RichText::new(text).strong()).tip(tip);
+        chrome.hit("agent free closed", r.rect);
+        ui.add_space(8.0);
+        if self.chat.surveyed {
+            ui.label(RichText::new("Thank you. That is counted.").color(t.muted))
+                .tip("One answer is counted from each visitor.");
+            return true;
+        }
+        if matches!(self.chat.free, Free::Unreachable) {
+            return true;
+        }
+        let ask = "Which AI service would you want to use here?";
+        ui.label(ask)
+            .tip("One click, counted with everyone else's. Nothing else about you is kept.");
+        let mut pick: Option<&str> = None;
+        // Wrapped: a row of buttons wider than the panel would widen it.
+        ui.horizontal_wrapped(|ui| {
+            for (id, label) in SURVEY_CHOICES {
+                let b = ui.button(label).tip(format!("Counts one answer for: {label}."));
+                chrome.hit(format!("survey {id}"), b.rect);
+                if b.clicked() {
+                    pick = Some(id);
+                }
+            }
+        });
+        ui.add_space(4.0);
+        let field = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.survey_other)
+                    .id_salt("pg-survey-other")
+                    .char_limit(SURVEY_OTHER_CHARS)
+                    .hint_text("Another one")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("Name another service, in a few words. These words are kept for 90 days.");
+        chrome.hit("survey other field", field.rect);
+        let send = ui
+            .add_enabled(!self.survey_other.trim().is_empty(), egui::Button::new("Send"))
+            .tip("Sends the name you typed.");
+        chrome.hit("survey other send", send.rect);
+        if send.clicked() {
+            pick = Some("other");
+        }
+        if let Some(choice) = pick
+            && let Some(req) = self.chat.survey(choice, &self.survey_other)
+        {
+            self.link.post(req);
+        }
+        true
+    }
+
+    /// The model picker of the key and proxy routes.
+    fn model_ui(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Model").color(t.muted))
+                .tip("The model that answers. A larger one is slower and costs more.");
+            // No wider than the panel: a row that overflows a resizable
+            // panel widens it every frame. `width` is only a floor, so
+            // the selected text is truncated to the room (2026-11-08:
+            // with two tabs the panel is narrower than this row was).
+            egui::ComboBox::from_id_salt("pg-model")
+                .width((ui.available_width() - 40.0).max(60.0))
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                // The name alone: the note in brackets is in the list.
+                .selected_text(self.chat.model.label().split(" (").next().unwrap_or_default())
+                .show_ui(ui, |ui| {
+                    for m in Model::ALL {
+                        ui.selectable_value(&mut self.chat.model, m, m.label())
+                            .tip(format!("Answers with {}.", m.label()));
+                    }
+                })
+                .response
+                .tip("The model that answers. A larger one is slower and costs more.");
         });
     }
 

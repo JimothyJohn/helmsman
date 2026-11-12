@@ -44,7 +44,28 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
+- [ ] **Should a flood of refused requests close the free chat, or only mail you?** — in the 2026-11-11 interview you picked "refusals piling up" as an alarm and "close the free route" as what an alarm does. As built (agent-relay `feat/demo-route`, docs/demo.md), refusals (wrong origin, oversized or malformed bodies) past 60 in five minutes raise the alarm and leave the chat open. A refusal spends nothing, and closing on them would let anyone who can send sixty bad requests turn the demo off for everyone until you reopen it. The two counters that do close it (one address 40 turns an hour, 60 turns in five minutes) count requests that cost money.
+  needs: your call
+  result: the relay's `refuse` keeps its alarm line, or also closes the chat (one line, plus its test)
+  options: alarm only, as built (recommended) | close on refusals too
+  est: 5m
+  difficulty: low
+  id: free-chat-refusals
+  asked: 2026-11-11
+  by: claude-session
+
 ## Needs your hands
+
+- [ ] **Turn on the free playground chat** — the playground chat on your OpenRouter key instead of the visitor's (interview 2026-11-11: playground only, no gate, a demo key of its own capped at about $2 a day, a function of its own, text and program edits only, alarms by mail, counters only, one notice line, a survey when closed). Built and tested, nothing deployed: the relay half is agent-relay `feat/demo-route` (two commits on top of PR #8, not pushed: the session could not push another repository), the page half is helmsman `feat/free-chat`, off until the page is built with the relay's address.
+  needs: in this order: (1) `! ~/github/agent-relay/scratch/23-push-demo-route.sh` pushes the branch and opens its draft PR; (2) land agent-relay #8 (card relay-openrouter-handoff), then read the draft's `template.yaml` (DemoFunctionRole, DemoFunction, the alarms), mark it ready, merge, and your dev → main there; (3) at openrouter.ai make a key for the demo alone with a credit limit of about $2 that resets daily; (4) `~/github/agent-relay/scripts/put-demo-key.sh` in the native terminal (hidden prompt; it refuses a key with no limit, one above $5, one that never resets, or the boxes' key); (5) `DEMO_ORIGINS=https://helmsman.advin.io ~/github/agent-relay/scripts/deploy.sh`, which prints the DemoUrl and checks the origin rule; (6) in helmsman, `HELMSMAN_FREE_CHAT_URL=<DemoUrl without the trailing slash> make playground`, commit docs/playground, and change docs/help/agent.md line 104 ("with your own API key") in the same PR; (7) your dev → master
+  result: anyone can use the playground's Agent tab with no key; a bad day costs at most the key's daily limit; `~/github/agent-relay/scripts/demo.sh status | open | close | survey` is the switch
+  depends: relay-openrouter-handoff
+  est: 1h
+  difficulty: med
+  id: free-chat-turn-on
+  asked: 2026-11-11
+  by: claude-session
+  notes: Not checked until a deploy: the DynamoDB store against DynamoDB, the log metric filter against a real Lambda log line, and that a function URL passes OPTIONS through to the function (deploy.sh checks the preflight). The survey's buttons name model vendors, which the voice rule forbids elsewhere; say if you want them worded differently. Once the page is live on the free chat, the key route can come out of the page (claude.rs Route::Direct, key_ui, the model picker) as its own change.
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
   needs: the PoE module on the board, a meter, a PoE port

@@ -280,6 +280,19 @@ fn every_step_has_words_and_the_actions_are_numbered() {
     assert!(words(Step::Deploy, &s, "⌘D").1.contains("⌘D"));
 }
 
+/// A page on the free chat has no key field, so its Agent step never asks
+/// for a key; the others still do.
+#[test]
+fn the_agent_step_asks_for_a_key_only_where_there_is_a_key_field() {
+    let free = crate::tour::agent_step(true);
+    let own = crate::tour::agent_step(false);
+    assert!(!free.to_lowercase().contains("key") && free.contains("free to try"));
+    assert!(own.contains("Paste a key"));
+    for text in [free, own] {
+        assert!(text.contains("or skip this step"));
+    }
+}
+
 #[test]
 fn anchors_fall_back_from_the_control_to_its_tab_to_its_pane() {
     let s = opened();
