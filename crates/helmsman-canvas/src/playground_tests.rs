@@ -2369,7 +2369,11 @@ fn a_pause_holds_the_state_and_a_stop_resets_it() {
     s.stop();
     assert_eq!(s.state(), RunState::Stopped);
     assert!(!s.running);
-    assert_eq!(s.value("motor"), Some(b(false)), "a stopped program's outputs are off");
+    assert_eq!(
+        s.value("motor"),
+        Some(b(false)),
+        "a stopped program's outputs are off"
+    );
     assert_eq!(s.build.as_ref().unwrap().image.q[0], 0);
     assert_eq!((s.scans, s.now_ms), (0, 0));
     assert!(s.trace.is_none() && s.earlier().is_empty(), "no scan to show");
@@ -2395,7 +2399,11 @@ fn step_runs_to_the_next_change() {
     assert!(s.step_to_change(), "the first step shows a scan");
     assert_eq!(s.scans, 1);
     assert!(s.step_to_change());
-    assert!(s.scans > 40, "past the scans where only the timer's time moved: {}", s.scans);
+    assert!(
+        s.scans > 40,
+        "past the scans where only the timer's time moved: {}",
+        s.scans
+    );
     let at = s.scans;
     let lamp = s.value("lamp");
     // The steps after it are each a change: the lamp flips within two.

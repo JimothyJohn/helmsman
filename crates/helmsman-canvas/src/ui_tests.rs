@@ -168,7 +168,8 @@ impl Harness {
                             .text
                             .get(sec.byte_range.start.0..sec.byte_range.end.0)
                             .unwrap_or("");
-                        if !text.trim().is_empty() && sec.format.font_id.family == egui::FontFamily::Monospace {
+                        if !text.trim().is_empty() && sec.format.font_id.family == egui::FontFamily::Monospace
+                        {
                             out.push(text.trim().chars().take(60).collect());
                         }
                     }
@@ -256,7 +257,9 @@ mod glyphs_and_help {
         let mut h = Harness::new(App::sim());
         let diagram = h.app.chrome.diagram;
         assert_ne!(diagram, Rect::NOTHING);
-        for k in ["state", "run", "stop", "step", "restart", "save", "upload", "download"] {
+        for k in [
+            "state", "run", "stop", "step", "restart", "save", "upload", "download",
+        ] {
             let r = h.rect(k);
             assert!(
                 diagram.contains(r.center()),
@@ -273,7 +276,10 @@ mod glyphs_and_help {
         // glyphs that change them, not in the header.
         let (state, run) = (h.rect("state"), h.rect("run"));
         assert!(state.right() <= run.left() && run.left() - state.right() < 24.0);
-        assert!((state.center().y - run.center().y).abs() < 8.0, "{state:?} beside {run:?}");
+        assert!(
+            (state.center().y - run.center().y).abs() < 8.0,
+            "{state:?} beside {run:?}"
+        );
         assert!(h.drew("running · "), "the running clock");
         assert!(h.app.sim.as_ref().unwrap().session.running);
         // Pause holds the state; Step goes to the next change.
@@ -287,9 +293,16 @@ mod glyphs_and_help {
         };
         assert!(scans > 0, "what ran is kept");
         h.wait(0.5);
-        assert_eq!(h.app.sim.as_ref().unwrap().session.now_ms, now, "the clock stands");
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().session.now_ms,
+            now,
+            "the clock stands"
+        );
         h.press("step");
-        assert!(h.app.sim.as_ref().unwrap().session.scans > scans, "a step moves on");
+        assert!(
+            h.app.sim.as_ref().unwrap().session.scans > scans,
+            "a step moves on"
+        );
         h.press("restart");
         assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
         h.press("run");
@@ -305,7 +318,10 @@ mod glyphs_and_help {
         h.frame(vec![]);
         assert!(h.drew("stopped · 0.0s"));
         h.press("run");
-        assert!(h.app.sim.as_ref().unwrap().session.running, "and runs from the start");
+        assert!(
+            h.app.sim.as_ref().unwrap().session.running,
+            "and runs from the start"
+        );
         // The Monitor has no diagram, so no file glyphs; the transport is
         // in its header (Nick, 2026-11-01).
         h.press("monitor");
@@ -417,9 +433,21 @@ mod glyphs_and_help {
         h.press("help about");
         assert!(h.app.about);
         h.frame(vec![]);
-        assert!(h.has("about close"));
-        h.press("about close");
-        assert!(!h.app.about);
+        // Nick, 2026-11-11: no Close button under the text. A click
+        // inside the window leaves it open; one outside it, or Escape,
+        // shuts it.
+        assert!(!h.has("about close"));
+        let about = h.rect("about");
+        h.click(about.center());
+        assert!(h.app.about, "a click on the window keeps it");
+        h.click(about.left_bottom() + eframe::egui::Vec2::new(-40.0, 40.0));
+        assert!(!h.app.about, "a click outside shuts it");
+        h.press("bar help");
+        h.press("help about");
+        h.frame(vec![]);
+        assert!(h.app.about);
+        h.key(eframe::egui::Modifiers::NONE, eframe::egui::Key::Escape);
+        assert!(!h.app.about, "Escape too");
     }
 
     /// The UI review of 2026-11-10: "Monitor" touched the edge of the
@@ -1263,7 +1291,6 @@ mod chrome {
             Some(serde_json::json!({ "transport": { "https": false, "fingerprint": null } }));
         h.frame(vec![]);
         assert!(!h.has("tls fingerprint"));
-        h.press("about close");
     }
 
     #[test]
@@ -3025,7 +3052,11 @@ mod simulated {
         assert_eq!(h.app.chrome.color("first"), Some(3));
         assert_eq!(color(&h, "FIRST", 0), palette_color(&t, 3));
         assert_eq!(color(&h, "FIRST", 1), palette_color(&t, 3), "in any lane");
-        assert_eq!(color(&h, "SECOND", 1), palette_color(&t, 1), "the others keep theirs");
+        assert_eq!(
+            color(&h, "SECOND", 1),
+            palette_color(&t, 1),
+            "the others keep theirs"
+        );
         assert!(!h.has("trend color 3"), "the palette shuts on a pick");
         // The order is as it was: a click is not a drag.
         let order = h.app.sim.as_ref().unwrap().session.trend.signals.clone();
@@ -3045,7 +3076,10 @@ mod simulated {
         c.set_color("bad name", 1);
         c.set_color("x=y", 1);
         c.set_color("", 1);
-        assert!(c.colors.is_empty(), "a name the saved text cannot hold is not kept");
+        assert!(
+            c.colors.is_empty(),
+            "a name the saved text cannot hold is not kept"
+        );
         // Any place in the palette draws: a stored index past its end wraps.
         c.set_color("lamp", 1_000_003);
         let _ = lane_color(&t, &c, "lamp", 0);

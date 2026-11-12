@@ -1268,7 +1268,7 @@ impl App {
     /// Help › About: the product, its version and build, the licence, the site.
     fn about_ui(&mut self, ctx: &egui::Context, hits: &mut Vec<(String, Rect)>) {
         let mut open = self.about;
-        egui::Window::new("About Helmsman")
+        let shown = egui::Window::new("About Helmsman")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
@@ -1308,14 +1308,14 @@ impl App {
                         ctx.open_url(egui::OpenUrl::new_tab(SITE_URL));
                     }
                 });
-                ui.add_space(6.0);
-                let c = ui.button("Close").tip("Closes this window.");
-                hits.push(("about close".to_string(), c.rect));
-                if c.clicked() {
-                    self.about = false;
-                }
             });
-        if !open {
+        // The X in its corner, a click anywhere outside it or Escape shuts
+        // it (Nick, 2026-11-11: no Close button under the text).
+        let rect = shown.map(|s| s.response.rect);
+        if let Some(r) = rect {
+            hits.push(("about".to_string(), r));
+        }
+        if !open || rect.is_none_or(|r| theme::dismissed(ctx, "about", &[r])) {
             self.about = false;
         }
     }
@@ -1833,7 +1833,7 @@ impl App {
         let Some(r) = &mut self.review else { return };
         let was = r.state.session.is_some();
         r.rects.clear();
-        egui::Area::new(egui::Id::unique("header-login"))
+        let panel = egui::Area::new(egui::Id::unique("header-login"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at.right_bottom() + Vec2::new(0.0, 4.0))
@@ -1846,8 +1846,15 @@ impl App {
                     ui.set_max_width(300.0);
                     r.login_ui(ui);
                 });
-            });
+            })
+            .response
+            .rect;
         hits.extend(r.rects.iter().map(|(k, rect)| (format!("login {k}"), *rect)));
+        // A click outside the panel shuts it; one on the button that
+        // opened it is that button's to handle.
+        if theme::dismissed(ctx, "header-login", &[panel, at]) {
+            self.login = false;
+        }
         // Signed in or out: the panel has done its job.
         let now = r.state.session.is_some();
         if was != now {

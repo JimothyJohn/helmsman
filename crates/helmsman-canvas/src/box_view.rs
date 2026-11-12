@@ -1882,12 +1882,13 @@ impl Body for BoxView {
         for m in &modules {
             let selected = self.state.selected.as_deref() == Some(m.name.as_str());
             let arrow = if selected { "▾" } else { "▸" };
-            let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
-                .color(if m.state == "faulted" {
+            let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans)).color(
+                if m.state == "faulted" {
                     crate::theme::theme(ui).ink(RED)
                 } else {
                     t.fg
-                });
+                },
+            );
             let r = ui.selectable_label(selected, text);
             chrome.hit(format!("module {}", m.name), r.rect);
             let r = match &m.fault {

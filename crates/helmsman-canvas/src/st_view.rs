@@ -1164,9 +1164,9 @@ impl Viewer {
             && let Some(p) = hover
             && self.instance_at(cam, p).is_some()
         {
-            response
-                .clone()
-                .on_hover_text_at_pointer("This block has a diagram of its own. Double-click opens it (Alt ] with it picked).");
+            response.clone().on_hover_text_at_pointer(
+                "This block has a diagram of its own. Double-click opens it (Alt ] with it picked).",
+            );
         }
         let pou = &self.module.pous[self.scopes[self.scope].pou].name;
         let old = self
@@ -1866,12 +1866,20 @@ END_PROGRAM
             .nodes
             .iter()
             .filter_map(|n| match &n.kind {
-                NodeKind::Fb { instance, .. } => Some((instance.to_ascii_uppercase(), v.openable().contains(&n.id))),
+                NodeKind::Fb { instance, .. } => {
+                    Some((instance.to_ascii_uppercase(), v.openable().contains(&n.id)))
+                }
                 _ => None,
             })
             .collect();
-        assert!(fbs.contains(&("M".into(), true)), "the motor block opens: {fbs:?}");
-        assert!(fbs.contains(&("BLINK".into(), false)), "a timer does not: {fbs:?}");
+        assert!(
+            fbs.contains(&("M".into(), true)),
+            "the motor block opens: {fbs:?}"
+        );
+        assert!(
+            fbs.contains(&("BLINK".into(), false)),
+            "a timer does not: {fbs:?}"
+        );
         assert!(fbs.contains(&("PARTS".into(), false)), "nor a counter: {fbs:?}");
         // Every block marked opens, and inside the motor nothing does.
         for n in v.openable() {
