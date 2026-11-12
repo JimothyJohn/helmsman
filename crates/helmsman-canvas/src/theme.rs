@@ -422,6 +422,34 @@ pub fn near_pointer(ctx: &egui::Context, key: &str) -> egui::Modal {
     egui::Modal::new(egui::Id::unique(key)).area(area)
 }
 
+/// Whether a popup that is not a modal (a window, a panel under a
+/// button) should shut now (Nick, 2026-11-11: a click outside a popup
+/// closes it, as it does a modal): a press outside every rect of
+/// `inside` (the popup, and the button that opens it), or Escape. The
+/// press that opened it does not count: nothing shuts in the pass it
+/// first shows, by `key`.
+#[must_use]
+pub fn dismissed(ctx: &egui::Context, key: &str, inside: &[egui::Rect]) -> bool {
+    let id = egui::Id::unique(("dismissed", key));
+    let pass = ctx.cumulative_pass_nr();
+    let fresh = ctx.data_mut(|d| {
+        let seen: &mut u64 = d.get_temp_mut_or_insert_with(id, || 0);
+        let fresh = *seen + 1 < pass;
+        *seen = pass;
+        fresh
+    });
+    if fresh {
+        return false;
+    }
+    let outside = ctx.input(|i| {
+        i.pointer.any_pressed()
+            && i.pointer
+                .interact_pos()
+                .is_some_and(|p| !inside.iter().any(|r| r.contains(p)))
+    });
+    outside || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+}
+
 /// Last in a frame: the finger over any enabled widget the pointer is on
 /// that takes a click and is not dragged (a row, a checkbox, a combo box,
 /// a tab, a fold arrow), unless a widget chose its own cursor (a text

@@ -574,11 +574,16 @@ impl App {
                 let targets = self.monitor.targets(&b.state.modules);
                 let t = engineer.then(|| Transport {
                     built: !targets.is_empty(),
-                    running: b
+                    state: if b
                         .state
                         .modules
                         .iter()
-                        .any(|m| targets.contains(&m.name) && m.state != "stopped"),
+                        .any(|m| targets.contains(&m.name) && m.state != "stopped")
+                    {
+                        crate::playground::RunState::Running
+                    } else {
+                        crate::playground::RunState::Paused
+                    },
                     on_box: true,
                 });
                 self.monitor.show(ui, &b.state, &mut self.chrome, engineer, t);
@@ -588,7 +593,7 @@ impl App {
                 s.tick(&ctx);
                 let t = Transport {
                     built: s.session.build.is_some(),
-                    running: s.session.running,
+                    state: s.session.state(),
                     on_box: false,
                 };
                 self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));
@@ -652,10 +657,17 @@ impl App {
                         let on = !s.session.running;
                         s.session.set_running(on);
                     }
-                    Action::Stop => s.session.set_running(false),
+                    Action::Stop => s.session.stop(),
                     _ => {
-                        if !s.session.running {
-                            s.session.step();
+                        if !s.session.running && !s.session.step_to_change() {
+                            let at = ctx.input(|i| i.time);
+                            s.log.info(
+                                at,
+                                format!(
+                                    "Step: nothing changed in {} s of program time.",
+                                    crate::playground::STEP_MS / 1000
+                                ),
+                            );
                         }
                     }
                 }
@@ -1071,6 +1083,30 @@ impl App {
                 .map(|s| (s.session.build.is_some(), s.session.running))
                 .unwrap_or_default()
         });
+        // The simulation's state and clock sit with the glyphs that change
+        // them (Nick, 2026-11-11), not in the header.
+        let stopped = self
+            .sim
+            .as_ref()
+            .is_none_or(|s| s.session.state() == crate::playground::RunState::Stopped);
+        let status = self
+            .sim
+            .as_ref()
+            .filter(|s| self.source == Source::Sim && s.session.build.is_some())
+            .map(|s| {
+                let (text, good) = s.run_status();
+                let t = theme(ui);
+                let color = t.ink(if good {
+                    crate::st_view::brand::GREEN
+                } else {
+                    crate::st_view::brand::RED
+                });
+                let tip = format!(
+                    "The simulation's state and clock, after {} scans.",
+                    s.session.scans
+                );
+                (text, color, tip)
+            });
         let engineer = is_engineer(self.session().as_ref()).is_ok();
         // What the glyphs act on is what the Monitor's do.
         let targets = self
@@ -1099,6 +1135,12 @@ impl App {
                     .inner_margin(4.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            if let Some((text, color, tip)) = &status {
+                                let r = ui
+                                    .label(RichText::new(text).monospace().strong().color(*color))
+                                    .tip(tip);
+                                hits.push(("state".to_string(), r.rect));
+                            }
                             let mut g =
                                 |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {
                                     let r = glyphs::button(ui, icon, enabled, on, tip);
@@ -1114,11 +1156,27 @@ impl App {
                                         "Run (Ctrl+Enter): the program does not compile yet.",
                                     )
                                 } else if running {
-                                    (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+                                    (
+                                        glyphs::Icon::Pause,
+                                        "Pause (Ctrl+Enter): the program holds where it is, every value kept.",
+                                    )
                                 } else {
                                     (glyphs::Icon::Run, "Run (Ctrl+Enter)")
                                 };
                                 g(ui, "run", icon, built, false, tip, Action::RunStop);
+                                g(
+                                    ui,
+                                    "stop",
+                                    glyphs::Icon::Stop,
+                                    built && !stopped,
+                                    false,
+                                    if stopped {
+                                        "Stop (Shift+F8): the program is stopped."
+                                    } else {
+                                        "Stop (Shift+F8): ends the run. Every value goes back to its initial one, the outputs go off and the clock to zero."
+                                    },
+                                    Action::Stop,
+                                );
                                 g(
                                     ui,
                                     "step",
@@ -1126,9 +1184,9 @@ impl App {
                                     built && !running,
                                     false,
                                     if running {
-                                        "Step one scan (F8): stop the program first."
+                                        "Step to the next change (F8): pause the program first."
                                     } else {
-                                        "Step one scan (F8)"
+                                        "Step to the next change (F8): scans until a value changes or the program takes another path."
                                     },
                                     Action::Step,
                                 );
@@ -1213,7 +1271,7 @@ impl App {
     /// Help › About: the product, its version and build, the licence, the site.
     fn about_ui(&mut self, ctx: &egui::Context, hits: &mut Vec<(String, Rect)>) {
         let mut open = self.about;
-        egui::Window::new("About Helmsman")
+        let shown = egui::Window::new("About Helmsman")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
@@ -1253,14 +1311,14 @@ impl App {
                         ctx.open_url(egui::OpenUrl::new_tab(SITE_URL));
                     }
                 });
-                ui.add_space(6.0);
-                let c = ui.button("Close").tip("Closes this window.");
-                hits.push(("about close".to_string(), c.rect));
-                if c.clicked() {
-                    self.about = false;
-                }
             });
-        if !open {
+        // The X in its corner, a click anywhere outside it or Escape shuts
+        // it (Nick, 2026-11-11: no Close button under the text).
+        let rect = shown.map(|s| s.response.rect);
+        if let Some(r) = rect {
+            hits.push(("about".to_string(), r));
+        }
+        if !open || rect.is_none_or(|r| theme::dismissed(ctx, "about", &[r])) {
             self.about = false;
         }
     }
@@ -1778,7 +1836,7 @@ impl App {
         let Some(r) = &mut self.review else { return };
         let was = r.state.session.is_some();
         r.rects.clear();
-        egui::Area::new(egui::Id::unique("header-login"))
+        let panel = egui::Area::new(egui::Id::unique("header-login"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at.right_bottom() + Vec2::new(0.0, 4.0))
@@ -1791,8 +1849,15 @@ impl App {
                     ui.set_max_width(300.0);
                     r.login_ui(ui);
                 });
-            });
+            })
+            .response
+            .rect;
         hits.extend(r.rects.iter().map(|(k, rect)| (format!("login {k}"), *rect)));
+        // A click outside the panel shuts it; one on the button that
+        // opened it is that button's to handle.
+        if theme::dismissed(ctx, "header-login", &[panel, at]) {
+            self.login = false;
+        }
         // Signed in or out: the panel has done its job.
         let now = r.state.session.is_some();
         if was != now {

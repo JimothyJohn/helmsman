@@ -25,6 +25,59 @@ pub const MIN_PERIOD: u64 = 1;
 pub const MAX_PERIOD: u64 = 1000;
 /// At most this many scans per frame (a slow tab catches up gradually).
 pub const MAX_CATCH_UP: u64 = 500;
+/// How far a Step looks for a change, ms of program time.
+pub const STEP_MS: u64 = 60_000;
+
+/// Where a simulation's run stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunState {
+    /// Not running, nothing of a run kept: initial values, clock at zero.
+    Stopped,
+    Running,
+    /// Not running, the state held (or a scan stopped at a breakpoint).
+    Paused,
+    Faulted,
+}
+
+impl RunState {
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Faulted => "faulted",
+        }
+    }
+}
+
+/// What a Step compares between scans: which of the program's own
+/// statements ran and which arms they took, and every value except a
+/// TIME's. A timer's elapsed
+/// time moves every scan while nothing else does; its output turning on
+/// is the change.
+#[must_use]
+pub fn picture(t: &Trace) -> (Vec<bool>, Vec<Value>) {
+    let map = t.map();
+    let mut path = Vec::new();
+    for (k, info) in map.stmts().iter().enumerate() {
+        // The library's own statements (a TON's start branch) are not the
+        // program's path.
+        if info.system {
+            continue;
+        }
+        let id = StmtId(u32::try_from(k).unwrap_or(u32::MAX));
+        path.push(t.hits(id) > 0);
+        path.extend(t.arm_hits(id).iter().map(|&n| n > 0));
+    }
+    let values = map
+        .vars()
+        .zip(t.values())
+        .filter(|((_, ty), _)| *ty != Ty::Time)
+        .map(|(_, (_, v))| v)
+        .collect();
+    (path, values)
+}
 /// How many scans before a frame's last are traced too
 /// ([`Session::earlier`]): a frame's worth at the shortest period, and
 /// never the whole of a long catch-up.
@@ -916,18 +969,17 @@ impl Session {
             .map(|p| p.value)
     }
 
-    /// Run or stop. Starting clears a fault and restarts the program cold
-    /// if it had faulted. Starting from a breakpoint goes on to the
-    /// scan's next breakpoint hit, and runs on from there if there is
-    /// none; stopping leaves a paused scan paused.
+    /// Run or pause (Nick, 2026-11-11: a pause holds the state, a stop
+    /// is [`Self::stop`]). Paused, every variable and output stays as the
+    /// last scan left it and the clock stands. Starting clears a fault
+    /// and restarts the program cold if it had faulted. Starting from a
+    /// breakpoint goes on to the scan's next breakpoint hit, and runs on
+    /// from there if there is none; pausing leaves a paused scan paused.
     pub fn set_running(&mut self, on: bool) {
         if on && self.fault.is_some() {
             self.restart();
         }
         self.last = None;
-        if !on && self.running {
-            self.silence();
-        }
         if on
             && let Some(skip) = self.paused
             && self.scan_or_pause(skip + 1)
@@ -935,6 +987,62 @@ impl Session {
             return;
         }
         self.running = on;
+    }
+
+    /// Stop: the program no longer runs and nothing of its run is left.
+    /// Every variable is back at its initial value, the outputs are off,
+    /// the clock and the trend are at zero and there is no scan to show,
+    /// so the diagram and the panels read as with nothing running.
+    pub fn stop(&mut self) {
+        self.running = false;
+        self.last = None;
+        self.acc_ms = 0.0;
+        self.restart();
+        self.silence();
+    }
+
+    /// Where the run stands, for the label beside the run glyphs.
+    #[must_use]
+    pub const fn state(&self) -> RunState {
+        if self.fault.is_some() {
+            RunState::Faulted
+        } else if self.running {
+            RunState::Running
+        } else if self.paused.is_some() || self.scans > 0 {
+            RunState::Paused
+        } else {
+            RunState::Stopped
+        }
+    }
+
+    /// Step (Nick, 2026-11-11: to the next change, not one scan on):
+    /// scans until one differs from the scan shown in the path it took
+    /// through the program or in a value ([`picture`]), and shows that
+    /// one. A breakpoint or a fault on the way ends it there. With no
+    /// scan shown yet it runs one. Returns whether it got somewhere: a
+    /// program in which nothing changes within [`STEP_MS`] of its own
+    /// time stops there.
+    pub fn step_to_change(&mut self) -> bool {
+        let before = self
+            .trace
+            .as_ref()
+            .filter(|_| self.paused.is_none() && self.fault.is_none())
+            .map(picture);
+        self.step();
+        let Some(before) = before else { return true };
+        let most = (STEP_MS / self.period_ms.max(1)).max(1);
+        for _ in 1..most {
+            if self.fault.is_some() || self.paused.is_some() {
+                return true;
+            }
+            if self.trace.as_ref().map(picture).as_ref() != Some(&before) {
+                return true;
+            }
+            self.step();
+        }
+        self.fault.is_some()
+            || self.paused.is_some()
+            || self.trace.as_ref().map(picture).as_ref() != Some(&before)
     }
 
     /// Sets or clears a breakpoint on `id` (Shift F9). Clearing the one a

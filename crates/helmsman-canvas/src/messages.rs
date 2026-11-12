@@ -35,13 +35,26 @@ pub struct Log {
     items: VecDeque<Message>,
     /// Which levels the tab shows: info, warning, error (all, to start).
     pub show: [bool; 3],
+    /// When the newest error came in, page time.
+    error_at: Option<f64>,
+    /// Errors that came in since the tab was last on screen.
+    unseen: usize,
+    /// An error came in and the Editor has not been told yet
+    /// ([`Self::take_fresh`]).
+    fresh: bool,
 }
+
+/// How long the Messages tab pulses after an error comes in, seconds.
+pub const FLASH: f64 = 4.0;
 
 impl Default for Log {
     fn default() -> Self {
         Self {
             items: VecDeque::new(),
             show: [true; 3],
+            error_at: None,
+            unseen: 0,
+            fresh: false,
         }
     }
 }
@@ -65,6 +78,11 @@ impl Log {
             .is_some_and(|m| m.level == level && m.text == text)
         {
             return;
+        }
+        if level == Level::Error {
+            self.error_at = Some(at);
+            self.unseen += 1;
+            self.fresh = true;
         }
         self.items.push_back(Message { at, level, text });
         while self.items.len() > KEEP {
@@ -107,14 +125,32 @@ impl Log {
         self.items.iter().filter(|m| m.level == Level::Error).count()
     }
 
-    /// The tab's label: "Messages", or "Messages · 2 errors".
+    /// Whether an error came in since this was last asked.
+    pub fn take_fresh(&mut self) -> bool {
+        std::mem::take(&mut self.fresh)
+    }
+
+    /// Whether the tab is pulsing at `now`: an error came in within
+    /// [`FLASH`].
     #[must_use]
-    pub fn label(&self) -> String {
-        match self.errors() {
-            0 => "Messages".into(),
-            1 => "Messages · 1 error".into(),
-            n => format!("Messages · {n} errors"),
+    pub fn flashing(&self, now: f64) -> bool {
+        self.error_at.is_some_and(|at| (0.0..FLASH).contains(&(now - at)))
+    }
+
+    /// How red the Messages tab is at `now`, 0 to 1: `None` with nothing
+    /// wrong, a steady red while an error stands (`standing`) or one has
+    /// come in since the tab was last on screen, and a slow pulse on top
+    /// for [`FLASH`] after a new one.
+    #[must_use]
+    pub fn alarm(&self, now: f64, standing: bool) -> Option<f32> {
+        const STEADY: f32 = 0.3;
+        if let Some(at) = self.error_at.filter(|_| self.flashing(now)) {
+            // Three even swells a second and a half apart, from steady.
+            #[allow(clippy::cast_possible_truncation)]
+            let swell = (0.5 - 0.5 * ((now - at) * std::f64::consts::TAU / 1.33).cos()) as f32;
+            return Some(STEADY + (1.0 - STEADY) * swell);
         }
+        (standing || self.unseen > 0).then_some(STEADY)
     }
 
     /// The messages the filters let through.
@@ -154,6 +190,7 @@ impl Log {
     /// The rows are selectable and Copy all puts them on the clipboard
     /// (Nick, 2026-11-07: errors must paste into a bug report).
     pub fn ui(&mut self, ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome) {
+        self.unseen = 0;
         let counts = self.counts();
         ui.horizontal_wrapped(|ui| {
             for (k, (name, color)) in [
@@ -164,14 +201,15 @@ impl Log {
             .into_iter()
             .enumerate()
             {
-                let text = RichText::new(format!("{name} {}", counts[k])).color(color);
-                let r = ui
-                    .add(egui::Button::selectable(self.show[k], text))
-                    .tip(format!("Shows or hides the {name}."));
+                // A tick box (Nick, 2026-11-11: what a toggle does must be
+                // plain): ticked and in its colour while the level shows,
+                // empty and grey while it is hidden.
+                let ink = if self.show[k] { color } else { theme(ui).muted };
+                let text = RichText::new(format!("{name} {}", counts[k])).color(ink);
+                let r = ui.checkbox(&mut self.show[k], text).tip(format!(
+                    "Ticked: the {name} are listed. Unticked: they are left out."
+                ));
                 chrome.hit(format!("messages {name}"), r.rect);
-                if r.clicked() {
-                    self.show[k] = !self.show[k];
-                }
             }
             if !self.items.is_empty() {
                 let r = ui
@@ -186,10 +224,15 @@ impl Log {
         let t = theme(ui);
         if self.items.is_empty() {
             ui.label(RichText::new("Nothing to report yet.").color(t.muted));
+            // The panel keeps the height it has on the Trend tab.
+            ui.allocate_space(ui.available_size());
             return;
         }
         egui::ScrollArea::vertical()
             .id_salt("messages")
+            // Down to the panel's edge however few the rows: the panel
+            // keeps its height from one tab to the other.
+            .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 for m in self.shown() {
@@ -250,13 +293,13 @@ mod tests {
     #[test]
     fn the_log_is_bounded_dedupes_repeats_and_counts_errors() {
         let mut l = Log::default();
-        assert!(l.is_empty() && l.label() == "Messages");
+        assert!(l.is_empty() && l.errors() == 0);
         l.info(1.0, "a");
         l.info(1.5, "a");
         assert_eq!(l.len(), 1, "a repeat is kept once");
         l.error(2.0, "b");
         l.error(2.5, "c");
-        assert_eq!(l.label(), "Messages · 2 errors");
+        assert_eq!(l.errors(), 2);
         l.warning(3.0, "d");
         assert_eq!(l.errors(), 2);
         for k in 0..(KEEP + 50) {

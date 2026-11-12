@@ -70,9 +70,18 @@ def layout(left=1, right=1, pane="code", tab="io", scan=0, trend=1, bottom="tren
 # points (x, y, width, height): a step that must change one is checked
 # against it. The clock, the diagram's values and the trend never hold.
 LEFT = (0, 120, 300, 500)
-RIGHT_TABS = (1180, 84, 210, 30)
+RIGHT_TABS = (1180, 56, 210, 30)
 BOTTOM_TABS = (330, 575, 300, 50)
-BANNER = (0, 56, 700, 24)
+# The Messages tab's rows, under its filters (what a deploy says is there
+# since 2026-11-11, not in a line under the header).
+MESSAGES = (330, 640, 700, 200)
+# The tabs are glyphs (2026-11-11): the left pane's Code, the right
+# panel's I/O and Agent, the bottom panel's Trend and Messages.
+TAB_CODE = (106, 71)
+TAB_IO = (1230, 71)
+TAB_AGENT = (1271, 71)
+TAB_TREND = (344, 600)
+TAB_MESSAGES = (385, 600)
 HEADER_RIGHT = (1150, 8, 200, 36)
 MOD = "ControlOrMeta"
 
@@ -141,18 +150,21 @@ def playground(ctx, base, out):
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT)
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.
-    r.step("code", lambda: r.click(183, 98), LEFT)
+    r.step("code", lambda: r.click(*TAB_CODE), LEFT)
     # The right panel's tabs: Agent, then I/O (two tabs since 2026-11-08).
-    r.click(1290, 98); r.wait(600); r.shot("agent-tab")
-    r.click(1232, 98); r.wait(600); r.shot("io-tab")
+    r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
+    r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     for x, name in ((137, "file-menu"), (190, "edit-menu"), (235, "view-menu"), (283, "help-menu")):
         r.click(x, 26); r.wait(500); r.shot(name); r.key("Escape")
     # Type a comment into the program, then deploy it.
     def edit():
-        r.click(130, 300); r.wait(200)
+        # The empty last line, after END_PROGRAM.
+        r.click(130, 568); r.wait(200)
         r.page.keyboard.type("(* smoke *)")
     r.step("edited", edit, LEFT, 1200)
-    r.step("deployed", lambda: r.key(f"Shift+{MOD}+Enter"), BANNER, 1200)
+    r.click(*TAB_MESSAGES); r.wait(600)
+    r.step("deployed", lambda: r.key(f"Shift+{MOD}+Enter"), MESSAGES, 1200)
+    r.click(*TAB_TREND); r.wait(400)
     r.click(989, 268); r.wait(1000); r.shot("diagram-why")
     r.step("trend-hidden", lambda: r.key("Alt+Shift+Digit2"), BOTTOM_TABS)
     r.key("Alt+Shift+Digit2"); r.wait(400)
@@ -174,7 +186,7 @@ def playground(ctx, base, out):
     r.page.close()
     r2 = Run(open_app(ctx, base, "?playground", layout(pane="files", light=1)), out, "pg-light")
     r2.wait(2500); r2.shot("files")
-    r2.click(1290, 98); r2.wait(600); r2.shot("agent-tab")
+    r2.click(*TAB_AGENT); r2.wait(600); r2.shot("agent-tab")
     r2.click(1313, 26); r2.wait(1500); r2.shot("monitor")
     problems += r2.problems()
     r2.page.close()
@@ -197,8 +209,8 @@ def box(ctx, base, out):
     r.step("signed-in", sign_in, HEADER_RIGHT, 6000)
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT, 800)
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT, 800)
-    r.click(1290, 98); r.wait(800); r.shot("agent-tab")
-    r.click(1232, 98); r.wait(600); r.shot("io-tab")
+    r.click(*TAB_AGENT); r.wait(800); r.shot("agent-tab")
+    r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     problems = r.problems()
     r.page.close()
     # The Monitor by its URL: the header's switch sits elsewhere once

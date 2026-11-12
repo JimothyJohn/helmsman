@@ -2336,26 +2336,109 @@ fn a_deploy_that_does_not_compile_leaves_the_program_and_its_clock() {
 }
 
 #[test]
-fn the_lamp_goes_off_when_the_simulation_stops() {
+fn a_pause_holds_the_state_and_a_stop_resets_it() {
+    use crate::playground::RunState;
     let mut s = Session::new(example("latch"));
+    assert_eq!(s.state(), RunState::Stopped, "nothing has run");
     s.set_input("start", b(true));
     s.set_running(true);
     s.advance(0.0);
     s.advance(0.1);
+    assert_eq!(s.state(), RunState::Running);
     assert_eq!(s.value("motor"), Some(b(true)));
     assert_eq!(s.build.as_ref().unwrap().image.q[0] & 1, 1);
+    // Pause (Nick, 2026-11-11): everything as the last scan left it,
+    // however long the page waits.
+    s.set_input("start", b(false));
     s.set_running(false);
+    let (scans, now) = (s.scans, s.now_ms);
+    s.advance(5.0);
+    s.advance(9.0);
+    assert_eq!(s.state(), RunState::Paused);
+    assert_eq!(s.value("motor"), Some(b(true)), "a paused output holds");
+    assert_eq!(s.build.as_ref().unwrap().image.q[0] & 1, 1);
+    assert_eq!((s.scans, s.now_ms), (scans, now), "the clock stands");
+    assert!(s.trace.is_some(), "the last scan is still shown");
+    // Run on: from where it was, the motor sealed in with start released.
+    s.set_running(true);
+    s.advance(9.1);
+    s.advance(9.2);
+    assert_eq!(s.value("motor"), Some(b(true)), "sealed in still");
+    assert!(s.now_ms > now, "the clock went on from where it stood");
+    // Stop: nothing of the run is left.
+    s.stop();
+    assert_eq!(s.state(), RunState::Stopped);
+    assert!(!s.running);
     assert_eq!(
         s.value("motor"),
         Some(b(false)),
-        "a stopped module's outputs are off"
+        "a stopped program's outputs are off"
     );
     assert_eq!(s.build.as_ref().unwrap().image.q[0], 0);
-    // Run again: the next scan writes it back.
+    assert_eq!((s.scans, s.now_ms), (0, 0));
+    assert!(s.trace.is_none() && s.earlier().is_empty(), "no scan to show");
+    assert!(s.trend.samples.is_empty());
+    s.advance(20.0);
+    assert_eq!((s.scans, s.now_ms), (0, 0), "and it stays stopped");
+    // Run again: from the initial values, so the seal is gone.
     s.set_running(true);
-    s.advance(1.0);
-    s.advance(1.1);
-    assert_eq!(s.value("motor"), Some(b(true)), "sealed in still");
+    s.advance(20.1);
+    s.advance(20.2);
+    assert_eq!(s.value("motor"), Some(b(false)), "the latch started over");
+    // Stopping a faulted or a never-run program is the same reset.
+    let mut s = Session::new(example("latch"));
+    s.stop();
+    assert_eq!(s.state(), RunState::Stopped);
+}
+
+/// Nick, 2026-11-11: Step goes to the next change, not one scan on.
+#[test]
+fn step_runs_to_the_next_change() {
+    // Blink: 49 scans of a timer counting, then its output turns on.
+    let mut s = Session::new(example("blink"));
+    assert!(s.step_to_change(), "the first step shows a scan");
+    assert_eq!(s.scans, 1);
+    assert!(s.step_to_change());
+    assert!(
+        s.scans > 40,
+        "past the scans where only the timer's time moved: {}",
+        s.scans
+    );
+    let at = s.scans;
+    let lamp = s.value("lamp");
+    // The steps after it are each a change: the lamp flips within two.
+    assert!(s.step_to_change());
+    assert!(s.step_to_change());
+    assert!(s.scans <= at + 2, "{} then {}", at, s.scans);
+    assert!(s.scans > at);
+    let _ = lamp;
+    // Every step lands on a scan that differs from the one before it.
+    let mut s = Session::new(example("blink"));
+    s.step_to_change();
+    for _ in 0..6 {
+        let before = crate::playground::picture(s.trace.as_ref().unwrap());
+        assert!(s.step_to_change());
+        assert_ne!(crate::playground::picture(s.trace.as_ref().unwrap()), before);
+    }
+    // A program in which nothing ever changes: the step gives up after
+    // STEP_MS of program time and says so.
+    let mut s = Session::new("PROGRAM still\nVAR_OUTPUT q : BOOL; END_VAR\nq := TRUE;\nEND_PROGRAM\n");
+    assert!(s.diags.is_empty(), "{:?}", s.diag_lines());
+    assert!(s.step_to_change());
+    assert!(!s.step_to_change(), "nothing changed");
+    assert_eq!(s.now_ms, crate::playground::STEP_MS + s.period_ms);
+    // A value that changes every scan: one scan a step.
+    let mut s = Session::new("PROGRAM count\nVAR_OUTPUT n : INT; END_VAR\nn := n + 1;\nEND_PROGRAM\n");
+    s.step_to_change();
+    s.step_to_change();
+    s.step_to_change();
+    assert_eq!(s.scans, 3);
+    // A fault on the way ends the step at the fault.
+    let mut s = Session::new(FAULTY);
+    s.step_to_change();
+    s.set_input("d", Value::Int(0));
+    assert!(s.step_to_change());
+    assert!(s.fault.is_some());
 }
 
 const FAULTY: &str = "PROGRAM f

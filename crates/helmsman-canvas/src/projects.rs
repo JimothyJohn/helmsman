@@ -332,7 +332,7 @@ impl FilesUi {
                 text.push_str("  ● running");
             }
             let color = if p.running { t.accent } else { t.fg };
-            let text = RichText::new(text).monospace().color(color);
+            let text = RichText::new(text).color(color);
             let tip = if p.example() {
                 let title = example_title(&p.name).unwrap_or(&p.name);
                 format!("{title}: click to make your own copy of this example, under a name you choose.")
@@ -486,9 +486,7 @@ impl FilesUi {
                 let r = ui
                     .selectable_label(
                         false,
-                        RichText::new(format!("{arrow} earlier ({})", earlier.len()))
-                            .monospace()
-                            .color(t.muted),
+                        RichText::new(format!("{arrow} earlier ({})", earlier.len())).color(t.muted),
                     )
                     .tip("Earlier iterations of the program, newest first. Click to show or hide them.");
                 chrome.hit("earlier", r.rect);
@@ -507,13 +505,11 @@ impl FilesUi {
                     if *dirty { " ●" } else { "" },
                     if runs { "  · runs" } else { "" }
                 );
-                let r = ui
-                    .selectable_label(here, RichText::new(text).monospace())
-                    .tip(if runs {
-                        "The file that runs. Double-click to edit it; right-click for more."
-                    } else {
-                        "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
-                    });
+                let r = ui.selectable_label(here, RichText::new(text)).tip(if runs {
+                    "The file that runs. Double-click to edit it; right-click for more."
+                } else {
+                    "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
+                });
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {
                     self.picked = Some(Picked::File {
@@ -932,12 +928,8 @@ pub fn diags_ui(ui: &mut egui::Ui, diags: &[Diag], chrome: &mut Chrome) -> Optio
         };
         let r = ui
             .add(
-                egui::Label::new(
-                    RichText::new(d.label())
-                        .monospace()
-                        .color(crate::theme::theme(ui).ink(color)),
-                )
-                .sense(egui::Sense::click()),
+                egui::Label::new(RichText::new(d.label()).color(crate::theme::theme(ui).ink(color)))
+                    .sense(egui::Sense::click()),
             )
             .tip(tip);
         chrome.hit(format!("diag {k}"), r.rect);

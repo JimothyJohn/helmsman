@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, RichText, Sense, Stroke};
+use eframe::egui::{self, CornerRadius, FontId, Pos2, RichText, Sense, Stroke};
 use helmsman_iec::Value;
 use serde_json::{Value as Json, json};
 
@@ -35,17 +35,6 @@ pub const WINDOW_MS: u64 = 600_000;
 pub const MAX_POINTS: usize = 2400;
 /// Seconds between history asks while the tab is open.
 pub const RENEW_S: f64 = 600.0;
-
-/// Line colours, in pin order (the last, near white, is the page's ink
-/// in light mode).
-const LINES: [Color32; 6] = [
-    Color32::from_rgb(0xFF, 0xC2, 0x0E),
-    Color32::from_rgb(0x4F, 0xC3, 0xF7),
-    Color32::from_rgb(0x81, 0xC7, 0x84),
-    Color32::from_rgb(0xFF, 0x8A, 0x65),
-    Color32::from_rgb(0xBA, 0x68, 0xC8),
-    Color32::from_rgb(0xE0, 0xE0, 0xE0),
-];
 
 /// Whose pins these are: a person signed in (their label), or the browser.
 fn owner(s: Option<&Session>) -> Option<String> {
@@ -350,7 +339,7 @@ impl BoxTrend {
         }
         window_slider(ui, chrome, &mut self.window_ms);
         ui.add_space(6.0);
-        let plot = self.chart(ui);
+        let plot = self.chart(ui, chrome);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.pins) {
             self.move_pin(from, to, session);
         }
@@ -358,7 +347,7 @@ impl BoxTrend {
 
     /// Draws the chart; returns the rect it filled (the lanes' handles go
     /// over it).
-    fn chart(&self, ui: &mut egui::Ui) -> egui::Rect {
+    fn chart(&self, ui: &mut egui::Ui, chrome: &Chrome) -> egui::Rect {
         let t = theme(ui);
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
@@ -388,10 +377,7 @@ impl BoxTrend {
         for (k, name) in self.pins.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = match k % LINES.len() {
-                5 if !t.dark => t.fg,
-                i => t.ink(LINES[i]),
-            };
+            let color = crate::playground_view::lane_color(&t, chrome, name, k);
             let line: &[(u64, f64)] = self.series.get(name).map_or(&[], Vec::as_slice);
             // The point before the window holds its value into it; the
             // scale is the window's.

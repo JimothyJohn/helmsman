@@ -156,6 +156,34 @@ impl Harness {
         })
     }
 
+    /// The text the last frame drew in the code face left of `x`.
+    fn mono_left_of(&self, x: f32) -> Vec<String> {
+        fn walk(shape: &egui::Shape, x: f32, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, x, out)),
+                egui::Shape::Text(t) if t.pos.x < x => {
+                    let job = &t.galley.job;
+                    for sec in &job.sections {
+                        let text = job
+                            .text
+                            .get(sec.byte_range.start.0..sec.byte_range.end.0)
+                            .unwrap_or("");
+                        if !text.trim().is_empty() && sec.format.font_id.family == egui::FontFamily::Monospace
+                        {
+                            out.push(text.trim().chars().take(60).collect());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for c in &self.shapes {
+            walk(&c.shape, x, &mut out);
+        }
+        out
+    }
+
     /// Whether the last frame drew a piece of text containing `needle`.
     fn drew(&self, needle: &str) -> bool {
         fn walk(shape: &egui::Shape, needle: &str) -> bool {
@@ -229,7 +257,9 @@ mod glyphs_and_help {
         let mut h = Harness::new(App::sim());
         let diagram = h.app.chrome.diagram;
         assert_ne!(diagram, Rect::NOTHING);
-        for k in ["run", "step", "restart", "save", "upload", "download"] {
+        for k in [
+            "state", "run", "stop", "step", "restart", "save", "upload", "download",
+        ] {
             let r = h.rect(k);
             assert!(
                 diagram.contains(r.center()),
@@ -242,16 +272,56 @@ mod glyphs_and_help {
             last.right() > diagram.right() - 40.0,
             "the strip ends at the right edge: {last:?}"
         );
+        // Nick, 2026-11-11: the state and the clock are right beside the
+        // glyphs that change them, not in the header.
+        let (state, run) = (h.rect("state"), h.rect("run"));
+        assert!(state.right() <= run.left() && run.left() - state.right() < 24.0);
+        assert!(
+            (state.center().y - run.center().y).abs() < 8.0,
+            "{state:?} beside {run:?}"
+        );
+        assert!(h.drew("running · "), "the running clock");
         assert!(h.app.sim.as_ref().unwrap().session.running);
+        // Pause holds the state; Step goes to the next change.
         h.press("run");
-        assert!(!h.app.sim.as_ref().unwrap().session.running, "the glyph stops");
-        let scans = h.app.sim.as_ref().unwrap().session.scans;
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "the glyph pauses");
+        h.frame(vec![]);
+        assert!(h.drew("paused · "));
+        let (scans, now) = {
+            let s = &h.app.sim.as_ref().unwrap().session;
+            (s.scans, s.now_ms)
+        };
+        assert!(scans > 0, "what ran is kept");
+        h.wait(0.5);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().session.now_ms,
+            now,
+            "the clock stands"
+        );
         h.press("step");
-        assert_eq!(h.app.sim.as_ref().unwrap().session.scans, scans + 1);
+        assert!(
+            h.app.sim.as_ref().unwrap().session.scans > scans,
+            "a step moves on"
+        );
         h.press("restart");
         assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
         h.press("run");
         assert!(h.app.sim.as_ref().unwrap().session.running, "and starts again");
+        // Stop ends the run: initial values, clock at zero, no scan shown.
+        h.wait(0.3);
+        h.press("stop");
+        {
+            let s = &h.app.sim.as_ref().unwrap().session;
+            assert!(!s.running && s.trace.is_none());
+            assert_eq!((s.scans, s.now_ms), (0, 0));
+        }
+        h.frame(vec![]);
+        assert!(h.drew("stopped · 0.0s"));
+        h.press("run");
+        assert!(
+            h.app.sim.as_ref().unwrap().session.running,
+            "and runs from the start"
+        );
         // The Monitor has no diagram, so no file glyphs; the transport is
         // in its header (Nick, 2026-11-01).
         h.press("monitor");
@@ -294,6 +364,9 @@ mod glyphs_and_help {
         let mut h = Harness::new(App::sim());
         h.wait(0.2);
         h.app.sim.as_mut().unwrap().session.fault = Some("division by zero at line 7".into());
+        h.wait(0.2);
+        h.press("bottom messages");
+        // The panel takes the tab's height: let it settle.
         h.wait(0.2);
         h.press("fault copy");
         assert_eq!(
@@ -360,9 +433,21 @@ mod glyphs_and_help {
         h.press("help about");
         assert!(h.app.about);
         h.frame(vec![]);
-        assert!(h.has("about close"));
-        h.press("about close");
-        assert!(!h.app.about);
+        // Nick, 2026-11-11: no Close button under the text. A click
+        // inside the window leaves it open; one outside it, or Escape,
+        // shuts it.
+        assert!(!h.has("about close"));
+        let about = h.rect("about");
+        h.click(about.center());
+        assert!(h.app.about, "a click on the window keeps it");
+        h.click(about.left_bottom() + eframe::egui::Vec2::new(-40.0, 40.0));
+        assert!(!h.app.about, "a click outside shuts it");
+        h.press("bar help");
+        h.press("help about");
+        h.frame(vec![]);
+        assert!(h.app.about);
+        h.key(eframe::egui::Modifiers::NONE, eframe::egui::Key::Escape);
+        assert!(!h.app.about, "Escape too");
     }
 
     /// The UI review of 2026-11-10: "Monitor" touched the edge of the
@@ -857,27 +942,36 @@ END_PROGRAM",
         h.press("monitor");
         assert_eq!(h.app.screen, Screen::Monitor);
         h.frame(vec![]);
-        for k in ["run", "step", "restart"] {
+        for k in ["run", "stop", "step", "restart"] {
             assert!(h.has(k), "the Monitor has {k}");
         }
         let running = |h: &Harness| h.app.sim.as_ref().unwrap().session.running;
         let scans = |h: &Harness| h.app.sim.as_ref().unwrap().session.scans;
         assert!(running(&h), "the example opens running");
         h.press("run");
-        assert!(!running(&h), "stopped from the Monitor");
+        assert!(!running(&h), "paused from the Monitor");
         let n = scans(&h);
+        assert!(n > 0, "a pause keeps what ran");
         h.press("step");
-        assert_eq!(scans(&h), n + 1, "one scan");
+        assert!(scans(&h) > n, "on to the next change");
         h.press("restart");
         assert_eq!(scans(&h), 0, "a cold restart");
         h.press("run");
         assert!(running(&h), "and running again");
         // The keys, on the Monitor: Ctrl Enter stops, F8 steps.
         h.key(Modifiers::COMMAND, Key::Enter);
-        assert!(!running(&h), "Ctrl Enter stops on the Monitor");
+        assert!(!running(&h), "Ctrl Enter pauses on the Monitor");
         let n = scans(&h);
         h.key(Modifiers::NONE, Key::F8);
-        assert_eq!(scans(&h), n + 1, "F8 steps on the Monitor");
+        assert!(scans(&h) > n, "F8 steps on the Monitor");
+        // Shift F8 and the Stop glyph end the run.
+        h.key(Modifiers::SHIFT, Key::F8);
+        assert_eq!(scans(&h), 0, "Shift F8 stops: nothing of the run is left");
+        h.press("run");
+        h.wait(0.2);
+        h.press("stop");
+        assert!(!running(&h));
+        assert_eq!(scans(&h), 0, "the glyph too");
         // Still no Save, Upload or Download there: nothing to edit.
         assert!(!h.has("save") && !h.has("download"));
     }
@@ -1197,7 +1291,6 @@ mod chrome {
             Some(serde_json::json!({ "transport": { "https": false, "fingerprint": null } }));
         h.frame(vec![]);
         assert!(!h.has("tls fingerprint"));
-        h.press("about close");
     }
 
     #[test]
@@ -1293,10 +1386,100 @@ mod chrome {
         h.press("right");
         assert!(!h.app.chrome.right);
         h.wait(0.5);
-        assert!(!h.has("tab io"), "the tabs fold with the panel");
         // Remembered per browser: what the app saves reads back the same.
         let back = Chrome::restored(&h.app.chrome.saved());
         assert_eq!((back.left, back.right, back.pane), (false, false, Pane::Code));
+    }
+
+    /// Nick, 2026-11-11: a folded pane keeps its tabs as glyphs down the
+    /// strip, and a click on one opens the pane on that tab.
+    #[test]
+    fn a_folded_panes_strip_keeps_its_tabs_and_each_opens_the_pane_on_it() {
+        let mut h = Harness::new(App::sim());
+        h.press("left");
+        h.press("right");
+        h.wait(0.5);
+        assert!(!h.app.chrome.left && !h.app.chrome.right);
+        for key in ["pane files", "pane devices", "pane code", "tab io", "tab claude"] {
+            let r = h.rect(key);
+            let edge = if key.starts_with("pane") { 0.0 } else { h.size.x };
+            assert!(
+                (r.center().x - edge).abs() <= STRIP,
+                "{key} is on its strip: {r:?}"
+            );
+            assert!(
+                r.width() >= 24.0 && r.height() >= 24.0,
+                "{key} is a target: {r:?}"
+            );
+        }
+        h.press("pane devices");
+        h.wait(0.5);
+        assert!(h.app.chrome.left, "the pane opens");
+        assert_eq!(h.app.chrome.pane, Pane::Devices, "on the tab clicked");
+        h.press("tab claude");
+        h.wait(0.5);
+        assert!(h.app.chrome.right, "the panel opens");
+        assert_eq!(h.app.chrome.tab, Tab::Claude);
+        // The chevron under them still opens a pane where it was.
+        h.press("left");
+        h.wait(0.5);
+        h.press("left");
+        h.wait(0.5);
+        assert!(h.app.chrome.left);
+        assert_eq!(h.app.chrome.pane, Pane::Devices);
+    }
+
+    /// Nick, 2026-11-11: nothing is said in a line under the menus. What
+    /// needs saying is in the Messages tab, which goes red on an error
+    /// (pulsing at first), stays red while the error stands or is unread,
+    /// and opens the bottom panel if it was shut.
+    #[test]
+    fn an_error_is_in_the_messages_tab_which_goes_red_and_opens_a_shut_panel() {
+        use crate::editor::Bottom;
+        use crate::messages::FLASH;
+        let mut h = Harness::new(App::sim());
+        h.wait(0.2);
+        let top = h.app.chrome.diagram.top();
+        let log = |h: &Harness| {
+            let l = &h.app.sim.as_ref().unwrap().log;
+            (l.alarm(h.time, false), l.flashing(h.time))
+        };
+        assert_eq!(log(&h), (None, false), "nothing wrong, nothing red");
+        // The bottom panel shut: a fault opens it on the Messages.
+        h.app.chrome.trend = false;
+        h.wait(0.2);
+        h.app.sim.as_mut().unwrap().session.fault = Some("division by zero at line 7".into());
+        h.wait(0.2);
+        h.wait(0.5);
+        assert!(h.app.chrome.trend, "the panel opened");
+        assert_eq!(h.app.chrome.bottom, Bottom::Messages);
+        assert!(h.has("fault"), "the fault is in the tab");
+        assert!(h.rect("fault").top() > h.rect("bottom messages").bottom());
+        let now = h.app.chrome.diagram.top();
+        assert!(
+            (now - top).abs() < 0.5,
+            "no line pushed the page down: {top} to {now}"
+        );
+        let (alarm, flashing) = log(&h);
+        assert!(alarm.is_some() && flashing, "red and pulsing");
+        // On the Trend tab the fault still stands: red, steady once the
+        // pulse is over, and it never stops while the fault is there.
+        h.press("bottom trend");
+        h.wait(FLASH + 0.5);
+        let l = &h.app.sim.as_ref().unwrap().log;
+        assert!(!l.flashing(h.time), "the pulse ends");
+        assert!(l.alarm(h.time, true).is_some(), "red while the fault stands");
+        // A new error while looking at the Trend: unread, so red on its
+        // own account until the Messages are looked at.
+        let at = h.time;
+        h.app.sim.as_mut().unwrap().session.fault = None;
+        h.app.sim.as_mut().unwrap().log.error(at, "deploy refused");
+        h.wait(FLASH + 0.5);
+        assert!(log(&h).0.is_some(), "unread: red");
+        assert_eq!(h.app.chrome.bottom, Bottom::Trend, "an open panel keeps its tab");
+        h.press("bottom messages");
+        h.wait(0.2);
+        assert_eq!(log(&h), (None, false), "read, and nothing stands");
     }
 
     #[test]
@@ -2842,6 +3025,82 @@ mod simulated {
         let r = handle(&h, &b);
         h.drag(r.center(), r.center() + Vec2::new(4.0, r.height() * 0.3));
         assert_eq!(order(&h), [a, b, c]);
+    }
+
+    /// Nick, 2026-11-11: a trend signal's colour is the user's to pick. A
+    /// click on a lane's label opens the palette; the swatch clicked is
+    /// that signal's colour whichever lane it is in, and the browser
+    /// keeps it.
+    #[test]
+    fn a_click_on_a_trend_label_picks_that_signals_colour() {
+        use crate::editor::Chrome;
+        use crate::playground_view::{lane_color, palette_color};
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let s = &mut h.app.sim.as_mut().unwrap().session;
+        s.trend.signals = vec!["FIRST".into(), "SECOND".into()];
+        s.trend.samples.clear();
+        h.wait(0.3);
+        let t = crate::theme::Theme::dark();
+        let color = |h: &Harness, name: &str, k: usize| lane_color(&t, &h.app.chrome, name, k);
+        assert_eq!(color(&h, "FIRST", 0), palette_color(&t, 0), "its lane's to start");
+        assert!(!h.has("trend color 3"), "no palette until asked");
+        h.press("trend lane first");
+        h.wait(0.2);
+        h.press("trend color 3");
+        h.wait(0.2);
+        assert_eq!(h.app.chrome.color("first"), Some(3));
+        assert_eq!(color(&h, "FIRST", 0), palette_color(&t, 3));
+        assert_eq!(color(&h, "FIRST", 1), palette_color(&t, 3), "in any lane");
+        assert_eq!(
+            color(&h, "SECOND", 1),
+            palette_color(&t, 1),
+            "the others keep theirs"
+        );
+        assert!(!h.has("trend color 3"), "the palette shuts on a pick");
+        // The order is as it was: a click is not a drag.
+        let order = h.app.sim.as_ref().unwrap().session.trend.signals.clone();
+        assert_eq!(order, ["FIRST", "SECOND"]);
+        // Kept per browser, and what is read back is bounded and clean.
+        let back = Chrome::restored(&h.app.chrome.saved());
+        assert_eq!(back.color("FIRST"), Some(3));
+        let hostile = format!(
+            "colors=a:1,:2,b,c:x,d:99999999999999999999,{}",
+            (0..500).map(|k| format!("s{k}:1")).collect::<Vec<_>>().join(",")
+        );
+        let back = Chrome::restored(&hostile);
+        assert_eq!(back.color("a"), Some(1));
+        assert!(back.colors.len() <= crate::editor::MAX_COLORS);
+        assert_eq!(Chrome::restored(&back.saved()).colors, back.colors);
+        let mut c = Chrome::default();
+        c.set_color("bad name", 1);
+        c.set_color("x=y", 1);
+        c.set_color("", 1);
+        assert!(
+            c.colors.is_empty(),
+            "a name the saved text cannot hold is not kept"
+        );
+        // Any place in the palette draws: a stored index past its end wraps.
+        c.set_color("lamp", 1_000_003);
+        let _ = lane_color(&t, &c, "lamp", 0);
+    }
+
+    /// Nick, 2026-11-11: the Code tab keeps its code face; the Files and
+    /// Devices tabs are in the face the rest of the page is in.
+    #[test]
+    fn only_the_code_tab_of_the_left_pane_is_in_the_code_face() {
+        use crate::editor::Pane;
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let edge = h.rect("left").right();
+        for pane in [Pane::Files, Pane::Devices] {
+            h.app.chrome.pane = pane;
+            h.wait(0.3);
+            assert_eq!(h.mono_left_of(edge), Vec::<String>::new(), "{pane:?}");
+        }
+        h.app.chrome.pane = Pane::Code;
+        h.wait(0.3);
+        assert!(!h.mono_left_of(edge).is_empty(), "the code is in the code face");
     }
 
     /// Nick, 2026-11-01: the trend's window is 1, 10 or 100 s, so the

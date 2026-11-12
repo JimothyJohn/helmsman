@@ -16,6 +16,8 @@ pub enum Icon {
     Run,
     /// ■, red: stop.
     Stop,
+    /// Two upright bars: pause, the state held.
+    Pause,
     /// ▶| : one scan.
     Step,
     /// ↻ : cold restart.
@@ -41,6 +43,18 @@ pub enum Icon {
     /// A line turning back under itself: word wrap in the Code tab
     /// (Nick, 2026-11-08), lit while on.
     Wrap,
+    /// A folder: the Files tab.
+    Files,
+    /// A module with terminals down both sides: the Devices tab.
+    Devices,
+    /// An arrow in over an arrow out: the I/O tab.
+    Io,
+    /// A speech bubble: the Agent tab.
+    Agent,
+    /// A trace across two axes: the Trend tab.
+    Trend,
+    /// A list of lines, each behind its mark: the Messages tab.
+    Messages,
 }
 
 /// The side of a glyph button, points.
@@ -88,6 +102,41 @@ pub fn button_sized(
     r
 }
 
+/// A tab as a glyph (Nick, 2026-11-11: glyphs for the tab titles, the
+/// tooltip says what each is): `size` points a side, muted until it is
+/// the one on, which gets the 2 pt accent bar under it. `alarm` (0 to 1)
+/// puts a red ground of that strength behind it and draws it red: the
+/// Messages tab with an error on it. The caller tips it.
+pub fn tab(ui: &mut egui::Ui, icon: Icon, size: f32, on: bool, alarm: Option<f32>) -> Response {
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let t = theme(ui);
+    let painter = ui.painter();
+    let red = t.ink(RED);
+    if let Some(a) = alarm {
+        painter.rect_filled(rect, CornerRadius::same(5), RED.gamma_multiply(0.15 + 0.55 * a));
+    } else if r.hovered() {
+        let tint = ui.style().interact(&r).bg_fill;
+        painter.rect_filled(rect, CornerRadius::same(5), tint);
+    }
+    let color = match alarm {
+        // On a strong red ground the page's ink reads; on a faint one, red.
+        Some(a) if a > 0.5 => t.fg,
+        Some(_) => red,
+        None if on => t.fg,
+        None if r.hovered() => t.accent,
+        None => t.muted,
+    };
+    draw(painter, rect.shrink(size * 0.24), icon, color);
+    if on {
+        painter.hline(
+            (rect.left() + 4.0)..=(rect.right() - 4.0),
+            rect.bottom() - 1.0,
+            Stroke::new(2.0, if alarm.is_some() { red } else { t.accent }),
+        );
+    }
+    r
+}
+
 /// `icon` drawn in `rect` in `color`, outside a button (the header's
 /// signed-in role).
 pub fn paint(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -109,6 +158,89 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
         }
         Icon::Stop => {
             p.rect_filled(b.shrink(b.width() * 0.08), CornerRadius::same(2), color);
+        }
+        Icon::Pause => {
+            let bar = b.width() * 0.3;
+            for x in [l + b.width() * 0.08, r - b.width() * 0.08 - bar] {
+                let rect = Rect::from_min_max(Pos2::new(x, t), Pos2::new(x + bar, bt));
+                p.rect_filled(rect, CornerRadius::same(1), color);
+            }
+        }
+        Icon::Files => {
+            // The tab on the folder's back, then its front.
+            let top = t + b.height() * 0.3;
+            let tab = [
+                Pos2::new(l, top),
+                Pos2::new(l, t + b.height() * 0.1),
+                Pos2::new(l + b.width() * 0.4, t + b.height() * 0.1),
+                Pos2::new(l + b.width() * 0.52, top),
+            ];
+            p.add(egui::Shape::line(tab.to_vec(), stroke));
+            let front = Rect::from_min_max(Pos2::new(l, top), Pos2::new(r, bt - b.height() * 0.06));
+            p.rect_stroke(front, CornerRadius::same(1), stroke, egui::StrokeKind::Inside);
+        }
+        Icon::Devices => {
+            let body = Rect::from_min_max(
+                Pos2::new(l + b.width() * 0.26, t),
+                Pos2::new(r - b.width() * 0.26, bt),
+            );
+            p.rect_stroke(body, CornerRadius::same(1), stroke, egui::StrokeKind::Inside);
+            for k in [0.22, 0.5, 0.78] {
+                let y = t + b.height() * k;
+                p.line_segment([Pos2::new(l, y), Pos2::new(body.left(), y)], stroke);
+                p.line_segment([Pos2::new(body.right(), y), Pos2::new(r, y)], stroke);
+            }
+        }
+        Icon::Io => {
+            let head = b.width() * 0.24;
+            let (y1, y2) = (t + b.height() * 0.27, bt - b.height() * 0.27);
+            p.line_segment([Pos2::new(l, y1), Pos2::new(r, y1)], stroke);
+            p.line_segment([Pos2::new(r, y1), Pos2::new(r - head, y1 - head)], stroke);
+            p.line_segment([Pos2::new(r, y1), Pos2::new(r - head, y1 + head)], stroke);
+            p.line_segment([Pos2::new(l, y2), Pos2::new(r, y2)], stroke);
+            p.line_segment([Pos2::new(l, y2), Pos2::new(l + head, y2 - head)], stroke);
+            p.line_segment([Pos2::new(l, y2), Pos2::new(l + head, y2 + head)], stroke);
+        }
+        Icon::Agent => {
+            // A bubble with its tail at the bottom left, two lines in it.
+            let base = bt - b.height() * 0.24;
+            let bubble = Rect::from_min_max(Pos2::new(l, t), Pos2::new(r, base));
+            p.rect_stroke(bubble, CornerRadius::same(3), stroke, egui::StrokeKind::Inside);
+            let tail = [
+                Pos2::new(l + b.width() * 0.2, base - w * 0.5),
+                Pos2::new(l + b.width() * 0.2, bt),
+                Pos2::new(l + b.width() * 0.48, base - w * 0.5),
+            ];
+            p.add(egui::Shape::line(tail.to_vec(), stroke));
+            for k in [0.36, 0.64] {
+                let y = t + (base - t) * k;
+                let end = if k < 0.5 { 0.24 } else { 0.42 };
+                p.line_segment(
+                    [
+                        Pos2::new(l + b.width() * 0.24, y),
+                        Pos2::new(r - b.width() * end, y),
+                    ],
+                    Stroke::new(w * 0.8, color),
+                );
+            }
+        }
+        Icon::Trend => {
+            p.add(egui::Shape::line(
+                vec![Pos2::new(l, t), Pos2::new(l, bt), Pos2::new(r, bt)],
+                stroke,
+            ));
+            let at = |x: f32, y: f32| Pos2::new(l + b.width() * x, t + b.height() * y);
+            p.add(egui::Shape::line(
+                vec![at(0.2, 0.72), at(0.42, 0.38), at(0.62, 0.58), at(0.96, 0.1)],
+                stroke,
+            ));
+        }
+        Icon::Messages => {
+            for k in [0.14, 0.5, 0.86] {
+                let y = t + b.height() * k;
+                p.circle_filled(Pos2::new(l + w, y), w, color);
+                p.line_segment([Pos2::new(l + b.width() * 0.3, y), Pos2::new(r, y)], stroke);
+            }
         }
         Icon::Step => {
             let rr = l + b.width() * 0.68;
