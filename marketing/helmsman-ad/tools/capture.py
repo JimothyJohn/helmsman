@@ -10,7 +10,8 @@ in 2880x1620 frames; the pointer is in points, and the remembered layout
 goes into localStorage from a same-origin page before the app loads.
 
 It opens the example the way a user does (Files, latch, a name), shows
-the code, then plays TAKE: run, hold start, hold stop, hold start again.
+the code, drags the trend panel taller, then plays TAKE: run, hold start,
+hold stop.
 Frames come from Chromium's screencast, each with its own time; <work dir> gets
 frames/NNNN.jpg, frames.txt (an ffmpeg concat list with each frame's real
 duration) and events.json (when each action happened, in seconds from the
@@ -36,7 +37,7 @@ PORT = 8796
 KEY = "helmsman-canvas/editor"
 W, H = 1280, 720  # points
 DPR = 1.5
-LAYOUT = "left=1 right=1 pane=files tab=io scan=0 trend=0 bottom=trend light=0"
+LAYOUT = "left=1 right=1 pane=files tab=io scan=0 trend=1 bottom=trend light=0"
 
 # Points in the 1280x720 layout.
 LATCH = (65, 253)  # "latch" under Examples
@@ -44,26 +45,26 @@ CODE_TAB = (183, 98)
 RUN = (717, 109)
 START = (332, 240)
 STOP = (332, 360)
-REST = (800, 420)  # empty diagram: no tooltip
+REST = (1000, 300)  # empty diagram: no tooltip
+# The trend panel's top edge (grabbed a point below it) and where it is
+# dragged to, just under the diagram, so each signal gets a readable row.
+TREND_EDGE = (900, 521)
+TREND_TOP = 396
 
 # (seconds, action, point)
 TAKE = [
     (1.0, "move", RUN),
     (1.3, "click", RUN),
-    (2.6, "move", START),
-    (2.9, "down", START),
-    (3.5, "up", START),
-    (3.6, "move", REST),
-    (6.0, "move", STOP),
-    (6.3, "down", STOP),
-    (6.9, "up", STOP),
-    (7.0, "move", REST),
-    (8.6, "move", START),
-    (8.9, "down", START),
-    (9.5, "up", START),
-    (9.6, "move", REST),
+    (2.9, "move", START),
+    (3.2, "down", START),
+    (3.8, "up", START),
+    (3.9, "move", REST),
+    (6.3, "move", STOP),
+    (6.6, "down", STOP),
+    (7.2, "up", STOP),
+    (7.3, "move", REST),
 ]
-LENGTH = 13.0
+LENGTH = 10.0
 
 
 def serve(root):
@@ -116,6 +117,15 @@ def main():
             page.keyboard.press("Enter")
             page.wait_for_timeout(1500)
             page.mouse.click(*CODE_TAB)
+            page.wait_for_timeout(600)
+            x, y = TREND_EDGE
+            page.mouse.move(x, y - 10)
+            page.mouse.move(x, y)
+            page.wait_for_timeout(400)
+            page.mouse.down()
+            for step in range(1, 6):
+                page.mouse.move(x, y + (TREND_TOP - y) * step / 5)
+            page.mouse.up()
             page.wait_for_timeout(600)
             page.mouse.move(*REST)
             page.wait_for_timeout(1200)
