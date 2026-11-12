@@ -1827,6 +1827,10 @@ impl Body for PlaygroundView {
             let area = ui.available_rect_before_wrap();
             v.breaks.clone_from(&self.session.breaks);
             v.paused = self.session.paused_at();
+            let now = ui.input(|i| i.time);
+            for t in self.session.earlier() {
+                v.saw(t, now);
+            }
             v.canvas(ui, scan);
             let mut jump = None;
             if v.pick != self.last_pick {

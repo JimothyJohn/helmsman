@@ -540,6 +540,15 @@ impl Viewer {
         }
     }
 
+    /// A scan that ran since the last frame and is not the one drawn:
+    /// what ran in it stays lit for [`HOLD`] all the same, so a statement
+    /// lights every time it runs, whichever scan of a frame that was in.
+    pub fn saw(&mut self, scan: &dyn Scan, now: f64) {
+        if let Some(mut l) = self.live(Some(scan)) {
+            self.hold(&mut l, now);
+        }
+    }
+
     /// Counts every change to the arrangement (a drag step, an
     /// [`Self::arrange`], a reset): a new count means something moved.
     #[must_use]
@@ -1834,6 +1843,53 @@ END_PROGRAM
         v.hold(&mut l, 20.0);
         assert!(!l.ran[lamp]);
         assert_eq!(l.gates[region], Gate::NotReached);
+    }
+
+    /// The lamp's assignment runs one scan in fifty. A frame of two scans
+    /// draws the second, so half the time the flip is in the scan that is
+    /// not drawn: it lit on some flips and not on others (Nick,
+    /// 2026-11-11).
+    #[test]
+    fn a_one_scan_statement_lights_every_time_it_runs_whichever_scan_of_the_frame() {
+        let mut session = Session::new(SRC);
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let mut v = Viewer::new(SRC, module);
+        let d = v.diagram().clone();
+        let lamp = d
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Write { path: "LAMP".into() })
+            .unwrap();
+        session.set_running(true);
+        session.advance(0.0);
+        let (mut flips, mut lit, mut was_on, mut was_lit) = (0, 0, false, false);
+        let mut both = [false; 2];
+        // 20 ms frames of two 10 ms scans, 6 s: the lamp flips every 510 ms,
+        // so in the first scan of a frame and in the second by turns.
+        for frame in 1..=300 {
+            let now = f64::from(frame) * 0.02;
+            session.advance(now);
+            for t in session.earlier() {
+                v.saw(t, now);
+            }
+            let trace = session.trace.as_ref().unwrap();
+            let on = session.value("lamp") == Some(helmsman_iec::Value::Bool(true));
+            if on != was_on {
+                flips += 1;
+                both[usize::from(trace.get("pulse.Q") == Some(helmsman_iec::Value::Bool(true)))] = true;
+            }
+            was_on = on;
+            let mut l = v.live(Some(trace as &dyn helmsman_diagram::Scan)).unwrap();
+            v.hold(&mut l, now);
+            lit += usize::from(l.ran[lamp] && !was_lit);
+            was_lit = l.ran[lamp];
+        }
+        assert!(flips >= 10, "{flips} flips");
+        assert_eq!(
+            both, [true; 2],
+            "flips in the drawn scan and in the one before it"
+        );
+        assert_eq!(lit, flips, "the assignment lit once per flip");
     }
 }
 
