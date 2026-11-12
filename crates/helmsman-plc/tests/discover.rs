@@ -26,11 +26,14 @@ const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789a
 
 const INDEX: &str = r#"{ "format": "helmsman-devices-index 1", "devices": [
   { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io",
+    "profile": "moxa-iologik-e1213.device",
     "identity": { "enip": { "vendor_id": 991, "product_code": 515 } },
     "protocols": { "enip": { "driver": "enip-io", "map": "enip.map", "profile": "moxa-e1213" },
                    "modbus": { "driver": "modbus-tcp", "map": "modbus.map" } } } ] }"#;
 const ENIP_MAP: &str =
     "# the E1213\ndevice e1213 enip-io ADDR profile=moxa-e1213 rpi_ms=100\nin di0 bool e1213 di:0\n";
+/// The library's copy of the E1213's profile (PROTOCOLS.md step 3).
+const PROFILE: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
 
 /// A static file server on loopback: `path -> body`, anything else 404.
 struct Files {
@@ -194,7 +197,65 @@ fn library() -> Files {
     Files::serve(BTreeMap::from([
         ("/index.json", INDEX.to_string()),
         ("/devices/moxa/iologik-e1213/enip.map", ENIP_MAP.to_string()),
+        (
+            "/devices/moxa/iologik-e1213/moxa-iologik-e1213.device",
+            PROFILE.to_string(),
+        ),
     ]))
+}
+
+/// Add by click (PROTOCOLS.md step 3): the library route hands the canvas
+/// the device's profile text, checked, beside the map lines; a found
+/// device says which file that is; a profile the library serves broken is
+/// said to be unavailable, in words, and nothing else of the answer is
+/// lost.
+#[test]
+fn the_library_route_serves_the_devices_profile_checked() {
+    let sim = E1213Sim::start().unwrap();
+    let lib = library();
+    let api = box_with(&sim, Some(lib.url("/index.json")), "");
+    let scan = request(api.addr(), "POST", "/api/devices/discover", true).json();
+    assert_eq!(
+        scan["found"][0]["library"]["profile_file"], "moxa-iologik-e1213.device",
+        "{scan}"
+    );
+    let r = request(
+        api.addr(),
+        "GET",
+        "/api/devices/library?vendor=991&product=515",
+        true,
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    let m = &r.json()["matches"][0];
+    assert_eq!(m["profile_file"], "moxa-iologik-e1213.device");
+    assert_eq!(m["profile_text"].as_str(), Some(PROFILE), "byte for byte");
+    assert!(m["lines"].as_str().is_some(), "{m}");
+
+    let broken = Files::serve(BTreeMap::from([
+        ("/index.json", INDEX.to_string()),
+        ("/devices/moxa/iologik-e1213/enip.map", ENIP_MAP.to_string()),
+        (
+            "/devices/moxa/iologik-e1213/moxa-iologik-e1213.device",
+            "helmsman-device 1\nmodel X\ntransport modbus-tcp\nin DI-00 wobble modbus-tcp=di:0\n".to_string(),
+        ),
+    ]));
+    let api = box_with(&sim, Some(broken.url("/index.json")), "");
+    let m = request(
+        api.addr(),
+        "GET",
+        "/api/devices/library?vendor=991&product=515",
+        true,
+    )
+    .json()["matches"][0]
+        .clone();
+    assert!(m.get("profile_text").is_none(), "{m}");
+    assert!(
+        m["profile_unavailable"]
+            .as_str()
+            .is_some_and(|w| w.starts_with("moxa-iologik-e1213.device does not read as a profile")),
+        "{m}"
+    );
+    assert!(m["lines"].as_str().is_some(), "the map lines still come: {m}");
 }
 
 #[test]

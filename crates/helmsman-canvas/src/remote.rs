@@ -612,6 +612,11 @@ pub struct DeviceRow {
     pub error: Option<String>,
     /// Where the box found it (a `mac=` or `cip=` endpoint resolved).
     pub address: Option<String>,
+    /// The protocol a device by its profile is reached over, once the box
+    /// said (`transport`).
+    pub transport: Option<String>,
+    /// `healthy`, `slow` or `lost`, once the link reported (`health`).
+    pub health: Option<String>,
 }
 
 impl DeviceRow {
@@ -621,6 +626,8 @@ impl DeviceRow {
             state: j["state"].as_str().unwrap_or("unknown").to_string(),
             error: j["error"].as_str().map(str::to_string),
             address: j["address"].as_str().map(str::to_string),
+            transport: j["transport"].as_str().map(str::to_string),
+            health: j["health"].as_str().map(str::to_string),
         })
     }
 }

@@ -374,6 +374,7 @@ impl BoxView {
                     }
                 }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
+                PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
         }
@@ -1038,6 +1039,10 @@ impl BoxView {
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
         }
+        if let Some(crate::devices::DeviceAct::Quick(q)) = self.devices_ui.quick_ui(&ui.ctx().clone(), chrome)
+        {
+            self.quick_add(&q);
+        }
         if self.devices_ui.renaming.is_some() {
             let files = self.loaded_files();
             self.devices_ui.plan_rename(&files);
@@ -1167,6 +1172,22 @@ impl BoxView {
             Ok(()) => self.projects.note(w.summary(), false),
             Err(e) => self.projects.note(e, true),
         }
+    }
+
+    /// The quick form's Add: the profile into the open project as
+    /// `NAME.device` (a new file, or the draft of one that exists), then
+    /// the device and its channels into io.map.
+    fn quick_add(&mut self, q: &crate::devices::QuickAdd) {
+        let Some(o) = &mut self.projects.open else {
+            self.projects.note("Open a project to add the device to.", true);
+            return;
+        };
+        match o.bufs.get_mut(&q.file) {
+            Some(b) if b.loaded => b.text.clone_from(&q.text),
+            Some(_) => {}
+            None => self.projects.new_file_with(&q.file, &q.text),
+        }
+        self.apply_wiring(&q.wiring);
     }
 
     fn wire_in(&mut self, w: &crate::device_form::Wiring) -> Result<(), String> {
@@ -1956,7 +1977,11 @@ impl Body for BoxView {
                 .find(|d| d.name == name)
                 .filter(|_| !devices_stale)
                 .map_or(LinkState::Unknown, |d| match d.state.as_str() {
-                    "up" => LinkState::Up(d.address.clone()),
+                    "up" => LinkState::Up {
+                        address: d.address.clone(),
+                        transport: d.transport.clone(),
+                        health: d.health.clone(),
+                    },
                     "down" => LinkState::Down(d.error.clone().unwrap_or_default()),
                     _ => LinkState::Unknown,
                 })
@@ -2010,10 +2035,14 @@ impl Body for BoxView {
                 self.projects.open_file(helmsman_project::IO_MAP);
                 chrome.show_code();
             }
+            Some(crate::devices::DeviceAct::Library { vendor, product }) => {
+                self.projects.library(vendor, product);
+            }
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
-                | crate::devices::DeviceAct::Delete(_),
+                | crate::devices::DeviceAct::Delete(_)
+                | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
         }

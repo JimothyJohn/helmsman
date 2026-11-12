@@ -67,25 +67,39 @@ this; change it here first when a decision changes.
   as does the Code tab's Structured Text header, Nick 2026-11-08),
   Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
   system's, each with its points under it, live values and the link's
-  state; on a box the open project's `io.map`, else the map the box runs;
-  a right-click on the blank space adds a device as a file is added: a
+  state, which on a box says the protocol a device by its profile is
+  reached over and whether the link is slow (2026-11-12); on a box the
+  open project's `io.map`, else the map the box runs; under the map's
+  devices, "On the network": Scan asks the box for one scan on every
+  protocol (`POST /api/devices/discover`; the simulation answers with its
+  simulated E1213; since 2026-11-11 the request asks EtherNet/IP, Modbus
+  and, where the build has it, PROFINET, and answers `found`, one entry
+  per device however many protocols it answered on, which the tab reads,
+  with the older `devices` list as the fallback for an older box) and
+  lists every device that answered by vendor and model, with whether a
+  map device binds it and what the public device library knows of it
+  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
+  then by vendor and model text; `--devices-index` points a box at
+  another). **Add by click** (2026-11-12, PROTOCOLS.md step 3): a device
+  the library knows, whose entry names a profile (`NAME.device`), offers
+  Add: a small form asks one thing, the device's name, and lists the
+  channels it will get; Add copies the profile into the project as
+  `NAME.device` (the box fetches and checks it, `GET
+  /api/devices/library`; the simulation carries its E1213's), writes
+  `device NAME device:PROFILE IDENTITY` with the identity the scan saw,
+  and one `ch:` signal per channel named `NAME_channel`. No protocol,
+  address, byte order or cycle time is asked. A device the library does
+  not know says so and offers Advanced. **Advanced** (a tick box beside
+  Scan, off by default, remembered in the browser) is the older way: a
+  right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
   and settings, written as one `device` line of `io.map`; Import device…
   takes a vendor's EDS, which joins the project as `NAME.eds` and fills
   the form in (EtherNet/IP, `eds=NAME.eds`); the box reads the file from
-  the project when the map loads (2026-11-02, `device-import`); under the
-  map's devices, "On the network": Scan asks the box for one ListIdentity
-  sweep (`POST /api/devices/discover`; the simulation answers with its
-  simulated E1213; since 2026-11-11 the same request also asks Modbus
-  and, where the build has it, PROFINET, and answers `found`, one entry
-  per device however many protocols it answered on; the tab still reads
-  the older `devices` list) and lists every device that answered, with whether a
-  map device binds it and what the public device library knows of it
-  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
-  then by vendor and model text; `--devices-index` points a box at
-  another); a right-click on one not in the map offers Add to the map…,
-  the form filled in by identity (`cip=V:P:S`) with the library's name
-  and profile (2026-11-02, `devices-repo`); the same listing, network
+  the project when the map loads (2026-11-02, `device-import`); and Use
+  this device on a found one, the form filled in by identity
+  (`cip=V:P:S`) with the library's name and profile (2026-11-02,
+  `devices-repo`); the same listing, network
   included, is the context the agent gets, in the page and as the box's
   `list_devices` tool; under that, "Plant states" (2026-11-02,
   `sim-feedback-devices`): the quantities the project's plant model

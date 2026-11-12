@@ -224,6 +224,11 @@ pub struct Chrome {
     pub hints: crate::st_hints::Hints,
     /// The blocks folded in the Code tab (`crate::st_fold`).
     pub folds: crate::st_fold::Folds,
+    /// The Devices tab's Advanced switch (PROTOCOLS.md step 3): today's
+    /// New device form, Import device… and Use this device, with their
+    /// protocols, addresses and typed points. Off, a device is added by
+    /// a click on what the scan found. Remembered per browser.
+    pub advanced: bool,
 }
 
 impl Default for Chrome {
@@ -247,6 +252,7 @@ impl Default for Chrome {
             colors: Vec::new(),
             hints: crate::st_hints::Hints::default(),
             folds: crate::st_fold::Folds::default(),
+            advanced: false,
         }
     }
 }
@@ -262,7 +268,7 @@ impl Chrome {
             format!(" colors={}", all.join(","))
         };
         format!(
-            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={} wrap={}{colors}",
+            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={} wrap={} advanced={}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             self.pane.key(),
@@ -271,7 +277,8 @@ impl Chrome {
             u8::from(self.trend),
             self.bottom.key(),
             u8::from(self.light),
-            u8::from(self.wrap)
+            u8::from(self.wrap),
+            u8::from(self.advanced)
         )
     }
 
@@ -292,6 +299,7 @@ impl Chrome {
                 Some(("trend", v)) => c.trend = v == "1",
                 Some(("light", v)) => c.light = v == "1",
                 Some(("wrap", v)) => c.wrap = v == "1",
+                Some(("advanced", v)) => c.advanced = v == "1",
                 Some(("colors", v)) => {
                     c.colors = v
                         .split(',')

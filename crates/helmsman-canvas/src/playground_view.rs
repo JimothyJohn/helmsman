@@ -1302,6 +1302,12 @@ impl PlaygroundView {
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
         }
+        if let Some(crate::devices::DeviceAct::Quick(q)) = self.devices_ui.quick_ui(&ui.ctx().clone(), chrome)
+            && self.own_project()
+        {
+            self.proj.add_file(&q.file, q.text.clone());
+            self.apply_wiring(&q.wiring);
+        }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
         }
@@ -1823,6 +1829,7 @@ impl Body for PlaygroundView {
                     .fetch(helmsman_project::devlib::DEFAULT_URL, &ui.ctx().clone());
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
+            Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
             Some(crate::devices::DeviceAct::OpenMap) => {
                 self.proj.open_file(helmsman_project::IO_MAP);
                 chrome.show_code();
@@ -1830,7 +1837,8 @@ impl Body for PlaygroundView {
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
-                | crate::devices::DeviceAct::Delete(_),
+                | crate::devices::DeviceAct::Delete(_)
+                | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
         }
@@ -2736,7 +2744,10 @@ impl PlaygroundView {
     /// the visitor's own first, a project without an `io.map` gets the one
     /// its program's I/O implies (on the box's own channels, which the
     /// rewire question then moves), and the form opens filled in.
-    fn use_device(&mut self, d: crate::devices::NewDevice) {
+    /// A project of the visitor's own to wire a device into: a read-only
+    /// example is copied first, and the copy gets the io.map its program
+    /// implies. `false` when the copy could not be made.
+    fn own_project(&mut self) -> bool {
         if self.proj.is_example() {
             let from = self.proj.open.clone();
             let to = (1..=99)
@@ -2753,7 +2764,7 @@ impl PlaygroundView {
             self.proj.create(&to, Some(&from));
             self.reload();
             if self.proj.is_example() {
-                return;
+                return false;
             }
             self.proj.note(
                 format!("{from} is a read-only example, so it was copied as {to} to wire the device in."),
@@ -2763,6 +2774,13 @@ impl PlaygroundView {
         if !self.proj.files.contains_key(helmsman_project::IO_MAP) {
             let map = crate::sim_projects::example_io_map(&self.proj.build_src());
             self.proj.add_file(helmsman_project::IO_MAP, map);
+        }
+        true
+    }
+
+    fn use_device(&mut self, d: crate::devices::NewDevice) {
+        if !self.own_project() {
+            return;
         }
         // The copy's program and map, for the form's channels.
         let map = self

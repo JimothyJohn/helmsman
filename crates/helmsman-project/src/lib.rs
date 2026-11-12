@@ -29,6 +29,7 @@ pub mod devlib;
 pub mod iomap;
 pub mod layout;
 pub mod plant;
+pub mod profile_skim;
 pub mod settings;
 pub mod zip;
 
@@ -218,6 +219,14 @@ pub fn kept_name(s: &str) -> bool {
 #[must_use]
 pub fn project_file(s: &str) -> bool {
     file_name(s).is_some() || kept_name(s)
+}
+
+/// The project file a device profile becomes: as [`eds_file_name`] with
+/// [`DEVICE_EXT`] (`moxa-iologik-e1213.device`).
+#[must_use]
+pub fn device_file_name(name: &str) -> Option<String> {
+    let eds = eds_file_name(name)?;
+    Some(format!("{}{DEVICE_EXT}", eds.strip_suffix(EDS_EXT)?))
 }
 
 /// The project file an uploaded EDS becomes: its stem as a slug (lower
