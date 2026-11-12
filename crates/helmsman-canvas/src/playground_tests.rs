@@ -1878,6 +1878,7 @@ fn typing_in_the_editor_checks_after_a_pause_and_marks_the_error_line() {
         &crate::editor::Lines {
             errors: &diags,
             warnings: &[],
+            hints: &[],
         },
         None,
         &[],
@@ -2662,6 +2663,7 @@ fn a_warning_is_marked_and_listed_beside_the_code_and_never_blocks_the_deploy() 
         &crate::editor::Lines {
             errors: &[],
             warnings: &[(4, 5)],
+            hints: &[],
         },
         None,
         &[],

@@ -1429,6 +1429,50 @@ mod chrome {
         assert_eq!(h.app.chrome.pane, Pane::Devices);
     }
 
+    /// Nick, 2026-11-11: style hints are a third, lighter level. A hinted
+    /// line is marked in the Code tab, says what it is on hover, and is
+    /// told to the Messages as information once the typing has settled:
+    /// never as an error, and it stops nothing.
+    #[test]
+    fn a_style_hint_is_marked_in_the_code_told_on_hover_and_said_in_the_messages() {
+        use crate::st_hints::SETTLE;
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.show_code();
+        h.wait(0.3);
+        assert!(!h.has("hint 3"), "the example has nothing to hint at");
+        let errors = h.app.sim.as_ref().unwrap().log.errors();
+        *h.app.sim.as_mut().unwrap().proj.current_text_mut().unwrap() =
+            "PROGRAM p\nVAR\n  spare : INT;\nEND_VAR\nEND_PROGRAM\n".into();
+        h.wait(0.3);
+        let band = h.rect("hint 3");
+        let editor = h.rect("st editor");
+        assert!(editor.contains(band.center()), "{band:?} in {editor:?}");
+        let said = |h: &Harness| h.app.sim.as_ref().unwrap().log.text();
+        assert!(!said(&h).contains("hint(s)"), "not while the text is new");
+        h.wait(SETTLE + 0.3);
+        let log = said(&h);
+        assert!(log.contains("1 hint(s) in the open file"), "{log}");
+        assert!(log.contains("line 3  spare: declared but never used"), "{log}");
+        assert!(
+            log.lines().any(|l| l.contains("info") && l.contains("hint(s)")),
+            "{log}"
+        );
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().log.errors(),
+            errors,
+            "a hint is no error"
+        );
+        // On hover the line says what the hint is.
+        h.frame(vec![Event::PointerMoved(band.center())]);
+        h.wait(1.5);
+        assert!(h.drew("Hint: spare: declared but never used."));
+        // Used, the hint goes.
+        *h.app.sim.as_mut().unwrap().proj.current_text_mut().unwrap() =
+            "PROGRAM p\nVAR\n  spare : INT;\nEND_VAR\nspare := spare + 1;\nEND_PROGRAM\n".into();
+        h.wait(0.3);
+        assert!(!h.has("hint 3"));
+    }
+
     /// Nick, 2026-11-11: nothing is said in a line under the menus. What
     /// needs saying is in the Messages tab, which goes red on an error
     /// (pulsing at first), stays red while the error stands or is unread,
