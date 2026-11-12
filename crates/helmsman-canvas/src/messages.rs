@@ -224,10 +224,15 @@ impl Log {
         let t = theme(ui);
         if self.items.is_empty() {
             ui.label(RichText::new("Nothing to report yet.").color(t.muted));
+            // The panel keeps the height it has on the Trend tab.
+            ui.allocate_space(ui.available_size());
             return;
         }
         egui::ScrollArea::vertical()
             .id_salt("messages")
+            // Down to the panel's edge however few the rows: the panel
+            // keeps its height from one tab to the other.
+            .auto_shrink([false, false])
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 for m in self.shown() {

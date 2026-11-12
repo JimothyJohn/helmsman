@@ -22,7 +22,7 @@ use crate::tips::Tip;
 pub const CHROME_KEY: &str = "helmsman-canvas/editor";
 
 /// Width of a collapsed sidebar, points.
-pub const STRIP: f32 = 40.0;
+pub const STRIP: f32 = 48.0;
 /// The side of a tab's glyph in a pane's header row, points.
 pub const TAB: f32 = TAP * 0.75;
 
