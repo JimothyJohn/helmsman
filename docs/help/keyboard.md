@@ -6,9 +6,9 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 |---|---|---|
 | Ctrl S | Save | Save Project |
 | Ctrl Shift Enter | Deploy |  |
-| Ctrl Enter | Run or stop the simulation |  |
-| Shift F8 | Stop the simulation | Stop |
-| F8 | Step one scan (stopped) | Step Into |
+| Ctrl Enter | Run or pause the simulation |  |
+| Shift F8 | Stop the simulation: initial values, clock to zero | Stop |
+| F8 | Step to the next change (paused or stopped) | Step Into |
 | Alt F8 | Sign in (box) | Login |
 | Ctrl F8 | Sign out (box) | Logout |
 | Ctrl Z | Undo in the Structured Text | Undo |
