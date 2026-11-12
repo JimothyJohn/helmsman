@@ -8,7 +8,11 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
 
 - `./scripts/lint.sh`: fmt, clippy pedantic with warnings denied, helmsman-plc
   without default features, and helmsman-canvas for wasm32. CI runs only fmt
-  and clippy of these, so the last two are yours to keep green.
+  and clippy of these, so the last two are yours to keep green. On a Mac
+  it also lints helmsman-l2 for aarch64-linux: CI is Linux, so code behind
+  `cfg(target_os = "linux")` is never compiled here and three casts in it
+  failed CI after a green local gate (2026-11-11). New `cfg(target_os)`
+  code gets its other half linted the same way in `lint.sh`.
 - `cargo test --workspace --locked`
 - After a change the native suite cannot see (anything behind
   `cfg(target_arch = "wasm32")`, panel layout): `make canvas-web` then
@@ -28,6 +32,13 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   is only its native dev-dependency (the real box API in its tests).
   crates/helmsman-canvas/tests/wasm_deps.rs fails if a native-only crate
   reaches the canvas.
+- **`unsafe` lives in helmsman-l2 and nowhere else.** Every other crate
+  forbids it; a system call the safe crates in the tree cannot make
+  (raw Ethernet today) goes there, one libc call per block with its
+  safety comment. It reaches a binary only through helmsman-plc's
+  `profinet-io` feature, which stays out of `default` until a real
+  PROFINET device has passed the bench (TODO.md `mdrive-bringup`), as
+  `enip-io` did (2026-11-11).
 - **Test helpers that start the binary** (`plc()` in tests/bin.rs and its
   copies) pass `--opcua off`; a subcommand (`account`, `bundle`) must be the
   first argument, so those helpers build a bare `Command`. A box a test
