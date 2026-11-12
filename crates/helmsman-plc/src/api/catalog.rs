@@ -173,6 +173,20 @@ pub struct Devices {
     addresses: Mutex<BTreeMap<String, String>>,
     /// By link name: the protocol a device by its profile is on now.
     transports: Mutex<BTreeMap<String, String>>,
+    /// By link name: what it says of its device's timing.
+    health: Mutex<BTreeMap<String, Timing>>,
+}
+
+/// What a link says of its device's timing (`helmsman_plc::link::Health`
+/// and the numbers behind it, in ms).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Timing {
+    /// `healthy`, `slow` or `lost`.
+    pub health: String,
+    /// The update period the link measures, once it has its samples.
+    pub measured_ms: Option<u64>,
+    /// The poll period the link runs at.
+    pub poll_ms: u64,
 }
 
 impl std::fmt::Debug for Devices {
@@ -192,6 +206,7 @@ impl Devices {
             browsers: Mutex::new(BTreeMap::new()),
             addresses: Mutex::new(BTreeMap::new()),
             transports: Mutex::new(BTreeMap::new()),
+            health: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -247,6 +262,30 @@ impl Devices {
         };
     }
 
+    /// Records what link `name` says of its device's timing: the health
+    /// word (`healthy`, `slow`, `lost`), the update period it measures
+    /// and the poll it runs at, in ms.
+    pub fn set_health(&self, name: &str, health: &str, measured_ms: Option<u64>, poll_ms: u64) {
+        self.health.lock().unwrap_or_else(PoisonError::into_inner).insert(
+            name.to_string(),
+            Timing {
+                health: health.to_string(),
+                measured_ms,
+                poll_ms,
+            },
+        );
+    }
+
+    /// What link `name` says of its device's timing, once it reported.
+    #[must_use]
+    pub fn health(&self, name: &str) -> Option<Timing> {
+        self.health
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
+    }
+
     /// The protocol link `name` is on now, if its driver picks one.
     #[must_use]
     pub fn transport(&self, name: &str) -> Option<String> {
@@ -283,6 +322,10 @@ impl Devices {
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|(n, _)| n != name);
         self.transports
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
+        self.health
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(name);

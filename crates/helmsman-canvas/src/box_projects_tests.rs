@@ -235,14 +235,9 @@ impl Bench {
                 Arc::clone(&table),
                 Arc::new(helmsman_io::open),
                 Arc::new(|| Box::new(Channels::new())),
-                Arc::new(
-                    move |name: &str,
-                          err: Option<&helmsman_io::Error>,
-                          _address: Option<String>,
-                          _: Option<String>| {
-                        dv.set(name, err.map(ToString::to_string));
-                    },
-                ),
+                Arc::new(move |r: &helmsman_plc::link::LinkReport| {
+                    dv.set(&r.name, r.error.clone());
+                }),
             );
             set.start(&parsed.map).unwrap();
             handle.with_links(Arc::new(Mutex::new(set)))

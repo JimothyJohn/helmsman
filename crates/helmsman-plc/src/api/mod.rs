@@ -12,7 +12,7 @@
 //! POST /api/modules/{name}/stop|run|restart  engineer session: stop, run or cold-restart one module (see [`control`])
 //! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
-//! GET  /api/devices                       device links: up, down (why), unknown, address
+//! GET  /api/devices                       device links: up, down (why), unknown, address; for a device by its profile `transport`; `health` (healthy, slow, lost), `poll_ms` and `measured_ms` once the link reports
 //! GET  /api/adapter                       the box's EtherNet/IP adapter: {protocol, bind, on}; `bind` is the address it listens on, absent when it is off
 //! POST /api/devices/discover              token or session: one scan of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
 //! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
@@ -2110,6 +2110,15 @@ fn devices(d: &Devices) -> Json {
                 // its details and failure text, never a choice.
                 if let Some(t) = d.transport(&name) {
                     j["transport"] = json!(t);
+                }
+                // What the link says of its timing: the word for the tabs,
+                // the numbers for a device's details.
+                if let Some(t) = d.health(&name) {
+                    j["health"] = json!(t.health);
+                    j["poll_ms"] = json!(t.poll_ms);
+                    if let Some(m) = t.measured_ms {
+                        j["measured_ms"] = json!(m);
+                    }
                 }
                 j
             })

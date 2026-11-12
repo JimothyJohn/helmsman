@@ -27,6 +27,7 @@
 //! [`Link::cycle`] / [`Link::cycle_at`] directly. [`LinkSet`] owns the
 //! running links and changes them for a new map (see its docs).
 
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -35,11 +36,76 @@ use std::time::{Duration, Instant};
 
 use helmsman_io::{Device, Dir, Driver, Error, IoMap, Value};
 
+use crate::Module;
 use crate::drivers::{self, Drivers};
 use crate::signals::{Polled, SignalTable, by_device};
 
-/// Poll period when a device sets no `poll_ms`.
+/// Poll period when a device sets no `poll_ms` and no module paces it.
 pub const DEFAULT_POLL: Duration = Duration::from_millis(50);
+/// Cycles a link measures its update period over before it says slow.
+pub const SAMPLES: usize = 8;
+
+/// The fastest scan period of the modules that read or drive each
+/// signal, by the signal's name in upper case (ST names are
+/// case-blind): what paces a link whose device line gives no `poll_ms`
+/// ([`pace`]).
+pub type Pace = BTreeMap<String, Duration>;
+
+/// [`Pace`] of `modules`: each port of each module, at the fastest period
+/// among the modules that have it.
+pub fn pace<'a>(modules: impl IntoIterator<Item = &'a Module>) -> Pace {
+    let mut out = Pace::new();
+    for m in modules {
+        for port in m.program.ports() {
+            let name = port.name.to_ascii_uppercase();
+            let e = out.entry(name).or_insert(m.period);
+            *e = (*e).min(m.period);
+        }
+    }
+    out
+}
+
+/// What a link says of its device: up and on time, up but updating at
+/// less than half the rate asked (over the last [`SAMPLES`] cycles),
+/// or down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Health {
+    Healthy,
+    Slow,
+    Lost,
+}
+
+impl Health {
+    /// The word the API and the tabs show.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Slow => "slow",
+            Self::Lost => "lost",
+        }
+    }
+}
+
+/// What a link reports when its state changes ([`spawn`], [`Report`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkReport {
+    /// The link's name (the device id, or `box`).
+    pub name: String,
+    /// Why it is down; `None` while it is up.
+    pub error: Option<String>,
+    /// Where the driver found the device, when it knows
+    /// (`helmsman_io::Driver::address`).
+    pub address: Option<String>,
+    /// The protocol a device by its profile is reached over, once one has
+    /// worked (`helmsman_io::Driver::transport`).
+    pub transport: Option<String>,
+    pub health: Health,
+    /// The update period the link measures, once it has [`SAMPLES`].
+    pub measured: Option<Duration>,
+    /// The poll period the link runs at.
+    pub poll: Duration,
+}
 
 /// The link name of the box's own channels.
 pub const BOX: &str = helmsman_io::text::BOX;
@@ -76,6 +142,10 @@ pub struct Link {
     up: bool,
     /// The table layout the indices above are for.
     epoch: Option<u64>,
+    /// When the last good cycle was, on the [`Link::cycle_at`] clock.
+    last_ok: Option<Duration>,
+    /// The spans between the last good cycles, at most [`SAMPLES`].
+    intervals: VecDeque<Duration>,
 }
 
 fn lock(t: &Mutex<SignalTable>) -> MutexGuard<'_, SignalTable> {
@@ -87,6 +157,50 @@ impl Link {
     #[must_use]
     pub const fn is_up(&self) -> bool {
         self.up
+    }
+
+    /// The update period the link measures: the mean span between its
+    /// last [`SAMPLES`] good cycles on the [`Link::cycle_at`] clock;
+    /// `None` until it has that many since it last came up.
+    #[must_use]
+    pub fn measured(&self) -> Option<Duration> {
+        (self.intervals.len() >= SAMPLES).then(|| {
+            let total: Duration = self.intervals.iter().sum();
+            total / u32::try_from(self.intervals.len()).unwrap_or(u32::MAX)
+        })
+    }
+
+    /// [`Health`]: lost while down, slow while the measured period is
+    /// more than twice the poll asked for, else healthy.
+    #[must_use]
+    pub fn health(&self) -> Health {
+        if !self.up {
+            Health::Lost
+        } else if self.measured().is_some_and(|m| m > self.poll * 2) {
+            Health::Slow
+        } else {
+            Health::Healthy
+        }
+    }
+
+    /// The driver, to ask where the device is and over what.
+    #[must_use]
+    pub fn driver(&self) -> &dyn Driver {
+        self.driver.as_ref()
+    }
+
+    /// What the link reports now, down for `error`.
+    #[must_use]
+    pub fn report(&self, error: Option<String>) -> LinkReport {
+        LinkReport {
+            name: self.name.clone(),
+            error,
+            address: self.driver.address(),
+            transport: self.driver.transport(),
+            health: self.health(),
+            measured: self.measured(),
+            poll: self.poll,
+        }
     }
 
     /// One poll: changed outputs out, every input in, whatever its period.
@@ -131,6 +245,22 @@ impl Link {
 
     fn run(&mut self, table: &Mutex<SignalTable>, now: Option<Duration>) -> Result<(), Error> {
         let r = self.exchange(table, now);
+        match (r.is_ok(), now) {
+            (true, Some(now)) => {
+                if let Some(prev) = self.last_ok {
+                    if self.intervals.len() == SAMPLES {
+                        self.intervals.pop_front();
+                    }
+                    self.intervals.push_back(now.saturating_sub(prev));
+                }
+                self.last_ok = Some(now);
+            }
+            (true, None) => {}
+            (false, _) => {
+                self.last_ok = None;
+                self.intervals.clear();
+            }
+        }
         if r.is_err() {
             self.up = false;
             for o in &mut self.outputs {
@@ -252,13 +382,42 @@ impl Link {
     }
 }
 
-/// The poll period a device's `poll_ms` param asks for.
-fn device_poll(d: &Device) -> Result<Duration, String> {
+/// The poll period a device's `poll_ms` param asks for; `None` for none.
+fn typed_poll(d: &Device) -> Result<Option<Duration>, String> {
     match d.params.get("poll_ms").map(|p| p.parse::<u64>()) {
-        None => Ok(DEFAULT_POLL),
-        Some(Ok(ms @ 1..=60_000)) => Ok(Duration::from_millis(ms)),
+        None => Ok(None),
+        Some(Ok(ms @ 1..=60_000)) => Ok(Some(Duration::from_millis(ms))),
         Some(_) => Err(format!("{}: poll_ms must be 1..=60000", d.id)),
     }
+}
+
+/// The poll period for `d`: a typed `poll_ms` wins; else, for a device
+/// by its profile, the fastest period of the modules that read or drive
+/// its signals (`pace`), held inside `limits` (the profile's transport
+/// limits); else [`DEFAULT_POLL`].
+fn chosen_poll(
+    d: &Device,
+    map: &IoMap,
+    sigs: &[Polled],
+    pace: &Pace,
+    limits: Option<(Duration, Duration)>,
+) -> Result<Duration, String> {
+    if let Some(p) = typed_poll(d)? {
+        return Ok(p);
+    }
+    if helmsman_io::profile_driver::profile_name(&d.driver).is_none() {
+        return Ok(DEFAULT_POLL);
+    }
+    let fastest = sigs
+        .iter()
+        .filter_map(|p| pace.get(&map.signals[p.signal].name.to_ascii_uppercase()))
+        .min()
+        .copied()
+        .unwrap_or(DEFAULT_POLL);
+    Ok(match limits {
+        Some((fast, slow)) => fastest.clamp(fast, slow),
+        None => fastest,
+    })
 }
 
 /// One link over `sigs` with `driver`; indices are found on first use.
@@ -277,6 +436,8 @@ fn build(
         outputs: Vec::new(),
         up: false,
         epoch: None,
+        last_ok: None,
+        intervals: VecDeque::new(),
     };
     for Polled {
         signal,
@@ -339,7 +500,7 @@ pub fn links(
                     .iter()
                     .find(|d| d.id == id)
                     .ok_or_else(|| format!("{id}: no such device"))?;
-                let poll = device_poll(d)?;
+                let poll = chosen_poll(d, map, &sigs, &Pace::new(), None)?;
                 (id, poll, open(d).map_err(|e| format!("{}: {e}", d.id))?)
             }
         };
@@ -360,33 +521,29 @@ fn nap(until: Instant, stop: &AtomicBool) {
 
 /// Runs `link` on its own thread until `stop` is set, calling `report` on
 /// every change between up and down (with the error when it went down),
-/// and again whenever a down link fails for another reason, so the
+/// again whenever a down link fails for another reason, so the
 /// Devices tab and the log say why it is down now, not why it first went
-/// down (2026-11-07: a stale "no T->O data" hid "No route to host"). The
-/// same reason again is not reported.
+/// down (2026-11-07: a stale "no T->O data" hid "No route to host"), and
+/// whenever its [`Health`] changes between healthy and slow. The same
+/// reason again is not reported.
 /// The thread hands the link back when it ends: set `stop`, unpark the
 /// thread (so a slow poll does not have to run out) and join.
 pub fn spawn(
     mut link: Link,
     table: Arc<Mutex<SignalTable>>,
     stop: Arc<AtomicBool>,
-    report: impl Fn(&str, Option<&Error>, Option<String>, Option<String>) + Send + 'static,
+    report: impl Fn(&LinkReport) + Send + 'static,
 ) -> JoinHandle<Link> {
     thread::spawn(move || {
-        // What was last reported: `Some(None)` up, `Some(Some(why))` down.
-        let mut said: Option<Option<String>> = None;
+        // What was last reported: why it is down (`None` up), and its health.
+        let mut said: Option<(Option<String>, Health)> = None;
         let start = Instant::now();
         let mut next = start;
         while !stop.load(Ordering::Acquire) {
             let r = link.cycle_at(&table, start.elapsed());
-            let now = r.as_ref().err().map(ToString::to_string);
+            let now = (r.as_ref().err().map(ToString::to_string), link.health());
             if said.as_ref() != Some(&now) {
-                report(
-                    &link.name,
-                    r.as_ref().err(),
-                    link.driver.address(),
-                    link.driver.transport(),
-                );
+                report(&link.report(now.0.clone()));
                 said = Some(now);
             }
             next += link.poll;
@@ -404,11 +561,9 @@ pub fn spawn(
 pub type Opener = Arc<dyn Fn(&Device) -> Result<Box<dyn Driver + Send>, Error> + Send + Sync>;
 /// A new driver for the box's own channels.
 pub type Channels = Arc<dyn Fn() -> Box<dyn Driver + Send> + Send + Sync>;
-/// Where links say they went up (`None`) or down (the error), the
-/// address the device was found at, when the driver knows one
-/// (`helmsman_io::Driver::address`), and the protocol it is reached over,
-/// for a driver that picks one (`helmsman_io::Driver::transport`).
-pub type Report = Arc<dyn Fn(&str, Option<&Error>, Option<String>, Option<String>) + Send + Sync>;
+/// Where links say they went up or down, and what else they know
+/// ([`LinkReport`]).
+pub type Report = Arc<dyn Fn(&LinkReport) + Send + Sync>;
 
 /// What a link is, to tell whether a new map changes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -423,9 +578,12 @@ struct Group {
     /// For a `wasm:` device, SHA-256 of the driver binary it runs on: a
     /// newly approved version of the driver is another link.
     guest: Option<[u8; 32]>,
+    /// How often the link polls (`poll_ms`, or the pace of its modules):
+    /// a link paced faster or slower is another link.
+    poll: Option<Duration>,
 }
 
-fn groups(map: &IoMap, drivers: &Drivers) -> Vec<(Group, Vec<Polled>)> {
+fn groups(map: &IoMap, drivers: &Drivers, pace: &Pace) -> Result<Vec<(Group, Vec<Polled>)>, String> {
     by_device(map)
         .into_iter()
         .map(|(dev, sigs)| {
@@ -450,14 +608,19 @@ fn groups(map: &IoMap, drivers: &Drivers) -> Vec<(Group, Vec<Polled>)> {
                 .map(|p| (map.signals[p.signal].name.clone(), p.addr.clone()))
                 .collect();
             let guest = device.as_ref().and_then(|d| drivers::digest(drivers, d));
+            let poll = match &device {
+                Some(d) => Some(chosen_poll(d, map, &sigs, pace, drivers::limits(drivers, d))?),
+                None => None,
+            };
             let group = Group {
                 name: dev.unwrap_or_else(|| BOX.to_string()),
                 device,
                 points,
                 outputs,
                 guest,
+                poll,
             };
-            (group, sigs)
+            Ok((group, sigs))
         })
         .collect()
 }
@@ -643,25 +806,38 @@ impl LinkSet {
     /// As [`LinkSet::plan`], plus a device naming a driver not in
     /// `drivers`.
     pub fn plan_with(&self, map: &IoMap, drivers: &Drivers) -> Result<Plan, String> {
+        self.plan_paced(map, drivers, &Pace::new())
+    }
+
+    /// [`LinkSet::plan_with`] with the modules' `pace`: a device by its
+    /// profile with no `poll_ms` polls at the fastest period of the
+    /// modules that read or drive its signals, inside the profile's
+    /// limits, and its cyclic transport is asked for the same rate
+    /// (`helmsman_io::profile_driver::ProfileDriver::pace`). A link
+    /// whose pace changed is replaced like one whose device line did.
+    ///
+    /// # Errors
+    /// As [`LinkSet::plan_with`].
+    pub fn plan_paced(&self, map: &IoMap, drivers: &Drivers, pace: &Pace) -> Result<Plan, String> {
         let mut keep = Vec::new();
         let mut start = Vec::new();
-        for (group, sigs) in groups(map, drivers) {
+        for (group, sigs) in groups(map, drivers, pace)? {
             if self.running.iter().any(|r| r.group == group) {
                 keep.push(group.name);
                 continue;
             }
-            let (poll, driver) = match &group.device {
-                None => (DEFAULT_POLL, (self.channels)()),
-                Some(d) => (
-                    device_poll(d)?,
+            let (poll, driver) = match (&group.device, group.poll) {
+                (Some(d), Some(poll)) => (
+                    poll,
                     drivers::open(drivers, d)
                         .or_else(|| {
                             let open = Arc::clone(&self.open);
-                            drivers::open_profiled(drivers, d, move |d| open(d))
+                            drivers::open_profiled(drivers, d, move |d| open(d), Some(poll))
                         })
                         .unwrap_or_else(|| (self.open)(d))
                         .map_err(|e| format!("{}: {e}", d.id))?,
                 ),
+                _ => (DEFAULT_POLL, (self.channels)()),
             };
             let link = build(group.name.clone(), poll, driver, map, sigs);
             start.push((group, link));
@@ -713,14 +889,9 @@ impl LinkSet {
     fn run(&mut self, group: Group, link: Link) {
         let stop = Arc::new(AtomicBool::new(false));
         let report = Arc::clone(&self.report);
-        let handle = spawn(
-            link,
-            Arc::clone(&self.table),
-            Arc::clone(&stop),
-            move |n, e, a, t| {
-                report(n, e, a, t);
-            },
-        );
+        let handle = spawn(link, Arc::clone(&self.table), Arc::clone(&stop), move |r| {
+            report(r);
+        });
         self.running.push(Running { group, stop, handle });
     }
 

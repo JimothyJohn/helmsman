@@ -64,14 +64,12 @@ fn a_down_link_reports_each_new_reason_once() {
             }) as Box<dyn Driver + Send>)
         }),
         Arc::new(|| Box::new(helmsman_io::local::Channels::new())),
-        Arc::new(
-            move |name: &str, err: Option<&Error>, _a: Option<String>, _t: Option<String>| {
-                if name == "dev" {
-                    let line = err.map_or_else(|| "up".to_string(), ToString::to_string);
-                    s.lock().unwrap_or_else(PoisonError::into_inner).push(line);
-                }
-            },
-        ),
+        Arc::new(move |r: &helmsman_plc::link::LinkReport| {
+            if r.name == "dev" {
+                let line = r.error.clone().unwrap_or_else(|| "up".to_string());
+                s.lock().unwrap_or_else(PoisonError::into_inner).push(line);
+            }
+        }),
     );
     set.start(layout.map.as_ref().unwrap()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);

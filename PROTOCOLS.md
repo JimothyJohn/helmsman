@@ -136,7 +136,7 @@ workers at once; 3 needs both; 4 and 5 follow 3.
 - Docs: docs/UI.md's Devices paragraph, the help page if it shows the
   form.
 
-### [ ] 4. Timing by itself; healthy, slow, lost
+### [x] 4. Timing by itself; healthy, slow, lost (box side; the word on the Devices tab and the Monitor waits for step 3's canvas work)
 
 - A profile transport may give limits (`cycle_ms=100..3000`). With no
   `poll_ms` on the line, a link polls at the fastest period of the

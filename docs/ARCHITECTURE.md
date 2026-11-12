@@ -349,12 +349,29 @@ scan; the scheduler bounds how often.
   own params are `poll_ms` and `DRIVER.KEY=VALUE` for one transport
   (`modbus-tcp.unit=2`, `enip-io.port=44818`); anything else is refused
   as the profile's business. The transport in use is reported
-  (`Driver::transport`, the link report's fourth argument,
-  `/api/devices` `transport`) for a device's details and failure text
-  only: nobody chooses it. A changed profile file is a changed driver
-  (its digest is part of the link's identity), so it replaces the link
-  at the next load. Not yet: the canvas's add-by-click (step 3),
-  profiles in the device library.
+  (`Driver::transport`, `LinkReport::transport`, `/api/devices`
+  `transport`) for a device's details and failure text only: nobody
+  chooses it. A changed profile file is a changed driver (its digest is
+  part of the link's identity), so it replaces the link at the next
+  load.
+  **Timing by itself** (step 4): a profile transport may give
+  `cycle_ms=A..B`, how fast and how slow the device can be asked over
+  it (the E1213's EtherNet/IP: its EDS's RPI range, 100 ms to 3 s). A
+  device by its profile with no `poll_ms` polls at the fastest scan
+  period of the modules that read or drive its signals (`link::pace`,
+  built from the modules at startup and at every reload), held inside
+  the preferred transport's limits, and the driver asks a cyclic
+  transport for the same rate (`ProfileDriver::pace`: `rpi_ms` on
+  `enip-io`, `cycle_ms` on `profinet-io`, a power of two of ms). A typed
+  `poll_ms` wins. A link paced differently is another link, replaced at
+  the reload. Every link measures its own update period on its
+  `cycle_at` clock (the mean of its last `SAMPLES` = 8 good cycles) and
+  says **healthy**, **slow** (more than twice the poll asked) or **lost**
+  (down, with the driver's sentence); it reports whenever that word or
+  the reason changes (`LinkReport`), and `/api/devices` carries `health`,
+  `poll_ms` and `measured_ms`. The Devices tab and the Monitor do not
+  show the word yet (the canvas is step 3's). Not yet: the canvas's
+  add-by-click (step 3), profiles in the device library.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
@@ -379,7 +396,10 @@ manifest declares, and is checked against.
   the commands that changed since the device last took them, then reads
   every input that is due. A link cycles at the fastest of its device's
   `poll_ms` and its inputs' own; an input without one is read at the
-  device's rate. A *link* error (I/O, an invalid reply) marks the link down:
+  device's rate (a device by its profile with no `poll_ms` is paced by
+  its modules: `profile`, above). A link measures its own update period
+  and says healthy, slow or lost (`Health`, `LinkReport`).
+  A *link* error (I/O, an invalid reply) marks the link down:
   its inputs go missing, and it forgets what the device holds, so every
   output is written again on reconnect. A *point* error (a value the point
   can't hold, a device exception, an unknown tag) stays on that signal: it

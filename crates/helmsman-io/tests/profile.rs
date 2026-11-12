@@ -171,3 +171,41 @@ fn names_follow_their_rules() {
     }
     assert_eq!(signal_name("rio", "DI-04-count"), "rio_di_04_count");
 }
+
+#[test]
+fn a_transport_may_give_rate_limits_the_map_never_sees() {
+    use std::time::Duration;
+    let p = e1213();
+    assert_eq!(
+        p.transports[0].limits(),
+        Some((Duration::from_millis(100), Duration::from_secs(3)))
+    );
+    assert_eq!(p.transports[1].limits(), None);
+    let map = p.map(0, "rio", "192.0.2.1").unwrap();
+    let line = map.lines().next().unwrap();
+    assert!(
+        line.contains(" rpi_ms=100") && !line.contains("cycle_ms"),
+        "{line}"
+    );
+    assert_eq!(
+        p.transports[0]
+            .driver_params()
+            .map(|(k, _)| k)
+            .collect::<Vec<_>>(),
+        ["profile", "rpi_ms"]
+    );
+    for bad in [
+        "cycle_ms=100",
+        "cycle_ms=0..100",
+        "cycle_ms=500..100",
+        "cycle_ms=1..60001",
+        "cycle_ms=a..b",
+    ] {
+        let src = E1213.replace("rpi_ms=100 cycle_ms=100..3000", &format!("rpi_ms=100 {bad}"));
+        let errs = Profile::parse(&src).unwrap_err();
+        assert!(
+            errs.iter().any(|(_, e)| e.starts_with(bad) && e.contains("A..B")),
+            "{bad}: {errs:?}"
+        );
+    }
+}

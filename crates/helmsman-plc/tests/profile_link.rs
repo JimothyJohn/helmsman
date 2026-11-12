@@ -133,18 +133,13 @@ fn start(root: &Path, text: &str) -> (Arc<Mutex<SignalTable>>, LinkSet, Reports,
         Arc::clone(&table),
         Arc::new(helmsman_io::open),
         Arc::new(|| Box::new(Channels::new())),
-        Arc::new(
-            move |name: &str,
-                  err: Option<&helmsman_io::Error>,
-                  _: Option<String>,
-                  transport: Option<String>| {
-                r.lock().unwrap_or_else(PoisonError::into_inner).push((
-                    name.into(),
-                    err.map(ToString::to_string),
-                    transport,
-                ));
-            },
-        ),
+        Arc::new(move |l: &helmsman_plc::link::LinkReport| {
+            r.lock().unwrap_or_else(PoisonError::into_inner).push((
+                l.name.clone(),
+                l.error.clone(),
+                l.transport.clone(),
+            ));
+        }),
     );
     let plan = set
         .plan_with(layout.map.as_ref().unwrap(), &found.drivers)
