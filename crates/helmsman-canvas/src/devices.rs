@@ -46,6 +46,37 @@ use crate::theme::theme;
 use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
+/// A link that is up but slow (PROTOCOLS.md step 4's word on the row).
+const AMBER: Color32 = Color32::from_rgb(255, 196, 60);
+
+/// A device's row: the fold arrow, its name, driver and endpoint; where
+/// an identity endpoint was found and, for a device by its profile, the
+/// protocol it is reached over; and the word `slow` when the link says
+/// the device updates at less than half the rate asked.
+fn head_text(n: &DeviceNode, folded: bool) -> String {
+    let arrow = if folded { "▸" } else { "▾" };
+    let mut head = format!("{arrow} {}  {} {}", n.name, n.driver, n.endpoint);
+    if let LinkState::Up {
+        address,
+        transport,
+        health,
+    } = &n.state
+    {
+        let identity = n.endpoint.starts_with("mac=")
+            || n.endpoint.starts_with("cip=")
+            || n.endpoint.starts_with("modbus=");
+        if let (Some(a), true) = (address, identity) {
+            let _ = write!(head, " → {a}");
+        }
+        if let Some(p) = transport {
+            let _ = write!(head, " over {p}");
+        }
+        if health.as_deref() == Some("slow") {
+            head.push_str("  slow");
+        }
+    }
+    head
+}
 
 /// How the box is doing with a device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -984,21 +1015,15 @@ impl DevicesUi {
         for n in nodes {
             let folded = self.folded.contains(&n.name);
             let dot = match &n.state {
+                LinkState::Up { health, .. } if health.as_deref() == Some("slow") => {
+                    RichText::new("●").color(AMBER)
+                }
                 LinkState::Up { .. } => RichText::new("●").color(t.accent),
                 LinkState::Down(_) => RichText::new("●").color(crate::theme::theme(ui).ink(RED)),
                 LinkState::Unknown => RichText::new("○").color(t.muted),
                 LinkState::Simulated => RichText::new("◌").color(t.muted),
             };
-            let arrow = if folded { "▸" } else { "▾" };
-            // An identity endpoint reads with where it was found.
-            let found = match (
-                &n.state,
-                n.endpoint.starts_with("mac=") || n.endpoint.starts_with("cip="),
-            ) {
-                (LinkState::Up { address: Some(a), .. }, true) => format!(" → {a}"),
-                _ => String::new(),
-            };
-            let head = format!("{arrow} {}  {} {}{found}", n.name, n.driver, n.endpoint);
+            let head = head_text(n, folded);
             // A device the map declares: Edit and Delete beside its name
             // (the box, the screen and other modules are not devices to edit).
             let declared = self.map.devices.iter().any(|d| d.name == n.name);
@@ -1643,5 +1668,38 @@ mod tests {
             (1, "cip=1:2:0x5")
         );
         assert!(Found::parse_discovery(&serde_json::json!({ "error": "x" })).is_none());
+    }
+
+    /// Step 4's word on the row: a device by its profile reads with the
+    /// protocol it is reached over, and `slow` when its link says so;
+    /// the dot and the hover say the same (`state_text`).
+    #[test]
+    fn a_devices_row_says_its_transport_and_whether_it_is_slow() {
+        let m =
+            iomap::skim("device rio device:moxa-e1213 mac=00-90-e8-7e-af-be\nin part bool rio ch:DI-04\n");
+        let up = |health: Option<&str>| LinkState::Up {
+            address: Some("10.0.0.57".into()),
+            transport: Some("modbus-tcp".into()),
+            health: health.map(str::to_string),
+        };
+        let nodes = tree(&m, &|_| None, &|_| up(Some("healthy")));
+        assert_eq!(
+            head_text(&nodes[0], true),
+            "▸ rio  device:moxa-e1213 mac=00-90-e8-7e-af-be → 10.0.0.57 over modbus-tcp"
+        );
+        assert_eq!(state_text(&nodes[0].state), "up at 10.0.0.57 over modbus-tcp");
+        let nodes = tree(&m, &|_| None, &|_| up(Some("slow")));
+        assert_eq!(
+            head_text(&nodes[0], false),
+            "▾ rio  device:moxa-e1213 mac=00-90-e8-7e-af-be → 10.0.0.57 over modbus-tcp  slow"
+        );
+        assert!(
+            state_text(&nodes[0].state)
+                .ends_with("; slow: the device updates at less than half the rate asked")
+        );
+        // A plain device: nothing new on its row.
+        let m = iomap::skim("device plc modbus-tcp 10.0.0.5:502\nin x bool plc di:0\n");
+        let nodes = tree(&m, &|_| None, &|_| LinkState::up(Some("10.0.0.5:502".into())));
+        assert_eq!(head_text(&nodes[0], true), "▸ plc  modbus-tcp 10.0.0.5:502");
     }
 }
