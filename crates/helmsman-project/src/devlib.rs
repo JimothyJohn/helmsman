@@ -13,6 +13,7 @@
 //! { "format": "helmsman-devices-index 1",
 //!   "devices": [ { "folder": "devices/moxa/iologik-e1213",
 //!                  "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io",
+//!                  "profile": "moxa-iologik-e1213.device",
 //!                  "identity": { "enip": { "vendor_id": 991, "product_code": 515 },
 //!                                "modbus": { "vendor_name": "Moxa", "product_code": "E1213" } },
 //!                  "protocols": { "enip": { "driver": "enip-io", "map": "enip.map",
@@ -20,6 +21,11 @@
 //!                                           "eds": { "name": "...", "size": 42906, "sha256": "..." } },
 //!                                 "modbus": { "driver": "modbus-tcp", "map": "modbus.map" } } } ] }
 //! ```
+//!
+//! `profile` names the device's profile file in the folder (`NAME.device`,
+//! `helmsman_io::profile`; PROTOCOLS.md step 3): a box copies it into the
+//! project when the device is added by click. The older `protocols.*.profile`
+//! is a driver's built-in profile name, another thing.
 //!
 //! Everything read here is data from a public repository: names are
 //! bounded and checked, numbers must be numbers, a folder is relative,
@@ -74,6 +80,9 @@ pub struct Entry {
     /// (`identity.modbus` in device.toml), when the device answers it.
     pub modbus: Option<(String, String)>,
     pub protocols: Vec<Protocol>,
+    /// The device's profile file in the folder (`NAME.device`), when the
+    /// library has one.
+    pub profile: Option<String>,
 }
 
 impl Entry {
@@ -208,6 +217,13 @@ fn entry(j: &Json) -> Result<Entry, String> {
             protocols.push(protocol(name, v)?);
         }
     }
+    let profile = text(j, "profile")?;
+    if !profile.is_empty() && crate::file_name(&profile) != Some(crate::FileKind::Device) {
+        return Err(format!(
+            "profile: not a profile file name (NAME.device, NAME 1 to {} of a-z 0-9 _ -)",
+            crate::NAME_LEN
+        ));
+    }
     Ok(Entry {
         folder,
         vendor,
@@ -216,6 +232,7 @@ fn entry(j: &Json) -> Result<Entry, String> {
         enip,
         modbus,
         protocols,
+        profile: (!profile.is_empty()).then_some(profile),
     })
 }
 
@@ -430,5 +447,34 @@ mod tests {
             with_address(t, "10.0.0.57"),
             "# ADDR stays here\ndevice e1213 enip-io 10.0.0.57 profile=moxa-e1213\nin di0 bool e1213 di:0 # ADDR\n"
         );
+    }
+
+    #[test]
+    fn an_entry_may_name_its_profile_file_and_nothing_else_passes_as_one() {
+        let ok = Index::parse(
+            r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "profile": "moxa-iologik-e1213.device", "protocols": { "modbus": { "driver": "modbus-tcp" } } } ] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            ok.devices[0].profile.as_deref(),
+            Some("moxa-iologik-e1213.device")
+        );
+        assert_eq!(
+            ok.devices[0].file_url("https://x/lib", "moxa-iologik-e1213.device"),
+            "https://x/lib/devices/moxa/iologik-e1213/moxa-iologik-e1213.device"
+        );
+        for bad in [
+            "../x.device",
+            "Moxa.device",
+            "e1213.eds",
+            "a/b.device",
+            "x.devicee",
+        ] {
+            let e = Index::parse(&format!(
+                r#"{{ "format": "helmsman-devices-index 1", "devices": [ {{ "folder": "devices/a/b", "vendor": "a", "model": "b", "profile": "{bad}", "protocols": {{ "modbus": {{ "driver": "modbus-tcp" }} }} }} ] }}"#
+            ))
+            .unwrap_err();
+            assert!(e.contains("profile: not a profile file name"), "{bad}: {e}");
+        }
     }
 }

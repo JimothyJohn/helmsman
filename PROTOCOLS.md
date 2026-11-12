@@ -112,7 +112,7 @@ workers at once; 3 needs both; 4 and 5 follow 3.
   two units are two; the bounds (hosts, concurrency, time) still hold.
 - PROFINET on a real wire is NOT part of this (see "Do not").
 
-### [ ] 3. Add by click
+### [x] 3. Add by click (2026-11-12)
 
 - "On the network" lists devices by vendor and model. A row the library
   knows (it carries a profile) offers **Add**; the form asks for one

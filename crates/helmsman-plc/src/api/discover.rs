@@ -319,6 +319,7 @@ fn entry_json(e: &Entry, driver: &str) -> Json {
         "folder": e.folder, "vendor": e.vendor, "model": e.model, "kind": e.kind,
         "driver": p.map(|p| p.driver.clone()),
         "profile": p.and_then(|p| p.profile.clone()),
+        "profile_file": e.profile,
         "map": p.and_then(|p| p.map.clone()),
         "eds": p.and_then(|p| p.eds.as_ref()).map(|f| json!({ "name": f.name, "size": f.size, "sha256": f.sha256 })),
     })
@@ -727,6 +728,20 @@ pub(super) fn library(req: &Request, ctx: &Ctx) -> Response {
                         j["lines"] = json!(lines);
                     }
                     Err(why) => j["lines_unavailable"] = json!(why),
+                }
+            }
+            // The device's profile, for the canvas to copy into the
+            // project (add by click): the box holds it to the profile's
+            // rules here, so what reaches a project reads.
+            if let Some(file) = e.profile.as_deref() {
+                let url = e.file_url(&base, file);
+                match st.map_text(&url).and_then(|t| {
+                    helmsman_io::profile::Profile::parse(&t)
+                        .map(|_| t)
+                        .map_err(|errs| format!("{file} does not read as a profile: {}", errs[0].1))
+                }) {
+                    Ok(text) => j["profile_text"] = json!(text),
+                    Err(why) => j["profile_unavailable"] = json!(why),
                 }
             }
             j

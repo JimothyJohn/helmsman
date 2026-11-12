@@ -1801,6 +1801,7 @@ mod chrome {
         assert!(h.has("devices blank"), "the blank space is there to right-click");
         // The blink example has no map: nothing listed, and read-only.
         assert!(!h.has("device box"));
+        h.app.chrome.advanced = true;
         h.right_click(h.rect("devices blank").center());
         assert!(h.has("menu new device"));
         h.press("menu new device");
@@ -1975,7 +1976,8 @@ mod chrome {
             .unwrap()
             .upload("---.eds", FACTS.as_bytes().to_vec());
         assert!(h.app.sim.as_ref().unwrap().devices_ui.adding.is_none());
-        // The right-click menu offers the import.
+        // The right-click menu offers the import (under Advanced).
+        h.app.chrome.advanced = true;
         h.right_click(h.rect("devices blank").center());
         assert!(h.has("menu import device"));
         h.press("menu import device");
@@ -1986,26 +1988,39 @@ mod chrome {
         );
     }
 
-    /// `devices-repo`: Scan in the Devices tab lists what answers on the
-    /// network (the simulation: its E1213), says whether the map binds it,
-    /// and "Add to the map…" opens the form filled in by identity; once
-    /// the map names it the row says so and the item is disabled.
+    /// Add by click (PROTOCOLS.md step 3, 2026-11-12): Scan lists what
+    /// answers on the network by vendor and model (the simulation: its
+    /// E1213, which the library knows); Add opens a form that asks one
+    /// thing, the device's name, and lists the channels it will get; Add
+    /// copies the profile into the project and writes the device line by
+    /// identity and one `ch:` signal a channel. No protocol, address or
+    /// point is asked. Once the map names it the row says so.
     #[test]
-    fn scan_lists_the_network_and_adds_a_found_device_by_identity() {
+    fn scan_lists_the_network_and_a_known_device_is_added_by_a_click() {
         use crate::devices::Scan;
         let mut h = Harness::new(App::sim());
         h.app.sim.as_mut().unwrap().proj.create("mine", None);
         h.press("pane devices");
         h.wait(0.3);
         assert!(h.has("devices scan"), "the Scan button");
+        assert!(!h.app.chrome.advanced, "Advanced is off until asked for");
         assert!(!h.has("network 192.168.127.254"));
         h.press("devices scan");
         h.wait(0.3);
         assert_eq!(h.app.sim.as_ref().unwrap().devices_ui.scan, Scan::Done);
         assert!(h.has("network 192.168.127.254"), "the simulated E1213 answered");
-        let f = &h.app.sim.as_ref().unwrap().devices_ui.found[0];
+        let f = h.app.sim.as_ref().unwrap().devices_ui.found[0].clone();
         assert_eq!((f.vendor_id, f.product_code), (991, 515));
         assert_eq!(f.mapped, None, "a fresh project maps nothing");
+        assert_eq!(
+            f.library.as_ref().and_then(|l| l.profile_file.as_deref()),
+            Some("moxa-iologik-e1213.device")
+        );
+        assert!(h.has("add network 192.168.127.254"), "Add, in sight");
+        assert!(
+            !h.has("use network 192.168.127.254"),
+            "the typed form is Advanced's"
+        );
         // The agent's context lists it too.
         let text = h.app.sim.as_ref().unwrap().devices_text();
         assert!(
@@ -2013,7 +2028,118 @@ mod chrome {
             "{text}"
         );
         assert!(text.contains("not in the map"), "{text}");
-        // Add to the map: the form, filled in by identity.
+        // Add: one field, the name, filled in from the model; the channels
+        // listed once the (simulated) library answered.
+        h.press("add network 192.168.127.254");
+        h.wait(0.3);
+        assert!(h.has("quick form"), "the quick form, not the typed one");
+        assert!(!h.has("device form"));
+        let q = h
+            .app
+            .sim
+            .as_ref()
+            .unwrap()
+            .devices_ui
+            .quick
+            .clone()
+            .expect("the quick form");
+        assert_eq!(q.name, "iologik_e1213", "named by the library's model");
+        assert_eq!(q.identity, "cip=991:515:0x00e12130");
+        let (_, skim) = q.profile.as_ref().expect("answered").as_ref().expect("read");
+        assert_eq!(skim.channels.len(), 40);
+        h.press("quick ok");
+        h.wait(0.3);
+        assert!(!h.has("quick form"), "added: the form is gone");
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            sim.proj.files.contains_key("moxa-iologik-e1213.device"),
+            "the profile joined the project: {:?}",
+            sim.proj.files.keys().collect::<Vec<_>>()
+        );
+        let map = sim.proj.files["io.map"].clone();
+        assert!(
+            map.contains("device iologik_e1213 device:moxa-iologik-e1213 cip=991:515:0x00e12130\n"),
+            "{map}"
+        );
+        assert!(
+            map.contains("in  iologik_e1213_di_04 bool iologik_e1213 ch:DI-04\n"),
+            "{map}"
+        );
+        assert!(
+            map.contains("out iologik_e1213_do_00 bool iologik_e1213 ch:DO-00 safe=false\n"),
+            "{map}"
+        );
+        assert!(
+            map.contains("in  iologik_e1213_di_04_count int iologik_e1213 ch:DI-04-count\n"),
+            "{map}"
+        );
+        assert_eq!(map.matches(" iologik_e1213 ch:").count(), 40, "{map}");
+        assert!(
+            !map.contains("enip-io") && !map.contains("modbus-tcp"),
+            "no protocol: {map}"
+        );
+        assert_eq!(
+            sim.devices_ui.found[0].mapped.as_deref(),
+            Some("iologik_e1213"),
+            "wired at once"
+        );
+        assert!(!h.has("add network 192.168.127.254"), "a wired device has no Add");
+        // The listing shows it with its forty points.
+        assert!(h.has("device iologik_e1213"));
+        h.press("devices scan");
+        h.wait(0.3);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
+            Some("iologik_e1213")
+        );
+    }
+
+    /// Advanced (PROTOCOLS.md step 3): the typed New device form, Import
+    /// device… and Use this device sit behind a tick box beside Scan, off
+    /// by default and remembered per browser; on, "Use this device…" on
+    /// a found device opens the form filled in by identity as before.
+    #[test]
+    fn advanced_hides_the_typed_form_and_is_remembered_and_use_this_device_still_works() {
+        use crate::editor::Chrome;
+        let mut h = Harness::new(App::sim());
+        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        h.press("pane devices");
+        h.wait(0.3);
+        // Off: the blank space's menu offers nothing to type.
+        h.right_click(h.rect("devices blank").center());
+        h.wait(0.2);
+        assert!(!h.has("menu new device"), "New device… is Advanced's");
+        assert!(!h.has("menu import device"));
+        h.frame(vec![Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        h.press("devices advanced");
+        h.wait(0.2);
+        assert!(h.app.chrome.advanced);
+        assert!(Chrome::restored(&h.app.chrome.saved()).advanced, "remembered");
+        assert!(!Chrome::restored("left=1").advanced, "off unless saved on");
+        h.right_click(h.rect("devices blank").center());
+        h.wait(0.2);
+        assert!(h.has("menu new device") && h.has("menu import device"));
+        h.frame(vec![Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        h.press("devices scan");
+        h.wait(0.3);
+        assert!(
+            h.has("use network 192.168.127.254"),
+            "Use this device, beside Add"
+        );
+        assert!(h.has("add network 192.168.127.254"));
+        // Use this device…: the typed form, filled in by identity.
         h.right_click(h.rect("network 192.168.127.254").center());
         assert!(h.has("menu add network"));
         h.press("menu add network");
@@ -2028,7 +2154,7 @@ mod chrome {
             .adding
             .clone()
             .expect("the form");
-        assert_eq!(d.name, "e1213");
+        assert_eq!(d.name, "iologik_e1213", "named by the library's model");
         assert_eq!(d.endpoint, "cip=991:515:0x00e12130");
         assert_eq!(d.protocol, 1, "EtherNet/IP");
         // The E1213's channels are listed; the program's lamp (on the box's
@@ -2044,11 +2170,14 @@ mod chrome {
         h.press("device ok");
         h.wait(0.3);
         let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
-        assert!(map.contains("out lamp bool e1213 do:0 safe=false"), "{map}");
+        assert!(
+            map.contains("out lamp bool iologik_e1213 do:0 safe=false"),
+            "{map}"
+        );
         assert!(!map.contains(" box do:0"), "moved, not doubled: {map}");
         assert!(
             map.contains(
-                "device e1213 enip-io cip=991:515:0x00e12130 profile=moxa-e1213 rpi_ms=100 poll_ms=20\n"
+                "device iologik_e1213 enip-io cip=991:515:0x00e12130 profile=moxa-e1213 rpi_ms=100 poll_ms=20\n"
             ),
             "{map}"
         );
@@ -2056,14 +2185,14 @@ mod chrome {
         // again until a rescan, 2026-11-05).
         assert_eq!(
             h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
-            Some("e1213")
+            Some("iologik_e1213")
         );
         assert!(!h.has("use network 192.168.127.254"));
         h.press("devices scan");
         h.wait(0.3);
         assert_eq!(
             h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
-            Some("e1213")
+            Some("iologik_e1213")
         );
         h.right_click(h.rect("network 192.168.127.254").center());
         h.press("menu add network");
@@ -2085,6 +2214,7 @@ mod chrome {
     #[test]
     fn use_this_device_copies_an_example_and_wires_its_io() {
         let mut h = Harness::new(App::sim());
+        h.app.chrome.advanced = true;
         {
             let sim = h.app.sim.as_mut().unwrap();
             // The start/stop latch: two BOOL inputs, a BOOL output.
@@ -2171,8 +2301,8 @@ mod chrome {
             let sim = h.app.sim.as_ref().unwrap();
             let map = &sim.proj.files["io.map"];
             assert!(!map.contains(" box di:") && !map.contains(" box do:"), "{map}");
-            assert!(map.contains("in  start bool e1213 di:0\n"), "{map}");
-            assert!(map.contains("in  door bool e1213 di:5\n"), "{map}");
+            assert!(map.contains("in  start bool iologik_e1213 di:0\n"), "{map}");
+            assert!(map.contains("in  door bool iologik_e1213 di:5\n"), "{map}");
             let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
             assert!(st.contains("  door : BOOL;"), "{st}");
             assert!(helmsman_iec::ast::parse(st).is_ok(), "{st}");
@@ -2202,7 +2332,7 @@ mod chrome {
         h.wait(0.3);
         assert!(!h.has("rename form"));
         let sim = h.app.sim.as_ref().unwrap();
-        assert!(sim.proj.files["io.map"].contains("in  go_button bool e1213 di:0\n"));
+        assert!(sim.proj.files["io.map"].contains("in  go_button bool iologik_e1213 di:0\n"));
         let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
         assert!(
             st.contains("go_button : BOOL;") && st.contains("(go_button OR motor)"),
@@ -2253,6 +2383,7 @@ mod chrome {
             egui::CursorIcon::PointingHand,
             "a button"
         );
+        h.app.chrome.advanced = true;
         h.right_click(h.rect("devices blank").center());
         h.press("menu new device");
         h.wait(0.2);
@@ -4119,12 +4250,16 @@ mod boxed {
                 state: "up".into(),
                 error: None,
                 address: None,
+                transport: None,
+                health: None,
             },
             DeviceRow {
                 name: "rio".into(),
                 state: "down".into(),
                 error: Some("connection refused".into()),
                 address: None,
+                transport: None,
+                health: None,
             },
         ];
         let mut h = Harness::new(App::boxed());
@@ -4136,6 +4271,7 @@ mod boxed {
         assert!(h.app.chrome.devices_open());
         assert!(h.has("device rio") && h.has("device box"), "both devices");
         assert!(h.has("point part") && h.has("point ready"), "their points");
+        h.app.chrome.advanced = true;
         h.right_click(h.rect("devices blank").center());
         assert!(h.has("menu new device"));
         h.press("menu new device");
