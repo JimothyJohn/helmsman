@@ -1,0 +1,60 @@
+helmsman-device 1
+# Moxa ioLogik E1213: 8 DI, 4 DO and 4 DIO channels (DI-08..11 or DO-04..07,
+# by jumper). The same channels over EtherNet/IP and Modbus TCP; where each
+# address comes from is in docs/devices/moxa-iologik-e1213.md.
+vendor Moxa
+model  ioLogik E1213
+kind   remote-io
+
+# EtherNet/IP first (cyclic, one connection); Modbus TCP when the unit's one
+# connection is taken (its firmware 3.1 grants a single owner).
+transport enip-io    profile=moxa-e1213 rpi_ms=100
+transport modbus-tcp unit=1
+
+# digital inputs: input bytes 0-1 / discrete inputs 0..11
+in  DI-00        bool enip-io=di:0 modbus-tcp=di:0
+in  DI-01        bool enip-io=di:1 modbus-tcp=di:1
+in  DI-02        bool enip-io=di:2 modbus-tcp=di:2
+in  DI-03        bool enip-io=di:3 modbus-tcp=di:3
+in  DI-04        bool enip-io=di:4 modbus-tcp=di:4
+in  DI-05        bool enip-io=di:5 modbus-tcp=di:5
+in  DI-06        bool enip-io=di:6 modbus-tcp=di:6
+in  DI-07        bool enip-io=di:7 modbus-tcp=di:7
+in  DI-08        bool enip-io=di:8 modbus-tcp=di:8
+in  DI-09        bool enip-io=di:9 modbus-tcp=di:9
+in  DI-10        bool enip-io=di:10 modbus-tcp=di:10
+in  DI-11        bool enip-io=di:11 modbus-tcp=di:11
+
+# counters (counter mode; 0 in DI mode): UDINT at byte 2 + 4n / input registers 16 + 2n
+in  DI-00-count  int  enip-io=in:2:u32 modbus-tcp=ir:16:u32
+in  DI-01-count  int  enip-io=in:6:u32 modbus-tcp=ir:18:u32
+in  DI-02-count  int  enip-io=in:10:u32 modbus-tcp=ir:20:u32
+in  DI-03-count  int  enip-io=in:14:u32 modbus-tcp=ir:22:u32
+in  DI-04-count  int  enip-io=in:18:u32 modbus-tcp=ir:24:u32
+in  DI-05-count  int  enip-io=in:22:u32 modbus-tcp=ir:26:u32
+in  DI-06-count  int  enip-io=in:26:u32 modbus-tcp=ir:28:u32
+in  DI-07-count  int  enip-io=in:30:u32 modbus-tcp=ir:30:u32
+in  DI-08-count  int  enip-io=in:34:u32 modbus-tcp=ir:32:u32
+in  DI-09-count  int  enip-io=in:38:u32 modbus-tcp=ir:34:u32
+in  DI-10-count  int  enip-io=in:42:u32 modbus-tcp=ir:36:u32
+in  DI-11-count  int  enip-io=in:46:u32 modbus-tcp=ir:38:u32
+
+# digital outputs: output byte 0 / coils 0..7
+out DO-00        bool safe=false enip-io=do:0 modbus-tcp=coil:0
+out DO-01        bool safe=false enip-io=do:1 modbus-tcp=coil:1
+out DO-02        bool safe=false enip-io=do:2 modbus-tcp=coil:2
+out DO-03        bool safe=false enip-io=do:3 modbus-tcp=coil:3
+out DO-04        bool safe=false enip-io=do:4 modbus-tcp=coil:4
+out DO-05        bool safe=false enip-io=do:5 modbus-tcp=coil:5
+out DO-06        bool safe=false enip-io=do:6 modbus-tcp=coil:6
+out DO-07        bool safe=false enip-io=do:7 modbus-tcp=coil:7
+
+# what the unit says its outputs are: input byte 50 / the coils read back
+in  DO-00-status bool enip-io=in:50.0 modbus-tcp=coil:0
+in  DO-01-status bool enip-io=in:50.1 modbus-tcp=coil:1
+in  DO-02-status bool enip-io=in:50.2 modbus-tcp=coil:2
+in  DO-03-status bool enip-io=in:50.3 modbus-tcp=coil:3
+in  DO-04-status bool enip-io=in:50.4 modbus-tcp=coil:4
+in  DO-05-status bool enip-io=in:50.5 modbus-tcp=coil:5
+in  DO-06-status bool enip-io=in:50.6 modbus-tcp=coil:6
+in  DO-07-status bool enip-io=in:50.7 modbus-tcp=coil:7
