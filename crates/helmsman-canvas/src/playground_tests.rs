@@ -246,6 +246,37 @@ fn blink_toggles_at_its_period_and_stops_when_disabled() {
     assert_eq!(s.value("lamp"), Some(b(true)), "toggled at 100 ms");
 }
 
+/// Every scan a frame runs is there to look at: the last in `trace`, the
+/// ones before it in `earlier`, and none of them twice.
+#[test]
+fn a_frame_keeps_the_scans_before_its_last() {
+    let mut s = Session::new(example("blink"));
+    s.set_running(true);
+    s.advance(0.0);
+    assert!(s.earlier().is_empty(), "the first frame's one scan");
+    s.advance(0.03);
+    let at = |t: &helmsman_iec::trace::Trace| t.now().as_millis();
+    assert_eq!(s.earlier().iter().map(at).collect::<Vec<_>>(), [10, 20]);
+    assert_eq!(s.trace.as_ref().map(at), Some(30));
+    // A frame with no scan due shows what the last one did.
+    s.advance(0.031);
+    assert_eq!(s.earlier().len(), 2);
+    // A long catch-up traces only its newest scans.
+    s.advance(2.0);
+    assert_eq!(s.earlier().len() as u64, crate::playground::EARLIER);
+    assert_eq!(s.trace.as_ref().map(at), Some(u128::from(s.now_ms - s.period_ms)));
+    // Stopped, stepped or paused: the one scan shown is all there is.
+    s.set_running(false);
+    s.advance(2.1);
+    assert!(s.earlier().is_empty());
+    s.set_running(true);
+    s.advance(2.2);
+    s.advance(2.3);
+    assert!(!s.earlier().is_empty());
+    s.step();
+    assert!(s.earlier().is_empty());
+}
+
 #[test]
 fn the_counter_counts_rising_edges_to_its_target() {
     let mut s = Session::new(example("counter"));
