@@ -120,6 +120,7 @@ mod once;
 mod parser;
 pub mod plcopen;
 mod rename;
+pub mod scan;
 pub mod spec;
 mod state;
 mod suggest;
