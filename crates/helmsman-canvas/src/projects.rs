@@ -332,7 +332,7 @@ impl FilesUi {
                 text.push_str("  ● running");
             }
             let color = if p.running { t.accent } else { t.fg };
-            let text = RichText::new(text).monospace().color(color);
+            let text = RichText::new(text).color(color);
             let tip = if p.example() {
                 let title = example_title(&p.name).unwrap_or(&p.name);
                 format!("{title}: click to make your own copy of this example, under a name you choose.")
@@ -487,7 +487,6 @@ impl FilesUi {
                     .selectable_label(
                         false,
                         RichText::new(format!("{arrow} earlier ({})", earlier.len()))
-                            .monospace()
                             .color(t.muted),
                     )
                     .tip("Earlier iterations of the program, newest first. Click to show or hide them.");
@@ -508,7 +507,7 @@ impl FilesUi {
                     if runs { "  · runs" } else { "" }
                 );
                 let r = ui
-                    .selectable_label(here, RichText::new(text).monospace())
+                    .selectable_label(here, RichText::new(text))
                     .tip(if runs {
                         "The file that runs. Double-click to edit it; right-click for more."
                     } else {
@@ -934,7 +933,6 @@ pub fn diags_ui(ui: &mut egui::Ui, diags: &[Diag], chrome: &mut Chrome) -> Optio
             .add(
                 egui::Label::new(
                     RichText::new(d.label())
-                        .monospace()
                         .color(crate::theme::theme(ui).ink(color)),
                 )
                 .sense(egui::Sense::click()),

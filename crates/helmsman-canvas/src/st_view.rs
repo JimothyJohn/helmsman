@@ -774,7 +774,7 @@ impl Viewer {
                 } else {
                     ui.add_space(18.0);
                 }
-                let text = RichText::new(&s.label).monospace();
+                let text = RichText::new(&s.label);
                 if ui
                     .selectable_label(row.scope == self.scope, text)
                     .tip("Shows this one's diagram.")

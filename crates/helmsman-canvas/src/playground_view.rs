@@ -26,7 +26,7 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 const DEBOUNCE: f64 = 0.35;
 /// Trend line colours, in signal order (the last, white, is the page's ink
 /// in light mode).
-const TREND: [Color32; TREND_SIGNALS] = [
+pub const TREND: [Color32; TREND_SIGNALS] = [
     YELLOW,
     Color32::from_rgb(0x6E, 0xC6, 0xFF),
     Color32::from_rgb(0x9B, 0xE5, 0x8C),
@@ -1993,7 +1993,7 @@ impl PlaygroundView {
         });
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
-        let plot = self.trend_plot(ui);
+        let plot = self.trend_plot(ui, chrome);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
             self.session.trend.move_signal(from, to);
         }
@@ -2146,7 +2146,7 @@ impl PlaygroundView {
 
     /// Draws the trend; returns the rect it filled (the lanes' handles go
     /// over it).
-    fn trend_plot(&self, ui: &mut egui::Ui) -> Rect {
+    fn trend_plot(&self, ui: &mut egui::Ui, chrome: &Chrome) -> Rect {
         let t = theme(ui);
         let trend = &self.session.trend;
         let rect = ui.available_rect_before_wrap();
@@ -2177,10 +2177,7 @@ impl PlaygroundView {
         for (k, name) in trend.signals.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = match k % TREND.len() {
-                5 if !t.dark => t.fg,
-                i => t.ink(TREND[i]),
-            };
+            let color = lane_color(&t, chrome, name, k);
             let (lo, hi) = trend
                 .samples
                 .lane(k, start)
@@ -2335,11 +2332,32 @@ pub fn window_label(ms: u64) -> String {
 /// Width of a lane's label column, which is also its drag handle.
 const LANE_HANDLE_W: f32 = 88.0;
 
+/// A place in the trend's palette as it is drawn on this page: the brand
+/// colours, as ink on the light page, where the last (white) is the
+/// page's own ink.
+#[must_use]
+pub fn palette_color(t: &Theme, index: usize) -> Color32 {
+    match index % TREND.len() {
+        5 if !t.dark => t.fg,
+        i => t.ink(TREND[i]),
+    }
+}
+
+/// The colour of trend signal `name` in lane `k` (both trends): the one
+/// picked for it ([`Chrome::set_color`]), or its lane's.
+#[must_use]
+pub fn lane_color(t: &Theme, chrome: &Chrome, name: &str, k: usize) -> Color32 {
+    palette_color(t, chrome.color(name).unwrap_or(k))
+}
+
 /// The lane labels of a trend drawn in `rect`, one lane per name, as
 /// drag handles (both trends; Nick, 2026-11-07): drag a label up or down
 /// and its signal moves to the lane it is dropped on, a bar marking
-/// where it will land. The hits are `trend lane <name>`. Returns
-/// `(from, to)` when a drag ends on another lane.
+/// where it will land. A click on a label opens the palette, and the
+/// swatch picked is that signal's colour from then on, on either trend
+/// (Nick, 2026-11-11). The hits are `trend lane <name>` and, while the
+/// palette is open, `trend color <k>`. Returns `(from, to)` when a drag
+/// ends on another lane.
 pub fn lane_handles(
     ui: &mut egui::Ui,
     chrome: &mut Chrome,
@@ -2361,10 +2379,44 @@ pub fn lane_handles(
         let top = rect.top() + lane * k as f32;
         let handle = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(LANE_HANDLE_W, lane));
         let r = ui
-            .interact(handle, ui.scope_id().with(("trend lane", k)), Sense::drag())
+            .interact(
+                handle,
+                ui.scope_id().with(("trend lane", k)),
+                Sense::click_and_drag(),
+            )
             .on_hover_cursor(egui::CursorIcon::Grab)
-            .tip("Drag up or down to move this signal to another lane.");
+            .tip("Click to pick this signal's colour. Drag up or down to move it to another lane.");
         chrome.hit(format!("trend lane {}", name.to_ascii_lowercase()), handle);
+        let picked = chrome.color(name).unwrap_or(k) % TREND.len();
+        let mut pick = None;
+        let mut swatches = Vec::new();
+        egui::Popup::menu(&r).show(|ui| {
+            let t = theme(ui);
+            ui.horizontal(|ui| {
+                for i in 0..TREND.len() {
+                    let (rect, s) = ui.allocate_exact_size(Vec2::splat(TAP * 0.75), Sense::click());
+                    let s = s.tip("This signal's line and label take this colour.");
+                    ui.painter()
+                        .rect_filled(rect.shrink(4.0), CornerRadius::same(4), palette_color(&t, i));
+                    if i == picked || s.hovered() {
+                        ui.painter().rect_stroke(
+                            rect.shrink(1.0),
+                            CornerRadius::same(6),
+                            Stroke::new(2.0, t.fg),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    swatches.push((format!("trend color {i}"), rect));
+                    if s.clicked() {
+                        pick = Some(i);
+                    }
+                }
+            });
+        });
+        chrome.hits.extend(swatches);
+        if let Some(i) = pick {
+            chrome.set_color(name, i);
+        }
         let at = ui.ctx().input(|i| i.pointer.latest_pos());
         if r.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);

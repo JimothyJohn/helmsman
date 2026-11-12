@@ -156,6 +156,33 @@ impl Harness {
         })
     }
 
+    /// The text the last frame drew in the code face left of `x`.
+    fn mono_left_of(&self, x: f32) -> Vec<String> {
+        fn walk(shape: &egui::Shape, x: f32, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, x, out)),
+                egui::Shape::Text(t) if t.pos.x < x => {
+                    let job = &t.galley.job;
+                    for sec in &job.sections {
+                        let text = job
+                            .text
+                            .get(sec.byte_range.start.0..sec.byte_range.end.0)
+                            .unwrap_or("");
+                        if !text.trim().is_empty() && sec.format.font_id.family == egui::FontFamily::Monospace {
+                            out.push(text.trim().chars().take(60).collect());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for c in &self.shapes {
+            walk(&c.shape, x, &mut out);
+        }
+        out
+    }
+
     /// Whether the last frame drew a piece of text containing `needle`.
     fn drew(&self, needle: &str) -> bool {
         fn walk(shape: &egui::Shape, needle: &str) -> bool {
@@ -2935,6 +2962,75 @@ mod simulated {
         let r = handle(&h, &b);
         h.drag(r.center(), r.center() + Vec2::new(4.0, r.height() * 0.3));
         assert_eq!(order(&h), [a, b, c]);
+    }
+
+    /// Nick, 2026-11-11: a trend signal's colour is the user's to pick. A
+    /// click on a lane's label opens the palette; the swatch clicked is
+    /// that signal's colour whichever lane it is in, and the browser
+    /// keeps it.
+    #[test]
+    fn a_click_on_a_trend_label_picks_that_signals_colour() {
+        use crate::editor::Chrome;
+        use crate::playground_view::{lane_color, palette_color};
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let s = &mut h.app.sim.as_mut().unwrap().session;
+        s.trend.signals = vec!["FIRST".into(), "SECOND".into()];
+        s.trend.samples.clear();
+        h.wait(0.3);
+        let t = crate::theme::Theme::dark();
+        let color = |h: &Harness, name: &str, k: usize| lane_color(&t, &h.app.chrome, name, k);
+        assert_eq!(color(&h, "FIRST", 0), palette_color(&t, 0), "its lane's to start");
+        assert!(!h.has("trend color 3"), "no palette until asked");
+        h.press("trend lane first");
+        h.wait(0.2);
+        h.press("trend color 3");
+        h.wait(0.2);
+        assert_eq!(h.app.chrome.color("first"), Some(3));
+        assert_eq!(color(&h, "FIRST", 0), palette_color(&t, 3));
+        assert_eq!(color(&h, "FIRST", 1), palette_color(&t, 3), "in any lane");
+        assert_eq!(color(&h, "SECOND", 1), palette_color(&t, 1), "the others keep theirs");
+        assert!(!h.has("trend color 3"), "the palette shuts on a pick");
+        // The order is as it was: a click is not a drag.
+        let order = h.app.sim.as_ref().unwrap().session.trend.signals.clone();
+        assert_eq!(order, ["FIRST", "SECOND"]);
+        // Kept per browser, and what is read back is bounded and clean.
+        let back = Chrome::restored(&h.app.chrome.saved());
+        assert_eq!(back.color("FIRST"), Some(3));
+        let hostile = format!(
+            "colors=a:1,:2,b,c:x,d:99999999999999999999,{}",
+            (0..500).map(|k| format!("s{k}:1")).collect::<Vec<_>>().join(",")
+        );
+        let back = Chrome::restored(&hostile);
+        assert_eq!(back.color("a"), Some(1));
+        assert!(back.colors.len() <= crate::editor::MAX_COLORS);
+        assert_eq!(Chrome::restored(&back.saved()).colors, back.colors);
+        let mut c = Chrome::default();
+        c.set_color("bad name", 1);
+        c.set_color("x=y", 1);
+        c.set_color("", 1);
+        assert!(c.colors.is_empty(), "a name the saved text cannot hold is not kept");
+        // Any place in the palette draws: a stored index past its end wraps.
+        c.set_color("lamp", 1_000_003);
+        let _ = lane_color(&t, &c, "lamp", 0);
+    }
+
+    /// Nick, 2026-11-11: the Code tab keeps its code face; the Files and
+    /// Devices tabs are in the face the rest of the page is in.
+    #[test]
+    fn only_the_code_tab_of_the_left_pane_is_in_the_code_face() {
+        use crate::editor::Pane;
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let edge = h.rect("left").right();
+        for pane in [Pane::Files, Pane::Devices] {
+            h.app.chrome.pane = pane;
+            h.wait(0.3);
+            assert_eq!(h.mono_left_of(edge), Vec::<String>::new(), "{pane:?}");
+        }
+        h.app.chrome.pane = Pane::Code;
+        h.wait(0.3);
+        assert!(!h.mono_left_of(edge).is_empty(), "the code is in the code face");
     }
 
     /// Nick, 2026-11-01: the trend's window is 1, 10 or 100 s, so the

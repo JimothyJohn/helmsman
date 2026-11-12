@@ -809,7 +809,7 @@ impl DevicesUi {
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
                             ui.add(
-                                egui::Label::new(RichText::new(head.as_str()).monospace().strong())
+                                egui::Label::new(RichText::new(head.as_str()).strong())
                                     .truncate()
                                     .sense(Sense::click()),
                             )
@@ -901,7 +901,7 @@ impl DevicesUi {
                     (Some(Value::Bool(true)), _) => t.accent,
                     _ => t.fg,
                 };
-                let r = row(ui, RichText::new(text).monospace().color(color), 22.0);
+                let r = row(ui, RichText::new(text).color(color), 22.0);
                 chrome.hit(format!("point {}", p.signal), r.rect);
                 if write.is_ok() && r.double_clicked() {
                     self.renaming = Some((p.signal.clone(), p.signal.clone()));
@@ -1004,7 +1004,7 @@ impl DevicesUi {
             let r = ui.horizontal(|ui| {
                 ui.label(dot);
                 ui.add(
-                    egui::Label::new(RichText::new(text).monospace())
+                    egui::Label::new(RichText::new(text))
                         .truncate()
                         .sense(Sense::click()),
                 )

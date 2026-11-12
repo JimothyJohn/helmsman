@@ -1883,7 +1883,6 @@ impl Body for BoxView {
             let selected = self.state.selected.as_deref() == Some(m.name.as_str());
             let arrow = if selected { "▾" } else { "▸" };
             let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
-                .monospace()
                 .color(if m.state == "faulted" {
                     crate::theme::theme(ui).ink(RED)
                 } else {

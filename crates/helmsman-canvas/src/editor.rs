@@ -171,6 +171,8 @@ pub const LEFT_W: f32 = 320.0;
 /// the panel grows every frame; the Requirements tab is archived since
 /// 2026-11-08, the width kept).
 pub const RIGHT_W: f32 = 236.0;
+/// How many trend colour picks a browser keeps.
+pub const MAX_COLORS: usize = 64;
 
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
 /// and what was drawn where this frame (tests click by it).
@@ -214,6 +216,10 @@ pub struct Chrome {
     /// (on, the default) or run on behind a sideways scroll bar (Nick,
     /// 2026-11-08). The toggle sits in the Code header.
     pub wrap: bool,
+    /// The colours picked for trend signals (Nick, 2026-11-11): a
+    /// signal's name, lower-cased, and its place in the trend's palette.
+    /// A signal not here takes its lane's colour.
+    pub colors: Vec<(String, usize)>,
 }
 
 impl Default for Chrome {
@@ -234,6 +240,7 @@ impl Default for Chrome {
             find: None,
             st_marks: None,
             wrap: true,
+            colors: Vec::new(),
         }
     }
 }
@@ -242,8 +249,14 @@ impl Chrome {
     /// What is kept per browser, as text.
     #[must_use]
     pub fn saved(&self) -> String {
+        let colors = if self.colors.is_empty() {
+            String::new()
+        } else {
+            let all: Vec<String> = self.colors.iter().map(|(n, i)| format!("{n}:{i}")).collect();
+            format!(" colors={}", all.join(","))
+        };
         format!(
-            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={} wrap={}",
+            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={} wrap={}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             self.pane.key(),
@@ -273,6 +286,15 @@ impl Chrome {
                 Some(("trend", v)) => c.trend = v == "1",
                 Some(("light", v)) => c.light = v == "1",
                 Some(("wrap", v)) => c.wrap = v == "1",
+                Some(("colors", v)) => {
+                    c.colors = v
+                        .split(',')
+                        .filter_map(|e| e.rsplit_once(':'))
+                        .filter_map(|(n, i)| Some((n.to_string(), i.parse().ok()?)))
+                        .filter(|(n, _)| !n.is_empty())
+                        .take(MAX_COLORS)
+                        .collect();
+                }
                 Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
                 Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
@@ -284,6 +306,29 @@ impl Chrome {
             }
         }
         c
+    }
+
+    /// The palette place picked for trend signal `name`, if one was.
+    #[must_use]
+    pub fn color(&self, name: &str) -> Option<usize> {
+        self.colors
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, i)| *i)
+    }
+
+    /// Gives trend signal `name` palette place `index`. The oldest pick
+    /// goes once [`MAX_COLORS`] are kept.
+    pub fn set_color(&mut self, name: &str, index: usize) {
+        // What the saved text cannot hold is not a signal's name.
+        if name.is_empty() || name.contains([' ', ',', '=']) {
+            return;
+        }
+        self.colors.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        self.colors.push((name.to_ascii_lowercase(), index));
+        if self.colors.len() > MAX_COLORS {
+            self.colors.remove(0);
+        }
     }
 
     /// Notes that `key` was drawn at `rect`.
