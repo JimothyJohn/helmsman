@@ -112,6 +112,7 @@ pub mod ast {
 
 mod check;
 mod fmath;
+pub mod hints;
 mod interp;
 pub mod l5x;
 pub mod ladder;
@@ -120,9 +121,11 @@ mod once;
 mod parser;
 pub mod plcopen;
 mod rename;
+pub mod scan;
 pub mod spec;
 mod state;
 mod suggest;
+pub mod tidy;
 pub mod trace;
 mod types;
 mod xml;
