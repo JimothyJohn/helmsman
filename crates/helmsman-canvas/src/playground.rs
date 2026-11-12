@@ -25,6 +25,10 @@ pub const MIN_PERIOD: u64 = 1;
 pub const MAX_PERIOD: u64 = 1000;
 /// At most this many scans per frame (a slow tab catches up gradually).
 pub const MAX_CATCH_UP: u64 = 500;
+/// How many scans before a frame's last are traced too
+/// ([`Session::earlier`]): a frame's worth at the shortest period, and
+/// never the whole of a long catch-up.
+pub const EARLIER: u64 = 32;
 /// The window a project opens with, ms of program time (the slider goes
 /// from `playground_view::WINDOW_MIN_MS` to `WINDOW_MAX_MS`; Nick,
 /// 2026-11-01: how fast the line crosses the pane). Both trends, the
@@ -655,6 +659,10 @@ pub struct Session {
     pub fault: Option<String>,
     /// The last traced scan, for the diagram.
     pub trace: Option<Trace>,
+    /// The scans run since the frame before, ahead of [`Self::trace`],
+    /// oldest first (the newest [`EARLIER`] of them); see
+    /// [`Self::earlier`].
+    earlier: Vec<Trace>,
     pub trend: Trend,
     /// Measured plant states (`crate::plant::substitutions`): the model's
     /// variable path and the input point that stands in for it. Before each
@@ -689,6 +697,7 @@ impl Session {
             scans: 0,
             fault: None,
             trace: None,
+            earlier: Vec::new(),
             trend: Trend::default(),
             sensors: Vec::new(),
             breaks: Vec::new(),
@@ -829,6 +838,7 @@ impl Session {
                 self.build = Some(b);
                 self.fault = None;
                 self.trace = None;
+                self.earlier.clear();
                 if !(hot && had) {
                     self.now_ms = 0;
                     self.scans = 0;
@@ -967,6 +977,7 @@ impl Session {
         self.scans = 0;
         self.fault = None;
         self.trace = None;
+        self.earlier.clear();
         self.paused = None;
         self.trend.samples.clear();
     }
@@ -974,6 +985,7 @@ impl Session {
     /// One scan, traced, whether running or not (Step). It stops at a
     /// breakpoint; from one, it runs the rest of the scan.
     pub fn step(&mut self) {
+        self.earlier.clear();
         if self.fault.is_some() {
             self.restart();
         }
@@ -1011,11 +1023,35 @@ impl Session {
         true
     }
 
+    /// The scans this frame ran before the one in [`Self::trace`], oldest
+    /// first. A frame is longer than a scan, so a statement that runs for
+    /// a single scan (a one-shot's body) is in the last scan of a frame
+    /// only some of the time: a diagram that looked at the last scan alone
+    /// would light it on some of its runs and miss the rest. Empty while a
+    /// scan is paused, which is then the only thing to show.
+    #[must_use]
+    pub fn earlier(&self) -> &[Trace] {
+        match &self.trace {
+            // Scans of the program the last one ran, never a build before.
+            Some(last) if self.paused.is_none() => {
+                let from = self
+                    .earlier
+                    .iter()
+                    .rposition(|e| !std::ptr::eq(e.map(), last.map()))
+                    .map_or(0, |k| k + 1);
+                &self.earlier[from..]
+            }
+            _ => &[],
+        }
+    }
+
     /// Runs the scans due by page time `t` (s) at the scan period, the
-    /// last one traced. Nothing while stopped.
+    /// last one traced into [`Self::trace`] and the [`EARLIER`] before it
+    /// into [`Self::earlier`]. Nothing while stopped.
     pub fn advance(&mut self, t: f64) {
         let last = self.last.replace(t).unwrap_or(t);
         if !self.running {
+            self.earlier.clear();
             // Paused: the moment follows the inputs as they change. If it
             // no longer comes, the scan stays paused where it was shown.
             if let Some(skip) = self.paused {
@@ -1037,14 +1073,26 @@ impl Session {
             self.scan_or_pause(0);
             return;
         }
+        if due > 0 {
+            self.earlier.clear();
+        }
         for k in 0..due {
             if !self.breaks.is_empty() && self.peek(0) {
                 self.running = false;
                 return;
             }
-            self.scan(k + 1 == due);
+            let left = due - k - 1;
+            self.scan(left <= EARLIER);
             if self.fault.is_some() {
                 break;
+            }
+            // Not the frame's last: kept beside it. A faulted scan stays
+            // the one shown.
+            if left > 0
+                && left <= EARLIER
+                && let Some(t) = self.trace.take()
+            {
+                self.earlier.push(t);
             }
         }
     }
