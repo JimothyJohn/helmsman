@@ -431,6 +431,8 @@ pub enum Wish {
 pub struct Transport {
     pub built: bool,
     pub running: bool,
+    /// The simulation is stopped: nothing of a run to end.
+    pub stopped: bool,
     pub on_box: bool,
 }
 
@@ -930,17 +932,27 @@ impl Monitor {
                 "Run (Ctrl+Enter): the program does not compile yet.",
             )
         } else if t.running {
-            (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+            (
+                glyphs::Icon::Pause,
+                "Pause (Ctrl+Enter): the program holds where it is, every value kept.",
+            )
         } else {
             (glyphs::Icon::Run, "Run (Ctrl+Enter)")
         };
         let items = [
             ("run", icon, t.built, tip, Action::RunStop),
             (
+                "stop",
+                glyphs::Icon::Stop,
+                t.built && !t.stopped,
+                "Stop (Shift+F8): ends the run. Every value goes back to its initial one, the outputs go off and the clock to zero.",
+                Action::Stop,
+            ),
+            (
                 "step",
                 glyphs::Icon::Step,
                 t.built && !t.running,
-                "Step one scan (F8)",
+                "Step to the next change (F8): scans until a value changes or the program takes another path.",
                 Action::Step,
             ),
             (

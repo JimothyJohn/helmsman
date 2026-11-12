@@ -17,9 +17,9 @@
 //! |---|---|---|
 //! | Save | Ctrl/⌘ S | Save Project |
 //! | Deploy | Ctrl/⌘ Shift Enter | (Download has no default key; Ctrl D bookmarks the page) |
-//! | Run / Stop (simulation) | Ctrl/⌘ Enter | (Start is F5, the browser's) |
-//! | Stop (simulation) | Shift F8 | Stop |
-//! | Step one scan (simulation, stopped) | F8 | Step Into (Step Over is F10, the toolbar's focus in Chrome and Edge on Windows) |
+//! | Run / Pause (simulation) | Ctrl/⌘ Enter | (Start is F5, the browser's) |
+//! | Stop (simulation: back to initial values) | Shift F8 | Stop |
+//! | Step to the next change (simulation, paused or stopped) | F8 | Step Into (Step Over is F10, the toolbar's focus in Chrome and Edge on Windows) |
 //! | Sign in (box) | Alt F8 | Login |
 //! | Sign out (box) | Ctrl F8 | Logout |
 //! | Undo / Redo | Ctrl/⌘ Z, Ctrl/⌘ Shift Z; Ctrl Y off a Mac | Undo / Restore |
@@ -404,9 +404,9 @@ const fn does(action: Action) -> &'static str {
     match action {
         Action::Save => "Save",
         Action::Deploy => "Deploy",
-        Action::RunStop => "Run or stop the simulation",
-        Action::Stop => "Stop the simulation",
-        Action::Step => "Step one scan (stopped)",
+        Action::RunStop => "Run or pause the simulation",
+        Action::Stop => "Stop the simulation: initial values, clock to zero",
+        Action::Step => "Step to the next change (paused or stopped)",
         Action::SignIn => "Sign in (box)",
         Action::SignOut => "Sign out (box)",
         Action::Undo => "Undo in the Structured Text",

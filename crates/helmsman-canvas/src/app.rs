@@ -579,6 +579,7 @@ impl App {
                         .modules
                         .iter()
                         .any(|m| targets.contains(&m.name) && m.state != "stopped"),
+                    stopped: false,
                     on_box: true,
                 });
                 self.monitor.show(ui, &b.state, &mut self.chrome, engineer, t);
@@ -589,6 +590,7 @@ impl App {
                 let t = Transport {
                     built: s.session.build.is_some(),
                     running: s.session.running,
+                    stopped: s.session.state() == crate::playground::RunState::Stopped,
                     on_box: false,
                 };
                 self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));
@@ -652,10 +654,17 @@ impl App {
                         let on = !s.session.running;
                         s.session.set_running(on);
                     }
-                    Action::Stop => s.session.set_running(false),
+                    Action::Stop => s.session.stop(),
                     _ => {
-                        if !s.session.running {
-                            s.session.step();
+                        if !s.session.running && !s.session.step_to_change() {
+                            let at = ctx.input(|i| i.time);
+                            s.log.info(
+                                at,
+                                format!(
+                                    "Step: nothing changed in {} s of program time.",
+                                    crate::playground::STEP_MS / 1000
+                                ),
+                            );
                         }
                     }
                 }
@@ -1071,6 +1080,30 @@ impl App {
                 .map(|s| (s.session.build.is_some(), s.session.running))
                 .unwrap_or_default()
         });
+        // The simulation's state and clock sit with the glyphs that change
+        // them (Nick, 2026-11-11), not in the header.
+        let stopped = self
+            .sim
+            .as_ref()
+            .is_none_or(|s| s.session.state() == crate::playground::RunState::Stopped);
+        let status = self
+            .sim
+            .as_ref()
+            .filter(|s| self.source == Source::Sim && s.session.build.is_some())
+            .map(|s| {
+                let (text, good) = s.run_status();
+                let t = theme(ui);
+                let color = t.ink(if good {
+                    crate::st_view::brand::GREEN
+                } else {
+                    crate::st_view::brand::RED
+                });
+                let tip = format!(
+                    "The simulation's state and clock, after {} scans.",
+                    s.session.scans
+                );
+                (text, color, tip)
+            });
         let engineer = is_engineer(self.session().as_ref()).is_ok();
         // What the glyphs act on is what the Monitor's do.
         let targets = self
@@ -1099,6 +1132,12 @@ impl App {
                     .inner_margin(4.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            if let Some((text, color, tip)) = &status {
+                                let r = ui
+                                    .label(RichText::new(text).monospace().strong().color(*color))
+                                    .tip(tip);
+                                hits.push(("state".to_string(), r.rect));
+                            }
                             let mut g =
                                 |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {
                                     let r = glyphs::button(ui, icon, enabled, on, tip);
@@ -1114,11 +1153,27 @@ impl App {
                                         "Run (Ctrl+Enter): the program does not compile yet.",
                                     )
                                 } else if running {
-                                    (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+                                    (
+                                        glyphs::Icon::Pause,
+                                        "Pause (Ctrl+Enter): the program holds where it is, every value kept.",
+                                    )
                                 } else {
                                     (glyphs::Icon::Run, "Run (Ctrl+Enter)")
                                 };
                                 g(ui, "run", icon, built, false, tip, Action::RunStop);
+                                g(
+                                    ui,
+                                    "stop",
+                                    glyphs::Icon::Stop,
+                                    built && !stopped,
+                                    false,
+                                    if stopped {
+                                        "Stop (Shift+F8): the program is stopped."
+                                    } else {
+                                        "Stop (Shift+F8): ends the run. Every value goes back to its initial one, the outputs go off and the clock to zero."
+                                    },
+                                    Action::Stop,
+                                );
                                 g(
                                     ui,
                                     "step",
@@ -1126,9 +1181,9 @@ impl App {
                                     built && !running,
                                     false,
                                     if running {
-                                        "Step one scan (F8): stop the program first."
+                                        "Step to the next change (F8): pause the program first."
                                     } else {
-                                        "Step one scan (F8)"
+                                        "Step to the next change (F8): scans until a value changes or the program takes another path."
                                     },
                                     Action::Step,
                                 );

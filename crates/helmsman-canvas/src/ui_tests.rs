@@ -256,7 +256,7 @@ mod glyphs_and_help {
         let mut h = Harness::new(App::sim());
         let diagram = h.app.chrome.diagram;
         assert_ne!(diagram, Rect::NOTHING);
-        for k in ["run", "step", "restart", "save", "upload", "download"] {
+        for k in ["state", "run", "stop", "step", "restart", "save", "upload", "download"] {
             let r = h.rect(k);
             assert!(
                 diagram.contains(r.center()),
@@ -269,16 +269,43 @@ mod glyphs_and_help {
             last.right() > diagram.right() - 40.0,
             "the strip ends at the right edge: {last:?}"
         );
+        // Nick, 2026-11-11: the state and the clock are right beside the
+        // glyphs that change them, not in the header.
+        let (state, run) = (h.rect("state"), h.rect("run"));
+        assert!(state.right() <= run.left() && run.left() - state.right() < 24.0);
+        assert!((state.center().y - run.center().y).abs() < 8.0, "{state:?} beside {run:?}");
+        assert!(h.drew("running · "), "the running clock");
         assert!(h.app.sim.as_ref().unwrap().session.running);
+        // Pause holds the state; Step goes to the next change.
         h.press("run");
-        assert!(!h.app.sim.as_ref().unwrap().session.running, "the glyph stops");
-        let scans = h.app.sim.as_ref().unwrap().session.scans;
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "the glyph pauses");
+        h.frame(vec![]);
+        assert!(h.drew("paused · "));
+        let (scans, now) = {
+            let s = &h.app.sim.as_ref().unwrap().session;
+            (s.scans, s.now_ms)
+        };
+        assert!(scans > 0, "what ran is kept");
+        h.wait(0.5);
+        assert_eq!(h.app.sim.as_ref().unwrap().session.now_ms, now, "the clock stands");
         h.press("step");
-        assert_eq!(h.app.sim.as_ref().unwrap().session.scans, scans + 1);
+        assert!(h.app.sim.as_ref().unwrap().session.scans > scans, "a step moves on");
         h.press("restart");
         assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
         h.press("run");
         assert!(h.app.sim.as_ref().unwrap().session.running, "and starts again");
+        // Stop ends the run: initial values, clock at zero, no scan shown.
+        h.wait(0.3);
+        h.press("stop");
+        {
+            let s = &h.app.sim.as_ref().unwrap().session;
+            assert!(!s.running && s.trace.is_none());
+            assert_eq!((s.scans, s.now_ms), (0, 0));
+        }
+        h.frame(vec![]);
+        assert!(h.drew("stopped · 0.0s"));
+        h.press("run");
+        assert!(h.app.sim.as_ref().unwrap().session.running, "and runs from the start");
         // The Monitor has no diagram, so no file glyphs; the transport is
         // in its header (Nick, 2026-11-01).
         h.press("monitor");
@@ -887,27 +914,36 @@ END_PROGRAM",
         h.press("monitor");
         assert_eq!(h.app.screen, Screen::Monitor);
         h.frame(vec![]);
-        for k in ["run", "step", "restart"] {
+        for k in ["run", "stop", "step", "restart"] {
             assert!(h.has(k), "the Monitor has {k}");
         }
         let running = |h: &Harness| h.app.sim.as_ref().unwrap().session.running;
         let scans = |h: &Harness| h.app.sim.as_ref().unwrap().session.scans;
         assert!(running(&h), "the example opens running");
         h.press("run");
-        assert!(!running(&h), "stopped from the Monitor");
+        assert!(!running(&h), "paused from the Monitor");
         let n = scans(&h);
+        assert!(n > 0, "a pause keeps what ran");
         h.press("step");
-        assert_eq!(scans(&h), n + 1, "one scan");
+        assert!(scans(&h) > n, "on to the next change");
         h.press("restart");
         assert_eq!(scans(&h), 0, "a cold restart");
         h.press("run");
         assert!(running(&h), "and running again");
         // The keys, on the Monitor: Ctrl Enter stops, F8 steps.
         h.key(Modifiers::COMMAND, Key::Enter);
-        assert!(!running(&h), "Ctrl Enter stops on the Monitor");
+        assert!(!running(&h), "Ctrl Enter pauses on the Monitor");
         let n = scans(&h);
         h.key(Modifiers::NONE, Key::F8);
-        assert_eq!(scans(&h), n + 1, "F8 steps on the Monitor");
+        assert!(scans(&h) > n, "F8 steps on the Monitor");
+        // Shift F8 and the Stop glyph end the run.
+        h.key(Modifiers::SHIFT, Key::F8);
+        assert_eq!(scans(&h), 0, "Shift F8 stops: nothing of the run is left");
+        h.press("run");
+        h.wait(0.2);
+        h.press("stop");
+        assert!(!running(&h));
+        assert_eq!(scans(&h), 0, "the glyph too");
         // Still no Save, Upload or Download there: nothing to edit.
         assert!(!h.has("save") && !h.has("download"));
     }

@@ -1344,6 +1344,21 @@ impl PlaygroundView {
 }
 
 impl PlaygroundView {
+    /// The simulation's state and clock as the label beside the run
+    /// glyphs says them (`running · 12.3s`), and whether that is the
+    /// good state (running, no fault).
+    #[must_use]
+    pub fn run_status(&self) -> (String, bool) {
+        let s = &self.session;
+        #[allow(clippy::cast_precision_loss)]
+        let secs = s.now_ms as f64 / 1000.0;
+        let state = s.state();
+        (
+            format!("{} · {secs:.1}s", state.word()),
+            state == crate::playground::RunState::Running,
+        )
+    }
+
     /// What the guided tour reads of this view (`crate::tour`), with the
     /// Editor on screen and the trend panel as `chrome` has it.
     #[must_use]
@@ -1490,35 +1505,10 @@ impl PlaygroundView {
 }
 
 impl Body for PlaygroundView {
-    fn toolbar(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
-        // Run, step and restart are glyphs over the diagram (app::glyphs);
-        // here only what state the program is in.
-        let s = &self.session;
-        let state = if s.fault.is_some() {
-            "faulted"
-        } else if s.paused.is_some() {
-            "paused"
-        } else if s.running {
-            "running"
-        } else {
-            "stopped"
-        };
-        #[allow(clippy::cast_precision_loss)]
-        let secs = s.now_ms as f64 / 1000.0;
-        ui.label(
-            RichText::new(format!("{state} · {secs:.1}s"))
-                .monospace()
-                .strong()
-                .color(if s.running && s.fault.is_none() {
-                    crate::theme::theme(ui).ink(GREEN)
-                } else {
-                    crate::theme::theme(ui).ink(RED)
-                }),
-        )
-        .tip(format!(
-            "The simulation's state and clock, after {} scans.",
-            s.scans
-        ));
+    fn toolbar(&mut self, _ui: &mut egui::Ui, _chrome: &mut Chrome) {
+        // Nothing of the simulation's is in the header: its state and
+        // clock sit beside the run glyphs over the diagram
+        // (`App::glyphs`, [`Self::run_status`]).
     }
 
     fn has_notices(&self) -> bool {
