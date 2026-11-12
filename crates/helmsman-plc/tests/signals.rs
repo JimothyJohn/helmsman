@@ -465,7 +465,7 @@ fn threaded_links_carry_a_scan_to_the_device_and_report_the_drop() {
                 l,
                 Arc::clone(&table),
                 Arc::clone(&stop),
-                move |name, err, _address| {
+                move |name, err, _address, _transport| {
                     ev.lock().unwrap().push((name.to_string(), err.is_none()));
                 },
             )

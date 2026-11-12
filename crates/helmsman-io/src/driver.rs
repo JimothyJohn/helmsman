@@ -129,6 +129,13 @@ pub trait Driver {
     fn address(&self) -> Option<String> {
         None
     }
+
+    /// The protocol the device is reached over, for a driver that picks
+    /// one ([`crate::profile_driver`]: the transport in use, once it has
+    /// worked); `None` for a driver that speaks one protocol.
+    fn transport(&self) -> Option<String> {
+        None
+    }
 }
 
 /// How a map names a driver compiled to WebAssembly: `wasm:NAME`, NAME
@@ -159,8 +166,24 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
         other if wasm_name(other).is_some() => Err(Error::UnknownDriver(format!(
             "{other}: not a WASM driver this box has approved"
         ))),
-        other => Err(Error::UnknownDriver(other.into())),
+        other => Err(no_profile(other).unwrap_or_else(|| Error::UnknownDriver(other.into()))),
     }
+}
+
+/// For a `device:NAME` driver name, the error when no profile was given
+/// with it: the box finds `NAME.device` and parses and opens such a
+/// device on it ([`crate::profile_driver`]).
+fn no_profile(driver: &str) -> Option<Error> {
+    crate::profile_driver::profile_name(driver).map(|name| {
+        Error::UnknownDriver(format!(
+            "{driver}: no profile {} in the project or on the box",
+            crate::profile_driver::file_name(name)
+                .chars()
+                .take(64)
+                .flat_map(char::escape_debug)
+                .collect::<String>()
+        ))
+    })
 }
 
 /// As [`parse_point`], knowing the device: a driver whose points depend on
@@ -187,6 +210,9 @@ pub fn output_keys(driver: &str, addr: &str) -> Vec<String> {
     match driver {
         crate::enip::DRIVER => crate::enip::Point::parse(addr).map(|p| p.out_bits()).ok(),
         crate::profinet::DRIVER => crate::profinet::Point::parse(addr).map(|p| p.out_bits()).ok(),
+        d if crate::profile_driver::profile_name(d).is_some() => {
+            Some(vec![crate::profile_driver::output_key(addr)])
+        }
         _ => None,
     }
     .unwrap_or_else(|| vec![addr.to_string()])
@@ -238,6 +264,6 @@ pub fn open_on(
             &device.params,
             crate::profinet::opener(),
         )?)),
-        other => Err(Error::UnknownDriver(other.into())),
+        other => Err(no_profile(other).unwrap_or_else(|| Error::UnknownDriver(other.into()))),
     }
 }

@@ -331,9 +331,30 @@ scan; the scheduler bounds how often.
   accepted only if every transport's map passes the map's own rules.
   docs/devices/moxa-iologik-e1213.device is the first: it gives the same
   40 signals over EtherNet/IP and Modbus TCP and agrees with the two maps
-  written by hand. Not yet: a map that binds channels instead of
-  addresses with the box falling back between transports by itself, the
-  canvas's add-by-click, profiles in the device library.
+  written by hand.
+  **A map binds channels, the box picks the protocol**
+  (`profile_driver`, PROTOCOLS.md step 1): `device rio device:moxa-e1213
+  mac=00-90-e8-7e-af-be` names the profile `moxa-e1213.device` (a
+  project file kind, `FileKind::Device`, found by
+  `helmsman_plc::driver_dir` in the project's folder, else the box's
+  driver folder; it must pass `Profile::parse` or the map does not load
+  and the problem names the file and line) and `in part_present bool rio
+  ch:DI-04` binds a channel. `ProfileDriver` wraps the real drivers: it
+  opens the profile's transports in the profile's order, moves to the
+  next on a link error before one has worked (the E1213 whose one
+  EtherNet/IP connection another controller owns ends on Modbus TCP),
+  stays once one works, and starts again from the first after a later
+  link loss. `ch:NAME` becomes that transport's point; a point error
+  stays a point error; the one-writer rule holds on channels. The line's
+  own params are `poll_ms` and `DRIVER.KEY=VALUE` for one transport
+  (`modbus-tcp.unit=2`, `enip-io.port=44818`); anything else is refused
+  as the profile's business. The transport in use is reported
+  (`Driver::transport`, the link report's fourth argument,
+  `/api/devices` `transport`) for a device's details and failure text
+  only: nobody chooses it. A changed profile file is a changed driver
+  (its digest is part of the link's identity), so it replaces the link
+  at the next load. Not yet: the canvas's add-by-click (step 3),
+  profiles in the device library.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE

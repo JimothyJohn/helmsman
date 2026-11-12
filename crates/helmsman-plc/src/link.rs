@@ -370,7 +370,7 @@ pub fn spawn(
     mut link: Link,
     table: Arc<Mutex<SignalTable>>,
     stop: Arc<AtomicBool>,
-    report: impl Fn(&str, Option<&Error>, Option<String>) + Send + 'static,
+    report: impl Fn(&str, Option<&Error>, Option<String>, Option<String>) + Send + 'static,
 ) -> JoinHandle<Link> {
     thread::spawn(move || {
         // What was last reported: `Some(None)` up, `Some(Some(why))` down.
@@ -381,7 +381,12 @@ pub fn spawn(
             let r = link.cycle_at(&table, start.elapsed());
             let now = r.as_ref().err().map(ToString::to_string);
             if said.as_ref() != Some(&now) {
-                report(&link.name, r.as_ref().err(), link.driver.address());
+                report(
+                    &link.name,
+                    r.as_ref().err(),
+                    link.driver.address(),
+                    link.driver.transport(),
+                );
                 said = Some(now);
             }
             next += link.poll;
@@ -399,10 +404,11 @@ pub fn spawn(
 pub type Opener = Arc<dyn Fn(&Device) -> Result<Box<dyn Driver + Send>, Error> + Send + Sync>;
 /// A new driver for the box's own channels.
 pub type Channels = Arc<dyn Fn() -> Box<dyn Driver + Send> + Send + Sync>;
-/// Where links say they went up (`None`) or down (the error), and the
+/// Where links say they went up (`None`) or down (the error), the
 /// address the device was found at, when the driver knows one
-/// (`helmsman_io::Driver::address`).
-pub type Report = Arc<dyn Fn(&str, Option<&Error>, Option<String>) + Send + Sync>;
+/// (`helmsman_io::Driver::address`), and the protocol it is reached over,
+/// for a driver that picks one (`helmsman_io::Driver::transport`).
+pub type Report = Arc<dyn Fn(&str, Option<&Error>, Option<String>, Option<String>) + Send + Sync>;
 
 /// What a link is, to tell whether a new map changes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -649,6 +655,10 @@ impl LinkSet {
                 Some(d) => (
                     device_poll(d)?,
                     drivers::open(drivers, d)
+                        .or_else(|| {
+                            let open = Arc::clone(&self.open);
+                            drivers::open_profiled(drivers, d, move |d| open(d))
+                        })
                         .unwrap_or_else(|| (self.open)(d))
                         .map_err(|e| format!("{}: {e}", d.id))?,
                 ),
@@ -707,8 +717,8 @@ impl LinkSet {
             link,
             Arc::clone(&self.table),
             Arc::clone(&stop),
-            move |n, e, a| {
-                report(n, e, a);
+            move |n, e, a, t| {
+                report(n, e, a, t);
             },
         );
         self.running.push(Running { group, stop, handle });

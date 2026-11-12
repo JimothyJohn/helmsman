@@ -32,6 +32,7 @@ pub mod logix;
 pub mod modbus;
 pub mod model;
 pub mod profile;
+pub mod profile_driver;
 pub mod profinet;
 pub mod resolve;
 pub mod rtu;

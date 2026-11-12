@@ -171,6 +171,8 @@ pub struct Devices {
     /// (`helmsman_io::Driver::address`): the resolved address of a
     /// `mac=`, `cip=` or `modbus=` endpoint, or the host's.
     addresses: Mutex<BTreeMap<String, String>>,
+    /// By link name: the protocol a device by its profile is on now.
+    transports: Mutex<BTreeMap<String, String>>,
 }
 
 impl std::fmt::Debug for Devices {
@@ -189,6 +191,7 @@ impl Devices {
             links: Mutex::new(names.into_iter().map(|n| (n, None)).collect()),
             browsers: Mutex::new(BTreeMap::new()),
             addresses: Mutex::new(BTreeMap::new()),
+            transports: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -233,6 +236,27 @@ impl Devices {
         }
     }
 
+    /// The protocol link `name` reaches its device over, for a device by
+    /// its profile: set while the link is up on one, cleared when it goes
+    /// down (the next transport is not known until one works).
+    pub fn set_transport(&self, name: &str, transport: Option<String>) {
+        let mut t = self.transports.lock().unwrap_or_else(PoisonError::into_inner);
+        match transport {
+            Some(v) => t.insert(name.to_string(), v),
+            None => t.remove(name),
+        };
+    }
+
+    /// The protocol link `name` is on now, if its driver picks one.
+    #[must_use]
+    pub fn transport(&self, name: &str) -> Option<String> {
+        self.transports
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
+    }
+
     /// Where link `name` last found its device, if its driver said.
     #[must_use]
     pub fn address(&self, name: &str) -> Option<String> {
@@ -258,6 +282,10 @@ impl Devices {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|(n, _)| n != name);
+        self.transports
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
     }
 
     /// Every link: name, then up (`Some(Ok)`), down with why, or not yet known.

@@ -100,6 +100,10 @@ name = "api"
 required-features = ["box"]
 
 [[test]]
+name = "profile_link"
+required-features = ["box"]
+
+[[test]]
 name = "bin"
 required-features = ["box"]
 
