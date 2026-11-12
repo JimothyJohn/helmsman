@@ -36,7 +36,8 @@
 #        NODE_BOARD=p4-eth NODE_P4_NO_POE=1 ESPFLASH=/path/to/espflash-4 scripts/node-flash.sh node
 #
 # The port and the board's MAC are remembered per board after a flash that
-# completes (scratch/node-board.<board>, untracked): with several boards on
+# completes (scratch/node-board.<board> in the main checkout, untracked,
+# also when run from a worktree): with several boards on
 # USB the next run takes the remembered port without SERIAL_PORT, reads that
 # one board's MAC first (espflash board-info: it resets only the board about
 # to be flashed) and refuses if it is not the board remembered under that
@@ -75,7 +76,12 @@ else
 fi
 
 root="$PWD"
-memo="$root/scratch/node-board.$board"
+# The memo lives in the main checkout's scratch/ whichever worktree this
+# runs from: a flash from a worktree found no memo and stopped at "several
+# serial ports" (2026-11-11).
+main="$(git rev-parse --path-format=absolute --git-common-dir)"
+main="${main%/.git}"
+memo="$main/scratch/node-board.$board"
 want_mac=""
 memo_port=""
 if [ -f "$memo" ]; then
@@ -167,6 +173,7 @@ else
 fi
 echo "log: $log"
 if grep -q "Flashing has completed" "$root/$log"; then
+  mkdir -p "$(dirname "$memo")"
   printf '%s %s\n' "$SERIAL_PORT" "$mac" > "$memo"
   echo "remembered: $board on $SERIAL_PORT, MAC $mac ($memo)"
 fi
