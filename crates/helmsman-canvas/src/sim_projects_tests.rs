@@ -45,18 +45,30 @@ impl Storage for Broken {
 }
 
 const BLOCKS: &str = "FUNCTION_BLOCK Latch
-VAR_INPUT set : BOOL; reset : BOOL; END_VAR
-VAR_OUTPUT q : BOOL; END_VAR
-  q := (q OR set) AND NOT reset;
+VAR_INPUT
+  set : BOOL;
+  reset : BOOL;
+END_VAR
+VAR_OUTPUT
+  q : BOOL;
+END_VAR
+q := (q OR set) AND NOT reset;
 END_FUNCTION_BLOCK
 ";
 
 const MAIN: &str = "PROGRAM conveyor
-VAR_INPUT start : BOOL; stop : BOOL; END_VAR
-VAR_OUTPUT lamp : BOOL; END_VAR
-VAR l : Latch; END_VAR
-  l(set := start, reset := stop);
-  lamp := l.q;
+VAR_INPUT
+  start : BOOL;
+  stop : BOOL;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+VAR
+  l : Latch;
+END_VAR
+l(set := start, reset := stop);
+lamp := l.q;
 END_PROGRAM
 ";
 
@@ -375,7 +387,7 @@ fn two_programs_in_the_simulation_are_refused_at_the_second() {
     v.open_project("pair");
     v.proj.new_file("other.st");
     *v.proj.current_text_mut().unwrap() =
-        "PROGRAM other\nVAR x : INT; END_VAR\nx := 1;\nEND_PROGRAM\n".into();
+        "PROGRAM other\nVAR\n  x : INT;\nEND_VAR\nx := 1;\nEND_PROGRAM\n".into();
     v.deploy();
     let d = v.diags();
     assert!(
@@ -588,7 +600,7 @@ fn opening_or_deploying_another_program_stops_the_one_running() {
         Some("broken"),
         "a new project compiles and runs"
     );
-    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\n  x := ;\nEND_PROGRAM\n".into();
+    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\nx :=;\nEND_PROGRAM\n".into();
     v.deploy();
     assert!(v.session.running, "the last good build still runs");
     assert!(!v.session.diags.is_empty(), "and the error is listed");
@@ -602,7 +614,7 @@ fn the_log_keeps_refused_deploys_faults_and_state_changes() {
     v.open_project("blink");
     v.proj.create("broken", None);
     v.open_project("broken");
-    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\n  x := ;\nEND_PROGRAM\n".into();
+    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\nx :=;\nEND_PROGRAM\n".into();
     v.deploy();
     let errors: Vec<String> = v
         .log
@@ -648,16 +660,16 @@ fn the_log_keeps_refused_deploys_faults_and_state_changes() {
 #[test]
 fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
     use crate::playground_view::answer_name;
-    assert_eq!(answer_name("PROGRAM Lamp_Test\nEND_PROGRAM"), "lamp_test");
+    assert_eq!(answer_name("PROGRAM Lamp_Test\nEND_PROGRAM\n"), "lamp_test");
     assert_eq!(
-        answer_name("(* x *) FUNCTION_BLOCK Debounce VAR END_VAR END_FUNCTION_BLOCK"),
+        answer_name("(* x *) FUNCTION_BLOCK Debounce VAR\nEND_VAR\nEND_FUNCTION_BLOCK\n"),
         "debounce"
     );
     assert_eq!(answer_name("x := 1;"), "agent");
     let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
     v.open_project("blink");
     assert!(!v.proj.dirty());
-    let code = "PROGRAM lamp_test\nVAR lamp : BOOL; END_VAR\nlamp := TRUE;\nEND_PROGRAM\n";
+    let code = "PROGRAM lamp_test\nVAR\n  lamp : BOOL;\nEND_VAR\nlamp := TRUE;\nEND_PROGRAM\n";
     v.take_code(code.into());
     // The conversation's first PROGRAM asks for its name (agent-iterations).
     assert_eq!(v.proj.open, "blink", "nothing lands before the name");
@@ -672,7 +684,7 @@ fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
     assert_eq!(v.proj.open, "lamp_test");
     assert!(v.proj.files.contains_key("v1.st"));
     // A block goes into the open project as a file.
-    let fb = "FUNCTION_BLOCK debounce\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nq := x;\nEND_FUNCTION_BLOCK\n";
+    let fb = "FUNCTION_BLOCK debounce\nVAR_INPUT\n  x : BOOL;\nEND_VAR\nVAR_OUTPUT\n  q : BOOL;\nEND_VAR\nq := x;\nEND_FUNCTION_BLOCK\n";
     v.take_code(fb.into());
     assert_eq!(v.proj.open, "lamp_test");
     assert_eq!(v.proj.current, "debounce.st");

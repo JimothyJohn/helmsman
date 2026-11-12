@@ -56,12 +56,16 @@ reads    start
 drives   lamp
 ";
 
-const SOURCE: &str = "
-PROGRAM conveyor
-VAR_INPUT start : BOOL; END_VAR
-VAR_OUTPUT lamp : BOOL; END_VAR
-  lamp := start;
-END_PROGRAM";
+const SOURCE: &str = "PROGRAM conveyor
+VAR_INPUT
+  start : BOOL;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+lamp := start;
+END_PROGRAM
+";
 
 const MAP: &str = "\
 in  start bool box di:0
@@ -72,19 +76,30 @@ out horn  bool box do:1 safe=false
 /// A function block in one file, used by the PROGRAM in another.
 const BLOCKS: &str = "\
 FUNCTION_BLOCK Latch
-VAR_INPUT set : BOOL; reset : BOOL; END_VAR
-VAR_OUTPUT q : BOOL; END_VAR
-  q := (q OR set) AND NOT reset;
+VAR_INPUT
+  set : BOOL;
+  reset : BOOL;
+END_VAR
+VAR_OUTPUT
+  q : BOOL;
+END_VAR
+q := (q OR set) AND NOT reset;
 END_FUNCTION_BLOCK
 ";
 
 const MAIN: &str = "\
 PROGRAM conveyor
-VAR_INPUT start : BOOL; END_VAR
-VAR_OUTPUT lamp : BOOL; END_VAR
-VAR l : Latch; END_VAR
-  l(set := start, reset := FALSE);
-  lamp := l.q;
+VAR_INPUT
+  start : BOOL;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+VAR
+  l : Latch;
+END_VAR
+l(set := start, reset := FALSE);
+lamp := l.q;
 END_PROGRAM
 ";
 
@@ -956,15 +971,23 @@ fn a_stale_save_is_a_409_and_reload_brings_the_boxs_text() {
 const TEST_RED: &str = "\
 (* The lamp stays off while start is held. *)
 PROGRAM test_lamp
-VAR_INPUT lamp : BOOL; END_VAR
-VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
-VAR t : TON; lamp_stays_off : ASSERT; END_VAR
-  start := TRUE;
-  t(IN := TRUE, PT := T#50ms);
-  IF t.Q THEN
-    lamp_stays_off(COND := NOT lamp);
-    done := TRUE;
-  END_IF;
+VAR_INPUT
+  lamp : BOOL;
+END_VAR
+VAR_OUTPUT
+  start : BOOL;
+  done : BOOL;
+END_VAR
+VAR
+  t : TON;
+  lamp_stays_off : ASSERT;
+END_VAR
+start := TRUE;
+t(IN := TRUE, PT := T#50ms);
+IF t.Q THEN
+  lamp_stays_off(COND := NOT lamp);
+  done := TRUE;
+END_IF;
 END_PROGRAM
 ";
 
@@ -972,15 +995,23 @@ END_PROGRAM
 const TEST_GREEN: &str = "\
 (* The lamp is on within 50 ms of start. *)
 PROGRAM test_lamp
-VAR_INPUT lamp : BOOL; END_VAR
-VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
-VAR t : TON; lamp_follows_start : ASSERT; END_VAR
-  start := TRUE;
-  t(IN := TRUE, PT := T#50ms);
-  IF t.Q THEN
-    lamp_follows_start(COND := lamp);
-    done := TRUE;
-  END_IF;
+VAR_INPUT
+  lamp : BOOL;
+END_VAR
+VAR_OUTPUT
+  start : BOOL;
+  done : BOOL;
+END_VAR
+VAR
+  t : TON;
+  lamp_follows_start : ASSERT;
+END_VAR
+start := TRUE;
+t(IN := TRUE, PT := T#50ms);
+IF t.Q THEN
+  lamp_follows_start(COND := lamp);
+  done := TRUE;
+END_IF;
 END_PROGRAM
 ";
 
@@ -2086,8 +2117,8 @@ fn the_agent_on_a_box_checks_against_the_boxs_sizes_and_period() {
     use crate::instruct::Kind;
     use crate::instruct_tests::LAMP;
     use serde_json::json;
-    let big = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; kept : BOOL; END_VAR\nVAR sensor AT %IX20.0 : BOOL; END_VAR\nlamp := start;\nkept := start OR sensor;\nEND_PROGRAM\n";
-    let scenario = "```st scenario\n(* The kept flag follows start. *)\nPROGRAM test_kept\nVAR_INPUT kept : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; kept_on : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN kept_on(COND := kept); done := TRUE; END_IF;\nEND_PROGRAM\n```\n";
+    let big = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\n  kept : BOOL;\nEND_VAR\nVAR\n  sensor AT %IX20.0 : BOOL;\nEND_VAR\nlamp := start;\nkept := start OR sensor;\nEND_PROGRAM\n";
+    let scenario = "` ` ` st scenario\n(* The kept flag follows start. *)\nPROGRAM test_kept\nVAR_INPUT\n  kept : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  kept_on : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  kept_on(COND := kept);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n` ` `\n";
     // The page's simulation cannot hold it; the box can.
     assert!(helmsman_iec::compile(big, crate::playground::SIZES).is_err());
     let b = Bench::new();
@@ -3547,10 +3578,17 @@ fn an_older_history_answer_does_not_replace_a_newer_one() {
 /// builds.
 const RETAIN_BLOCKS: &str = "\
 FUNCTION_BLOCK Latch
-VAR_INPUT set : BOOL; reset : BOOL; END_VAR
-VAR_OUTPUT q : BOOL; END_VAR
-VAR RETAIN kept : INT; END_VAR
-  q := (q OR set) AND NOT reset;
+VAR_INPUT
+  set : BOOL;
+  reset : BOOL;
+END_VAR
+VAR_OUTPUT
+  q : BOOL;
+END_VAR
+VAR RETAIN
+  kept : INT;
+END_VAR
+q := (q OR set) AND NOT reset;
 END_FUNCTION_BLOCK
 ";
 

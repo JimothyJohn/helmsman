@@ -961,8 +961,31 @@ impl BoxProjects {
         self.pages.values().map(String::as_str).collect()
     }
 
-    /// Saves every edited file, each with the version it was read as.
+    /// Puts the open project's edited Structured Text files in the one
+    /// layout (`helmsman_iec::tidy`; Nick, 2026-11-11: on save and on
+    /// deploy). A file with no edits, or with a save on its way, is left
+    /// as it is: nothing the engineer did not touch is rewritten on the
+    /// box. Returns how many files it changed.
+    pub fn format(&mut self) -> usize {
+        let Some(o) = &mut self.open else { return 0 };
+        let mut changed = 0;
+        for (name, b) in &mut o.bufs {
+            if !name.ends_with(".st") || !b.dirty() || b.saving.is_some() {
+                continue;
+            }
+            let tidy = helmsman_iec::tidy::format(&b.text);
+            if tidy != b.text {
+                b.text = tidy;
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// Saves every edited file, each with the version it was read as,
+    /// its Structured Text in the one layout first ([`Self::format`]).
     pub fn save(&mut self) {
+        self.format();
         let Some(o) = &mut self.open else { return };
         let project = o.name.clone();
         let mut reqs = Vec::new();
@@ -1007,6 +1030,7 @@ impl BoxProjects {
         if self.deploy.busy() || self.open.is_none() {
             return;
         }
+        self.format();
         self.diags.clear();
         if self.dirty() {
             self.deploy = Deploy::Saving;

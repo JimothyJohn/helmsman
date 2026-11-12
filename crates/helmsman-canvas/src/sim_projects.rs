@@ -556,9 +556,38 @@ impl SimProjects {
             .unwrap_or(base)
     }
 
-    /// Saves the open project; an example is saved as a copy, which opens.
+    /// Saves the open project, its Structured Text in the one layout
+    /// ([`Self::format`]); an example is saved as a copy, which opens.
     pub fn save(&mut self) {
+        self.format();
         self.save_as("saved", None);
+    }
+
+    /// Puts the open project's edited Structured Text files in the one
+    /// layout (`helmsman_iec::tidy`; Nick, 2026-11-11: on save and on
+    /// deploy). A file with no edits since it was saved is left as it
+    /// is: nothing the visitor did not touch is rewritten. Only spacing,
+    /// line breaks and the capitals of keywords change. Returns how many
+    /// files it changed.
+    pub fn format(&mut self) -> usize {
+        let edited: Vec<String> = self
+            .files
+            .keys()
+            .filter(|n| n.ends_with(".st") && self.file_dirty(n))
+            .cloned()
+            .collect();
+        let mut changed = 0;
+        for (name, text) in &mut self.files {
+            if !edited.contains(name) {
+                continue;
+            }
+            let tidy = helmsman_iec::tidy::format(text);
+            if tidy != *text {
+                *text = tidy;
+                changed += 1;
+            }
+        }
+        changed
     }
 
     /// [`Self::save`], recorded in the project's history as `what`, with

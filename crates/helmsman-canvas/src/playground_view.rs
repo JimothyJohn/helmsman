@@ -2948,6 +2948,10 @@ impl Workspace for PlaygroundView {
             );
             return;
         }
+        // What runs is what the files say, in the one layout.
+        if self.proj.format() > 0 {
+            self.edited(f64::NEG_INFINITY);
+        }
         let src = self.proj.build_src();
         let carried = self.session.deploy(&src);
         self.pending = None;
