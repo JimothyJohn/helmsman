@@ -136,6 +136,17 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        read cross-origin; the canvas gets a Site view. Off
                        by default; needs a fixed --api port. A box only
                        lists what it hears, it never acts on it
+  --dhcp IFACE         serve DHCP and BOOTP on the device interface IFACE, so
+                       a block that ships as a DHCP client (Turck TBEN,
+                       Murrelektronik IMPACT67) gets an address untouched.
+                       Off by default. The box's address and mask are
+                       IFACE's own; it first listens 4 s for another DHCP
+                       server and never serves beside one (GET /api/dhcp
+                       says why). Leases in <state-dir>/dhcp/leases. Needs
+                       UDP 67 and 68 (CAP_NET_BIND_SERVICE on Linux)
+  --dhcp-pool A-B      the addresses --dhcp hands out (default .100-.199 of
+                       IFACE's /24; any other mask needs it)
+  --dhcp-lease S       the lease, in seconds (default 86400)
   --box-name NAME      this box's name in its site (default: the host
                        name, else box-<id>)
   --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
@@ -211,6 +222,9 @@ struct Opts {
     /// `--devices-index`: `None` is the default library, `Some("off")` none.
     devices_index: Option<String>,
     box_name: Option<String>,
+    dhcp: Option<String>,
+    dhcp_pool: Option<String>,
+    dhcp_lease: Option<u32>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
     scan: Duration,
@@ -274,6 +288,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         site: None,
         devices_index: None,
         box_name: None,
+        dhcp: None,
+        dhcp_pool: None,
+        dhcp_lease: None,
         policy: None,
         set_pin: None,
         scan: Duration::from_millis(10),
@@ -386,6 +403,23 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--devices-index" => return Err(format!("--devices-index: a http(s):// URL or off, got {v:?}")),
             "--site" if site::valid_token(v) => o.site = Some(v.clone()),
             "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
+            "--dhcp"
+                if !v.is_empty()
+                    && v.len() <= 15
+                    && v.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) =>
+            {
+                o.dhcp = Some(v.clone());
+            }
+            "--dhcp" => return Err(format!("--dhcp: an interface name (en0, eth1), got {v:?}")),
+            "--dhcp-pool" => {
+                helmsman_plc::dhcp::parse_pool(v)?;
+                o.dhcp_pool = Some(v.clone());
+            }
+            "--dhcp-lease" => match v.parse::<u32>() {
+                Ok(s) if s >= 60 => o.dhcp_lease = Some(s),
+                _ => return Err(format!("--dhcp-lease: seconds, 60 or more, got {v:?}")),
+            },
             "--box-name" if site::valid_name(v) => o.box_name = Some(v.clone()),
             "--box-name" => {
                 return Err(format!(
@@ -1118,6 +1152,7 @@ fn start_api(
     forces: &Arc<Forces>,
     running_drivers: helmsman_plc::drivers::Drivers,
     adapter: SocketAddr,
+    dhcp: Option<helmsman_plc::dhcp::Handle>,
 ) -> Result<(Api, Option<Site>), String> {
     let ui =
         o.ui.as_deref()
@@ -1184,6 +1219,7 @@ fn start_api(
         trend_pins: Some(dir.join("trend-pins")),
         desks: Some(dir.join("desks")),
         devconf: Some(api::devconf::Setup::in_state_dir(&dir)),
+        dhcp,
         discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {
             Some("off") => None,
             Some(url) => Some(url.to_string()),
@@ -1278,6 +1314,57 @@ fn start_site(o: &Opts, name: &str, api_port: u16, token: &str) -> Result<Site, 
         );
     }
     Ok(started)
+}
+
+/// The DHCP server on `--dhcp IFACE`, if asked for: the box's address and
+/// mask are the interface's own (helmsman-l2's `ipv4_net`).
+fn start_dhcp(o: &Opts) -> Result<Option<helmsman_plc::dhcp::Dhcp>, String> {
+    use helmsman_plc::dhcp::{self, Dhcp, Settings, Wire};
+    let Some(iface) = o.dhcp.as_deref() else {
+        return Ok(None);
+    };
+    let (addr, mask) = helmsman_l2::ipv4_net(iface)
+        .map_err(|e| format!("--dhcp {iface}: {e}"))?
+        .ok_or_else(|| {
+            format!("--dhcp {iface}: the interface has no IPv4 address; give it a fixed one first")
+        })?;
+    let (server, netmask) = (Ipv4Addr::from(addr), Ipv4Addr::from(mask));
+    let pool = match o.dhcp_pool.as_deref() {
+        Some(p) => dhcp::parse_pool(p)?,
+        None => dhcp::default_pool(server, netmask).ok_or_else(|| {
+            format!(
+                "--dhcp {iface}: {server} has mask {netmask}, not a /24: name the pool with --dhcp-pool A-B"
+            )
+        })?,
+    };
+    let config = helmsman_dhcp::Config {
+        server,
+        netmask,
+        router: None,
+        pool,
+        lease_s: o.dhcp_lease.unwrap_or(dhcp::LEASE_S),
+        reserved: std::collections::BTreeMap::new(),
+        bootp: true,
+    };
+    config.check().map_err(|e| format!("--dhcp {iface}: {e}"))?;
+    let wire = Wire::open(iface).map_err(|e| format!("--dhcp {iface}: {e}"))?;
+    let settings = Settings {
+        interface: iface.to_string(),
+        config,
+        dir: state_dir(o).join("dhcp"),
+    };
+    let started = Dhcp::start(
+        settings,
+        wire,
+        dhcp::PROBE_FOR,
+        Arc::new(|line: &str| eprintln!("helmsman-plc: {line}")),
+    )
+    .map_err(|e| format!("--dhcp {iface}: {e}"))?;
+    eprintln!(
+        "helmsman-plc: dhcp on {iface} ({server}/{netmask}, pool {}-{}): listening for another server first; status at /api/dhcp",
+        pool.0, pool.1
+    );
+    Ok(Some(started))
 }
 
 /// The OPC UA server on `bind`, if any, and the scan side of its feed.
@@ -1587,6 +1674,8 @@ fn run(o: &Opts) -> Result<(), String> {
     });
     let forces = Arc::new(Forces::default());
     let mut force_reader = force::Reader::default();
+    // The DHCP server runs as long as the box does.
+    let dhcp = start_dhcp(o)?;
     let started = o
         .api
         .zip(approval)
@@ -1602,6 +1691,7 @@ fn run(o: &Opts) -> Result<(), String> {
                 &forces,
                 content.drivers.drivers.clone(),
                 SocketAddr::V4(adapter.encap_addr()),
+                dhcp.as_ref().map(helmsman_plc::dhcp::Dhcp::handle),
             )
         })
         .transpose()?;

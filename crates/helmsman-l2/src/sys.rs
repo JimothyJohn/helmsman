@@ -441,3 +441,118 @@ fn check(ret: libc::c_int) -> io::Result<()> {
         Ok(())
     }
 }
+
+/// An interface's first IPv4 address and its netmask, from
+/// `getifaddrs(3)`; `None` when it has no IPv4 address.
+///
+/// # Errors
+/// The call failed.
+pub fn ipv4_net(interface: &str) -> io::Result<Option<([u8; 4], [u8; 4])>> {
+    let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: `list` is a valid out-pointer; on success it holds a list
+    // this function frees below with `freeifaddrs`.
+    if unsafe { libc::getifaddrs(&raw mut list) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut found = None;
+    let mut entry = list;
+    while !entry.is_null() && found.is_none() {
+        // SAFETY: `entry` is a non-null node of the list `getifaddrs`
+        // returned, which stays allocated until `freeifaddrs` below.
+        let ifa = unsafe { &*entry };
+        entry = ifa.ifa_next;
+        if ifa.ifa_name.is_null() || ifa.ifa_addr.is_null() || ifa.ifa_netmask.is_null() {
+            continue;
+        }
+        // SAFETY: `ifa_name` is a NUL-terminated string owned by the list.
+        let name = unsafe { CStr::from_ptr(ifa.ifa_name) };
+        // SAFETY: `ifa_addr` is non-null and points at a sockaddr whose
+        // family field is always readable.
+        let family = i32::from(unsafe { (*ifa.ifa_addr).sa_family });
+        if name.to_bytes() != interface.as_bytes() || family != libc::AF_INET {
+            continue;
+        }
+        // SAFETY: an AF_INET address, and the netmask beside it, are
+        // `sockaddr_in`s.
+        let (addr, mask) = unsafe {
+            (
+                &*ifa.ifa_addr.cast::<libc::sockaddr_in>(),
+                &*ifa.ifa_netmask.cast::<libc::sockaddr_in>(),
+            )
+        };
+        found = Some((
+            addr.sin_addr.s_addr.to_ne_bytes(),
+            mask.sin_addr.s_addr.to_ne_bytes(),
+        ));
+    }
+    // SAFETY: `list` came from `getifaddrs` and is freed exactly once.
+    unsafe { libc::freeifaddrs(list) };
+    Ok(found)
+}
+
+/// Ties `socket` to `interface`: it then hears only what arrives there,
+/// and what it sends, broadcasts included, leaves there. `IP_BOUND_IF`
+/// on macOS (`ip(4)`), `SO_BINDTODEVICE` on Linux (`socket(7)`; before
+/// Linux 5.7 it needs `CAP_NET_RAW`).
+///
+/// # Errors
+/// No such interface, the kernel refused, or the platform has neither.
+pub fn bind_to_interface(socket: &std::net::UdpSocket, interface: &str) -> io::Result<()> {
+    let name = std::ffi::CString::new(interface)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "interface name"))?;
+    bind_device(socket.as_raw_fd(), &name)
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn bind_device(fd: std::os::fd::RawFd, name: &CStr) -> io::Result<()> {
+    // SAFETY: `name` is a NUL-terminated string alive for the call.
+    let index: libc::c_uint = unsafe { libc::if_nametoindex(name.as_ptr()) };
+    if index == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // An unsigned int is four bytes on every Apple target.
+    let len = libc::socklen_t::try_from(size_of::<libc::c_uint>()).unwrap_or(4);
+    // SAFETY: `index` is a `c_uint` of the length passed, alive for the
+    // call; `fd` is an open socket the caller owns.
+    check(unsafe {
+        libc::setsockopt(
+            fd,
+            libc::IPPROTO_IP,
+            libc::IP_BOUND_IF,
+            (&raw const index).cast::<libc::c_void>(),
+            len,
+        )
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn bind_device(fd: std::os::fd::RawFd, name: &CStr) -> io::Result<()> {
+    let bytes = name.to_bytes_with_nul();
+    let len = libc::socklen_t::try_from(bytes.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "interface name"))?;
+    // SAFETY: `bytes` is the interface name with its NUL, of the length
+    // passed, alive for the call; `fd` is an open socket the caller owns.
+    check(unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_BINDTODEVICE,
+            bytes.as_ptr().cast::<libc::c_void>(),
+            len,
+        )
+    })
+    .map_err(|e| permission(e, "binding to an interface needs CAP_NET_RAW before Linux 5.7"))
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android"
+)))]
+fn bind_device(_fd: std::os::fd::RawFd, _name: &CStr) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "binding a socket to an interface is not implemented on this platform",
+    ))
+}

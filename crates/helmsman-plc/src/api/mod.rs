@@ -46,6 +46,7 @@
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
 //! POST /api/help                          token or session: what went wrong, or a question, in words; a diagnosis and a Markdown issue with the box's context, redacted, or an answer from the help pages (see [`help`])
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
+//! GET  /api/dhcp                          the DHCP server on the device port (with --dhcp IFACE; see [`crate::dhcp`])
 //! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
 //! POST /api/dropins?name=N&kind=K         token: a document, a photo or a PDF for the agent, stored in memory (see [`dropin`], [`photo`], [`pdf`])
 //! GET  /api/dropins                       the drop-ins held
@@ -278,6 +279,9 @@ pub struct More {
     /// Configuring devices through their own protocols
     /// ([`devconf`]); `None`: those routes answer 404.
     pub devconf: Option<devconf::Setup>,
+    /// The DHCP server on the device port (`--dhcp`, [`crate::dhcp`]):
+    /// `GET /api/dhcp`. `None`: that route answers 404.
+    pub dhcp: Option<crate::dhcp::Handle>,
     /// How the box scans its network for devices and where its device
     /// library is (see [`discover`]). The default sweeps the LAN's
     /// broadcast and reads the public library.
@@ -387,6 +391,8 @@ struct Ctx {
     tls: Option<Tls>,
     /// Device configuration (see [`devconf`]); `None`: 404.
     devconf: Option<devconf::State>,
+    /// The DHCP server on the device port; `None`: 404.
+    dhcp: Option<crate::dhcp::Handle>,
 }
 
 impl Ctx {
@@ -650,6 +656,7 @@ impl Api {
             trend_pins,
             desks,
             devconf,
+            dhcp,
             discovery,
         } = more;
         let listener = TcpListener::bind(cfg.bind)?;
@@ -695,6 +702,7 @@ impl Api {
             desks: Mutex::new(desks.map_or_else(desk::Desks::default, desk::Desks::in_dir)),
             tls,
             devconf: devconf.map(devconf::State::new),
+            dhcp,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -1860,6 +1868,10 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "site"] => site_route(ctx, c, &view),
+        ["api", "dhcp"] => match &ctx.dhcp {
+            Some(d) => Response::json(200, &d.json()),
+            None => Response::error(404, "this box serves no DHCP (--dhcp IFACE)"),
+        },
         ["api", "policy"] => match &ctx.approval {
             Some(a) => Response::json(200, &policy_json(a, ctx)),
             None => Response::error(404, "no approval path on this box"),
@@ -2000,6 +2012,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", true, "a PLC drop-in's inventory: overview, tags, routine, names"),
             e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
             e("GET", "/api/chat/status", true, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
+            e("GET", "/api/dhcp", true, "the DHCP server on the device port (with --dhcp IFACE): its interface, address, pool, status (probing, serving, refused with the other server, failed) and leases"),
             e("GET", "/api/site", false, "this box's status and the boxes it heard on the LAN (with --site); readable from other origins"),
             e("GET", "/api/projects", true, "the editor's projects (with --projects) and which one runs"),
             e("POST", "/api/projects", true, "engineer session: {name} a new empty project, or {name, from} a copy"),

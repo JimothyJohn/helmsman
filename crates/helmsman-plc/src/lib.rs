@@ -9,6 +9,8 @@ pub mod api;
 pub mod bundle;
 pub mod calendar;
 #[cfg(feature = "box")]
+pub mod dhcp;
+#[cfg(feature = "box")]
 pub mod driver_dir;
 pub mod drivers;
 pub mod fallback;

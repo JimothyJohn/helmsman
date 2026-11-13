@@ -386,6 +386,7 @@ impl Bench {
             trend_pins: None,
             desks: None,
             devconf: None,
+            dhcp: None,
             discovery: helmsman_plc::api::discover::Discovery::default(),
         };
         let api = Api::start_box(cfg, shared, Extras::default(), None, more).unwrap();
