@@ -69,9 +69,9 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
 <p>The Agent is the way you program by describing the machine. Open the
 <strong>Agent</strong> tab in the side panel (<kbd>Alt</kbd>
 <kbd>Shift</kbd> <kbd>3</kbd>, then the tab), type what the open
-Structured Text file should do, and press <strong>Send</strong>. The
-file is updated in place and the editor shows it; there is no
-conversation to read through.</p>
+Structured Text file should do, and press <strong>Send</strong>, the
+yellow paper plane (or <kbd>Enter</kbd>). The file is updated in place
+and the editor shows it; there is no conversation to read through.</p>
 <img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
 
 <p>An instruction can be a new behaviour ("the lamp latches until stop
@@ -125,10 +125,10 @@ entry holds the instruction, the Agent's reason, the scenarios that
 passed, the answers that failed and were sent back, and the Agent's
 words. Edits of your own you had not saved are saved first, as their own
 revision, so the version before the change is always there.</p>
-<p><strong>Undo</strong> in the Agent tab puts the file back as it was
-before the last change (a new revision; the change stays in History). It
-is offered while the file is still as the Agent left it; after an edit
-of your own, go back through History instead.</p>
+<p><strong>Undo</strong>, the arrow hooked back beside Send, puts the
+file back as it was before the last change (a new revision; the change
+stays in History). It is offered while the file is still as the Agent
+left it; after an edit of your own, go back through History instead.</p>
 <h2 id="follow-ups">Follow-ups</h2>
 <p>Each instruction goes to the Agent with the whole file and the last
 five instructions carried out on that file, read from History. So "now
@@ -191,13 +191,13 @@ is <strong>Get help</strong>.</p>
 <img src="img/get-help.png" alt="Get help in the Agent tab: the question, Ask for help, and the issue with its Copy button." width="326">
 
 <p>Sign in (any role), say what you saw or what you want to do in your
-own words, and press <strong>Ask for help</strong> (<kbd>Enter</kbd>
-works too; <kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd>
-<kbd>Enter</kbd> starts a new line). The page sends your words with its
-recent Messages, and the box adds what it knows: its version, the
-program it runs, its devices and their errors. Passwords, PINs and
-tokens are left out. Nothing on the box changes and nothing is filed
-anywhere.</p>
+own words, and press <strong>Ask for help</strong>, the yellow paper
+plane (<kbd>Enter</kbd> works too; <kbd>Shift</kbd> <kbd>Enter</kbd> or
+<kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a new line). The page sends your
+words with its recent Messages, and the box adds what it knows: its
+version, the program it runs, its devices and their errors. Passwords,
+PINs and tokens are left out. Nothing on the box changes and nothing is
+filed anywhere.</p>
 <p>What comes back depends on what you asked:</p>
 <ul>
 <li>A report of trouble ("the conveyor stopped, the lamp is red") gets
@@ -217,8 +217,8 @@ the issue by itself from your words and its details, and a line above it
 says why there is no diagnosis. For a question it also lists the help
 sections whose headings match it, under <strong>These help pages may
 answer it</strong>. The picture above shows this case.</p>
-<p><strong>Stop</strong>, shown while the Agent is working, stops
-waiting for the answer.</p>
+<p><strong>Stop</strong>, the red square shown while the Agent is
+working, stops waiting for the answer.</p>
 <h2 id="what-it-will-not-do">What it will not do</h2>
 <p>The Agent changes the open file; it never deploys. It cannot force an
 input, change the I/O map on a box, or approve anything. Its code is

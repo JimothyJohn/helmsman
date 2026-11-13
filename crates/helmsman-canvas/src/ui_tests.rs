@@ -250,6 +250,33 @@ fn node(v: &Viewer, f: impl Fn(&NodeKind) -> bool) -> (Pos2, f32) {
     )
 }
 
+/// The bounds of the line and path strokes the last frame drew inside
+/// `area` (a hand-drawn glyph is lines and paths; the fills under it are
+/// rects, left out).
+fn stroke_bounds_in(h: &Harness, area: Rect) -> Rect {
+    fn walk(s: &egui::Shape, area: Rect, out: &mut Rect) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
+            egui::Shape::LineSegment { points, .. } => {
+                for p in points.iter().filter(|p| area.contains(**p)) {
+                    out.extend_with(*p);
+                }
+            }
+            egui::Shape::Path(path) => {
+                for p in path.points.iter().filter(|p| area.contains(**p)) {
+                    out.extend_with(*p);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Rect::NOTHING;
+    for c in &h.shapes {
+        walk(&c.shape, area, &mut out);
+    }
+    out
+}
+
 fn write_to(path: &str) -> impl Fn(&NodeKind) -> bool + '_ {
     move |k| *k == NodeKind::Write { path: path.into() }
 }
@@ -462,23 +489,40 @@ mod glyphs_and_help {
     }
 
     /// The UI review of 2026-11-10: "Monitor" touched the edge of the
-    /// Editor | Monitor switch, whose sides were a fixed width. Each side
-    /// is its label and padding either side of it.
+    /// Editor | Monitor switch. Since 2026-11-13 each side is a glyph (the
+    /// code brackets, a screen): the two sides are a tap target wide, the
+    /// same width, and each glyph's strokes stay clear of its side's edge.
     #[test]
-    fn the_mode_switch_pads_its_labels() {
+    fn the_mode_switch_is_two_glyphs_clear_of_its_edges() {
         let h = Harness::new(App::sim());
-        let font = eframe::egui::FontId::proportional(crate::theme::BODY);
-        for (key, label) in [("editor", "Editor"), ("monitor", "Monitor")] {
-            let text = h
-                .ctx
-                .fonts_mut(|f| {
-                    f.layout_no_wrap(label.to_string(), font.clone(), eframe::egui::Color32::WHITE)
-                })
-                .size()
-                .x;
-            let side = h.rect(key).width();
-            assert!(side >= text + 20.0, "{label}: {text} pt of text in {side} pt");
+        let (editor, monitor) = (h.rect("editor"), h.rect("monitor"));
+        assert!((editor.width() - monitor.width()).abs() < 0.01);
+        assert!(editor.width() >= crate::st_view::TAP, "a tap target: {editor:?}");
+        for side in [editor, monitor] {
+            let ink = super::stroke_bounds_in(&h, side);
+            assert!(ink.is_positive(), "a glyph in {side:?}");
+            assert!(
+                side.shrink(4.0).contains_rect(ink),
+                "{ink:?} clear of the edges of {side:?}"
+            );
         }
+        assert!(!h.drew("Editor") && !h.drew("Monitor"), "no words in the switch");
+    }
+
+    /// The Agent tab's Send is a paper plane, not the word (2026-11-13).
+    #[test]
+    fn the_agents_send_is_a_glyph() {
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.tab = crate::editor::Tab::Claude;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let send = h.rect("agent send");
+        let ink = super::stroke_bounds_in(&h, send);
+        assert!(
+            ink.is_positive() && send.shrink(2.0).contains_rect(ink),
+            "{ink:?} in {send:?}"
+        );
+        assert!(!h.drew("Send"), "no word on it");
     }
 
     /// The same review: a small program sat in a sixth of the canvas at

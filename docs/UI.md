@@ -30,8 +30,9 @@ this; change it here first when a decision changes.
   build, licence, and on a box its certificate fingerprint). After them
   the program's state, green running, red stopped or faulted (a box: its
   link). On the right the project's name, its edited mark, a "n waiting"
-  badge when proposals wait, the Editor | Monitor toggle (a click on
-  either side flips it), Sign in on a box, and ? in the very corner (help
+  badge when proposals wait, the Editor | Monitor toggle (a glyph a
+  side since 2026-11-13, `< >` and a screen; a click on either side
+  flips it), Sign in on a box, and ? in the very corner (help
   on the site). Proposals and "Simulate in this browser / Back to this
   box" are View items. A fault, a deploy under way or a stale file shows
   on a line under the header only while it lasts. Below the narrow width
@@ -228,7 +229,13 @@ this; change it here first when a decision changes.
   keeps nothing (a private window) still works; the projects last until
   the page closes.
 - **Glyph library** (Nick, 2026-11-12: "the app shouldn't even need
-  words"). One SVG a glyph in `crates/helmsman-canvas/assets/glyphs/`,
+  words"). The panels' action buttons are glyphs too (2026-11-13,
+  `glyphs::action`): Send and Ask for help a yellow paper plane, Stop a
+  red square, Undo a hooked arrow; the Editor | Monitor switch `< >` and
+  a screen. Words stay where they are the safeguard or the content:
+  menus, form labels, dialog confirmations (OK, Cancel, Restore this
+  revision, Use this code), Release on a forced input, Sign in, and the
+  Devices tab's buttons until the device configuration work lands. One SVG a glyph in `crates/helmsman-canvas/assets/glyphs/`,
   rasterized to alpha masks by the crate's build script and tinted in the
   theme's colours when drawn (`glyph_lib`); redrawing one is replacing
   its file. Placeholders in the spirit of emoji until Nick draws the set.

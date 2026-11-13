@@ -3,7 +3,7 @@
 The Agent is the way you program by describing the machine. Open the
 **Agent** tab in the side panel (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>, then the
 tab), type what the open Structured Text file should do, and press
-**Send**. The file is updated in place and the editor shows it; there is
+**Send**, the yellow paper plane (or <kbd>Enter</kbd>). The file is updated in place and the editor shows it; there is
 no conversation to read through.
 
 <img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
@@ -68,7 +68,7 @@ that failed and were sent back, and the Agent's words. Edits of your own
 you had not saved are saved first, as their own revision, so the version
 before the change is always there.
 
-**Undo** in the Agent tab puts the file back as it was before the last
+**Undo**, the arrow hooked back beside Send, puts the file back as it was before the last
 change (a new revision; the change stays in History). It is offered while
 the file is still as the Agent left it; after an edit of your own, go
 back through History instead.
@@ -141,7 +141,7 @@ program**, **?** is **Get help**.
 <img src="img/get-help.png" alt="Get help in the Agent tab: the question, Ask for help, and the issue with its Copy button." width="326">
 
 Sign in (any role), say what you saw or what you want to do in your own
-words, and press **Ask for help** (<kbd>Enter</kbd> works too;
+words, and press **Ask for help**, the yellow paper plane (<kbd>Enter</kbd> works too;
 <kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a
 new line). The page sends your words with its recent Messages, and the box
 adds what it knows: its version, the program it runs, its devices and
@@ -166,7 +166,7 @@ says why there is no diagnosis. For a question it also lists the help
 sections whose headings match it, under **These help pages may answer
 it**. The picture above shows this case.
 
-**Stop**, shown while the Agent is working, stops waiting for the answer.
+**Stop**, the red square shown while the Agent is working, stops waiting for the answer.
 
 ## What it will not do
 

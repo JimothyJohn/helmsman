@@ -776,10 +776,9 @@ pub(crate) fn chat_box(
 /// The instruction box, Send or Stop, Undo, and the status line with
 /// the reason.
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruct, v: &View) -> Option<Act> {
-    use egui::{RichText, Vec2};
+    use egui::RichText;
 
-    use crate::st_view::TAP;
-    use crate::st_view::brand::{BLACK, GREEN, RED, WARN, YELLOW};
+    use crate::st_view::brand::{GREEN, RED, WARN};
 
     let t = crate::theme::theme(ui);
     let mut act = None;
@@ -801,22 +800,17 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     let why_not = v.blocked.clone().or_else(|| s.refusal());
     ui.horizontal_wrapped(|ui| {
         if s.busy() {
-            let r = ui
-                .add(egui::Button::new("Stop").min_size(Vec2::new(TAP * 1.5, TAP * 0.75)))
-                .tip("Stops the Agent. The file stays as it is.");
+            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Stop, true, false)
+                .tip("Stop: stops the Agent. The file stays as it is.");
             chrome.hit("agent stop", r.rect);
             if r.clicked() {
                 act = Some(Act::Stop);
             }
         } else {
-            let send = egui::Button::new(RichText::new("Send").strong().color(BLACK))
-                .fill(YELLOW)
-                .min_size(Vec2::new(TAP * 1.5, TAP * 0.75));
-            let r = ui
-                .add_enabled(why_not.is_none(), send)
+            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true)
                 .tip(why_not.clone().unwrap_or_else(|| {
                 format!(
-                    "Sends the instruction with the whole of {target}. A checked answer is written into it."
+                    "Send: sends the instruction with the whole of {target}. A checked answer is written into it."
                 )
             }));
             chrome.hit("agent send", r.rect);
@@ -825,13 +819,12 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             }
         }
         if let Some(u) = s.undo() {
-            let b = egui::Button::new("Undo").min_size(Vec2::new(TAP * 1.5, TAP * 0.75));
             let r = match &v.undo_blocked {
-                None => ui.add(b).tip(format!(
-                    "Puts {} back as it was in revision {}. The change stays in History.",
+                None => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, true, false).tip(format!(
+                    "Undo: puts {} back as it was in revision {}. The change stays in History.",
                     u.file, u.revision
                 )),
-                Some(why) => ui.add_enabled(false, b).tip(why),
+                Some(why) => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, false, false).tip(why),
             };
             chrome.hit("agent undo", r.rect);
             if r.clicked() {
