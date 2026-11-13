@@ -123,7 +123,10 @@ this; change it here first when a decision changes.
   characters a row); Alt Shift 0, Alt Shift 4 and Alt Shift 1 open the
   pane on its tab, or shut it when that tab shows.
 - **Right panel, collapsible, tabs (236 pt):** I/O
-  (values; inputs the diagram does not show) and Agent. (The Requirements
+  (values; inputs the diagram does not show), Palette (the glyph
+  library's pieces, `palette`: a click, or a drag onto the diagram, sends
+  the piece's request to the Agent as if typed, and the panel turns to
+  the Agent tab; Nick, 2026-11-12) and Agent. (The Requirements
   tab of 2026-11-05, a list of requirements in plain words with the agent
   writing the test behind each, is archived since 2026-11-08 under
   `crates/helmsman-canvas/archive/requirements/`: the scenarios the Agent
@@ -236,8 +239,10 @@ this; change it here first when a decision changes.
   `interlock`, `phase`/`step`, `hmi`, `timer`, `count`, `latch`, `edge`),
   else a switch for a BOOL input, a pilot lamp for a BOOL output, a gauge
   for a number; a device by its driver (the box, the screen, an I/O
-  module). Next: the standard blocks on the diagram (timer, counter,
-  latch, edge) and a palette to drag from.
+  module). The standard blocks on the diagram carry theirs in the
+  header (timer, counter, latch, edge; `Icons::glyph`), where a rule of
+  the project's `icons.map` naming the block or its type still puts its
+  character instead. The Palette tab holds the pieces to drag.
 - **Lamps** (Nick, 2026-11-12: the first screen should speak without
   words). The program's BOOL outputs are lamps in the diagram's
   bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a

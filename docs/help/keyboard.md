@@ -27,7 +27,7 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | Alt Shift 0 | The left pane's Files tab | Devices |
 | Alt Shift 1 | The left pane's Code tab (the Structured Text) | POUs |
 | Alt Shift 2 | The bottom panel (Trend, Messages) | Modules |
-| Alt Shift 3 | The side panel (I/O, Agent) | Messages |
+| Alt Shift 3 | The side panel (I/O, Palette, Agent) | Messages |
 | Alt Shift 4 | The left pane's Devices tab (the I/O map's devices and points) |  |
 | Alt ↑ | Up one level in the diagram | |
 

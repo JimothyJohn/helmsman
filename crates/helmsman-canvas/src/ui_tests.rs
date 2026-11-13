@@ -5173,7 +5173,7 @@ mod lamps {
 
 /// The glyph library beside every point (`glyph_lib`).
 mod glyph_library {
-    use eframe::egui::{Rect, Shape, TextureId};
+    use eframe::egui::{self, Rect, Shape, TextureId};
 
     use super::Harness;
     use crate::app::App;
@@ -5202,10 +5202,74 @@ mod glyph_library {
     }
 
     #[test]
+    fn the_traffic_lights_timer_block_carries_the_timer_glyph_in_its_header() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let v = super::sim_view(&h);
+        let (centre, width) = super::node(
+            v,
+            |k| matches!(k, helmsman_diagram::NodeKind::Fb { fb, .. } if fb == "TON"),
+        );
+        let block = Rect::from_center_size(centre, eframe::egui::vec2(width, width));
+        assert_eq!(
+            glyphs_in(&h, block),
+            1,
+            "the TON block's header has the timer glyph"
+        );
+    }
+
+    /// The Palette tab (`palette`): a piece dragged onto the diagram, or
+    /// clicked, is sent to the Agent as its request, and the panel turns
+    /// to the Agent tab to show the answer coming.
+    #[test]
+    fn a_palette_piece_dropped_on_the_diagram_or_clicked_asks_the_agent() {
+        let mut h = Harness::new(App::sim());
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .chat
+            .key_mut()
+            .push_str("sk-ant-test-key");
+        // The panels' widths show as the diagram's: it keeps its size.
+        let before = h.app.chrome.diagram;
+        let tab = h.rect("tab palette").center();
+        h.click(tab);
+        assert_eq!(h.app.chrome.tab, Tab::Palette);
+        let panel = Rect::from_min_max(egui::pos2(before.right(), 0.0), egui::pos2(h.size.x, h.size.y));
+        assert_eq!(glyphs_in(&h, panel), 12, "the twelve pieces are drawn");
+        assert_eq!(h.app.chrome.diagram, before, "the grid fits the panel");
+        let sent = |h: &Harness| h.app.sim.as_ref().unwrap().link.sent.len();
+        assert_eq!(sent(&h), 0);
+        // Dropped outside the diagram (back on the panel): nothing.
+        let piece = h.rect("palette push-button").center();
+        h.drag(piece, piece + eframe::egui::vec2(0.0, 300.0));
+        assert_eq!(sent(&h), 0, "dropped on the panel");
+        // Dropped on the diagram: asked.
+        let piece = h.rect("palette push-button").center();
+        h.drag(piece, h.app.chrome.diagram.center());
+        assert_eq!(sent(&h), 1);
+        assert_eq!(h.app.chrome.tab, Tab::Claude, "the answer's tab");
+        let body = &h.app.sim.as_ref().unwrap().link.sent[0].1.body;
+        assert!(body.contains("Add a push button"), "{body}");
+        // A click asks too.
+        h.app.sim.as_mut().unwrap().stop_answer();
+        h.click(tab);
+        h.click(h.rect("palette timer").center());
+        assert_eq!(sent(&h), 2);
+        assert!(
+            h.app.sim.as_ref().unwrap().link.sent[1]
+                .1
+                .body
+                .contains("Add a timer (TON)")
+        );
+    }
+
+    #[test]
     fn every_output_in_the_io_tab_has_a_glyph_and_the_panel_keeps_its_width() {
         let mut h = Harness::new(App::sim());
         h.app.chrome.tab = Tab::Io;
-        let before = h.rect("right").width();
+        let before = h.app.chrome.diagram;
         h.wait(0.3);
         let outputs = h.rect("io outputs");
         // The traffic light's three lamps.
@@ -5215,8 +5279,7 @@ mod glyph_library {
             "run is a control on the diagram"
         );
         assert_eq!(
-            h.rect("right").width(),
-            before,
+            h.app.chrome.diagram, before,
             "the glyph column did not widen the panel"
         );
     }
