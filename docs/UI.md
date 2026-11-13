@@ -156,7 +156,20 @@ this; change it here first when a decision changes.
   the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
-  and the Agent's one-sentence reason. Send updates the open file: one
+  and the Agent's one-sentence reason. In the simulation (Nick,
+  2026-11-13) the box takes the tab's height and scrolls past it; Shift
+  or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
+  empty item) and Tab indents; while the Agent works the box shows the
+  instruction sent, a palette piece's too, greyed. A change that lands
+  runs at once and is seen on the canvas, marked, with nothing written in
+  the tab (its reason goes to the Messages). One that does not is an
+  error in the Messages (their red count, and they open), the box is
+  outlined red, and one red line opens the Messages. Undo is Before /
+  After there: the file swaps at once between the version before the
+  change and the change, compiled and running, each marked green and red
+  against the other; nothing is saved (Save keeps the version shown), and
+  an edit ends the swap. On a box the tab keeps Undo and the three-row
+  box: a box's change goes through a deploy. Send updates the open file: one
   request carries the whole file in its scope, the program and its
   errors, and the last 5 instructions carried out on that file, read back
   from its History revisions. `verify::check` runs the answer on a copy
