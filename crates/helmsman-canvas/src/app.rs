@@ -229,6 +229,15 @@ pub struct App {
     /// The page fell back to the simulation by itself (no box answered);
     /// once, so ⋯ › Back to this box is not undone.
     fell_back: bool,
+    /// The box popup that asks something, open (`crate::box_popup`).
+    asking: crate::box_popup::Asking,
+    /// The found popup was shown (once).
+    found_shown: bool,
+    /// The Lost popup was hidden; shown again once the box is back.
+    pub(crate) lost_hidden: bool,
+    /// When the page started watching the box (the Connecting popup waits
+    /// a moment before it shows).
+    watch_from: Option<f64>,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
     /// The last Run, Stop or Restart sent to the box: until when it holds,
@@ -305,6 +314,10 @@ impl App {
             routed: false,
             about: false,
             fell_back: false,
+            asking: crate::box_popup::Asking::None,
+            found_shown: false,
+            lost_hidden: false,
+            watch_from: None,
             listed: None,
             ctl: None,
             tour: None,
@@ -512,23 +525,52 @@ impl App {
         }
         self.desk();
         // No box ever answered this page: it is the simulation then, by
-        // itself (Nick, 2026-11-01). A box that answered and went away
-        // stays the box: its last diagram is worth more than a demo.
+        // itself (Nick, 2026-11-01), on the first failed look (Nick,
+        // 2026-11-13: not after three), with a second look in the
+        // background once the simulation is up. A box that answered and
+        // went away stays the box: its last diagram is worth more than a
+        // demo.
         if self.source == Source::Box
             && !self.fell_back
-            && let Some(b) = &self.boxv
-            && matches!(b.state.link(), crate::remote::Link::Unreachable { .. })
+            && let Some(b) = &mut self.boxv
+            && matches!(
+                b.state.link(),
+                crate::remote::Link::Unreachable { .. } | crate::remote::Link::Reconnecting { .. }
+            )
             && !b.state.ever_connected()
         {
+            b.state.probe_at(now + crate::box_popup::PROBE_AFTER);
             self.fell_back = true;
+            self.asking = crate::box_popup::Asking::NoBox;
             self.source = Source::Sim;
             if self.screen == Screen::Proposals {
                 self.screen = Screen::Editor;
             }
             let s = self.sim.get_or_insert_with(PlaygroundView::new);
             s.notice = Some(
-                "No box answered at this address: simulating in this browser (⋯ › Back to this box).".into(),
+                "No box answered at this address: simulating in this browser (View › Back to this box)."
+                    .into(),
             );
+        }
+        // The second look, while the simulation runs.
+        if self.source == Source::Sim
+            && let Some(b) = &mut self.boxv
+        {
+            match b.state.probe() {
+                crate::remote::Probe::Due(at) => {
+                    b.probe_tick(&ctx);
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).max(0.05)));
+                }
+                crate::remote::Probe::Asked => {
+                    b.probe_tick(&ctx);
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                crate::remote::Probe::Found if !self.found_shown => {
+                    self.found_shown = true;
+                    self.asking = crate::box_popup::Asking::Found;
+                }
+                _ => {}
+            }
         }
         let mut header = self.header(ui);
         header.extend(self.build_banner(ui));
@@ -619,7 +661,51 @@ impl App {
             self.act(a, &ctx);
         }
         self.tour_ui(&ctx);
+        self.box_popup(&ctx, now);
         theme::pointer_cursor(&ctx);
+    }
+
+    /// What the page is doing about the box, as a popup
+    /// (`crate::box_popup`), and what the person pressed in it.
+    fn box_popup(&mut self, ctx: &egui::Context, now: f64) {
+        use crate::box_popup::{Act, Seen, show, which};
+        let Some(b) = &self.boxv else { return };
+        if self.source == Source::Box {
+            self.watch_from.get_or_insert(now);
+        }
+        let link = b.state.link();
+        if link == crate::remote::Link::Connected {
+            self.lost_hidden = false;
+        }
+        let seen = Seen {
+            on_box: self.source == Source::Box,
+            link,
+            ever_connected: b.state.ever_connected(),
+            waited: now - self.watch_from.unwrap_or(now),
+            asking: self.asking,
+            probe: b.state.probe(),
+            lost_hidden: self.lost_hidden,
+        };
+        let Some(p) = which(&seen) else { return };
+        #[cfg(target_arch = "wasm32")]
+        let here = crate::web::box_address();
+        #[cfg(not(target_arch = "wasm32"))]
+        let here = "this address".to_string();
+        match show(ctx, &mut self.chrome, p, &here) {
+            Some(Act::Ok | Act::Keep) => self.asking = crate::box_popup::Asking::None,
+            Some(Act::Connect) => {
+                self.asking = crate::box_popup::Asking::None;
+                self.source = Source::Box;
+                self.screen = Screen::Editor;
+            }
+            Some(Act::Hide) => self.lost_hidden = true,
+            Some(Act::Simulate) => {
+                self.lost_hidden = true;
+                self.source = Source::Sim;
+                self.screen = Screen::Editor;
+            }
+            None => {}
+        }
     }
 
     /// Does what a shortcut (or its menu item) asks; nothing where it

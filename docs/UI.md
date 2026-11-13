@@ -198,8 +198,21 @@ this; change it here first when a decision changes.
   diagram too big for the view at that zoom shows its left part and you
   pan, instead of shrinking to one-letter labels. Controls on blocks cut
   their text instead of wrapping it.
-- **The box link's status counts down:** "reconnecting (retry in 5s)",
-  ticking each second; every retry waits 5 s.
+- **The box link's status counts down:** "reconnecting (retry in 2s)",
+  ticking each second; every retry waits 2 s (it was 5 s, too slow:
+  Nick, 2026-11-13).
+- **What happens to the box is said in the middle of the screen**
+  (`box_popup`, Nick, 2026-11-13). A first look that takes over 0.4 s
+  shows "Connecting to the box"; a box that answered and went away shows
+  "Reconnecting to the box" with the countdown (Hide, and Simulate in this
+  browser once it is unreachable). Both are a window that leaves the page
+  usable, so the last diagram can still be read. A page no box answers
+  falls back to the simulation on the first failed look, not the third,
+  and says so in a modal; once the simulation is up a second look goes
+  in the background, one module list read, and a box that answers then
+  is offered in a modal: Connect to the box, or Keep simulating. Nothing
+  answers the second look: the modal says so, and no third look goes
+  until View › Back to this box.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.

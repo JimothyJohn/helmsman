@@ -44,10 +44,27 @@ pub const UNREACHABLE_AFTER: u32 = 3;
 /// that: the engineer is told before the reconnect.
 pub const SILENT_AFTER: f64 = 5.0;
 
-/// Seconds between retries: a steady 5 s, so the countdown on the status
+/// Seconds between retries: a steady 2 s, so the countdown on the status
 /// line reads the same every time (Nick, 2026-11-01; it was 2 s doubling
-/// to 30, which read as a hang).
-pub const RETRY_SECS: f64 = 5.0;
+/// to 30, which read as a hang) and a box that comes back is seen soon
+/// (Nick, 2026-11-13: 5 s was too slow).
+pub const RETRY_SECS: f64 = 2.0;
+
+/// The second look for a box, while the page simulates: one module list
+/// read, asked once ([`BoxState::probe_at`]) and answered once.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Probe {
+    /// None asked for.
+    Off,
+    /// Asked for at this page time.
+    Due(f64),
+    /// Sent; no answer yet.
+    Asked,
+    /// A box answered.
+    Found,
+    /// Nothing answered.
+    Missed,
+}
 
 /// Seconds to wait before retry number `failures` (1-based).
 #[must_use]
@@ -801,6 +818,8 @@ pub struct BoxState {
     heard: Option<f64>,
     /// Nobody is looking at the box: its streams are closed.
     paused: bool,
+    /// The second look for a box while paused ([`Probe`]).
+    probe: Probe,
     /// The box refused a read for want of a session ([`Link::SignIn`]).
     locked: bool,
     /// The lock is new and the page has not yet been asked to sign in.
@@ -854,6 +873,7 @@ impl BoxState {
             streaming: false,
             heard: None,
             paused: false,
+            probe: Probe::Off,
             locked: false,
             prompt: false,
             values: Retry::default(),
@@ -871,6 +891,14 @@ impl BoxState {
 
     /// What to do now: queued commands and retries that are due.
     pub fn poll(&mut self, now: f64) -> Vec<Cmd> {
+        if self.paused
+            && let Probe::Due(at) = self.probe
+            && now >= at
+        {
+            self.probe = Probe::Asked;
+            self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
+            return std::mem::take(&mut self.queue);
+        }
         if self.paused || self.locked {
             // Closing is all that is left to do for a box nobody watches,
             // or one that will not answer without a session.
@@ -1173,8 +1201,34 @@ impl BoxState {
         }
     }
 
+    /// Asks for one more look for the box at page time `at`, while the
+    /// page simulates (paused): a single module list read, whose answer
+    /// [`Self::probe`] says. Asked once: a later call changes nothing.
+    pub fn probe_at(&mut self, at: f64) {
+        if self.probe == Probe::Off {
+            self.probe = Probe::Due(at);
+        }
+    }
+
+    /// Where the second look for the box stands.
+    #[must_use]
+    pub const fn probe(&self) -> Probe {
+        self.probe
+    }
+
     /// Takes in what the transport saw at page time `now` (seconds).
     pub fn apply(&mut self, msg: Msg, now: f64) {
+        if self.probe == Probe::Asked
+            && let Msg::Got(Fetch::Modules, r) = &msg
+        {
+            let found = r
+                .as_ref()
+                .ok()
+                .and_then(|b| parse(b))
+                .and_then(|j| rows(&j, ModuleRow::parse))
+                .is_some();
+            self.probe = if found { Probe::Found } else { Probe::Missed };
+        }
         if let Msg::Got(_, Err(e)) = &msg
             && e == "HTTP 401"
         {
@@ -1504,7 +1558,7 @@ mod tests {
     #[test]
     fn the_retry_wait_is_the_same_every_time() {
         let d: Vec<f64> = (1..=7).map(backoff).collect();
-        assert_eq!(d, [5.0; 7]);
+        assert_eq!(d, [2.0; 7]);
         assert!((backoff(u32::MAX) - RETRY_SECS).abs() < f64::EPSILON);
     }
 
@@ -1584,12 +1638,12 @@ mod tests {
             s.link(),
             Link::Reconnecting {
                 failures: 1,
-                at: 15.0
+                at: 12.0
             }
         );
-        assert_eq!(s.poll(14.9), [], "not before the backoff");
-        assert_eq!(s.next_retry(), Some(15.0));
-        assert_eq!(s.poll(15.0), [Cmd::Listen(Stream::Values, "/api/events".into())]);
+        assert_eq!(s.poll(11.9), [], "not before the backoff");
+        assert_eq!(s.next_retry(), Some(12.0));
+        assert_eq!(s.poll(12.0), [Cmd::Listen(Stream::Values, "/api/events".into())]);
         assert_eq!(s.next_retry(), None);
 
         let now = failed_values(&mut s, 2, 13.0);
