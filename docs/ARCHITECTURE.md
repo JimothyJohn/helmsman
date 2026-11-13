@@ -330,6 +330,10 @@ scan; the scheduler bounds how often.
   `Profile::map(transport, id, endpoint)` writes the I/O map for one
   transport, a signal per channel (`rio_di_04_count`), and a profile is
   accepted only if every transport's map passes the map's own rules.
+  An optional `configure NAME` line (`moxa-e1200` is the only name) says the
+  device has a configuration protocol the box speaks; without it the device
+  has no configuration routes, and a name the box does not know is a profile
+  error naming the line ("Device configuration" below).
   docs/devices/moxa-iologik-e1213.device is the first: it gives the same
   40 signals over EtherNet/IP and Modbus TCP and agrees with the two maps
   written by hand.
@@ -3048,6 +3052,37 @@ unit refuses a change from a password that is already set, not understood),
 (`unreachable`, `protocol`, `restart_not_observed`, `restart_timeout`); 500
 `store` (the kept password could not be written). No error, event, log line or
 audit entry carries a password.
+
+**The secret store.** A device's console password is the one secret the box
+keeps for a third party, and nothing existing fits it: the box token and the
+accounts are the box's own, and the sinks' `Secret` type holds a header value in
+memory. So `<state-dir>/devconf/ID.password` (directory 0700, file 0600,
+written beside the old one and renamed over it, one line) holds it, and in
+memory it is only a `sink::Secret` (whose `Debug` prints nothing) on its way to
+the configurator's own redacted `Secret`. It is set by `PUT` with an engineer
+session, replaced when `POST .../password` succeeds, removed by `DELETE`, and
+returned by no route: not in `GET .../config` (only `password_stored`), nor in
+a project, a snapshot, an export (the unit's export does not hold it), an
+error, an event, an audit entry or a log line; `tests/devconf.rs` searches
+every response body, the audit log and the captured log for it. `ConfigView`,
+the read path the routes and the agent's tools share (`api::devconf::config_view`),
+has no field that can hold it. The file is plain text at rest, as the box token
+and the TLS key are; a box someone can read the state directory of is lost
+anyway. The configurator logs in at most once per call, and a refused password
+is a 409 `login_refused` the person fixes with `PUT`; the box never retries a
+refused one.
+
+**The saved configuration** is the project file `ID.devconf` (`FileKind::Devconf`,
+stem a lower-case slug like a driver name): the export text as read from the
+unit, in the running project, saved by `POST .../snapshot`, versioned, listed,
+revisioned, zipped and diffed like any project file, ignored by the build.
+It is the source of `import {from: "snapshot"}` and of `drift`.
+
+**The interruption gate.** A restart or an import takes the unit off the
+network for about 21 s. If a module of the running project reads or drives a
+signal bound to the device, the call is 409 `interrupts` naming the modules,
+unless the request says `interrupts: true`. (Writes with `set` stage only and
+are not gated.)
 
 **While a restart or an import runs**, `GET /api/devices` lists that device as
 `{state: "down", health: "lost", restarting: true, error: "restarting for its

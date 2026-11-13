@@ -385,6 +385,7 @@ impl Bench {
             running_drivers: found.drivers,
             trend_pins: None,
             desks: None,
+            devconf: None,
             discovery: helmsman_plc::api::discover::Discovery::default(),
         };
         let api = Api::start_box(cfg, shared, Extras::default(), None, more).unwrap();
