@@ -209,3 +209,43 @@ fn a_transport_may_give_rate_limits_the_map_never_sees() {
         );
     }
 }
+
+/// `configure NAME` attaches a device to a configurator the box has; a
+/// profile without the line has none, and a name the box does not know is
+/// an error naming the line.
+#[test]
+fn a_profile_names_its_configurator_or_has_none() {
+    assert_eq!(e1213().configure.as_deref(), Some("moxa-e1200"));
+    let base = "helmsman-device 1\nmodel X\ntransport modbus-tcp unit=1\nin A bool modbus-tcp=di:0\n";
+    assert_eq!(Profile::parse(base).unwrap().configure, None);
+    let with = |line: &str| {
+        Profile::parse(&format!(
+            "helmsman-device 1\nmodel X\n{line}\ntransport modbus-tcp unit=1\nin A bool modbus-tcp=di:0\n"
+        ))
+    };
+    assert_eq!(
+        with("configure moxa-e1200").unwrap().configure.as_deref(),
+        Some("moxa-e1200")
+    );
+    let errs = with("configure web-console").unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|(n, e)| *n == 3 && e.contains("web-console") && e.contains("moxa-e1200")),
+        "{errs:?}"
+    );
+    assert!(with("configure").unwrap_err().iter().any(|(n, _)| *n == 3));
+    assert!(
+        with("configure moxa-e1200 extra")
+            .unwrap_err()
+            .iter()
+            .any(|(n, _)| *n == 3)
+    );
+    let twice = Profile::parse(
+        "helmsman-device 1\nmodel X\nconfigure moxa-e1200\nconfigure moxa-e1200\ntransport modbus-tcp unit=1\nin A bool modbus-tcp=di:0\n",
+    )
+    .unwrap_err();
+    assert!(
+        twice.iter().any(|(n, e)| *n == 4 && e.contains("twice")),
+        "{twice:?}"
+    );
+}
