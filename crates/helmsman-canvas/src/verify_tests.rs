@@ -302,8 +302,28 @@ fn a_red_answer_goes_back_twice_and_code_without_a_scenario_once() {
         };
         assert!(m.contains("unknown variable STRAT"), "{m}");
         assert!(m.contains("Answer again in full"), "{m}");
+        assert!(!m.contains("in brackets"), "no scenario failed: {m}");
     }
     assert_eq!(next(&red, RETRIES, false), Next::Show, "then it is shown red");
+    // A failed scenario: the retry says how to read the values it held.
+    let scenario_red = Check {
+        code: true,
+        scenarios: vec![crate::verify::Ran {
+            file: "test_x.st".into(),
+            requirement: "x".into(),
+            passed: false,
+            why: "off when both failed at 0.64 s (a=FALSE, b=TRUE, either=TRUE)".into(),
+        }],
+        ..Check::default()
+    };
+    let Next::Retry(m) = next(&scenario_red, 0, false) else {
+        panic!("a red scenario goes back")
+    };
+    assert!(m.contains("(a=FALSE, b=TRUE, either=TRUE)"), "{m}");
+    assert!(
+        m.contains("the scenario's timing is wrong, so fix the scenario"),
+        "{m}"
+    );
     let bare = Check {
         code: true,
         ..Check::default()

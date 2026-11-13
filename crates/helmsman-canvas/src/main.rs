@@ -23,6 +23,8 @@
     clippy::similar_names
 )]
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod agent_ladder_tests;
 mod agent_marks;
 mod app;
 mod arrange;
