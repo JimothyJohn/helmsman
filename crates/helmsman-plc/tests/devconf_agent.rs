@@ -492,7 +492,13 @@ fn the_tools_read_facts_and_never_the_password_over_mcp() {
         !text.contains("\"export\""),
         "the whole export is left out: {text}"
     );
+    let before = b.sim.requests().len();
     let l = mcp_tool(&b, "list_device_configs", &json!({}));
+    assert_eq!(
+        b.sim.requests().len(),
+        before,
+        "listing contacted the unit; it reads the profile's configurator only"
+    );
     let list = result_text(&l);
     assert!(list.contains("\"device\":\"moxa\""), "{list}");
     assert!(list.contains("moxa-e1200"), "{list}");

@@ -1085,9 +1085,6 @@ const CONFIG_KEYS: [&str; 6] = [
     "drift",
 ];
 
-/// Most devices `list_device_configs` asks, one read of the unit each.
-const MAX_CONFIG_PROBES: usize = 32;
-
 fn scrub_secrets(v: &mut Json) {
     match v {
         Json::Object(m) => {
@@ -1111,42 +1108,26 @@ fn code(body: &Json) -> &str {
 }
 
 /// Which devices of the running map have a configuration the box can read,
-/// with each one's configurator. The box has no list route, so this asks
-/// `GET /api/devices` and then each device's `GET
-/// /api/devices/{id}/config` (at most 32): a device whose profile has no
-/// `configure` line answers 404 `not_configurable` and is left out; one
-/// that has it but whose unit does not answer is listed as not readable
-/// now. Read only; changing a device's own configuration is the
-/// engineer's, in the canvas's Devices tab.
+/// with each one's configurator: the `configurator` of each entry of
+/// `GET /api/devices` (the profile's `configure` name, null without one;
+/// from the profile alone, so no unit is contacted and no device lock
+/// taken). `read_device_config` reads one unit. Read only; changing a
+/// device's own configuration is the engineer's, in the canvas's Devices
+/// tab.
 fn list_device_configs(api: &dyn Caller) -> Outcome {
     let links = match api.get("/api/devices") {
         Ok((200, Json::Array(list))) => list,
         Ok((s, b)) => return unexpected("reading devices", s, &b),
         Err(e) => return fail(e),
     };
-    let mut found = Vec::new();
-    for d in links.iter().take(MAX_CONFIG_PROBES) {
-        let Some(id) = d["name"].as_str().filter(|n| device_id_ok(n)) else {
-            continue;
-        };
-        match api.get(&format!("/api/devices/{}/config", http::segment(id))) {
-            Ok((200, j)) => found.push(json!({
-                "device": id, "configurator": j["configurator"], "readable": true,
-                "snapshot_exists": !j["snapshot"].is_null(),
-                "password_stored": j["password_stored"],
-            })),
-            Ok((404, _)) => {}
-            Ok((409, b)) if code(&b) == "busy" => found.push(json!({
-                "device": id, "configurator": Json::Null, "readable": false,
-                "why": "the device is busy (restarting for its configuration, or another operation)",
-            })),
-            Ok((s, b)) => found.push(json!({
-                "device": id, "configurator": Json::Null, "readable": false,
-                "why": format!("the box answered {s}: {}", b["error"].as_str().unwrap_or("no reason given")),
-            })),
-            Err(e) => return fail(e),
-        }
-    }
+    let found: Vec<Json> = links
+        .iter()
+        .filter_map(|d| {
+            let id = d["name"].as_str().filter(|n| device_id_ok(n))?;
+            let c = d["configurator"].as_str()?;
+            Some(json!({ "device": id, "configurator": c, "state": d["state"] }))
+        })
+        .collect();
     let n = found.len();
     let note = if n == 0 {
         "no device in the running map has a configuration the box can read (its profile needs a `configure` line)"
@@ -1927,19 +1908,32 @@ END_FUNCTION_BLOCK
     }
 
     #[test]
-    fn list_device_configs_lists_the_configurable_ones_only() {
-        let o = list_device_configs(&config_routes());
+    fn list_device_configs_lists_the_configurable_ones_from_the_device_list_alone() {
+        let mut api = routes(vec![]);
+        api.0.remove(0);
+        api.0.push((
+            "GET /api/devices".into(),
+            200,
+            json!([{"name": "box", "state": "up", "configurator": null},
+                   {"name": "io1", "state": "up", "configurator": "moxa-e1200"},
+                   {"name": "old", "state": "up"},
+                   {"name": "dead", "state": "down", "configurator": "moxa-e1200"}]),
+        ));
+        let o = list_device_configs(&api);
         assert!(o.ok, "{}", o.data);
         let l = o.data["devices"].as_array().expect("a list");
-        assert_eq!(l.len(), 2, "{}", o.data);
-        assert_eq!(l[0]["device"], "io1");
+        let ids: Vec<&str> = l.iter().filter_map(|d| d["device"].as_str()).collect();
+        assert_eq!(ids, ["io1", "dead"], "{}", o.data);
         assert_eq!(l[0]["configurator"], "moxa-e1200");
-        assert_eq!(l[0]["readable"], true);
-        assert_eq!(l[1]["device"], "dead");
-        assert_eq!(l[1]["readable"], false);
-        assert!(!o.data.to_string().contains(PASSWORD));
         let none = list_device_configs(&routes(vec![]));
         assert!(none.ok && none.data["devices"] == json!([]), "{}", none.data);
+    }
+
+    #[test]
+    fn listing_makes_one_request_and_none_to_a_unit() {
+        let r = Recorder(std::cell::RefCell::new(Vec::new()));
+        let _ = list_device_configs(&r);
+        assert_eq!(*r.0.borrow(), ["GET /api/devices"]);
     }
 
     #[test]
