@@ -31,8 +31,20 @@ W, H = 1400, 860
 S = 2
 
 
-def layout(left=1, right=1, pane="code", tab="io", scan=0, trend=1, bottom="trend", light=0):
-    return f"left={left} right={right} pane={pane} tab={tab} scan={scan} trend={trend} bottom={bottom} light={light}"
+# Every tab in the left pane, in its first order (2026-11-13). The shots
+# dock I/O on the right by default: the diagram then sits where it did
+# with two side panels, and the coordinates below hold.
+PANES = ("claude", "code", "io", "devices", "files", "history", "palette")
+
+
+def layout(left=1, pane="code", rights="io", scan=0, trend=1, bottom="trend", light=0):
+    docked = [p for p in rights.split(",") if p]
+    lefts = ",".join(p for p in PANES if p not in docked)
+    right = f" rights={rights} side={docked[0]}" if docked else ""
+    return (
+        f"dock=2 left={left} right=1 lefts={lefts} pane={pane}{right}"
+        f" scan={scan} trend={trend} bottom={bottom} light={light}"
+    )
 
 
 def clip(x, y, w, h):
@@ -50,9 +62,9 @@ SHOTS = {
     "diagram-why": ("?playground", layout(), [("click", 578, 392), ("wait", 1500)], clip(320, 330, 836, 260)),
     "files-pane": ("?playground", layout(pane="files"), [("wait", 1500)], clip(0, 52, 360, 493)),
     "context-menu": ("?playground", layout(pane="files"), [("wait", 1500), ("rclick", 55, 373), ("wait", 800)], clip(0, 52, 360, 560)),
-    "io-tab": ("?playground", layout(tab="io"), [("wait", 1500)], clip(1098, 52, 302, 423)),
-    "agent-tab": ("?playground", layout(tab="claude"), [("wait", 1500)], clip(1098, 52, 302, 393)),
-    "palette-tab": ("?playground", layout(tab="palette"), [("wait", 1500)], clip(1098, 52, 302, 393)),
+    "io-tab": ("?playground", layout(pane="io", rights=""), [("wait", 1500)], clip(0, 52, 320, 423)),
+    "agent-tab": ("?playground", layout(pane="claude", rights=""), [("wait", 1500)], clip(0, 52, 320, 393)),
+    "palette-tab": ("?playground", layout(pane="palette", rights=""), [("wait", 1500)], clip(0, 52, 320, 393)),
     "trend": ("?playground", layout(bottom="trend"), [("wait", 8000)], clip(320, 580, 836, 280)),
     "monitor": ("?playground&monitor", layout(), [("wait", 3000)], None),
     "monitor-stopped": ("?playground&monitor", layout(), [("wait", 2000), ("key", "Control+Enter"), ("wait", 1200)], clip(0, 52, 1400, 260)),

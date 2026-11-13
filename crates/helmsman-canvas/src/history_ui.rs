@@ -1,8 +1,9 @@
-//! A project's history in the Files tab (Nick 2026-11-01,
-//! `project-history`; interview 2026-11-02: revisions on the box, not
-//! git): a "History" row that folds the revisions, newest first, each
-//! with who, when and what; a click opens the revision in the middle of
-//! the screen with its Agent page and a line diff of each file against
+//! A project's history (Nick 2026-11-01, `project-history`; interview
+//! 2026-11-02: revisions on the box, not git), in its own tab of the left
+//! pane since 2026-11-13 ([`tab_ui`]): the revisions newest first, each
+//! one line saying what changed, stepped through with Newer / Older; in
+//! the simulation a pick runs that version. A double click opens the
+//! revision in the middle of the screen with its Agent page and a line diff of each file against
 //! the project as it is, and Restore for an engineer. The same rows and
 //! modal serve the box (`crate::box_projects`, from `/api/projects/{p}/
 //! history`) and the simulation (`crate::sim_projects`, revisions in the
@@ -36,6 +37,112 @@ pub struct RevisionRow {
     pub what: String,
     /// It carries an Agent page.
     pub page: bool,
+    /// The change in a few words, when there is more than `what` to go
+    /// on (the Agent's reason).
+    pub about: Option<String>,
+}
+
+impl RevisionRow {
+    /// The row's one line in the History tab: the change in a few words.
+    #[must_use]
+    pub fn short(&self) -> String {
+        let text = self.about.as_deref().unwrap_or(&self.what);
+        let text = text.strip_prefix("Agent: ").unwrap_or(text);
+        let line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut c = line.chars();
+        c.next()
+            .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+    }
+}
+
+/// What the History tab asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pick {
+    /// Run this revision (a click, or a step up or down).
+    Show(u32),
+    /// Open this revision's details: its Agent page and diffs.
+    Details(u32),
+}
+
+/// The History tab (Nick, 2026-11-13): the revisions newest first, each
+/// one line saying what changed, under Newer / Older that step through
+/// them (the Up and Down keys too). `at`: the revision shown, `None` for
+/// the newest. Returns what was asked.
+pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: Option<u32>) -> Option<Pick> {
+    let t = theme(ui);
+    if rows.is_empty() {
+        ui.label(RichText::new("No versions yet.").color(t.muted))
+            .tip("Every save and every change the Agent makes is kept here, newest at the top.");
+        return None;
+    }
+    let newest: Vec<&RevisionRow> = rows.iter().rev().collect();
+    let here = at.and_then(|n| newest.iter().position(|r| r.n == n)).unwrap_or(0);
+    let mut pick = None;
+    ui.horizontal(|ui| {
+        let r = ui
+            .add_enabled(here > 0, egui::Button::new(RichText::new("▲ Newer").size(18.0)))
+            .tip("Runs the next newer version (Up key).");
+        chrome.hit("history newer", r.rect);
+        if r.clicked() {
+            pick = Some(Pick::Show(newest[here - 1].n));
+        }
+        let r = ui
+            .add_enabled(
+                here + 1 < newest.len(),
+                egui::Button::new(RichText::new("▼ Older").size(18.0)),
+            )
+            .tip("Runs the next older version (Down key).");
+        chrome.hit("history older", r.rect);
+        if r.clicked() {
+            pick = Some(Pick::Show(newest[here + 1].n));
+        }
+    });
+    // Up and Down step too, while no text field has the keyboard.
+    if pick.is_none() && ui.memory(|m| m.focused().is_none()) {
+        let (up, down) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+            )
+        });
+        if up && here > 0 {
+            pick = Some(Pick::Show(newest[here - 1].n));
+        } else if down && here + 1 < newest.len() {
+            pick = Some(Pick::Show(newest[here + 1].n));
+        }
+    }
+    ui.add_space(4.0);
+    for (k, row) in newest.iter().enumerate() {
+        let on = k == here;
+        let label = RichText::new(row.short()).color(if on { t.accent } else { t.fg });
+        let r = ui
+            .scope(|ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                ui.selectable_label(on, label) // tip: exempt, added below
+            })
+            .inner;
+        chrome.hit(format!("revision {}", row.n), r.rect);
+        let r = r.tip(format!(
+            "{}\n{} · {} · version {}{}. Click to run it; double-click for its details.",
+            row.what,
+            row.by,
+            when(row.at_ms),
+            row.n,
+            if row.page { " · from the Agent" } else { "" }
+        ));
+        if r.double_clicked() {
+            pick = Some(Pick::Details(row.n));
+        } else if r.clicked() && !on {
+            pick = Some(Pick::Show(row.n));
+        }
+        ui.label(
+            RichText::new(format!("{} · {}", when(row.at_ms), row.by))
+                .size(16.0)
+                .color(t.muted),
+        )
+        .tip("When it was saved, and by whom.");
+    }
+    pick
 }
 
 /// One revision, read whole.
@@ -206,53 +313,6 @@ pub fn counts(lines: &[Line<'_>]) -> (usize, usize) {
     let new = lines.iter().filter(|l| matches!(l, Line::New(_))).count();
     let gone = lines.iter().filter(|l| matches!(l, Line::Gone(_))).count();
     (new, gone)
-}
-
-/// The History row and, unfolded, the revisions newest first. Returns
-/// the revision clicked.
-pub fn rows_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], open: &mut bool) -> Option<u32> {
-    if rows.is_empty() {
-        return None;
-    }
-    let t = theme(ui);
-    let arrow = if *open { "▾" } else { "▸" };
-    let r = ui.selectable_label(
-        false,
-        RichText::new(format!("{arrow} history ({})", rows.len()))
-            .monospace()
-            .color(t.muted),
-    );
-    chrome.hit("history", r.rect);
-    if r.tip("Every save, as it was: who, when and what. Click to show or hide them.")
-        .clicked()
-    {
-        *open = !*open;
-    }
-    if !*open {
-        return None;
-    }
-    let mut picked = None;
-    for row in rows.iter().rev() {
-        let text = format!("{}  {}  {}", row.n, when(row.at_ms), row.what);
-        let r = ui.add(
-            egui::Label::new(RichText::new(text).monospace().color(t.fg))
-                .truncate()
-                .sense(egui::Sense::click()),
-        );
-        chrome.hit(format!("revision {}", row.n), r.rect);
-        let hover = format!(
-            "{} · {}{}",
-            row.by,
-            when(row.at_ms),
-            if row.page { " · from an Agent page" } else { "" }
-        );
-        if r.tip(format!("{hover}. Click to see what changed since."))
-            .clicked()
-        {
-            picked = Some(row.n);
-        }
-    }
-    picked
 }
 
 /// The revision in the middle of the screen: who, when, what, its Agent

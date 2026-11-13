@@ -131,6 +131,8 @@ pub struct PlaygroundView {
     /// The Agent's last change, marked on the diagram and in the code
     /// until the file is edited ([`crate::agent_marks`]).
     pub agent_change: Option<crate::agent_marks::AgentChange>,
+    /// The revision the History tab runs, when it is not the newest.
+    pub history_at: Option<u32>,
     /// Its shared default layout (the project's) and this browser's
     /// tweaks (`arrange.rs`).
     pub layers: Layers,
@@ -222,6 +224,7 @@ impl PlaygroundView {
             session: Session::new(&proj.build_src()),
             viewer: None,
             agent_change: None,
+            history_at: None,
             layers: Layers::load(tweaks),
             fresh: false,
             viewer_of: String::new(),
@@ -1223,6 +1226,66 @@ impl PlaygroundView {
         )
     }
 
+    /// The open project's files are revision `n`'s (the Agent's pages
+    /// aside).
+    fn shows_revision(&self, n: u32) -> bool {
+        let mine = |f: &std::collections::BTreeMap<String, String>| {
+            f.iter()
+                .filter(|(k, _)| !helmsman_project::agent::is_agent_file(k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<Vec<_>>()
+        };
+        self.proj
+            .revisions()
+            .iter()
+            .find(|r| r.n == n)
+            .is_some_and(|r| mine(&r.files) == mine(&self.proj.files))
+    }
+
+    /// Runs revision `n` of the open project (the History tab): its files
+    /// in place, compiled and running, the open file marked green and red
+    /// against the revision before it, the diagram too. Nothing is saved:
+    /// Save keeps it as the newest; the newest is a step away.
+    pub fn show_revision(&mut self, n: u32) {
+        let revs = self.proj.revisions();
+        let Some(k) = revs.iter().position(|r| r.n == n) else {
+            return;
+        };
+        let rev = revs[k].clone();
+        let prev = k.checked_sub(1).map(|j| revs[j].clone());
+        let newest = k + 1 == revs.len();
+        let agent = self.proj.files.get(helmsman_project::AGENT).cloned();
+        self.proj.files = rev.files.clone();
+        if let Some(a) = agent {
+            self.proj.files.insert(helmsman_project::AGENT.into(), a);
+        }
+        if !self.proj.files.contains_key(&self.proj.current) {
+            self.proj.current = self
+                .proj
+                .files
+                .keys()
+                .find(|f| *f == helmsman_project::MAIN)
+                .or_else(|| self.proj.files.keys().find(|f| crate::sim_projects::is_st(f)))
+                .cloned()
+                .unwrap_or_default();
+        }
+        self.reload_running();
+        // What this revision changed, marked as the Agent's changes are.
+        let file = self.proj.current.clone();
+        let after = self.proj.files.get(&file).cloned().unwrap_or_default();
+        self.agent_change = prev.map(|p| {
+            let before = p.files.get(&file).cloned().unwrap_or_default();
+            let src = crate::sim_projects::SimProjects::build_src_of(&p.files);
+            let baseline = crate::playground::Build::new(&src)
+                .0
+                .ok()
+                .and_then(|b| b.module)
+                .map(std::rc::Rc::new);
+            crate::agent_marks::AgentChange::new(&self.proj.open, &file, &before, after, baseline)
+        });
+        self.history_at = (!newest).then_some(n);
+    }
+
     /// Undo: the project back to the revision before the Agent's change,
     /// saved as a new revision (the change stays in History).
     pub fn undo_change(&mut self) {
@@ -1769,7 +1832,6 @@ impl Body for PlaygroundView {
     /// files, and under them the program's outline: every block instance
     /// it calls, nested; a click shows that one's diagram.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let t = theme(ui);
         let rows = self.proj.rows();
         let files: Vec<(String, bool)> = self
             .proj
@@ -1781,8 +1843,6 @@ impl Body for PlaygroundView {
             .collect();
         let open = self.proj.open.clone();
         let current = self.proj.current.clone();
-        let history: Vec<crate::history_ui::RevisionRow> =
-            self.proj.revisions().iter().map(SimRevision::row).collect();
         let listing = Listing {
             projects: &rows,
             open: Some(&open),
@@ -1792,28 +1852,32 @@ impl Body for PlaygroundView {
             dirty: self.proj.dirty(),
             starters: false,
             running: self.proj.running.as_deref() == Some(open.as_str()),
-            history: &history,
             // The page deploys at once: never busy.
             deploy: Ok(()),
         };
         if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
             self.act(a);
         }
-        ui.separator();
-        ui.label(RichText::new("Program").strong().color(t.muted))
-            .tip("The compiled program: each POU and the instances it calls. Click one to open its diagram.");
-        match &mut self.viewer {
-            Some(v) => {
-                ui.indent("pg-tree", |ui| v.tree_ui(ui));
-            }
-            None => {
-                ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
-            }
-        }
         // The blank space under it all: a right-click offers a new project
         // (and a paste into the open one).
         if let Some(a) = self.files_ui.blank_menu(ui, chrome, &Ok(()), true) {
             self.act(a);
+        }
+    }
+
+    fn history(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        // An edit or a save since the pick: the newest is what shows.
+        if let Some(n) = self.history_at
+            && !self.shows_revision(n)
+        {
+            self.history_at = None;
+        }
+        let rows: Vec<crate::history_ui::RevisionRow> =
+            self.proj.revisions().iter().map(SimRevision::row).collect();
+        match crate::history_ui::tab_ui(ui, chrome, &rows, self.history_at) {
+            Some(crate::history_ui::Pick::Show(n)) => self.show_revision(n),
+            Some(crate::history_ui::Pick::Details(n)) => self.act(Act::ShowRevision(n)),
+            None => {}
         }
     }
 

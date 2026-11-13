@@ -1761,6 +1761,8 @@ fn only_an_engineer_can_start_a_project_from_the_list() {
     let v = page(&b, &jar, Some(("alice", ALICE)));
     let session = v.session.clone();
     let mut h = Harness::new(v, session);
+    // The box opens on the Agent (2026-11-13); the list is the Files tab.
+    h.app.chrome.show_files();
     h.wait(0.2);
     h.press("starter latch");
     h.wait(0.1);
@@ -1784,6 +1786,7 @@ fn only_an_engineer_can_start_a_project_from_the_list() {
     let v = page(&b, &jar, Some(("bob", BOB)));
     let session = v.session.clone();
     let mut h = Harness::new(v, session);
+    h.app.chrome.show_files();
     h.wait(0.2);
     h.press("starter latch");
     h.wait(0.1);

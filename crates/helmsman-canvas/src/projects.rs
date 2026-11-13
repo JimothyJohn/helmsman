@@ -179,7 +179,7 @@ pub enum Act {
         text: String,
         save: bool,
     },
-    /// Show revision n of the open project (the History row).
+    /// Show revision n of the open project's details (the History tab).
     ShowRevision(u32),
 }
 
@@ -199,8 +199,6 @@ pub struct Listing<'a> {
     pub starters: bool,
     /// The open project is the one running: its `main.st` is marked.
     pub running: bool,
-    /// The open project's revisions, oldest first (the History row).
-    pub history: &'a [crate::history_ui::RevisionRow],
     /// Whether the open project may be deployed now, or why not.
     pub deploy: Result<(), String>,
 }
@@ -244,8 +242,6 @@ pub struct FilesUi {
     pub picked: Option<Picked>,
     /// The earlier iterations (`vN.st`) are unfolded.
     pub earlier_open: bool,
-    /// The History row is unfolded.
-    pub history_open: bool,
     /// The file last copied (name, text): the app's own, not the
     /// system's, so a paste works in any open project here.
     pub clipboard: Option<(String, String)>,
@@ -370,6 +366,11 @@ impl FilesUi {
                     let name = free_name(l, &p.name);
                     self.ask(Naming::FromStarter(p.name.clone()), &name);
                 }
+                if open {
+                    ui.indent(("files-of", &p.name), |ui| {
+                        self.files_under(ui, l, chrome, &mut act);
+                    });
+                }
                 continue;
             }
             if r.clicked() {
@@ -430,7 +431,28 @@ impl FilesUi {
                     self.naming = None;
                     self.confirm = Some(Act::DeleteProject(p.name.clone()));
                 }
+                let paste = self.clipboard.is_some() && can_write && mine;
+                let paste_tip = if !mine {
+                    "A built-in example stays as it is: copy the project first.".to_string()
+                } else if let Err(why) = &l.write {
+                    why.clone()
+                } else if self.clipboard.is_none() {
+                    "Nothing copied yet: right-click a file and Copy.".to_string()
+                } else {
+                    "Pastes the copied file into this project.".to_string()
+                };
+                if open
+                    && menu_item(ui, chrome, "menu paste", "Paste", paste, &paste_tip)
+                    && let Some((name, text)) = self.clipboard.clone()
+                {
+                    act = Some(Act::PasteFile { name, text });
+                }
             });
+            if open {
+                ui.indent(("files-of", &p.name), |ui| {
+                    self.files_under(ui, l, chrome, &mut act);
+                });
+            }
         }
         if l.projects.is_empty() {
             ui.label(RichText::new("No projects yet.").color(t.muted))
@@ -438,181 +460,6 @@ impl FilesUi {
         }
         if l.starters {
             self.starters_ui(ui, l, chrome);
-        }
-        if let Some(open) = l.open {
-            ui.separator();
-            let is_example = l.projects.iter().any(|p| p.name == open && p.example());
-            let can_write = l.write.is_ok() && !is_example;
-            let head = ui
-                .label(RichText::new(format!("{open}: files")).strong().color(t.muted))
-                .tip("The open project's files. Right-click to paste a copied file.");
-            let paste_tip = if is_example {
-                "A built-in example stays as it is: copy the project first."
-            } else if let Err(why) = &l.write {
-                why.as_str()
-            } else if self.clipboard.is_none() {
-                "Nothing copied yet: right-click a file and Copy."
-            } else {
-                "Pastes the copied file into this project."
-            };
-            // Right-click the heading: paste into this project.
-            head.context_menu(|ui| {
-                let paste = self.clipboard.is_some() && can_write;
-                if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
-                    && let Some((name, text)) = self.clipboard.clone()
-                {
-                    act = Some(Act::PasteFile { name, text });
-                }
-            });
-            // The program's files, then the earlier iterations folded under
-            // one row, newest first (Nick, 2026-11-01).
-            let mut earlier: Vec<&(String, bool)> = l
-                .files
-                .iter()
-                .filter(|(f, _)| helmsman_project::iteration_number(f).is_some())
-                .collect();
-            earlier.sort_by_key(|(f, _)| std::cmp::Reverse(helmsman_project::iteration_number(f)));
-            // Requirement tests live behind their rows in the Requirements
-            // tab (Nick, 2026-11-05), not here.
-            let mut rows: Vec<&(String, bool)> = l
-                .files
-                .iter()
-                .filter(|(f, _)| {
-                    helmsman_project::iteration_number(f).is_none() && !helmsman_iec::spec::is_test(f)
-                })
-                .collect();
-            if !earlier.is_empty() {
-                let arrow = if self.earlier_open { "▾" } else { "▸" };
-                let r = ui
-                    .selectable_label(
-                        false,
-                        RichText::new(format!("{arrow} earlier ({})", earlier.len())).color(t.muted),
-                    )
-                    .tip("Earlier iterations of the program, newest first. Click to show or hide them.");
-                chrome.hit("earlier", r.rect);
-                if r.clicked() {
-                    self.earlier_open = !self.earlier_open;
-                }
-                if self.earlier_open {
-                    rows.extend(earlier);
-                }
-            }
-            for (f, dirty) in rows {
-                let here = l.current == Some(f.as_str());
-                let runs = l.running && f == helmsman_project::MAIN && !l.files.is_empty();
-                let text = format!(
-                    "{f}{}{}",
-                    if *dirty { " ●" } else { "" },
-                    if runs { "  · runs" } else { "" }
-                );
-                let r = ui.selectable_label(here, RichText::new(text)).tip(if runs {
-                    "The file that runs. Double-click to edit it; right-click for more."
-                } else {
-                    "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
-                });
-                chrome.hit(format!("file {f}"), r.rect);
-                if r.clicked() {
-                    self.picked = Some(Picked::File {
-                        project: l.open.unwrap_or_default().into(),
-                        file: f.clone(),
-                    });
-                    if !here {
-                        act = Some(Act::OpenFile(f.clone()));
-                    }
-                }
-                // A double click opens the file in the Code tab (Nick,
-                // 2026-11-02).
-                if r.double_clicked() {
-                    chrome.show_code();
-                }
-                // Right-click a file: copy, paste, duplicate, rename, delete
-                // (Nick, 2026-11-01: easy copy and paste of files).
-                let write_tip = |tip: &'static str| -> &str {
-                    if is_example {
-                        "A built-in example stays as it is: copy the project first."
-                    } else {
-                        l.write.as_ref().err().map_or(tip, String::as_str)
-                    }
-                };
-                r.context_menu(|ui| {
-                    // Deploy first: the step a right-click is most often
-                    // for (Nick, 2026-11-05). It deploys the project, whose
-                    // main.st runs, whichever file was clicked.
-                    if menu_item(
-                        ui,
-                        chrome,
-                        "menu deploy",
-                        "Deploy",
-                        l.deploy.is_ok(),
-                        l.deploy.as_ref().err().map_or(
-                            "Saves, checks and runs this project (its main.st), as File › Deploy.",
-                            String::as_str,
-                        ),
-                    ) {
-                        act = Some(Act::Deploy);
-                    }
-                    ui.separator();
-                    if menu_item(
-                        ui,
-                        chrome,
-                        "menu copy",
-                        "Copy",
-                        true,
-                        "Copies the file, to paste into this or another project.",
-                    ) {
-                        act = Some(Act::CopyFile(f.clone()));
-                    }
-                    let paste = self.clipboard.is_some() && can_write;
-                    if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
-                        && let Some((name, text)) = self.clipboard.clone()
-                    {
-                        act = Some(Act::PasteFile { name, text });
-                    }
-                    if menu_item(
-                        ui,
-                        chrome,
-                        "menu duplicate",
-                        "Duplicate",
-                        can_write,
-                        write_tip("Makes a copy of the file beside it."),
-                    ) {
-                        act = Some(Act::DuplicateFile(f.clone()));
-                    }
-                    if menu_item(
-                        ui,
-                        chrome,
-                        "menu rename",
-                        "Rename…",
-                        can_write,
-                        write_tip("Gives the file a new name."),
-                    ) {
-                        self.ask(Naming::RenameFile(f.clone()), f);
-                    }
-                    if menu_item(
-                        ui,
-                        chrome,
-                        "menu delete",
-                        "Delete…",
-                        can_write,
-                        write_tip("Deletes the file, asked first (Delete key)."),
-                    ) {
-                        self.naming = None;
-                        self.confirm = Some(Act::DeleteFile(f.clone()));
-                    }
-                });
-            }
-            if !is_example {
-                let r = write_button(ui, &l.write, "New file", "Adds a new .st file to this project.");
-                chrome.hit("new file", r.rect);
-                if r.clicked() {
-                    self.ask(Naming::NewFile, ".st");
-                }
-            }
-        }
-        if l.open.is_some()
-            && let Some(n) = crate::history_ui::rows_ui(ui, chrome, l.history, &mut self.history_open)
-        {
-            act = Some(Act::ShowRevision(n));
         }
         if let Some(a) = self.delete_key(ui, l) {
             self.naming = None;
@@ -625,6 +472,174 @@ impl FilesUi {
             }
         }
         act
+    }
+
+    /// The open project's files, under its row (Nick, 2026-11-13: the
+    /// project, expanded, shows its files; no separate files section).
+    fn files_under(
+        &mut self,
+        ui: &mut egui::Ui,
+        l: &Listing<'_>,
+        chrome: &mut Chrome,
+        act: &mut Option<Act>,
+    ) {
+        let t = theme(ui);
+        let Some(open) = l.open else { return };
+        let is_example = l.projects.iter().any(|p| p.name == open && p.example());
+        let can_write = l.write.is_ok() && !is_example;
+        let paste_tip = if is_example {
+            "A built-in example stays as it is: copy the project first."
+        } else if let Err(why) = &l.write {
+            why.as_str()
+        } else if self.clipboard.is_none() {
+            "Nothing copied yet: right-click a file and Copy."
+        } else {
+            "Pastes the copied file into this project."
+        };
+        // The program's files, then the earlier iterations folded under
+        // one row, newest first (Nick, 2026-11-01).
+        let mut earlier: Vec<&(String, bool)> = l
+            .files
+            .iter()
+            .filter(|(f, _)| helmsman_project::iteration_number(f).is_some())
+            .collect();
+        earlier.sort_by_key(|(f, _)| std::cmp::Reverse(helmsman_project::iteration_number(f)));
+        // Requirement tests live behind their rows in the Requirements
+        // tab (Nick, 2026-11-05), not here.
+        let mut rows: Vec<&(String, bool)> = l
+            .files
+            .iter()
+            .filter(|(f, _)| {
+                helmsman_project::iteration_number(f).is_none() && !helmsman_iec::spec::is_test(f)
+            })
+            .collect();
+        if !earlier.is_empty() {
+            let arrow = if self.earlier_open { "▾" } else { "▸" };
+            let r = ui
+                .selectable_label(
+                    false,
+                    RichText::new(format!("{arrow} earlier ({})", earlier.len())).color(t.muted),
+                )
+                .tip("Earlier iterations of the program, newest first. Click to show or hide them.");
+            chrome.hit("earlier", r.rect);
+            if r.clicked() {
+                self.earlier_open = !self.earlier_open;
+            }
+            if self.earlier_open {
+                rows.extend(earlier);
+            }
+        }
+        for (f, dirty) in rows {
+            let here = l.current == Some(f.as_str());
+            let runs = l.running && f == helmsman_project::MAIN && !l.files.is_empty();
+            let text = format!(
+                "{f}{}{}",
+                if *dirty { " ●" } else { "" },
+                if runs { "  · runs" } else { "" }
+            );
+            let r = ui.selectable_label(here, RichText::new(text)).tip(if runs {
+                "The file that runs. Double-click to edit it; right-click for more."
+            } else {
+                "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
+            });
+            chrome.hit(format!("file {f}"), r.rect);
+            if r.clicked() {
+                self.picked = Some(Picked::File {
+                    project: l.open.unwrap_or_default().into(),
+                    file: f.clone(),
+                });
+                if !here {
+                    *act = Some(Act::OpenFile(f.clone()));
+                }
+            }
+            // A double click opens the file in the Code tab (Nick,
+            // 2026-11-02).
+            if r.double_clicked() {
+                chrome.show_code();
+            }
+            // Right-click a file: copy, paste, duplicate, rename, delete
+            // (Nick, 2026-11-01: easy copy and paste of files).
+            let write_tip = |tip: &'static str| -> &str {
+                if is_example {
+                    "A built-in example stays as it is: copy the project first."
+                } else {
+                    l.write.as_ref().err().map_or(tip, String::as_str)
+                }
+            };
+            r.context_menu(|ui| {
+                // Deploy first: the step a right-click is most often
+                // for (Nick, 2026-11-05). It deploys the project, whose
+                // main.st runs, whichever file was clicked.
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu deploy",
+                    "Deploy",
+                    l.deploy.is_ok(),
+                    l.deploy.as_ref().err().map_or(
+                        "Saves, checks and runs this project (its main.st), as File › Deploy.",
+                        String::as_str,
+                    ),
+                ) {
+                    *act = Some(Act::Deploy);
+                }
+                ui.separator();
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu copy",
+                    "Copy",
+                    true,
+                    "Copies the file, to paste into this or another project.",
+                ) {
+                    *act = Some(Act::CopyFile(f.clone()));
+                }
+                let paste = self.clipboard.is_some() && can_write;
+                if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
+                    && let Some((name, text)) = self.clipboard.clone()
+                {
+                    *act = Some(Act::PasteFile { name, text });
+                }
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu duplicate",
+                    "Duplicate",
+                    can_write,
+                    write_tip("Makes a copy of the file beside it."),
+                ) {
+                    *act = Some(Act::DuplicateFile(f.clone()));
+                }
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu rename",
+                    "Rename…",
+                    can_write,
+                    write_tip("Gives the file a new name."),
+                ) {
+                    self.ask(Naming::RenameFile(f.clone()), f);
+                }
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu delete",
+                    "Delete…",
+                    can_write,
+                    write_tip("Deletes the file, asked first (Delete key)."),
+                ) {
+                    self.naming = None;
+                    self.confirm = Some(Act::DeleteFile(f.clone()));
+                }
+            });
+        }
+        if !is_example {
+            let r = write_button(ui, &l.write, "New file", "Adds a new .st file to this project.");
+            chrome.hit("new file", r.rect);
+            if r.clicked() {
+                self.ask(Naming::NewFile, ".st");
+            }
+        }
     }
 
     /// The Delete key (Backspace on a Mac keyboard) with the pane up and
