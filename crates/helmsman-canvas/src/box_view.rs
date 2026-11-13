@@ -375,6 +375,7 @@ impl BoxView {
                 }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
+                PCall::Config(device, op) => self.devices_ui.config.answer(&device, op, a.status, &a.body),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
         }
@@ -1035,6 +1036,11 @@ impl BoxView {
         if self.devices_ui.take_import() {
             #[cfg(target_arch = "wasm32")]
             crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
+        }
+        self.devices_ui.config.modal_ui(&ui.ctx().clone(), chrome);
+        for r in self.devices_ui.config.take_requests() {
+            self.projects.enqueue(r);
+            ui.ctx().request_repaint();
         }
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
@@ -2025,6 +2031,26 @@ impl Body for BoxView {
             .map(|(n, _)| n.clone())
             .filter(|n| crate::devices::is_eds(n))
             .collect();
+        // Which devices have a configuration to show: by their profile,
+        // when the project holds it; else the box is asked and says.
+        let asks = nodes
+            .iter()
+            .filter_map(|n| {
+                let profile = n.driver.strip_prefix("device:")?;
+                let text = open
+                    .and_then(|o| o.bufs.get(&format!("{profile}{}", helmsman_project::DEVICE_EXT)))
+                    .filter(|b| b.loaded)
+                    .map(|b| b.text.as_str());
+                match text {
+                    Some(t) if !crate::device_config::profile_configures(t) => None,
+                    Some(_) => Some((n.name.clone(), true)),
+                    None => Some((n.name.clone(), false)),
+                }
+            })
+            .collect();
+        self.devices_ui
+            .config
+            .set_context(is_engineer(self.session.as_ref()), asks);
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.scan = crate::devices::Scan::Running;
