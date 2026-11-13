@@ -1183,6 +1183,7 @@ fn start_api(
         running_drivers,
         trend_pins: Some(dir.join("trend-pins")),
         desks: Some(dir.join("desks")),
+        devconf: Some(api::devconf::Setup::in_state_dir(&dir)),
         discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {
             Some("off") => None,
             Some(url) => Some(url.to_string()),

@@ -13,6 +13,7 @@
 //! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
 //! GET  /api/devices                       device links: up, down (why), unknown, address; for a device by its profile `transport`; `health` (healthy, slow, lost), `poll_ms` and `measured_ms` once the link reports
+//! GET  /api/devices/{id}/config          facts, export, saved configuration and drift of a device with a configurator; PUT/DELETE .../config/password and POST .../config/set|restart|import|password|snapshot need an engineer session (see [`devconf`])
 //! GET  /api/adapter                       the box's EtherNet/IP adapter: {protocol, bind, on}; `bind` is the address it listens on, absent when it is off
 //! POST /api/devices/discover              token or session: one scan of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
 //! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
@@ -118,6 +119,8 @@ pub mod catalog;
 pub mod chat;
 mod control;
 pub mod desk;
+#[cfg(feature = "box")]
+pub mod devconf;
 pub mod discover;
 pub mod drivers;
 pub mod dropin;
@@ -272,6 +275,9 @@ pub struct More {
     /// (`<state-dir>/desks/`, [`desk::Desks::in_dir`]). `None`: memory
     /// only.
     pub desks: Option<std::path::PathBuf>,
+    /// Configuring devices through their own protocols
+    /// ([`devconf`]); `None`: those routes answer 404.
+    pub devconf: Option<devconf::Setup>,
     /// How the box scans its network for devices and where its device
     /// library is (see [`discover`]). The default sweeps the LAN's
     /// broadcast and reads the public library.
@@ -379,6 +385,8 @@ struct Ctx {
     desks: Mutex<desk::Desks>,
     /// The box's HTTPS ([`Api::start_secure`]); `None`: plain HTTP only.
     tls: Option<Tls>,
+    /// Device configuration (see [`devconf`]); `None`: 404.
+    devconf: Option<devconf::State>,
 }
 
 impl Ctx {
@@ -641,6 +649,7 @@ impl Api {
             running_drivers,
             trend_pins,
             desks,
+            devconf,
             discovery,
         } = more;
         let listener = TcpListener::bind(cfg.bind)?;
@@ -685,6 +694,7 @@ impl Api {
             trends: Mutex::new(trend_pins.map_or_else(trend::Trends::default, trend::Trends::in_file)),
             desks: Mutex::new(desks.map_or_else(desk::Desks::default, desk::Desks::in_dir)),
             tls,
+            devconf: devconf.map(devconf::State::new),
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -1397,6 +1407,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         ("POST", ["api", "market", "install"]) => return market::install(req, ctx),
         ("POST", ["api", "dropins"]) => return dropin::post(req, ctx),
         ("POST", ["api", "devices", "discover"]) => return discover::post(req, ctx),
+        (_, ["api", "devices", id, "config", rest @ ..]) => return devconf::mutate(req, ctx, id, rest),
         ("POST", ["api", "devices", name, "browse"]) => return dropin::browse(req, ctx, name),
         ("POST", ["api", "proposals", "check"]) => return check_only(req, ctx),
         ("POST", ["api", "proposals", "replay"]) => return replay_draft(req, ctx),
@@ -1439,6 +1450,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "forces", _] => return Some("DELETE"),
         ["api", "modules", _, "stop" | "run" | "restart"] => return Some("POST"),
         ["api", "drivers" | "trends"] => return Some("GET"),
+        ["api", "devices", _, "config", "password"] => return Some("PUT, DELETE, POST"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
         ["api", "trends", "pins"] | ["api", "desk"] => return Some("GET, PUT"),
         _ => {}
@@ -1451,7 +1463,14 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "chat" | "explain" | "help" | "bundles" | "logout"]
         | ["api", "devices", "discover"]
         | ["api", "market", "list" | "install"]
-        | ["api", "devices", _, "browse"] => Some("POST"),
+        | ["api", "devices", _, "browse"]
+        | [
+            "api",
+            "devices",
+            _,
+            "config",
+            "set" | "restart" | "import" | "snapshot",
+        ] => Some("POST"),
         ["api"]
         | ["api", "devices", "library"]
         | [
@@ -1468,6 +1487,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "snapshots", _, "bundle"]
         | ["api", "dropins", _, "plc"]
         | ["api", "modules", _, "trace"]
+        | ["api", "devices", _, "config"]
         | ["api", "chat", "status"]
         | ["api", "modules", _, "trace", "events"]
         | ["api", "traces", "events"] => Some("GET"),
@@ -1796,6 +1816,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "outputs"] => Response::json(200, &render::outputs(c, &view)),
         ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices)),
         ["api", "devices", "library"] => discover::library(req, ctx),
+        ["api", "devices", id, "config"] => devconf::get(ctx, id),
         ["api", "adapter"] => Response::json(200, &adapter_json(ctx.adapter)),
         ["api", "io_map"] => io_map(ctx),
         ["api", "proposals"] => Response::json(
@@ -1910,6 +1931,8 @@ fn snapshot(ctx: &Ctx, id: &str) -> Result<ChangeSet, Response> {
     Ok(loaded.content)
 }
 
+// One line a route: the list grows with the API.
+#[allow(clippy::too_many_lines)]
 fn index(agent: bool) -> Json {
     let e = |method: &str, path: &str, token: bool, what: &str| json!({ "method": method, "path": path, "token": token, "what": what });
     json!({
@@ -1934,6 +1957,14 @@ fn index(agent: bool) -> Json {
             ),
             e("GET", "/api/outputs", true, "output commands, safe values, the %Q image"),
             e("GET", "/api/devices", true, "device links up or down"),
+            e("GET", "/api/devices/{id}/config", true, "a device with a configurator (its profile's configure line): facts, the unit's export, the saved .devconf and the drift; the console password is never returned"),
+            e("PUT", "/api/devices/{id}/config/password", true, "engineer session: {password}: keep the console password for this device (write-only)"),
+            e("DELETE", "/api/devices/{id}/config/password", true, "engineer session: forget the kept console password"),
+            e("POST", "/api/devices/{id}/config/set", true, "engineer session: {page, changes}: change settings on the unit (staged until a restart)"),
+            e("POST", "/api/devices/{id}/config/restart", true, "engineer session: {interrupts?}: Save/Restart the unit and wait for it; 409 if a running module needs the device and interrupts is not true"),
+            e("POST", "/api/devices/{id}/config/import", true, "engineer session: {from: \"snapshot\"} or {text}, overwrite_network?, interrupts?: restore the unit from an export (it reboots)"),
+            e("POST", "/api/devices/{id}/config/password", true, "engineer session: {new}: change the unit's console password"),
+            e("POST", "/api/devices/{id}/config/snapshot", true, "engineer session: {version?}: save the unit's export as ID.devconf in the running project"),
             e("GET", "/api/adapter", true, "the EtherNet/IP adapter: {protocol, bind, on}"),
             e("GET", "/api/io_map", true, "the running I/O map file and its snapshot id"),
             e("GET", "/api/proposals", true, "drafts awaiting approval"),
@@ -2119,6 +2150,14 @@ fn devices(d: &Devices) -> Json {
                     if let Some(m) = t.measured_ms {
                         j["measured_ms"] = json!(m);
                     }
+                }
+                // The box itself restarts it for its configuration: a
+                // planned outage, whatever the link says meanwhile.
+                if let Some(why) = d.held(&name) {
+                    j["state"] = json!("down");
+                    j["error"] = json!(why);
+                    j["health"] = json!("lost");
+                    j["restarting"] = json!(true);
                 }
                 j
             })

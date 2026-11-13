@@ -223,6 +223,25 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-11
   by: claude-session
 
+- [ ] **Device configuration in the canvas** — the box API is built (`/api/devices/{id}/config`, docs/ARCHITECTURE.md "Device configuration" > "On the box"; Nick's interview 2026-11-13). The Devices tab's details for a device whose profile has `configure moxa-e1200` get a Configuration section: the facts (firmware, communication watchdog, each DO's safe value and power-on state, EtherNet/IP and RESTful on or off), whether the unit's export has drifted from the project's saved `ID.devconf` (the changed lines), and for an engineer: change a setting (`set`, staged), Save / Restart (with the 409 `interrupts` answer shown as "this stops <modules> for about 21 s", and a confirm that sends `interrupts: true`), Save the configuration as a project file (`snapshot`), Restore from it (`import {from: "snapshot"}`, network settings left alone unless a separate, unticked-by-default box is ticked), Set / Forget the console password (write-only field, never shown), Change the unit's password. While it restarts the device row shows `restarting` (the box lists it lost with the reason "restarting for its configuration"), and the restart call holds for up to 135 s, so the fetch must not time out sooner. The canvas does no HTTP to the unit itself.
+  needs: nothing
+  result: an engineer reads a Moxa's settings, changes the watchdog and the safe values, restarts it and restores it from the project file, from the Devices tab, against a box
+  depends: device-profiles
+  est: 2d
+  difficulty: med
+  id: devconf-canvas
+  asked: 2026-11-13
+  by: claude-session
+
+- [ ] **Device configuration: the agent's read-only tools** — the agent (and MCP) read a device's configuration, never change it: a `read_device_config` tool (facts, the export, the drift from the saved `.devconf`) through `api::devconf::config_view`, wrapped in the `<box-data>` envelope like every plant text. No set, restart, import or password tool, and the password is in no tool result (`ConfigView` has no field for it). The box's engineer gate stays the only way a unit is changed; the agent may propose a setting in words.
+  needs: nothing
+  result: "why does this Moxa drop its outputs when the controller stops?" is answered from the unit's real watchdog and safe values
+  est: 1d
+  difficulty: low
+  id: devconf-agent-tools
+  asked: 2026-11-13
+  by: claude-session
+
 - [ ] **Relay: the agent proposes a device profile from a vendor's file and publishes it** — PROTOCOLS.md step 5, the relay half. The served helmsman profile's `fetch_document` already answers a device-library record or says to ask for the manual or the EDS (helmsman-agent `tools.rs`); nothing in it writes a `helmsman-device 1` profile or opens a pull request into github.com/JimothyJohn/helmsman-devices. Needed on the relay (`../agent-relay`, a new id since a served profile never changes): a `propose_profile` tool (input: the EDS or GSDML text and what the user said; output: the profile text, which the box accepts only through `Profile::parse` and shows as a channel list to rename) and a `publish_profile` tool (a PR into the library's `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`). The box half (an upload route that holds the EDS, the agent turn, the channel list with renames, the write into the project) follows in helmsman once the ids exist.
   needs: your go on the tool shapes and the relay's PR path to the library (a GitHub token on the relay, or the box's own)
   result: a device the library does not know gets a profile the user checked, and the library grows by a PR

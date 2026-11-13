@@ -588,7 +588,11 @@ mod tests {
         assert_eq!(file_name("moxa-e1213_v2.eds"), Some(FileKind::Eds));
         assert_eq!(file_name("moxa-e1213.device"), Some(FileKind::Device));
         assert_eq!(file_name("rio.devconf"), Some(FileKind::Devconf));
-        assert_eq!(file_name("Rio.devconf"), None, "a device file is a lower-case slug");
+        assert_eq!(
+            file_name("Rio.devconf"),
+            None,
+            "a device file is a lower-case slug"
+        );
         assert!(!kept_name("Rio.devconf"), "a form the project means is not kept");
         for bad in ["Moxa.device", ".device", "../x.device", "a b.device"] {
             assert_eq!(file_name(bad), None, "{bad}");
