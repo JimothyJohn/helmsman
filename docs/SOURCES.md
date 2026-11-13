@@ -796,6 +796,33 @@ into the code.
 - `packet(7)`: `AF_PACKET` / `SOCK_RAW` bound to an interface and an
   `EtherType`. Compiled for aarch64-unknown-linux-gnu, not run.
 
+### DHCP and BOOTP (IETF RFCs, read 2026-11-13, `helmsman-dhcp`)
+
+- **RFC 2131**, Dynamic Host Configuration Protocol: Table 1 (the
+  message's fields and sizes), section 3 (the magic cookie
+  99.130.83.99), Table 3 (what an OFFER, ACK and NAK carry: lease time
+  required in OFFER and ACK, never in NAK; server identifier in all
+  three; requested address never), 4.1 (where a reply goes: `giaddr`,
+  then `ciaddr`, then the BROADCAST bit, else unicast to `yiaddr` and
+  `chaddr`; a NAK is broadcast), 4.3.2 (a REQUEST's four forms told
+  apart by server identifier, requested address and `ciaddr`; INIT-REBOOT
+  with no record is silent), 4.3.3 and 4.3.4 (DECLINE and RELEASE).
+  `helmsman-dhcp` drops relayed requests (`giaddr` set) on purpose: it
+  serves only its own segment.
+- **RFC 2132**, DHCP Options and BOOTP Vendor Extensions: the option
+  codes used (1, 3, 50, 51, 52, 53, 54, 58, 59) and option 52's values.
+- **RFC 3396**, Encoding Long Options: one code in several pieces is one
+  option, joined in the order options field, `file`, `sname`.
+- **RFC 1542**, Clarifications and Extensions for BOOTP: 2.1 (300 octets
+  is the smallest message), 2.2 (the BROADCAST flag is `flags`' top bit),
+  3.5 (unused vendor octets are zero), 5.4 (a reply on the server's own
+  network: broadcast when B is set, else unicast to `yiaddr`, port 68).
+- What the RFCs leave open and was chosen here: an offer holds its
+  address 60 s, a declined address is out of the pool 600 s, a BOOTP
+  binding never expires (a BOOTP client never renews), and a renewal
+  from a client the server has no record of is taken back on when its
+  address is free in the pool (the box lost its lease file).
+
 ### Browser keyboard shortcuts (Chrome, Edge, Safari, Firefox), read 2026-11-08
 
 - **Where:** Chrome, "Chrome keyboard shortcuts"
