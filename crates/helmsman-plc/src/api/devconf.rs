@@ -314,6 +314,29 @@ fn resolve(ctx: &Ctx, id: &str) -> Result<Target, Failure> {
     })
 }
 
+/// The configurator each device of the running map names, by device id:
+/// from the profiles the box loaded, with no contact with any unit
+/// (`GET /api/devices` shows it as `configurator`).
+pub(super) fn configurators(ctx: &Ctx) -> BTreeMap<String, String> {
+    let Some(map) = ctx
+        .running()
+        .and_then(|cs| cs.io_map)
+        .and_then(|t| helmsman_io::text::parse(&t).ok())
+    else {
+        return BTreeMap::new();
+    };
+    let drivers = ctx.running_drivers();
+    map.map
+        .devices
+        .iter()
+        .filter_map(|d| {
+            let bytes = drivers.get(&profile_file(profile_name(&d.driver)?))?;
+            let profile = Profile::parse(std::str::from_utf8(bytes).ok()?).ok()?;
+            Some((d.id.clone(), profile.configure?))
+        })
+        .collect()
+}
+
 /// The modules of the running project that read or drive device `id`.
 fn users(ctx: &Ctx, id: &str) -> Vec<String> {
     let c = ctx.catalog();

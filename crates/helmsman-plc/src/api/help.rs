@@ -382,7 +382,7 @@ fn gather(ctx: &Ctx, messages: &str) -> Json {
         }
         None => json!({ "project": null, "snapshot": null, "current": false, "runs": now }),
     };
-    let mut devices: Vec<Json> = super::devices(&ctx.box_.devices)
+    let mut devices: Vec<Json> = super::devices(&ctx.box_.devices, &super::devconf::configurators(ctx))
         .as_array()
         .cloned()
         .unwrap_or_default();

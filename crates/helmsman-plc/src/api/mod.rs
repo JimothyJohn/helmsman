@@ -12,7 +12,7 @@
 //! POST /api/modules/{name}/stop|run|restart  engineer session: stop, run or cold-restart one module (see [`control`])
 //! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
-//! GET  /api/devices                       device links: up, down (why), unknown, address; for a device by its profile `transport`; `health` (healthy, slow, lost), `poll_ms` and `measured_ms` once the link reports
+//! GET  /api/devices                       device links: up, down (why), unknown, address; `configurator` (its profile's `configure` name or null, no contact with the unit); for a device by its profile `transport`; `health` (healthy, slow, lost), `poll_ms` and `measured_ms` once the link reports
 //! GET  /api/devices/{id}/config          facts, export, saved configuration and drift of a device with a configurator; PUT/DELETE .../config/password and POST .../config/set|restart|import|password|snapshot need an engineer session (see [`devconf`])
 //! GET  /api/adapter                       the box's EtherNet/IP adapter: {protocol, bind, on}; `bind` is the address it listens on, absent when it is off
 //! POST /api/devices/discover              token or session: one scan of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
@@ -1814,7 +1814,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             None => Response::error(404, "no such module"),
         },
         ["api", "outputs"] => Response::json(200, &render::outputs(c, &view)),
-        ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices)),
+        ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices, &devconf::configurators(ctx))),
         ["api", "devices", "library"] => discover::library(req, ctx),
         ["api", "devices", id, "config"] => devconf::get(ctx, id),
         ["api", "adapter"] => Response::json(200, &adapter_json(ctx.adapter)),
@@ -2123,7 +2123,7 @@ fn adapter_json(bind: Option<SocketAddr>) -> Json {
     }
 }
 
-fn devices(d: &Devices) -> Json {
+fn devices(d: &Devices, configurators: &BTreeMap<String, String>) -> Json {
     Json::Array(
         d.list()
             .into_iter()
@@ -2134,6 +2134,9 @@ fn devices(d: &Devices) -> Json {
                     Some(Err(why)) => json!({ "name": name, "state": "down", "error": why }),
                 };
                 // Where the link found its device, once its driver said.
+                // The configuration protocol its profile names, from the
+                // loaded profile alone: no contact with the unit.
+                j["configurator"] = json!(configurators.get(&name));
                 if let Some(a) = d.address(&name) {
                     j["address"] = json!(a);
                 }
