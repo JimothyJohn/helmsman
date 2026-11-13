@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use helmsman_agent::tools::{self, BoxApi, Drafts};
 use helmsman_devconf::moxa_e1200::Config as ConsoleConfig;
-use helmsman_devconf::moxa_e1200::sim::{Options, Restart, Settings, Sim};
+use helmsman_devconf::moxa_e1200::sim::{Options, Sim};
 use helmsman_iec::{ImageSizes, compile};
 use helmsman_plc::api::devconf::Setup;
 use helmsman_plc::api::{
