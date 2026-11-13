@@ -80,6 +80,8 @@ pub struct Config {
     pub facts: Facts,
     /// `None`: the project has no saved configuration of this device.
     pub drift: Option<Drift>,
+    /// The project holds a saved configuration of this device.
+    pub snapshot: bool,
     pub password_stored: bool,
 }
 
@@ -117,61 +119,81 @@ impl Config {
         if !j.is_object() {
             return None;
         }
-        let f = pick(j, &["facts"]);
-        let wd = pick(f, &["watchdog", "communication_watchdog"]);
-        let outputs = pick(f, &["outputs", "dos"])
+        let f = &j["facts"];
+        let wd = &f["watchdog"];
+        let outputs = f["outputs"]
             .as_array()
             .map(|a| {
                 a.iter()
                     .enumerate()
-                    .map(|(i, o)| OutFact {
-                        name: clean(o["name"].as_str().unwrap_or(""), 24),
-                        index: o["index"].as_u64().map_or(i, |n| usize::try_from(n).unwrap_or(i)),
-                        safe: flag(pick(o, &["safe", "safe_value", "safe_mode"])),
-                        power_on: flag(pick(o, &["power_on", "power_on_state", "poweron"])),
+                    .map(|(i, o)| {
+                        let name = clean(o["channel"].as_str().unwrap_or(""), 24);
+                        // `DO-03` sits at place 3 on the settings page.
+                        let digits: String = name.chars().rev().take_while(char::is_ascii_digit).collect();
+                        let index = digits.chars().rev().collect::<String>().parse().unwrap_or(i);
+                        OutFact {
+                            name,
+                            index,
+                            safe: flag(&o["safe"]),
+                            power_on: flag(&o["power_on"]),
+                        }
                     })
                     .collect()
             })
             .unwrap_or_default();
+        let watchdog = flag(wd);
         let facts = Facts {
             firmware: clean(f["firmware"].as_str().unwrap_or(""), 32),
-            watchdog: flag(wd),
-            watchdog_time: pick(wd, &["seconds", "time"])
+            watchdog,
+            watchdog_time: wd["value"]
                 .as_u64()
-                .or_else(|| pick(f, &["watchdog_time", "watchdog_seconds"]).as_u64())
+                .filter(|_| watchdog == Some(true))
                 .and_then(|n| u32::try_from(n).ok()),
             outputs,
-            ethernet_ip: flag(pick(f, &["ethernet_ip", "enip", "ethernetip"])),
-            restful: flag(pick(f, &["restful", "rest"])),
+            ethernet_ip: flag(&f["eip_enabled"]),
+            restful: flag(&f["rest_enabled"]),
         };
-        let d = pick(j, &["drift"]);
-        let drift = match d {
-            Json::Array(_) | Json::Object(_) => {
-                let list = if d.is_array() {
-                    d
-                } else {
-                    pick(d, &["lines", "changed", "differences"])
-                };
-                let lines: Vec<String> = list
-                    .as_array()
+        let d = &j["drift"];
+        let drift = d.is_object().then(|| {
+            let strs = |k: &str| -> Vec<String> {
+                d[k].as_array()
                     .map(|a| a.iter().filter_map(Json::as_str).map(|s| clean(s, 120)).collect())
-                    .unwrap_or_default();
-                let count = pick(d, &["count", "differs"])
-                    .as_u64()
-                    .and_then(|n| usize::try_from(n).ok())
-                    .unwrap_or(lines.len());
-                Some(Drift { count, lines })
+                    .unwrap_or_default()
+            };
+            let mut lines: Vec<String> = d["changed"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|c| {
+                            format!(
+                                "{}  (saved: {})",
+                                clean(c["after"].as_str().unwrap_or(""), 100),
+                                clean(c["before"].as_str().unwrap_or(""), 100)
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            lines.extend(
+                strs("added")
+                    .into_iter()
+                    .map(|l| format!("{l}  (not in the saved one)")),
+            );
+            lines.extend(
+                strs("removed")
+                    .into_iter()
+                    .map(|l| format!("{l}  (saved, not on the device)")),
+            );
+            Drift {
+                count: lines.len(),
+                lines,
             }
-            _ => None,
-        };
-        let stored = pick(j, &["password_stored", "password"]);
-        let password_stored = flag(pick(stored, &["stored"]))
-            .or_else(|| flag(stored))
-            .unwrap_or(false);
+        });
         Some(Self {
             facts,
             drift,
-            password_stored,
+            snapshot: j["snapshot"].is_object(),
+            password_stored: j["password_stored"].as_bool().unwrap_or(false),
         })
     }
 }
@@ -191,7 +213,7 @@ pub fn sentences(f: &Facts) -> Vec<String> {
     let mut out = Vec::new();
     match (f.watchdog, f.watchdog_time) {
         (Some(false), _) => {
-            out.push("Outputs hold their state if this box stops: the device's watchdog is off.".to_string())
+            out.push("Outputs hold their state if this box stops: the device's watchdog is off.".to_string());
         }
         (Some(true), t) => {
             let time = t.map_or(String::new(), |t| format!(" (time {t})"));
@@ -367,7 +389,7 @@ impl std::fmt::Debug for ConfigUi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConfigUi")
             .field("devices", &self.devs.keys().collect::<Vec<_>>())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -458,7 +480,10 @@ impl ConfigUi {
         };
         let d = self.devs.entry(device.to_string()).or_default();
         if op == ConfigOp::Read {
-            d.load = Load::Asking;
+            // What is shown stays while it is read again.
+            if !matches!(d.load, Load::Got(_)) {
+                d.load = Load::Asking;
+            }
         } else {
             d.busy = busy;
             d.notice = None;
@@ -482,7 +507,7 @@ impl ConfigUi {
         d.busy = None;
         // A restart or restore that would interrupt running modules: the
         // box names them and waits for a second ask.
-        if status == 409 && matches!(op, ConfigOp::Restart | ConfigOp::Import) {
+        if status == 409 && j["code"] == "interrupts" && matches!(op, ConfigOp::Restart | ConfigOp::Import) {
             let named = match j["modules"].as_array() {
                 Some(m) if !m.is_empty() => m
                     .iter()
@@ -810,7 +835,11 @@ impl ConfigUi {
                 }
                 Kind::Restart | Kind::Restore => {
                     let restore = kind == Kind::Restore;
-                    if let Some(mods) = &m.modules {
+                    let snap = matches!(self.devs.get(&device).map(|d| &d.load), Some(Load::Got(c)) if c.snapshot);
+                    let blocked = restore && !snap;
+                    if blocked {
+                        say(ui, "The project has no saved configuration of this device yet. Save a snapshot first.");
+                    } else if let Some(mods) = &m.modules {
                         say(ui, &format!("The running project uses this device. Restarting it interrupts: {mods}."));
                         say(ui, "Restart anyway?");
                     } else if restore {
@@ -822,9 +851,13 @@ impl ConfigUi {
                     ui.horizontal(|ui| {
                         let interrupts = m.modules.is_some();
                         let label = if restore { "Restore" } else { "Restart" };
-                        if button(ui, chrome, "config confirm", if interrupts { "Restart anyway" } else { label }, "Goes ahead. The device is offline for about 21 seconds.") {
+                        if !blocked && button(ui, chrome, "config confirm", if interrupts { "Restart anyway" } else { label }, "Goes ahead. The device is offline for about 21 seconds.") {
                             go = Some(if restore {
-                                (ConfigOp::Import, json!({"from": "snapshot", "overwrite_network": false, "interrupts": interrupts}))
+                                (ConfigOp::Import, if interrupts {
+                                    json!({"from": "snapshot", "interrupts": true})
+                                } else {
+                                    json!({"from": "snapshot"})
+                                })
                             } else if interrupts {
                                 (ConfigOp::Restart, json!({"interrupts": true}))
                             } else {
@@ -921,18 +954,20 @@ mod tests {
 
     fn sample() -> Json {
         json!({
+            "device": "rio",
             "facts": {
                 "firmware": "V3.1",
-                "watchdog": {"enabled": false, "seconds": 0},
+                "watchdog": {"enabled": false, "value": 0, "label": "Disabled"},
                 "outputs": [
-                    {"name": "DO-00", "safe": false, "power_on": true},
-                    {"name": "DO-01", "safe": true, "power_on": true},
-                    {"name": "DO-02", "safe": false, "power_on": false}
+                    {"channel": "DO-00", "safe": {"value": 0, "label": "Off"}, "power_on": {"value": 1, "label": "On"}},
+                    {"channel": "DO-01", "safe": {"value": 1, "label": "On"}, "power_on": {"value": 1, "label": "On"}},
+                    {"channel": "DO-02", "safe": {"value": 0, "label": "Off"}, "power_on": {"value": 0, "label": "Off"}}
                 ],
-                "ethernet_ip": false,
-                "restful": true
+                "eip_enabled": false,
+                "rest_enabled": true
             },
-            "drift": {"count": 3, "lines": ["a=1", "b=2", "c=3"]},
+            "snapshot": {"file": "rio.devconf", "version": "x", "bytes": 10},
+            "drift": {"changed": [{"before": "a=1", "after": "a=2"}], "added": ["b=2"], "removed": ["c=3"]},
             "password_stored": true
         })
     }
@@ -953,8 +988,8 @@ mod tests {
     #[test]
     fn a_hostile_body_reads_as_nothing_or_clean_text() {
         assert!(Config::parse(&json!([1, 2])).is_none());
-        let c =
-            Config::parse(&json!({"facts": {"firmware": "V\u{7}3", "outputs": [{"name": "x\ny"}]}})).unwrap();
+        let c = Config::parse(&json!({"facts": {"firmware": "V\u{7}3", "outputs": [{"channel": "x\ny"}]}}))
+            .unwrap();
         assert_eq!(c.facts.firmware, "V3");
         assert_eq!(c.facts.outputs[0].name, "xy");
     }
@@ -963,7 +998,7 @@ mod tests {
     fn changes_name_only_what_differs_and_one_page_each() {
         let f = Config::parse(&sample()).unwrap().facts;
         let mut d = Draft::of(&f);
-        assert!(changes(&f, &d).is_empty());
+        assert_eq!(changes(&f, &d).len(), 0);
         d.watchdog = true;
         d.time = 5;
         d.safe[2] = true;
@@ -990,6 +1025,6 @@ mod tests {
             "the project drives it"
         );
         assert!(!why(500, "").contains("500"));
-        assert!(!why(0, "").is_empty());
+        assert_ne!(why(0, ""), "");
     }
 }
