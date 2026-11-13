@@ -330,6 +330,10 @@ scan; the scheduler bounds how often.
   `Profile::map(transport, id, endpoint)` writes the I/O map for one
   transport, a signal per channel (`rio_di_04_count`), and a profile is
   accepted only if every transport's map passes the map's own rules.
+  An optional `configure NAME` line (`moxa-e1200` is the only name) says the
+  device has a configuration protocol the box speaks; without it the device
+  has no configuration routes, and a name the box does not know is a profile
+  error naming the line ("Device configuration" below).
   docs/devices/moxa-iologik-e1213.device is the first: it gives the same
   40 signals over EtherNet/IP and Modbus TCP and agrees with the two maps
   written by hand.
@@ -2977,6 +2981,97 @@ the new password for its next login.
 - A static `disabled` attribute on a field is ignored (a page's script is
   not run), as the Python client does.
 - Firmware update and Load Factory Default.
+
+### On the box (`devconf-box`: the box API; the canvas and the agent's read-only tools are the next two cards)
+
+**Attaching.** A device profile (`NAME.device`, `helmsman-device 1`, still
+version 1) may carry one more optional line, `configure moxa-e1200`
+(`helmsman_io::profile::CONFIGURATORS`; the bench E1213 profile has it). An
+unknown name is a profile error naming the line (`configure web-console: not a
+configurator this box has (one of moxa-e1200)`); a profile without the line has
+no configuration routes: they answer 404 for its devices. The routes are for a
+device of the **running map** whose driver is `device:NAME`; the profile is
+the one the box loaded with that map. The console is at the device's host (the
+address its link resolved, else the map's device endpoint), port 80.
+
+**Routes.** `{id}` is the device id in the running I/O map. Every write is
+audited. Reads need what `GET /api/devices` needs (any session or the box
+token); every write needs an **engineer login session** (the box token and
+lesser roles are 403). One operation per device at a time, reads included: a
+second concurrent one gets 409 `{"error": ..., "code": "busy", "busy": "restart"}`.
+
+| route | who | request | answer |
+| --- | --- | --- | --- |
+| `GET /api/devices/{id}/config` | read | | 200 `{device, configurator, endpoint, password_stored, facts, export, snapshot, drift}`; `export` is the unit's export text (staged settings, CRLF); `snapshot` is `{file, version, bytes}` or `null`; `drift` is `null` without a snapshot, else `{changed: [{before, after}], added: [line], removed: [line]}` (the saved `.devconf` against the unit now); 502 when the unit does not answer |
+| `PUT /api/devices/{id}/config/password` | engineer | `{password}` (printable ASCII, 1 to 24) | 200 `{password_stored: true}`; write-only: no route returns it |
+| `DELETE /api/devices/{id}/config/password` | engineer | | 200 `{password_stored: false}` |
+| `POST /api/devices/{id}/config/set` | engineer | `{page: "04_1.htm", changes: {"MOD_LOC": "bench"}}` (1 to 64 changes, text values; a checkbox is `"1"` or `"0"`) | 200 `{staged: true, diff: {changed, added, removed}}`; staged until a restart; 422 for an unknown page or field |
+| `POST /api/devices/{id}/config/restart` | engineer | `{interrupts?: bool}` | 200 `{restarted: true, took_ms}` after the unit is back (about 21 s on the real unit, bounded at 135 s); 409 `{code: "interrupts", modules: [..]}` if the running project reads or drives the device and `interrupts` is not `true` |
+| `POST /api/devices/{id}/config/import` | engineer | `{from: "snapshot"}` or `{text: "<export text>"}`, `overwrite_network?: false`, `interrupts?: bool` | 200 `{imported: true, diff, took_ms}`; the unit reboots by itself, so it waits like a restart; the same 409 gate; the network option is sent only when `true`; 404 `no_snapshot` |
+| `POST /api/devices/{id}/config/password` | engineer | `{new}` (1 to 16) | 200 `{changed: true}`; the old password is the kept one; the kept password becomes `new` |
+| `POST /api/devices/{id}/config/snapshot` | engineer | `{version?}` | reads the unit's export and saves it as `{id}.devconf` in the running project, a project file versioned like any other (`version` is the file's SHA-256 you read, `null` for "new only"; a stale one is 409 `stale`); 200 `{file, version, bytes, revision}`; 409 `no_project` when none runs |
+
+`facts` (from the export): `{firmware, watchdog: {enabled, value, label}, eip_enabled, rest_enabled, outputs: [{channel: "DO-00", safe: {value, label}, power_on: {value, label}}]}`; an item is `null` when the export lacks its key. The firmware is the first `[System Information]` entry whose key says firmware or version (the exact key has not been seen).
+
+**Restart and import are synchronous.** The answer comes when the unit is
+back, so the call holds one API worker for about 21 s (at most 135 s: 15 s to
+see it go down, 120 s to come back). The API has 32 workers and its 5 s
+request deadline bounds only reading the request, not the handler or the
+answer, so the rest of the box is served meanwhile (`tests/devconf.rs` proves
+a restart with a long downtime completes through the real server while other
+calls are answered). The canvas shows the device as restarting (below) and its
+fetch simply waits; it must not time out under 150 s.
+
+**Errors** are `{"error": text, "code": word}` with the statuses above plus: 400
+`malformed` body; 401 no credential; 403 not an engineer; 404 `no_device`,
+`not_configurable`, `no_devconf`, `no_snapshot`; 409 `busy`, `interrupts`,
+`password_required` (the console asks for a password and none is kept),
+`login_refused` (the kept one was refused; it is not tried again by that
+session), `login_before_write` (the write met the login page: logged in again,
+**nothing was written**, run it again), `no_project`, `stale`; 422 `refused`
+(input broke a rule; nothing sent), `not_accepted` (the console did not say
+Configuration Complete), `password_failed` ("Change Password Fail!": the real
+unit refuses a change from a password that is already set, not understood),
+`password_unconfirmed`; 502 the unit did not answer or broke HTTP
+(`unreachable`, `protocol`, `restart_not_observed`, `restart_timeout`); 500
+`store` (the kept password could not be written). No error, event, log line or
+audit entry carries a password.
+
+**The secret store.** A device's console password is the one secret the box
+keeps for a third party, and nothing existing fits it: the box token and the
+accounts are the box's own, and the sinks' `Secret` type holds a header value in
+memory. So `<state-dir>/devconf/ID.password` (directory 0700, file 0600,
+written beside the old one and renamed over it, one line) holds it, and in
+memory it is only a `sink::Secret` (whose `Debug` prints nothing) on its way to
+the configurator's own redacted `Secret`. It is set by `PUT` with an engineer
+session, replaced when `POST .../password` succeeds, removed by `DELETE`, and
+returned by no route: not in `GET .../config` (only `password_stored`), nor in
+a project, a snapshot, an export (the unit's export does not hold it), an
+error, an event, an audit entry or a log line; `tests/devconf.rs` searches
+every response body, the audit log and the captured log for it. `ConfigView`,
+the read path the routes and the agent's tools share (`api::devconf::config_view`),
+has no field that can hold it. The file is plain text at rest, as the box token
+and the TLS key are; a box someone can read the state directory of is lost
+anyway. The configurator logs in at most once per call, and a refused password
+is a 409 `login_refused` the person fixes with `PUT`; the box never retries a
+refused one.
+
+**The saved configuration** is the project file `ID.devconf` (`FileKind::Devconf`,
+stem a lower-case slug like a driver name): the export text as read from the
+unit, in the running project, saved by `POST .../snapshot`, versioned, listed,
+revisioned, zipped and diffed like any project file, ignored by the build.
+It is the source of `import {from: "snapshot"}` and of `drift`.
+
+**The interruption gate.** A restart or an import takes the unit off the
+network for about 21 s. If a module of the running project reads or drives a
+signal bound to the device, the call is 409 `interrupts` naming the modules,
+unless the request says `interrupts: true`. (Writes with `set` stage only and
+are not gated.)
+
+**While a restart or an import runs**, `GET /api/devices` lists that device as
+`{state: "down", health: "lost", restarting: true, error: "restarting for its
+configuration"}`, whatever its link reports meanwhile: a planned outage, not a
+fault.
 
 ## Trust boundaries
 

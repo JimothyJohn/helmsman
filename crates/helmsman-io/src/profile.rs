@@ -27,6 +27,12 @@
 //!   `cycle_ms=A..B` is the profile's own: how fast and how slow the
 //!   device can be asked for data over that transport (the box picks the
 //!   rate inside it, [`Transport::limits`]); the rest are the driver's.
+//! - `configure NAME` (optional, once): the device has a configuration
+//!   protocol the box can speak, named by NAME (one of [`CONFIGURATORS`];
+//!   `moxa-e1200` is the ioLogik E1200's web console). A profile without
+//!   the line has no configuration routes on the box. The device's
+//!   endpoint for it is the device's host (the map's device line). An
+//!   unknown NAME is a profile error naming the line.
 //! - `in` / `out NAME TYPE [unit=U] [safe=V] DRIVER=POINT ...`: a channel,
 //!   with its point in each transport's own syntax. Every channel names
 //!   every transport, so the device looks the same whichever is in use.
@@ -51,6 +57,9 @@ pub const MAX_CHANNEL: usize = 32;
 /// A transport's own param: `cycle_ms=A..B`, the rate the device can be
 /// asked at over it, fastest to slowest, in ms (1..=60000).
 pub const CYCLE: &str = "cycle_ms";
+
+/// The configurators a profile's `configure NAME` line may name.
+pub const CONFIGURATORS: [&str; 1] = ["moxa-e1200"];
 
 /// `A..B` of a `cycle_ms=A..B` value, 1 <= A <= B <= 60000, as durations.
 fn parse_limits(v: &str) -> Option<(Duration, Duration)> {
@@ -107,6 +116,9 @@ pub struct Profile {
     pub vendor: String,
     pub model: String,
     pub kind: String,
+    /// The `configure NAME` line: the configurator that speaks the
+    /// device's own configuration protocol ([`CONFIGURATORS`]).
+    pub configure: Option<String>,
     pub transports: Vec<Transport>,
     pub channels: Vec<Channel>,
 }
@@ -194,6 +206,18 @@ impl Profile {
             ["vendor", rest @ ..] if !rest.is_empty() => self.vendor = text(rest),
             ["model", rest @ ..] if !rest.is_empty() => self.model = text(rest),
             ["kind", kind] => self.kind = (*kind).into(),
+            ["configure", name] => {
+                if !CONFIGURATORS.contains(name) {
+                    return Err(format!(
+                        "configure {name}: not a configurator this box has (one of {})",
+                        CONFIGURATORS.join(", ")
+                    ));
+                }
+                if self.configure.replace((*name).into()).is_some() {
+                    return Err("configure given twice".into());
+                }
+            }
+            ["configure", ..] => return Err("expected configure NAME".into()),
             ["transport", driver, params @ ..] => {
                 if self.transports.iter().any(|t| t.driver == *driver) {
                     return Err(format!("transport {driver} given twice"));
@@ -254,7 +278,7 @@ impl Profile {
             }
             _ => {
                 return Err(format!(
-                    "{:?}: expected vendor, model, kind, transport, in or out",
+                    "{:?}: expected vendor, model, kind, configure, transport, in or out",
                     words[0]
                 ));
             }
