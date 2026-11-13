@@ -4,20 +4,24 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **Close the ESP32 node cards now that the P4 is the embedded board?** — Why it matters: `node-resume`, `node-modbus` and `poe-iso-modbus-rerun` were opened when the only node boards were the ESP32 POE2 and POE-ISO, and between them they ask one thing: can a board that cheap scan a real program in time? On the ESP32 the 4k-statement bench took 28 ms against a 10 ms period. The P4 answered it on 2026-11-10 with the same node image: the chase in 51 to 72 us a scan, a 431-line cell in about 1 ms, zero late scans at 10 ms (docs/EDGE.md Phase 3), and you named the P4 the runtime and embedded board (2026-11-13). What closing drops: finding out why the ESP32 is slow, the POE2's PSRAM bug, and the POE-ISO rerun of #337's Modbus fix. Those matter only if a product ships on an ESP32. What it keeps: G4 (overruns under 1 % over 10 minutes) and G5 (the block goes safe when the node's cable is pulled) were never run on any board, so they move onto `node-p4-followups` as P4 runs.
+- [ ] **Close the ESP32 node cards now that the P4 is the embedded board?** — Three cards are about the two ESP32 boards (the POE2 and the POE-ISO): `node-resume`, `node-modbus` and `poe-iso-modbus-rerun`. Between them they ask one thing: can a board that cheap scan a real program in time? On the ESP32 a 4,000-statement test program took 28 ms a scan against a 10 ms target. The P4 answered it on 2026-11-10 with the same firmware: the traffic-light chase in 51 to 72 microseconds a scan, a 431-line machine cell in about 1 ms, no late scans at 10 ms (docs/EDGE.md Phase 3). You named the P4 the runtime and embedded board on 2026-11-13. Two goals docs/EDGE.md set for any node were never run on any board: under 1 % late scans over 10 minutes against the E1213, and the block's outputs going safe when the node's cable is pulled.
   needs: your call
-  result: the three cards leave the board and G4 / G5 become P4 runs; or they stay parked as they are
-  options: close all three, G4 and G5 to the P4 (recommended) | keep them parked | resume the ESP32 work
+  result: closed: the three cards leave the board and the two goals become P4 runs on `node-p4-followups`; kept: they stay parked
+  options: close all three, the two goals to the P4 — the ESP32 slowness, the POE2's memory bug and the POE-ISO rerun are dropped; they matter only if a product ships on an ESP32 (recommended) | keep them parked — nothing changes, three cards stay blocked | resume the ESP32 work — about a week on the scan speed and the memory bug before any P4 work
+  recommend: close all three — the P4 is the embedded board and already meets the scan targets the ESP32 missed
+  stakes: low
   est: 5m
   difficulty: low
   id: node-esp32-close
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **Who opens the library pull request when the agent publishes a device profile?** — Why it matters: the second tool of `relay-device-profile-agent` sends a profile the user checked to helmsman-devices as a pull request, so whatever opens it holds a GitHub credential that can write to that repository. On the relay that is one fine-grained token, limited to pull requests on helmsman-devices, kept in Secrets Manager, and no customer box ever holds a GitHub secret. On the box, every box would need its own token. The first tool (a profile from an EDS, checked by `Profile::parse`) needs neither and can be built now against the Murrelektronik 55086's EDS.
+- [ ] **Who opens the library pull request when the agent publishes a device profile?** — When the agent has built a profile for a device the public library (github.com/JimothyJohn/helmsman-devices) does not know, and the user has checked its channel names, the last step sends it to the library as a pull request, so the next user of that device gets it in one click. Whatever opens that pull request holds a GitHub credential that can write to the library. Building the profile itself needs no credential: that half is done on the relay (agent helmsman/v10, agent-relay #20, merged 2026-11-13) and its box half is card `device-profile-propose-box`.
   needs: your call
-  result: the publish tool's shape, and the token it needs (you create it; a hand-off script names the scopes)
-  options: the relay's own fine-grained token (recommended) | each box's own token | no publish tool: the user opens the pull request by hand
+  result: the publish tool's shape, and the token it needs (you create it; a hand-off script names its scopes)
+  options: the relay's own fine-grained token — one secret in Secrets Manager, limited to pull requests on helmsman-devices; no customer box holds a GitHub credential (recommended) | each box's own token — every box that publishes needs a GitHub token configured by its owner | no publish tool — the user downloads the profile and opens the pull request by hand
+  recommend: the relay's own fine-grained token — one secret you control, scoped to one repository, and nothing to configure on a customer's box
+  stakes: high
   est: 5m
   difficulty: low
   id: device-profile-publish-path
@@ -43,6 +47,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: poe-iso-modbus-rerun
   asked: 2026-11-10
   by: claude-session
+  depends: node-esp32-close
 
 - [ ] **Rebuild the try box at the dev tip** — it came back when you logged in at the Studio (pid 86028 on 2026-11-13, :8081 answers, the E1213 up), but on the build of 2026-11-08 (e7f1ae2, #300), about 90 merges behind dev: no device profiles, no device configuration, no glyphs. Best done after `studio-box-no-io` lands, so the rebuilt box can be switched off the devices for P4 work.
   needs: `~/github/helmsman-try/scratch/16-rebuild.sh` from your terminal at the Studio (it builds at the dev tip, signs, and restarts the LaunchAgent)
@@ -143,8 +148,8 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 - [ ] **Devices, not protocols: the device profile layer** — Nick, 2026-11-11: "the comms protocol isn't critically important since we can talk to everything. It's most important for the user to easily find, connect, and talk to the I/O on devices"; a simpler, more limited interface, not for power users. Decided in the interview that day: (1) the protocol is never shown or chosen: the box picks from the profile's order and falls back, and names it only in a failure and in details; (2) a device not in the library: the agent builds its profile from the vendor's file or manual, the user checks the channel names and can publish it; (3) channels first (named, typed, with units and a safe value), the standard face per kind (a drive's enable, speed, position, fault) when the MDrive is on the bench; (4) addresses and names: the box suggests, the user confirms (the I/O network may be IT's); (5) today's add-a-device form and typed points stay behind an Advanced switch; (6) timing is fully automatic, from the program's scan period and the profile's limits: the user sees healthy, slow or lost; (7) a profile is copied into the project when the device is added, updates are offered; (8) the Moxa E1213 proves it first: the same channels over Modbus TCP and EtherNet/IP. Sequence: (a) the profile format (identity per protocol, transports in order with their connection settings, channels with an address per transport, kind, limits) and its resolution to today's map lines, E1213 first, in helmsman-io with the library entry; (b) one Scan across protocols (ListIdentity, Modbus identification, PROFINET DCP) into one list; (c) add by click: the device named, its channels there with names, the profile in the project; (d) automatic timing and the healthy / slow / lost status; (e) the agent's build-a-profile path and publish; (f) suggested addressing; (g) kinds, with the MDrive.
   notes: 2026-11-11: the overnight plan for steps (a)..(e), a PR each, is PROTOCOLS.md at the repo root ("Run PROTOCOLS.md").
   notes: 2026-11-11: first slice of (a) built: `helmsman_io::profile` (the format, its checks, `Profile::map` per transport) and docs/devices/moxa-iologik-e1213.device, which agrees with both hand-written maps and drives the simulated unit by channel name. The device library already has a `device.toml` per device whose points are prose; the profile is the machine-readable form of that. Left of (a): the map binds a channel (`ch:DI-04`) instead of an address, behind a driver that opens the profile's transports in order and falls back by itself; the profile as a project file and a library entry.
-  notes: 2026-11-12 later: (c) is #365 (add by click, the Advanced switch, the library route serving the profile; the library's half is helmsman-devices#2, which that repo cannot auto-merge: a manual merge, or repo-baseline on it first). Until #2 merges, a real box with the default library sees no profile on the E1213 and offers Advanced instead of Add. Left of the plan: (e) on the relay (card `relay-device-profile-agent`), then its box half; the health word on the Devices tab row and in the Monitor (the hover says it).
-  notes: 2026-11-12: (a) landed as #363 (`device:NAME` lines, `ch:` points, `ProfileDriver` falling back between transports, `NAME.device` a project file, `/api/devices` `transport`); (b) as #361 (one Scan, `found`); (d)'s box side as #364 (`cycle_ms=A..B` limits, the link paced by its modules, healthy / slow / lost on `/api/devices`). Left: (c) add by click and the words on the Devices tab and the Monitor, waiting while another agent is in the canvas; (e) the agent's build-a-profile path: its relay half is the card `relay-device-profile-agent`; (f) and (g) as before. Assumed without asking: pacing applies to `device:` devices only (plain lines keep `poll_ms` or 50 ms).
+  notes: 2026-11-12 later: (c) is #365 (add by click, the Advanced switch, the library route serving the profile; the library's half is helmsman-devices#2, which that repo cannot auto-merge: a manual merge, or repo-baseline on it first). Until #2 merges, a real box with the default library sees no profile on the E1213 and offers Advanced instead of Add. Left of the plan: (e) the relay half merged (agent-relay #20), its box half is card `device-profile-propose-box`; the health word on the Devices tab row and in the Monitor (the hover says it).
+  notes: 2026-11-12: (a) landed as #363 (`device:NAME` lines, `ch:` points, `ProfileDriver` falling back between transports, `NAME.device` a project file, `/api/devices` `transport`); (b) as #361 (one Scan, `found`); (d)'s box side as #364 (`cycle_ms=A..B` limits, the link paced by its modules, healthy / slow / lost on `/api/devices`). Left: (c) add by click and the words on the Devices tab and the Monitor, waiting while another agent is in the canvas; (e) the agent's build-a-profile path: its box half is the card `device-profile-propose-box`; (f) and (g) as before. Assumed without asking: pacing applies to `device:` devices only (plain lines keep `poll_ms` or 50 ms).
   result: a user finds a device, clicks it, names it and uses its channels by name; no protocol, address, byte order, cycle time or vendor file is asked of them
   est: 3w
   difficulty: high
@@ -173,16 +178,24 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **Relay: the agent proposes a device profile from a vendor's file and publishes it** — PROTOCOLS.md step 5, the relay half. The served helmsman profile's `fetch_document` already answers a device-library record or says to ask for the manual or the EDS (helmsman-agent `tools.rs`); nothing in it writes a `helmsman-device 1` profile or opens a pull request into github.com/JimothyJohn/helmsman-devices. Needed on the relay (`../agent-relay`, a new id since a served profile never changes): a `propose_profile` tool (input: the EDS or GSDML text and what the user said; output: the profile text, which the box accepts only through `Profile::parse` and shows as a channel list to rename) and a `publish_profile` tool (a PR into the library's `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`). The box half (an upload route that holds the EDS, the agent turn, the channel list with renames, the write into the project) follows in helmsman once the ids exist.
-  needs: nothing for `propose_profile` (the profile format and `Profile::parse` landed in #351 and #363); its first test case is the Murrelektronik 55086's EDS (helmsman-devices scratch/55086_IMPACT67_KF5_x_11.zip, checked against the hand-made `.device` there); `publish_profile` waits on question `device-profile-publish-path`
-  result: a device the library does not know gets a profile the user checked, and the library grows by a PR
+- [ ] **The box half of the agent's device profile: propose, check, rename, save** — PROTOCOLS.md step 5. The relay half is merged (agent-relay #20, 2026-11-13, by the helmsman-devices-8d session): agent helmsman/v10 has the client tool `propose_device_profile {name, text, summary}`, and on the real Murrelektronik 55086 EDS and handbook every bit address it proposed matched the hand-made `.device` (it chose true lengths of 3 and 1 bytes against the hand-made 4 and 2, and said so). Left here: helmsman-agent executes `propose_device_profile` by running the text through `Profile::parse` and returns the parse errors or the channel list to the model; a box opts into v10 (`--relay-agent v10`); the Devices tab shows the proposed channels for the user to rename and saves `NAME.device` into the project; an upload route holds the EDS or manual the agent reads.
+  needs: nothing
+  result: a device the library does not know gets a profile the user checked, from its vendor's file, without a hand-written map
   est: 2d
   difficulty: med
-  id: relay-device-profile-agent
-  notes: 2026-11-13: propose_profile taken by the helmsman-devices-8d session as agent helmsman/v10 (agent-relay worktree .claude/worktrees/propose-profile); publish_profile waits on device-profile-publish-path.
+  id: device-profile-propose-box
   asked: 2026-11-12
   by: claude-session
-  notes: You have some manuals and EDS files for the Murrelektronik to ry building this out before it's connected.
+
+- [ ] **Publish a checked device profile to the library** — the second tool: a pull request into helmsman-devices' `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`, opened from what the user checked on the Devices tab.
+  needs: the answer to `device-profile-publish-path`
+  result: the library grows by a pull request each time a user maps a new device
+  depends: device-profile-publish-path, device-profile-propose-box
+  est: 1d
+  difficulty: med
+  id: device-profile-publish
+  asked: 2026-11-13
+  by: claude-session
 
 - [ ] **PROFINET from the node: a real device, then the node image** — Why it matters: only once a device has to be reached over PROFINET. Parked with `profinet-raw-access` (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first; PROFINET when a customer or a device needs it). the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block; (3) the same on the POE-ISO (Xtensa: its EMAC driver is ph-esp32-mac, a different wrapper).
   needs: a device that has to be reached over PROFINET
@@ -733,6 +746,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   asked: 2026-11-03
   by: claude-session
   status: blocked
+  depends: node-esp32-close
 
 - [ ] **Vision sources** — deferred per interview; card kept so the signal model leaves room for camera-derived signals.
   est: 2w
@@ -770,6 +784,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: run 2026-11-03, then PARKED by Nick: the Modbus loop works on the POE2 (lease, chase program on the E1213's DO-00..02); the UDP reports never arrive (the node never takes the Studio's ARP replies); the POE-ISO build (#211) links at 100 Mbit but gets no lease. Findings in docs/EDGE.md Phase 2; picked up again by `node-resume`. G4/G5 not measured (G4 fails anyway at 28 ms scans).
   status: blocked
   id: node-modbus
+  depends: node-esp32-close
 
 - [ ] **EtherCAT master via ethercrab** — ethercrab (MIT/Apache-2.0, pure Rust) as the driver; EtherCAT slaves' PDOs mapped into the runtime's %I/%Q. Master only: a Pi cannot be an EtherCAT slave (needs an ESC chip).
   needs: a USB 3 gigabit NIC for the Pi (its one port is the Studio link) and one EtherCAT I/O slave to test against (e.g. a bus coupler + digital I/O terminal)
