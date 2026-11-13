@@ -161,7 +161,19 @@ pub fn button_sized(
 /// puts a red ground of that strength behind it and draws it red: the
 /// Messages tab with an error on it. The caller tips it.
 pub fn tab(ui: &mut egui::Ui, icon: Icon, size: f32, on: bool, alarm: Option<f32>) -> Response {
-    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    tab_sensed(ui, icon, size, on, alarm, Sense::click())
+}
+
+/// [`tab`] with its own sense: a side pane's tab can be dragged too.
+pub fn tab_sensed(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    size: f32,
+    on: bool,
+    alarm: Option<f32>,
+    sense: Sense,
+) -> Response {
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), sense);
     let t = theme(ui);
     let painter = ui.painter();
     let red = t.ink(RED);

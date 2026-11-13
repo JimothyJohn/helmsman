@@ -190,6 +190,7 @@ fn a_project_of_several_files_deploys_in_the_page_and_errors_point_at_their_file
     // Clicking it (in the app) opens main.st at line 13.
     v.proj.open_file("blocks.st");
     let mut app = App::sim();
+    app.chrome.show_code();
     app.sim = Some(v);
     let ctx = egui::Context::default();
     for k in 0..40 {

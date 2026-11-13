@@ -375,6 +375,10 @@ pub fn apply(ctx: &egui::Context, light: bool) {
         ctx.style_mut_of(egui::Theme::Dark, |s| style(s, true));
         ctx.style_mut_of(egui::Theme::Light, |s| style(s, false));
         ctx.data_mut(|d| d.insert_temp(id, true));
+        // The fonts take effect on the next pass: lay the first frame out
+        // again with them, or it is drawn at the default sizes and every
+        // row moves on the second (a click aimed by the first missed).
+        ctx.request_discard("fonts installed");
     }
     // Nick, 2026-11-05: a title or a row is not text to select, and a
     // control shows the finger. Labels are not selectable (the Agent's

@@ -14,7 +14,7 @@ use crate::claude::{
     FALLBACK_BETA, Incoming, KeyStore, MAX_ANSWER, MAX_PROGRAM, Model, PROXY_URL, Phase, Proxy, Route,
     Segment, Sse, extract_program, request, segments,
 };
-use crate::editor::{Chrome, Tab, highlight};
+use crate::editor::{Chrome, Pane, highlight};
 use crate::playground::{
     Carried, Dir, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range,
     tick_label,
@@ -2018,8 +2018,8 @@ fn every_tab_and_example_draws() {
         s.view.load(e.src, e.name);
         assert!(!s.view.session.running, "loading never runs");
         s.view.session.set_running(true);
-        for tab in [Tab::Io, Tab::Claude] {
-            s.chrome.tab = tab;
+        for tab in [Pane::Io, Pane::Claude] {
+            s.chrome.show(tab);
             s.wait(0.1);
         }
         assert!(s.view.session.scans > 0, "{k}");
@@ -2037,7 +2037,11 @@ fn tapping_an_output_picks_it() {
     s.view.session.step();
     s.wait(0.1);
     assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("MOTOR"));
-    assert_eq!(s.chrome.tab, Tab::Io, "no tab of its own");
+    assert_eq!(
+        s.chrome.pane,
+        Pane::Code,
+        "the tab stays: an output has none of its own"
+    );
 }
 
 /// An instruction on a built-in example: no key, nothing is sent and the
@@ -2048,7 +2052,7 @@ fn tapping_an_output_picks_it() {
 fn an_instruction_on_an_example_lands_its_program_named_and_never_runs_it() {
     use crate::instruct::Kind;
     let mut s = Screen::as_opened();
-    s.chrome.tab = Tab::Claude;
+    s.chrome.show(Pane::Claude);
     s.frame(vec![]);
     s.view.instruct.draft = "a latch please".into();
     s.view.send_instruction(&s.ctx.clone());

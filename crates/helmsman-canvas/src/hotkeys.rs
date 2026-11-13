@@ -26,8 +26,9 @@
 //! | Files sidebar | Alt Shift 0 | Devices view (Alt 1 to 9 switch Firefox's tabs on Windows and Linux) |
 //! | Structured Text | Alt Shift 1 | POUs view |
 //! | Trend along the bottom | Alt Shift 2 | Modules view |
-//! | Side panel | Alt Shift 3 | Messages view |
+//! | Right pane | Alt Shift 3 | Messages view |
 //! | Devices tab | Alt Shift 4 | (a key of our own) |
+//! | Move the left pane's tab to the right | Alt Shift 5 | (a key of our own) |
 //! | Go to definition (picked block's variable) | Alt Shift D | Go to Definition (Ctrl Shift D bookmarks every tab) |
 //! | Cross references (its reads and writes lit) | Alt Shift X | Display Cross References (Ctrl Shift X is Firefox's text direction) |
 //! | Breakpoint on the picked block (simulation) | Shift F9 | (Toggle Breakpoint is F9, Edge's reader; Ctrl B is Firefox's bookmarks) |
@@ -64,6 +65,8 @@ pub enum Action {
     Devices,
     St,
     Panel,
+    /// The left pane's tab to the right pane.
+    DockRight,
     Trend,
     GoToDefinition,
     CrossReferences,
@@ -200,6 +203,12 @@ pub const TABLE: &[Hotkey] = &[
         Action::Devices,
         Modifiers::ALT.plus(Modifiers::SHIFT),
         Key::Num4,
+        "",
+    ),
+    key(
+        Action::DockRight,
+        Modifiers::ALT.plus(Modifiers::SHIFT),
+        Key::Num5,
         "",
     ),
 ];
@@ -415,7 +424,8 @@ const fn does(action: Action) -> &'static str {
         Action::Devices => "The left pane's Devices tab (the I/O map's devices and points)",
         Action::St => "The left pane's Code tab (the Structured Text)",
         Action::Trend => "The bottom panel (Trend, Messages)",
-        Action::Panel => "The side panel (I/O, Palette, Agent)",
+        Action::Panel => "The right pane, once a tab is docked there",
+        Action::DockRight => "The left pane's tab to a pane on the right, the next one shown on the left",
         Action::GoToDefinition => "Go to definition: the picked block's variable, at its VAR line",
         Action::CrossReferences => "Cross references: every read and write of it lit",
         Action::Breakpoint => {
