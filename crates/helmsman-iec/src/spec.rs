@@ -62,7 +62,7 @@ use core::time::Duration;
 use crate::ast::{self, PouKind, Section, TypeRef};
 #[cfg(not(feature = "std"))]
 use crate::prelude::*;
-use crate::{Diagnostic, Image, ImageSizes, PortDir, Value, compile};
+use crate::{Diagnostic, Image, ImageSizes, Port, PortDir, Value, compile};
 
 /// The file name prefix that makes a `.st` file a test: `test_NAME.st`.
 pub const TEST_PREFIX: &str = "test_";
@@ -223,8 +223,14 @@ pub enum Outcome {
     /// `DONE` went TRUE with no `ASSERT` failed.
     Passed,
     /// An `ASSERT` failed: which (its name as words, and its line's comment
-    /// if any), when.
-    Failed { check: String, at: Duration },
+    /// if any), when, and what the test held of the program's ports then
+    /// (`name=value`, the inputs it drove and the outputs it had read, one
+    /// scan old; empty when it shares none).
+    Failed {
+        check: String,
+        at: Duration,
+        seen: String,
+    },
     /// `DONE` never went TRUE within the limit.
     NeverDone,
     /// The test holds no `ASSERT`: it checks nothing.
@@ -235,6 +241,22 @@ pub enum Outcome {
     /// The test neither reads an output nor drives an input of the program
     /// under test, so whatever it asserts says nothing about the program.
     ChecksNothing,
+    /// The test declares a port of the program in a section that does not
+    /// connect it: a program input anywhere but the test's `VAR_OUTPUT`, a
+    /// program output anywhere but its `VAR_INPUT`. `fix` says where it goes.
+    Misdeclared {
+        port: String,
+        section: String,
+        fix: String,
+    },
+    /// The test assigns one input of the program more than once at the top
+    /// level of its body: a script written as if statements waited, where a
+    /// scan runs them all at once and the last value wins.
+    DrivenTwice { port: String, times: usize },
+    /// The test reads the program's own `done` and declares no `TEST_DONE`
+    /// output, so it would end the moment the program's `done` came on,
+    /// whatever it had checked by then.
+    EndsOnProgramDone,
     /// No test yet: the file states its requirement but declares no
     /// `ASSERT` (or its PROGRAM's body is empty). Neither green nor red.
     Untested,
@@ -299,13 +321,24 @@ impl Verdict {
         match &self.outcome {
             Outcome::Passed => String::new(),
             Outcome::Untested => "no test yet: nothing checks this requirement".into(),
-            Outcome::Failed { check, at } => format!("{check} failed at {}", secs(*at)),
-            Outcome::NeverDone => format!("never set DONE within {}", secs(self.elapsed)),
+            Outcome::Failed { check, at, seen } if at.is_zero() => format!(
+                "{check} failed on the first scan (0.00 s), before the program had run once: what a test reads is one scan old, so check from the second scan on{seen}"
+            ),
+            Outcome::Failed { check, at, seen } => format!("{check} failed at {}{seen}", secs(*at)),
+            Outcome::NeverDone => format!(
+                "never set done within {}: set done := TRUE at the last check",
+                secs(self.elapsed)
+            ),
             Outcome::NoAssert => "has no ASSERT: it checks nothing".into(),
-            Outcome::NeverChecked { check } => format!("{check} never checked"),
+            Outcome::NeverChecked { check } => format!("{check} never checked: call every ASSERT you declare"),
             Outcome::ChecksNothing => {
-                "reads no output and drives no input of the program: it checks nothing".into()
+                "reads no output and drives no input of the program, so it checks nothing: declare the program's inputs in the test's VAR_OUTPUT and its outputs in the test's VAR_INPUT".into()
             }
+            Outcome::Misdeclared { port, section, fix } => format!("declares {port} in {section}: {fix}"),
+            Outcome::EndsOnProgramDone => "reads the program's own output done, so it would end the moment that came on: declare test_done : BOOL in the test's VAR_OUTPUT and set it TRUE at the last check".into(),
+            Outcome::DrivenTwice { port, times } => format!(
+                "assigns {port} {times} times in one scan: a test runs once per scan like the program, nothing waits between its statements and the last value wins, so drive one state per scan (count scans with n := n + 1 and switch on n)"
+            ),
             Outcome::TestDoesNotCompile(d) => format!("the test does not compile: {}", first(d)),
             Outcome::ProgramDoesNotCompile(d) => format!("the program does not compile: {}", first(d)),
             Outcome::PortTypes { port, test, program } => {
@@ -354,6 +387,91 @@ fn asserts(src: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A port of the program declared in the test's wrong section
+/// ([`Outcome::Misdeclared`]), the first one.
+fn misdeclared(src: &str, ports: &[Port]) -> Option<Outcome> {
+    let unit = ast::parse(src).ok()?;
+    let prog = unit.pous.iter().find(|p| matches!(p.kind, PouKind::Program))?;
+    for v in &prog.vars {
+        let Some(p) = ports.iter().find(|p| p.name.eq_ignore_ascii_case(&v.name)) else {
+            continue;
+        };
+        let right = match p.dir {
+            PortDir::Input => Section::Output,
+            PortDir::Output => Section::Input,
+        };
+        if v.section == right {
+            continue;
+        }
+        let section = match v.section {
+            Section::Var => "VAR",
+            Section::Temp => "VAR_TEMP",
+            Section::Input => "VAR_INPUT",
+            Section::Output => "VAR_OUTPUT",
+            Section::InOut => "VAR_IN_OUT",
+        };
+        let fix = match p.dir {
+            PortDir::Input => format!(
+                "the program's input {} is driven by declaring it in the test's VAR_OUTPUT",
+                words(&p.name)
+            ),
+            PortDir::Output if p.name == DONE => {
+                "the program's output done is read by declaring it in the test's VAR_INPUT, and the test then ends on an output test_done of its own".to_string()
+            }
+            PortDir::Output => format!(
+                "the program's output {} is read by declaring it in the test's VAR_INPUT",
+                words(&p.name)
+            ),
+        };
+        return Some(Outcome::Misdeclared {
+            port: words(&v.name),
+            section: section.into(),
+            fix,
+        });
+    }
+    None
+}
+
+/// An input of the program the test assigns more than once at the top
+/// level of its body ([`Outcome::DrivenTwice`]), the first one.
+fn driven_twice(src: &str, drives: &[String]) -> Option<Outcome> {
+    let unit = ast::parse(src).ok()?;
+    let prog = unit.pous.iter().find(|p| matches!(p.kind, PouKind::Program))?;
+    for name in drives {
+        let times = prog
+            .body
+            .iter()
+            .filter(|s| {
+                matches!(&s.kind, ast::StmtKind::Assign(target, _)
+                    if matches!(&target.kind, ast::ExprKind::Var(n) if n.eq_ignore_ascii_case(name)))
+            })
+            .count();
+        if times > 1 {
+            return Some(Outcome::DrivenTwice {
+                port: words(name),
+                times,
+            });
+        }
+    }
+    None
+}
+
+/// `name=value` for each of `names` as the test holds it: ` (a=TRUE, b=0)`,
+/// empty when there are none.
+fn seen(t: &crate::Program, names: &[&String]) -> String {
+    let mut out = String::new();
+    for name in names {
+        if let Some(v) = t.get(name) {
+            out.push_str(if out.is_empty() { " (" } else { ", " });
+            let _ = write!(out, "{}={v}", words(name));
+        }
+    }
+    if !out.is_empty() {
+        out.push(')');
+    }
+    out
+}
+
 /// Whether the first PROGRAM in `src` has an empty body.
 fn empty_body(src: &str) -> bool {
     ast::parse(src).is_ok_and(|u| {
@@ -393,11 +511,15 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
         };
         return verdict(none, 0, zero);
     }
+    let program_ports = m.ports();
+    if let Some(o) = misdeclared(&test.src, &program_ports) {
+        return verdict(o, 0, zero);
+    }
     // The test drives these inputs of the program; it reads those outputs.
     let mut drives = Vec::new();
     let mut reads = Vec::new();
     for tp in t.ports() {
-        for mp in m.ports() {
+        for mp in &program_ports {
             if tp.name != mp.name {
                 continue;
             }
@@ -419,12 +541,21 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
             }
         }
     }
+    if drives.is_empty() && reads.is_empty() {
+        return verdict(Outcome::ChecksNothing, 0, zero);
+    }
+    if let Some(o) = driven_twice(&test.src, &drives) {
+        return verdict(o, 0, zero);
+    }
+    let shared: Vec<&String> = drives.iter().chain(reads.iter()).collect();
     let end = if t
         .ports()
         .iter()
         .any(|p| p.name == TEST_DONE && p.dir == PortDir::Output)
     {
         TEST_DONE
+    } else if reads.iter().any(|r| r == DONE) {
+        return verdict(Outcome::EndsOnProgramDone, 0, zero);
     } else {
         DONE
     };
@@ -462,13 +593,11 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
                     _ => now,
                 };
                 let check = check.clone();
-                return verdict(Outcome::Failed { check, at }, scans, now);
+                let seen = seen(&t, &shared);
+                return verdict(Outcome::Failed { check, at, seen }, scans, now);
             }
         }
         if t.get(end) == Some(Value::Bool(true)) {
-            if drives.is_empty() && reads.is_empty() {
-                return verdict(Outcome::ChecksNothing, scans, now);
-            }
             if let Some((_, check)) = checks
                 .iter()
                 .find(|(path, _)| t.get(&format!("{path}.CHECKED")) != Some(Value::Bool(true)))
@@ -689,8 +818,9 @@ END_PROGRAM
         let broken = LAMP.replace("lamp := t.Q;", "lamp := FALSE;");
         let v = one(&broken, TEST_OK);
         match &v.outcome {
-            Outcome::Failed { check, at } => {
+            Outcome::Failed { check, at, seen } => {
                 assert_eq!(check, "lamp on in time (on within 2 s)");
+                assert_eq!(seen, " (start pb=TRUE, lamp=FALSE)");
                 assert!(
                     (Duration::from_millis(1990)..=Duration::from_millis(2010)).contains(at),
                     "{at:?}"
@@ -698,10 +828,13 @@ END_PROGRAM
             }
             o => panic!("{o:?}"),
         }
-        assert_eq!(v.why(), "lamp on in time (on within 2 s) failed at 2.00 s");
+        assert_eq!(
+            v.why(),
+            "lamp on in time (on within 2 s) failed at 2.00 s (start pb=TRUE, lamp=FALSE)"
+        );
         assert_eq!(
             red(std::slice::from_ref(&v)),
-            vec!["test_x: lamp on in time (on within 2 s) failed at 2.00 s"]
+            vec!["test_x: lamp on in time (on within 2 s) failed at 2.00 s (start pb=TRUE, lamp=FALSE)"]
         );
     }
 
@@ -722,7 +855,10 @@ END_PROGRAM
             settings().limit(Duration::from_secs(5)),
         );
         assert_eq!(v.outcome, Outcome::NeverDone);
-        assert_eq!(v.why(), "never set DONE within 5.00 s");
+        assert_eq!(
+            v.why(),
+            "never set done within 5.00 s: set done := TRUE at the last check"
+        );
         assert_eq!(v.scans, 501);
     }
 
@@ -746,7 +882,7 @@ END_PROGRAM
                 check: "lamp ok".into()
             }
         );
-        assert_eq!(v.why(), "lamp ok never checked");
+        assert_eq!(v.why(), "lamp ok never checked: call every ASSERT you declare");
         assert!(v.red());
         // Called, but only on a branch that never runs: still never checked.
         let branch = never_called.replace(
@@ -781,6 +917,146 @@ END_PROGRAM
             }
         );
         assert_eq!(one(LAMP, TEST_OK).outcome, Outcome::Passed);
+    }
+
+    /// A program port in the wrong section of the test connects nothing:
+    /// the verdict names the port, the section and where it goes, before
+    /// anything runs (the model-written scenarios of 2026-11-12 read an
+    /// output from a plain VAR and failed "at 0.00 s" with no clue why).
+    #[test]
+    fn a_program_port_in_the_wrong_section_is_named_with_its_fix() {
+        let output_in_var = "(* The lamp is on. *)
+PROGRAM test_x
+VAR_OUTPUT start_pb : BOOL; done : BOOL; END_VAR
+VAR lamp : BOOL; n : INT; lamp_ok : ASSERT; END_VAR
+start_pb := TRUE;
+n := n + 1;
+IF n > 150 THEN lamp_ok(COND := lamp); done := TRUE; END_IF;
+END_PROGRAM
+";
+        let v = one(LAMP, output_in_var);
+        assert_eq!(
+            v.why(),
+            "declares lamp in VAR: the program's output lamp is read by declaring it in the test's VAR_INPUT"
+        );
+        assert!(v.red());
+        let input_in_var = output_in_var
+            .replace(
+                "VAR_OUTPUT start_pb : BOOL; done : BOOL; END_VAR",
+                "VAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT done : BOOL; END_VAR",
+            )
+            .replace("VAR lamp : BOOL; n : INT;", "VAR start_pb : BOOL; n : INT;");
+        assert_eq!(
+            one(LAMP, &input_in_var).why(),
+            "declares start pb in VAR: the program's input start pb is driven by declaring it in the test's VAR_OUTPUT"
+        );
+        // A program with its own done: the test's done output is the
+        // program's, misread; the fix names test_done.
+        let counter = "PROGRAM counter
+VAR_INPUT pulse : BOOL; END_VAR
+VAR_OUTPUT done : BOOL; END_VAR
+VAR c : CTU; END_VAR
+c(CU := pulse, R := FALSE, PV := 3);
+done := c.Q;
+END_PROGRAM
+";
+        let done_out = "(* done comes on. *)
+PROGRAM test_x
+VAR_OUTPUT pulse : BOOL; done : BOOL; END_VAR
+VAR n : INT; on : ASSERT; END_VAR
+n := n + 1;
+pulse := (n MOD 2) = 1;
+IF n > 8 THEN on(COND := TRUE); done := TRUE; END_IF;
+END_PROGRAM
+";
+        let v = one(counter, done_out);
+        assert!(matches!(v.outcome, Outcome::Misdeclared { .. }), "{v:?}");
+        assert!(v.why().contains("test_done"), "{}", v.why());
+        // It reads the program's done but ends on a flag of another name:
+        // it would stop when the program's done came on (2026-11-12, the
+        // model's `done_flag`).
+        let other_flag = "(* done comes on at the third pulse. *)
+PROGRAM test_x
+VAR_INPUT done : BOOL; END_VAR
+VAR_OUTPUT pulse : BOOL; done_flag : BOOL; END_VAR
+VAR n : INT; on_at_3 : ASSERT; END_VAR
+n := n + 1;
+pulse := (n MOD 2) = 1;
+IF n = 20 THEN on_at_3(COND := done); done_flag := TRUE; END_IF;
+END_PROGRAM
+";
+        let v = one(counter, other_flag);
+        assert_eq!(v.outcome, Outcome::EndsOnProgramDone);
+        assert!(v.why().contains("declare test_done : BOOL"), "{}", v.why());
+        assert_eq!(
+            one(counter, &other_flag.replace("done_flag", "test_done")).outcome,
+            Outcome::Passed
+        );
+    }
+
+    /// A script that sets an input, checks, sets it again in one scan:
+    /// named as such, with the scan-counter way out.
+    #[test]
+    fn an_input_assigned_twice_in_one_scan_is_named() {
+        let script = "(* The lamp follows start. *)
+PROGRAM test_x
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start_pb : BOOL; done : BOOL; END_VAR
+VAR off : ASSERT; on : ASSERT; END_VAR
+start_pb := FALSE;
+off(COND := NOT lamp);
+start_pb := TRUE;
+on(COND := lamp);
+done := TRUE;
+END_PROGRAM
+";
+        let v = one(LAMP, script);
+        assert_eq!(
+            v.outcome,
+            Outcome::DrivenTwice {
+                port: "start pb".into(),
+                times: 2
+            }
+        );
+        assert!(
+            v.why().starts_with("assigns start pb 2 times in one scan"),
+            "{}",
+            v.why()
+        );
+        // One assignment per branch is one state per scan: not a script.
+        let branches = "(* The lamp follows start. *)
+PROGRAM test_x
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start_pb : BOOL; done : BOOL; END_VAR
+VAR n : INT; on : ASSERT; END_VAR
+n := n + 1;
+IF n < 5 THEN start_pb := FALSE; ELSE start_pb := TRUE; END_IF;
+IF n > 150 THEN on(COND := lamp); done := TRUE; END_IF;
+END_PROGRAM
+";
+        assert_eq!(one(LAMP, branches).outcome, Outcome::Passed);
+    }
+
+    /// A check on the first scan sees nothing of the program yet: the
+    /// verdict says so and shows what the test held.
+    #[test]
+    fn a_failure_on_the_first_scan_says_the_program_had_not_run() {
+        let eager = "(* The lamp is off at first. *)
+PROGRAM test_x
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start_pb : BOOL; done : BOOL; END_VAR
+VAR n : INT; on_at_once : ASSERT; END_VAR
+n := n + 1;
+start_pb := TRUE;
+on_at_once(COND := lamp);
+done := n > 2;
+END_PROGRAM
+";
+        let v = one(LAMP, eager);
+        assert_eq!(
+            v.why(),
+            "on at once failed on the first scan (0.00 s), before the program had run once: what a test reads is one scan old, so check from the second scan on (start pb=TRUE, lamp=FALSE)"
+        );
     }
 
     #[test]

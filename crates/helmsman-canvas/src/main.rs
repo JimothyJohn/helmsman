@@ -23,6 +23,8 @@
     clippy::similar_names
 )]
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod agent_ladder_tests;
 mod agent_marks;
 mod app;
 mod arrange;
@@ -68,6 +70,7 @@ mod monitor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod node_api_tests;
 mod node_token;
+mod palette;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]

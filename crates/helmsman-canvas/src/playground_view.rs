@@ -1853,14 +1853,21 @@ impl Body for PlaygroundView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Claude]
+        &[Tab::Io, Tab::Palette, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
             Tab::Io => self.io(ui, chrome),
+            // The shell draws the palette (`palette::show`).
+            Tab::Palette => {}
             Tab::Claude => self.claude(ui, chrome),
         }
+    }
+
+    fn ask_agent(&mut self, text: &str, ctx: &egui::Context) {
+        text.clone_into(&mut self.instruct.draft);
+        self.send_instruction(ctx);
     }
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
