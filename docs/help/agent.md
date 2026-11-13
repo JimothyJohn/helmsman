@@ -1,8 +1,8 @@
 # The Agent
 
-The Agent is the way you program by describing the machine. Open the
-**Agent** tab in the side panel (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>, then the
-tab), type what the open Structured Text file should do, and press
+The Agent is the way you program by describing the machine. The page
+opens on the **Agent** tab, the first in the left pane: type what the open
+Structured Text file should do, and press
 **Send**, the yellow paper plane (or <kbd>Enter</kbd>). The file is updated in place and the editor shows it; there is
 no conversation to read through.
 
