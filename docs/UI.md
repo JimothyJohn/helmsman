@@ -236,8 +236,10 @@ this; change it here first when a decision changes.
   `interlock`, `phase`/`step`, `hmi`, `timer`, `count`, `latch`, `edge`),
   else a switch for a BOOL input, a pilot lamp for a BOOL output, a gauge
   for a number; a device by its driver (the box, the screen, an I/O
-  module). Next: the standard blocks on the diagram (timer, counter,
-  latch, edge) and a palette to drag from.
+  module). The standard blocks on the diagram carry theirs in the
+  header (timer, counter, latch, edge; `Icons::glyph`), where a rule of
+  the project's `icons.map` naming the block or its type still puts its
+  character instead. Next: a palette to drag from.
 - **Lamps** (Nick, 2026-11-12: the first screen should speak without
   words). The program's BOOL outputs are lamps in the diagram's
   bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a

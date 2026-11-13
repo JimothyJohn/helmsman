@@ -96,11 +96,12 @@ instead of a long lead. Fitting the diagram to the view never shrinks it
 past the point where its labels read: a big program shows its left part
 and you pan.
 
-**Icons.** A block can carry one character at the left of its header, so
-you can tell a timer from a counter at a glance: the standard blocks have
-built-in ones (T for timers, # for counters, ↑ and ↓ for the edge
-detectors, S and R for the bistables, ~ for the blink pattern), and a file
-named `icons.map` in the project adds your own, one rule a line:
+**Icons.** A block carries a small picture at the left of its header, so
+you can tell a timer from a counter at a glance: the standard blocks
+have their own (a stopwatch for the timers, tally marks for the
+counters, a padlock for the bistables, a rising step for the edge
+detectors, ~ for the blink pattern), and a file named `icons.map` in the
+project gives any block one character of your own, one rule a line:
 
 ```
 MOTOR = M        # every block of type MOTOR
@@ -108,8 +109,8 @@ conveyor* = >    # every variable or instance whose name starts so
 TON = ⏱          # over the built-in one
 ```
 
-The project's rules win over the built-in ones. Zoomed out past where the
-label is drawn, the icon stands alone at a readable size.
+The project's rules win over the built-in pictures. Zoomed out past
+where the label is drawn, the icon stands alone at a readable size.
 
 **Lamps.** The program's BOOL outputs are also lamps in the bottom-right
 corner of the diagram, lit as the program runs. An output named after a

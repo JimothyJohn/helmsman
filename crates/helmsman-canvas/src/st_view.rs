@@ -1761,22 +1761,47 @@ fn draw(
         // The block's one-character icon: at the header's left edge beside
         // the label, or alone and large enough to read when the label is
         // too small to draw (Nick, 2026-11-01).
-        let icon = icons.of(n);
-        if !text && let Some(i) = icon {
-            painter.text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                i,
-                font((14.0 * z).max(11.0)),
-                ink.gamma_multiply(fade),
-            );
+        // A standard block takes its picture from the glyph library
+        // instead of its character (`Icons::glyph`).
+        let glyph = icons.glyph(n);
+        let icon = if glyph.is_some() { None } else { icons.of(n) };
+        if !text {
+            if let Some(g) = glyph {
+                let side = (18.0 * z).max(14.0);
+                crate::glyph_lib::paint(
+                    painter,
+                    Rect::from_center_size(r.center(), Vec2::splat(side)),
+                    g,
+                    ink.gamma_multiply(fade),
+                );
+            } else if let Some(i) = icon {
+                painter.text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    i,
+                    font((14.0 * z).max(11.0)),
+                    ink.gamma_multiply(fade),
+                );
+            }
         }
         if text {
             let band = if two_tone { h } else { r };
             // With an icon the label sits right of it, so the two never
             // overlap on a block sized to its label alone.
             let mut centre = band.center();
-            if let Some(i) = icon {
+            if let Some(g) = glyph {
+                let side = 11.0 * z;
+                crate::glyph_lib::paint(
+                    painter,
+                    Rect::from_min_size(
+                        Pos2::new(band.left() + 3.0 * z, band.center().y - side / 2.0),
+                        Vec2::splat(side),
+                    ),
+                    g,
+                    ink.gamma_multiply(fade),
+                );
+                centre.x += 7.0 * z;
+            } else if let Some(i) = icon {
                 painter.text(
                     Pos2::new(band.left() + 3.0 * z, band.center().y),
                     Align2::LEFT_CENTER,

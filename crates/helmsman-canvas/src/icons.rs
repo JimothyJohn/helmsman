@@ -87,6 +87,31 @@ impl Icons {
         true
     }
 
+    /// The library glyph for `n` (`glyph_lib`): a standard block's
+    /// picture, unless a rule of the project's names the block, whose
+    /// character then wins as it always did (Nick, 2026-11-12).
+    #[must_use]
+    pub fn glyph(&self, n: &Node) -> Option<&'static str> {
+        let NodeKind::Fb { instance, fb } = &n.kind else {
+            return None;
+        };
+        let ruled = [fb.as_str(), instance.as_str()].iter().any(|k| {
+            let k = k.to_ascii_uppercase();
+            self.rules.iter().any(|r| {
+                if r.prefix {
+                    k.starts_with(&r.what)
+                } else {
+                    k == r.what
+                }
+            })
+        });
+        if ruled {
+            None
+        } else {
+            crate::glyph_lib::for_block(fb)
+        }
+    }
+
     /// The icon for `n`, if any rule or built-in names its type or name.
     #[must_use]
     pub fn of(&self, n: &Node) -> Option<&str> {
@@ -194,5 +219,29 @@ mod tests {
         assert_eq!(i.of(&fb("P", "TON")), Some("t"));
         assert!(i.update(None), "the file went");
         assert_eq!(i.of(&fb("P", "TON")), Some("T"), "back to the built-in");
+    }
+
+    #[test]
+    fn a_standard_block_is_drawn_with_its_glyph_unless_the_project_names_it() {
+        let none = Icons::default();
+        assert_eq!(none.glyph(&fb("t", "TON")), Some("timer"));
+        assert_eq!(none.glyph(&fb("c", "CTU")), Some("counter"));
+        assert_eq!(none.glyph(&fb("m", "MOTOR")), None, "no picture for a user block");
+        assert_eq!(
+            none.glyph(&node(NodeKind::Read { path: "TON".into() })),
+            None,
+            "blocks only"
+        );
+        // A rule on the type, or on the instance, keeps the character.
+        let by_type = Icons::parse("TON = ⏱");
+        assert_eq!(by_type.glyph(&fb("t", "TON")), None);
+        assert_eq!(by_type.of(&fb("t", "TON")), Some("⏱"));
+        let by_name = Icons::parse("dwell* = D");
+        assert_eq!(by_name.glyph(&fb("dwell_t", "TON")), None);
+        assert_eq!(
+            by_name.glyph(&fb("t", "TON")),
+            Some("timer"),
+            "another instance keeps the glyph"
+        );
     }
 }

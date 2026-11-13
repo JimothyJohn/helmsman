@@ -5202,6 +5202,23 @@ mod glyph_library {
     }
 
     #[test]
+    fn the_traffic_lights_timer_block_carries_the_timer_glyph_in_its_header() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let v = super::sim_view(&h);
+        let (centre, width) = super::node(
+            v,
+            |k| matches!(k, helmsman_diagram::NodeKind::Fb { fb, .. } if fb == "TON"),
+        );
+        let block = Rect::from_center_size(centre, eframe::egui::vec2(width, width));
+        assert_eq!(
+            glyphs_in(&h, block),
+            1,
+            "the TON block's header has the timer glyph"
+        );
+    }
+
+    #[test]
     fn every_output_in_the_io_tab_has_a_glyph_and_the_panel_keeps_its_width() {
         let mut h = Harness::new(App::sim());
         h.app.chrome.tab = Tab::Io;
