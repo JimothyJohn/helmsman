@@ -695,6 +695,8 @@ pub enum Act {
     Send,
     Stop,
     Undo,
+    /// Show this version of the file the Agent changed.
+    Show(crate::agent_marks::Side),
     /// Open this proposal under Proposals (a box).
     Review(u64),
 }
@@ -711,6 +713,12 @@ pub struct View {
     /// Proposals already decided (a box), with their status: shown as
     /// decided instead of offered for review.
     pub decided: std::collections::BTreeMap<u64, String>,
+    /// The Agent's change can be swapped Before / After (the playground),
+    /// and the side the file shows; `None`: Undo instead.
+    pub swap: Option<crate::agent_marks::Side>,
+    /// Height the owner draws under the tab, kept free of the box, pt;
+    /// `None`: the box is three rows (a tab that scrolls, on a box).
+    pub room_below: Option<f32>,
 }
 
 /// A chat box where Enter sends and Shift+Enter or Ctrl+Enter starts a new
@@ -724,17 +732,45 @@ pub(crate) fn chat_box(
     hint: String,
     tip: String,
 ) -> (egui::Response, bool) {
+    chat_box_sized(ui, draft, id_salt, hint, tip, None)
+}
+
+/// [`chat_box`], `height` points tall when given (it scrolls past that),
+/// with Tab indenting instead of leaving the box.
+pub(crate) fn chat_box_sized(
+    ui: &mut egui::Ui,
+    draft: &mut String,
+    id_salt: &str,
+    hint: String,
+    tip: String,
+    height: Option<f32>,
+) -> (egui::Response, bool) {
     use egui::TextBuffer as _;
     use egui::text::{CCursor, CCursorRange, CharIndex};
 
-    let mut out = egui::TextEdit::multiline(draft)
-        .id_salt(id_salt)
-        .hint_text(hint)
-        .desired_rows(3)
-        .desired_width(f32::INFINITY)
-        .return_key(None)
-        .show(ui)
-        .tip(tip);
+    let edit = |draft: &mut String, ui: &mut egui::Ui| {
+        let e = egui::TextEdit::multiline(draft) // tip: exempt, `.tip(tip)` on its output below
+            .id_salt(id_salt)
+            .hint_text(hint)
+            .desired_width(f32::INFINITY)
+            .return_key(None);
+        match height {
+            Some(h) => e.lock_focus(true).min_size(egui::vec2(0.0, h)).show(ui),
+            None => e.desired_rows(3).show(ui),
+        }
+    };
+    let mut out = match height {
+        Some(h) => {
+            egui::ScrollArea::vertical()
+                .id_salt((id_salt, "scroll"))
+                .max_height(h)
+                .auto_shrink([false, true])
+                .show(ui, |ui| edit(draft, ui))
+                .inner
+        }
+        None => edit(draft, ui),
+    }
+    .tip(tip);
     let mut send = false;
     if out.response.has_focus() {
         // The modifiers of the key event itself, as TextEdit reads them.
@@ -759,10 +795,27 @@ pub(crate) fn chat_box(
                     |r| r.sorted_cursors(),
                 );
                 draft.delete_char_range(from.index..to.index);
-                draft.insert_text("\n", from.index);
+                // A list goes on: the new line starts with the bullet (or
+                // the next number) and the indent of the line it breaks;
+                // on an empty item it ends the list instead.
+                let at = draft
+                    .char_indices()
+                    .nth(from.index.0)
+                    .map_or(draft.len(), |(b, _)| b);
+                let start = draft[..at].rfind('\n').map_or(0, |k| k + 1);
+                let (insert, cut) = continue_list(&draft[start..at]);
+                let mut caret = from.index.0;
+                if cut > 0 {
+                    let line_start = draft[..start].chars().count();
+                    draft.delete_char_range(CharIndex(line_start)..CharIndex(line_start + cut));
+                    caret = line_start;
+                } else {
+                    draft.insert_text(&insert, CharIndex(caret));
+                    caret += insert.chars().count();
+                }
                 out.state
                     .cursor
-                    .set_char_range(Some(CCursorRange::one(CCursor::new(CharIndex(from.index.0 + 1)))));
+                    .set_char_range(Some(CCursorRange::one(CCursor::new(CharIndex(caret)))));
                 out.state.store(ui.ctx(), out.response.id);
             } else {
                 send = true;
@@ -773,29 +826,88 @@ pub(crate) fn chat_box(
     (out.response.response, send)
 }
 
-/// The instruction box, Send or Stop, Undo, and the status line with
-/// the reason.
+/// What a new line in a prompt starts with after `line` (the text before
+/// the caret on its line): a newline and the line's indent and bullet
+/// (`- `, `* `, `• `, or the next `N. ` / `N) `). An item with nothing in it
+/// ends the list: then nothing is inserted and the second value is how many
+/// characters of the line to remove (its bullet).
+#[must_use]
+pub fn continue_list(line: &str) -> (String, usize) {
+    let indent: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+    let rest = &line[indent.len()..];
+    let bullet = ["- ", "* ", "• "]
+        .iter()
+        .find(|b| rest.starts_with(**b))
+        .map(|b| ((*b).to_string(), (*b).to_string()))
+        .or_else(|| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            let n: u32 = digits.parse().ok()?;
+            let tail = &rest[digits.len()..];
+            [". ", ") "]
+                .iter()
+                .find(|s| tail.starts_with(**s))
+                .map(|s| (format!("{digits}{s}"), format!("{}{s}", n + 1)))
+        });
+    match bullet {
+        Some((this, _)) if rest.trim_end() == this.trim_end() => {
+            (String::new(), indent.chars().count() + this.chars().count())
+        }
+        Some((_, next)) => (format!("\n{indent}{next}"), 0),
+        None => (format!("\n{indent}"), 0),
+    }
+}
+
+/// The instruction box, as tall as the tab leaves it, then one row: Send
+/// or Stop, Before / After (or Undo), and what is happening. A change that
+/// landed shows on the canvas and in the code, marked; one that did not
+/// goes to the Messages as an error, and the box is outlined red with one
+/// line that opens them (Nick, 2026-11-13).
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruct, v: &View) -> Option<Act> {
     use egui::RichText;
 
-    use crate::st_view::brand::{GREEN, RED, WARN};
+    use crate::agent_marks::Side;
+    use crate::st_view::brand::{RED, WARN};
 
     let t = crate::theme::theme(ui);
+    let red = t.ink(RED);
     let mut act = None;
     let target = &v.target;
-    // Fits three rows at the panel's width: a longer hint made the empty
-    // field taller, and it shrank on the first keystroke.
-    let (field, enter) = chat_box(
-        ui,
-        &mut s.draft,
-        "agent-instruction",
-        format!("What should {target} do? e.g. Latch the lamp until stop"),
-        format!(
-            "Tell the Agent what {target} should do. It changes the file, checks the change with \
-             scenarios and the requirement tests, and writes it only if every check passes. \
-             Enter sends; Shift+Enter or Ctrl+Enter starts a new line."
-        ),
+    let failed = s
+        .outcome
+        .as_ref()
+        .is_some_and(|o| matches!(o.kind, Kind::Refused | Kind::Failed));
+    // The box takes the tab's height, less one row of buttons, one of
+    // status and what the owner draws under it.
+    let row = ui.spacing().interact_size.y;
+    let height = v
+        .room_below
+        .map(|below| (ui.available_height() - 2.0 * row - 24.0 - below).max(4.0 * row));
+    let tip = format!(
+        "Tell the Agent what {target} should do. It changes the file, checks the change with \
+         scenarios and the requirement tests, and writes it only if every check passes. \
+         Enter sends; Shift+Enter or Ctrl+Enter starts a new line and goes on with a list \
+         (- , * or 1. ); Tab indents."
     );
+    let hint = format!("What should {target} do? e.g. Latch the lamp until stop");
+    let (field, enter) = if let Some(run) = &s.run {
+        // While it works the box shows what was sent (a palette drop is
+        // an instruction too), and takes no typing.
+        let mut sent = run.instruction.clone();
+        ui.add_enabled_ui(false, |ui| {
+            chat_box_sized(ui, &mut sent, "agent-instruction", hint, tip, height)
+        })
+        .inner
+    } else {
+        chat_box_sized(ui, &mut s.draft, "agent-instruction", hint, tip, height)
+    };
+    if failed {
+        ui.painter().rect_stroke(
+            field.rect.expand(1.0),
+            4.0,
+            egui::Stroke::new(2.0, red),
+            egui::StrokeKind::Outside,
+        );
+    }
     chrome.hit("agent instruction", field.rect);
     let why_not = v.blocked.clone().or_else(|| s.refusal());
     ui.horizontal_wrapped(|ui| {
@@ -818,7 +930,30 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
                 act = Some(Act::Send);
             }
         }
-        if let Some(u) = s.undo() {
+        if let Some(side) = v.swap {
+            for (key, label, this, tip) in [
+                (
+                    "agent before",
+                    "Before",
+                    Side::Before,
+                    "Shows the file as it was before the Agent's change, running. Green: what the change takes out; a red rule: where it adds. Saving keeps the version shown.",
+                ),
+                (
+                    "agent after",
+                    "After",
+                    Side::After,
+                    "Shows the file with the Agent's change, running. Green: what it added; a red rule: what it took out.",
+                ),
+            ] {
+                let r = ui
+                    .selectable_label(side == this, RichText::new(label).size(18.0))
+                    .tip(tip);
+                chrome.hit(key, r.rect);
+                if r.clicked() && side != this {
+                    act = Some(Act::Show(this));
+                }
+            }
+        } else if let Some(u) = s.undo() {
             let r = match &v.undo_blocked {
                 None => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, true, false).tip(format!(
                     "Undo: puts {} back as it was in revision {}. The change stays in History.",
@@ -832,19 +967,18 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             }
         }
     });
-    ui.add_space(6.0);
     if let Some(run) = &s.run {
         ui.horizontal_wrapped(|ui| {
             ui.spinner();
             let (words, tip) = if run.retries == 0 {
                 (
-                    format!("Updating {}…", run.target()),
+                    format!("Asking the Agent to change {}…", run.target()),
                     "The Agent is writing the change. It is checked before it is written.".to_string(),
                 )
             } else {
                 (
                     format!(
-                        "The answer did not pass its checks, so the Agent is fixing it (try {} of {}).",
+                        "The answer did not pass its checks: the Agent is fixing it (try {} of {}).",
                         run.retries + 1,
                         verify::RETRIES + 1
                     ),
@@ -858,36 +992,34 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             chrome.hit("agent working", r.rect);
         });
     } else if let Some(o) = &s.outcome {
-        let color = match o.kind {
-            Kind::Applied => crate::theme::theme(ui).ink(GREEN),
-            Kind::Refused | Kind::Failed => crate::theme::theme(ui).ink(RED),
-            Kind::Said => crate::theme::theme(ui).ink(WARN),
-            Kind::Undone => t.fg,
-        };
-        let tip = match o.kind {
-            Kind::Applied => {
-                "The change is in the file and saved as a revision. Its History entry holds the instruction, the scenarios and the Agent's answer."
+        match o.kind {
+            Kind::Refused | Kind::Failed => {
+                let r = ui
+                    .add(
+                        egui::Label::new(
+                            RichText::new("Not written. The Messages say why.")
+                                .strong()
+                                .color(red),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
+                    .tip(format!("{} Click to open the Messages.", o.status));
+                chrome.hit("agent result", r.rect);
+                if r.clicked() {
+                    chrome.trend = true;
+                    chrome.bottom = crate::editor::Bottom::Messages;
+                }
             }
-            Kind::Refused => {
-                "The page took the code into a copy of the project and ran the Agent's scenarios and the requirement tests on it. The file was not touched."
+            Kind::Said => {
+                // The Agent's own words (a question, or why it could not):
+                // an answer to read, so it stays here.
+                let r = ui
+                    .add(egui::Label::new(RichText::new(&o.status).color(t.ink(WARN))).wrap())
+                    .tip("The Agent answered without changing the file.");
+                chrome.hit("agent result", r.rect);
             }
-            Kind::Said => "The Agent answered without changing the file.",
-            Kind::Failed => "Nothing was written.",
-            Kind::Undone => "Undo restored the revision before the change.",
-        };
-        let r = ui
-            .add(egui::Label::new(RichText::new(&o.status).strong().color(color)).wrap())
-            .tip(tip);
-        chrome.hit("agent result", r.rect);
-        if let Some(w) = &o.why {
-            let r = ui
-                .add(egui::Label::new(format!("Why: {w}")).wrap())
-                .tip("The Agent's reason for the change, in its words.");
-            chrome.hit("agent why", r.rect);
-        }
-        for p in &o.problems {
-            ui.add(egui::Label::new(RichText::new(p).color(crate::theme::theme(ui).ink(RED))).wrap())
-                .tip("What failed.");
+            // A change that landed shows on the canvas and in the code.
+            Kind::Applied | Kind::Undone => {}
         }
         if !o.review.is_empty() {
             ui.horizontal_wrapped(|ui| {
@@ -902,7 +1034,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
                         continue;
                     }
                     let r = ui
-                        .small_button(format!("Review #{id}"))
+                        .button(format!("Review #{id}"))
                         .tip("Opens this proposal under Proposals.");
                     chrome.hit("agent review", r.rect);
                     if r.clicked() {

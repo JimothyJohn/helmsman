@@ -81,7 +81,7 @@ TAB_CODE = (106, 71)
 # The fold arrow of the Code tab's second line, in the gutter.
 FOLD_LINE_2 = (14, 172)
 TAB_IO = (1230, 71)
-TAB_AGENT = (1271, 71)
+TAB_AGENT = (1312, 71)
 TAB_TREND = (344, 600)
 TAB_MESSAGES = (385, 600)
 HEADER_RIGHT = (1150, 8, 200, 36)
