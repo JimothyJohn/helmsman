@@ -272,7 +272,8 @@ fn a_red_test_exits_1_and_the_report_says_why() {
         "{xml}"
     );
     assert!(
-        xml.contains("<failure message=\"lamp dark (dark &lt;&amp;&gt; &quot;ü&quot;) failed at 0.02 s\" type=\"failed\">"),
+        xml.contains("<failure message=\"lamp dark (dark &lt;&amp;&gt; &quot;ü&quot;) failed at 0.02 s (")
+            && xml.contains(")\" type=\"failed\">"),
         "{xml}"
     );
 }

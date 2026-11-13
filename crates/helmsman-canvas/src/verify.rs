@@ -191,7 +191,7 @@ pub fn scenarios(answer: &str, taken: &[String]) -> (Vec<Scenario>, Vec<String>)
         let file = if let Some(old) = &replaced {
             if !taken.contains(old) {
                 problems.push(format!(
-                    "Scenario {k} replaces {}, which the project does not have.",
+                    "Scenario {k} replaces {}, which the project does not have: only a test listed in <requirement_tests> can be replaced; give the scenario a name of its own.",
                     old.trim_end_matches(".st")
                 ));
                 continue;
@@ -677,7 +677,7 @@ fn indistinct(
         .map(|v| v.file.trim_end_matches(".st").to_string())
         .collect();
     Some(format!(
-        "The scenario does not distinguish the change: {} pass on {file} as it was before, so they would pass without the change. Send a scenario that fails on the old file and passes on the new one.",
+        "The scenario does not distinguish the change: {} pass on {file} as it was before, so they would pass without the change. Send a scenario that fails on the old file and passes on the new one, or, if the instruction keeps what the file does (a rename, a tidy, moving code into a FUNCTION_BLOCK), add the line `Unchanged behaviour: ` and one sentence why right after the Why line.",
         names.join(", ")
     ))
 }
@@ -705,6 +705,11 @@ pub fn next(check: &Check, retries: u8, asked: bool) -> Next {
             m.push_str("- ");
             m.push_str(&p);
             m.push('\n');
+        }
+        if check.scenarios.iter().any(|r| !r.passed) {
+            m.push_str(
+                "A failed scenario lists, in brackets, the values it held at the failing scan: the inputs it drove then and the outputs it read. If those inputs are not the case the check is about, the scenario's timing is wrong, so fix the scenario; if they are, fix the code.\n",
+            );
         }
         m.push_str(
             "Answer again in full: the whole file with the fix made in it, in one ```st block, and the ```st scenario blocks that check it.",
