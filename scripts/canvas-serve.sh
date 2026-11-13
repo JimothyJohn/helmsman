@@ -7,6 +7,12 @@
 # "Simulate in this browser" once the box is unreachable). Refresh the
 # page after an edit (no auto-reload).
 #
+# The Agent tab talks to the relay's free chat (DeepSeek through
+# OpenRouter), as the published playground does: HELMSMAN_FREE_CHAT_URL
+# defaults to the relay's demo function, whose DemoOrigins include this
+# page's LAN and loopback origins on :8790 (agent-relay stack, 2026-11-12).
+# Set it empty to get the key field instead (HELMSMAN_FREE_CHAT_URL= ...).
+#
 # Usage: scripts/canvas-serve.sh [PORT]      # default 8790
 # Stop:  Ctrl-C (stops both), or kill $(lsof -tiTCP:PORT -sTCP:LISTEN)
 set -euo pipefail
@@ -18,8 +24,18 @@ if lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null; then
     echo "port $port is taken: kill \$(lsof -tiTCP:$port -sTCP:LISTEN)" >&2
     exit 1
 fi
+export HELMSMAN_FREE_CHAT_URL="${HELMSMAN_FREE_CHAT_URL-https://iup63z6bv5rz2fwtwexyw3pvoi0spenq.lambda-url.us-east-1.on.aws}"
+if [ -n "$HELMSMAN_FREE_CHAT_URL" ]; then
+    echo "Agent tab: the free chat at $HELMSMAN_FREE_CHAT_URL"
+else
+    echo "Agent tab: the visitor's own key (HELMSMAN_FREE_CHAT_URL is empty)"
+fi
 dist="$PWD/target/canvas-dist"
 mkdir -p "$dist"
+# The page waits for the first build below; a stale index.html from the
+# last run would let it serve the previous build while trunk compiles
+# (a pull was "not showing" for that reason, 2026-11-12).
+rm -f "$dist/index.html"
 (cd crates/helmsman-canvas && trunk watch --release --dist "$dist") &
 watch=$!
 trap 'kill "$watch" 2>/dev/null; wait "$watch" 2>/dev/null || true' EXIT
