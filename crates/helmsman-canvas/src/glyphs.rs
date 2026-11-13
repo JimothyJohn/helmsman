@@ -57,6 +57,55 @@ pub enum Icon {
     Messages,
     /// Four squares: the Palette tab (the glyph library's pieces).
     Palette,
+    /// A paper plane: send to the Agent (Nick, 2026-11-13: no words).
+    Send,
+    /// An arrow hooked back to the left: undo the Agent's last change.
+    Undo,
+    /// A screen on a stand: the Monitor.
+    Monitor,
+}
+
+/// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
+/// app should speak in pictures) at the size the worded buttons had, its
+/// glyph in place of the word: `primary` fills it in the brand yellow
+/// with black ink, as the worded Send was. The caller tips it with what
+/// it does.
+pub fn action(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool) -> Response {
+    let size = Vec2::new(TAP * 1.5, TAP * 0.75);
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, r) = ui.allocate_exact_size(size, sense);
+    let t = theme(ui);
+    let painter = ui.painter();
+    let hot = enabled && r.hovered();
+    let (fill, ink) = match (enabled, primary) {
+        (false, _) => (t.rule.gamma_multiply(0.5), t.muted.gamma_multiply(0.5)),
+        (true, true) => (
+            if hot { YELLOW.gamma_multiply(0.85) } else { YELLOW },
+            crate::st_view::brand::BLACK,
+        ),
+        (true, false) => (
+            if hot {
+                ui.style().interact(&r).bg_fill
+            } else {
+                t.rule
+            },
+            t.fg,
+        ),
+    };
+    painter.rect_filled(rect, CornerRadius::same(5), fill);
+    let ink = if enabled && icon == Icon::Stop {
+        t.ink(RED)
+    } else {
+        ink
+    };
+    let side = rect.height() * 0.56;
+    draw(
+        painter,
+        Rect::from_center_size(rect.center(), Vec2::splat(side)),
+        icon,
+        ink,
+    );
+    r
 }
 
 /// The side of a glyph button, points.
@@ -236,6 +285,59 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 vec![at(0.2, 0.72), at(0.42, 0.38), at(0.62, 0.58), at(0.96, 0.1)],
                 stroke,
             ));
+        }
+        Icon::Send => {
+            // A paper plane pointing right: its outline, and the fold.
+            let tip = Pos2::new(r, c.y);
+            let fold = Pos2::new(l + b.width() * 0.32, c.y);
+            p.add(egui::Shape::closed_line(
+                vec![Pos2::new(l, t + w), tip, Pos2::new(l, bt - w), fold],
+                stroke,
+            ));
+            p.line_segment([fold, tip], stroke);
+        }
+        Icon::Undo => {
+            // From the right, a half ring down and back left, ending in an
+            // arrowhead pointing left at the top.
+            let radius = b.height() * 0.3;
+            let top = t + b.height() * 0.3;
+            let centre = Pos2::new(r - radius - w * 0.5, top + radius);
+            let n = 16;
+            let mut pts: Vec<Pos2> = (0..=n)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let a = -std::f32::consts::FRAC_PI_2 + (k as f32 / n as f32) * std::f32::consts::PI;
+                    Pos2::new(centre.x + radius * a.cos(), centre.y + radius * a.sin())
+                })
+                .collect();
+            pts.insert(0, Pos2::new(l + b.width() * 0.25, top));
+            pts.push(Pos2::new(l + b.width() * 0.3, top + 2.0 * radius));
+            p.add(egui::Shape::line(pts, stroke));
+            let head = Pos2::new(l, top);
+            p.add(egui::Shape::convex_polygon(
+                vec![
+                    head,
+                    Pos2::new(l + b.width() * 0.32, top - b.height() * 0.22),
+                    Pos2::new(l + b.width() * 0.32, top + b.height() * 0.22),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+        }
+        Icon::Monitor => {
+            let screen = Rect::from_min_max(Pos2::new(l, t), Pos2::new(r, bt - b.height() * 0.28));
+            p.rect_stroke(screen, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+            p.line_segment(
+                [Pos2::new(c.x, screen.bottom()), Pos2::new(c.x, bt - w * 0.5)],
+                stroke,
+            );
+            p.line_segment(
+                [
+                    Pos2::new(l + b.width() * 0.25, bt - w * 0.5),
+                    Pos2::new(r - b.width() * 0.25, bt - w * 0.5),
+                ],
+                stroke,
+            );
         }
         Icon::Palette => {
             let g = b.width() * 0.16;

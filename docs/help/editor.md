@@ -19,7 +19,8 @@ One row along the top.
   simulation's state and clock sit beside the run glyphs over the
   diagram.
 - On the right: the project's name, a mark when it has unsaved edits, the
-  **Editor | Monitor** toggle, a yellow **waiting** badge when proposals
+  **Editor | Monitor** toggle (the code brackets and a screen; hover
+  either for its name), a yellow **waiting** badge when proposals
   wait for an approver (it opens the Proposals screen) and, on a box,
   **Sign in**.
 
