@@ -4,79 +4,29 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **Move Ctrl S, Ctrl F and Ctrl G off the browser's chords too?** #322 moved every canvas shortcut that a browser owns and kept six as the one exception: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F, Ctrl G, Ctrl Shift G. Every editor on the web takes these, and the browser's own default (save the page, find in the page) does no harm if it slips through. The question was left in the PR body and the handoff file and never reached the board. Recommended: keep them.
+- [ ] **Close the ESP32 node cards now that the P4 is the embedded board?** — Why it matters: `node-resume`, `node-modbus` and `poe-iso-modbus-rerun` were opened when the only node boards were the ESP32 POE2 and POE-ISO, and between them they ask one thing: can a board that cheap scan a real program in time? On the ESP32 the 4k-statement bench took 28 ms against a 10 ms period. The P4 answered it on 2026-11-10 with the same node image: the chase in 51 to 72 us a scan, a 431-line cell in about 1 ms, zero late scans at 10 ms (docs/EDGE.md Phase 3), and you named the P4 the runtime and embedded board (2026-11-13). What closing drops: finding out why the ESP32 is slow, the POE2's PSRAM bug, and the POE-ISO rerun of #337's Modbus fix. Those matter only if a product ships on an ESP32. What it keeps: G4 (overruns under 1 % over 10 minutes) and G5 (the block goes safe when the node's cable is pulled) were never run on any board, so they move onto `node-p4-followups` as P4 runs.
   needs: your call
-  result: the exception in `hotkeys::BROWSER` stays, or the six move (a one-line change per chord, the test `no_shortcut_is_a_browsers` then covers them)
-  options: keep them (recommended) | move all six | move Ctrl S only
+  result: the three cards leave the board and G4 / G5 become P4 runs; or they stay parked as they are
+  options: close all three, G4 and G5 to the P4 (recommended) | keep them parked | resume the ESP32 work
   est: 5m
   difficulty: low
-  id: hotkeys-editor-chords
-  asked: 2026-11-10
+  id: node-esp32-close
+  asked: 2026-11-13
   by: claude-session
 
-- [ ] **Keep the try box, or retire it?** — the standing box in `../helmsman-try` (LaunchAgent `io.advin.helmsman-try`, https :8081) has been down since the Studio's desktop session logged out on 2026-11-10 at 17:06, and nothing on the P4 bench needed it. What it costs while it runs: it holds the E1213's one EtherNet/IP connection (firmware V3.1 takes a single Class 1 connection of any kind), so a node can only read that unit over Modbus beside it. What it gives: a box that is always up for the canvas, the relay and a demo. Nick, 2026-11-10: "I'm really not sure why it's even needed."
+- [ ] **Who opens the library pull request when the agent publishes a device profile?** — Why it matters: the second tool of `relay-device-profile-agent` sends a profile the user checked to helmsman-devices as a pull request, so whatever opens it holds a GitHub credential that can write to that repository. On the relay that is one fine-grained token, limited to pull requests on helmsman-devices, kept in Secrets Manager, and no customer box ever holds a GitHub secret. On the box, every box would need its own token. The first tool (a profile from an EDS, checked by `Profile::parse`) needs neither and can be built now against the Murrelektronik 55086's EDS.
   needs: your call
-  result: either it comes back when you log in at the Studio (RunAtLoad; `launchctl ... gui/501/...` answers 125 until then) and stays as documented, or its entry leaves CLAUDE.md, the checkout is unlocked and removed, and a box is started by hand when one is wanted
-  options: keep it as it is | keep it but off the E1213 (its link over Modbus, the unit free for a node) | retire it
+  result: the publish tool's shape, and the token it needs (you create it; a hand-off script names the scopes)
+  options: the relay's own fine-grained token (recommended) | each box's own token | no publish tool: the user opens the pull request by hand
   est: 5m
   difficulty: low
-  id: try-box-keep-or-retire
-  asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Update the bench E1213 from firmware 3.1?** — Moxa's release notes (docs/devices/moxa-iologik-e1213.md, "Release notes") list as fixed in v3.3 "Ethernet/IP cannot establish second input-only session" and in v3.2 "implicit messages are sent to port 2222 by default"; the unit is v3.1 and today refuses any second cyclic connection and takes O->T on port 5222. v4.0 turns EtherNet/IP off by default, so it has to be switched on again after that step. The notes say to update one release at a time: 3.2, 3.3, 3.4, 4.0. Not said and not tested: whether Input Only then runs beside an Exclusive Owner.
-  needs: your call, then your hands on the unit's web console for each step (firmware files from Moxa's site)
-  result: a unit a node and a box can both hold a cyclic connection to, or a measured no; the port-5222 handling and the one-connection notes are then rechecked with `scratch/enip-fo-probe.py` and `scratch/enip-hold-probe.py`
-  options: update to 3.3 only (the fix, two steps) | update to 4.0 (four steps) | leave it at 3.1
-  est: 1h
-  difficulty: low
-  id: e1213-firmware-update
-  asked: 2026-11-10
-  by: claude-session
-
-- [ ] **What does a node talk TLS to?** — the last open item of the P4 bring-up is "mbedtls-rs at the fork's main with Homebrew clang" (the recipe compiles for the P4, docs/EDGE.md Phase 3), but nothing says what the first TLS connection is for. The candidates in EDGE.md: the uplink to the relay with a per-node client certificate, or the deploy channel (the node's own API over https, plus a signed image for node-ota). They pull different work in: a client handshake and a certificate store, or a server certificate on the node and the browser trusting it.
-  needs: your call before anything is built
-  result: one TLS connection on the P4 with a named peer, and the memory and handshake time it costs written into EDGE.md
-  options: client to the relay first | https on the node's own API first | not yet (plain HTTP on the plant network, token as today)
-  est: 5m
-  difficulty: low
-  id: node-tls-first-peer
-  asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Should a flood of refused requests close the free chat, or only mail you?** — in the 2026-11-11 interview you picked "refusals piling up" as an alarm and "close the free route" as what an alarm does. As built (agent-relay `feat/demo-route`, docs/demo.md), refusals (wrong origin, oversized or malformed bodies) past 60 in five minutes raise the alarm and leave the chat open. A refusal spends nothing, and closing on them would let anyone who can send sixty bad requests turn the demo off for everyone until you reopen it. The two counters that do close it (one address 40 turns an hour, 60 turns in five minutes) count requests that cost money.
-  needs: your call
-  result: the relay's `refuse` keeps its alarm line, or also closes the chat (one line, plus its test)
-  options: alarm only, as built (recommended) | close on refusals too
-  est: 5m
-  difficulty: low
-  id: free-chat-refusals
-  asked: 2026-11-11
-  by: claude-session
-
-- [ ] **Devices tab buttons as glyphs too?** — the glyph sweep (#378, merged 2026-11-13) made the Agent and Help action buttons (Send, Stop, Undo, Ask for help) and the Editor | Monitor switch into glyphs. Words stayed on menus, form labels, dialog confirmations (OK, Cancel, Restore this revision, Use this code), Release on forced inputs, Sign in, Refresh, and the Devices tab's Scan / Edit / Delete / Use this device; the last group only because #375 (device configuration on the Devices tab) had devices.rs open.
-  needs: your call, and #375 landed for the Devices part
-  result: the Devices buttons become glyphs with tooltips (glyphs::action), or the words stay as they are
-  options: Devices buttons as glyphs once #375 lands (recommended) | keep their words | also drop words on dialog confirmations
-  est: 1h
-  difficulty: low
-  id: glyphs-devices-buttons
+  id: device-profile-publish-path
   asked: 2026-11-13
   by: claude-session
 
 ## Needs your hands
 
-- [ ] **Promote the free playground chat: helmsman dev → master** — the playground's Agent tab on the relay's demo function instead of a visitor's key (interview 2026-11-11). Everything else is done: the relay is deployed on OpenRouter with the demo function for https://helmsman.advin.io (agent-relay main, stack updated 2026-11-12 UTC), one real turn through the live demo answered and was counted, and docs/playground is built with the demo's address. The published site still serves the old page until master moves.
-  needs: your dev → master merge in helmsman
-  result: anyone can use the playground's Agent tab with no key; a bad day costs at most the demo key's daily limit; `~/github/agent-relay-deploy/scripts/demo.sh status | open | close | survey` is the switch (the alarms mail you when it closes itself)
-  est: 5m
-  difficulty: low
-  id: free-chat-turn-on
-  asked: 2026-11-11
-  by: claude-session
-  notes: Seen in a browser against a local relay, not against the live one: a page served from another origin is refused there by design, so the first look at the live page is yours after the promotion. In the local run the model's answer failed the page's checks three times on one instruction (DeepSeek V4.1 Flash, thinking off). The survey's buttons name model vendors, which the voice rule forbids elsewhere. The help pictures (docs/help/img) may still show the key field; `make help-shots` retakes them. Once the page is live, the key route can come out of the page (claude.rs Route::Direct, key_ui, the model picker) as its own change. Not exercised yet: the alarm filters firing on a real close, and the survey route against DynamoDB.
-
-- [ ] **Fit the P4's PoE module and measure its isolation** — the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
+- [ ] **Fit the P4's PoE module and measure its isolation** — Why it matters: a node in a cabinet is powered by its Ethernet cable alone, and today no run has proven that. The PoE module turns the cable's 48 V into the board's supply; if its output is not isolated from the cable side, a USB cable plugged in at the same time ties the laptop's ground to the PoE supply's return, and current can flow through the laptop's USB port. Nobody knows yet which it is, so `scripts/node-flash.sh` makes you pull Ethernet before every USB flash. One measurement settles it: the prompt goes away, or becomes a hard rule. the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
   needs: the PoE module on the board, a meter, a PoE port
   result: "isolated" or "not isolated" written into `board.rs` and `scripts/node-flash.sh` (which then keeps or drops its Ethernet-unplugged prompt and `NODE_P4_NO_POE`), and the node seen running on PoE alone
   est: 30m
@@ -85,7 +35,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **Put the POE-ISO back on the network for one run** — the P4 took its switch port on 2026-11-10; poe-iso-rack-03 is still on USB (/dev/cu.usbserial-1130). #337 changed its Modbus client and I/O task as it did the P4's (wait for the link, quick retries before the back-off) and that crate was built and linted, not run. Also not tried: a flash of it with espflash 4.7.0 (only `board-info` was).
+- [ ] **Put the POE-ISO back on the network for one run** — Why it matters: only if the ESP32 boards stay in the plan (question `node-esp32-close`). #337 fixed the node's Modbus link coming up late after boot and was run on the P4; the POE-ISO uses a different Ethernet driver, so the same fix there is compiled and unproven. the P4 took its switch port on 2026-11-10; poe-iso-rack-03 is still on USB (/dev/cu.usbserial-1130). #337 changed its Modbus client and I/O task as it did the P4's (wait for the link, quick retries before the back-off) and that crate was built and linted, not run. Also not tried: a flash of it with espflash 4.7.0 (only `board-info` was).
   needs: a second switch port (or the P4's cable for ten minutes); tell a session when it is in
   result: the POE-ISO flashed at the dev tip with espflash 4.7, its block up at link-up, and the line in docs/EDGE.md that says "not run" gone
   est: 15m
@@ -94,19 +44,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **Promote dev to master: 280 commits, the guided tour among them** — the last dev → master merge was #246 on 2026-11-06. #248 (the playground tour) landed one minute after it and #251 (the playground rebuilt with the tour) is merged into dev, so the only step left for /playground/?tour is the promotion. Everything since waits with it: the node (POE-ISO and P4), read-lock, Help mode, the hotkeys, the 2026-11-08 review fixes (#303 to #308). dev's last CI run is green (0d840f7, 2026-11-10).
-  needs: your dev → master merge; `gh pr list --base dev` first (2026-11-10: none open, but fix/node-modbus-connect is in flight in a live session and will open one)
-  result: helmsman.advin.io/playground/?tour runs the tour and the site matches dev
-  est: 15m
-  difficulty: low
-  id: tour-live
-  asked: 2026-11-06
-  by: claude-session
-
-- [ ] **Log in at the Studio to bring the try box back, then rebuild it** — the try box has been down since the desktop session logged out at 17:06 CST on 2026-11-10: no helmsman-plc process, nothing on :8081, `/dev/console` belongs to root (checked 19:47). `launchctl kickstart` from SSH answers 125 until someone logs in at the Studio's screen; RunAtLoad then starts the box by itself. It comes back on the build of 2026-11-08 (e7f1ae2, #300), 52 merges behind dev, so rebuild after.
-  needs: a login at the Studio's own screen (not SSH); then `~/github/helmsman-try/scratch/16-rebuild.sh` from your terminal there (it builds at the dev tip, signs and kickstarts the LaunchAgent)
-  result: https://10.0.0.41:8081/ answers at the dev tip with the E1213 up
-  notes: the box takes the E1213's one Class 1 connection as soon as it starts, so a P4 `enip` run (card enip-task-bench-checks) has to happen before the login or with the box stopped (`launchctl bootout gui/501/io.advin.helmsman-try`). Check after: `curl -sk -H "Authorization: Bearer $(cat ~/github/helmsman-try/scratch/try-state/api-token)" https://127.0.0.1:8081/api/devices` shows iologik_e1213 up.
+- [ ] **Rebuild the try box at the dev tip** — it came back when you logged in at the Studio (pid 86028 on 2026-11-13, :8081 answers, the E1213 up), but on the build of 2026-11-08 (e7f1ae2, #300), about 90 merges behind dev: no device profiles, no device configuration, no glyphs. Best done after `studio-box-no-io` lands, so the rebuilt box can be switched off the devices for P4 work.
+  needs: `~/github/helmsman-try/scratch/16-rebuild.sh` from your terminal at the Studio (it builds at the dev tip, signs, and restarts the LaunchAgent)
+  result: https://10.0.0.41:8081/ at the dev tip with the E1213 up
+  notes: check after: `curl -sk -H "Authorization: Bearer $(cat ~/github/helmsman-try/scratch/try-state/api-token)" https://127.0.0.1:8081/api/devices` shows iologik_e1213 up.
   est: 10m
   difficulty: low
   id: try-box-login
@@ -122,26 +63,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-02
   by: claude-session
   notes: 2026-11-06: helmsman-devices PR #1 (index.json) is merged into its dev; main has no index.json yet. Left: dev → main there (yours), then tick.
-
-- [ ] **Look at the box UI on the Pi, with projects** — the bench Pi (nick@192.168.3.20, on the Studio link) runs helmsman-plc with the relay on agent v7 (a real turn 2026-11-04). Its API and canvas do not answer on the LAN (8080 and 443 closed from the Studio, 2026-11-06), so reach it through SSH. Whether it already runs `--projects` and has an engineer account is unchecked (the agent's SSH has no key loaded).
-  needs: your key in the agent (`ssh-add --apple-use-keychain ~/.ssh/id_ed25519`)
-  result: you sign in on the Pi as an engineer and edit, deploy and force a project
-  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi. connect from the Studio: `ssh -L 8080:127.0.0.1:8080 nick@192.168.3.20`, then http://127.0.0.1:8080/ ; from the Air: `ssh -J nick@10.0.0.41 -L 8080:127.0.0.1:8080 nick@192.168.3.20`, same URL. Not on projects yet: `scripts/pi-deploy-plc.sh nick@192.168.3.20` (projects is its default; RESTARTS helmsman-plc; keep PLC_API as the unit has it), then `scripts/pi-account.sh nick@192.168.3.20 nick engineer`.
-  est: 15m
-  difficulty: low
-  status: blocked
-  id: pi-ui-demo
-  asked: 2026-10-31
-  by: claude-session
-
-- [ ] **Check the board backend on the Pi** — run the GPIO / I2C check against the pick PC: finds the header's GPIO chip (gpiochip0 or gpiochip4 on a Pi 5, by kernel), lists /dev/i2c-1, builds and runs `board_check` (helmsman-io's Linux backend, the code behind `helmsman-plc --gpio-chip`) reading `di:4` by default. Add `READ="di:4 i2c:1:0x48:0:i16"` for a sensor, and `LOOP="do:17=di:27"` only with a jumper from that output to that input (it drives the output).
-  needs: on the Pi `sudo apt install gpiod i2c-tools`, `dtparam=i2c_arm=on` and a reboot, the SSH user in the gpio and i2c groups; Docker here
-  result: the board backend proven on real GPIO (and I2C if a sensor is wired); then `--gpio-chip` goes into the deploy unit
-  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi. `! scripts/pi-gpio-check.sh nick@192.168.3.20` (runs here, not in the native terminal; read-only unless LOOP is set)
-  est: 30m
-  difficulty: low
-  status: blocked
-  id: pi-gpio-check
 
 - [ ] **Supply the datasheet image** — docs/helmsman-datasheet.pdf (docs/datasheet.html) has no picture yet. Nick 2026-11-01: card it, place it when the file exists. Drop the file under docs/brand/ (PNG or SVG; a photo at 1200 px wide or more, or a render) and say where it goes: in the top band right of the wordmark (about 45 mm wide, the lede moves down) or as a strip under the lede. The build (`make datasheet`) refuses a second page, so the slot comes out of the spec table's air.
   needs: the image file and its spot
@@ -168,29 +89,19 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: canvas-try
 
-- [ ] **Prune the merged branches and drop the October stash** — 2026-11-10: 16 local branches and 4 on origin (docs/relay-model-api, fix/hotkeys-browser-free, feat/code-wrap-toggle, docs/help-get-help) are all in origin/dev, each checked with `git merge-base --is-ancestor`. The stray docs/studio-runs-plc of 2026-11-07 is already gone. `stash@{0}` (2026-10-31, "WIP on dev: 0ad1686 ... #70") holds only `answer:` lines for board questions that were acted on long ago (relay-repo, dev-merge-safety, logix-point-syntax and their neighbours). Branch and stash deletion is always a hand-off.
-  needs: `! ~/github/helmsman/scripts/prune-branches.sh` (`DRY_RUN=1` first lists the deletions; it keeps the live fix/node-modbus-connect worktree and the locked try box checkout), then `git stash drop 'stash@{0}'` if you agree it is spent (`git stash show -p 'stash@{0}'` shows it)
-  result: `git branch -a` shows dev, master and branches with work in flight; `git stash list` is empty
-  notes: untracked leftovers nobody needs any more, yours to delete: scratch/11-try-box-relay.sh.bak, scratch/claude-md-panel-width-rule.patch (landed as docs/panel-width-rule), scratch/todo-board-answers-20261107-uncommitted.patch and scratch/board-answers-20261108.patch with scratch/TODO-board-answers-20261108.md (consumed by #293), and ~/github/helmsman-try/SCRIPT_OUTPUT.md (a pasted rebuild log of 2026-11-07).
-  est: 5m
-  difficulty: low
-  id: prune-merged-20261110
-  asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Open raw Ethernet to your user on the Studio (one sudo script)** — PROFINET's cyclic data, alarms and station discovery are Ethernet frames, not IP, and on macOS a program sends them through `/dev/bpf*`, which is root-only here (`/dev/bpf0` is root:wheel 0600; you are already in `access_bpf`, so Wireshark's helper was installed once and is gone). Until this runs, everything PROFINET is proven against the simulated device only: the BPF code has compiled and parsed synthetic buffers and has never carried a frame.
-  needs: `~/github/helmsman/scratch/27-bpf-access.sh` in the native terminal (sudo; again after each reboot, or install Wireshark's ChmodBPF to make it stick), then `! ~/github/helmsman/scratch/28-profinet-scan.sh` here
+- [ ] **Open raw Ethernet to your user on the Studio (one sudo script)** — Why it matters: only once a device has to be reached over PROFINET, and that is no longer first (Nick, 2026-11-13: EtherNet/IP and Modbus TCP are what plants run). PROFINET's cyclic data is raw Ethernet frames, not IP, and on macOS a program sends those through `/dev/bpf*`, which only root can open. Parked with the PROFINET cards. PROFINET's cyclic data, alarms and station discovery are Ethernet frames, not IP, and on macOS a program sends them through `/dev/bpf*`, which is root-only here (`/dev/bpf0` is root:wheel 0600; you are already in `access_bpf`, so Wireshark's helper was installed once and is gone). Until this runs, everything PROFINET is proven against the simulated device only: the BPF code has compiled and parsed synthetic buffers and has never carried a frame.
+  needs: a device that has to be reached over PROFINET; then `~/github/helmsman/scratch/27-bpf-access.sh` in the native terminal (sudo; again after each reboot), then `! ~/github/helmsman/scratch/28-profinet-scan.sh` here
   result: the scan lists the PROFINET stations on en0 (none is a fine answer with nothing plugged in: it proves frames go out and the listen works); a session can then run a box against a real device without sudo
   est: 5m
   difficulty: low
   id: profinet-raw-access
   asked: 2026-11-10
   by: claude-session
+  status: blocked
 
-- [ ] **Bring up the Novanta IMS Liberty MDrive: PROFINET first** — due on the bench the week of 2026-11-10 with PROFINET enabled (Nick). The first device that is not discrete I/O, and the first real station for the PROFINET controller (`profinet-controller`). What its files say, read 2026-11-10 (docs/devices/novanta-mdrive.md): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1. Its GSDML (`GSDML-V2.2-mdrive-SchneiderElectic-20130530.xml`, in the firmware zip) is vendor 0x0261 device 0x0001, an access point without interface or port submodules, a 128-byte input module (0x30) in slot 1 and a 128-byte output module (0x31) in slot 2, no parameter records, fastest cycle 8 ms. The 128 bytes carry MCode registers; the byte map is in Novanta's PROFINET manual and S7 workbook, which are not read yet. Steps: give it its station name (ours or Novanta's tool), bring the AR up from docs/devices/novanta-mdrive-profinet.map, read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested. Then the same axis over EtherNet/IP (its EDS is in the same zip) and Modbus TCP, so one device compares all three drivers. Motion asks "cell clear?" once per session (hardware-guard).
-  needs: the MDrive on 192.168.3.x with its DC supply and a free shaft; its part number and firmware version (2.4.0.7 or later: the release notes name two PROFINET timing bugs fixed there); `profinet-raw-access` done; the PROFINET manual's I/O table (PDF from Novanta, the copy found online is behind a login)
-  result: a device doc with citations, a map and a library entry; an ST program that jogs and positions the axis over PROFINET and stops it on comms loss; the first PROFINET startup against a device this project did not write, captured as a pcap and held as a regression test
-  depends: profinet-raw-access
+- [ ] **Bring up the Novanta IMS Liberty MDrive over EtherNet/IP or Modbus TCP** — Why it matters: the first device on the bench that is not discrete I/O. A motor drive is where the device profile's "kinds" get decided (step (g) of `device-profiles`: a drive's enable, speed, position and fault as the same four channels whatever the vendor), and where a comms loss has to stop something that moves. PROFINET first is out (Nick, 2026-11-13), so this starts on the protocols plants run. What its files say (docs/devices/novanta-mdrive.md, read 2026-11-10): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1; its EDS is in the firmware zip. Steps: Modbus TCP as it ships (no vendor tool needed), read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested; then EtherNet/IP from its EDS, so one device compares two drivers; PROFINET later, if ever. Motion asks "cell clear?" once per session (hardware-guard).
+  needs: the MDrive on 192.168.3.x with its DC supply and a free shaft (it was due the week of 2026-11-10: is it here?); its part number and firmware version (2.4.0.7 or later); the Modbus register map from Novanta's manual
+  result: a device doc with citations, a profile and a library entry; an ST program that jogs and positions the axis and stops it on comms loss
   est: 2d
   difficulty: med
   status: blocked
@@ -198,24 +109,32 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **Bring up a Universal Robot on all three of its fieldbuses** — Nick, 2026-11-10: a UR is available and speaks EtherNet/IP, Modbus TCP and PROFINET. One device behind every driver the box has, and the first with a large mixed image (floats, 32-bit registers, bit fields). Read 2026-11-10 (docs/devices/universal-robots.md): PROFINET is enabled under Installation > Fieldbus > PROFINET (e-Series guide for PolyScope 5.12; PolyScope X has it under Settings > Services); its GSDML (`GSDML-V2.45-UR-PROFIsafe-20251201.xml`) is vendor 0x0361 device 0x0001, RT class 1, fastest cycle 8 ms, legacy and advanced startup, robot-to-controller modules in slots 1..7 (480 bytes: state, I/O, joints, TCP, bit, integer and float registers) and controller-to-robot modules in slots 8..10 (224 bytes), an access point with an interface (0x8000) and a port (0x8001) submodule. EtherNet/IP: input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); the same layout as PROFINET. Modbus TCP server on 502: function codes 1..6, 15, 16; general purpose registers 128..255; robot state from 256; every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values to convert by hand); the unit id is ignored. PROFINET and EtherNet/IP cannot be enabled together, and the robot stops its program when the PROFINET controller goes away. URSim is no stand-in: users report its PROFINET part missing and its Modbus registers stuck, so this needs the robot.
-  needs: the robot on 192.168.3.x, its model and PolyScope version; which fieldbus is enabled first (one at a time for EtherNet/IP and PROFINET); a cleared cell before anything moves; whether its PROFINET option needs a licence on this unit (UR's developer page says one is required, in its PROFIsafe section)
-  result: docs/devices/universal-robots.md "On the bench" with what each interface accepted; three maps (enip-io from its EDS, modbus-tcp, profinet-io); an ST program that reads the robot's state and sets a general purpose register over each; the register quirks held as tests
-  depends: profinet-raw-access
-  est: 3d
+- [ ] **Bring up a Universal Robot over EtherNet/IP and Modbus TCP** — Why it matters: the first device with a large mixed image (floats, 32-bit registers, bit fields), so it tests what a profile can say about a value beyond on and off, and a robot is something customers already own. PROFINET first is out (Nick, 2026-11-13). Read 2026-11-10 (docs/devices/universal-robots.md): EtherNet/IP input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); Modbus TCP server on 502, function codes 1..6, 15, 16, general purpose registers 128..255, robot state from 256, every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values converted by hand), the unit id ignored. EtherNet/IP and PROFINET cannot be on together. URSim is no stand-in: users report its Modbus registers stuck, so this needs the robot. PROFINET (its GSDML is read, slots 1..10) only if a customer asks.
+  needs: the robot on 192.168.3.x, its model and PolyScope version, EtherNet/IP enabled under Installation > Fieldbus; a cleared cell before anything moves
+  result: docs/devices/universal-robots.md "On the bench" with what each interface accepted; a profile with both transports; an ST program that reads the robot's state and sets a general purpose register; the register quirks held as tests
+  est: 2d
   difficulty: med
   status: blocked
   id: ur-bringup
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **Bring up the Murrelektronik I/O block** — placeholder until the unit is on the bench (Nick offered it 2026-11-10, and named it again for PROFINET the same day). A second vendor's remote I/O beside the E1213: every implicit-messaging finding so far is against one Moxa unit on firmware V3.1 and OpENer, and the PROFINET controller has met no I/O block at all. Which protocol it speaks depends on the article: the MVK Pro and Impact67 Pro blocks are sold per protocol (54620 and 54630 PROFINET, 54631 EtherNet/IP, 54632 EtherCAT), SOLID67 blocks switch between PROFINET and EtherNet/IP with a rotary switch (Murrelektronik's product pages, read 2026-11-10; nothing else about the unit is verified). If it is an EtherNet/IP block: bring it up from its EDS alone (`from_eds`, the Devices tab import) with no hand-written profile, and record what its Forward_Open accepts. If it is a PROFINET block: its GSDML gives the modules (an IO-Link master's ports are submodules with parameter records, which the controller writes at startup), its name and address come over DCP. Either way: a device doc with the manual's citations and a library entry. With a second EtherNet/IP unit the P4 node and a box each own one and stop contending for the E1213's single connection.
-  needs: the block on 192.168.3.x with 24 VDC, and its article number (for the EDS or GSDML and the manual)
-  result: a second device doc, map and library entry; the EDS import or the PROFINET startup proven on a device it was not written against
-  est: 1d
+- [ ] **Bring up the Murrelektronik IMPACT67 E DI8 DO8 (55086)** — Why it matters: every implicit-messaging finding so far is against one Moxa unit on one old firmware; a second vendor's block is what shows whether the EtherNet/IP driver is right or only right for that Moxa. A second unit also ends the contention for the E1213's single connection: the P4 owns one, a Studio box the other. What is already done without the unit (helmsman-devices `devices/murrelektronik/`, from its EDS and handbook, 2026-11-12): the 55086 is EtherNet/IP only, vendor 640, product code 55086, input instance 100 (4 bytes), output 112 (2 bytes), RPI 10 ms by default; its folder has the doc, an enip map and a `.device` profile. It ships at rotary 000, DHCP/BOOTP, so it is also the first device `box-dhcp-server` can address with nobody touching it. Left for the bench: power it, let it take an address, Scan, add by click, and record what its Forward_Open accepts.
+  needs: the block on 192.168.3.x with 24 VDC (US and UA on its 7/8" connector)
+  result: the block found, added and driven from the library's profile with no hand-written map; its doc gains "On the bench"
+  est: 4h
   difficulty: med
   status: blocked
   id: murr-block-bringup
+  asked: 2026-11-10
+  by: claude-session
+
+- [ ] **Update the bench E1213 from firmware 3.1 to 3.3** — your answer (2026-11-13): 3.3 only, by a session if it can. It cannot, for two reasons: helmsman-devconf maps the console's Firmware Update page (`06_4.htm` to `06_4_1.htm`, helmsman-devices `devices/moxa/iologik-e1200-web-console.md`) and does not drive it, and a scripted upload that goes wrong leaves the bench's only EtherNet/IP unit unusable until Moxa recovers it; and the 3.2 and 3.3 files were not found on Moxa's site (2026-11-13 search: the product page offers the latest release, 4.0.1). Why it matters: v3.3 is the release Moxa says fixes "Ethernet/IP cannot establish second input-only session", so after it a P4 node and a Studio box could both hold a cyclic connection to the one unit instead of taking turns. Steps: (1) in the canvas, Devices > iologik_e1213 > Configuration > Save as project file, so its settings can be restored; (2) get the E1213 firmware v3.2 and v3.3 files from Moxa (support site, ioLogik E1213, software packages; if only 4.0.1 is listed, ask Moxa support for the two older builds); (3) http://192.168.3.60 > Firmware Update, upload 3.2, wait for the unit to come back (ping, then the overview page shows V3.2); (4) the same with 3.3; (5) check on the console that EtherNet/IP is still enabled, then tell a session "E1213 is on 3.3". The session then runs `scratch/enip-fo-probe.py` and `scratch/enip-hold-probe.py` (Input Only beside an Exclusive Owner, the port-2222 change) and rewrites docs/devices/moxa-iologik-e1213.md.
+  needs: your hands on the unit's web console, and the two firmware files
+  result: the unit on V3.3 with its settings unchanged; a measured yes or no on two cyclic connections at once
+  est: 1h
+  difficulty: low
+  id: e1213-firmware-update
   asked: 2026-11-10
   by: claude-session
 
@@ -233,16 +152,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-11
   by: claude-session
 
-- [ ] **Device configuration in the canvas** — the box API is built (`/api/devices/{id}/config`, docs/ARCHITECTURE.md "Device configuration" > "On the box"; Nick's interview 2026-11-13). The Devices tab's details for a device whose profile has `configure moxa-e1200` get a Configuration section: the facts (firmware, communication watchdog, each DO's safe value and power-on state, EtherNet/IP and RESTful on or off), whether the unit's export has drifted from the project's saved `ID.devconf` (the changed lines), and for an engineer: change a setting (`set`, staged), Save / Restart (with the 409 `interrupts` answer shown as "this stops <modules> for about 21 s", and a confirm that sends `interrupts: true`), Save the configuration as a project file (`snapshot`), Restore from it (`import {from: "snapshot"}`, network settings left alone unless a separate, unticked-by-default box is ticked), Set / Forget the console password (write-only field, never shown), Change the unit's password. While it restarts the device row shows `restarting` (the box lists it lost with the reason "restarting for its configuration"), and the restart call holds for up to 135 s, so the fetch must not time out sooner. The canvas does no HTTP to the unit itself.
-  needs: nothing
-  result: an engineer reads a Moxa's settings, changes the watchdog and the safe values, restarts it and restores it from the project file, from the Devices tab, against a box
-  depends: device-profiles
-  est: 2d
-  difficulty: med
-  id: devconf-canvas
-  asked: 2026-11-13
-  by: claude-session
-
 - [ ] **Device configuration: the agent's read-only tools** — the agent (and MCP) read a device's configuration, never change it: a `read_device_config` tool (facts, the export, the drift from the saved `.devconf`) through `api::devconf::config_view`, wrapped in the `<box-data>` envelope like every plant text. No set, restart, import or password tool, and the password is in no tool result (`ConfigView` has no field for it). The box's engineer gate stays the only way a unit is changed; the agent may propose a setting in words.
   needs: nothing
   result: "why does this Moxa drop its outputs when the controller stops?" is answered from the unit's real watchdog and safe values
@@ -251,13 +160,13 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: devconf-agent-tools
   asked: 2026-11-13
   by: claude-session
+  notes: 2026-11-13: built as #374 (draft). Its last CI run failed in helmsman-plc tests/agent.rs:2152 `an_unreachable_relay_still_gives_the_boxs_explanation_then_an_error`; not looked into yet. Then `gh pr ready 374 && gh pr merge 374 --auto --merge` (classifier-denied once).
 
 - [ ] **A DHCP server on the box's device port: a block out of the box needs no vendor tool** — Nick, 2026-11-13: users won't preconfigure devices themselves, and PROFINET-first is out (EtherNet/IP and Modbus TCP are what plants run). Turck TBEN blocks ship at rotary position 600 (PGM-DHCP, a DHCP client until given an address) and Murrelektronik IMPACT67 E at 000 (DHCP/BOOTP, helmsman-devices `devices/murrelektronik/impact67-e-series.md`), so a box that answers DHCP on its own I/O network gets them addressed with nobody touching the device. Shape: a DHCPv4 server (RFC 2131 subset: DISCOVER/OFFER/REQUEST/ACK/NAK/RELEASE, plus BOOTP replies for blocks that only send BOOTP), std only like the other protocol crates, a pure state machine with the socket outside it (the `helmsman-profinet` pattern), a fixed lease per MAC kept in the state dir, addresses from a pool the project settings name. A new device's lease shows up as `found` in the Scan (ListIdentity from that address, matched to the library by `cip=`), and the map line the box suggests is `mac=` (`helmsman_io::resolve`), so the lease can move without the project changing. Off by default and per interface: decision (4) of `device-profiles` says the I/O network may be IT's, and a second DHCP server on a plant network is an outage. Before it answers anything it listens for another server's OFFER (sends one DISCOVER of its own) and refuses to start if one exists, says so on the Devices tab, and stops if one appears later. Tests: hostile packets (truncated, option overflow, wrong magic cookie, a flood of DISCOVERs with random MACs against pool exhaustion), the rogue-server check, lease persistence across restarts, and one bench script that gives a TBEN out of the box its address (auto mode refuses LAN listeners: the bench run is Nick's).
   notes: 2026-11-13: the server itself is crate `helmsman-dhcp` (feat/dhcp-server): the message, the server state machine, the lease file and `guard` (the probe and the other-server check), with property tests; the property test found the pool's take-back handing out another client's reservation, fixed with its regression. Left: the box half (UDP 67 on the named interface, the probe before serving, the lease file in the state dir, the settings and the Devices tab's word for a refused start), then the Scan's `found` from a lease and the `mac=` suggestion.
   notes: 2026-11-13: Nick: a box setting, not a project's ("a personal preference that will be global to all devices"). The box half is `--dhcp IFACE` (`--dhcp-pool A-B`, default .100-.199 of a /24; `--dhcp-lease S`, default a day): helmsman-plc `dhcp`, both sockets tied to IFACE (helmsman-l2 `bind_to_interface`), a 4 s probe before serving, a stop when another server is heard later, leases in `<state-dir>/dhcp/leases`, `GET /api/dhcp`; tested on loopback. Left: (1) deploy/helmsman-plc.service has `CapabilityBoundingSet=` empty and says every port is above 1024, so `--dhcp` on the Pi needs `CAP_NET_BIND_SERVICE` granted there (Nick's deploy line); (2) the bench run against a TBEN out of the box (Nick: auto mode refuses LAN listeners); (3) the Devices tab's word for a refused or failed server, and leases in the Scan's `found` with a `mac=` line suggested; (4) reservations from the running project's `mac=` device lines.
-  needs: nothing to start; the bench test needs a TBEN-S2-8DXP (helmsman-devices: the first Turck entry)
+  needs: nothing for (3) and (4); the bench run needs a block out of the box (the Murrelektronik 55086 ships on DHCP/BOOTP, card `murr-block-bringup`; a TBEN-S2-8DXP does too) and is yours (auto mode refuses LAN listeners)
   result: a Turck block wired to the box's device port gets its address, shows up in the Scan and is added by click, with no vendor tool, no laptop and no rotary switch touched
-  depends: device-profiles
   est: 3d
   difficulty: med
   id: box-dhcp-server
@@ -265,27 +174,28 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **Relay: the agent proposes a device profile from a vendor's file and publishes it** — PROTOCOLS.md step 5, the relay half. The served helmsman profile's `fetch_document` already answers a device-library record or says to ask for the manual or the EDS (helmsman-agent `tools.rs`); nothing in it writes a `helmsman-device 1` profile or opens a pull request into github.com/JimothyJohn/helmsman-devices. Needed on the relay (`../agent-relay`, a new id since a served profile never changes): a `propose_profile` tool (input: the EDS or GSDML text and what the user said; output: the profile text, which the box accepts only through `Profile::parse` and shows as a channel list to rename) and a `publish_profile` tool (a PR into the library's `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`). The box half (an upload route that holds the EDS, the agent turn, the channel list with renames, the write into the project) follows in helmsman once the ids exist.
-  needs: your go on the tool shapes and the relay's PR path to the library (a GitHub token on the relay, or the box's own)
+  needs: nothing for `propose_profile` (the profile format and `Profile::parse` landed in #351 and #363); its first test case is the Murrelektronik 55086's EDS (helmsman-devices scratch/55086_IMPACT67_KF5_x_11.zip, checked against the hand-made `.device` there); `publish_profile` waits on question `device-profile-publish-path`
   result: a device the library does not know gets a profile the user checked, and the library grows by a PR
-  depends: device-profiles
   est: 2d
   difficulty: med
   id: relay-device-profile-agent
+  notes: 2026-11-13: propose_profile taken by the helmsman-devices-8d session as agent helmsman/v10 (agent-relay worktree .claude/worktrees/propose-profile); publish_profile waits on device-profile-publish-path.
   asked: 2026-11-12
   by: claude-session
+  notes: You have some manuals and EDS files for the Murrelektronik to ry building this out before it's connected.
 
-- [ ] **PROFINET from the node: a real device, then the node image** — the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block; (3) the same on the POE-ISO (Xtensa: its EMAC driver is ph-esp32-mac, a different wrapper).
-  needs: a PROFINET device on 192.168.3.x (`mdrive-bringup`); for a look at the wire, `profinet-raw-access` and a tcpdump hand-off
+- [ ] **PROFINET from the node: a real device, then the node image** — Why it matters: only once a device has to be reached over PROFINET. Parked with `profinet-raw-access` (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first; PROFINET when a customer or a device needs it). the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block; (3) the same on the POE-ISO (Xtensa: its EMAC driver is ph-esp32-mac, a different wrapper).
+  needs: a device that has to be reached over PROFINET
   result: a node masters a PROFINET device at an 8 ms cycle with its late frames counted, from a map deployed over its API
-  depends: mdrive-bringup
   est: 3d
   difficulty: med
   id: node-profinet
   asked: 2026-11-11
   by: claude-session
+  status: blocked
 
-- [ ] **PROFINET IO controller: from the simulated device to real ones** — built 2026-11-10 night (docs/ARCHITECTURE.md `profinet`; crates helmsman-profinet, helmsman-l2, helmsman-io's `profinet-io`): DCP, the Connect / Write / PrmEnd / application-ready / Release RPCs, cyclic frames with a watchdog both ways, alarms acknowledged, a `slots=` device line, bench tools (`profinet_scan`, `profinet_watch`, a pcap of a startup). Proven against our own simulated device (startup, loss, refusals, hostile bytes as properties) and read back field for field by scapy's dissector. Not proven: one frame on a real wire. What is left, in the order the bench will ask for it: (1) the first real startup (`mdrive-bringup`), fixing what it shows and keeping its capture as a test; (2) GSDML import, so `slots=` comes from the vendor's file as `eds=` does for EtherNet/IP (the Devices tab's Import device…); (3) alarms and the device's diagnosis shown on the signal and in the Monitor instead of only kept; (4) record reads (I&M0 for the device's identity page); (5) RPC fragmentation, for devices with many submodules; (6) the default build: `helmsman-plc`'s `profinet-io` feature goes into `default` once a device has passed; (7) a Linux run (packet socket; the Pi or CI with a veth pair).
-  needs: `profinet-raw-access`, then a device (`mdrive-bringup`, `ur-bringup`, `murr-block-bringup`)
+- [ ] **PROFINET IO controller: from the simulated device to real ones** — Why it matters: only once a device has to be reached over PROFINET. Parked with `profinet-raw-access` (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first; PROFINET when a customer or a device needs it). built 2026-11-10 night (docs/ARCHITECTURE.md `profinet`; crates helmsman-profinet, helmsman-l2, helmsman-io's `profinet-io`): DCP, the Connect / Write / PrmEnd / application-ready / Release RPCs, cyclic frames with a watchdog both ways, alarms acknowledged, a `slots=` device line, bench tools (`profinet_scan`, `profinet_watch`, a pcap of a startup). Proven against our own simulated device (startup, loss, refusals, hostile bytes as properties) and read back field for field by scapy's dissector. Not proven: one frame on a real wire. What is left, in the order the bench will ask for it: (1) the first real startup (`mdrive-bringup`), fixing what it shows and keeping its capture as a test; (2) GSDML import, so `slots=` comes from the vendor's file as `eds=` does for EtherNet/IP (the Devices tab's Import device…); (3) alarms and the device's diagnosis shown on the signal and in the Monitor instead of only kept; (4) record reads (I&M0 for the device's identity page); (5) RPC fragmentation, for devices with many submodules; (6) the default build: `helmsman-plc`'s `profinet-io` feature goes into `default` once a device has passed; (7) a Linux run (packet socket; the Pi or CI with a veth pair).
+  needs: a device that has to be reached over PROFINET; then `profinet-raw-access`
   result: a box masters a real PROFINET device from a map an engineer wrote from the GSDML, and says in words what is wrong when it does not come up
   depends: profinet-raw-access
   est: 1w
@@ -293,6 +203,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: profinet-controller
   asked: 2026-11-10
   by: claude-session
+  status: blocked
 
 - [ ] **Canvas: match box answers to requests, one buffer state machine** — from the 2026-11-08 interface review. Every wasm request to the box is a parallel fetch with no request id or generation; `BoxProjects::answer` matches by call name and reads live buffer state at answer time, and the native tests run requests one at a time so ordering is never exercised. The data-loss fixes of PR fix/box-projects-correlation patch the cases found (NewFile empty buffer, dropped save answers, deploy during save, Replace target); this card is the shape that stops the class: an in-flight table keyed by request id holding the sent text and the project generation, answers resolved against it, and one `Buf` state enum (Clean, Dirty, Saving{sent}, Conflict) shared by save, rename, create and deploy, with a test harness that answers requests out of order.
   result: a reordered or late answer can never make a buffer clean, empty or stuck; box_projects_tests has an out-of-order answer suite
@@ -379,7 +290,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: relay-v2-client
   asked: 2026-11-05
   by: claude-session
-  notes: agent-relay PR #7 merged on 2026-11-07. Whether a deployed relay serves helmsman/v8 is not checked (the deployed one serves v7; relay card relay-deploy-v2).
+  notes: agent-relay PR #7 merged on 2026-11-07. Checked 2026-11-13: the relay's agents/helmsman has v1..v7 and explain-v1/v2, no v8, so nothing serves it yet (relay card relay-deploy-v2).
 
 - [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.
   needs: a Modbus device that answers FC 43/14 to test on (does the E1213? check on the bench; the simulator answers it either way)
@@ -416,7 +327,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. Same code on the POE-ISO and the P4 (helmsman-node-p4). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
+- [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — Why it matters: today a node's firmware changes only over a USB cable from a laptop, so a node in a cabinet has to be opened to update it. This lets it take a new image over the network and fall back to the old one by itself if the new one does not come up, so a bad build cannot leave a machine without its controller. #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. Same code on the POE-ISO and the P4 (helmsman-node-p4). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
   needs: the P4 is not required; the POE-ISO on the bench (poe-iso-rack-03, /dev/cu.usbserial-1130, 192.168.3.55) is enough
   result: a node on the plant network takes a new firmware from a laptop without a USB cable, and a bad image cannot brick it
   notes: sized 2026-11-09 (not started, needs the bench): (1) a new partition table, nvs / otadata / phy_init / ota_0 / ota_1 on supervictor/edge/partitions.csv's model, one USB flash per board (espflash --partition-table, --erase-parts otadata; it moves the nvs region the settings and program live in, so the node is commissioned again); (2) port supervictor/edge/src/ota/{install,policy,http,manifest}.rs into nodecore (Slot trait installer with sector buffering, digest and read-back; the checksummed RTC record with MAX_PENDING_BOOTS; the strict response-head parser; 2.4k lines with their proptests, tied to supervictor_common::firmware types to replace); (3) the fetch task on embassy-net (Range + If-Match) writing through esp-bootloader-esp-idf 0.5's OtaUpdater (next_partition, activate_next_partition, set_current_ota_state), the boot policy at start, GET /api/firmware, POST /api/firmware {url, sha256}, POST /api/firmware/confirm; (4) on the POE-ISO: a push, a confirm, a forced rollback.
@@ -426,19 +337,46 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-09
   by: claude-session
 
-- [ ] **P4 node, after the bring-up: EtherNet/IP against the E1213, the PoE module, TLS** — the node image runs on the Waveshare ESP32-P4-ETH as on the POE-ISO since 2026-11-10 (docs/EDGE.md Phase 3 "On the board": press-5 at 192.168.3.56, token bench-token-2026, chase at 10 ms with 70 us of execution, a 431-line cell at 1 ms). What is left: (1) settled 2026-11-10: the E1213 (firmware V3.1) holds one Class 1 connection at a time of either kind, so Input Only beside the try box is refused with a bare 0x01 and the node's request is right as it is (docs/devices/moxa-iologik-e1213.md); the `enip` image then ran both ways with the unit free (Input Only and Exclusive Owner, no lost packets, the chase on the outputs over CIP; docs/EDGE.md); a bare 0x01 now prints with that explanation (`Refused`'s text); the node's Modbus link no longer comes up late at boot (2026-11-10: the I/O task waits for the link and retries a failed connect quickly before backing off; run the POE-ISO once with it when that board is back on the network); (2) Moxa's release notes say v3.3 fixed "cannot establish second input-only session" and v3.2 moved implicit messages to port 2222 (the unit runs v3.1; docs/devices/moxa-iologik-e1213.md): updating the unit is Nick's call and four steps (3.2, 3.3, 3.4, 4.0, one release at a time), then rerun `scratch/enip-fo-probe.py` for Input Only beside an owner; (3) the PoE module's isolation measured before USB and PoE are ever together, then a run on PoE alone; (4) and (5) done 2026-11-10 (the panic restart seen, the PSRAM in `/api/node`, a cell's data in PSRAM costing nothing visible at a 1 ms scan; docs/EDGE.md); (6) mbedtls-rs at the fork's main with Homebrew clang for TLS; (7) drop `ethernet::CutThroughTx` when an esp-hal release ties transmit store-and-forward to checksum offload.
-  needs: Nick's cards first: `p4-poe-isolation` for (3), `e1213-firmware-update` for (2), `node-tls-first-peer` for (6), `poe-iso-modbus-rerun` for the POE-ISO run; (7) waits for an esp-hal release
-  result: the P4 node owns the E1213 over EtherNet/IP, runs on PoE alone, and its memory numbers say what a scan in PSRAM costs
+- [ ] **A Studio box with the device links off, beside the P4** — your answer to `try-box-keep-or-retire` (2026-11-13): the Studio is for app and interface work, the P4 for runtime and embedded work, and the two should not both be on the devices; but the Studio box should still be programmable with everything except device comms, so it can run while the P4 has them. Today a box opens every link its project's map names, and the only way off the E1213 is to stop the box. Build a box setting (`--links off`, and the same as a switch an engineer can flip): the program, the canvas, the agent, proposals, history and the Monitor all work; no link opens; each input reads as the simulation would give it (the same plant model the page's simulation runs) and outputs go nowhere; the Devices tab and the Monitor say "device links off on this box" so nobody reads simulated values as the plant's. Then the try box runs that way during P4 work, and CLAUDE.md's try box entry says so.
+  needs: nothing
+  result: a P4 run against the E1213 no longer needs the try box stopped; the Studio box stays up for interface work meanwhile
   est: 1d
   difficulty: med
-  notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash is 4.7.0 since 2026-11-10, 3.3.0 could not talk to this chip revision; the POE-ISO answers 4.7's board-info, a flash of it with 4.7 is not yet tried). A program over the flash slot runs but is not kept (12 KB did not fit): the larger slot comes with node-ota's partition table.
-  depends: p4-poe-isolation, e1213-firmware-update, node-tls-first-peer, poe-iso-modbus-rerun
+  id: studio-box-no-io
+  asked: 2026-11-13
+  by: claude-session
+
+- [ ] **Devices tab: glyph buttons with their names, I/O grouped and collapsed, a search** — your answer to `glyphs-devices-buttons` (2026-11-13): "let the user choose through a subset of icons but still show their names. Collapse the I/O registers by default and group ins, outs, and datatypes so that it's easier for the user to organize. A simple pattern search feature for an input in real-time would be nice as well." Read as: (1) Scan, Edit, Delete and Use this device become `glyphs::action` buttons that keep their word beside the glyph (not glyph only, as the Agent tab's are); (2) a device's points start collapsed, and open grouped as Inputs, Outputs, then by data type inside each (BOOL, INT, REAL, ...), each group with its count; (3) a filter field at the top of the tab that narrows the list as you type, matching point names, channels and devices (plain substring and `*` wildcards). Assumed and to check with you on the PR: "choose through a subset of icons" means the glyph library's existing set, not a picker where the user assigns icons to devices. Panel width rules apply (`every_tab_leaves_the_panels_their_width`, a test at the default width).
+  needs: nothing
+  result: a device with 40 points opens as two short groups, and typing "DI-0" shows only those points
+  est: 1d
+  difficulty: low
+  id: devices-tab-glyphs-io
+  asked: 2026-11-13
+  by: claude-session
+
+- [ ] **The live free chat: the leftovers** — the free chat is on master (#359, promoted 2026-11-13; the published playground's page allows the relay's demo address). Left from its card: (1) your first look at the live page (a page served from another origin is refused by design, so it was never seen against the live relay); (2) the survey's buttons name model vendors, which the voice rule forbids; (3) the help pictures (docs/help/img) may still show the key field: `make help-shots`; (4) the key route can come out of the page (claude.rs Route::Direct, key_ui, the model picker) as its own change; (5) not exercised yet: the alarm filters on a real close, and the survey route against DynamoDB.
+  needs: your look at https://helmsman.advin.io/playground/ for (1); the rest needs nothing
+  result: the published chat has no key field, no vendor names, and pictures that match it
+  est: 3h
+  difficulty: low
+  id: free-chat-followups
+  asked: 2026-11-13
+  by: claude-session
+
+- [ ] **P4 node, after the bring-up: PoE alone, two connections on the E1213, G4 and G5** — Why it matters: the P4 is the runtime board (Nick, 2026-11-13), and these are the runs between "it scans on the bench" and "it can be left in a cabinet": powered by its cable only, sharing a device with a Studio box, and measured against the two goals docs/EDGE.md set for a node (G4: under 1 % late scans over 10 minutes; G5: the block's outputs go safe when the node's cable is pulled). Done already (2026-11-10, docs/EDGE.md Phase 3 "On the board"): the node image at 192.168.3.56 (press-5, token bench-token-2026), the chase at 10 ms with 51 to 72 us of work, a 431-line cell at 1 ms, the `enip` image against the E1213 both ways, the panic restart, PSRAM in `/api/node`, the late Modbus link at boot fixed. Left: (1) a run on PoE alone, after `p4-poe-isolation`; (2) after `e1213-firmware-update`: Input Only from the P4 beside the Studio box's connection (`scratch/enip-fo-probe.py`); (3) G4 and G5 on the P4, 10 minutes against the E1213 and a pulled cable with the unit's watchdog and safe values set (the Devices tab's Configuration can set both now); (4) drop `ethernet::CutThroughTx` when an esp-hal release ties transmit store-and-forward to checksum offload. TLS is not on it any more: you want it for publishing data from a second Ethernet port, kept apart from control (card `node-data-tls`).
+  needs: `p4-poe-isolation` for (1), `e1213-firmware-update` for (2); (3) needs nothing but the bench; (4) waits for an esp-hal release
+  result: the P4 node runs on PoE alone, shares the E1213, and has its G4 and G5 numbers in docs/EDGE.md
+  est: 1d
+  difficulty: med
+  notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash 4.7.0). A program over the flash slot runs but is not kept (12 KB did not fit): the larger slot comes with node-ota's partition table.
+  depends: p4-poe-isolation, e1213-firmware-update
   id: node-p4-followups
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **The P4's `enip` image after #333: the two runs that were skipped** — #333 moved the EtherNet/IP session into a task of its own and was checked on the board for the first open only (1.1 s after link-up, 0 late scans, was 199). Two runs were left out and are on no card: (1) the close after a lost link, through the task: pull the cable or power the E1213 off mid-run, see the outputs go to their safe state, the session close, and the reopen once the unit is back, with no late scans meanwhile; (2) Exclusive Owner with this change (the 640 of 640 packet run of 2026-11-10 was on the image before it). Write both into docs/EDGE.md Phase 3 "On the board".
-  needs: the E1213's one Class 1 connection free: the try box down (it is, until the Studio login of card try-box-login) or stopped; no other session flashing the P4 (2026-11-10 19:47: a live session was flashing it from the worktree modbus-connect for the Modbus connect fix of node-p4-followups, so start after its PR lands)
+- [ ] **The P4's `enip` image after #333: the two runs that were skipped** — Why it matters: #333 moved the node's EtherNet/IP session onto its own task so a slow device cannot make the scan late, and that was checked only for the first connection. The two runs here are the ones a plant sees: the device goes away and comes back, and the node holds the connection as its only owner. #333 moved the EtherNet/IP session into a task of its own and was checked on the board for the first open only (1.1 s after link-up, 0 late scans, was 199). Two runs were left out and are on no card: (1) the close after a lost link, through the task: pull the cable or power the E1213 off mid-run, see the outputs go to their safe state, the session close, and the reopen once the unit is back, with no late scans meanwhile; (2) Exclusive Owner with this change (the 640 of 640 packet run of 2026-11-10 was on the image before it). Write both into docs/EDGE.md Phase 3 "On the board".
+  needs: the E1213's one Class 1 connection free: the try box off the unit (`studio-box-no-io`, or `launchctl bootout gui/501/io.advin.helmsman-try` from your terminal until that lands); no other session flashing the P4
   result: the enip task is proven for loss and for ownership, not only for the first open
   notes: flash: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 SERIAL_PORT=/dev/cu.usbmodem5C930154551 scripts/node-flash.sh enip`, then back to the `node` image with `NODE_SEED_CHASE=1`. Read the outputs back over Modbus with `/usr/bin/python3` (Local Network privacy).
   est: 2h
@@ -682,14 +620,12 @@ Update 2026-10-29 (I/O mapping): "This device is the PLC, it just may talk to ot
 
 Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". The agent drafts ST, the canvas shows it live against real values, a PIN approves it, the Pi's output toggles, and undo restores the previous snapshot.
 
-- [ ] **Box outputs: GPIO stack light** — Pi GPIO (or a relay hat) as box-owned outputs with named channels; blink patterns as a stdlib FB.
-  needs: a relay hat or 24 V stack light + driver on the bench
-  notes: the GPIO backend is in (feat/sources-modbus-rtu: `do:N` is line N of `--gpio-chip`); the blink FB is in (feat/blink-fb: `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` in helmsman-iec's library.st, modes off / steady / slow / fast / double flash, on the scan clock; not named BLINK so modules called blink still compile); left: the hardware and pi-gpio-check on the Pi
-  result: the demo's light
-  est: 1d
+- [ ] **A stack light on the E1213's outputs** — the demo's light. The Pi's GPIO path (`do:N` of `--gpio-chip`) is built but the Pi is out of the loop (Nick, 2026-11-07), so the light is a 24 V stack light on the E1213's DO through the map, as decided on 2026-10-31 (stack-light-hw). `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` is in helmsman-iec's library.st (off, steady, slow, fast, double flash, on the scan clock).
+  needs: a 24 V stack light wired to E1213 DO-00..02 with its supply
+  result: the demo's light, blinking from ST
+  est: 2h
   difficulty: low
   id: gpio-outputs
-  notes: stack light (stack-light-hw, 2026-10-31): a 24 V light driven from the E1213's DO through the map, no new hardware.
 
 - [ ] **M1 demo run** — the sentence at the top of this section, on the bench, recorded. scripts/m1-demo.sh brings the box up from a clean deploy.
   needs: CompactLogix on the bench
@@ -776,6 +712,16 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   needs: a decision taken (interview 2026-11-02): no console host at all; see notes
   notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
   status: ready
+
+- [ ] **TLS on a node's data port** — your answer to `node-tls-first-peer` (2026-11-13): needed eventually to push production data out over a second network port, with strict isolation between the control runtime and the data publication; not until there is a board with more than one Ethernet port. The recipe (mbedtls-rs at the fork's main with Homebrew clang) compiles for the P4 (docs/EDGE.md Phase 3) and is all that exists.
+  needs: a node board with two Ethernet ports
+  result: a node publishes data over TLS on one port while its control traffic stays on the other
+  est: 3d
+  difficulty: high
+  status: blocked
+  id: node-data-tls
+  asked: 2026-11-13
+  by: claude-session
 
 - [ ] **Resume the edge node: faster scans and the POE2's PSRAM** — parked by Nick 2026-11-03 after the first runs on the boards (docs/EDGE.md Phase 1 and 2). Thread 1 (the network) is SOLVED in #312 (2026-11-08): the POE-ISO got no lease because helmsman-node enabled esp-hal's `psram` feature on the WROOM, whose PSRAM pins are the POE-ISO's RMII clock (now `--no-default-features --features poe-iso`); the Studio reached 10.0.0.x only over Wi-Fi (dual-homed, scratch/23 and 26 add the en0 aliases); and a dead unit's connect-every-scan starved smoltcp's neighbour cache (2 s back-off after a failed connect). Two threads stay: (2) scan speed: 28 ms for the 4k-statement bench against < 5 ms, and 30 ms with two synchronous Modbus round trips before the I/O task; measure flash at 80 MHz QIO (it boots at 40 MHz DIO), the interpreter's i128 `Value::Int` on a 32-bit core, the no_std BTreeMap lookups, esp-alloc heap-stats, before any rewrite (a compact compiled form or compile-on-laptop is the bigger lever); (3) the PSRAM corruption on the POE2: compiling the batch-mixer starter with PSRAM asks for 0x3F40D781 bytes (a rodata address read as a length); the POE2 at 10.0.0.50 still runs November's firmware.
   needs: Nick's call to resume (2026-11-06: stays parked); the P4 ran on 2026-11-10 (docs/EDGE.md Phase 3 "On the board": the chase in 70 us a scan, a 431-line cell in 1 ms), which may make both threads moot
