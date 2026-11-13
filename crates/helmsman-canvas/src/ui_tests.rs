@@ -1101,13 +1101,14 @@ END_PROGRAM",
         assert!(!h.has("dirty"), "saved from the File menu");
     }
 
-    /// Nick, 2026-11-05: no chat. The Agent tab is the instruction box,
-    /// Send, and after an answer a status line with the reason and Undo;
-    /// an instruction typed and sent updates the file, and Undo from the
-    /// tab puts it back. The hit stays "tab claude" (the stored key).
+    /// Nick, 2026-11-05: no chat; 2026-11-13: the box takes the tab's
+    /// height, a change that lands is seen on the canvas (running, marked)
+    /// and not described in the tab, one that fails is an error in the
+    /// Messages with the box outlined red, and Before / After swaps the
+    /// file at once, marked each way. The hit stays "tab claude".
     #[test]
-    fn the_agent_tab_is_an_instruction_box_a_status_line_and_undo() {
-        use crate::instruct::Kind;
+    fn the_agent_tab_is_a_tall_box_and_before_and_after_swap_at_once() {
+        use crate::agent_marks::Side;
         use crate::instruct_tests::{LAMP, follows};
         let mut h = Harness::new(App::sim());
         h.press("tab claude");
@@ -1121,11 +1122,24 @@ END_PROGRAM",
             v.open_project("mine");
         }
         h.wait(0.2);
-        for gone in ["page prev", "use code", "agent new", "agent result", "agent undo"] {
+        for gone in [
+            "page prev",
+            "use code",
+            "agent new",
+            "agent result",
+            "agent undo",
+            "agent before",
+        ] {
             assert!(!h.has(gone), "{gone}");
         }
         assert!(h.has("agent instruction") && h.has("agent send"));
-        h.click(h.rect("agent instruction").center());
+        let field = h.rect("agent instruction");
+        assert!(
+            field.height() > 0.5 * h.rect("right").height(),
+            "the box takes the tab's height: {field:?} in {:?}",
+            h.rect("right")
+        );
+        h.click(field.center());
         h.frame(vec![Event::Text("comment it".into())]);
         h.press("agent send");
         h.frame(vec![]);
@@ -1140,21 +1154,119 @@ END_PROGRAM",
         );
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
-        assert!(h.has("agent result") && h.has("agent why") && h.has("agent undo"));
         {
             let v = h.app.sim.as_ref().unwrap();
             assert_eq!(v.proj.files["main.st"], new);
-            assert_eq!(
-                v.instruct.outcome.as_ref().map(|o| o.status.as_str()),
-                Some("Updated main.st: 1 scenario passed, kept as a test.")
-            );
+            assert!(v.session.running, "the change runs at once");
+            let logged = v
+                .log
+                .iter()
+                .map(|e| e.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(logged.contains("Why: it says why the lamp is on."), "{logged}");
         }
-        h.press("agent undo");
+        assert!(
+            !h.has("agent result"),
+            "a change that landed is not described in the tab"
+        );
+        assert!(h.has("agent before") && h.has("agent after"));
+        assert!(
+            h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
+            "After is marked"
+        );
+        // Before: the old file, running, marked against the new.
+        h.press("agent before");
+        h.wait(0.2);
+        {
+            let v = h.app.sim.as_ref().unwrap();
+            assert_eq!(v.proj.files["main.st"], LAMP);
+            assert_eq!(v.agent_change.as_ref().map(|c| c.side), Some(Side::Before));
+            assert!(v.session.running);
+        }
+        assert!(
+            h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(LAMP)),
+            "Before is marked"
+        );
+        // And back, as often as wanted.
+        h.press("agent after");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.files["main.st"], new);
+        h.press("agent before");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.files["main.st"], LAMP);
+        h.press("agent after");
+        h.wait(0.2);
+        // An edit ends the swap: the file is the engineer's again.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .proj
+            .files
+            .insert("main.st".into(), format!("{new}\n"));
+        h.wait(0.2);
+        assert!(!h.has("agent before"), "an edit ends Before / After");
+    }
+
+    /// A refused answer: an error in the Messages (red count, opened), the
+    /// box outlined, and one line in the tab that opens the Messages.
+    #[test]
+    fn a_refused_answer_is_an_error_in_the_messages_and_one_red_line() {
+        use crate::instruct_tests::LAMP;
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(crate::claude::Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.2);
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("break it".into())]);
+        h.press("agent send");
+        h.frame(vec![]);
+        let broken = "Why: no.\n\n```st\nPROGRAM lamp\nlamp := ;\nEND_PROGRAM\n```\n";
+        for _ in 0..3 {
+            crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), broken);
+            h.frame(vec![]);
+        }
         h.wait(0.2);
         let v = h.app.sim.as_ref().unwrap();
-        assert_eq!(v.proj.files["main.st"], LAMP);
-        assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
-        assert!(!h.has("agent undo"));
+        assert_eq!(v.proj.files["main.st"], LAMP, "nothing written");
+        assert!(v.log.errors() >= 1, "an error, so the Messages count it red");
+        assert!(h.has("agent result"));
+        h.app.chrome.trend = false;
+        h.press("agent result");
+        assert!(h.app.chrome.trend, "the line opens the Messages");
+        assert_eq!(h.app.chrome.bottom, crate::editor::Bottom::Messages);
+    }
+
+    /// Shift+Enter goes on with a list, and ends it on an empty item.
+    #[test]
+    fn a_list_goes_on_and_ends_on_an_empty_item() {
+        use crate::instruct::continue_list;
+        assert_eq!(continue_list("- latch the lamp"), ("\n- ".into(), 0));
+        assert_eq!(continue_list("  * start wins"), ("\n  * ".into(), 0));
+        assert_eq!(continue_list("3. then stop"), ("\n4. ".into(), 0));
+        assert_eq!(continue_list("9) last"), ("\n10) ".into(), 0));
+        assert_eq!(continue_list("plain words"), ("\n".into(), 0));
+        assert_eq!(continue_list("    indented"), ("\n    ".into(), 0));
+        assert_eq!(
+            continue_list("- "),
+            (String::new(), 2),
+            "an empty item ends the list"
+        );
+        assert_eq!(continue_list("  12. "), (String::new(), 6));
+        assert_eq!(
+            continue_list("2024 was a year"),
+            ("\n".into(), 0),
+            "a number is not a list"
+        );
     }
 
     /// Nick, 2026-11-08: Enter in the chat box sends; Shift+Enter and
@@ -1225,7 +1337,7 @@ END_PROGRAM",
         let states = [
             (
                 outcome(Kind::Applied, &format!("Updated {word}.st: 2 scenarios passed")),
-                "agent why",
+                "agent undo",
             ),
             (outcome(Kind::Refused, &long), "agent result"),
             (outcome(Kind::Said, &long), "agent review"),

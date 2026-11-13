@@ -843,7 +843,7 @@ impl BoxView {
         let at = self.agent_at;
         match o.kind {
             Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
-            Kind::Refused | Kind::Failed => self.log.warning(at, line),
+            Kind::Refused | Kind::Failed => self.log.error(at, line),
         }
     }
 
@@ -935,6 +935,8 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
             decided: self.decided.clone(),
+            swap: None,
+            room_below: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
@@ -980,7 +982,8 @@ impl BoxView {
             }
             Some(Act::Undo) => self.undo_change(),
             Some(Act::Review(id)) => self.wants_review = Some(id),
-            None => {}
+            // A box's change goes through a deploy: no Before / After here.
+            Some(Act::Show(_)) | None => {}
         }
     }
 
