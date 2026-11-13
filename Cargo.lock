@@ -1562,6 +1562,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-devconf"
+version = "0.1.0"
+dependencies = [
+ "helmsman-devconf",
+ "proptest",
+]
+
+[[package]]
 name = "helmsman-diagram"
 version = "0.1.0"
 dependencies = [
