@@ -1419,7 +1419,7 @@ impl PlaygroundView {
             f(&mut h);
             h.finish()
         };
-        let blink = crate::sim_projects::example_project(crate::playground::EXAMPLES[0].src).0;
+        let blink = crate::sim_projects::example_project(crate::playground::example("Blink").src).0;
         let trend = &self.session.trend;
         crate::tour::Seen {
             editor: true,
@@ -2480,10 +2480,16 @@ pub fn palette_color(t: &Theme, index: usize) -> Color32 {
 }
 
 /// The colour of trend signal `name` in lane `k` (both trends): the one
-/// picked for it ([`Chrome::set_color`]), or its lane's.
+/// picked for it ([`Chrome::set_color`]), else the colour its name asks
+/// for (`red`, `lamp_green`: the lamp's own, Nick, 2026-11-12), else its
+/// lane's.
 #[must_use]
 pub fn lane_color(t: &Theme, chrome: &Chrome, name: &str, k: usize) -> Color32 {
-    palette_color(t, chrome.color(name).unwrap_or(k))
+    match (chrome.color(name), crate::lamps::colour(name)) {
+        (Some(i), _) => palette_color(t, i),
+        (None, Some(c)) => t.ink(c),
+        (None, None) => palette_color(t, k),
+    }
 }
 
 /// The lane labels of a trend drawn in `rect`, one lane per name, as
@@ -3348,9 +3354,14 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
         RichText::new(text)
             .monospace()
             .size(crate::theme::MIN_TEXT)
-            // On is green, as a TRUE value in the diagram and a lamp on
-            // the Monitor are (it was the accent yellow here alone).
-            .color(if on { t.ink(GREEN) } else { t.fg }),
+            // On is the lamp's own colour when its name has one (red,
+            // yellow, green...; `lamps`), else green, as a TRUE value in
+            // the diagram and a lamp on the Monitor are.
+            .color(if on {
+                t.ink(crate::lamps::colour(&p.name).unwrap_or(GREEN))
+            } else {
+                t.fg
+            }),
     )
     .wrap_mode(egui::TextWrapMode::Truncate)
     .min_size(Vec2::new(ui.available_width(), TAP * 0.8));

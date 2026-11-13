@@ -128,19 +128,19 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
     let store = Shared::default();
     let mut v = PlaygroundView::with_storage(Box::new(store.clone()));
     let (first, file) = example_project(crate::playground::EXAMPLES[0].src);
-    assert_eq!((first.as_str(), file.as_str()), ("blink", "blink.st"));
-    assert_eq!(v.title(), "blink", "opens the first example");
+    assert_eq!((first.as_str(), file.as_str()), ("traffic", "traffic.st"));
+    assert_eq!(v.title(), "traffic", "opens the first example");
     assert!(v.session.running, "running, as the playground always opened");
     let rows = v.proj.rows();
     assert!(rows.iter().all(ProjectRow::example), "{rows:?}");
     assert_eq!(rows.len(), crate::playground::EXAMPLES.len());
-    assert!(rows.iter().any(|r| r.name == "blink" && r.running));
+    assert!(rows.iter().any(|r| r.name == "traffic" && r.running));
     // Edited and saved: a copy under a free name, opened; the example
     // itself is unchanged.
     v.proj.current_text_mut().unwrap().insert_str(0, "(* mine *)\n");
     assert!(v.dirty());
     v.save();
-    assert_eq!(v.title(), "blink-2");
+    assert_eq!(v.title(), "traffic-2");
     assert!(!v.dirty());
     assert!(
         v.proj
@@ -148,17 +148,17 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
             .as_ref()
             .unwrap()
             .0
-            .contains("saved your copy as blink-2")
+            .contains("saved your copy as traffic-2")
     );
     assert!(
-        v.proj.examples["blink"]
-            .get("blink.st")
+        v.proj.examples["traffic"]
+            .get("traffic.st")
             .unwrap()
-            .starts_with("PROGRAM blink")
+            .starts_with("PROGRAM traffic")
     );
     // The next visit finds it, open.
     let again = PlaygroundView::with_storage(Box::new(store));
-    assert_eq!(again.title(), "blink-2");
+    assert_eq!(again.title(), "traffic-2");
     assert!(again.proj.files[&again.proj.current].starts_with("(* mine *)"));
 }
 
@@ -311,7 +311,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     let junk = Shared(Rc::new(RefCell::new(Some("{not json".into()))));
     let v = PlaygroundView::with_storage(Box::new(junk));
     assert!(v.proj.storage_problem.is_some());
-    assert_eq!(v.title(), "blink");
+    assert_eq!(v.title(), "traffic");
     let evil = serde_json::json!({
         "format": "helmsman-projects 1",
         "open": "../etc",
@@ -323,7 +323,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     });
     let v = PlaygroundView::with_storage(Box::new(Shared(Rc::new(RefCell::new(Some(evil.to_string()))))));
     assert_eq!(v.proj.saved.keys().collect::<Vec<_>>(), ["fine"]);
-    assert_eq!(v.title(), "blink", "the open name it held is not a project");
+    assert_eq!(v.title(), "traffic", "the open name it held is not a project");
 }
 
 #[test]

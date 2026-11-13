@@ -106,7 +106,7 @@ program's `scan_ms`, unless you have set one there already.
 
 ## Examples
 
-Five short **examples** teach one thing each: Blink, Read and write,
+Six short **examples** teach one thing each: Traffic light, Blink, Read and write,
 Logic (AND, OR, NOT), a start/stop latch and a counter. Click one and
 give it a name: it becomes a program of your own to change. On a box the
 same list makes the program on the box, its inputs and outputs on the

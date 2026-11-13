@@ -224,13 +224,23 @@ this; change it here first when a decision changes.
   compile is refused and the old program keeps running. A browser that
   keeps nothing (a private window) still works; the projects last until
   the page closes.
-- **Examples** (Nick, 2026-11-05). Five programs from the first chapters
-  of a Structured Text book, a few lines each: Blink, Read and write,
-  Logic (AND, OR, NOT), Start/stop latch, Counter (`playground::EXAMPLES`).
+- **Lamps** (Nick, 2026-11-12: the first screen should speak without
+  words). The program's BOOL outputs are lamps in the diagram's
+  bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a
+  green together are a traffic light, anything else a row of pilot lamps
+  named under them. An output named after a colour (`red`, `lamp_green`,
+  `amber`, `blue`, `white`) takes that colour there, in the I/O tab's
+  output text when on, and on both trends until a palette colour is
+  picked for it. Only the program's own diagram shows them, not a block
+  instance's.
+- **Examples** (Nick, 2026-11-05). Six programs from the first chapters
+  of a Structured Text book, a few lines each: Traffic light (first, Nick,
+  2026-11-12), Blink, Read and write, Logic (AND, OR, NOT), Start/stop
+  latch, Counter (`playground::EXAMPLES`).
   The worked machines and templates are gone. A click on an example asks
   for the program's name (prefilled, made unique) and opens the person's
   own copy; the example itself never opens for editing (a first visit
-  shows Blink running). On a box the same list sends the copy as a `.zip`
+  shows the traffic light running). On a box the same list sends the copy as a `.zip`
   with an `io.map` made from the example's own ports, BOOL inputs on the
   box's `di` channels and outputs on its `do` channels, so it deploys with
   nothing wired; nothing else changes what the box holds, and a first

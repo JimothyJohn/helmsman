@@ -39,6 +39,17 @@ impl Harness {
         h
     }
 
+    /// The page as it opened before the traffic light took first place
+    /// (2026-11-12): the Blink example open and running. The tests that
+    /// click its LAMP block or count its lines start here.
+    fn blink() -> Self {
+        let mut h = Self::new(App::sim());
+        h.app.sim.as_mut().expect("the simulation").open_project("blink");
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h
+    }
+
     fn frame(&mut self, events: Vec<Event>) {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
@@ -476,7 +487,7 @@ mod glyphs_and_help {
     /// wide enough that the blink example's longest line wraps once.
     #[test]
     fn a_small_program_is_fitted_large_and_the_code_tab_opens_wide() {
-        let h = Harness::new(App::sim());
+        let h = Harness::blink();
         let zoom = crate::ui_tests::sim_view(&h).cams[0].zoom;
         assert!(
             (zoom - crate::st_view::FIT_MAX).abs() < 1e-3,
@@ -511,7 +522,7 @@ mod glyphs_and_help {
     /// half of a four-column grid. Few tiles take the width between them.
     #[test]
     fn the_monitors_tiles_take_the_width() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.press("monitor");
         h.wait(0.3);
         let (status, outputs) = (h.rect("status blink"), h.rect("outputs blink/"));
@@ -640,7 +651,7 @@ mod polish {
 
     #[test]
     fn alt_shift_d_opens_the_declaration_and_alt_shift_x_lights_the_references() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::Num1);
         assert!(!h.app.chrome.code_open(), "ST shut for the test");
         // The pane's close moves the diagram: let it settle, then pick.
@@ -678,7 +689,7 @@ mod polish {
         fn session(h: &Harness) -> &crate::playground::Session {
             &h.app.sim.as_ref().unwrap().session
         }
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.key(Modifiers::ALT, Key::Num1);
         h.wait(0.6);
         let (at, _) = super::node(super::sim_view(&h), super::write_to("LAMP"));
@@ -1235,7 +1246,7 @@ mod chrome {
 
     #[test]
     fn the_header_is_on_every_screen() {
-        let h = Harness::new(App::sim());
+        let h = Harness::blink();
         h.header_is_up();
         assert_eq!(h.app.title(), "blink", "the program's name");
         let mut h = Harness::new(App::boxed());
@@ -1436,7 +1447,7 @@ mod chrome {
     /// to be seen opens it by itself.
     #[test]
     fn a_block_folds_from_its_gutter_arrow_and_opens_for_a_line_that_must_show() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.app.chrome.show_code();
         h.wait(0.3);
         // Blink: PROGRAM on 1, VAR_OUTPUT on 2, VAR on 5, the IF on 10.
@@ -1596,7 +1607,7 @@ mod chrome {
 
     #[test]
     fn the_left_pane_has_files_and_code_tabs_and_one_width() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         assert!(h.app.chrome.code_open(), "the simulation opens on Code");
         let code = h.rect("pane code");
         let files = h.rect("pane files");
@@ -1636,7 +1647,7 @@ mod chrome {
     /// as its widest item, every item filling that width.
     #[test]
     fn menus_are_as_wide_as_their_widest_item() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         let menu = |h: &mut Harness, open: &str, items: &[&str]| {
             h.press(open);
             // The frame the menu opens on is egui's sizing pass, where
@@ -1687,7 +1698,7 @@ mod chrome {
     /// Deploy does (Nick, 2026-11-05).
     #[test]
     fn a_files_right_click_deploys_the_project() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.press("bar file");
         h.press("file copy");
         // The name popup settles into the centre on its second frame.
@@ -1714,7 +1725,7 @@ mod chrome {
     /// of the screen (Nick, 2026-11-02).
     #[test]
     fn rename_and_delete_are_the_menus_and_the_delete_key_and_ask_by_the_click() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.press("bar file");
         h.press("file copy");
         // The name popup settles into the centre on its second frame.
@@ -2808,7 +2819,7 @@ mod chrome {
 
     #[test]
     fn double_clicking_a_file_opens_the_code_tab() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.app.chrome.show_files();
         h.wait(0.2);
         let at = h.rect("file blink.st").center();
@@ -2917,7 +2928,7 @@ mod chrome {
 
     #[test]
     fn a_right_click_on_a_file_copies_pastes_and_duplicates_it() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         // An example is read-only: its file menu offers Copy alone. File ›
         // Copy project first to get a writable one; it lands on the Files
         // tab asking for the name.
@@ -3030,7 +3041,7 @@ mod chrome {
 
     #[test]
     fn the_st_toggle_opens_and_closes_the_editor_and_a_block_click_sends_it_to_the_line() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         let editor = h.editor_id();
         assert!(h.app.chrome.code_open(), "the simulation starts with the ST open");
         assert!(h.ctx.read_response(editor).is_some());
@@ -3106,7 +3117,7 @@ mod simulated {
 
     #[test]
     fn clicking_empty_canvas_clears_the_pick() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
         h.click(at);
         assert!(matches!(sim_view(&h).pick, Some(Pick::Node(_))));
@@ -3121,7 +3132,7 @@ mod simulated {
 
     #[test]
     fn a_tap_near_a_small_block_still_hits_it() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.frame(vec![Event::Zoom(0.5)]);
         h.frame(vec![]);
         let (at, width) = node(sim_view(&h), write_to("LAMP"));
@@ -3497,7 +3508,7 @@ mod simulated {
 
     #[test]
     fn ctrl_f_finds_in_the_st_and_ctrl_g_walks_the_matches() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::blink();
         h.wait(0.3);
         h.press("pane code");
         h.wait(0.3);
@@ -5077,6 +5088,86 @@ mod tour {
             assert!(a.files_ui.naming.is_none());
             assert_eq!(a.chat.seq(), 0);
         }
+    }
+}
+
+/// The outputs as lamps in the diagram's corner (`lamps`; Nick,
+/// 2026-11-12: the first screen should show itself without words).
+mod lamps {
+    use eframe::egui::{Color32, Pos2, Shape};
+
+    use super::Harness;
+    use crate::app::App;
+    use crate::st_view::brand::{GREEN, RED, YELLOW};
+
+    /// The circles of radius `r` the last frame drew inside the diagram,
+    /// top to bottom: centre and fill.
+    fn lamps(h: &Harness, r: f32) -> Vec<(Pos2, Color32)> {
+        fn walk(s: &Shape, r: f32, out: &mut Vec<(Pos2, Color32)>) {
+            match s {
+                Shape::Vec(v) => v.iter().for_each(|s| walk(s, r, out)),
+                Shape::Circle(c) if (c.radius - r).abs() < 0.01 => out.push((c.center, c.fill)),
+                _ => {}
+            }
+        }
+        let area = h.app.chrome.diagram;
+        let mut out = Vec::new();
+        for c in &h.shapes {
+            walk(&c.shape, r, &mut out);
+        }
+        out.retain(|(c, _)| area.contains(*c));
+        out.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
+        out
+    }
+
+    #[test]
+    fn the_page_opens_on_the_traffic_light_lit_in_the_diagrams_corner() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.5);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert_eq!(sim.title(), "traffic");
+        assert!(sim.session.running);
+        let area = h.app.chrome.diagram;
+        let l = lamps(&h, 15.0);
+        assert_eq!(l.len(), 3, "red over yellow over green: {l:?}");
+        assert!(
+            l.iter()
+                .all(|(c, _)| c.x > area.center().x && c.y > area.center().y),
+            "in the bottom-right corner of {area:?}: {l:?}"
+        );
+        assert!(
+            l.iter().all(|(c, _)| (c.x - l[0].0.x).abs() < 0.01),
+            "one column: {l:?}"
+        );
+        // Green holds the first 3 s: full colour; the other two nearly out.
+        assert_eq!(l[2].1, GREEN, "{l:?}");
+        assert_ne!(l[0].1, RED, "{l:?}");
+        assert_ne!(l[1].1, YELLOW, "{l:?}");
+        // Then one second of yellow, then red.
+        h.wait(3.0);
+        let l = lamps(&h, 15.0);
+        assert_eq!(l[1].1, YELLOW, "{l:?}");
+        assert_ne!(l[2].1, GREEN, "{l:?}");
+        h.wait(1.5);
+        let l = lamps(&h, 15.0);
+        assert_eq!(l[0].1, RED, "{l:?}");
+        assert_ne!(l[1].1, YELLOW, "{l:?}");
+    }
+
+    #[test]
+    fn any_other_bool_output_is_a_pilot_lamp_with_its_name() {
+        let mut h = Harness::blink();
+        h.wait(0.3);
+        let l = lamps(&h, 11.0);
+        assert_eq!(l.len(), 1, "Blink's one lamp: {l:?}");
+        assert!(h.drew("lamp"), "named under it");
+        // It blinks: on at full brand yellow within a period.
+        let mut seen_on = false;
+        for _ in 0..40 {
+            h.wait(0.05);
+            seen_on |= lamps(&h, 11.0).first().is_some_and(|(_, c)| *c == YELLOW);
+        }
+        assert!(seen_on);
     }
 }
 

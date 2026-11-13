@@ -2,6 +2,7 @@
 
 Short programs that teach one thing each, the first chapters of a Structured Text book. Pick one and name it: it becomes a program of your own to change.
 
+- **Traffic light**
 - **Blink**
 - **Read and write**
 - **Logic: AND, OR, NOT**

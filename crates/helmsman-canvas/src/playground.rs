@@ -105,10 +105,49 @@ pub struct Example {
     pub src: &'static str,
 }
 
+/// The example called `name` (the tour is built on "Blink", whichever
+/// example opens first).
+#[must_use]
+pub fn example(name: &str) -> &'static Example {
+    EXAMPLES
+        .iter()
+        .find(|e| e.name == name)
+        .unwrap_or_else(|| panic!("no example named {name}"))
+}
+
 /// The examples (Nick, 2026-11-05): what the first chapters of a
 /// Structured Text book teach, one idea each, a few lines long. Inputs are
 /// `VAR_INPUT`s the I/O tab switches; outputs are `VAR_OUTPUT`s it shows.
-pub const EXAMPLES: [Example; 5] = [
+/// The traffic light opens first (Nick, 2026-11-12): its three lamps are
+/// the diagram's fixture (`lamps`), so the first screen shows a program
+/// doing something anyone knows.
+pub const EXAMPLES: [Example; 6] = [
+    Example {
+        name: "Traffic light",
+        src: "PROGRAM traffic
+VAR_INPUT
+  run : BOOL := TRUE;
+END_VAR
+VAR_OUTPUT
+  red : BOOL;
+  yellow : BOOL;
+  green : BOOL;
+END_VAR
+VAR
+  phase : INT;  (* 0 green, 1 yellow, 2 red *)
+  t : TON;
+END_VAR
+(* Green and red hold 3 s, yellow 1 s; the timer steps the phase. *)
+t(IN := run AND NOT t.Q, PT := SEL(phase = 1, T#3s, T#1s));
+IF t.Q THEN
+  phase := (phase + 1) MOD 3;
+END_IF;
+green := run AND (phase = 0);
+yellow := run AND (phase = 1);
+red := NOT run OR (phase = 2);
+END_PROGRAM
+",
+    },
     Example {
         name: "Blink",
         src: "PROGRAM blink

@@ -87,7 +87,7 @@ you cannot draw into it. What you can do:
   drag on empty space, zoom with the wheel; the diagram never leaves the
   view, and a double-click on empty space fits it again.
 
-![The lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims.](img/diagram-why.png)
+![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs.](img/diagram-why.png)
 
 Values that would clutter the diagram are left off it: a constant shows
 its name alone, a time reads as `T#500ms`. A wire that would cross the
@@ -110,6 +110,13 @@ TON = ⏱          # over the built-in one
 
 The project's rules win over the built-in ones. Zoomed out past where the
 label is drawn, the icon stands alone at a readable size.
+
+**Lamps.** The program's BOOL outputs are also lamps in the bottom-right
+corner of the diagram, lit as the program runs. An output named after a
+colour (`red`, `lamp_green`, `amber`) is a lamp of that colour, in the
+I/O panel's list and on the trend too; a red, a yellow and a green
+together are drawn as a traffic light. Any other output is a pilot lamp
+with its name under it.
 
 ## The panes
 
