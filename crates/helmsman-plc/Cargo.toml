@@ -109,6 +109,10 @@ name = "devconf"
 required-features = ["box"]
 
 [[test]]
+name = "devconf_agent"
+required-features = ["box"]
+
+[[test]]
 name = "profile_link"
 required-features = ["box"]
 

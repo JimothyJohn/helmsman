@@ -1136,6 +1136,10 @@ fn list_device_configs(api: &dyn Caller) -> Outcome {
                 "password_stored": j["password_stored"],
             })),
             Ok((404, _)) => {}
+            Ok((409, b)) if code(&b) == "busy" => found.push(json!({
+                "device": id, "configurator": Json::Null, "readable": false,
+                "why": "the device is busy (restarting for its configuration, or another operation)",
+            })),
             Ok((s, b)) => found.push(json!({
                 "device": id, "configurator": Json::Null, "readable": false,
                 "why": format!("the box answered {s}: {}", b["error"].as_str().unwrap_or("no reason given")),
@@ -1191,6 +1195,13 @@ fn read_device_config(api: &dyn Caller, i: &ReadDeviceConfig) -> Outcome {
             }),
             format!("{} has no configuration", i.device),
         ),
+        Ok((409, b)) if code(&b) == "busy" => {
+            let what = match b["busy"].as_str() {
+                Some("restart" | "import") => "the device is restarting for its configuration",
+                _ => "the device is busy with another configuration operation",
+            };
+            fail(format!("{what}; ask again in a minute"))
+        }
         Ok((404, _)) => fail(format!(
             "no device {} in the running map; list_device_configs gives the ids",
             i.device
@@ -1929,6 +1940,42 @@ END_FUNCTION_BLOCK
         assert!(!o.data.to_string().contains(PASSWORD));
         let none = list_device_configs(&routes(vec![]));
         assert!(none.ok && none.data["devices"] == json!([]), "{}", none.data);
+    }
+
+    #[test]
+    fn a_restarting_device_is_said_in_a_sentence() {
+        let api = routes(vec![(
+            "GET /api/devices/io1/config",
+            409,
+            json!({"error": "busy", "code": "busy", "busy": "restart"}),
+        )]);
+        let o = read_device_config(&api, &ReadDeviceConfig { device: "io1".into() });
+        assert!(!o.ok);
+        assert_eq!(
+            o.summary,
+            "the device is restarting for its configuration; ask again in a minute"
+        );
+        assert_eq!(o.data["error"], o.summary);
+    }
+
+    /// Records every call, and answers 404.
+    struct Recorder(std::cell::RefCell<Vec<String>>);
+
+    impl Caller for Recorder {
+        fn call(&self, method: &str, path: &str, _: Option<&Json>) -> Result<(u16, Json), String> {
+            self.0.borrow_mut().push(format!("{method} {path}"));
+            Ok((404, json!({"error": "x"})))
+        }
+    }
+
+    #[test]
+    fn the_device_config_tools_only_ever_get() {
+        let r = Recorder(std::cell::RefCell::new(Vec::new()));
+        let _ = read_device_config(&r, &ReadDeviceConfig { device: "io1".into() });
+        let _ = list_device_configs(&r);
+        let calls = r.0.borrow();
+        assert!(!calls.is_empty());
+        assert!(calls.iter().all(|c| c.starts_with("GET /api/")), "{calls:?}");
     }
 
     #[test]
