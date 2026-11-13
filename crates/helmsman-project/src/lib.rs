@@ -53,13 +53,18 @@ pub const MAIN: &str = "main.st";
 /// Most earlier iterations (`vN.st`) a project keeps.
 pub const MAX_ITERATIONS: usize = 1000;
 /// What a project file may be named, for messages.
-pub const FILE_NAMES: &str = "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout, icons.map, agent.md NAME.eds (a device's EDS) or NAME.device (a device's profile), NAME 1 to 48 of a-z 0-9 _ -";
+pub const FILE_NAMES: &str = "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout, icons.map, agent.md NAME.eds (a device's EDS), NAME.device (a device's profile) or ID.devconf (a device's saved configuration), NAME 1 to 48 of a-z 0-9 _ -";
 /// A device file's extension: a vendor's EDS, carried by the project and
 /// named by its map (`eds=NAME.eds`), so a device goes with the project.
 pub const EDS_EXT: &str = ".eds";
 /// A device profile's extension: carried by the project and named by its
 /// map (`device ID device:NAME ...`).
 pub const DEVICE_EXT: &str = ".device";
+/// A device's saved configuration (`ID.devconf`): the export text a
+/// configurator read from the unit with the device's id as the stem
+/// (`helmsman-devconf`, docs/ARCHITECTURE.md "Device configuration"). The
+/// build ignores it; a restore sends it back to the unit.
+pub const DEVCONF_EXT: &str = ".devconf";
 /// Largest file, bytes.
 pub const MAX_FILE: usize = 256 * 1024;
 /// Most `.st` files in a project.
@@ -100,6 +105,9 @@ pub enum FileKind {
     /// channels and how to reach them, named by the map
     /// (`device:NAME`); the build ignores it.
     Device,
+    /// A device's saved configuration (`ID.devconf`, [`DEVCONF_EXT`]):
+    /// the export text as the unit gave it; the build ignores it.
+    Devconf,
     /// The Agent tab's pages (`agent.md`, [`agent`]).
     Agent,
     /// An earlier iteration of the program, `vN.st` (N from 1): what
@@ -141,6 +149,9 @@ pub fn file_name(s: &str) -> Option<FileKind> {
     if let Some(stem) = s.strip_suffix(DEVICE_EXT) {
         return driver_name(stem).then_some(FileKind::Device);
     }
+    if let Some(stem) = s.strip_suffix(DEVCONF_EXT) {
+        return driver_name(stem).then_some(FileKind::Devconf);
+    }
     if iteration_number(s).is_some() {
         return Some(FileKind::Iteration);
     }
@@ -180,7 +191,7 @@ const RESERVED: [&str; 8] = [
 /// fixed file's name in another case, the two files a revision folder
 /// holds beside the project's, `drivers`, a DOS device name (`con`,
 /// `nul`, `com1`, ... also with an extension), or an extension the
-/// project already means ([`EDS_EXT`], [`DEVICE_EXT`], `.st`, [`DRIVER_EXT`]) in a form
+/// project already means ([`EDS_EXT`], [`DEVICE_EXT`], [`DEVCONF_EXT`], `.st`, [`DRIVER_EXT`]) in a form
 /// [`file_name`] refuses. Two names that differ only by case are still
 /// refused together by [`Files::check`].
 #[must_use]
@@ -199,7 +210,7 @@ pub fn kept_name(s: &str) -> bool {
     }
     let lower = s.to_ascii_lowercase();
     if RESERVED.contains(&lower.as_str())
-        || [".st", EDS_EXT, DEVICE_EXT, DRIVER_EXT]
+        || [".st", EDS_EXT, DEVICE_EXT, DEVCONF_EXT, DRIVER_EXT]
             .iter()
             .any(|e| lower.ends_with(e))
     {
@@ -576,6 +587,13 @@ mod tests {
         assert_eq!(file_name("e1213.eds"), Some(FileKind::Eds));
         assert_eq!(file_name("moxa-e1213_v2.eds"), Some(FileKind::Eds));
         assert_eq!(file_name("moxa-e1213.device"), Some(FileKind::Device));
+        assert_eq!(file_name("rio.devconf"), Some(FileKind::Devconf));
+        assert_eq!(
+            file_name("Rio.devconf"),
+            None,
+            "a device file is a lower-case slug"
+        );
+        assert!(!kept_name("Rio.devconf"), "a form the project means is not kept");
         for bad in ["Moxa.device", ".device", "../x.device", "a b.device"] {
             assert_eq!(file_name(bad), None, "{bad}");
             assert!(!kept_name(bad), "{bad}");

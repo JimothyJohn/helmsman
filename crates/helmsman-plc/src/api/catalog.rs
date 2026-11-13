@@ -175,6 +175,10 @@ pub struct Devices {
     transports: Mutex<BTreeMap<String, String>>,
     /// By link name: what it says of its device's timing.
     health: Mutex<BTreeMap<String, Timing>>,
+    /// By link name: the reason the box itself has taken the device off
+    /// the network (a restart for its configuration). Listed as the
+    /// device's state whatever its link reports meanwhile.
+    held: Mutex<BTreeMap<String, String>>,
 }
 
 /// What a link says of its device's timing (`helmsman_plc::link::Health`
@@ -207,7 +211,36 @@ impl Devices {
             addresses: Mutex::new(BTreeMap::new()),
             transports: Mutex::new(BTreeMap::new()),
             health: Mutex::new(BTreeMap::new()),
+            held: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The box takes device `name` off the network on purpose (a restart
+    /// for its configuration, `api::devconf`): until [`Devices::release`]
+    /// it is listed lost with `reason`, not as a fault.
+    pub fn hold(&self, name: &str, reason: &str) {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_string(), reason.to_string());
+    }
+
+    /// Ends a [`Devices::hold`].
+    pub fn release(&self, name: &str) {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
+    }
+
+    /// Why the box holds device `name` off the network, if it does.
+    #[must_use]
+    pub fn held(&self, name: &str) -> Option<String> {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
     /// Lets the box API browse device `name`'s tags (a controller it only
