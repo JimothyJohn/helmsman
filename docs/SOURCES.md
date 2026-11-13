@@ -903,7 +903,37 @@ into the code.
   (`helmsman_adapter::e1213`, the device doc), the profile's channel counts
   and connection limit, the Modbus example map. Bit positions within the
   status words and the counters' byte order are inferred, and say so.
+- **Also leaned on by** `helmsman-devconf`'s Moxa console configurator for
+  the factory defaults and the connection limits it must not break (the
+  console itself is not in the manual; see the next entry).
 - **How to cite:** `E1200 manual v15.10 p. X-N`.
+
+### The ioLogik E1200 web console, as written down in helmsman-devices (mapped 2026-11-12)
+
+- **What:** `devices/moxa/iologik-e1200-web-console.md` in helmsman-devices
+  (branch `dev`), with its client `scripts/moxa-e1200-console.py` and tests
+  `tests/test_moxa_console.py`: the console's cookies, the configuration
+  export, the form-and-token write, the staged-versus-running split, and
+  what was done to the bench E1213 (firmware V3.1 Build19110615) to map it.
+  Later facts from the same unit (2026-11-12), given to this work by the
+  person who ran them and not yet in that document: Save/Restart takes
+  about 21 s with HTTP up twice (11.4 s with TCP 502 still down, down again
+  at 14.0 s, up for good at 20.0 s), its reply arrives in about 0.1 s,
+  an import (`POST 06_5_1.htm`) reboots the unit by itself ("System
+  configuration file imported and restart successfully."), staged settings
+  become running across the reboot, and the password change's three fields
+  (`ChallID`, `OldPwd`, `NewPwd` from MD5 and an XOR with the `ChallID`
+  cookie's MD5), whose six test vectors were computed by running Moxa's own
+  `md5.js` and `Xor()` under node. A password-protected console's login was
+  not seen.
+- **Where:** the helmsman-devices repository; the facts are first-hand from
+  one E1213, not a vendor document. Moxa's HTML and scripts are not copied
+  into this repository.
+- **Leaned on by:** `crates/helmsman-devconf` (`moxa_e1200`, its simulator
+  and its tests). The simulator's assumptions are listed in its module
+  documentation.
+- **How to cite:** `E1200 web console write-up, section <name>`; the vendor
+  vectors as `password.rs` `VENDOR`.
 
 ### Novanta IMS MDrive files (read 2026-11-10, no unit on the bench)
 
