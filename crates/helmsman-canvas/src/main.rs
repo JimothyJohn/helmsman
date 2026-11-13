@@ -49,6 +49,7 @@ mod devices;
 mod diff_ui;
 mod editor;
 mod find;
+mod glyph_lib;
 mod glyphs;
 mod help;
 mod history_ui;
@@ -57,6 +58,7 @@ mod icons;
 mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;
+mod lamps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod link_tests;
 mod messages;

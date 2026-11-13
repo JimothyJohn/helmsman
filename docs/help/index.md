@@ -11,11 +11,12 @@ part is still to come.
 
 The [playground](../playground/) runs a controller inside the page, with no
 install and nothing to sign up for. It opens with a small example running:
-a lamp that blinks. The diagram in the middle is the program as it runs,
+a traffic light, its three lamps lit in turn in the corner of the diagram.
+The diagram in the middle is the program as it runs,
 live; the Structured Text that makes it is one key away (View › Structured
 Text, or <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>).
 
-![The playground as it opens: the blink example running, its diagram in the middle, the Structured Text on the left, the I/O panel on the right and the trend along the bottom.](img/editor.png)
+![The playground as it opens: the traffic light example running, its diagram in the middle, the Structured Text on the left, the I/O panel on the right and the trend along the bottom.](img/editor.png)
 
 The [guided tour](https://helmsman.advin.io/playground/?tour) walks you
 through it in the playground itself: each step points at the control it
@@ -24,7 +25,10 @@ Take the tour starts it again any time.
 
 Or try these yourself, in order:
 
-1. Watch the lamp on the diagram: Blink's timer flips it every 500 ms.
+1. Watch the traffic light in the diagram's corner: green for three
+   seconds, yellow for one, red for three, and the same lamps in the same
+   colours on the trend below. Switch `run` off in the I/O panel on the
+   right and the light stops on red.
 2. Open **Files** on the left and click **Read and write**. Give it a
    name: it opens as a program of your own, running. Click the `switch`
    block on the diagram; it is an input, the click flips it, and the lamp

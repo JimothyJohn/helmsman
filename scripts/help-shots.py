@@ -46,7 +46,8 @@ SHOTS = {
     "editor-light": ("?playground", layout(light=1), [("wait", 2500)], None),
     "file-menu": ("?playground", layout(), [("click", 137, 26), ("wait", 800)], clip(0, 0, 520, 300)),
     "glyphs": ("?playground", layout(), [("move", 861, 82), ("wait", 1200)], clip(680, 56, 485, 96)),
-    "diagram-why": ("?playground", layout(), [("click", 989, 268), ("wait", 1500)], clip(320, 75, 836, 340)),
+    # The traffic light's GREEN := block (the first example since 2026-11-12), with the lamps in the corner.
+    "diagram-why": ("?playground", layout(), [("click", 578, 392), ("wait", 1500)], clip(320, 330, 836, 260)),
     "files-pane": ("?playground", layout(pane="files"), [("wait", 1500)], clip(0, 52, 360, 493)),
     "context-menu": ("?playground", layout(pane="files"), [("wait", 1500), ("rclick", 55, 373), ("wait", 800)], clip(0, 52, 360, 560)),
     "io-tab": ("?playground", layout(tab="io"), [("wait", 1500)], clip(1098, 52, 302, 423)),

@@ -110,7 +110,9 @@ moves only when the values cross one. Pin from the tab's list. History
 restarts when you change the set. To put the lanes in another order,
 drag a lane's name up or down and drop it on the lane it should take;
 its history moves with it. Click a lane's name to pick that signal's
-colour from the palette; the browser keeps your choice.
+colour from the palette; the browser keeps your choice. Until you pick
+one, a signal named after a colour (`red`, `lamp_green`) is drawn in
+that colour, the same as its lamp.
 
 ![The Trend tab: three pinned signals, the Window slider, a lane each with its scale at the right edge.](img/trend.png)
 

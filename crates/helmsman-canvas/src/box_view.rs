@@ -2217,10 +2217,21 @@ impl Body for BoxView {
                                     _ if s.value == Some(helmsman_iec::Value::Bool(true)) => t.ink(GREEN),
                                     _ => t.fg,
                                 };
-                                let l = ui.label(RichText::new(text).monospace().color(color));
-                                if let Some(e) = &s.point_error {
-                                    l.on_hover_text(e);
-                                }
+                                let bool_ty = matches!(s.value, Some(helmsman_iec::Value::Bool(_)));
+                                let glyph = crate::glyph_lib::for_point(&s.name, dir == "in", bool_ty);
+                                ui.horizontal(|ui| {
+                                    crate::glyph_lib::show(
+                                        ui,
+                                        glyph,
+                                        crate::glyphs::ROW,
+                                        color,
+                                        crate::glyph_lib::tip(glyph),
+                                    );
+                                    let l = ui.label(RichText::new(text).monospace().color(color));
+                                    if let Some(e) = &s.point_error {
+                                        l.on_hover_text(e);
+                                    }
+                                });
                             }
                             ui.end_row();
                         }

@@ -84,6 +84,7 @@ fn the_offered_examples_are_short_and_each_has_io() {
     assert_eq!(
         names,
         [
+            "Traffic light",
             "Blink",
             "Read and write",
             "Logic: AND, OR, NOT",
@@ -1461,7 +1462,10 @@ impl Screen {
             time: 0.0,
         };
         // The fixture blink (an enable and a period to drive), as the page
-        // opened before the textbook examples; running, as it opens.
+        // opened before the textbook examples; running, as it opens. The
+        // Blink example is the project open under it (the traffic light
+        // opens first since 2026-11-12).
+        s.view.open_project("blink");
         s.view.load(example("blink"), "blink");
         s.view.session.set_running(true);
         s.frame(vec![]);
@@ -2069,7 +2073,7 @@ fn an_instruction_on_an_example_lands_its_program_named_and_never_runs_it() {
     assert_eq!(s.view.link.sent.len(), 2);
     let (seq, req) = s.view.link.sent[1].clone();
     assert!(
-        req.body.contains("PROGRAM blink"),
+        req.body.contains("PROGRAM traffic"),
         "the editor's program goes along"
     );
     let latch = STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n"));

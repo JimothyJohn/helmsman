@@ -58,7 +58,9 @@ fn watch_git() {
     }
 }
 
-fn main() {
+// `pub`: helmsman-canvas's build script includes this file as a module and
+// calls it from its own `main` (the glyph library comes after the stamp).
+pub fn main() {
     println!("cargo:rerun-if-env-changed=HELMSMAN_BUILD");
     let stamp = match std::env::var("HELMSMAN_BUILD") {
         Ok(s) if !s.trim().is_empty() => clean(s.trim()),

@@ -903,16 +903,32 @@ impl Viewer {
         for path in self.outputs() {
             let value = scan.and_then(|s| s.get(&path));
             let on = value == Some(Value::Bool(true));
+            let color = if on {
+                crate::lamps::colour(&path).map_or(t.accent, |c| t.ink(c))
+            } else {
+                t.fg
+            };
             let text = RichText::new(format!("{} {path} = {}", if on { "●" } else { "○" }, show(value)))
                 .monospace()
-                .color(if on { t.accent } else { t.fg });
-            let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
-                .min_size(Vec2::new(ui.available_width(), TAP));
-            if ui
-                .add(row)
-                .tip("Click to light why it has this value in the diagram.")
-                .clicked()
-            {
+                .color(color);
+            let glyph = crate::glyph_lib::for_point(&path, false, matches!(value, Some(Value::Bool(_))));
+            let clicked = ui
+                .horizontal(|ui| {
+                    crate::glyph_lib::show(
+                        ui,
+                        glyph,
+                        crate::glyphs::ROW,
+                        color,
+                        crate::glyph_lib::tip(glyph),
+                    );
+                    let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
+                        .min_size(Vec2::new(ui.available_width(), TAP));
+                    ui.add(row)
+                        .tip("Click to light why it has this value in the diagram.")
+                        .clicked()
+                })
+                .inner;
+            if clicked {
                 self.because = Some(path);
             }
         }
@@ -1194,6 +1210,18 @@ impl Viewer {
                 ghosts: old.map(|o| (o, removed.as_slice())),
             },
         );
+        // The program's BOOL outputs as lamps in the corner (a traffic
+        // light for a red, a yellow and a green), on the program's own
+        // diagram only: a block instance's outputs are not the machine's.
+        if let Some(scan) = scan
+            && self.scopes[self.scope].prefix.is_empty()
+        {
+            let outs = self.outputs();
+            let fixture = crate::lamps::fixture(outs.iter().map(|p| (p.as_str(), scan.get(p))));
+            if let Some(f) = &fixture {
+                crate::lamps::paint(&painter, area, f);
+            }
+        }
     }
 
     /// What drives the "because" variable's value in `scan`, on the

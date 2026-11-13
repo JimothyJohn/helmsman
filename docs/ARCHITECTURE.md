@@ -1314,7 +1314,11 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
 - **Build match** (`build-match`): the box and the canvas are built
   separately, so both carry a stamp, `HELMSMAN_BUILD`, baked in by
   `crates/build_stamp.rs` (the build scripts of helmsman-plc and
-  helmsman-canvas `include!` it): `git describe --always --abbrev=9`,
+  helmsman-canvas `include!` it; helmsman-canvas's build script then
+  rasterizes the glyph library, `assets/glyphs/*.svg`, into alpha masks
+  with resvg, a build dependency that never reaches the wasm graph;
+  `glyph_lib` tints them when it draws, docs/UI.md "Glyph library"):
+  `git describe --always --abbrev=9`,
   `HELMSMAN_BUILD` from the environment if set, "unknown" without either.
   Every reply, files and event streams too, carries the box's as
   `X-Helmsman-Build`; the canvas reads it off its fetches (the device poll

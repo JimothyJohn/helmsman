@@ -224,13 +224,37 @@ this; change it here first when a decision changes.
   compile is refused and the old program keeps running. A browser that
   keeps nothing (a private window) still works; the projects last until
   the page closes.
-- **Examples** (Nick, 2026-11-05). Five programs from the first chapters
-  of a Structured Text book, a few lines each: Blink, Read and write,
-  Logic (AND, OR, NOT), Start/stop latch, Counter (`playground::EXAMPLES`).
+- **Glyph library** (Nick, 2026-11-12: "the app shouldn't even need
+  words"). One SVG a glyph in `crates/helmsman-canvas/assets/glyphs/`,
+  rasterized to alpha masks by the crate's build script and tinted in the
+  theme's colours when drawn (`glyph_lib`); redrawing one is replacing
+  its file. Placeholders in the spirit of emoji until Nick draws the set.
+  Today a glyph stands beside every point in the I/O tab, the box's
+  signal list, the outputs list and the Devices tree: by the words of the
+  point's name (`start_pb` a push button, `e_stop` an emergency stop,
+  `mode_sel` a selector, a colour or `lamp` a pilot lamp, `alarm`,
+  `interlock`, `phase`/`step`, `hmi`, `timer`, `count`, `latch`, `edge`),
+  else a switch for a BOOL input, a pilot lamp for a BOOL output, a gauge
+  for a number; a device by its driver (the box, the screen, an I/O
+  module). Next: the standard blocks on the diagram (timer, counter,
+  latch, edge) and a palette to drag from.
+- **Lamps** (Nick, 2026-11-12: the first screen should speak without
+  words). The program's BOOL outputs are lamps in the diagram's
+  bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a
+  green together are a traffic light, anything else a row of pilot lamps
+  named under them. An output named after a colour (`red`, `lamp_green`,
+  `amber`, `blue`, `white`) takes that colour there, in the I/O tab's
+  output text when on, and on both trends until a palette colour is
+  picked for it. Only the program's own diagram shows them, not a block
+  instance's.
+- **Examples** (Nick, 2026-11-05). Six programs from the first chapters
+  of a Structured Text book, a few lines each: Traffic light (first, Nick,
+  2026-11-12), Blink, Read and write, Logic (AND, OR, NOT), Start/stop
+  latch, Counter (`playground::EXAMPLES`).
   The worked machines and templates are gone. A click on an example asks
   for the program's name (prefilled, made unique) and opens the person's
   own copy; the example itself never opens for editing (a first visit
-  shows Blink running). On a box the same list sends the copy as a `.zip`
+  shows the traffic light running). On a box the same list sends the copy as a `.zip`
   with an `io.map` made from the example's own ports, BOOL inputs on the
   box's `di` channels and outputs on its `do` channels, so it deploys with
   nothing wired; nothing else changes what the box holds, and a first
