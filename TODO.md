@@ -54,6 +54,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-11
   by: claude-session
 
+- [ ] **Devices tab buttons as glyphs too?** — the glyph sweep (#378, merged 2026-11-13) made the Agent and Help action buttons (Send, Stop, Undo, Ask for help) and the Editor | Monitor switch into glyphs. Words stayed on menus, form labels, dialog confirmations (OK, Cancel, Restore this revision, Use this code), Release on forced inputs, Sign in, Refresh, and the Devices tab's Scan / Edit / Delete / Use this device; the last group only because #375 (device configuration on the Devices tab) had devices.rs open.
+  needs: your call, and #375 landed for the Devices part
+  result: the Devices buttons become glyphs with tooltips (glyphs::action), or the words stay as they are
+  options: Devices buttons as glyphs once #375 lands (recommended) | keep their words | also drop words on dialog confirmations
+  est: 1h
+  difficulty: low
+  id: glyphs-devices-buttons
+  asked: 2026-11-13
+  by: claude-session
+
 ## Needs your hands
 
 - [ ] **Promote the free playground chat: helmsman dev → master** — the playground's Agent tab on the relay's demo function instead of a visitor's key (interview 2026-11-11). Everything else is done: the relay is deployed on OpenRouter with the demo function for https://helmsman.advin.io (agent-relay main, stack updated 2026-11-12 UTC), one real turn through the live demo answered and was counted, and docs/playground is built with the demo's address. The published site still serves the old page until master moves.
