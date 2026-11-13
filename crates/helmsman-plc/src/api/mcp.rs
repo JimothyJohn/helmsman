@@ -601,7 +601,7 @@ pub fn reachable(method: &str, path: &str) -> bool {
         (
             "GET",
             ["", "api", "signals" | "modules" | "io_map" | "devices"]
-                | ["", "api", "devices", "library" | "config"]
+                | ["", "api", "devices", "library"]
                 | ["", "api", "devices", _, "config"]
                 | ["", "api", "modules" | "dropins", _]
                 | ["", "api", "modules", _, "trace"]
@@ -994,7 +994,6 @@ mod tests {
             ("GET", "/api/devices"),
             ("GET", "/api/devices/library?vendor=991&product=515"),
             ("POST", "/api/devices/discover"),
-            ("GET", "/api/devices/config"),
             ("GET", "/api/devices/ioLogik1/config"),
             // A fetched document stored as a drop-in (fetch_document).
             ("POST", "/api/dropins?name=manual.pdf&kind=pdf"),
@@ -1011,7 +1010,6 @@ mod tests {
         for m in ["POST", "PUT", "PATCH", "DELETE"] {
             for p in [
                 "/api/devices/ioLogik1/config",
-                "/api/devices/config",
                 "/api/devices/ioLogik1/config/set",
                 "/api/devices/ioLogik1/config/restart",
                 "/api/devices/ioLogik1/config/import",

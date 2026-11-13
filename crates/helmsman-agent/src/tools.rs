@@ -1072,17 +1072,21 @@ fn device_id_ok(s: &str) -> bool {
 
 /// What a device-configuration result may carry, whatever the box API
 /// answered. The box's view has no password field; this is the second
-/// lock: an allow-list of top-level keys, and below them any key that
-/// looks like a secret is dropped (`password_stored`, a yes/no, is the one
-/// allowed).
+/// lock: an allow-list of top-level keys (the unit's whole export text is
+/// left out, the facts and the drift are the reading), and below them any
+/// key that looks like a secret is dropped (`password_stored`, a yes/no,
+/// is the one allowed).
 const CONFIG_KEYS: [&str; 6] = [
     "device",
     "configurator",
+    "password_stored",
     "facts",
     "snapshot",
     "drift",
-    "password_stored",
 ];
+
+/// Most devices `list_device_configs` asks, one read of the unit each.
+const MAX_CONFIG_PROBES: usize = 32;
 
 fn scrub_secrets(v: &mut Json) {
     match v {
@@ -1101,31 +1105,54 @@ fn scrub_secrets(v: &mut Json) {
     }
 }
 
-/// Which devices have a configuration the box can read
-/// (`GET /api/devices/config`): each with its id and configurator. Read
-/// only; changing a device's own configuration is the engineer's, in the
-/// canvas's Devices tab.
+/// The error code of a box API answer, if it has one.
+fn code(body: &Json) -> &str {
+    body["code"].as_str().unwrap_or_default()
+}
+
+/// Which devices of the running map have a configuration the box can read,
+/// with each one's configurator. The box has no list route, so this asks
+/// `GET /api/devices` and then each device's `GET
+/// /api/devices/{id}/config` (at most 32): a device whose profile has no
+/// `configure` line answers 404 `not_configurable` and is left out; one
+/// that has it but whose unit does not answer is listed as not readable
+/// now. Read only; changing a device's own configuration is the
+/// engineer's, in the canvas's Devices tab.
 fn list_device_configs(api: &dyn Caller) -> Outcome {
-    match api.get("/api/devices/config") {
-        Ok((200, j)) => {
-            let mut list = j["devices"].as_array().cloned().unwrap_or_default();
-            for d in &mut list {
-                *d = json!({ "device": d["device"], "configurator": d["configurator"] });
-            }
-            let n = list.len();
-            let note = if n == 0 {
-                "no device on this box has a configuration the box can read (a device profile with a `configure` line gives it one)"
-            } else {
-                "read_device_config gives one device's facts and drift"
-            };
-            ok(
-                json!({ "devices": list, "note": note }),
-                format!("{n} device(s) with configuration"),
-            )
+    let links = match api.get("/api/devices") {
+        Ok((200, Json::Array(list))) => list,
+        Ok((s, b)) => return unexpected("reading devices", s, &b),
+        Err(e) => return fail(e),
+    };
+    let mut found = Vec::new();
+    for d in links.iter().take(MAX_CONFIG_PROBES) {
+        let Some(id) = d["name"].as_str().filter(|n| device_id_ok(n)) else {
+            continue;
+        };
+        match api.get(&format!("/api/devices/{}/config", http::segment(id))) {
+            Ok((200, j)) => found.push(json!({
+                "device": id, "configurator": j["configurator"], "readable": true,
+                "snapshot_exists": !j["snapshot"].is_null(),
+                "password_stored": j["password_stored"],
+            })),
+            Ok((404, _)) => {}
+            Ok((s, b)) => found.push(json!({
+                "device": id, "configurator": Json::Null, "readable": false,
+                "why": format!("the box answered {s}: {}", b["error"].as_str().unwrap_or("no reason given")),
+            })),
+            Err(e) => return fail(e),
         }
-        Ok((s, b)) => unexpected("listing device configurations", s, &b),
-        Err(e) => fail(e),
     }
+    let n = found.len();
+    let note = if n == 0 {
+        "no device in the running map has a configuration the box can read (its profile needs a `configure` line)"
+    } else {
+        "read_device_config gives one device's facts and drift"
+    };
+    ok(
+        json!({ "devices": found, "note": note }),
+        format!("{n} device(s) with configuration"),
+    )
 }
 
 /// One device's own configuration as the box last read it
@@ -1139,27 +1166,33 @@ fn read_device_config(api: &dyn Caller, i: &ReadDeviceConfig) -> Outcome {
     let path = format!("/api/devices/{}/config", http::segment(&i.device));
     match api.get(&path) {
         Ok((200, j)) => {
-            if j["configurator"].is_null() {
-                return ok(
-                    json!({
-                        "device": i.device, "configured": false,
-                        "note": "this device has no configuration: its profile has no `configure` line, so the box has nothing to read",
-                    }),
-                    format!("{} has no configuration", i.device),
-                );
-            }
             let mut out = Map::new();
             for k in CONFIG_KEYS {
                 if let Some(v) = j.get(k) {
                     out.insert(k.into(), v.clone());
                 }
             }
+            let has_snapshot = !j["snapshot"].is_null();
+            out.insert("snapshot_exists".into(), json!(has_snapshot));
+            if !has_snapshot {
+                out.insert(
+                    "drift_note".into(),
+                    json!("no snapshot is saved for this device, so there is nothing to compare against"),
+                );
+            }
             let mut out = Json::Object(out);
             scrub_secrets(&mut out);
             ok(out, format!("configuration of {}", i.device))
         }
+        Ok((404, b)) if code(&b) == "not_configurable" => ok(
+            json!({
+                "device": i.device, "configured": false,
+                "note": "this device has no configuration: its profile has no `configure` line, so the box has nothing to read",
+            }),
+            format!("{} has no configuration", i.device),
+        ),
         Ok((404, _)) => fail(format!(
-            "no device {} on this box; list_device_configs gives the ids",
+            "no device {} in the running map; list_device_configs gives the ids",
             i.device
         )),
         Ok((s, b)) => unexpected("reading the device configuration", s, &b),
@@ -1791,46 +1824,59 @@ END_FUNCTION_BLOCK
     const PASSWORD: &str = "hunter2-console";
 
     fn config_routes() -> Routes {
-        routes(vec![
+        let mut r = routes(vec![
             (
-                "GET /api/devices/config",
+                "GET /api/devices",
                 200,
-                json!({"devices": [{"device": "io1", "configurator": "moxa-e1200", "extra": PASSWORD}]}),
+                json!([{"name": "box", "state": "up"}, {"name": "io1", "state": "up"},
+                       {"name": "plain", "state": "up"}, {"name": "dead", "state": "down"}]),
             ),
             (
                 "GET /api/devices/io1/config",
                 200,
                 json!({
-                    "device": "io1", "configurator": "moxa-e1200",
+                    "device": "io1", "configurator": "moxa-e1200", "endpoint": "10.0.0.9",
+                    "export": format!("[System]\r\nPwd={PASSWORD}\r\n"),
                     "facts": {
-                        "firmware": "3.1", "communication_watchdog": {"enabled": true, "seconds": 5},
-                        "outputs": [{"channel": 0, "safe_value": "off", "power_on": "off"}],
-                        "ethernet_ip": false, "restful": true,
+                        "firmware": "3.1", "watchdog": {"enabled": true, "value": "5", "label": null},
+                        "eip_enabled": false, "rest_enabled": true,
+                        "outputs": [{"channel": "DO-00", "safe": {"value": "0", "label": "Off"},
+                                     "power_on": {"value": "0", "label": "Off"}}],
                     },
-                    "snapshot": {"exists": true},
-                    "drift": ["EtherNet/IP: snapshot on, device off"],
+                    "snapshot": {"file": "io1.devconf", "version": "ab", "bytes": 9},
+                    "drift": {"changed": [{"before": "EIP=1", "after": "EIP=0"}], "added": [], "removed": []},
                     "password_stored": true,
-                    // A leak the box API should never make, and a stray key.
+                    // Leaks the box API never makes, and a stray key.
                     "password": PASSWORD, "debug": {"MoxaPass": PASSWORD, "note": "x"},
                     "unlisted": PASSWORD,
                 }),
             ),
             (
                 "GET /api/devices/plain/config",
-                200,
-                json!({"device": "plain", "configurator": null}),
+                404,
+                json!({"error": "no configurator", "code": "not_configurable"}),
             ),
-        ])
+            (
+                "GET /api/devices/dead/config",
+                502,
+                json!({"error": "the unit did not answer", "code": "unreachable"}),
+            ),
+        ]);
+        // The first match wins: drop the helper's own one-device list.
+        r.0.remove(0);
+        r
     }
 
     #[test]
     fn read_device_config_gives_facts_and_drift_and_never_the_password() {
         let o = read_device_config(&config_routes(), &ReadDeviceConfig { device: "io1".into() });
         assert!(o.ok, "{}", o.data);
-        assert_eq!(o.data["facts"]["ethernet_ip"], false);
-        assert_eq!(o.data["facts"]["outputs"][0]["safe_value"], "off");
-        assert_eq!(o.data["drift"][0], "EtherNet/IP: snapshot on, device off");
+        assert_eq!(o.data["facts"]["eip_enabled"], false);
+        assert_eq!(o.data["facts"]["outputs"][0]["safe"]["label"], "Off");
+        assert_eq!(o.data["drift"]["changed"][0]["after"], "EIP=0");
         assert_eq!(o.data["password_stored"], true);
+        assert_eq!(o.data["snapshot_exists"], true);
+        assert!(o.data.get("export").is_none());
         let all = format!(
             "{} {} {}",
             o.data,
@@ -1870,20 +1916,19 @@ END_FUNCTION_BLOCK
     }
 
     #[test]
-    fn list_device_configs_lists_ids_and_configurators_only() {
+    fn list_device_configs_lists_the_configurable_ones_only() {
         let o = list_device_configs(&config_routes());
-        assert!(o.ok);
-        assert_eq!(
-            o.data["devices"],
-            json!([{"device": "io1", "configurator": "moxa-e1200"}])
-        );
+        assert!(o.ok, "{}", o.data);
+        let l = o.data["devices"].as_array().expect("a list");
+        assert_eq!(l.len(), 2, "{}", o.data);
+        assert_eq!(l[0]["device"], "io1");
+        assert_eq!(l[0]["configurator"], "moxa-e1200");
+        assert_eq!(l[0]["readable"], true);
+        assert_eq!(l[1]["device"], "dead");
+        assert_eq!(l[1]["readable"], false);
         assert!(!o.data.to_string().contains(PASSWORD));
-        let none = list_device_configs(&routes(vec![(
-            "GET /api/devices/config",
-            200,
-            json!({"devices": []}),
-        )]));
-        assert!(none.ok && none.data["devices"] == json!([]));
+        let none = list_device_configs(&routes(vec![]));
+        assert!(none.ok && none.data["devices"] == json!([]), "{}", none.data);
     }
 
     #[test]
