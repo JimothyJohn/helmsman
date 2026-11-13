@@ -1066,7 +1066,8 @@ const MAX_DEVICE_ID: usize = 48;
 fn device_id_ok(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= MAX_DEVICE_ID
-        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// What a device-configuration result may carry, whatever the box API
@@ -1074,7 +1075,14 @@ fn device_id_ok(s: &str) -> bool {
 /// lock: an allow-list of top-level keys, and below them any key that
 /// looks like a secret is dropped (`password_stored`, a yes/no, is the one
 /// allowed).
-const CONFIG_KEYS: [&str; 6] = ["device", "configurator", "facts", "snapshot", "drift", "password_stored"];
+const CONFIG_KEYS: [&str; 6] = [
+    "device",
+    "configurator",
+    "facts",
+    "snapshot",
+    "drift",
+    "password_stored",
+];
 
 fn scrub_secrets(v: &mut Json) {
     match v {
@@ -1110,7 +1118,10 @@ fn list_device_configs(api: &dyn Caller) -> Outcome {
             } else {
                 "read_device_config gives one device's facts and drift"
             };
-            ok(json!({ "devices": list, "note": note }), format!("{n} device(s) with configuration"))
+            ok(
+                json!({ "devices": list, "note": note }),
+                format!("{n} device(s) with configuration"),
+            )
         }
         Ok((s, b)) => unexpected("listing device configurations", s, &b),
         Err(e) => fail(e),
@@ -1820,13 +1831,23 @@ END_FUNCTION_BLOCK
         assert_eq!(o.data["facts"]["outputs"][0]["safe_value"], "off");
         assert_eq!(o.data["drift"][0], "EtherNet/IP: snapshot on, device off");
         assert_eq!(o.data["password_stored"], true);
-        let all = format!("{} {} {}", o.data, o.summary, envelope("read_device_config", &o.data));
+        let all = format!(
+            "{} {} {}",
+            o.data,
+            o.summary,
+            envelope("read_device_config", &o.data)
+        );
         assert!(!all.contains(PASSWORD), "{all}");
     }
 
     #[test]
     fn a_device_without_configuration_says_so() {
-        let o = read_device_config(&config_routes(), &ReadDeviceConfig { device: "plain".into() });
+        let o = read_device_config(
+            &config_routes(),
+            &ReadDeviceConfig {
+                device: "plain".into(),
+            },
+        );
         assert!(o.ok, "{}", o.data);
         assert_eq!(o.data["configured"], false);
         assert!(o.summary.contains("no configuration"), "{}", o.summary);
@@ -1834,7 +1855,12 @@ END_FUNCTION_BLOCK
 
     #[test]
     fn an_unknown_device_is_refused_in_a_sentence() {
-        let o = read_device_config(&config_routes(), &ReadDeviceConfig { device: "ghost".into() });
+        let o = read_device_config(
+            &config_routes(),
+            &ReadDeviceConfig {
+                device: "ghost".into(),
+            },
+        );
         assert!(!o.ok);
         assert!(o.summary.contains("no device ghost"), "{}", o.summary);
         for bad in ["", "a/b", "..", "io1?x=1", "a b", &"x".repeat(49)] {
@@ -1847,9 +1873,16 @@ END_FUNCTION_BLOCK
     fn list_device_configs_lists_ids_and_configurators_only() {
         let o = list_device_configs(&config_routes());
         assert!(o.ok);
-        assert_eq!(o.data["devices"], json!([{"device": "io1", "configurator": "moxa-e1200"}]));
+        assert_eq!(
+            o.data["devices"],
+            json!([{"device": "io1", "configurator": "moxa-e1200"}])
+        );
         assert!(!o.data.to_string().contains(PASSWORD));
-        let none = list_device_configs(&routes(vec![("GET /api/devices/config", 200, json!({"devices": []}))]));
+        let none = list_device_configs(&routes(vec![(
+            "GET /api/devices/config",
+            200,
+            json!({"devices": []}),
+        )]));
         assert!(none.ok && none.data["devices"] == json!([]));
     }
 
