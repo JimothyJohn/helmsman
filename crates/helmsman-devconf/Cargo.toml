@@ -1,0 +1,27 @@
+[package]
+name = "helmsman-devconf"
+version = "0.1.0"
+description = "Configuration of third-party devices over their own configuration protocols: the Moxa ioLogik E1200 web console first"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# std only, no dependencies: the HTTP client, the MD5 the console's password
+# change needs and the form and export readers are written here, like the
+# other HTTP clients in this workspace (helmsman-agent, helmsman-plc's sinks).
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.12"
+# The crate's own tests run against its simulator: turning `sim` on for the
+# test build through a self dev-dependency keeps `cargo test --workspace`
+# honest without making the simulator part of the default build.
+helmsman-devconf = { path = ".", features = ["sim"] }
+
+[features]
+# `moxa_e1200::sim`: a simulated E1200 web console on 127.0.0.1.
+sim = []
+
+[lints]
+workspace = true

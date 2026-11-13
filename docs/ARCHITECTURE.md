@@ -71,6 +71,7 @@ Three directions of traffic, three different rules:
 | `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
+| `helmsman-devconf` | Configuration of third-party devices over their own configuration protocols, std only with no dependencies: `moxa_e1200` is the Moxa ioLogik E1200 web console (HTTP client, form and export readers, export / form / set / restart / import / change-password) and `moxa_e1200::sim` (feature `sim`) is a simulated console for tests. A library for now: nothing in the box calls it yet. | built: against its simulator only; the real console was mapped by hand (2026-11-12) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
@@ -2873,6 +2874,109 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   gzipped) are committed under `docs/playground/`; rebuild with
   `make playground` after a canvas change. Live once dev is merged to
   master.
+
+## Device configuration (`helmsman-devconf`, built: library and simulator)
+
+Some devices are set up through a protocol of their own, not the one the box
+runs its I/O on. `helmsman-devconf` is where those configurators live, one
+module per device, std only, no dependencies (its HTTP client is written in
+the style of `helmsman-agent`'s: one request per connection, one deadline, a
+capped head and body, no redirects, errors that name kinds and never echo a
+header value or a body). It is a library and tests. The box API and the
+canvas do not call it yet; wiring it in is the next card.
+
+**The Moxa ioLogik E1200 web console (`moxa_e1200`)** is the first device.
+The console is a small HTTP/1.1 server on port 80 and is written down, with
+how it was mapped on the bench E1213 (firmware 3.1, 2026-11-12), in
+`devices/moxa/iologik-e1200-web-console.md` in helmsman-devices; the Python
+client there (`scripts/moxa-e1200-console.py`) is the behavioural
+reference. The operations:
+
+| call | what it does |
+| --- | --- |
+| `Console::connect` | `GET /` for the `ChallID` and `MoxaPass` cookies, sent back on every later request. |
+| `export()` | the configuration export (`ik12NN.txt`, named by `06_6.htm`) parsed into sections and keys, a value's `,(label)` suffix split off. It shows the *staged* settings. |
+| `form(page)` | the settings form of a page as a browser would submit it: a fresh `token`, the hidden `code`, unticked checkboxes left out, `IdleTime` and `WDTime` left out unless `EnableIDLE` and `EnableWD` are ticked, other buttons left out. |
+| `set(page, changes)` | `GET /set.htm?<fields>`, then the export lines that changed. Staged until a restart. |
+| `restart()` | `GET /set_ok.htm?token=`, then waits for the whole return (below). |
+| `import(file, overwrite_network)` | multipart `POST /06_5_1.htm`. The unit reboots by itself, so it waits like `restart()`. The IP in the file is applied only with `overwrite_network`, which defaults to off in every caller. |
+| `change_password(old, new)` | `07.htm`: `OldPwd`, `NewPwd` and `ChallID` computed from the cookie with a hand-written MD5, as the page's script does. The reply says "Change Password OK!" or "Change Password Fail!"; the change applies at once, so the next request has no session. |
+
+What it refuses before sending anything: a page outside
+`[0-9A-Za-z_]{1,32}\.htm`, the pages that act when fetched (`08.htm` Load
+Factory Default, `09.htm` and `set_ok.htm` restart, `set.htm`, the import and
+firmware-update targets) except through their own operation, a field the
+form does not have, a hand-set `token` or `code`, a select value the page
+does not offer, a password over 16 characters or outside printable ASCII, an
+empty new password, and an import file that is not an export. A write is
+never retried; a read is retried once, because the console sometimes drops a
+connection opened right after the last one closed. Between requests it waits
+0.3 s.
+
+**A restart is not one outage.** On the real unit a Save/Restart takes about
+21 s and HTTP comes back twice: down at 1.1 s, up at 11.4 s while Modbus
+(TCP 502) is still down, down again at 14.0 s, up for good at 20.0 s (502 at
+20.1 s, EtherNet/IP 44818 at 20.9 s; the same on two reboots). `restart()` is
+finished only when HTTP was seen down, and afterwards HTTP answers and TCP 502
+accepts. It does not wait for 44818, which is off when EtherNet/IP is
+disabled. The wait is bounded (15 s to see it go down, 120 s to come back).
+Staged settings become running across the reboot.
+
+**The simulator (`moxa_e1200::sim`, feature `sim`)** is a `std` TCP listener
+on `127.0.0.1`, started by the crate's own tests through a self
+dev-dependency. It models cookies; a fresh token per page load; staged and
+running settings, with the export rendering the staged ones; the two-phase
+reboot after `set_ok.htm` and after an import, its phases counted in
+connection attempts so a test needs no clock; a Modbus port that refuses
+while the unit reboots; import with and without `NetConfig_OverWrite`; the
+password change decoded with the stored challenge; and an injected
+"drop the next connection". Its pages are minimal HTML with the same form
+shapes as the real ones (General Settings code 41, DO Safe Mode 116, RESTful
+131, EtherNet/IP 141, password 07.htm code 7), none of Moxa's markup. Its
+assumptions are written next to them in `sim.rs`: `set.htm` accepts only the
+latest token issued for a page's code (what the real unit does with a stale
+token is not known); `OldPwd` for a console without a password is the MD5 of
+the empty string; the export's key names are synthetic except the ones the
+write-up cites. It also has a locked mode (a password set): the login page,
+the `MD5(password + Token)` post and the session cookie as mapped below, and a
+password change that answers "Change Password OK!" or "Change Password Fail!"
+and ends every session.
+
+**A console with a password** (mapped on the bench E1213 with a password set,
+2026-11-12). Every page, the export included, answers 200 with a login page
+until the session logs in: `<FORM name=InputPassword method="post"
+action=home.htm>`, a `Password` field (24 characters at most) and a hidden
+`Token` (39 characters, fresh per login page). The page's script posts
+`Password` = hex MD5 of the password followed by the `Token`, with `Token` and
+`Submit=Submit`. A right password gets the frameset back with `ChallID` and a
+new 39-character `MoxaPass`, which is the session; a wrong one gets the login
+page and no cookie. The password is not in the export: the export through the
+login is identical to the one taken before the password was set.
+`Config::password` holds it (its `Debug` is redacted). A read that meets the
+login page logs in once and repeats; a write that meets it logs in and does
+**not** repeat, and says nothing was written (`LoginBeforeWrite`); with no
+password configured the error is `PasswordRequired`. A refused password is
+tried once per session and then not again, so a stale password cannot lock a
+console out by repetition. After `change_password` succeeds the client keeps
+the new password for its next login.
+
+**Not known, so not done:**
+
+- **Changing a password that is already set.** On the real unit it failed
+  twice, moxa -> empty and moxa -> moxa, "Change Password Fail!", with exactly
+  the fields `07.htm`'s script builds; the first change, from no password,
+  was accepted. Not understood and under investigation. The simulator
+  accepts such a change when `OldPwd` is right, which is **not** known
+  behaviour of the unit; do not rely on `change_password` from a set
+  password.
+- **How the real unit ages sessions.** The simulator ends every session at a
+  reboot and at a password change; a login token is valid only while it is
+  the latest issued. Neither is known for the unit.
+- **The wording of an import's reply.** The reply is not parsed; the export
+  read afterwards is the check.
+- A static `disabled` attribute on a field is ignored (a page's script is
+  not run), as the Python client does.
+- Firmware update and Load Factory Default.
 
 ## Trust boundaries
 
