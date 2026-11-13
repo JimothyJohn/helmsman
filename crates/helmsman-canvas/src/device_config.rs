@@ -81,7 +81,8 @@ pub struct Config {
     /// `None`: the project has no saved configuration of this device.
     pub drift: Option<Drift>,
     /// The project holds a saved configuration of this device.
-    pub snapshot: bool,
+    /// The saved file's version, which a new snapshot replaces.
+    pub snapshot: Option<String>,
     pub password_stored: bool,
 }
 
@@ -147,6 +148,7 @@ impl Config {
             watchdog,
             watchdog_time: wd["value"]
                 .as_u64()
+                .or_else(|| wd["value"].as_str().and_then(|v| v.trim().parse().ok()))
                 .filter(|_| watchdog == Some(true))
                 .and_then(|n| u32::try_from(n).ok()),
             outputs,
@@ -192,7 +194,7 @@ impl Config {
         Some(Self {
             facts,
             drift,
-            snapshot: j["snapshot"].is_object(),
+            snapshot: j["snapshot"]["version"].as_str().map(str::to_string),
             password_stored: j["password_stored"].as_bool().unwrap_or(false),
         })
     }
@@ -750,7 +752,13 @@ impl ConfigUi {
             self.queue_read(device);
         }
         if snapshot {
-            self.send(device, ConfigOp::Snapshot, &json!({}));
+            // A saved file is replaced by the version this page read.
+            let version = match &load {
+                Load::Got(c) => c.snapshot.clone(),
+                _ => None,
+            };
+            let body = version.map_or_else(|| json!({}), |v| json!({"version": v}));
+            self.send(device, ConfigOp::Snapshot, &body);
         }
         if let (Some(kind), Load::Got(c)) = (act, &load) {
             self.modal = Some(Modal {
@@ -835,7 +843,7 @@ impl ConfigUi {
                 }
                 Kind::Restart | Kind::Restore => {
                     let restore = kind == Kind::Restore;
-                    let snap = matches!(self.devs.get(&device).map(|d| &d.load), Some(Load::Got(c)) if c.snapshot);
+                    let snap = matches!(self.devs.get(&device).map(|d| &d.load), Some(Load::Got(c)) if c.snapshot.is_some());
                     let blocked = restore && !snap;
                     if blocked {
                         say(ui, "The project has no saved configuration of this device yet. Save a snapshot first.");
@@ -881,8 +889,8 @@ impl ConfigUi {
                         "No password is stored. If the device's console asks for one, store it here."
                     });
                     let r = ui
-                        .add(egui::TextEdit::singleline(&mut m.text).password(true).desired_width(300.0).hint_text(if change { "new password" } else { "password" }))
-                        .tip("Up to 16 characters. It is sent to the box and never shown again.");
+                        .add(egui::TextEdit::singleline(&mut m.text).password(true).char_limit(if change { 16 } else { 24 }).desired_width(300.0).hint_text(if change { "new password" } else { "password" }))
+                        .tip("Printable characters only: up to 24 to store, 16 for a new console password. It is sent to the box and never shown again.");
                     chrome.hit("config password field", r.rect);
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui| {
@@ -957,11 +965,11 @@ mod tests {
             "device": "rio",
             "facts": {
                 "firmware": "V3.1",
-                "watchdog": {"enabled": false, "value": 0, "label": "Disabled"},
+                "watchdog": {"enabled": false, "value":"0", "label": "Disabled"},
                 "outputs": [
-                    {"channel": "DO-00", "safe": {"value": 0, "label": "Off"}, "power_on": {"value": 1, "label": "On"}},
-                    {"channel": "DO-01", "safe": {"value": 1, "label": "On"}, "power_on": {"value": 1, "label": "On"}},
-                    {"channel": "DO-02", "safe": {"value": 0, "label": "Off"}, "power_on": {"value": 0, "label": "Off"}}
+                    {"channel": "DO-00", "safe": {"value":"0", "label": "Off"}, "power_on": {"value":"1", "label": "On"}},
+                    {"channel": "DO-01", "safe": {"value":"1", "label": "On"}, "power_on": {"value":"1", "label": "On"}},
+                    {"channel": "DO-02", "safe": {"value":"0", "label": "Off"}, "power_on": {"value":"0", "label": "Off"}}
                 ],
                 "eip_enabled": false,
                 "rest_enabled": true

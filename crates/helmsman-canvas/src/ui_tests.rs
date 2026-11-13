@@ -5246,11 +5246,11 @@ mod devconf {
 
     fn facts() -> String {
         r#"{"device":"rio","facts":{"firmware":"V3.1",
-            "watchdog":{"enabled":false,"value":0,"label":"Disabled"},
+            "watchdog":{"enabled":false,"value":"0","label":"Disabled"},
             "outputs":[
-              {"channel":"DO-00","safe":{"value":0},"power_on":{"value":1}},
-              {"channel":"DO-01","safe":{"value":0},"power_on":{"value":1}},
-              {"channel":"DO-02","safe":{"value":0},"power_on":{"value":0}}],
+              {"channel":"DO-00","safe":{"value":"0"},"power_on":{"value":"1"}},
+              {"channel":"DO-01","safe":{"value":"0"},"power_on":{"value":"1"}},
+              {"channel":"DO-02","safe":{"value":"0"},"power_on":{"value":"0"}}],
             "eip_enabled":false,"rest_enabled":true},
             "snapshot":{"file":"rio.devconf","version":"v","bytes":9},
             "drift":{"changed":[{"before":"A=1","after":"A=2"}],"added":["B=2"],"removed":["C=3"]},
