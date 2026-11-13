@@ -1,0 +1,2 @@
+in  start bool box di:0
+out lamp  bool box do:0 safe=false

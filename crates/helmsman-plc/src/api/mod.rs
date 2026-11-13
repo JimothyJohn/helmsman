@@ -9,10 +9,13 @@
 //! GET  /api/modules/{name}                + ports, source, manifest
 //! GET  /api/modules/{name}/trace          asks for a traced scan; the newest one (200), or 202 until one lands
 //! GET  /api/modules/{name}/trace/events   event stream of traced scans
+//! POST /api/modules/{name}/stop|run|restart  engineer session: stop, run or cold-restart one module (see [`control`])
 //! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
-//! GET  /api/devices                       device links: up, down (why), unknown, address
-//! POST /api/devices/discover              token or session: one ListIdentity sweep; every EtherNet/IP device on the LAN, mapped or not, with the library's match (see [`discover`])
+//! GET  /api/devices                       device links: up, down (why), unknown, address; `configurator` (its profile's `configure` name or null, no contact with the unit); for a device by its profile `transport`; `health` (healthy, slow, lost), `poll_ms` and `measured_ms` once the link reports
+//! GET  /api/devices/{id}/config          facts, export, saved configuration and drift of a device with a configurator; PUT/DELETE .../config/password and POST .../config/set|restart|import|password|snapshot need an engineer session (see [`devconf`])
+//! GET  /api/adapter                       the box's EtherNet/IP adapter: {protocol, bind, on}; `bind` is the address it listens on, absent when it is off
+//! POST /api/devices/discover              token or session: one scan of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
 //! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
@@ -41,7 +44,9 @@
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
+//! POST /api/help                          token or session: what went wrong, or a question, in words; a diagnosis and a Markdown issue with the box's context, redacted, or an answer from the help pages (see [`help`])
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
+//! GET  /api/dhcp                          the DHCP server on the device port (with --dhcp IFACE; see [`crate::dhcp`])
 //! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
 //! POST /api/dropins?name=N&kind=K         token: a document, a photo or a PDF for the agent, stored in memory (see [`dropin`], [`photo`], [`pdf`])
 //! GET  /api/dropins                       the drop-ins held
@@ -52,6 +57,7 @@
 //! POST /api/projects/{p}/requirements    engineer session: one requirement in words; the agent writes its test (see [`requirements`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
 //! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
+//! GET  /api/desk                        a session: that person's desk; PUT sets it (see [`desk`])
 //! GET  /api/drivers ...                   the box's WASM driver files; list, PUT and DELETE need an engineer session (see [`drivers`])
 //! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
@@ -72,16 +78,23 @@
 //! checks), and plain HTTP only to this host; from elsewhere plain HTTP
 //! is redirected, never served ([`to_https`]).
 //!
-//! **Auth.** Reads (`GET`) are open to whoever can reach the socket (the
-//! default bind is loopback; the LAN only when asked). Every other method
-//! needs `Authorization: Bearer <token>` ([`token`]), or a login session
-//! from `POST /api/login` ([`login`], which takes a session wherever it
-//! takes the token, except `/mcp`): as a bearer, or as the browser's
-//! `HttpOnly` cookie with a same-origin proof ([`login::same_origin`];
-//! an `Authorization` header, when sent, is the credential and the cookie
-//! is not read). Each call is written to the audit log whatever its
-//! outcome, naming the session's person; without a credential it is
-//! refused with 401 before any routing, and a cookie without the proof
+//! **Auth.** Every call under `/api` needs `Authorization: Bearer
+//! <token>` ([`token`]), or a login session from `POST /api/login`
+//! ([`login`], which takes a session wherever it takes the token, except
+//! `/mcp`): as a bearer, or as the browser's `HttpOnly` cookie. Reads
+//! (`GET`) too, since card read-lock (2026-11-08): a box bound to the LAN
+//! showed its programs, map, values, audit log and snapshots to whoever
+//! reached the socket. The reads that stay open are the canvas's own files,
+//! `GET /api` (the route list), `GET /api/health` (up and the build),
+//! `GET /api/login` (how to sign in) and `GET /api/site`
+//! ([`read_is_open`]). A mutating call on the cookie needs
+//! a same-origin proof too ([`login::same_origin`]); a read on the cookie
+//! does not (it changes nothing, the cookie is `SameSite=Strict`, and an
+//! `EventSource` cannot send a header). An `Authorization` header, when
+//! sent, is the credential and the cookie is not read. Each mutating call
+//! is written to the audit log whatever its outcome, naming the session's
+//! person; without a credential any call is refused with 401 before any
+//! routing (so nothing can be probed), and a cookie without the proof
 //! with 403. A token in the query string is refused
 //! outright (400), on any request, so it never lands in a log or a
 //! browser history.
@@ -102,13 +115,19 @@
 
 pub mod approve;
 pub mod bundle;
+mod carry;
 pub mod catalog;
 pub mod chat;
+mod control;
+pub mod desk;
+#[cfg(feature = "box")]
+pub mod devconf;
 pub mod discover;
 pub mod drivers;
 pub mod dropin;
 pub mod explain;
 pub mod forces;
+pub mod help;
 pub mod http;
 pub mod live;
 pub mod login;
@@ -225,6 +244,10 @@ pub struct Extras {
     /// private ranges): a bench or a LAN mirror. Off on a box
     /// (`--market-allow-local` turns it on).
     pub market_local: bool,
+    /// Where the box's `EtherNet/IP` adapter really listens (the address
+    /// its listener holds, not the option it was asked for), for
+    /// `GET /api/adapter`; `None`: the adapter is off.
+    pub adapter: Option<SocketAddr>,
 }
 
 /// What a box running the editor serves besides [`Extras`] (a struct of
@@ -249,6 +272,16 @@ pub struct More {
     /// (`<state-dir>/trend-pins`, [`trend::Trends::in_file`]). `None`:
     /// memory only.
     pub trend_pins: Option<std::path::PathBuf>,
+    /// Where people's desks are kept across restarts
+    /// (`<state-dir>/desks/`, [`desk::Desks::in_dir`]). `None`: memory
+    /// only.
+    pub desks: Option<std::path::PathBuf>,
+    /// Configuring devices through their own protocols
+    /// ([`devconf`]); `None`: those routes answer 404.
+    pub devconf: Option<devconf::Setup>,
+    /// The DHCP server on the device port (`--dhcp`, [`crate::dhcp`]):
+    /// `GET /api/dhcp`. `None`: that route answers 404.
+    pub dhcp: Option<crate::dhcp::Handle>,
     /// How the box scans its network for devices and where its device
     /// library is (see [`discover`]). The default sweeps the LAN's
     /// broadcast and reads the public library.
@@ -325,6 +358,8 @@ struct Ctx {
     trust: Option<TrustStore>,
     /// The marketplace routes may fetch from local addresses.
     market_local: bool,
+    /// The adapter's bound address (`GET /api/adapter`).
+    adapter: Option<SocketAddr>,
     /// Drop-in documents (see [`dropin`]).
     dropins: Mutex<dropin::Store>,
     /// Held while a device browse runs (one at a time).
@@ -340,6 +375,8 @@ struct Ctx {
     projects: Option<crate::project::Projects>,
     /// Forced inputs (see [`forces`]); `None`: those routes answer 404.
     forces: Option<Arc<crate::force::Forces>>,
+    /// Who stopped which module (see [`control`]).
+    stops: Mutex<control::Stops>,
     /// The box's driver folder (see [`drivers`]); `None`: those routes
     /// answer 404, and only a project's drivers load.
     driver_dir: Option<crate::driver_dir::DriverDir>,
@@ -348,8 +385,14 @@ struct Ctx {
     running_drivers: Mutex<crate::drivers::Drivers>,
     /// Pinned signals' history ([`trend`]).
     trends: Mutex<trend::Trends>,
+    /// Each person's desk ([`desk`]).
+    desks: Mutex<desk::Desks>,
     /// The box's HTTPS ([`Api::start_secure`]); `None`: plain HTTP only.
     tls: Option<Tls>,
+    /// Device configuration (see [`devconf`]); `None`: 404.
+    devconf: Option<devconf::State>,
+    /// The DHCP server on the device port; `None`: 404.
+    dhcp: Option<crate::dhcp::Handle>,
 }
 
 impl Ctx {
@@ -359,6 +402,10 @@ impl Ctx {
 
     fn trends(&self) -> MutexGuard<'_, trend::Trends> {
         self.trends.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn desks(&self) -> MutexGuard<'_, desk::Desks> {
+        self.desks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn dropins(&self) -> MutexGuard<'_, dropin::Store> {
@@ -599,6 +646,7 @@ impl Api {
             ui,
             trust,
             market_local,
+            adapter,
         } = extras;
         let More {
             projects,
@@ -606,6 +654,9 @@ impl Api {
             drivers: driver_dir,
             running_drivers,
             trend_pins,
+            desks,
+            devconf,
+            dhcp,
             discovery,
         } = more;
         let listener = TcpListener::bind(cfg.bind)?;
@@ -636,6 +687,7 @@ impl Api {
             ui,
             trust,
             market_local,
+            adapter,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
             discovery: discover::State::new(discovery),
@@ -643,10 +695,14 @@ impl Api {
             mcp: Mutex::new(mcp::Workspace::default()),
             projects,
             forces,
+            stops: Mutex::new(control::Stops::new()),
             driver_dir,
             running_drivers: Mutex::new(running_drivers),
             trends: Mutex::new(trend_pins.map_or_else(trend::Trends::default, trend::Trends::in_file)),
+            desks: Mutex::new(desks.map_or_else(desk::Desks::default, desk::Desks::in_dir)),
             tls,
+            devconf: devconf.map(devconf::State::new),
+            dhcp,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -760,6 +816,8 @@ enum Reply {
     Explain(explain::Job),
     /// One requirement: the agent writes its test.
     Requirement(Box<requirements::Job>),
+    /// One help request: a diagnosis and an issue.
+    Help(Box<help::Job>),
     /// A file of the UI.
     File(ui::Asset),
 }
@@ -897,6 +955,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
             }
         }
         Reply::Requirement(job) => requirements::serve(ctx, &mut stream, &job),
+        Reply::Help(job) => help::serve(ctx, &mut stream, &job),
         Reply::File(asset) => {
             let _ = ui::send(&mut stream, asset);
         }
@@ -913,6 +972,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 | Reply::Chat(_)
                 | Reply::Explain(_)
                 | Reply::Requirement(_)
+                | Reply::Help(_)
                 | Reply::File(_) => Ok(()),
             };
         }
@@ -957,6 +1017,31 @@ fn policy_json(a: &Approval, ctx: &Ctx) -> Json {
     j
 }
 
+/// The two open reads with a body of their own: `GET /api/health` (up,
+/// and the build, for a monitor to poll) and `GET /api/login`
+/// ([`login_how`]).
+fn open_read(route: &str, ctx: &Ctx) -> Response {
+    if route == "health" {
+        return Response::json(200, &json!({ "up": true, "build": crate::BUILD }));
+    }
+    login_how(ctx)
+}
+
+/// `GET /api/login`: how to sign in here (`credentials`: `pins`,
+/// `accounts`, `unavailable`, or `none` on a box without an approval
+/// path), and nothing else. Open: the sign-in form has to know before
+/// there is a session, and it is what `POST /api/login` tells a wrong
+/// attempt anyway.
+fn login_how(ctx: &Ctx) -> Response {
+    let credentials = match ctx.approval.as_ref().map(|a| a.gate.logins().map(Logins::mode)) {
+        None => "none",
+        Some(None | Some(Mode::Pins)) => "pins",
+        Some(Some(Mode::Accounts(_))) => "accounts",
+        Some(Some(Mode::Broken(_))) => "unavailable",
+    };
+    Response::json(200, &json!({ "credentials": credentials }))
+}
+
 /// The login sessions, when the box has an approval path with accounts
 /// wired in.
 fn logins(ctx: &Ctx) -> Option<&crate::policy::account::Logins> {
@@ -986,6 +1071,20 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         );
     }
     if req.method == "GET" {
+        if !read_is_open(&req.segments) {
+            // A read needs a session too (card read-lock): the box token
+            // or a bearer session as any write; the cookie alone, with no
+            // same-origin proof, since a read changes nothing and the
+            // event streams cannot send a header.
+            let authed = if req.authorization || req.cookies.is_empty() {
+                by_bearer(req, ctx, false)
+            } else {
+                login::by_cookie_read(req, ctx)
+            };
+            if let Err(r) = authed {
+                return Reply::Once(r);
+            }
+        }
         return get(req, ctx);
     }
     if req.method == "POST" && req.segments == ["api", "login"] {
@@ -1016,6 +1115,12 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
     {
         return start_explain(req, ctx);
     }
+    if req.method == "POST" && req.segments == ["api", "help"] {
+        return match help::start(req, ctx) {
+            Ok(job) => Reply::Help(Box::new(job)),
+            Err(r) => Reply::Once(r),
+        };
+    }
     if let [api, projects, name, requirements] = req.segments.as_slice()
         && req.method == "POST"
         && api == "api"
@@ -1031,6 +1136,23 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         return Reply::Once(mcp::post(req, ctx));
     }
     Reply::Once(mutate(req, ctx))
+}
+
+/// The reads that answer without a session: the canvas's own files (the
+/// page has to load to sign in), the route list, `GET /api/health` (up
+/// and the build, for a monitor to poll), `GET /api/login` (how to sign
+/// in: the form has to know before there is a session) and `GET
+/// /api/site` (what the beacons already tell the whole LAN, read across
+/// origins by the site view). `GET /api/session` answers 401 itself,
+/// clearing a dead cookie.
+fn read_is_open(segments: &[String]) -> bool {
+    match segments {
+        // The page and its files, and the route list.
+        [] | [_] => true,
+        [api, ..] if api != "api" => true,
+        [_, route] => matches!(route.as_str(), "health" | "site" | "session" | "login"),
+        _ => false,
+    }
 }
 
 /// Authenticates `req` by its `Authorization: Bearer`: the box token, or
@@ -1282,8 +1404,10 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         (_, ["api", "projects", ..]) => return projects::mutate(req, ctx, &segs[1..]),
         (_, ["api", "forces", ..]) => return forces::mutate(req, ctx, &segs[1..]),
+        ("POST", ["api", "modules", name, op]) if *op != "trace" => return control::post(req, ctx, name, op),
         (_, ["api", "drivers", ..]) => return drivers::mutate(req, ctx, &segs[1..]),
         ("PUT", ["api", "trends", "pins"]) => return trend::put_pins(req, ctx),
+        ("PUT", ["api", "desk"]) => return desk::put(req, ctx),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1291,6 +1415,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         ("POST", ["api", "market", "install"]) => return market::install(req, ctx),
         ("POST", ["api", "dropins"]) => return dropin::post(req, ctx),
         ("POST", ["api", "devices", "discover"]) => return discover::post(req, ctx),
+        (_, ["api", "devices", id, "config", rest @ ..]) => return devconf::mutate(req, ctx, id, rest),
         ("POST", ["api", "devices", name, "browse"]) => return dropin::browse(req, ctx, name),
         ("POST", ["api", "proposals", "check"]) => return check_only(req, ctx),
         ("POST", ["api", "proposals", "replay"]) => return replay_draft(req, ctx),
@@ -1331,26 +1456,35 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "forces"] => return Some("GET, POST, DELETE"),
         ["api", "forces", _] => return Some("DELETE"),
+        ["api", "modules", _, "stop" | "run" | "restart"] => return Some("POST"),
         ["api", "drivers" | "trends"] => return Some("GET"),
+        ["api", "devices", _, "config", "password"] => return Some("PUT, DELETE, POST"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
-        ["api", "trends", "pins"] => return Some("GET, PUT"),
+        ["api", "trends", "pins"] | ["api", "desk"] => return Some("GET, PUT"),
         _ => {}
     }
     match path {
-        ["api", "proposals" | "dropins"] => Some("GET, POST"),
+        ["api", "proposals" | "dropins" | "login"] => Some("GET, POST"),
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat" | "explain" | "bundles" | "login" | "logout"]
+        | ["api", "chat" | "explain" | "help" | "bundles" | "logout"]
         | ["api", "devices", "discover"]
         | ["api", "market", "list" | "install"]
-        | ["api", "devices", _, "browse"] => Some("POST"),
+        | ["api", "devices", _, "browse"]
+        | [
+            "api",
+            "devices",
+            _,
+            "config",
+            "set" | "restart" | "import" | "snapshot",
+        ] => Some("POST"),
         ["api"]
         | ["api", "devices", "library"]
         | [
             "api",
-            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
-            | "session" | "site" | "io_map",
+            "signals" | "modules" | "outputs" | "devices" | "adapter" | "audit" | "events" | "snapshots"
+            | "policy" | "session" | "site" | "io_map" | "health",
         ]
         | [
             "api",
@@ -1361,6 +1495,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "snapshots", _, "bundle"]
         | ["api", "dropins", _, "plc"]
         | ["api", "modules", _, "trace"]
+        | ["api", "devices", _, "config"]
         | ["api", "chat", "status"]
         | ["api", "modules", _, "trace", "events"]
         | ["api", "traces", "events"] => Some("GET"),
@@ -1421,6 +1556,20 @@ fn check_only(req: &Request, ctx: &Ctx) -> Response {
         }
         Err((status, body)) => audited(ctx, req, status, &body, "check: refused by the checks"),
     }
+}
+
+/// What a module gets for any key its manifest leaves out: the
+/// approval path's, else the box's `%M` size with no windows.
+fn module_defaults(ctx: &Ctx) -> crate::spec::Defaults {
+    ctx.approval.as_ref().map_or(
+        crate::spec::Defaults {
+            period: Duration::from_millis(10),
+            i: crate::Window::new(0, 0),
+            q: crate::Window::new(0, 0),
+            m: ctx.cfg.memory,
+        },
+        |a| a.plant.defaults,
+    )
 }
 
 /// [`proposal::check`], after the drop-in rule: a proposal that names a
@@ -1584,6 +1733,12 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
         (Some(base), Some(cs)) => approve::tier_json(ctx, base, cs, None),
         _ => Json::Null,
     };
+    // Worked out once, here: see `carry` for why not on every GET.
+    p["state"] = match (&running, &change) {
+        (Some(base), Some(cs)) => carry::preview(base, cs, &module_defaults(ctx)),
+        (None, _) => carry::nothing(true),
+        (Some(_), None) => Json::Null,
+    };
     let snap = change.as_ref().map(|cs| cs.id().to_string());
     let what = match (&snap, p["base"].as_str()) {
         (Some(to), Some(base)) => format!("{what}: snapshot {base} -> {to}"),
@@ -1619,6 +1774,8 @@ fn ui_file(req: &Request, ctx: &Ctx) -> Reply {
     }
 }
 
+// One arm a route: the table is the point, and a split hides a route.
+#[allow(clippy::too_many_lines)]
 fn get(req: &Request, ctx: &Ctx) -> Reply {
     if req.segments.first().is_none_or(|s| s != "api") {
         return ui_file(req, ctx);
@@ -1629,6 +1786,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
     let module = |name: &str| c.module(name);
     let r = match segs.as_slice() {
         ["api"] => Response::json(200, &index(ctx.chat.is_some())),
+        ["api", route @ ("health" | "login")] => open_read(route, ctx),
         ["api", "signals"] => Response::json(200, &forces::mark(ctx, render::signals(c, &view))),
         ["api", "signals", name] => match c.signal(name) {
             Some(i) => Response::json(
@@ -1644,9 +1802,9 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             ),
             None => Response::error(404, "no such signal"),
         },
-        ["api", "modules"] => Response::json(200, &render::modules(c, &view)),
+        ["api", "modules"] => Response::json(200, &control::modules(ctx, c, &view)),
         ["api", "modules", name] => match module(name) {
-            Some(k) => Response::json(200, &render::module_detail(&c.modules[k], view.modules.get(k))),
+            Some(k) => Response::json(200, &control::detail(ctx, c, &view, k)),
             None => Response::error(404, "no such module"),
         },
         ["api", "modules", name, "trace"] => match module(name) {
@@ -1664,8 +1822,10 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             None => Response::error(404, "no such module"),
         },
         ["api", "outputs"] => Response::json(200, &render::outputs(c, &view)),
-        ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices)),
+        ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices, &devconf::configurators(ctx))),
         ["api", "devices", "library"] => discover::library(req, ctx),
+        ["api", "devices", id, "config"] => devconf::get(ctx, id),
+        ["api", "adapter"] => Response::json(200, &adapter_json(ctx.adapter)),
         ["api", "io_map"] => io_map(ctx),
         ["api", "proposals"] => Response::json(
             200,
@@ -1704,9 +1864,14 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "forces"] => forces::get(ctx),
         ["api", "drivers"] => drivers::list(req, ctx),
         ["api", "trends", rest @ ..] => trend::get(req, ctx, rest),
+        ["api", "desk"] => desk::get(req, ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "site"] => site_route(ctx, c, &view),
+        ["api", "dhcp"] => match &ctx.dhcp {
+            Some(d) => Response::json(200, &d.json()),
+            None => Response::error(404, "this box serves no DHCP (--dhcp IFACE)"),
+        },
         ["api", "policy"] => match &ctx.approval {
             Some(a) => Response::json(200, &policy_json(a, ctx)),
             None => Response::error(404, "no approval path on this box"),
@@ -1778,65 +1943,83 @@ fn snapshot(ctx: &Ctx, id: &str) -> Result<ChangeSet, Response> {
     Ok(loaded.content)
 }
 
+// One line a route: the list grows with the API.
+#[allow(clippy::too_many_lines)]
 fn index(agent: bool) -> Json {
     let e = |method: &str, path: &str, token: bool, what: &str| json!({ "method": method, "path": path, "token": token, "what": what });
     json!({
         "service": "helmsman box API",
         "endpoints": [
-            e("GET", "/api/signals", false, "every signal with its live value and quality"),
-            e("GET", "/api/signals/{name}", false, "one signal"),
-            e("GET", "/api/modules", false, "every module: schedule, status, stats"),
-            e("GET", "/api/modules/{name}", false, "one module with ports, source and manifest"),
-            e("GET", "/api/modules/{name}/trace", false, "request a traced scan; 200 with the newest, 202 until one lands"),
-            e("GET", "/api/modules/{name}/trace/events", false, "event stream of traced scans"),
+            e("GET", "/api/health", false, "up, and the build; the one read a monitor polls without a session"),
+            e("GET", "/api/login", false, "how to sign in here: {credentials: accounts | pins | unavailable}, nothing else"),
+            e("GET", "/api/signals", true, "every signal with its live value and quality"),
+            e("GET", "/api/signals/{name}", true, "one signal"),
+            e("GET", "/api/modules", true, "every module: schedule, status, stats"),
+            e("GET", "/api/modules/{name}", true, "one module with ports, source and manifest"),
+            e("GET", "/api/modules/{name}/trace", true, "request a traced scan; 200 with the newest, 202 until one lands"),
+            e("GET", "/api/modules/{name}/trace/events", true, "event stream of traced scans"),
+            e("POST", "/api/modules/{name}/stop", true, "engineer session (the policy's output-affecting role): stop the module; outputs zero, signals safe, until run or restart"),
+            e("POST", "/api/modules/{name}/run", true, "engineer session: run a stopped or faulted module again, its state as it was"),
+            e("POST", "/api/modules/{name}/restart", true, "engineer session: cold restart, initial values, then run"),
             e(
                 "GET",
                 "/api/traces/events",
-                false,
+                true,
                 "event stream of every module's traced scans",
             ),
-            e("GET", "/api/outputs", false, "output commands, safe values, the %Q image"),
-            e("GET", "/api/devices", false, "device links up or down"),
-            e("GET", "/api/io_map", false, "the running I/O map file and its snapshot id"),
-            e("GET", "/api/proposals", false, "drafts awaiting approval"),
-            e("GET", "/api/proposals/{id}", false, "one proposal"),
+            e("GET", "/api/outputs", true, "output commands, safe values, the %Q image"),
+            e("GET", "/api/devices", true, "device links up or down"),
+            e("GET", "/api/devices/{id}/config", true, "a device with a configurator (its profile's configure line): facts, the unit's export, the saved .devconf and the drift; the console password is never returned"),
+            e("PUT", "/api/devices/{id}/config/password", true, "engineer session: {password}: keep the console password for this device (write-only)"),
+            e("DELETE", "/api/devices/{id}/config/password", true, "engineer session: forget the kept console password"),
+            e("POST", "/api/devices/{id}/config/set", true, "engineer session: {page, changes}: change settings on the unit (staged until a restart)"),
+            e("POST", "/api/devices/{id}/config/restart", true, "engineer session: {interrupts?}: Save/Restart the unit and wait for it; 409 if a running module needs the device and interrupts is not true"),
+            e("POST", "/api/devices/{id}/config/import", true, "engineer session: {from: \"snapshot\"} or {text}, overwrite_network?, interrupts?: restore the unit from an export (it reboots)"),
+            e("POST", "/api/devices/{id}/config/password", true, "engineer session: {new}: change the unit's console password"),
+            e("POST", "/api/devices/{id}/config/snapshot", true, "engineer session: {version?}: save the unit's export as ID.devconf in the running project"),
+            e("GET", "/api/adapter", true, "the EtherNet/IP adapter: {protocol, bind, on}"),
+            e("GET", "/api/io_map", true, "the running I/O map file and its snapshot id"),
+            e("GET", "/api/proposals", true, "drafts awaiting approval"),
+            e("GET", "/api/proposals/{id}", true, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
             e("POST", "/api/login", false, "log in {user, password} (with an accounts file) or {role, pin} (without): a session token for Authorization: Bearer, or with X-Helmsman-Request: 1 from the box's own page an HttpOnly cookie"),
             e("POST", "/api/logout", true, "end the session it is sent with (and clear its cookie)"),
-            e("GET", "/api/session", false, "who the session sent (cookie or bearer) is, or 401"),
+            e("GET", "/api/session", true, "who the session sent (cookie or bearer) is, or 401"),
             e("POST", "/api/proposals/{id}/apply", true, "apply: with a session {replay?}, else {role, pin, replay?} (PINs only while the box has no accounts), checked against the policy"),
-            e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
-            e("GET", "/api/snapshots", false, "snapshot history (needs --store), head, and the running change set's id"),
-            e("GET", "/api/snapshots/head", false, "the head entry"),
-            e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
-            e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
-            e("GET", "/api/snapshots/{id}/bundle", false, "that snapshot as an unsigned bundle file (sign it off the box)"),
+            e("GET", "/api/audit?after=N&limit=M", true, "every mutating call"),
+            e("GET", "/api/snapshots", true, "snapshot history (needs --store), head, and the running change set's id"),
+            e("GET", "/api/snapshots/head", true, "the head entry"),
+            e("GET", "/api/snapshots/{id}", true, "a snapshot's files"),
+            e("GET", "/api/snapshots/{a}/diff/{b}", true, "what changed from a to b"),
+            e("GET", "/api/snapshots/{id}/bundle", true, "that snapshot as an unsigned bundle file (sign it off the box)"),
             e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/market/list", true, "{index}: the signed marketplace index at that URL, verified against the trusted publishers, and its bundles"),
             e("POST", "/api/market/install", true, "{index, name, version?}: that bundle fetched from the index's site, checked against the index, then imported as POST /api/bundles"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
-            e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
-            e("GET", "/api/policy", false, "the approval policy this box enforces, and its transport: https and the certificate's SHA-256 fingerprint"),
-            e("GET", "/api/events", false, "event stream of live values and module status"),
+            e("GET", "/api/replays/{n}", true, "a replay kept as evidence"),
+            e("GET", "/api/policy", true, "the approval policy this box enforces, and its transport: https and the certificate's SHA-256 fingerprint"),
+            e("GET", "/api/events", true, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
+            e("POST", "/api/help", true, "{question, messages?}: what went wrong, in words (1 to 2000 characters) with the page's recent messages; the box attaches its build, the running project, its devices and their errors, all redacted of secrets. An event stream: help, text, tool_call, tool_result, retrying, issue (a diagnosis and a Markdown issue to copy; nothing is filed), done or error"),
             e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB), a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side) or a PDF (at most 2 MiB, passed to the model unread): stored in memory, 201 with its id"),
-            e("GET", "/api/dropins", false, "the drop-ins held: id, name, kind, size, chunks"),
-            e("GET", "/api/dropins/{id}?chunk=K", false, "one chunk of a drop-in's text"),
-            e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", false, "a PLC drop-in's inventory: overview, tags, routine, names"),
+            e("GET", "/api/dropins", true, "the drop-ins held: id, name, kind, size, chunks"),
+            e("GET", "/api/dropins/{id}?chunk=K", true, "one chunk of a drop-in's text"),
+            e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", true, "a PLC drop-in's inventory: overview, tags, routine, names"),
             e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
-            e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
+            e("GET", "/api/chat/status", true, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
+            e("GET", "/api/dhcp", true, "the DHCP server on the device port (with --dhcp IFACE): its interface, address, pool, status (probing, serving, refused with the other server, failed) and leases"),
             e("GET", "/api/site", false, "this box's status and the boxes it heard on the LAN (with --site); readable from other origins"),
-            e("GET", "/api/projects", false, "the editor's projects (with --projects) and which one runs"),
+            e("GET", "/api/projects", true, "the editor's projects (with --projects) and which one runs"),
             e("POST", "/api/projects", true, "engineer session: {name} a new empty project, or {name, from} a copy"),
-            e("GET", "/api/projects/{p}", false, "a project's files: name, bytes, version (SHA-256)"),
+            e("GET", "/api/projects/{p}", true, "a project's files: name, bytes, version (SHA-256)"),
             e("DELETE", "/api/projects/{p}", true, "engineer session: delete a project (never the running one)"),
             e("POST", "/api/projects/{p}/rename", true, "engineer session: {to}"),
-            e("GET", "/api/projects/{p}/files/{f}", false, "one file: {name, text, version}"),
+            e("GET", "/api/projects/{p}/files/{f}", true, "one file: {name, text, version}"),
             e("PUT", "/api/projects/{p}/files/{f}", true, "engineer session: save {text, version?} (a draft; version: what was read, null: a new file)"),
             e("DELETE", "/api/projects/{p}/files/{f}", true, "engineer session: delete a file"),
             e("POST", "/api/projects/{p}/check", true, "build the project as a deploy would: its modules and tier, or every problem with file and line; nothing changes"),
@@ -1844,23 +2027,26 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/projects/{p}/requirements", true, "engineer session: one requirement {text, name?} (one line, 1 to 500 characters): the agent writes its test, compiled and run here, saved as a revision; offline it is written down untested. An event stream: requirement, text, tool_call, tool_result, retrying, test, done or error"),
             e("POST", "/api/projects/{p}/replay", true, "engineer session: sim replay of deploying the project (evidence for deploy)"),
             e("POST", "/api/projects/{p}/deploy", true, "engineer session: {replay?}: build, apply through the approval policy, commit a snapshot, hot-swap between scans"),
-            e("GET", "/api/projects/{p}/zip", false, "the project as a .zip (its .st files, io.map, project.settings)"),
+            e("GET", "/api/projects/{p}/zip", true, "the project as a .zip (its .st files, io.map, project.settings)"),
             e("POST", "/api/projects/{p}/zip?replace=true", true, "engineer session: a .zip (application/zip) as project p, new or (replace=true) in its place"),
             e("POST", "/api/projects/{p}/import?file=F&replace=true", true, "engineer session: one file into the project: F.st as it is, F.xml (PLCopen TC6) lowered to F.st"),
-            e("GET", "/api/trends?signals=a,b", false, "each signal's history (10 min, on change) on the scheduler's clock; keeps them tracked a day: {now_ms, window_ms, signals: [{name, points: [[t_ms, value]]}], unknown, refused}"),
-            e("GET", "/api/trends/pins", false, "the signed-in person's pinned signals"),
+            e("GET", "/api/trends?signals=a,b", true, "each signal's history (10 min, on change) on the scheduler's clock; keeps them tracked a day: {now_ms, window_ms, signals: [{name, points: [[t_ms, value]]}], unknown, refused}"),
+            e("GET", "/api/trends/pins", true, "the signed-in person's pinned signals"),
             e("PUT", "/api/trends/pins", true, "a login session: {signals: [...]} (at most 16), that person's pins"),
-            e("GET", "/api/forces", false, "active forced inputs: {id, signal | address, value, by, at}"),
+            e("GET", "/api/desk", true, "the signed-in person's desk (open project and file, unsaved edits, inputs), or null"),
+            e("PUT", "/api/desk", true, "a login session: that person's desk (at most 512 KiB; an older saved_at than the box's is refused, 409)"),
+            e("GET", "/api/forces", true, "active forced inputs: {id, signal | address, value, by, at}"),
             e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
             e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),
             e("DELETE", "/api/forces", true, "engineer session: release every force"),
             e("GET", "/api/drivers", true, "engineer session: the box's WASM driver files (drivers/NAME.wasm): name, bytes, sha256, problems"),
             e("PUT", "/api/drivers/{name}", true, "engineer session: the driver's .wasm bytes, checked as a load checks them, written atomically; runs from the next deploy or map reload"),
             e("DELETE", "/api/drivers/{name}", true, "engineer session: delete a driver file (not one the running map loads from the box)"),
-            e("GET", "/api/running", false,"the project deployed last, its snapshot, and whether it is what runs"),
+            e("GET", "/api/running", true,"the project deployed last, its snapshot, and whether it is what runs"),
             e("POST", "/mcp", true,"MCP (Streamable HTTP, 2026-07-28 or 2025-11-25): the agent's read, draft, check, simulate and propose tools for an engineer's own client; no apply"),
         ],
         "agent": agent,
+        "reads": "every read but /api, /api/health and /api/site needs a session (the box token, a bearer session, or the page's cookie)",
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
     })
 }
@@ -1891,12 +2077,13 @@ fn site_route(ctx: &Ctx, c: &Catalog, view: &View) -> Response {
 fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Devices) -> Json {
     let me = site.me();
     let (peers, counts, now) = site.snapshot();
-    let (mut running, mut held, mut faulted) = (0usize, 0usize, 0usize);
+    let (mut running, mut held, mut faulted, mut stopped) = (0usize, 0usize, 0usize, 0usize);
     for k in 0..c.modules.len() {
         match view.modules.get(k).map(|m| m.status) {
             Some(crate::Status::Running) => running += 1,
             Some(crate::Status::Held) => held += 1,
             Some(crate::Status::Faulted(_)) => faulted += 1,
+            Some(crate::Status::Stopped) => stopped += 1,
             None => {}
         }
     }
@@ -1922,6 +2109,7 @@ fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Dev
                 "running": running,
                 "held": held,
                 "faulted": faulted,
+                "stopped": stopped,
                 "devices": { "up": up, "down": down, "unknown": unknown },
             },
         },
@@ -1939,7 +2127,16 @@ fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Dev
     })
 }
 
-fn devices(d: &Devices) -> Json {
+/// `GET /api/adapter`: the `EtherNet/IP` adapter other controllers read this
+/// box through. `bind` is there only while it is on.
+fn adapter_json(bind: Option<SocketAddr>) -> Json {
+    match bind {
+        Some(a) => json!({ "protocol": "EtherNet/IP", "bind": a.to_string(), "on": true }),
+        None => json!({ "protocol": "EtherNet/IP", "on": false }),
+    }
+}
+
+fn devices(d: &Devices, configurators: &BTreeMap<String, String>) -> Json {
     Json::Array(
         d.list()
             .into_iter()
@@ -1950,8 +2147,33 @@ fn devices(d: &Devices) -> Json {
                     Some(Err(why)) => json!({ "name": name, "state": "down", "error": why }),
                 };
                 // Where the link found its device, once its driver said.
+                // The configuration protocol its profile names, from the
+                // loaded profile alone: no contact with the unit.
+                j["configurator"] = json!(configurators.get(&name));
                 if let Some(a) = d.address(&name) {
                     j["address"] = json!(a);
+                }
+                // The protocol in use, for a device by its profile: for
+                // its details and failure text, never a choice.
+                if let Some(t) = d.transport(&name) {
+                    j["transport"] = json!(t);
+                }
+                // What the link says of its timing: the word for the tabs,
+                // the numbers for a device's details.
+                if let Some(t) = d.health(&name) {
+                    j["health"] = json!(t.health);
+                    j["poll_ms"] = json!(t.poll_ms);
+                    if let Some(m) = t.measured_ms {
+                        j["measured_ms"] = json!(m);
+                    }
+                }
+                // The box itself restarts it for its configuration: a
+                // planned outage, whatever the link says meanwhile.
+                if let Some(why) = d.held(&name) {
+                    j["state"] = json!("down");
+                    j["error"] = json!(why);
+                    j["health"] = json!("lost");
+                    j["restarting"] = json!(true);
                 }
                 j
             })
@@ -2078,7 +2300,7 @@ fn value_stream(stream: &mut Conn, ctx: &Ctx) -> io::Result<()> {
                 "seq": view.seq,
                 "at_ms": u64::try_from(view.at.as_millis()).unwrap_or(u64::MAX),
                 "signals": forces::mark(ctx, render::signals(c, &view)),
-                "modules": render::modules(c, &view),
+                "modules": control::modules(ctx, c, &view),
                 "outputs": view.outputs,
                 "forces": forces::list(ctx),
             }),

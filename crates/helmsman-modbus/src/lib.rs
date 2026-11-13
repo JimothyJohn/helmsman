@@ -64,6 +64,10 @@ pub const ILLEGAL_FUNCTION: u8 = 0x01;
 pub const ILLEGAL_DATA_ADDRESS: u8 = 0x02;
 pub const ILLEGAL_DATA_VALUE: u8 = 0x03;
 pub const SERVER_DEVICE_FAILURE: u8 = 0x04;
+/// A gateway has no path to the target (no route to the serial line).
+pub const GATEWAY_PATH_UNAVAILABLE: u8 = 0x0A;
+/// A gateway's target device (the unit behind it) did not respond.
+pub const GATEWAY_TARGET_FAILED: u8 = 0x0B;
 
 /// What the codec can refuse: a request outside the spec's ranges or a
 /// reply that is not what the request asks for, and a device's exception.

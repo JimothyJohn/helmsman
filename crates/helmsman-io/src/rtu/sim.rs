@@ -146,6 +146,7 @@ fn serve(mut line: End, unit: u8, timing: Timing, state: &Mutex<State>, stop: &A
             let fault = s.next_fault();
             let reply = match fault {
                 Some(Fault::DeviceFailure) => vec![pdu[0] | 0x80, SERVER_DEVICE_FAILURE],
+                Some(Fault::Exception(code)) => vec![pdu[0] | 0x80, code],
                 _ => s.handle(pdu),
             };
             (fault, reply)
@@ -178,6 +179,7 @@ fn serve(mut line: End, unit: u8, timing: Timing, state: &Mutex<State>, stop: &A
             Some(
                 Fault::WrongTransaction
                 | Fault::DeviceFailure
+                | Fault::Exception(_)
                 | Fault::Silent
                 | Fault::ShortInput
                 | Fault::Reboot,

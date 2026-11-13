@@ -15,6 +15,7 @@ build; the same I/O also runs over Modbus/TCP
 | --- | --- | --- |
 | **EDS** | `moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`, 647 lines, 42 906 bytes, CRLF, SHA-256 `3895fbca8bb036c1b31a9d6b68dea69eca6892fe0a6bce7409ab76311cfd470d`. EZ-EDS 3.27 generated; `[File]` Revision 2.0, ModDate 03-16-2026; `MinRev = 1; $ corresponds to firmware v4.0, EDS revision 1` (l.20). | Nick's download, kept untracked in `devices/` at the repo root (`*.eds` is ignored). **Not in this repository**: the file carries no terms at all (only the generator's header line), so redistribution is unclear (TODO.md `e1213-eds-license`). `scripts/eds-corpus.sh` checks the hash and runs `crates/helmsman-io/tests/eds_corpus.rs` against it. "l.N" below is a line of this file. |
 | **Manual** | *ioLogik E1200 Series User's Manual*, Version 15.10, May 2021, 10 137 362 bytes, SHA-256 `f8788816b2e0062a68f9b7f1ef9850a2d57f92946ac8b64077c4e77097744454`. | Fetched 2026-10-30 from a university mirror (`pct.wiki.uib.no/images/2/29/Moxa-iologik-e1200-series-manual-v15.10.pdf`); Moxa's own links to v15.8 and v15.2 answered with an HTML page instead of the PDF. "p. X-N" is the manual's own page number. |
+| **Release notes** | *Firmware for ioLogik E1200 Series (ioLogik E1213/E1213-T) Release Notes*, 10 pages, v1.1 to v4.0 (Build24071616, Aug 29, 2025), 60 472 bytes, SHA-256 `cf4e9bd918878a47f093103db40b0a84b14bd6bc12fc7648b74174c90c692ef3`. | Fetched 2026-11-10 from `moxa.com/Moxa/media/PDIM/S100000327/` (the "firmware v4.0.1kp Software Release History" PDF for the E1213). Not in this repository. "RN p. N" is a page of it. |
 
 The EDS says what to connect to and how big the data is; it says nothing
 about what the bytes mean (the input assembly is one 408-bit member, l.466).
@@ -228,6 +229,63 @@ driver, both sides at once, so each fact below is from the wire:
   extended status 0x0100 (connection in use); a connection whose owner
   vanishes without `Forward_Close` is held for about 10 s before another
   owner is accepted.
+- **One Class 1 connection at a time, of either kind** (firmware V3.1,
+  2026-11-10, a Python originator on the Studio after a power cycle with
+  no other originator on the unit). Alone, the EDS's Input Only request
+  opens: path config 100, heartbeat 111, T->O 101, O->T 2 bytes, T->O 53
+  bytes, both point-to-point, RPI 100 ms; so does Exclusive Owner. With
+  an Exclusive Owner held open, three Input Only requests in a row were
+  refused; after its `Forward_Close` the next one opened. A second Input
+  Only beside an open Input Only is refused the same way. Refused
+  requests leave nothing behind: the next request on a free unit opens.
+  The manual's "9 for read-only, and 1 for read/write" (p. 3-27) is not
+  what this firmware does for Class 1; whether firmware 4.0, which the
+  EDS v2.0 describes, does is not known.
+- **That refusal is general status 0x01 with no extended status**, and
+  its reply data stops after the originator serial: `03 00 ff ff e1 16 e8
+  0a` (connection serial, originator vendor, originator serial; no
+  remaining path size, no reserved byte). The same request with a wrong
+  size gets the ordinary form, 0x01 with extended 0x0109 and the full
+  body, and a second Exclusive Owner gets 0x0106, so the bare 0x01 reads
+  as "a Class 1 connection is already open". First seen from the ESP32-P4
+  node while the try box owned the unit.
+  `helmsman_proto::io::Refused::decode` accepts the short form (test
+  `a_refusal_that_stops_after_the_originator_serial_still_reads`).
+- **Both kinds are given the same O->T port.** Each successful reply
+  carries the O->T socket-address item with port 5222, for Input Only as
+  for Exclusive Owner.
+- **A connection dropped without `Forward_Close`** (the TCP session
+  closed, no more O->T) keeps the unit refusing for about 10 s: requests
+  at 2.6, 5.1 and 7.7 s were refused, the one at 10.2 s opened, for an
+  abandoned Exclusive Owner and for an abandoned Input Only alike.
+- **Any originator can close a connection.** A `Forward_Close` naming
+  the connection serial, originator vendor and originator serial of the
+  P4 node's Exclusive Owner connection, sent from the Studio over its own
+  session, was answered with success and ended the node's connection
+  (2026-11-10); the unit also dropped the node's TCP session. The triad
+  is not a secret: the vendor is 0xFFFF and the serials are small or
+  derived from the MAC.
+- **Later firmware changes two things seen here** (the release notes;
+  the bench unit is v3.1 Build19110615 of Nov 26, 2019, RN p. 5). v3.2
+  (Dec 25, 2020, RN p. 4) lists as fixed "Ethernet/IP implicit messages
+  are sent to port 2222 by default", which reads as the end of the O->T
+  port 5222 above, and adds EtherNet/IP to Safe Mode. v3.3 (Aug 03, 2022,
+  RN p. 3) lists as fixed "Ethernet/IP cannot establish second input-only
+  session". Whether that also lets Input Only run beside an Exclusive
+  Owner is not said and not tested. v4.0 (RN p. 1) turns the SNMP,
+  EtherNet/IP and RESTful services off by default. v3.0's note (RN p. 6)
+  says to update only to the next or the previous release, so 3.1 to 4.0
+  is four updates.
+- **Not explained:** before the power cycle the unit refused every
+  request, Exclusive Owner included, with the bare 0x01 for several
+  minutes while no originator was known to be connected (the try box was
+  not running). About 300 refused requests had gone to it that afternoon,
+  among them requests with both directions multicast, nine of which had
+  opened and been closed while the try box owned the unit. None of that
+  was reproduced after the power cycle, and multicast was not tried again.
+- **The Connection Manager's counters are not there**: `Get_Attribute_Single`
+  on class 6 instance 1 attributes 1 to 8 answers 0x14, `Get_Attributes_All`
+  0x08, and a Large `Forward_Open` (0x5B) 0x08.
 - **Counters read 0** in DI mode (counter mode is off, as Appendix E
   says).
 - The console's DO page says "DO4-7 Channel Equal DIO0-3 Channel": the
@@ -241,6 +299,26 @@ T->O never reaches `conformance` or `helmsman-plc` until each is allowed
 (`scratch/02-allow-firewall.sh`, `sudo socketfilterfw --add --unblockapp`,
 again after every rebuild). Apple's own `python3` is allowed, which is how
 the facts above were taken over SSH.
+
+### The echoed socket-address item (2026-11-07)
+
+Taken with `tcpdump` on the Studio (192.168.3.10) while a box on an I/O
+port other than 2222 opened the E1213 at 192.168.3.60. Such a box's
+`Forward_Open` carries a T->O socket-address item (type `0x8001`, 16
+bytes). The E1213 echoes that item after the unconnected-data item but
+gives the CPF item count as 2, so 20 bytes follow the last item it
+counts:
+
+```text
+reply CPF: count 2, 0x0000 (len 0), 0x00B2 (len 16), then 01 80 10 00 + 16 bytes (the 0x8001 item)
+```
+
+`cpf::decode_reply` reads trailing bytes as items only when they are whole
+socket-address items (`tests/e1213_quirks.rs` holds this reply). In this
+capture the reply was a refusal, general status 0x01 with extended
+0x0106, ownership conflict: another originator held the exclusive-owner
+connection. Before the fix the box reported only
+`decode: invalid: bytes after last CPF item`.
 
 ## Checking it
 

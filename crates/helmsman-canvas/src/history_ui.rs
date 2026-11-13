@@ -8,17 +8,18 @@
 //! history`) and the simulation (`crate::sim_projects`, revisions in the
 //! browser's storage).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use eframe::egui::{self, Color32, RichText, Vec2};
+use eframe::egui::{self, RichText, Vec2};
 
+use crate::diff_ui::Kind;
 use crate::editor::Chrome;
 use crate::st_view::TAP;
 use crate::theme::theme;
 use crate::tips::Tip;
 
-const RED: Color32 = Color32::from_rgb(255, 110, 100);
-const GREEN: Color32 = Color32::from_rgb(90, 200, 120);
 /// Longest file a diff is drawn for, lines each side; past it the file is
 /// shown as replaced.
 pub const MAX_DIFF_LINES: usize = 3000;
@@ -132,6 +133,73 @@ pub fn diff<'a>(old: &'a str, new: &'a str) -> Vec<Line<'a>> {
     out
 }
 
+/// A file's diff kept between frames: the LCS table is up to
+/// [`MAX_DIFF_LINES`] squared, so the modal does not redo it every frame.
+#[derive(Debug, Clone)]
+struct Diffed {
+    lines: Vec<(Kind, String)>,
+    new: usize,
+    gone: usize,
+}
+
+/// The diffs of the revision on show, by file and a hash of the two texts
+/// (the project can change under an open modal), in the context's memory.
+#[derive(Debug, Clone, Default)]
+struct DiffCache {
+    revision: u32,
+    files: HashMap<(String, u64), Arc<Diffed>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many diffs [`cached`] computed on this thread (a test reads it).
+    static COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The diff of `then` (revision `revision`'s `name`) against `now`,
+/// computed once for as long as neither text changes.
+fn cached(ctx: &egui::Context, revision: u32, name: &str, then: &str, now: &str) -> Arc<Diffed> {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (then, now).hash(&mut h);
+    let key = (name.to_string(), h.finish());
+    let id = egui::Id::NULL.with("history-diffs");
+    let hit = ctx.data_mut(|d| {
+        let c = d.get_temp_mut_or_default::<DiffCache>(id);
+        if c.revision != revision {
+            *c = DiffCache {
+                revision,
+                files: HashMap::new(),
+            };
+        }
+        c.files.get(&key).cloned()
+    });
+    if let Some(hit) = hit {
+        return hit;
+    }
+    #[cfg(test)]
+    COMPUTED.with(|c| c.set(c.get() + 1));
+    let lines = diff(then, now);
+    let (new, gone) = counts(&lines);
+    let made = Arc::new(Diffed {
+        lines: lines
+            .iter()
+            .map(|l| match l {
+                Line::Same(s) => (Kind::Same, (*s).to_string()),
+                Line::Gone(s) => (Kind::Removed, (*s).to_string()),
+                Line::New(s) => (Kind::Added, (*s).to_string()),
+            })
+            .collect(),
+        new,
+        gone,
+    });
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<DiffCache>(id)
+            .files
+            .insert(key, made.clone());
+    });
+    made
+}
+
 /// How many lines a diff adds and removes.
 #[must_use]
 pub fn counts(lines: &[Line<'_>]) -> (usize, usize) {
@@ -237,8 +305,8 @@ pub fn modal(
                     seen.push(name);
                     let then = view.files.get(name).map_or("", String::as_str);
                     let now = current.get(name).map_or("", String::as_str);
-                    let lines = diff(then, now);
-                    let (new, gone) = counts(&lines);
+                    let diffed = cached(ctx, view.row.n, name, then, now);
+                    let (new, gone) = (diffed.new, diffed.gone);
                     let state = match (view.files.contains_key(name), current.contains_key(name)) {
                         (true, false) => " (gone since)".to_string(),
                         (false, true) => " (new since)".to_string(),
@@ -249,17 +317,10 @@ pub fn modal(
                     if new + gone == 0 {
                         continue;
                     }
-                    // One block per file, coloured line by line.
-                    for l in &lines {
-                        let (mark, s, color) = match l {
-                            Line::Same(s) => ("  ", *s, t.muted),
-                            Line::Gone(s) => ("- ", *s, RED),
-                            Line::New(s) => ("+ ", *s, GREEN),
-                        };
-                        ui.add(
-                            egui::Label::new(RichText::new(format!("{mark}{s}")).monospace().color(color))
-                                .truncate(),
-                        );
+                    // One block per file, line by line as GitHub draws
+                    // a diff (Nick, 2026-11-08).
+                    for (kind, s) in &diffed.lines {
+                        crate::diff_ui::row(ui, *kind, "", s);
                     }
                     ui.add_space(6.0);
                 }
@@ -320,6 +381,29 @@ mod tests {
         let big = "x\n".repeat(MAX_DIFF_LINES + 1);
         let d = diff(&big, "y");
         assert_eq!(counts(&d), (1, MAX_DIFF_LINES + 1));
+    }
+
+    /// The revision modal draws every frame; a file's diff is worked out
+    /// once for as long as neither text changes, and again when one does.
+    #[test]
+    fn a_files_diff_is_computed_once_not_every_frame() {
+        let ctx = egui::Context::default();
+        let before = COMPUTED.with(std::cell::Cell::get);
+        let computed = || COMPUTED.with(std::cell::Cell::get) - before;
+        let first = cached(&ctx, 3, "main.st", "a\nb\n", "a\nx\n");
+        assert_eq!((first.new, first.gone), (1, 1));
+        for _ in 0..100 {
+            let again = cached(&ctx, 3, "main.st", "a\nb\n", "a\nx\n");
+            assert!(Arc::ptr_eq(&first, &again));
+        }
+        assert_eq!(computed(), 1);
+        cached(&ctx, 3, "other.st", "a\nb\n", "a\nx\n");
+        assert_eq!(computed(), 2, "each file has its own");
+        let changed = cached(&ctx, 3, "main.st", "a\nb\n", "a\nx\ny\n");
+        assert_eq!((changed.new, changed.gone), (2, 1));
+        assert_eq!(computed(), 3, "the project changed under the modal");
+        cached(&ctx, 4, "main.st", "a\nb\n", "a\nx\n");
+        assert_eq!(computed(), 4, "another revision");
     }
 
     #[test]

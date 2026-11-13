@@ -7,7 +7,7 @@
     <meta name="description" content="Write IEC 61131-3 Structured Text, run it in your browser against virtual I/O, and see why each output is on. Helmsman Factory Automation.">
     <!-- Scripts and the wasm from this site only; the network only to this
          site and the Claude API (the visitor's key goes nowhere else). -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://iup63z6bv5rz2fwtwexyw3pvoi0spenq.lambda-url.us-east-1.on.aws; base-uri 'none'; form-action 'none'; object-src 'none'">
     <meta name="referrer" content="no-referrer">
     
     <link rel="icon" type="image/svg+xml" href="helmsman-mark-16-yellow.svg">
@@ -251,10 +251,10 @@ async function __trunkInitializer(init, source, sourceSize, initializer, initWit
 }
 
 
-import init, * as bindings from '/playground/helmsman-canvas-19aaf2afd56b104c.js';
+import init, * as bindings from '/playground/helmsman-canvas-52c5a49ce3ca31c4.js';
 import initializer from '/playground/53465a22e1851b4-helmsman-canvas-initializer.js';
 
-const wasm = await __trunkInitializer(init, '/playground/helmsman-canvas-19aaf2afd56b104c_bg.wasm', 5570567, initializer(), true);
+const wasm = await __trunkInitializer(init, '/playground/helmsman-canvas-52c5a49ce3ca31c4_bg.wasm', 5968972, initializer(), true);
 
 
 window.wasmBindings = bindings;
@@ -267,7 +267,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
         html, body { margin: 0; height: 100%; overflow: hidden; background: #141414; }
         canvas { display: block; width: 100%; height: 100%; }
     </style>
-<link rel="modulepreload" href="/playground/helmsman-canvas-19aaf2afd56b104c.js" crossorigin="anonymous" integrity="sha384-4MeNE2ABYulJnUtpauYKI5eT3yMen7X7urf8jbAW68mlK3CdfOClv3wTq+ROMrEV"><link rel="modulepreload" href="/playground/53465a22e1851b4-helmsman-canvas-initializer.js" crossorigin="anonymous" integrity="sha384-/lAKd4xg5n/NVR7x4keg+rFjyUed9e34qki4yL7DUjPkc1qzlAnaykLymM8kZ5Gq"><link rel="preload" href="/playground/helmsman-canvas-19aaf2afd56b104c_bg.wasm" crossorigin="anonymous" integrity="sha384-NixLsc7ea3F28FE6gbhiRsWbb2acmK3TSZe9YWNuXKI1weSFeWlf3qttbEfK8x+6" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/playground/helmsman-canvas-52c5a49ce3ca31c4.js" crossorigin="anonymous" integrity="sha384-VBSEmy3bMrY/k7xOHImNeuL7IpFhDmlW2Xg4s2mp4iUkPz/DssabGBL0FqNKmEdu"><link rel="modulepreload" href="/playground/53465a22e1851b4-helmsman-canvas-initializer.js" crossorigin="anonymous" integrity="sha384-/lAKd4xg5n/NVR7x4keg+rFjyUed9e34qki4yL7DUjPkc1qzlAnaykLymM8kZ5Gq"><link rel="preload" href="/playground/helmsman-canvas-52c5a49ce3ca31c4_bg.wasm" crossorigin="anonymous" integrity="sha384-SKJ4uLvE4lna+je5Zg7aUEf4mun6fhT4OUxWZAIO1J59q2Hjy02bntNPntzZ6pcs" as="fetch" type="application/wasm"></head>
 <body>
     <style>
     #loading { position: fixed; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center;

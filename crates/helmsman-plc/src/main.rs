@@ -12,6 +12,7 @@ use std::io::{BufRead as _, Write as _};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -38,6 +39,7 @@ use helmsman_plc::policy::account::{self, Accounts, Logins};
 use helmsman_plc::policy::pin::{self, Gate, Pins};
 use helmsman_plc::policy::{Policy, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
+use helmsman_plc::retain;
 use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::site::{self, Site};
 use helmsman_plc::spec::{Defaults, Spec};
@@ -54,7 +56,11 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                     (first install only: with no project and nothing deployed,
                     makes NAME from the files for --projects; nothing runs
                     until an engineer deploys it)
-  --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
+       helmsman-plc test PROJECT_DIR [--junit FILE] [--scan-ms MS]
+                    (checks a project folder and runs its requirement tests with
+                    no box running; exit 0 green, 1 red, 2 does not build:
+                    `helmsman-plc test --help`)
+  --module SPEC       PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
   --module-dir DIR     one module as a directory: module.st and module.manifest
@@ -106,7 +112,7 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        /api/chat), e.g. https://relay.example.com; without
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
-                       The box never holds an Anthropic key.
+                       The box never holds a model API key.
   --relay-agent V      the agent version to ask the relay for (default v7)
   --relay-explain-agent V
                        the agent version POST /api/explain asks for (an
@@ -116,6 +122,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        the agent version POST /api/projects/{p}/requirements
                        asks for (a tests profile; default tests-v1). The box
                        runs only its submit_test for it either way.
+  --relay-help-agent V the agent version POST /api/help asks for (a help
+                       profile; default helmsman/help-v1). The box runs only
+                       its submit_issue for it either way; a relay that does
+                       not serve it leaves Help with the box's own issue.
   --devices-index URL  the device library's index the Devices tab and the
                        agent look a found device up in (default the public
                        library's, see docs/devices/; `off` for none)
@@ -126,6 +136,17 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        read cross-origin; the canvas gets a Site view. Off
                        by default; needs a fixed --api port. A box only
                        lists what it hears, it never acts on it
+  --dhcp IFACE         serve DHCP and BOOTP on the device interface IFACE, so
+                       a block that ships as a DHCP client (Turck TBEN,
+                       Murrelektronik IMPACT67) gets an address untouched.
+                       Off by default. The box's address and mask are
+                       IFACE's own; it first listens 4 s for another DHCP
+                       server and never serves beside one (GET /api/dhcp
+                       says why). Leases in <state-dir>/dhcp/leases. Needs
+                       UDP 67 and 68 (CAP_NET_BIND_SERVICE on Linux)
+  --dhcp-pool A-B      the addresses --dhcp hands out (default .100-.199 of
+                       IFACE's /24; any other mask needs it)
+  --dhcp-lease S       the lease, in seconds (default 86400)
   --box-name NAME      this box's name in its site (default: the host
                        name, else box-<id>)
   --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
@@ -195,11 +216,15 @@ struct Opts {
     relay_agent: String,
     relay_explain_agent: Option<String>,
     relay_tests_agent: Option<String>,
+    relay_help_agent: Option<String>,
     ui: Option<PathBuf>,
     site: Option<String>,
     /// `--devices-index`: `None` is the default library, `Some("off")` none.
     devices_index: Option<String>,
     box_name: Option<String>,
+    dhcp: Option<String>,
+    dhcp_pool: Option<String>,
+    dhcp_lease: Option<u32>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
     scan: Duration,
@@ -217,7 +242,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
 }
 
 /// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`,
-/// `--relay-tests-agent`.
+/// `--relay-tests-agent`, `--relay-help-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
         "--relay" => {
@@ -228,6 +253,7 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
         _ if !relay::version_ok(v) => return Err(format!("{flag}: not an agent version: {v:?}")),
         "--relay-explain-agent" => o.relay_explain_agent = Some(v.to_string()),
         "--relay-tests-agent" => o.relay_tests_agent = Some(v.to_string()),
+        "--relay-help-agent" => o.relay_help_agent = Some(v.to_string()),
         _ => v.clone_into(&mut o.relay_agent),
     }
     Ok(())
@@ -257,10 +283,14 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_agent: "v7".into(),
         relay_explain_agent: None,
         relay_tests_agent: None,
+        relay_help_agent: None,
         ui: None,
         site: None,
         devices_index: None,
         box_name: None,
+        dhcp: None,
+        dhcp_pool: None,
+        dhcp_lease: None,
         policy: None,
         set_pin: None,
         scan: Duration::from_millis(10),
@@ -343,7 +373,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             | "--relay-token"
             | "--relay-agent"
             | "--relay-explain-agent"
-            | "--relay-tests-agent" => {
+            | "--relay-tests-agent"
+            | "--relay-help-agent" => {
                 relay_flag(&mut o, flag, v)?;
             }
             "--policy" => once(&mut o.policy, flag, v)?,
@@ -372,6 +403,23 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--devices-index" => return Err(format!("--devices-index: a http(s):// URL or off, got {v:?}")),
             "--site" if site::valid_token(v) => o.site = Some(v.clone()),
             "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
+            "--dhcp"
+                if !v.is_empty()
+                    && v.len() <= 15
+                    && v.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) =>
+            {
+                o.dhcp = Some(v.clone());
+            }
+            "--dhcp" => return Err(format!("--dhcp: an interface name (en0, eth1), got {v:?}")),
+            "--dhcp-pool" => {
+                helmsman_plc::dhcp::parse_pool(v)?;
+                o.dhcp_pool = Some(v.clone());
+            }
+            "--dhcp-lease" => match v.parse::<u32>() {
+                Ok(s) if s >= 60 => o.dhcp_lease = Some(s),
+                _ => return Err(format!("--dhcp-lease: seconds, 60 or more, got {v:?}")),
+            },
             "--box-name" if site::valid_name(v) => o.box_name = Some(v.clone()),
             "--box-name" => {
                 return Err(format!(
@@ -927,6 +975,7 @@ fn plan_io(
     channels: helmsman_plc::link::Channels,
     io: &IoEndpoint,
     drivers: &helmsman_plc::drivers::Drivers,
+    pace: &helmsman_plc::link::Pace,
 ) -> Result<(LinkSet, Plan), String> {
     let devices = Arc::clone(devices);
     let io = io.clone();
@@ -934,18 +983,35 @@ fn plan_io(
         Arc::clone(table),
         Arc::new(move |d: &helmsman_io::Device| helmsman_io::open_on(d, Some(&io))),
         channels,
-        Arc::new(
-            move |name: &str, err: Option<&helmsman_io::Error>, address: Option<String>| {
-                match (err, &address) {
-                    (None, Some(a)) => eprintln!("helmsman-plc: device {name} up at {a}"),
-                    (None, None) => eprintln!("helmsman-plc: device {name} up"),
-                    (Some(e), _) => eprintln!("helmsman-plc: device {name} down: {e}"),
-                }
-                devices.set_with(name, err.map(ToString::to_string), address);
-            },
-        ),
+        Arc::new(move |r: &helmsman_plc::link::LinkReport| {
+            let name = &r.name;
+            let over = r
+                .transport
+                .as_deref()
+                .map(|t| format!(" over {t}"))
+                .unwrap_or_default();
+            match (&r.error, &r.address, r.health) {
+                (Some(e), _, _) => eprintln!("helmsman-plc: device {name} down: {e}"),
+                (None, _, helmsman_plc::link::Health::Slow) => eprintln!(
+                    "helmsman-plc: device {name} slow: updates every {} ms, asked every {} ms",
+                    r.measured.map_or(0, |m| m.as_millis()),
+                    r.poll.as_millis()
+                ),
+                (None, Some(a), _) => eprintln!("helmsman-plc: device {name} up at {a}{over}"),
+                (None, None, _) => eprintln!("helmsman-plc: device {name} up{over}"),
+            }
+            devices.set_with(name, r.error.clone(), r.address.clone());
+            devices.set_transport(name, r.transport.clone());
+            devices.set_health(
+                name,
+                r.health.as_str(),
+                r.measured
+                    .map(|m| u64::try_from(m.as_millis()).unwrap_or(u64::MAX)),
+                u64::try_from(r.poll.as_millis()).unwrap_or(u64::MAX),
+            );
+        }),
     );
-    let plan = set.plan_with(&map.cloned().unwrap_or_default(), drivers)?;
+    let plan = set.plan_paced(&map.cloned().unwrap_or_default(), drivers, pace)?;
     Ok((set, plan))
 }
 
@@ -1085,6 +1151,8 @@ fn start_api(
     approval: Approval,
     forces: &Arc<Forces>,
     running_drivers: helmsman_plc::drivers::Drivers,
+    adapter: SocketAddr,
+    dhcp: Option<helmsman_plc::dhcp::Handle>,
 ) -> Result<(Api, Option<Site>), String> {
     let ui =
         o.ui.as_deref()
@@ -1134,6 +1202,7 @@ fn start_api(
         ui,
         trust: Some(trust),
         market_local: o.market == MarketHosts::Local,
+        adapter: Some(adapter),
     };
     let site = o
         .site
@@ -1148,6 +1217,9 @@ fn start_api(
         drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
         running_drivers,
         trend_pins: Some(dir.join("trend-pins")),
+        desks: Some(dir.join("desks")),
+        devconf: Some(api::devconf::Setup::in_state_dir(&dir)),
+        dhcp,
         discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {
             Some("off") => None,
             Some(url) => Some(url.to_string()),
@@ -1244,6 +1316,57 @@ fn start_site(o: &Opts, name: &str, api_port: u16, token: &str) -> Result<Site, 
     Ok(started)
 }
 
+/// The DHCP server on `--dhcp IFACE`, if asked for: the box's address and
+/// mask are the interface's own (helmsman-l2's `ipv4_net`).
+fn start_dhcp(o: &Opts) -> Result<Option<helmsman_plc::dhcp::Dhcp>, String> {
+    use helmsman_plc::dhcp::{self, Dhcp, Settings, Wire};
+    let Some(iface) = o.dhcp.as_deref() else {
+        return Ok(None);
+    };
+    let (addr, mask) = helmsman_l2::ipv4_net(iface)
+        .map_err(|e| format!("--dhcp {iface}: {e}"))?
+        .ok_or_else(|| {
+            format!("--dhcp {iface}: the interface has no IPv4 address; give it a fixed one first")
+        })?;
+    let (server, netmask) = (Ipv4Addr::from(addr), Ipv4Addr::from(mask));
+    let pool = match o.dhcp_pool.as_deref() {
+        Some(p) => dhcp::parse_pool(p)?,
+        None => dhcp::default_pool(server, netmask).ok_or_else(|| {
+            format!(
+                "--dhcp {iface}: {server} has mask {netmask}, not a /24: name the pool with --dhcp-pool A-B"
+            )
+        })?,
+    };
+    let config = helmsman_dhcp::Config {
+        server,
+        netmask,
+        router: None,
+        pool,
+        lease_s: o.dhcp_lease.unwrap_or(dhcp::LEASE_S),
+        reserved: std::collections::BTreeMap::new(),
+        bootp: true,
+    };
+    config.check().map_err(|e| format!("--dhcp {iface}: {e}"))?;
+    let wire = Wire::open(iface).map_err(|e| format!("--dhcp {iface}: {e}"))?;
+    let settings = Settings {
+        interface: iface.to_string(),
+        config,
+        dir: state_dir(o).join("dhcp"),
+    };
+    let started = Dhcp::start(
+        settings,
+        wire,
+        dhcp::PROBE_FOR,
+        Arc::new(|line: &str| eprintln!("helmsman-plc: {line}")),
+    )
+    .map_err(|e| format!("--dhcp {iface}: {e}"))?;
+    eprintln!(
+        "helmsman-plc: dhcp on {iface} ({server}/{netmask}, pool {}-{}): listening for another server first; status at /api/dhcp",
+        pool.0, pool.1
+    );
+    Ok(Some(started))
+}
+
 /// The OPC UA server on `bind`, if any, and the scan side of its feed.
 fn start_opcua(
     bind: Option<SocketAddr>,
@@ -1295,6 +1418,9 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
             .unwrap_or_else(|| "explain-v2".into()),
     );
     setup.tests_agent = Some(o.relay_tests_agent.clone().unwrap_or_else(|| "tests-v1".into()));
+    if let Some(v) = &o.relay_help_agent {
+        setup.help_agent.clone_from(v);
+    }
     Ok(Some(setup))
 }
 
@@ -1426,6 +1552,23 @@ fn browsers(map: Option<&helmsman_io::IoMap>, devices: &Devices) {
     }
 }
 
+/// The flags SIGTERM and SIGINT set, by name (no signal API in std, and the
+/// crate forbids `unsafe`, so `signal-hook`).
+fn stop_flags() -> Result<Vec<(&'static str, Arc<AtomicBool>)>, String> {
+    [
+        ("SIGTERM", signal_hook::consts::SIGTERM),
+        ("SIGINT", signal_hook::consts::SIGINT),
+    ]
+    .into_iter()
+    .map(|(name, sig)| {
+        let flag = Arc::new(AtomicBool::new(false));
+        signal_hook::flag::register(sig, Arc::clone(&flag))
+            .map_err(|e| format!("cannot catch {name}: {e}"))?;
+        Ok((name, flag))
+    })
+    .collect()
+}
+
 #[allow(clippy::too_many_lines)]
 fn run(o: &Opts) -> Result<(), String> {
     if o.emit_st {
@@ -1441,7 +1584,7 @@ fn run(o: &Opts) -> Result<(), String> {
     let d = defaults(o, i_len, q_len);
     let mut content = content(o, &d)?;
     let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
-    let (modules, sources): (Vec<Module>, Vec<String>) = loaded
+    let (mut modules, sources): (Vec<Module>, Vec<String>) = loaded
         .iter()
         .map(load)
         .collect::<Result<Vec<_>, _>>()?
@@ -1453,6 +1596,8 @@ fn run(o: &Opts) -> Result<(), String> {
         map,
         calendar: cal,
     } = load_signals(&content)?;
+    let retain_dir = state_dir(o).join(retain::DIR);
+    let restored = retain::restore(&retain_dir, &mut modules);
     let table = Arc::new(Mutex::new(table));
     let bound = Runtime::with_signals(
         i_len,
@@ -1472,6 +1617,7 @@ fn run(o: &Opts) -> Result<(), String> {
     // enip-io links' are routed by connection ID (helmsman_proto::endpoint).
     let io = IoEndpoint::bind(SocketAddrV4::new(o.server.bind, o.server.io_port))
         .map_err(|e| format!("CIP sockets: UDP {} (Class 1 I/O): {e}", o.server.io_port))?;
+    let pace = helmsman_plc::link::pace(rt.names().filter_map(|n| rt.module(n)));
     let (link_set, io_plan) = plan_io(
         map.as_ref(),
         &table,
@@ -1479,6 +1625,7 @@ fn run(o: &Opts) -> Result<(), String> {
         box_channels(o.gpio_chip.as_deref())?,
         &io,
         &content.drivers.drivers,
+        &pace,
     )?;
     for name in io_plan.starts() {
         devices.add(name);
@@ -1496,6 +1643,15 @@ fn run(o: &Opts) -> Result<(), String> {
         o.gpio_chip.as_deref(),
         cal.as_ref(),
     );
+    for name in rt.names() {
+        for w in rt.program(name).map_or(&[][..], helmsman_iec::Program::warnings) {
+            eprintln!("helmsman-plc: module {name}: warning: {w}");
+        }
+    }
+    for line in &restored {
+        eprintln!("helmsman-plc: {line}");
+    }
+    let mut retainer = retain::Writer::start(retain_dir);
     let recorder = recorder(&table);
     let (swap, swapper) = api::swap::channel(Duration::from_secs(5));
     let swap = swap.with_links(Arc::clone(&link_set));
@@ -1518,6 +1674,8 @@ fn run(o: &Opts) -> Result<(), String> {
     });
     let forces = Arc::new(Forces::default());
     let mut force_reader = force::Reader::default();
+    // The DHCP server runs as long as the box does.
+    let dhcp = start_dhcp(o)?;
     let started = o
         .api
         .zip(approval)
@@ -1532,6 +1690,8 @@ fn run(o: &Opts) -> Result<(), String> {
                 approval,
                 &forces,
                 content.drivers.drivers.clone(),
+                SocketAddr::V4(adapter.encap_addr()),
+                dhcp.as_ref().map(helmsman_plc::dhcp::Dhcp::handle),
             )
         })
         .transpose()?;
@@ -1565,6 +1725,9 @@ fn run(o: &Opts) -> Result<(), String> {
     let mut inputs = vec![0; i_len];
     let mut names: Vec<String> = rt.names().map(str::to_string).collect();
     let start = Instant::now();
+    // A planned stop (service manager, Ctrl-C) sets one of these; the scan
+    // loop sees it within a scan and writes the RETAIN values before exiting.
+    let stops = stop_flags()?;
     loop {
         {
             let d = lock_ref(&dev);
@@ -1623,6 +1786,20 @@ fn run(o: &Opts) -> Result<(), String> {
             (held, faults)
         };
         report_changes(&specs, &names, &rt, &held, faults);
+        if let Some(name) = stops
+            .iter()
+            .find_map(|(name, f)| f.load(Ordering::Relaxed).then_some(*name))
+        {
+            retainer.offer_now(start.elapsed(), &rt);
+            let said = if retainer.flush(Duration::from_secs(5)) {
+                "RETAIN values written, exiting"
+            } else {
+                "RETAIN values not written within 5 s, exiting"
+            };
+            eprintln!("helmsman-plc: {name}: {said}");
+            return Ok(());
+        }
+        retainer.offer(start.elapsed(), &rt);
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
         sleep_to(start, rt.next_deadline(), cap(scene.calendar.as_ref()), &mut said);
     }
@@ -1702,6 +1879,23 @@ fn project_cli(args: &[String]) -> Result<String, String> {
     }
 }
 
+/// The box `helmsman-plc test` builds and tests for: one started with the
+/// defaults (`--scan-ms 10`, `--memory 1024`, the adapter's assemblies).
+fn test_shape() -> helmsman_plc::project::build::Shape {
+    let cfg = device_config(1);
+    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    helmsman_plc::project::build::Shape {
+        defaults: Defaults {
+            period: Duration::from_millis(10),
+            i: Window::new(0, i_len),
+            q: Window::new(0, q_len),
+            m: 1024,
+        },
+        i_len,
+        q_len,
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "account") {
@@ -1728,6 +1922,12 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+    }
+    if args.first().is_some_and(|a| a == "test") {
+        let ran = helmsman_plc::project::check::cli(&args[1..], &test_shape());
+        print!("{}", ran.out);
+        eprint!("{}", ran.err);
+        return ExitCode::from(ran.code);
     }
     if args.first().is_some_and(|a| a == "bundle") {
         return match helmsman_plc::bundle::cli::run(&args[1..]) {

@@ -8,9 +8,9 @@ use std::fmt::Write as _;
 use crate::scope::{Files, Scope};
 use crate::verify::{Check, Next, RETRIES, check, code_part, elision, full_copy, has_code, next, scenarios};
 
-pub(crate) const LAMP: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
+pub(crate) const LAMP: &str = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := start;\nEND_PROGRAM\n";
 /// The project's own test: green while the lamp follows start.
-pub(crate) const FOLLOWS: &str = "(* The lamp comes on with start. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_follows : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_follows(COND := lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
+pub(crate) const FOLLOWS: &str = "(* The lamp comes on with start. *)\nPROGRAM test_lamp\nVAR_INPUT\n  lamp : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  lamp_follows : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  lamp_follows(COND := lamp);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n";
 
 /// A scenario: the lamp stays off without start (`holds` FALSE makes
 /// it expect the lamp on, so it fails against `LAMP`).
@@ -184,8 +184,8 @@ fn every_pou_of_the_file_comes_back_with_its_header_and_end() {
 fn a_selection_takes_the_whole_file_changed_only_inside_it() {
     let lines = Scope::Lines {
         file: "main.st".into(),
-        from: 4,
-        to: 4,
+        from: 8,
+        to: 8,
     };
     let files = project();
     // A fragment would be spliced in by the scope rules: refused here.
@@ -197,16 +197,16 @@ fn a_selection_takes_the_whole_file_changed_only_inside_it() {
         "{:?}",
         c.failures
     );
-    // The whole file with the change in line 4: green (no scenario).
+    // The whole file with the change in line 8: green (no scenario).
     let whole = LAMP.replace("lamp := start;", "lamp := NOT NOT start;");
     let c = check(&lines, &files, &answer_with(&whole, &[]), settings());
     assert!(c.green() && c.unchecked(), "{c:?}");
-    // The whole file with a change outside line 4: refused by the scope.
+    // The whole file with a change outside line 8: refused by the scope.
     let outside = whole.replace("PROGRAM lamp", "PROGRAM lamp (* moved *)");
     let c = check(&lines, &files, &answer_with(&outside, &[]), settings());
     assert!(c.red(), "{c:?}");
     assert!(
-        c.failures.iter().any(|f| f.contains("outside line 4 of main.st")),
+        c.failures.iter().any(|f| f.contains("outside line 8 of main.st")),
         "{:?}",
         c.failures
     );
@@ -215,8 +215,8 @@ fn a_selection_takes_the_whole_file_changed_only_inside_it() {
     let block = Scope::Block {
         file: "main.st".into(),
         name: "lamp".into(),
-        from: 4,
-        to: 4,
+        from: 8,
+        to: 8,
     };
     let c = check(
         &block,
@@ -302,8 +302,28 @@ fn a_red_answer_goes_back_twice_and_code_without_a_scenario_once() {
         };
         assert!(m.contains("unknown variable STRAT"), "{m}");
         assert!(m.contains("Answer again in full"), "{m}");
+        assert!(!m.contains("in brackets"), "no scenario failed: {m}");
     }
     assert_eq!(next(&red, RETRIES, false), Next::Show, "then it is shown red");
+    // A failed scenario: the retry says how to read the values it held.
+    let scenario_red = Check {
+        code: true,
+        scenarios: vec![crate::verify::Ran {
+            file: "test_x.st".into(),
+            requirement: "x".into(),
+            passed: false,
+            why: "off when both failed at 0.64 s (a=FALSE, b=TRUE, either=TRUE)".into(),
+        }],
+        ..Check::default()
+    };
+    let Next::Retry(m) = next(&scenario_red, 0, false) else {
+        panic!("a red scenario goes back")
+    };
+    assert!(m.contains("(a=FALSE, b=TRUE, either=TRUE)"), "{m}");
+    assert!(
+        m.contains("the scenario's timing is wrong, so fix the scenario"),
+        "{m}"
+    );
     let bare = Check {
         code: true,
         ..Check::default()
@@ -380,17 +400,20 @@ fn a_test_the_instruction_contradicts_is_replaced_and_said_so() {
     assert!(c.green(), "{:?}", c.problems());
     assert_eq!(
         c.replaced,
-        vec![(
-            "test_lamp.st".to_string(),
-            "The lamp is off while start is on.".to_string()
-        )]
+        vec![crate::verify::Replaced {
+            file: "test_lamp.st".into(),
+            was: "The lamp comes on with start.".into(),
+            now: "The lamp is off while start is on.".into(),
+        }]
     );
     assert_eq!(c.add.len(), 1);
     assert_eq!(c.add[0].0, "test_lamp.st");
     assert!(c.add[0].1.contains("NOT lamp"));
     let s = crate::instruct::status("main.st", &c);
     assert!(
-        s.contains("changed requirement test_lamp: The lamp is off while start is on."),
+        s.contains(
+            "changed requirement test_lamp: The lamp is off while start is on (was: The lamp comes on with start)"
+        ),
         "{s}"
     );
 
@@ -409,4 +432,119 @@ fn a_test_the_instruction_contradicts_is_replaced_and_said_so() {
         "{:?}",
         c.problems()
     );
+}
+
+/// The lamp program with a second output, which leaves `FOLLOWS` green.
+const LAMP_AND_FLAG: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; flag : BOOL; END_VAR\nlamp := start;\nflag := NOT start;\nEND_PROGRAM\n";
+
+/// A scenario that reads `flag` and expects it on while start is off:
+/// false on `LAMP` (no such output), true on `LAMP_AND_FLAG`.
+fn flag_scenario(name: &str) -> String {
+    format!(
+        "(* The flag is on while start is not pressed. *)\nPROGRAM test_{name}\nVAR_INPUT flag : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; flag_on : ASSERT; END_VAR\nstart := FALSE;\nn := n + 1;\nIF n > 3 THEN flag_on(COND := flag); done := TRUE; END_IF;\nEND_PROGRAM"
+    )
+}
+
+/// A test is replaced only when the new code turns it red. A trivial
+/// replacement of a test that still passes is refused and the old test
+/// stays (review of 2026-11-08, hole 2).
+#[test]
+fn a_test_that_still_passes_cannot_be_replaced() {
+    let trivial = "(* Nothing to check. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT done : BOOL; END_VAR\nVAR ok : ASSERT; END_VAR\nok(COND := TRUE);\nlamp := lamp;\ndone := TRUE;\nEND_PROGRAM";
+    let a = replacing(LAMP_AND_FLAG, "st scenario replaces test_lamp", trivial);
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.red(), "{:?}", c.problems());
+    let p = c.problems().join("\n");
+    assert!(p.contains("replaces test_lamp"), "{p}");
+    assert!(p.contains("still passes with this code"), "{p}");
+    assert!(c.replaced.is_empty() && c.add.is_empty(), "the old test stays");
+    // The retry sends the reason back.
+    let Next::Retry(m) = next(&c, 0, false) else {
+        panic!("a retry")
+    };
+    assert!(m.contains("still passes with this code"), "{m}");
+    // A scenario with a name of its own that tells the change apart is green.
+    let a = answer_with(LAMP_AND_FLAG, &[flag_scenario("flag")]);
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    assert_eq!(c.tests_green, 1, "test_lamp ran and passed");
+}
+
+/// Red before, green after: scenarios that pass on the old file say
+/// nothing about a change that alters what the file does.
+#[test]
+fn a_scenario_that_passes_on_the_old_file_does_not_distinguish_the_change() {
+    // Both pass on LAMP too: refused, and the retry text says so.
+    let a = answer_with(LAMP_AND_FLAG, &[off("lamp_off", true)]);
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.red(), "{:?}", c.problems());
+    let p = c.problems().join("\n");
+    assert!(p.contains("does not distinguish the change"), "{p}");
+    assert!(p.contains("lamp_off"), "{p}");
+    assert!(matches!(next(&c, 0, false), Next::Retry(m) if m.contains("does not distinguish")));
+    // One that fails on the old file and passes on the new one: green.
+    let a = answer_with(LAMP_AND_FLAG, &[off("lamp_off", true), flag_scenario("flag")]);
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    // A change in comments alone changes nothing to tell apart.
+    let a = answer_with(&commented(), &[off("lamp_off", true)]);
+    assert!(check(&file(), &project(), &a, settings()).green());
+}
+
+/// A rename keeps the behaviour, so no scenario can fail on the old file:
+/// refused as indistinct unless the answer claims it, and then the status
+/// line says it is the Agent's claim; scenarios must still pass.
+#[test]
+fn a_behaviour_preserving_change_passes_only_with_the_unchanged_behaviour_line() {
+    let old = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nVAR t : BOOL; END_VAR\nt := start;\nlamp := t;\nEND_PROGRAM\n";
+    let renamed = old
+        .replace("t :=", "pressed :=")
+        .replace("lamp := t", "lamp := pressed")
+        .replace("VAR t :", "VAR pressed :");
+    let files = Files::from([("main.st".to_string(), old.to_string())]);
+    let follows = FOLLOWS.replace("test_lamp", "test_follows");
+    let plain = answer_with(&renamed, std::slice::from_ref(&follows));
+    let c = check(&file(), &files, &plain, settings());
+    assert!(
+        c.problems().join("\n").contains("does not distinguish"),
+        "{:?}",
+        c.problems()
+    );
+    let claimed = plain.replacen(
+        "It now says why.",
+        "Why: the variable is named for what it holds.\nUnchanged behaviour: only a local variable's name changes.",
+        1,
+    );
+    let c = check(&file(), &files, &claimed, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    assert!(c.unchanged);
+    assert!(crate::instruct::status("main.st", &c).contains("behaviour unchanged (the Agent's claim)"));
+    // The claim does not excuse a failing scenario.
+    let broken = claimed.replace("lamp := pressed", "lamp := NOT pressed");
+    assert!(check(&file(), &files, &broken, settings()).red());
+    // A claim with no reason is no claim.
+    assert!(!crate::verify::claims_unchanged(
+        "Why: x.\nUnchanged behaviour:\n"
+    ));
+}
+
+/// A block that never closes was cut off: the answer is red and goes
+/// back, not checked as if the block were not there.
+#[test]
+fn an_answer_cut_off_inside_a_block_is_red_not_checked_without_it() {
+    let whole = answer_with(&commented(), &[off("lamp_off", true)]);
+    let cut = whole.trim_end().trim_end_matches("```").trim_end().to_string();
+    assert!(!cut.ends_with("```"), "{cut}");
+    let c = check(&file(), &project(), &cut, settings());
+    assert!(c.red(), "{:?}", c.problems());
+    assert!(c.problems()[0].contains("cut off"), "{:?}", c.problems());
+    assert!(matches!(next(&c, 0, false), Next::Retry(m) if m.contains("cut off")));
+    // The same answer closed is checked as before.
+    assert!(check(&file(), &project(), &whole, settings()).green());
+    // The code block closed and only a scenario cut off.
+    let half = format!(
+        "Why: x.\n\n```st\n{}```\n\n```st scenario\n(* a *)\nPROGRAM test_a\n",
+        commented()
+    );
+    assert!(check(&file(), &project(), &half, settings()).red());
 }

@@ -30,11 +30,16 @@ this; change it here first when a decision changes.
   build, licence, and on a box its certificate fingerprint). After them
   the program's state, green running, red stopped or faulted (a box: its
   link). On the right the project's name, its edited mark, a "n waiting"
-  badge when proposals wait, the Editor | Monitor toggle (a click on
-  either side flips it), Sign in on a box, and ? in the very corner (help
+  badge when proposals wait, the Editor | Monitor toggle (a glyph a
+  side since 2026-11-13, `< >` and a screen; a click on either side
+  flips it), Sign in on a box, and ? in the very corner (help
   on the site). Proposals and "Simulate in this browser / Back to this
   box" are View items. A fault, a deploy under way or a stale file shows
-  on a line under the header only while it lasts.
+  on a line under the header only while it lasts. Below the narrow width
+  (a phone) the wordmark, the state and the "simulation" tag are hidden,
+  the four menus fold into one Menu button with File, Edit, View and Help
+  as submenus, and the project's name is truncated, so the two groups
+  never overlap (2026-11-08).
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
   restart (the simulation), then save, upload, download. Strokes in the
   brand colours; each tells its key on hover.
@@ -46,7 +51,10 @@ this; change it here first when a decision changes.
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
-- **Left pane, collapsible, tabs (200 pt):** Files (the projects, the
+- **Panes collapse** from their chevron, their Alt key, or a double click
+  on any of their tabs (Nick, 2026-11-07), on the left pane and the side
+  panel alike.
+- **Left pane, collapsible, tabs (320 pt):** Files (the projects, the
   open one's files, the program tree; a right-click on a project offers
   Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and
   Delete with an app-wide clipboard so a file pastes into any open
@@ -55,25 +63,60 @@ this; change it here first when a decision changes.
   deletes the row last clicked, a double click on a file opens the Code
   tab, every delete is confirmed in a modal at the screen's centre, and
   the earlier iterations of the program, `vN.st`, fold under one
-  "earlier (n)" row with `main.st` marked as the one running),
+  "earlier (n)" row with `main.st` marked as the one running; the running
+  program, open, carries a → that deploys it again with the latest edits,
+  as does the Code tab's Structured Text header, Nick 2026-11-08),
   Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
   system's, each with its points under it, live values and the link's
-  state; on a box the open project's `io.map`, else the map the box runs;
-  a right-click on the blank space adds a device as a file is added: a
+  state, which on a box says the protocol a device by its profile is
+  reached over and whether the link is slow (2026-11-12); on a box the
+  open project's `io.map`, else the map the box runs; under the map's
+  devices, "On the network": Scan asks the box for one scan on every
+  protocol (`POST /api/devices/discover`; the simulation answers with its
+  simulated E1213; since 2026-11-11 the request asks EtherNet/IP, Modbus
+  and, where the build has it, PROFINET, and answers `found`, one entry
+  per device however many protocols it answered on, which the tab reads,
+  with the older `devices` list as the fallback for an older box) and
+  lists every device that answered by vendor and model, with whether a
+  map device binds it and what the public device library knows of it
+  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
+  then by vendor and model text; `--devices-index` points a box at
+  another). **Add by click** (2026-11-12, PROTOCOLS.md step 3): a device
+  the library knows, whose entry names a profile (`NAME.device`), offers
+  Add: a small form asks one thing, the device's name, and lists the
+  channels it will get; Add copies the profile into the project as
+  `NAME.device` (the box fetches and checks it, `GET
+  /api/devices/library`; the simulation carries its E1213's), writes
+  `device NAME device:PROFILE IDENTITY` with the identity the scan saw,
+  and one `ch:` signal per channel named `NAME_channel`. No protocol,
+  address, byte order or cycle time is asked. A device the library does
+  not know says so and offers Advanced. **Device configuration**
+  (2026-11-13, `devconf-canvas`, `device_config.rs`): under an open
+  device whose profile has `configure moxa-e1200`, a Configuration section
+  reads first, in words: the firmware, what the outputs do if the box stops
+  (the device's watchdog), which outputs switch on at power-up, whether
+  EtherNet/IP and the RESTful interface are on, and how many settings differ
+  from the project's saved `ID.devconf` (the lines on demand). One Actions
+  control holds the engineer's work: Save a snapshot; Change a setting (the
+  watchdog and its time, each output's safe value, EtherNet/IP, RESTful),
+  staged on the device and marked "Staged, not applied yet" until Apply;
+  Apply (restart), which says first that the device is offline for about
+  21 s and, when the box answers 409, names the modules it would interrupt
+  and asks again; Restore from snapshot (the IP address stays as it is);
+  the stored console password (write-only, the field never shows a value)
+  and Change the console's password. Everyone else sees the controls
+  disabled with the reason as the tooltip. Errors are the box's own words.
+  **Advanced** (a tick box beside
+  Scan, off by default, remembered in the browser) is the older way: a
+  right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
   and settings, written as one `device` line of `io.map`; Import device…
   takes a vendor's EDS, which joins the project as `NAME.eds` and fills
   the form in (EtherNet/IP, `eds=NAME.eds`); the box reads the file from
-  the project when the map loads (2026-11-02, `device-import`); under the
-  map's devices, "On the network": Scan asks the box for one ListIdentity
-  sweep (`POST /api/devices/discover`; the simulation answers with its
-  simulated E1213) and lists every device that answered, with whether a
-  map device binds it and what the public device library knows of it
-  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
-  then by vendor and model text; `--devices-index` points a box at
-  another); a right-click on one not in the map offers Add to the map…,
-  the form filled in by identity (`cip=V:P:S`) with the library's name
-  and profile (2026-11-02, `devices-repo`); the same listing, network
+  the project when the map loads (2026-11-02, `device-import`); and Use
+  this device on a found one, the form filled in by identity
+  (`cip=V:P:S`) with the library's name and profile (2026-11-02,
+  `devices-repo`); the same listing, network
   included, is the context the agent gets, in the page and as the box's
   `list_devices` tool; under that, "Plant states" (2026-11-02,
   `sim-feedback-devices`): the quantities the project's plant model
@@ -93,57 +136,66 @@ this; change it here first when a decision changes.
   context carries the same list, so it can suggest and reason about
   what the machine does not measure yet) and Code (the Structured Text
   editor). One width
-  for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
+  for every tab (320 pt since 2026-11-10, so the Code tab holds 27
+  characters a row); Alt Shift 0, Alt Shift 4 and Alt Shift 1 open the
   pane on its tab, or shut it when that tab shows.
-- **Right panel, collapsible, tabs (236 pt since the third tab):** I/O
-  (values; inputs the diagram does not show), Requirements (Nick, 2026-11-05: a list of requirements in plain words.
-  Type one and Add: the agent writes the test behind it, a
-  `test_NAME.st` PROGRAM whose first comment is the requirement, and runs
-  it; in the simulation through the page's Agent route, on a box through
-  `POST /api/projects/{p}/requirements`, where the box's agent writes and
-  checks it. Each row is green (passing), red (failing, and why) or grey
-  (no test yet: no agent was reachable, or it wrote none); a row opens to
-  its test with Edit test and Delete. Test files stay out of the Files
-  list. The page runs the tests after every build change and before
-  Deploy and "Use this code", a box when a project opens, after each save
-  and before a deploy; a red one refuses both, naming the test, a grey one
-  does not), Agent (Nick,
-  2026-11-01: the conversation is pages, ‹ › walk them, Delete drops
-  one, every kept page goes to the model as context each time, and the
-  pages live with the project as `agent.md`, so a reload or a download
-  keeps them; an earlier page's code has its own Use this code. On a box
-  (card `agent-on-box`, first cut) the Agent tab talks to the agent the
-  box runs through its relay, `POST /api/chat` with the session cookie:
-  the reply streams in with each tool it ran, ✓ or ✗ and a summary, and
-  each change it stored as a proposal with a Review #n button that opens
-  it under Proposals, where it is replayed, approved or left like any
-  other; nothing on the tab applies a change. A line on top says whether
-  the agent is online, offline (a message is then read by rule: a param
-  edit becomes a proposal, nothing else) or not configured; signed out,
-  Send stays off. Stop ends the answer on the page; New conversation
-  starts one of its own on the box. Pages, iterations and the edit scope
-  are the page's alone for now. The agent edits only what is in focus (Nick 2026-11-01,
+- **Right panel, collapsible, tabs (236 pt):** I/O
+  (values; inputs the diagram does not show), Palette (the glyph
+  library's pieces, `palette`: a click, or a drag onto the diagram, sends
+  the piece's request to the Agent as if typed, and the panel turns to
+  the Agent tab; Nick, 2026-11-12) and Agent. (The Requirements
+  tab of 2026-11-05, a list of requirements in plain words with the agent
+  writing the test behind each, is archived since 2026-11-08 under
+  `crates/helmsman-canvas/archive/requirements/`: the scenarios the Agent
+  writes with each change are the tests. `test_NAME.st` files still run,
+  after every build change and before Deploy and "Use this code" in the
+  page, when a project opens, after each save and before a deploy on a
+  box; a red one refuses both, naming the test. Test files stay out of
+  the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
+  same on the page and on a box: no conversation. The tab is an
+  instruction box, Send or Stop, Undo, and after an answer a status line
+  and the Agent's one-sentence reason. In the simulation (Nick,
+  2026-11-13) the box takes the tab's height and scrolls past it; Shift
+  or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
+  empty item) and Tab indents; while the Agent works the box shows the
+  instruction sent, a palette piece's too, greyed. A change that lands
+  runs at once and is seen on the canvas, marked, with nothing written in
+  the tab (its reason goes to the Messages). One that does not is an
+  error in the Messages (their red count, and they open), the box is
+  outlined red, and one red line opens the Messages. Undo is Before /
+  After there: the file swaps at once between the version before the
+  change and the change, compiled and running, each marked green and red
+  against the other; nothing is saved (Save keeps the version shown), and
+  an edit ends the swap. On a box the tab keeps Undo and the three-row
+  box: a box's change goes through a deploy. Send updates the open file: one
+  request carries the whole file in its scope, the program and its
+  errors, and the last 5 instructions carried out on that file, read back
+  from its History revisions. `verify::check` runs the answer on a copy
+  with its scenarios and the requirement tests; a red one goes back with
+  what failed, up to `verify::RETRIES` times, and if it is still red
+  nothing is written and the tab says why. Green is written into the file
+  as one revision whose History entry records the instruction, the
+  reason, the scenarios and the failed attempts; the scenarios are kept
+  as test files, and Undo restores the revision before. On a box (card
+  `agent-on-box`) the same message goes to `POST /api/chat` with the
+  session cookie, a new conversation per instruction; the change is a
+  PUT, Undo the box's restore, and a proposal the box stores instead is
+  offered for review under Proposals with nothing written. A line on top
+  says whether the box's agent is online, offline or not configured;
+  signed out, Send stays off. The agent edits only what is in focus (Nick 2026-11-01,
   interview 2026-11-02, card `agent-scoped-edits`): the open file by
   default, the lines selected in the Code tab or the block picked in the
   diagram (its statement, while the diagram is of the editor's text) when
-  there is one; a line above the question says which ("Editing: main.st",
+  there is one; a line above the instruction says which ("Editing: main.st",
   "Editing: lines 12–30 of main.st", "Editing: block Motor1") and by which
   rule, with Whole file to drop the selection or pick. The scope goes to
-  the model in an `<edit_scope>` envelope and back with the page; Use
-  this code takes the answer into that scope only (`scope.rs`,
-  `apply`): another file, lines outside the selection, a block's
-  neighbour, several code blocks, the page's envelope markers or no
-  change at all are refused, saying what it tried to touch, and nothing
-  outside the scope changes, byte for byte. A taken change must keep the
-  requirement tests green; unsaved edits are saved first, then the
-  change is one revision with its page. A whole `main.st` with its
-  PROGRAM lands as an iteration; lines and blocks are edited in place.
-  With a built-in example open (read-only) the scope is a new project:
-  Use this code on a PROGRAM asks for the program's name once per
-  conversation; the answers after it land in that project with the
-  newest as `main.st` and the file it replaced kept as the next `vN.st`,
-  serially, however many; `vN.st` is never built, and past the project's
-  size the oldest go first). On a Pi the Trend opens with
+  the model in an `<edit_scope>` envelope (`scope.rs`, `apply`): another
+  file, lines outside the selection, a block's neighbour, several code
+  blocks, the envelope markers or no change at all are refused, saying
+  what it tried to touch, and nothing outside the scope changes, byte for
+  byte. With a built-in example open (read-only) the scope is a new
+  project: the first answer asks for the program's name in a popup
+  ("Use this code") and lands in that project as `main.st`). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.
@@ -159,8 +211,21 @@ this; change it here first when a decision changes.
   diagram too big for the view at that zoom shows its left part and you
   pan, instead of shrinking to one-letter labels. Controls on blocks cut
   their text instead of wrapping it.
-- **The box link's status counts down:** "reconnecting (retry in 5s)",
-  ticking each second; every retry waits 5 s.
+- **The box link's status counts down:** "reconnecting (retry in 2s)",
+  ticking each second; every retry waits 2 s (it was 5 s, too slow:
+  Nick, 2026-11-13).
+- **What happens to the box is said in the middle of the screen**
+  (`box_popup`, Nick, 2026-11-13). A first look that takes over 0.4 s
+  shows "Connecting to the box"; a box that answered and went away shows
+  "Reconnecting to the box" with the countdown (Hide, and Simulate in this
+  browser once it is unreachable). Both are a window that leaves the page
+  usable, so the last diagram can still be read. A page no box answers
+  falls back to the simulation on the first failed look, not the third,
+  and says so in a modal; once the simulation is up a second look goes
+  in the background, one module list read, and a box that answers then
+  is offered in a modal: Connect to the box, or Keep simulating. Nothing
+  answers the second look: the modal says so, and no third look goes
+  until View › Back to this box.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
@@ -189,7 +254,8 @@ this; change it here first when a decision changes.
   **Deploy** saves first, compiles the open project, records a snapshot in
   the store (history and rollback keep working) and hot-swaps it in
   between scans; compile errors list file and line, and a click goes
-  there.
+  there. A revision's diff and a proposal's source diff draw as GitHub
+  does: `+` on a green tint, `−` on a red tint, the row the pane's width.
 - **Who:** only an engineer login edits, saves, deploys or forces. Anyone
   else watches: the ST is read-only and the write controls are disabled,
   saying why. Sign in and out from the header.
@@ -204,13 +270,45 @@ this; change it here first when a decision changes.
   compile is refused and the old program keeps running. A browser that
   keeps nothing (a private window) still works; the projects last until
   the page closes.
-- **Examples** (Nick, 2026-11-05). Five programs from the first chapters
-  of a Structured Text book, a few lines each: Blink, Read and write,
-  Logic (AND, OR, NOT), Start/stop latch, Counter (`playground::EXAMPLES`).
+- **Glyph library** (Nick, 2026-11-12: "the app shouldn't even need
+  words"). The panels' action buttons are glyphs too (2026-11-13,
+  `glyphs::action`): Send and Ask for help a yellow paper plane, Stop a
+  red square, Undo a hooked arrow; the Editor | Monitor switch `< >` and
+  a screen. Words stay where they are the safeguard or the content:
+  menus, form labels, dialog confirmations (OK, Cancel, Restore this
+  revision, Use this code), Release on a forced input, Sign in, and the
+  Devices tab's buttons until the device configuration work lands. One SVG a glyph in `crates/helmsman-canvas/assets/glyphs/`,
+  rasterized to alpha masks by the crate's build script and tinted in the
+  theme's colours when drawn (`glyph_lib`); redrawing one is replacing
+  its file. Placeholders in the spirit of emoji until Nick draws the set.
+  Today a glyph stands beside every point in the I/O tab, the box's
+  signal list, the outputs list and the Devices tree: by the words of the
+  point's name (`start_pb` a push button, `e_stop` an emergency stop,
+  `mode_sel` a selector, a colour or `lamp` a pilot lamp, `alarm`,
+  `interlock`, `phase`/`step`, `hmi`, `timer`, `count`, `latch`, `edge`),
+  else a switch for a BOOL input, a pilot lamp for a BOOL output, a gauge
+  for a number; a device by its driver (the box, the screen, an I/O
+  module). The standard blocks on the diagram carry theirs in the
+  header (timer, counter, latch, edge; `Icons::glyph`), where a rule of
+  the project's `icons.map` naming the block or its type still puts its
+  character instead. The Palette tab holds the pieces to drag.
+- **Lamps** (Nick, 2026-11-12: the first screen should speak without
+  words). The program's BOOL outputs are lamps in the diagram's
+  bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a
+  green together are a traffic light, anything else a row of pilot lamps
+  named under them. An output named after a colour (`red`, `lamp_green`,
+  `amber`, `blue`, `white`) takes that colour there, in the I/O tab's
+  output text when on, and on both trends until a palette colour is
+  picked for it. Only the program's own diagram shows them, not a block
+  instance's.
+- **Examples** (Nick, 2026-11-05). Six programs from the first chapters
+  of a Structured Text book, a few lines each: Traffic light (first, Nick,
+  2026-11-12), Blink, Read and write, Logic (AND, OR, NOT), Start/stop
+  latch, Counter (`playground::EXAMPLES`).
   The worked machines and templates are gone. A click on an example asks
   for the program's name (prefilled, made unique) and opens the person's
   own copy; the example itself never opens for editing (a first visit
-  shows Blink running). On a box the same list sends the copy as a `.zip`
+  shows the traffic light running). On a box the same list sends the copy as a `.zip`
   with an `io.map` made from the example's own ports, BOOL inputs on the
   box's `di` channels and outputs on its `do` channels, so it deploys with
   nothing wired; nothing else changes what the box holds, and a first
@@ -220,31 +318,42 @@ this; change it here first when a decision changes.
 
 CODESYS's default keys where the browser leaves them alone (its
 "Shortcuts" help page, checked 2026-11-01); nothing on a key the browser
-owns (F5 and Ctrl+R reload, F11 goes full screen, Ctrl+F5 reloads hard).
-The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
+owns, checked on 2026-11-08 against Chrome, Edge, Firefox and Safari
+(Ctrl D bookmarks, Ctrl B is Firefox's bookmarks sidebar, F10 the
+toolbar on Windows, Alt 1 to 9 Firefox's tabs, Ctrl ] Forward); the
+editor's own conventions stay (Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F,
+Ctrl G), as in every editor on the web. `hotkeys::BROWSER` holds the
+browsers' chords and a test keeps the table off them. The page keeps the
+browser's default off our keys. Ctrl is ⌘ on a Mac.
+Save, Deploy, Upload, Download, Force, Release all, Undo, Redo, Go to
+definition, Cross references, the step chords and Breakpoint act only on
+the Editor screen; on the Monitor or Proposals they do nothing (Deploy's
+key there used to deploy the hidden project). Ctrl Z and Ctrl Y go to the
+focused text field alone, never to the editor's history as well
+(2026-11-08).
 
 | key | does | CODESYS command on that key |
 |---|---|---|
 | Ctrl S | Save | Save Project |
-| Ctrl D | Deploy | (Download has no key) |
+| Ctrl Shift Enter | Deploy | (Download has no key; Ctrl D is the browser's bookmark) |
 | Ctrl Enter | Run / Stop the simulation | (Start is F5, the browser's) |
 | Shift F8 | Stop the simulation | Stop |
-| F10 | Step one scan (stopped); from a breakpoint, the rest of the scan | Step Over |
+| F8 | Step one scan (stopped); from a breakpoint, the rest of the scan | Step Into (Step Over is F10, the browser's toolbar on Windows) |
 | Alt F8 | Sign in (box) | Login |
 | Ctrl F8 | Sign out (box) | Logout |
-| Ctrl Z, Ctrl Y | Undo, Redo in the ST editor | Undo, Restore |
-| Alt 0 | The left pane's Files tab | Devices view |
-| Alt 1 | The left pane's Code tab (the Structured Text) | POUs view |
-| Alt 2 | Trend along the bottom | Modules view |
-| Alt 3 | Side panel | Messages view |
-| Alt 4 | The left pane's Devices tab | |
-| Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
-| Ctrl Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References |
-| Ctrl B | Breakpoint on the picked block (simulation): the scan stops before it, framed in orange; Ctrl Enter goes on to the next stop | (Toggle Breakpoint is F9) |
-| Ctrl Shift F | Force the picked input: a switch flips, a number's field opens (on a box an engineer's audited force) | |
-| Ctrl Shift U | Release every force (box, engineer) | |
-| Ctrl ] | Into the picked block instance's diagram; a stopped simulation steps one scan | |
-| Ctrl [ | Out to the caller's diagram, the instance left picked; a stopped simulation steps one scan | |
+| Ctrl Z, Ctrl Shift Z; Ctrl Y off a Mac | Undo, Redo in the ST editor | Undo, Restore |
+| Alt Shift 0 | The left pane's Files tab | Devices view (Alt 1 to 9 are Firefox's tabs on Windows and Linux) |
+| Alt Shift 1 | The left pane's Code tab (the Structured Text) | POUs view |
+| Alt Shift 2 | Trend along the bottom | Modules view |
+| Alt Shift 3 | Side panel | Messages view |
+| Alt Shift 4 | The left pane's Devices tab | |
+| Alt Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition (Ctrl Shift D bookmarks every tab) |
+| Alt Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References (Ctrl Shift X is Firefox's text direction) |
+| Shift F9 | Breakpoint on the picked block (simulation): the scan stops before it, framed in orange; Ctrl Enter goes on to the next stop | (Toggle Breakpoint is F9, Edge's reader; Ctrl B is Firefox's bookmarks) |
+| Alt Shift F | Force the picked input: a switch flips, a number's field opens (on a box an engineer's audited force) | (Ctrl Shift F is Firefox's full screen on a Mac) |
+| Alt Shift U | Release every force (box, engineer) | (Ctrl Shift U is Edge's Read aloud) |
+| Alt ] | Into the picked block instance's diagram; a stopped simulation steps one scan | (Ctrl ] is Forward) |
+| Alt [ | Out to the caller's diagram, the instance left picked; a stopped simulation steps one scan | (Ctrl [ is Back) |
 | Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
 | Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |
@@ -261,17 +370,21 @@ Each menu item prints its key. Reserved, not built (TODO card
 - **Tap a tile:** the same tiles one level down (that instance's instances
   and outputs). Back and breadcrumbs go up; the full diagram is one tap
   away.
-- **Watch only.** The Monitor never writes to a box. In the simulation
-  its header carries the transport (run or stop, step, restart) and the
-  same keys as the Editor (Nick, 2026-11-01); a box's Monitor gets the
-  same once the box has an audited stop and start (card
-  `monitor-box-run-stop`).
+- **Watch only, but for an engineer's Stop and Restart.** In the
+  simulation the header carries the transport (run or stop, step,
+  restart) and the same keys as the Editor (Nick, 2026-11-01). On a box,
+  an engineer signed in gets Stop or Run and Restart there (no step):
+  they act on the program shown, or on every program at the top level,
+  through the box's audited routes (card `monitor-box-run-stop`, Nick
+  2026-11-06). A stopped program's tile says STOPPED, "outputs at safe
+  values" and who stopped it. For anyone else the Monitor writes
+  nothing. The Editor's glyph strip carries the same Stop or Run and
+  Restart for every program the box runs; no key does it on a box.
 
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
 period and count only while an engineer is signed in and this browser's
-"Scan detail" is on, kept with the Editor's layout; nothing is measured
-box-side), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
+"Scan detail" is on, kept with the Editor's layout), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
@@ -280,6 +393,16 @@ Editor's diagram at the level shown. Stale data is never a colour: a
 program with no new scan for 3 s, or every program while the box is out
 of reach, goes grey with "stale" and the age, under a red NO DATA banner
 when the box itself is the problem; a stopped simulation is grey too.
+
+Scan load (card `scan-stats`): on a box, "Scan detail" also puts three
+lines on each status tile, each with a tooltip on what it means and
+what is normal: the scan time (average and peak over the module's last
+1000 scans; the tooltip adds the p99 and the shortest), the jitter (how
+late each scan started after its deadline, the same way), and the
+overruns with how long ago the last one was. An overrun in the last
+minute shows on the tile for everyone, in yellow, Scan detail or not.
+The simulation runs in the page on no real clock and shows none of
+these.
 Phones (under 600 points wide), `?monitor` and the old `?andon` open on
 it; the header switches either way. Tiles are at least a finger wide,
 one column on a phone, and grow with the screen up to 4K.

@@ -6,6 +6,7 @@
 //! raw bytes instead of assuming the address/data/sockaddr shape.
 
 use crate::codec::{DecodeError, Reader, Writer};
+use alloc::vec::Vec;
 
 /// CPF item type IDs.
 pub mod item {
@@ -47,6 +48,56 @@ pub fn decode(payload: &[u8]) -> Result<Vec<Item<'_>>, DecodeError> {
         return Err(DecodeError::Invalid("bytes after last CPF item"));
     }
     Ok(items)
+}
+
+/// [`decode`] for a reply from a device, which may echo socket-address
+/// items past the count it declares: the Moxa ioLogik E1213 answers a
+/// `Forward_Open` that carries a T->O socket address with that item after
+/// the data item and a count of 2 (bench capture, 2026-11-07;
+/// `docs/devices/moxa-iologik-e1213.md`). Bytes past the count are read
+/// only when they are whole socket-address items (16 bytes, type
+/// `SOCKADDR_O_TO_T` or `SOCKADDR_T_TO_O`); anything else is refused as
+/// [`decode`] refuses it.
+///
+/// # Errors
+/// As [`decode`].
+pub fn decode_reply(payload: &[u8]) -> Result<Vec<Item<'_>>, DecodeError> {
+    let mut r = Reader::new(payload);
+    let count = r.u16_le()?;
+    let mut items = Vec::with_capacity(usize::from(count.min(8)) + 2);
+    for _ in 0..count {
+        let type_id = r.u16_le()?;
+        let len = usize::from(r.u16_le()?);
+        let data = r.bytes(len)?;
+        items.push(Item { type_id, data });
+    }
+    // What is left past the count: at most two echoed items, one for each
+    // direction, each a whole socket-address item.
+    let tail = r.rest();
+    let mut t = Reader::new(tail);
+    let mut left = tail.len();
+    for _ in 0..2 {
+        if left == 0 {
+            break;
+        }
+        let type_id = t.u16_le().map_err(|_| trailing())?;
+        let len = usize::from(t.u16_le().map_err(|_| trailing())?);
+        let sockaddr = matches!(type_id, item::SOCKADDR_O_TO_T | item::SOCKADDR_T_TO_O);
+        if !sockaddr || len != 16 {
+            return Err(trailing());
+        }
+        let data = t.bytes(len).map_err(|_| trailing())?;
+        items.push(Item { type_id, data });
+        left = left.saturating_sub(4 + len);
+    }
+    if left != 0 {
+        return Err(trailing());
+    }
+    Ok(items)
+}
+
+const fn trailing() -> DecodeError {
+    DecodeError::Invalid("bytes after last CPF item")
 }
 
 /// Encode items with a count prefix.

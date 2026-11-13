@@ -11,27 +11,95 @@
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Vec2};
 
 use crate::editor::Chrome;
+use crate::glyphs;
 use crate::st_view::TAP;
 use crate::theme::theme;
 use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
-/// A compile error in a project: which file, where, and why.
+/// How much a [`Diag`] matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Severity {
+    /// Stops the build.
+    #[default]
+    Error,
+    /// Listed beside the code and never stops a save, a build or a deploy
+    /// (unless the box says it is [`Diag::blocking`]).
+    Warning,
+}
+
+/// A problem in a project: which file, where, and why. An error is a
+/// compile error; a warning is something the checker or the build has
+/// to say that does not stop the build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diag {
     pub file: String,
     pub line: u32,
     pub col: u32,
     pub message: String,
+    pub severity: Severity,
+    /// A stable name for the rule that raised it, when it has one (the
+    /// lints will).
+    pub id: Option<String>,
+    /// A warning that holds a deploy like an error (the lints that block).
+    /// Nothing sets it yet.
+    pub blocking: bool,
 }
 
 impl Diag {
-    /// `main.st:3:5  expected ;`
+    /// A compile error at `file:line:col`.
+    #[must_use]
+    pub fn error(file: impl Into<String>, line: u32, col: u32, message: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            line,
+            col,
+            message: message.into(),
+            severity: Severity::Error,
+            id: None,
+            blocking: false,
+        }
+    }
+
+    /// A warning at `file:line:col`.
+    #[must_use]
+    pub fn warning(file: impl Into<String>, line: u32, col: u32, message: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Warning,
+            ..Self::error(file, line, col, message)
+        }
+    }
+
+    /// Whether it is a warning.
+    #[must_use]
+    pub fn is_warning(&self) -> bool {
+        self.severity == Severity::Warning
+    }
+
+    /// `main.st:3:5  expected ;`, or for a warning
+    /// `warning  main.st:3:5  RETAIN here is not kept yet`: the word, not
+    /// only the colour, tells it from an error.
     #[must_use]
     pub fn label(&self) -> String {
-        format!("{}:{}:{}  {}", self.file, self.line, self.col, self.message)
+        let at = format!("{}:{}:{}  {}", self.file, self.line, self.col, self.message);
+        match (self.is_warning(), &self.id) {
+            (false, _) => at,
+            (true, None) => format!("warning  {at}"),
+            (true, Some(id)) => format!("warning {id}  {at}"),
+        }
     }
+}
+
+/// The errors (or, with `warnings`, the warnings) among `diags` in
+/// `file`, as the editor marks them: `(line, column)`.
+#[must_use]
+pub fn marks_in(diags: &[Diag], file: &str, warnings: bool) -> Vec<(u32, u32)> {
+    diags
+        .iter()
+        .filter(|d| d.file == file && d.is_warning() == warnings)
+        .map(|d| (d.line, d.col))
+        .collect()
 }
 
 /// A project as the sidebar lists it.
@@ -152,7 +220,14 @@ pub enum Naming {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picked {
     Project(String),
-    File(String),
+    /// A file, with the project it was clicked in.
+    File {
+        project: String,
+        file: String,
+    },
+    /// What was picked is deleted or renamed: the key has no target until
+    /// a row is clicked, and does not fall back to the open project.
+    Gone,
 }
 
 /// The sidebar's own state: a name being typed, a delete being confirmed.
@@ -164,7 +239,8 @@ pub struct FilesUi {
     /// the screen ([`Self::confirm_ui`]).
     pub confirm: Option<Act>,
     /// The project or file last clicked; the Delete key deletes it (or
-    /// the open project when nothing was).
+    /// the open project when nothing was clicked yet). Once it is deleted
+    /// or renamed, or its project is left, the key does nothing.
     pub picked: Option<Picked>,
     /// The earlier iterations (`vN.st`) are unfolded.
     pub earlier_open: bool,
@@ -212,6 +288,24 @@ fn menu_item(
     false
 }
 
+/// The running program's arrow, on hover.
+const REDEPLOY_TIP: &str = "Deploys this program again with your latest edits: saves, checks and runs it (Ctrl Shift Enter, File › Deploy).";
+
+/// The → that deploys the open project (`deploy`: whether it may be, or
+/// why not), drawn as `key` for the tests. True when pressed.
+pub fn deploy_arrow(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    deploy: &Result<(), String>,
+    tip: &str,
+) -> bool {
+    let tip = deploy.as_ref().err().map_or(tip, String::as_str);
+    let r = glyphs::button_sized(ui, glyphs::Icon::Deploy, glyphs::ROW, deploy.is_ok(), false, tip);
+    chrome.hit(key, r.rect);
+    r.clicked()
+}
+
 /// A button that is disabled, with why on hover, unless writes are allowed.
 fn write_button(ui: &mut egui::Ui, write: &Result<(), String>, text: &str, hint: &str) -> egui::Response {
     let b = egui::Button::new(text).min_size(Vec2::new(0.0, TAP * 0.7));
@@ -238,24 +332,46 @@ impl FilesUi {
                 text.push_str("  ● running");
             }
             let color = if p.running { t.accent } else { t.fg };
-            let r = ui.selectable_label(open, RichText::new(text).monospace().color(color));
+            let text = RichText::new(text).color(color);
+            let tip = if p.example() {
+                let title = example_title(&p.name).unwrap_or(&p.name);
+                format!("{title}: click to make your own copy of this example, under a name you choose.")
+            } else if open {
+                "Your program, open. Right-click to copy, rename or delete it.".into()
+            } else {
+                "Your program: click to open it. Right-click to copy, rename or delete it.".into()
+            };
+            let r = if p.running && open {
+                // The running program, open: an arrow beside it deploys
+                // it again with the latest edits (Nick, 2026-11-08). The
+                // name is capped to the room left of the arrow, so a
+                // long one cannot widen the pane.
+                ui.horizontal(|ui| {
+                    let room = ui.available_width() - glyphs::ROW - ui.spacing().item_spacing.x;
+                    let r = ui
+                        .scope(|ui| {
+                            ui.set_max_width(room.max(40.0));
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                            ui.selectable_label(open, text).tip(tip.as_str())
+                        })
+                        .inner;
+                    if deploy_arrow(ui, chrome, "deploy arrow", &l.deploy, REDEPLOY_TIP) {
+                        act = Some(Act::Deploy);
+                    }
+                    r
+                })
+                .inner
+            } else {
+                ui.selectable_label(open, text).tip(tip.as_str())
+            };
             chrome.hit(format!("project {}", p.name), r.rect);
             if p.example() {
-                let title = example_title(&p.name).unwrap_or(&p.name);
-                let r = r.tip(format!(
-                    "{title}: click to make your own copy of this example, under a name you choose."
-                ));
                 if r.clicked() {
                     let name = free_name(l, &p.name);
                     self.ask(Naming::FromStarter(p.name.clone()), &name);
                 }
                 continue;
             }
-            let r = r.tip(if open {
-                "Your program, open. Right-click to copy, rename or delete it."
-            } else {
-                "Your program: click to open it. Right-click to copy, rename or delete it."
-            });
             if r.clicked() {
                 self.picked = Some(Picked::Project(p.name.clone()));
             }
@@ -370,9 +486,7 @@ impl FilesUi {
                 let r = ui
                     .selectable_label(
                         false,
-                        RichText::new(format!("{arrow} earlier ({})", earlier.len()))
-                            .monospace()
-                            .color(t.muted),
+                        RichText::new(format!("{arrow} earlier ({})", earlier.len())).color(t.muted),
                     )
                     .tip("Earlier iterations of the program, newest first. Click to show or hide them.");
                 chrome.hit("earlier", r.rect);
@@ -391,16 +505,17 @@ impl FilesUi {
                     if *dirty { " ●" } else { "" },
                     if runs { "  · runs" } else { "" }
                 );
-                let r = ui
-                    .selectable_label(here, RichText::new(text).monospace())
-                    .tip(if runs {
-                        "The file that runs. Double-click to edit it; right-click for more."
-                    } else {
-                        "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
-                    });
+                let r = ui.selectable_label(here, RichText::new(text)).tip(if runs {
+                    "The file that runs. Double-click to edit it; right-click for more."
+                } else {
+                    "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
+                });
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {
-                    self.picked = Some(Picked::File(f.clone()));
+                    self.picked = Some(Picked::File {
+                        project: l.open.unwrap_or_default().into(),
+                        file: f.clone(),
+                    });
                     if !here {
                         act = Some(Act::OpenFile(f.clone()));
                     }
@@ -532,11 +647,12 @@ impl FilesUi {
         let mine = |name: &str| l.projects.iter().any(|p| p.name == name && !p.example());
         let open_mine = l.open.filter(|o| mine(o));
         match &self.picked {
-            Some(Picked::File(f)) if open_mine.is_some() && l.files.iter().any(|(n, _)| n == f) => {
-                Some(Act::DeleteFile(f.clone()))
-            }
-            Some(Picked::Project(p)) if mine(p) => Some(Act::DeleteProject(p.clone())),
-            _ => open_mine.map(|o| Act::DeleteProject(o.into())),
+            Some(Picked::File { project, file }) => (open_mine == Some(project.as_str())
+                && l.files.iter().any(|(n, _)| n == file))
+            .then(|| Act::DeleteFile(file.clone())),
+            Some(Picked::Project(p)) => mine(p).then(|| Act::DeleteProject(p.clone())),
+            Some(Picked::Gone) => None,
+            None => open_mine.map(|o| Act::DeleteProject(o.into())),
         }
     }
 
@@ -701,6 +817,9 @@ impl FilesUi {
             if name.is_empty() {
                 return None;
             }
+            if matches!(n, Naming::RenameProject(_) | Naming::RenameFile(_)) {
+                self.picked = Some(Picked::Gone);
+            }
             return Some(match n {
                 Naming::NewProject => Act::NewProject(name),
                 Naming::CopyProject(from) => Act::CopyProject { from, to: name },
@@ -746,7 +865,10 @@ impl FilesUi {
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
                 let yes = ui
-                    .add(egui::Button::new(RichText::new(verb).color(RED)).min_size(tall))
+                    .add(
+                        egui::Button::new(RichText::new(verb).color(crate::theme::theme(ui).ink(RED)))
+                            .min_size(tall),
+                    )
                     .tip(match &a {
                         Act::DeleteProject(_) | Act::DeleteFile(_) => "Deletes it. There is no undo.",
                         Act::UseAnswer { .. } => "Saves the edits here, then opens the agent's code.",
@@ -772,6 +894,9 @@ impl FilesUi {
                     .tip("Leaves everything as it is (Escape).");
                 chrome.hit("confirm no", no.rect);
                 if yes.clicked() {
+                    if matches!(a, Act::DeleteProject(_) | Act::DeleteFile(_)) {
+                        self.picked = Some(Picked::Gone);
+                    }
                     out = Some(a.clone());
                     self.confirm = None;
                 } else if no.clicked() {
@@ -787,22 +912,58 @@ impl FilesUi {
     }
 }
 
-/// The compile errors, each a link to its file and line. Returns the one
-/// clicked.
+/// The problems, errors in red and warnings in the warning colour with
+/// the word `warning` in front, each a link to its file and line. Returns
+/// the one clicked.
 pub fn diags_ui(ui: &mut egui::Ui, diags: &[Diag], chrome: &mut Chrome) -> Option<Diag> {
     let mut out = None;
     for (k, d) in diags.iter().enumerate() {
+        let (color, tip) = if d.is_warning() {
+            (
+                crate::st_view::brand::WARN,
+                "A warning: the project still builds and deploys. Opens the file at this line.",
+            )
+        } else {
+            (RED, "Opens the file at this line.")
+        };
         let r = ui
             .add(
-                egui::Label::new(RichText::new(d.label()).monospace().color(RED)).sense(egui::Sense::click()),
+                egui::Label::new(RichText::new(d.label()).color(crate::theme::theme(ui).ink(color)))
+                    .sense(egui::Sense::click()),
             )
-            .tip("Opens the file at this line.");
+            .tip(tip);
         chrome.hit(format!("diag {k}"), r.rect);
         if r.clicked() {
             out = Some(d.clone());
         }
     }
     out
+}
+
+/// The log line for the warnings among `diags`, or none when there are
+/// none: how many, that they never stop a deploy, and the first few.
+#[must_use]
+pub fn warning_summary(diags: &[Diag]) -> Option<String> {
+    let warned: Vec<&Diag> = diags.iter().filter(|d| d.is_warning()).collect();
+    if warned.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = warned
+        .iter()
+        .take(5)
+        .map(|d| format!("{}:{}  {}", d.file, d.line, d.message))
+        .collect();
+    let more = warned.len().saturating_sub(shown.len());
+    let tail = if more > 0 {
+        format!(" · and {more} more")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "{} warning(s), which do not stop a deploy: {}{tail}",
+        warned.len(),
+        shown.join(" · ")
+    ))
 }
 
 /// What the header asks of the open project, wherever it lives.
@@ -839,28 +1000,28 @@ pub trait Workspace {
     /// Lights every read and write of the picked block's variable on the
     /// diagram (Cross references); whether there was one.
     fn cross_references(&mut self) -> bool;
-    /// Sets or clears a breakpoint on the picked block (Ctrl B); whether
+    /// Sets or clears a breakpoint on the picked block (Shift F9); whether
     /// there was a block to put one on. Only the simulation stops.
     fn toggle_breakpoint(&mut self) -> bool {
         false
     }
-    /// Forces the input the picked block reads (Ctrl Shift F): a BOOL
+    /// Forces the input the picked block reads (Alt Shift F): a BOOL
     /// flips, a number's field takes the keyboard. On a box an engineer's
     /// force; in the simulation the input's switch. Whether it did.
     fn force_picked(&mut self, _ctx: &egui::Context) -> bool {
         false
     }
-    /// Opens the picked block instance's diagram (Ctrl ]); a stopped
+    /// Opens the picked block instance's diagram (Alt ]); a stopped
     /// simulation then steps one scan. Whether it opened one.
     fn step_into(&mut self) -> bool {
         false
     }
-    /// Up one level of the diagram (Ctrl [); a stopped simulation then
+    /// Up one level of the diagram (Alt [); a stopped simulation then
     /// steps one scan. Whether there was a level up.
     fn step_out(&mut self) -> bool {
         false
     }
-    /// Releases every force (Ctrl Shift U); whether there were any.
+    /// Releases every force (Alt Shift U); whether there were any.
     fn release_all(&mut self) -> bool {
         false
     }

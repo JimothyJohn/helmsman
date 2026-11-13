@@ -11,12 +11,14 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Vec2,
 };
 use helmsman_diagram::diff::{self, Change, Line};
+
+use crate::diff_ui::Kind;
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, in_port_at, out_port, out_port_at};
 use helmsman_diagram::{Diagram, NodeId};
 
 use crate::review::{
-    Answer, Call, Chart, Delta, Drawn, Open, Phase, ROLES, Refusal, Replay, Request, Review, SignalChart,
-    Step, Target, Track, Why,
+    Answer, Call, Chart, Delta, Drawn, Open, Phase, ROLES, Refusal, Replay, Request, Review, SHOWN,
+    SignalChart, Step, Target, Track, Values, Why,
 };
 use crate::st_view::brand::{BLACK, YELLOW};
 use crate::theme::{Theme, theme};
@@ -69,6 +71,12 @@ pub struct ReviewView {
     /// The role picked to sign in with its PIN (boxes without accounts).
     pub role_input: String,
     pub pin_input: String,
+    /// The token typed for a node or box watched by address (card
+    /// canvas-node-token); emptied once it is taken.
+    pub token_input: String,
+    /// The origin this page watches by address (`?box=ORIGIN`), when it
+    /// does: the sign-in panel then asks for that origin's token.
+    pub remote: Option<String>,
     /// Which POU of the diagram diff is shown.
     pub pou: usize,
     pub cam: Cam,
@@ -119,6 +127,8 @@ impl ReviewView {
             password_input: String::new(),
             role_input: ROLES[0].to_string(),
             pin_input: String::new(),
+            token_input: String::new(),
+            remote: None,
             pou: 0,
             cam: Cam::default(),
             rects: Vec::new(),
@@ -208,8 +218,17 @@ impl ReviewView {
     /// Who is approving: signed in, or the way in this box takes (a user
     /// and password with accounts, else a role and its PIN).
     pub fn login_ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(origin) = self.remote.clone() {
+            self.token_ui(ui, &origin);
+            return;
+        }
         let t = theme(ui);
-        ui.label(RichText::new("Signed in").strong()).tip(SESSION);
+        let head = if self.state.signed_in().is_some() {
+            "Signed in"
+        } else {
+            "Sign in"
+        };
+        ui.label(RichText::new(head).strong()).tip(SESSION);
         if let Some(who) = self.state.signed_in() {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("● {who}")).color(t.accent))
@@ -231,8 +250,15 @@ impl ReviewView {
             }
             Some("unavailable") => {
                 ui.colored_label(
-                    RED,
+                    crate::theme::theme(ui).ink(RED),
                     "The box's accounts file cannot be used: nobody can sign in (see its journal).",
+                );
+                return;
+            }
+            Some("none") => {
+                ui.label(
+                    RichText::new("This box takes no sign-ins: it runs without an approval path.")
+                        .color(t.muted),
                 );
                 return;
             }
@@ -252,7 +278,74 @@ impl ReviewView {
             ui.spinner();
         }
         if let Some(p) = &self.state.login_problem {
-            ui.colored_label(RED, p);
+            ui.colored_label(crate::theme::theme(ui).ink(RED), p);
+        }
+    }
+
+    /// The panel for a node or box watched by address: no accounts there,
+    /// only its token, kept by this browser for that origin and sent on
+    /// every call (card canvas-node-token).
+    fn token_ui(&mut self, ui: &mut egui::Ui, origin: &str) {
+        let t = theme(ui);
+        ui.label(RichText::new("Token").strong()).tip(TOKEN_TIP);
+        ui.label(RichText::new(origin).color(t.muted))
+            .tip("The node or box this page watches, from its address.");
+        if self.state.session.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("● token kept for this address").color(t.accent))
+                    .tip("Deploy, Save, Stop and Run send it; the node checks it on every write.");
+                let out = ui
+                    .button("Forget")
+                    .tip("Drops the token from this browser. Watching goes on; writes stop.");
+                self.rects.push(("forget".into(), out.rect));
+                if out.clicked() {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        crate::web::set_token(None);
+                        crate::web::forget_token(origin);
+                    }
+                    self.state.session = None;
+                    self.state.login_problem = None;
+                }
+            });
+            return;
+        }
+        let field = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.token_input)
+                    .password(true)
+                    .hint_text("token")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("The token from the node's settings page (or the box's api-token file). Enter keeps it.");
+        self.rects.push(("token".into(), field.rect));
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let go = ui
+            .button("Use this token")
+            .tip("Keeps the token in this browser for this address and sends it on every call.");
+        self.rects.push(("use".into(), go.rect));
+        if go.clicked() || enter {
+            match crate::node_token::clean(&self.token_input) {
+                Some(token) => {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        crate::web::set_token(Some(&token));
+                        crate::web::remember_token(origin, &token);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let _ = &token;
+                    self.token_input.clear();
+                    self.state.session = Some(crate::node_token::session());
+                    self.state.login_problem = None;
+                }
+                None => {
+                    self.state.login_problem =
+                        Some("A token is one line of plain characters, no spaces.".into());
+                }
+            }
+        }
+        if let Some(p) = &self.state.login_problem {
+            ui.colored_label(crate::theme::theme(ui).ink(RED), p);
         }
     }
 
@@ -324,7 +417,7 @@ impl ReviewView {
             }
         });
         if let Some(e) = &self.state.list_error {
-            ui.colored_label(RED, e);
+            ui.colored_label(crate::theme::theme(ui).ink(RED), e);
         }
         if self.state.list.is_empty() {
             ui.label(RichText::new("No proposals on this box.").color(t.muted));
@@ -398,7 +491,7 @@ impl ReviewView {
             }
             section(ui, "Diagram");
             if let Some(p) = &o.problem {
-                ui.colored_label(RED, p);
+                ui.colored_label(crate::theme::theme(ui).ink(RED), p);
             }
             if let Some(d) = &o.drawn {
                 diagram(ui, d, &mut self.pou, &mut self.cam);
@@ -410,6 +503,10 @@ impl ReviewView {
         };
         section(ui, "Sim replay");
         replay_ui(ui, &o.step, &mut out);
+        if let Some(v) = o.values() {
+            section(ui, "Running values").tip(VALUES);
+            values_ui(ui, &v, &mut out);
+        }
         section(ui, "Approve");
         approve_ui(ui, o, now, &mut out);
         if let Some(u) = o.undo.as_mut() {
@@ -460,6 +557,11 @@ struct Out {
 const SESSION: &str = "The box keeps the session (1 h, or 15 min unused) in a cookie this page \
                        cannot read; signing out ends it on the box. Approvals are made as who \
                        is signed in.";
+
+/// The token panel's heading tooltip (a node or box watched by address).
+const TOKEN_TIP: &str = "A node has no accounts: its settings page holds one token, and every \
+                         write needs it. This browser keeps the token for this address only, \
+                         never in the page's URL.";
 
 /// The Sign in button's tooltip.
 const fn sign_in_tip(busy: bool) -> &'static str {
@@ -515,7 +617,7 @@ fn header(ui: &mut egui::Ui, o: &Open) {
     });
     if o.tier().is_none() {
         ui.colored_label(
-            RED,
+            crate::theme::theme(ui).ink(RED),
             "The box gave this draft no tier (it does not run a change set), so it cannot be applied here.",
         );
     }
@@ -600,7 +702,7 @@ fn source(ui: &mut egui::Ui, lines: &[Line]) {
         .collect();
     egui::Frame::new()
         .fill(t.bg)
-        .inner_margin(egui::Margin::same(6))
+        .inner_margin(egui::Margin::symmetric(2, 6))
         .show(ui, |ui| {
             let mut skipped = false;
             for (k, l) in lines.iter().enumerate() {
@@ -612,21 +714,14 @@ fn source(ui: &mut egui::Ui, lines: &[Line]) {
                     continue;
                 }
                 skipped = false;
-                let (gutter, fg, bg) = match l {
-                    Line::Same { new, .. } => (format!("{new:>4}  "), t.muted, None),
-                    Line::Added { new, .. } => (format!("{new:>4} +"), BLACK, Some(YELLOW)),
-                    Line::Removed { old, .. } => (format!("{old:>4} −"), t.fg, Some(t.rule)),
+                // As GitHub draws a diff: + on green, − on red, the row
+                // the pane's width (Nick, 2026-11-08).
+                let (kind, n) = match l {
+                    Line::Same { new, .. } => (Kind::Same, *new),
+                    Line::Added { new, .. } => (Kind::Added, *new),
+                    Line::Removed { old, .. } => (Kind::Removed, *old),
                 };
-                let mut t = RichText::new(format!("{gutter} {}", l.text()))
-                    .monospace()
-                    .color(fg);
-                if let Some(bg) = bg {
-                    t = t.background_color(bg);
-                }
-                if matches!(l, Line::Removed { .. }) {
-                    t = t.strikethrough();
-                }
-                ui.label(t);
+                crate::diff_ui::row(ui, kind, &format!("{n:>4}"), l.text());
             }
         });
 }
@@ -940,6 +1035,84 @@ fn replay_ui(ui: &mut egui::Ui, step: &Step, out: &mut Out) {
     }
 }
 
+/// The Running values heading's tooltip.
+const VALUES: &str = "What the deploy does to the values the box holds now: timers, counters \
+                      and every variable keep their value when the new program declares them \
+                      with the same name and type. A new variable, or one whose type changed, \
+                      starts at its initial value; one the new program no longer declares is \
+                      gone. The audit log records what the deploy did.";
+
+/// What the deploy keeps, resets and drops: the box's sentence, then each
+/// reset and dropped value marked apart from the kept count. Wrapped to
+/// what is visible (the diagram can make the scrolled area wider), with
+/// room for the scroll bar.
+fn values_ui(ui: &mut egui::Ui, v: &Values, out: &mut Out) {
+    let seen = ui.clip_rect().right() - ui.cursor().left() - 12.0;
+    let w = ui.available_width().min(seen).max(120.0);
+    ui.scope(|ui| {
+        ui.set_max_width(w);
+        values_rows(ui, v, out);
+    });
+}
+
+fn values_rows(ui: &mut egui::Ui, v: &Values, out: &mut Out) {
+    let t = theme(ui);
+    let tip = if v.preview {
+        "A preview, worked out when the proposal was made against what runs now. A value that \
+         no longer fits its type at the moment of the deploy also starts again; the audit log \
+         records what actually happened."
+    } else {
+        "What the deploy did, as the box reported it when it swapped the program."
+    };
+    let line = ui
+        .add(egui::Label::new(RichText::new(v.sentence()).color(t.fg)).wrap())
+        .tip(tip);
+    out.rects.push(("state".into(), line.rect));
+    if !v.running || (v.reset.is_empty() && v.dropped.is_empty()) {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(format!("{} kept", v.kept)).color(t.muted))
+            .tip("Values that carry over unchanged.");
+        for (name, why) in v.reset.iter().take(SHOWN) {
+            let (mark, tip) = if why == "type changed" {
+                ("reset", "Starts again at its initial value: its type changed.")
+            } else {
+                ("new", "New: starts at its initial value.")
+            };
+            ui.label(
+                RichText::new(format!("{mark} {name}"))
+                    .monospace()
+                    .background_color(YELLOW)
+                    .color(BLACK),
+            )
+            .tip(tip);
+        }
+        more(ui, v.reset.iter().skip(SHOWN).map(|(n, _)| n.as_str()), "reset");
+        for name in v.dropped.iter().take(SHOWN) {
+            ui.label(
+                RichText::new(format!("drop {name}"))
+                    .monospace()
+                    .strikethrough()
+                    .color(GONE),
+            )
+            .tip("No longer declared: its value is gone after the deploy.");
+        }
+        more(ui, v.dropped.iter().skip(SHOWN).map(String::as_str), "dropped");
+    });
+}
+
+/// "and 40 more reset", the names in its tooltip; nothing when none.
+fn more<'a>(ui: &mut egui::Ui, rest: impl Iterator<Item = &'a str>, what: &str) {
+    let rest: Vec<&str> = rest.collect();
+    if rest.is_empty() {
+        return;
+    }
+    let t = theme(ui);
+    ui.label(RichText::new(format!("and {} more {what}", rest.len())).color(t.muted))
+        .tip(rest.join(", "));
+}
+
 fn approve_ui(ui: &mut egui::Ui, o: &mut Open, now: f64, out: &mut Out) {
     let t = theme(ui);
     if o.tier().is_none() {
@@ -1030,7 +1203,10 @@ fn chart(ui: &mut egui::Ui, c: &Chart) {
     let secs = (c.end_ms.saturating_sub(c.start_ms)) as f64 / 1000.0;
     ui.label(RichText::new(format!("replay #{} over {secs:.1} s of recorded inputs", c.id)).color(t.muted));
     for f in &c.faults {
-        ui.colored_label(RED, format!("the proposal faulted: {f}"));
+        ui.colored_label(
+            crate::theme::theme(ui).ink(RED),
+            format!("the proposal faulted: {f}"),
+        );
     }
     if c.signals.is_empty() {
         ui.label(RichText::new("No module drives a signal in either version.").color(t.muted));

@@ -32,10 +32,10 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use helmsman_iec::ast::{self, PouKind};
-use helmsman_iec::{ImageSizes, PortDir, Pos, compile};
+use helmsman_iec::{ImageSizes, PortDir, Pos, compile_warned};
 
 use super::settings::{self, Settings};
-use super::{Files, IO_MAP, SETTINGS};
+use super::{Files, IO_MAP, LAYOUT, SETTINGS, layout};
 use crate::manifest::{Manifest, ModuleDir};
 use crate::spec::{Defaults, name_ok};
 use crate::store::{ChangeSet, ModuleFiles};
@@ -93,6 +93,9 @@ pub struct Module {
 pub struct Built {
     pub change: ChangeSet,
     pub modules: Vec<Module>,
+    /// Problems that do not stop the build: a file the build never reads
+    /// (`diagram.layout`) that does not read, listed at its line.
+    pub problems: Vec<Diag>,
 }
 
 /// Byte offset of `pos` (1-based line, byte column) in `src`.
@@ -293,19 +296,94 @@ fn len_of(window: Option<&str>) -> usize {
         .unwrap_or(0)
 }
 
+/// What is wrong with the project's `diagram.layout`, if it does not read,
+/// each as a problem on that file at its line. The build ignores the
+/// layout, so these never stop it: the drawing falls back to the automatic
+/// layout.
+fn layout_problems(files: &Files) -> Vec<Diag> {
+    let Some(text) = files.get(LAYOUT) else {
+        return Vec::new();
+    };
+    let Err(errs) = layout::parse(text) else {
+        return Vec::new();
+    };
+    errs.into_iter()
+        .map(|e| {
+            let (line, why) = e
+                .strip_prefix("line ")
+                .and_then(|r| r.split_once(": "))
+                .and_then(|(n, why)| Some((n.parse::<usize>().ok()?, why)))
+                .unwrap_or((0, e.as_str()));
+            diag(
+                LAYOUT,
+                line,
+                format!("{why}; the diagram is drawn in the automatic layout, and the build is not affected"),
+            )
+        })
+        .collect()
+}
+
+/// The files this release has no use for ([`Files::kept`]): a newer
+/// release's, carried with the project and never read, built or run.
+fn kept_problems(files: &Files) -> Vec<Diag> {
+    files
+        .kept()
+        .map(|(name, _)| {
+            diag(
+                name,
+                0,
+                "not used by this release: kept with the project, never built or run",
+            )
+        })
+        .collect()
+}
+
 /// Builds `files` (project `name`) into the change set a deploy applies:
 /// `base`'s calendar, the project's map and one module per
 /// PROGRAM, each compiled and held to its manifest.
 ///
 /// # Errors
 /// Every problem found, with its file, line and column, sorted.
-#[allow(clippy::too_many_lines)]
 pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape) -> Result<Built, Vec<Diag>> {
+    build_noted(name, files, base, shape).0
+}
+
+/// [`build`], and the problems that do not stop a build, whether it
+/// succeeded or not: a layout that does not read, and what the checker
+/// warns of (a RETAIN that is not kept), each at its file and line, sorted.
+/// A project with an error and a warning lists both.
+pub fn build_noted(
+    name: &str,
+    files: &Files,
+    base: Option<&ChangeSet>,
+    shape: &Shape,
+) -> (Result<Built, Vec<Diag>>, Vec<Diag>) {
+    let mut problems = Vec::new();
+    let built = build_into(name, files, base, shape, &mut problems);
+    problems.sort();
+    let built = built.map(|mut b| {
+        b.problems.clone_from(&problems);
+        b
+    });
+    (built, problems)
+}
+
+#[allow(clippy::too_many_lines)]
+fn build_into(
+    name: &str,
+    files: &Files,
+    base: Option<&ChangeSet>,
+    shape: &Shape,
+    problems: &mut Vec<Diag>,
+) -> Result<Built, Vec<Diag>> {
     let mut diags = Vec::new();
-    if let Err(errs) = files.check() {
+    if let Err(errs) = files.check_buildable() {
         diags.extend(errs.into_iter().map(|e| diag("", 0, e)));
         return Err(diags);
     }
+    problems.extend(layout_problems(files));
+    problems.extend(kept_problems(files));
+    let mut warned = BTreeSet::new();
     let settings = match files.get(SETTINGS).map(settings::parse) {
         None => Settings::default(),
         Some(Ok(s)) => s,
@@ -365,7 +443,20 @@ pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape)
             q: len_of(qwin.as_deref()),
             m,
         };
-        let program = match compile(&src, sizes) {
+        let (compiled, warnings) = compile_warned(&src, sizes);
+        for w in warnings {
+            let (file, line) = locate(&segments, w.pos.line).unwrap_or(("", 0));
+            let d = Diag {
+                file: file.to_string(),
+                line,
+                col: if line == 0 { 0 } else { w.pos.col },
+                message: w.msg,
+            };
+            if warned.insert(d.clone()) {
+                problems.push(d);
+            }
+        }
+        let program = match compiled {
             Ok(p) => p,
             Err(errs) => {
                 for e in errs {
@@ -474,6 +565,7 @@ pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape)
     Ok(Built {
         change,
         modules: summary,
+        problems: Vec::new(),
     })
 }
 

@@ -23,6 +23,9 @@
     clippy::similar_names
 )]
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod agent_ladder_tests;
+mod agent_marks;
 mod app;
 mod arrange;
 #[cfg(test)]
@@ -30,6 +33,7 @@ mod arrange_tests;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;
+mod box_popup;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_projects_tests;
@@ -41,22 +45,34 @@ mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
+mod desk;
+mod device_config;
 mod device_form;
 mod device_form_ui;
 mod devices;
+mod diff_ui;
 mod editor;
 mod find;
+mod glyph_lib;
 mod glyphs;
+mod help;
 mod history_ui;
 mod hotkeys;
 mod icons;
 mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;
+mod lamps;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod link_tests;
 mod messages;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod monitor_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod node_api_tests;
+mod node_token;
+mod palette;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -65,8 +81,6 @@ mod playground_view;
 mod projects;
 mod remote;
 mod requirements;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod requirements_tests;
 mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod review_tests;
@@ -77,13 +91,22 @@ mod scope_tests;
 mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod slow_link_tests;
+mod st_fold;
+mod st_hints;
+mod st_syntax;
 mod st_view;
+mod stamp;
 #[cfg(test)]
 mod test_programs;
 mod theme;
 mod tips;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tips_tests;
+mod tour;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tour_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod ui_tests;
 mod verify;

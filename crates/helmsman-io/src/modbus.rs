@@ -18,8 +18,10 @@
 //!   32-bit formats span N and N+1, high word first; append `sw` (`f32sw`)
 //!   for devices that put the low word first.
 
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, SocketAddrV4, TcpStream};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use crate::driver::{Driver, Error, PointInfo};
@@ -30,11 +32,12 @@ pub const DRIVER: &str = "modbus-tcp";
 // The bytes of Modbus are the codec's (crates/helmsman-modbus), shared with
 // the edge node; the names stay here for every user of this module.
 pub use helmsman_modbus::{
-    COIL_OFF, COIL_ON, ENCAPSULATED_INTERFACE, ILLEGAL_DATA_ADDRESS, ILLEGAL_DATA_VALUE, ILLEGAL_FUNCTION,
-    MAX_PDU, MAX_READ_BITS, MAX_READ_REGS, MAX_WRITE_COILS, MAX_WRITE_REGS, MBAP_LEN, MEI_READ_DEVICE_ID,
-    OBJECT_MAJOR_MINOR_REVISION, OBJECT_PRODUCT_CODE, OBJECT_VENDOR_NAME, READ_COILS, READ_DEVICE_ID_BASIC,
-    READ_DISCRETE_INPUTS, READ_HOLDING_REGISTERS, READ_INPUT_REGISTERS, SERVER_DEVICE_FAILURE,
-    WRITE_MULTIPLE_COILS, WRITE_MULTIPLE_REGISTERS, WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER,
+    COIL_OFF, COIL_ON, ENCAPSULATED_INTERFACE, GATEWAY_PATH_UNAVAILABLE, GATEWAY_TARGET_FAILED,
+    ILLEGAL_DATA_ADDRESS, ILLEGAL_DATA_VALUE, ILLEGAL_FUNCTION, MAX_PDU, MAX_READ_BITS, MAX_READ_REGS,
+    MAX_WRITE_COILS, MAX_WRITE_REGS, MBAP_LEN, MEI_READ_DEVICE_ID, OBJECT_MAJOR_MINOR_REVISION,
+    OBJECT_PRODUCT_CODE, OBJECT_VENDOR_NAME, READ_COILS, READ_DEVICE_ID_BASIC, READ_DISCRETE_INPUTS,
+    READ_HOLDING_REGISTERS, READ_INPUT_REGISTERS, SERVER_DEVICE_FAILURE, WRITE_MULTIPLE_COILS,
+    WRITE_MULTIPLE_REGISTERS, WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER,
 };
 
 /// Most Read Device Identification replies one identification may take
@@ -312,15 +315,33 @@ pub mod reply {
     }
 }
 
-/// A Modbus TCP connection to one unit. Every error drops the connection, so
-/// the next request starts clean (a late reply can never be taken for the
-/// answer to a newer request).
+/// A Modbus TCP client for one unit. Clients whose endpoints reach the
+/// same address share one connection to it (a [`Line`]): the units behind
+/// one gateway (the unit id routes each request, TCP §3.1.3 pp.5-6) cost
+/// the gateway one connection, not one each, as the guide recommends
+/// (TCP §4.2.1.1 p.10, rule 3).
+///
+/// One request is in flight on a connection at a time (a gateway's serial
+/// line answers one at a time anyway), taken first come first served: a
+/// client waits for the requests queued before it, at most one per other
+/// client and each bounded by that client's own timeout, then has its
+/// whole timeout for its own reply. Replies are matched by transaction
+/// id (TCP §4.4.1.2 p.23): a late reply to a request that timed out is
+/// skipped, any other foreign one is a protocol error that closes the
+/// connection. The connection survives one unit's timeouts and
+/// exceptions; it is closed when the stream can no longer be trusted (a
+/// write or read error, a reply cut off, a header that does not parse)
+/// or when every unit on it has timed out since the last reply came, and
+/// the next request from any unit opens it again.
+///
+/// After any error the client lets go of the connection, so the next
+/// request resolves its endpoint again (a `mac=` device that moved is
+/// found where it is now).
 pub struct Client {
     endpoint: String,
     unit: u8,
     timeout: Duration,
-    stream: Option<TcpStream>,
-    tid: u16,
+    line: Option<Handle>,
     /// The address the endpoint resolved to at the last connection
     /// (`crate::resolve`: a `mac=` endpoint is looked up again each time).
     resolved: Option<std::net::SocketAddrV4>,
@@ -345,8 +366,7 @@ impl Client {
             endpoint: endpoint.into(),
             unit,
             timeout,
-            stream: None,
-            tid: 0,
+            line: None,
             resolved: None,
             missed: None,
             resolver: None,
@@ -368,8 +388,10 @@ impl Client {
         self.resolved
     }
 
-    fn connect(&mut self) -> Result<&mut TcpStream, Error> {
-        if self.stream.is_none() {
+    /// The shared connection to where the endpoint resolves, resolving it
+    /// first when the client has none.
+    fn attach(&mut self) -> Result<Arc<Line>, Error> {
+        if self.line.is_none() {
             let probed = self.endpoint.starts_with("modbus=");
             if probed
                 && let Some((at, why)) = &self.missed
@@ -402,14 +424,9 @@ impl Client {
                 }
             };
             self.missed = None;
-            let s = TcpStream::connect_timeout(&std::net::SocketAddr::V4(addr), self.timeout)?;
-            s.set_read_timeout(Some(self.timeout))?;
-            s.set_write_timeout(Some(self.timeout))?;
-            s.set_nodelay(true)?;
-            self.stream = Some(s);
-            self.resolved = Some(addr);
+            self.line = Some(Handle::to(addr, self.unit));
         }
-        Ok(self.stream.as_mut().expect("set above"))
+        Ok(Arc::clone(&self.line.as_ref().expect("set above").line))
     }
 
     /// Sends one request PDU and returns the reply PDU.
@@ -420,24 +437,18 @@ impl Client {
     pub fn transact(&mut self, pdu: &[u8]) -> Result<Vec<u8>, Error> {
         let r = self.exchange(pdu);
         if r.is_err() {
-            self.stream = None;
+            self.line = None;
         }
         r
     }
 
     fn exchange(&mut self, pdu: &[u8]) -> Result<Vec<u8>, Error> {
-        self.tid = self.tid.wrapping_add(1);
-        let (tid, unit) = (self.tid, self.unit);
-        let frame = helmsman_modbus::mbap::frame(tid, unit, pdu)?;
-        let s = self.connect()?;
-        s.write_all(&frame)?;
-        let mut head = [0u8; MBAP_LEN];
-        s.read_exact(&mut head)?;
-        // A late or foreign reply is never taken for ours.
-        let len = helmsman_modbus::mbap::check_head(&head, tid, unit)?;
-        let mut body = vec![0u8; len];
-        s.read_exact(&mut body)?;
-        Ok(body)
+        let line = self.attach()?;
+        let _turn = line.turn();
+        let mut conn = lock(&line.conn);
+        conn.connect(line.addr, self.timeout)?;
+        self.resolved = Some(line.addr);
+        conn.exchange(self.unit, pdu, self.timeout, &line.units)
     }
 
     /// # Errors
@@ -472,6 +483,234 @@ impl Client {
     /// See [`app::read_device_identification`].
     pub fn read_device_identification(&mut self) -> Result<DeviceIdentification, Error> {
         app::read_device_identification(self)
+    }
+}
+
+/// Most requests on one connection whose late replies are remembered to
+/// be skipped (they timed out); past it the oldest is forgotten.
+pub const MAX_ABANDONED: usize = 16;
+
+/// The one connection the box keeps to an address, shared by every
+/// [`Client`] that reaches it. Lives while a client holds it.
+pub struct Line {
+    addr: SocketAddrV4,
+    /// Turns on the connection, first come first served: `(next ticket,
+    /// ticket being served)`. A plain mutex is not fair, and a dead unit
+    /// polled back to back could take the connection again and again
+    /// ahead of a live one waiting for it.
+    queue: Mutex<(u64, u64)>,
+    turned: Condvar,
+    conn: Mutex<Conn>,
+    /// The units of the clients holding the line, with how many each:
+    /// apart from `conn`, so a client letting go never waits out another's
+    /// request.
+    units: Mutex<BTreeMap<u8, usize>>,
+}
+
+/// A client's turn on a [`Line`]; the next in line goes when it drops.
+struct Turn<'a>(&'a Line);
+
+impl Line {
+    fn turn(&self) -> Turn<'_> {
+        let mut q = lock(&self.queue);
+        let ticket = q.0;
+        q.0 += 1;
+        while q.1 != ticket {
+            q = self.turned.wait(q).unwrap_or_else(PoisonError::into_inner);
+        }
+        Turn(self)
+    }
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.queue).1 += 1;
+        self.0.turned.notify_all();
+    }
+}
+
+/// Every open [`Line`], by address.
+static LINES: Mutex<Vec<Weak<Line>>> = Mutex::new(Vec::new());
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[derive(Default)]
+struct Conn {
+    stream: Option<TcpStream>,
+    /// The last transaction id sent; unique on the connection at a time.
+    tid: u16,
+    /// Requests that timed out on this stream, oldest first: their
+    /// replies, if they come, are skipped.
+    abandoned: VecDeque<u16>,
+    /// Units that timed out since the stream last carried a reply.
+    unanswered: BTreeSet<u8>,
+    /// The last connect that failed: when, how long it took, and the
+    /// error. Another unit asking within that long gets the same answer
+    /// instead of waiting out a connect of its own, so a gateway that is
+    /// gone costs one connect timeout, not one per unit.
+    failed: Option<(Instant, Duration, std::io::ErrorKind, String)>,
+}
+
+/// A client's hold on a [`Line`], counted under its unit.
+struct Handle {
+    line: Arc<Line>,
+    unit: u8,
+}
+
+impl Handle {
+    fn to(addr: SocketAddrV4, unit: u8) -> Self {
+        let mut lines = lock(&LINES);
+        lines.retain(|w| w.strong_count() > 0);
+        let line = lines
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|l| l.addr == addr)
+            .unwrap_or_else(|| {
+                let l = Arc::new(Line {
+                    addr,
+                    queue: Mutex::new((0, 0)),
+                    turned: Condvar::new(),
+                    conn: Mutex::default(),
+                    units: Mutex::default(),
+                });
+                lines.push(Arc::downgrade(&l));
+                l
+            });
+        *lock(&line.units).entry(unit).or_default() += 1;
+        Self { line, unit }
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        let mut units = lock(&self.line.units);
+        if let Some(n) = units.get_mut(&self.unit) {
+            *n -= 1;
+            if *n == 0 {
+                units.remove(&self.unit);
+            }
+        }
+    }
+}
+
+impl Conn {
+    fn connect(&mut self, addr: SocketAddrV4, timeout: Duration) -> Result<(), Error> {
+        if self.stream.is_some() {
+            return Ok(());
+        }
+        if let Some((at, took, kind, why)) = &self.failed
+            && at.elapsed() < *took
+        {
+            return Err(Error::Io(std::io::Error::new(*kind, why.clone())));
+        }
+        let started = Instant::now();
+        let s = TcpStream::connect_timeout(&SocketAddr::V4(addr), timeout).and_then(|s| {
+            s.set_nodelay(true)?;
+            Ok(s)
+        });
+        match s {
+            Ok(s) => {
+                self.stream = Some(s);
+                self.failed = None;
+                self.abandoned.clear();
+                self.unanswered.clear();
+                Ok(())
+            }
+            Err(e) => {
+                self.failed = Some((Instant::now(), started.elapsed(), e.kind(), e.to_string()));
+                Err(Error::Io(e))
+            }
+        }
+    }
+
+    /// Closes the stream and fails with `e`.
+    fn lose<T>(&mut self, e: Error) -> Result<T, Error> {
+        self.stream = None;
+        Err(e)
+    }
+
+    /// One request and its reply, on a connected stream.
+    fn exchange(
+        &mut self,
+        unit: u8,
+        pdu: &[u8],
+        timeout: Duration,
+        units: &Mutex<BTreeMap<u8, usize>>,
+    ) -> Result<Vec<u8>, Error> {
+        let mut tid = self.tid.wrapping_add(1);
+        while self.abandoned.contains(&tid) {
+            tid = tid.wrapping_add(1);
+        }
+        self.tid = tid;
+        let frame = helmsman_modbus::mbap::frame(tid, unit, pdu)?;
+        let deadline = Instant::now() + timeout;
+        let Some(s) = self.stream.as_mut() else {
+            return Err(Error::Io(std::io::ErrorKind::NotConnected.into()));
+        };
+        if let Err(e) = s
+            .set_write_timeout(Some(timeout))
+            .and_then(|()| s.write_all(&frame))
+        {
+            return self.lose(Error::Io(e));
+        }
+        loop {
+            let s = self.stream.as_mut().expect("written to above");
+            let mut head = [0u8; MBAP_LEN];
+            let mut got = 0;
+            match read_counted(s, &mut head, deadline, &mut got) {
+                Ok(()) => {}
+                // Nothing of a reply yet: the unit may still answer, late.
+                // The connection stays for the other units unless every
+                // unit on it has gone unanswered.
+                Err(Error::Io(e)) if got == 0 && e.kind() == std::io::ErrorKind::TimedOut => {
+                    let e = Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("unit {unit}: no reply in {} ms", timeout.as_millis()),
+                    ));
+                    self.unanswered.insert(unit);
+                    if lock(units).keys().all(|u| self.unanswered.contains(u)) {
+                        return self.lose(e);
+                    }
+                    if self.abandoned.len() >= MAX_ABANDONED {
+                        // Its reply, should it ever come, is then foreign.
+                        self.abandoned.pop_front();
+                    }
+                    self.abandoned.push_back(tid);
+                    return Err(e);
+                }
+                Err(e) => return self.lose(e),
+            }
+            let got_tid = u16::from_be_bytes([head[0], head[1]]);
+            let late = (got_tid != tid)
+                .then(|| self.abandoned.iter().position(|t| *t == got_tid))
+                .flatten();
+            // Protocol id and length must read whatever the reply is for:
+            // the stream is out of step otherwise.
+            let len = match helmsman_modbus::mbap::check_head(
+                &head,
+                if late.is_some() { got_tid } else { tid },
+                head[6],
+            ) {
+                Ok(n) => n,
+                Err(e) => return self.lose(e.into()),
+            };
+            let mut body = vec![0u8; len];
+            if let Err(e) = read_counted(s, &mut body, deadline, &mut 0) {
+                return self.lose(e);
+            }
+            self.unanswered.clear();
+            if let Some(i) = late {
+                // A reply to a request given up on: never taken for ours.
+                self.abandoned.remove(i);
+                continue;
+            }
+            if head[6] != unit {
+                return Err(Error::Protocol(format!("unit {}, expected {unit}", head[6])));
+            }
+            return Ok(body);
+        }
     }
 }
 
@@ -619,8 +858,14 @@ pub mod app {
 /// Reads exactly `buf.len()` bytes by `deadline`, however the peer
 /// trickles them.
 fn read_by(s: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<(), Error> {
-    let mut got = 0;
-    while got < buf.len() {
+    read_counted(s, buf, deadline, &mut 0)
+}
+
+/// [`read_by`], counting into `got` the bytes that came (so a caller can
+/// tell a reply that never started from one cut off).
+fn read_counted(s: &mut TcpStream, buf: &mut [u8], deadline: Instant, got: &mut usize) -> Result<(), Error> {
+    *got = 0;
+    while *got < buf.len() {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
             return Err(Error::Io(std::io::Error::new(
@@ -629,14 +874,14 @@ fn read_by(s: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<(), E
             )));
         }
         s.set_read_timeout(Some(left))?;
-        match s.read(&mut buf[got..]) {
+        match s.read(&mut buf[*got..]) {
             Ok(0) => {
                 return Err(Error::Io(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     "closed mid-reply",
                 )));
             }
-            Ok(n) => got += n,
+            Ok(n) => *got += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             // A read timeout is WouldBlock on some platforms (macOS), TimedOut
             // on others; the loop's check above says which it was.

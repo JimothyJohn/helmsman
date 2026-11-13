@@ -22,7 +22,8 @@
 //! information, electronic key and connection IDs"; Class 1 data is
 //! "pre-pended with a 16-bit sequence count"; UDP port 2222.
 
-use std::fmt;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::cip::{self, GeneralStatus, Path};
 use crate::codec::{DecodeError, Reader, Writer};
@@ -574,8 +575,18 @@ impl Refused {
         let connection_serial = r.u16_le()?;
         let originator_vendor_id = r.u16_le()?;
         let originator_serial = r.u32_le()?;
-        let remaining_path_size = r.u8()?;
-        let _reserved = r.u8()?;
+        // The Moxa E1213 ends an unsuccessful reply here, without the
+        // remaining path size and the reserved byte (captured 2026-11-10,
+        // docs/devices/moxa-iologik-e1213.md); what identifies the
+        // connection is already read, so that is a refusal with no path
+        // left over, not a reply that does not decode.
+        let remaining_path_size = if r.remaining() == 0 {
+            0
+        } else {
+            let size = r.u8()?;
+            let _reserved = r.u8()?;
+            size
+        };
         Ok(Self {
             status: resp.status,
             extended: resp.additional_status.clone(),
@@ -592,14 +603,47 @@ impl Refused {
     }
 }
 
+/// What an extended Connection Manager code means, for the ones named in
+/// [`extended`] that an engineer can act on.
+#[must_use]
+pub const fn extended_text(code: u16) -> Option<&'static str> {
+    Some(match code {
+        extended::CONNECTION_IN_USE => "connection in use",
+        extended::OWNERSHIP_CONFLICT => "ownership conflict: another controller owns this device's outputs",
+        extended::CONNECTION_NOT_FOUND => "connection not found",
+        extended::RPI_NOT_SUPPORTED => "RPI not supported",
+        extended::RPI_NOT_ACCEPTABLE => "RPI not acceptable",
+        extended::NO_MORE_CONNECTIONS => "no more connections",
+        extended::VENDOR_OR_PRODUCT_CODE_MISMATCH => "vendor or product code mismatch",
+        extended::DEVICE_TYPE_MISMATCH => "device type mismatch",
+        extended::REVISION_MISMATCH => "revision mismatch",
+        extended::INVALID_O_TO_T_SIZE => "invalid O->T size",
+        extended::INVALID_T_TO_O_SIZE => "invalid T->O size",
+        extended::CONNECTION_TIMED_OUT => "connection timed out",
+        _ => return None,
+    })
+}
+
 impl fmt::Display for Refused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "refused: {}", self.status)?;
         if let Some(code) = self.extended_code() {
             write!(f, " extended 0x{code:04X}")?;
+            if let Some(what) = extended_text(code) {
+                write!(f, " ({what})")?;
+            }
         }
         if self.extended.len() > 1 {
             write!(f, " {:04X?}", &self.extended[1..])?;
+        }
+        if self.status == GeneralStatus::CONNECTION_FAILURE && self.extended.is_empty() {
+            // docs/devices/moxa-iologik-e1213.md, "On the bench": the
+            // E1213 answers this, and nothing more, while another
+            // originator holds its one Class 1 connection.
+            write!(
+                f,
+                " with no extended status (a Moxa ioLogik E1213 answers this while another originator holds its one cyclic connection)"
+            )?;
         }
         Ok(())
     }
@@ -943,6 +987,36 @@ mod tests {
         assert_eq!(ForwardOpen::decode(&req.data).unwrap(), fo);
     }
 
+    /// The E1213's answer to an Input Only `Forward_Open` from the P4 node
+    /// on 2026-11-10, as the node printed it: general status 0x01, no
+    /// extended status, and a body that stops after the originator serial
+    /// (no remaining path size, no reserved byte). The refusal must read
+    /// as a refusal, not as a decode error.
+    #[test]
+    fn a_refusal_that_stops_after_the_originator_serial_still_reads() {
+        let resp = cip::Response {
+            service: 0xD4,
+            status: GeneralStatus(0x01),
+            additional_status: vec![],
+            data: vec![0x03, 0x00, 0xFF, 0xFF, 0xE1, 0x16, 0xE8, 0x0A],
+        };
+        let refused = open_result(&resp).unwrap().unwrap_err();
+        assert_eq!(refused.status, GeneralStatus(0x01));
+        assert_eq!(refused.extended_code(), None);
+        assert_eq!(refused.connection_serial, 3);
+        assert_eq!(refused.originator_vendor_id, 0xFFFF);
+        assert_eq!(refused.originator_serial, 0x0AE8_16E1);
+        assert_eq!(refused.remaining_path_size, 0);
+        assert_eq!(
+            refused.to_string(),
+            "refused: 0x01 connection failure with no extended status (a Moxa ioLogik E1213 answers this while another originator holds its one cyclic connection)"
+        );
+        // One byte short of the identifying triad is still an error.
+        let mut short = resp;
+        short.data.pop();
+        assert!(open_result(&short).is_err());
+    }
+
     #[test]
     fn reply_and_refusal_round_trip() {
         let reply = ForwardOpenReply {
@@ -971,7 +1045,7 @@ mod tests {
         assert_eq!(r.connection_serial, 0x0101);
         assert_eq!(
             r.to_string(),
-            "refused: 0x01 connection failure extended 0x0127 [0026]"
+            "refused: 0x01 connection failure extended 0x0127 (invalid O->T size) [0026]"
         );
     }
 

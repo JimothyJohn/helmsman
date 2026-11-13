@@ -123,7 +123,8 @@ pub const MAX_READ: usize = 50;
 #[derive(Clone)]
 pub struct BoxApi {
     pub url: Url,
-    /// The box API token, for the POST routes; never sent to the relay.
+    /// The box API token, sent on every call (a read needs a session too,
+    /// card read-lock); never sent to the relay.
     pub token: String,
     pub timeouts: Timeouts,
 }
@@ -159,15 +160,10 @@ impl BoxApi {
     fn call(&self, method: &str, path: &str, body: Option<&Json>) -> Result<(u16, Json), String> {
         let bytes = body.map(|b| serde_json::to_vec(b).unwrap_or_default());
         let auth = format!("Bearer {}", self.token);
-        let headers: &[(&str, &str)] = if method == "GET" {
-            &[]
-        } else {
-            &[("Authorization", &auth)]
-        };
         let req = http::Request {
             method,
             path,
-            headers,
+            headers: &[("Authorization", &auth)],
             json: bytes.as_deref(),
             raw: None,
         };

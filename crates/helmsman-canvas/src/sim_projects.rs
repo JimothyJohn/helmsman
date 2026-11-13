@@ -25,7 +25,6 @@ use crate::projects::{Group, ProjectRow, file_line, slug};
 
 /// Whether `f` is a program file (`NAME.st`).
 #[must_use]
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_st(f: &str) -> bool {
     file_name(f) == Some(FileKind::St)
 }
@@ -42,6 +41,21 @@ pub trait Storage {
     /// # Errors
     /// The storage cannot be written (blocked, full).
     fn save(&mut self, text: &str) -> Result<(), String>;
+    /// Keeps `text` (what the store held and this page could not read)
+    /// somewhere it is not written over. A store with no such place says
+    /// so, and the page then leaves the store itself alone.
+    ///
+    /// # Errors
+    /// There is no backup place, or it cannot be written (blocked, full).
+    fn backup(&mut self, _text: &str) -> Result<(), String> {
+        Err("this storage keeps no backup".into())
+    }
+    /// The store beside this one named `suffix` (a cleaned
+    /// [`crate::desk::slot_suffix`]), for the desk of one person. `None`:
+    /// the store has no neighbours, and one desk is all it keeps.
+    fn keyed(&self, _suffix: &str) -> Option<Box<dyn Storage>> {
+        None
+    }
 }
 
 /// Storage in memory: gone with the page (native builds, tests).
@@ -111,7 +125,7 @@ impl SimRevision {
             .iter()
             .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
             .collect();
-        Files(files.clone()).check().ok()?;
+        Files(files.clone()).check_buildable().ok()?;
         Some(Self {
             n: u32::try_from(j["n"].as_u64()?).ok()?,
             at_ms: j["at_ms"].as_u64().unwrap_or(0),
@@ -224,6 +238,17 @@ lamp := run;
 END_PROGRAM
 ";
 
+/// An uploaded file ready to go into the open project as `target`.
+#[derive(Debug, Clone)]
+pub struct Import {
+    /// The file as the visitor named it.
+    file: String,
+    target: String,
+    text: String,
+    /// The task rates an L5X came with (name, ms).
+    scans: Vec<(String, u32)>,
+}
+
 /// Everything the simulation knows about its projects.
 pub struct SimProjects {
     store: Box<dyn Storage>,
@@ -244,6 +269,12 @@ pub struct SimProjects {
     pub notice: Option<(String, bool)>,
     /// An upload whose name is taken, waiting for Replace.
     pub pending: Option<(String, Files)>,
+    /// A file import whose name is taken in the open project, waiting for
+    /// Replace.
+    pub pending_file: Option<Import>,
+    /// What the store held could not be read in full: it is left as it is
+    /// (a copy is kept as a backup) until the person saves something.
+    held: bool,
     /// Each project's revisions, oldest first (the newest
     /// [`MAX_SIM_REVISIONS`]).
     pub history: BTreeMap<String, Vec<SimRevision>>,
@@ -277,21 +308,26 @@ impl SimProjects {
             storage_problem: None,
             notice: None,
             pending: None,
+            pending_file: None,
+            held: false,
             history: BTreeMap::new(),
         };
         let mut open = None;
         match s.store.load() {
-            Ok(Some(text)) => match parse(&text) {
-                Some((saved, last, history)) => {
-                    s.saved = saved;
-                    s.history = history;
-                    open = last;
+            Ok(Some(text)) => {
+                let left_out = match parse(&text) {
+                    Some(((saved, last, history), left_out)) => {
+                        s.saved = saved;
+                        s.history = history;
+                        open = last;
+                        left_out
+                    }
+                    None => usize::MAX,
+                };
+                if left_out > 0 {
+                    s.hold(&text, left_out);
                 }
-                None => {
-                    s.storage_problem =
-                        Some("what this browser stored is not readable; starting afresh".into());
-                }
-            },
+            }
             Ok(None) => {}
             Err(e) => {
                 s.storage_problem = Some(format!(
@@ -302,6 +338,24 @@ impl SimProjects {
         let open = open.filter(|o| s.exists(o)).unwrap_or(first);
         s.open_project(&open);
         s
+    }
+
+    /// `text`, what the store held, was not read in full (`left_out`
+    /// projects or revisions dropped; `usize::MAX`: none of it read): a
+    /// copy goes to the backup place and the store is not written until
+    /// the person saves, so opening a project cannot overwrite it.
+    fn hold(&mut self, text: &str, left_out: usize) {
+        let kept = match self.store.backup(text) {
+            Ok(()) => "the stored copy is kept as a backup".to_string(),
+            Err(e) => format!("the stored copy could not be backed up ({e})"),
+        };
+        let what = if left_out == usize::MAX {
+            "what this browser stored is not readable; starting afresh".to_string()
+        } else {
+            format!("{left_out} stored project(s) or revision(s) are not readable and were left out")
+        };
+        self.storage_problem = Some(format!("{what}; {kept} and left as it is until you save"));
+        self.held = true;
     }
 
     pub(crate) fn exists(&self, name: &str) -> bool {
@@ -385,6 +439,7 @@ impl SimProjects {
             .cloned()
             .unwrap_or_default();
         self.pending = None;
+        self.pending_file = None;
         if self.is_example()
             && let Some(e) = EXAMPLES.iter().find(|e| example_project(e.src).0 == name)
         {
@@ -467,6 +522,9 @@ impl SimProjects {
     /// Writes the visitor's projects and which is open; a failure is
     /// noted once, and the projects stay in memory.
     fn persist(&mut self) {
+        if self.held {
+            return;
+        }
         let text = render(&self.saved, &self.open, &self.history);
         if let Err(e) = self.store.save(&text)
             && self.storage_problem.is_none()
@@ -497,9 +555,38 @@ impl SimProjects {
             .unwrap_or(base)
     }
 
-    /// Saves the open project; an example is saved as a copy, which opens.
+    /// Saves the open project, its Structured Text in the one layout
+    /// ([`Self::format`]); an example is saved as a copy, which opens.
     pub fn save(&mut self) {
+        self.format();
         self.save_as("saved", None);
+    }
+
+    /// Puts the open project's edited Structured Text files in the one
+    /// layout (`helmsman_iec::tidy`; Nick, 2026-11-11: on save and on
+    /// deploy). A file with no edits since it was saved is left as it
+    /// is: nothing the visitor did not touch is rewritten. Only spacing,
+    /// line breaks and the capitals of keywords change. Returns how many
+    /// files it changed.
+    pub fn format(&mut self) -> usize {
+        let edited: Vec<String> = self
+            .files
+            .keys()
+            .filter(|n| is_st(n) && self.file_dirty(n))
+            .cloned()
+            .collect();
+        let mut changed = 0;
+        for (name, text) in &mut self.files {
+            if !edited.contains(name) {
+                continue;
+            }
+            let tidy = helmsman_iec::tidy::format(text);
+            if tidy != *text {
+                *text = tidy;
+                changed += 1;
+            }
+        }
+        changed
     }
 
     /// [`Self::save`], recorded in the project's history as `what`, with
@@ -523,6 +610,7 @@ impl SimProjects {
             self.note(format!("Saved {}.", self.open), false);
         }
         self.record_revision(what, page);
+        self.held = false;
         self.persist();
     }
 
@@ -631,6 +719,7 @@ impl SimProjects {
             format!("Saved this arrangement as {}'s default layout.", self.open),
             false,
         );
+        self.held = false;
         self.persist();
         true
     }
@@ -657,6 +746,7 @@ impl SimProjects {
             None => Files(BTreeMap::from([("main.st".to_string(), STARTER.to_string())])),
         };
         self.saved.insert(name.to_string(), files);
+        self.held = false;
         self.open_project(name);
         self.note(format!("Made {name}."), false);
     }
@@ -670,6 +760,9 @@ impl SimProjects {
             return;
         };
         self.saved.insert(to.to_string(), files);
+        if let Some(revisions) = self.history.remove(from) {
+            self.history.insert(to.to_string(), revisions);
+        }
         if self.open == from {
             to.clone_into(&mut self.open);
         }
@@ -677,6 +770,7 @@ impl SimProjects {
             self.running = Some(to.to_string());
         }
         self.note(format!("Renamed {from} to {to}."), false);
+        self.held = false;
         self.persist();
     }
 
@@ -684,6 +778,8 @@ impl SimProjects {
         if self.saved.remove(name).is_none() {
             return;
         }
+        self.history.remove(name);
+        self.held = false;
         if self.running.as_deref() == Some(name) {
             self.running = None;
         }
@@ -722,7 +818,8 @@ impl SimProjects {
     }
 
     pub fn rename_file(&mut self, from: &str, to: &str) {
-        if file_name(to).is_none() || self.files.contains_key(to) {
+        // As the box has it: a name differing only by case is taken.
+        if file_name(to).is_none() || self.files.keys().any(|f| f.eq_ignore_ascii_case(to)) {
             self.note(format!("{to:?} is taken or not a project file name."), true);
             return;
         }
@@ -791,10 +888,14 @@ impl SimProjects {
         if let Some((name, files)) = self.pending.take() {
             self.install(&name, files);
         }
+        if let Some(i) = self.pending_file.take() {
+            self.import_into(&i, true);
+        }
     }
 
     fn install(&mut self, name: &str, files: Files) {
         self.saved.insert(name.to_string(), files);
+        self.held = false;
         self.open_project(name);
         self.note(format!("Uploaded {name}."), false);
     }
@@ -811,27 +912,15 @@ impl SimProjects {
         }
         if ext.eq_ignore_ascii_case("l5x") {
             match l5x(file, bytes) {
-                Ok((st, scans)) => {
-                    self.files.insert(target.clone(), st);
-                    self.current.clone_from(&target);
-                    // The task rates, as the box writes them.
-                    let mut said = format!("Imported {file} into {} as {target}.", self.open);
-                    if !scans.is_empty() {
-                        let settings = helmsman_project::SETTINGS;
-                        let had = self.files.get(settings).cloned().unwrap_or_default();
-                        let (text, notes) = helmsman_project::settings::set_scans(&had, &scans);
-                        if text != had {
-                            self.files.insert(settings.to_string(), text);
-                            said.push_str(" Its task rates are in project.settings.");
-                        }
-                        for n in notes {
-                            said.push(' ');
-                            said.push_str(&n);
-                            said.push('.');
-                        }
-                    }
-                    self.note(said, false);
-                }
+                Ok((text, scans)) => self.import_into(
+                    &Import {
+                        file: file.to_string(),
+                        target,
+                        text,
+                        scans,
+                    },
+                    false,
+                ),
                 Err(e) => self.note(e, true),
             }
             return;
@@ -858,9 +947,59 @@ impl SimProjects {
         } else {
             text
         };
-        self.files.insert(target.clone(), text);
-        self.current.clone_from(&target);
-        self.note(format!("Imported {file} into {} as {target}.", self.open), false);
+        self.import_into(
+            &Import {
+                file: file.to_string(),
+                target,
+                text,
+                scans: Vec::new(),
+            },
+            false,
+        );
+    }
+
+    /// Puts `i` into the open project as the box's import does: a name
+    /// that differs only by case from one there is refused, and a name
+    /// that is taken waits for Replace (`replace`: it was asked for).
+    fn import_into(&mut self, i: &Import, replace: bool) {
+        let taken = self
+            .files
+            .keys()
+            .find(|f| f.eq_ignore_ascii_case(&i.target))
+            .cloned();
+        if let Some(other) = taken {
+            if other != i.target {
+                self.note(format!("{other} exists; names differ only by case."), true);
+                return;
+            }
+            if !replace {
+                self.note(
+                    format!("{} already has that file ({}). Replace it?", self.open, i.target),
+                    true,
+                );
+                self.pending_file = Some(i.clone());
+                return;
+            }
+        }
+        self.files.insert(i.target.clone(), i.text.clone());
+        self.current.clone_from(&i.target);
+        // The task rates, as the box writes them.
+        let mut said = format!("Imported {} into {} as {}.", i.file, self.open, i.target);
+        if !i.scans.is_empty() {
+            let settings = helmsman_project::SETTINGS;
+            let had = self.files.get(settings).cloned().unwrap_or_default();
+            let (text, notes) = helmsman_project::settings::set_scans(&had, &i.scans);
+            if text != had {
+                self.files.insert(settings.to_string(), text);
+                said.push_str(" Its task rates are in project.settings.");
+            }
+            for n in notes {
+                said.push(' ');
+                said.push_str(&n);
+                said.push('.');
+            }
+        }
+        self.note(said, false);
     }
 }
 
@@ -907,22 +1046,31 @@ type Parsed = (
     BTreeMap<String, Vec<SimRevision>>,
 );
 
-fn parse(text: &str) -> Option<Parsed> {
+/// What `text` holds, and how many projects and revisions in it were left
+/// out because they did not read or broke a rule; `None`: not in this
+/// format at all.
+fn parse(text: &str) -> Option<(Parsed, usize)> {
     let j: Json = serde_json::from_str(text).ok()?;
     if j["format"] != FORMAT {
         return None;
     }
+    let mut left_out = 0;
     let mut out = BTreeMap::new();
     for (name, files) in j["projects"].as_object()? {
-        let Some(files) = files.as_object() else { continue };
-        let files = Files(
+        let Some(files) = files.as_object() else {
+            left_out += 1;
+            continue;
+        };
+        let read = Files(
             files
                 .iter()
                 .filter_map(|(f, t)| Some((f.clone(), t.as_str()?.to_string())))
                 .collect(),
         );
-        if project_name(name) && files.check().is_ok() {
-            out.insert(name.clone(), files);
+        if project_name(name) && read.0.len() == files.len() && read.check_buildable().is_ok() {
+            out.insert(name.clone(), read);
+        } else {
+            left_out += 1;
         }
     }
     let mut history = BTreeMap::new();
@@ -931,10 +1079,9 @@ fn parse(text: &str) -> Option<Parsed> {
             if !out.contains_key(name) {
                 continue;
             }
-            let mut revs: Vec<SimRevision> = revs
-                .as_array()
-                .map(|a| a.iter().filter_map(SimRevision::parse).collect())
-                .unwrap_or_default();
+            let all = revs.as_array().map_or(&[][..], Vec::as_slice);
+            let mut revs: Vec<SimRevision> = all.iter().filter_map(SimRevision::parse).collect();
+            left_out += all.len() - revs.len();
             revs.sort_by_key(|r| r.n);
             if revs.len() > MAX_SIM_REVISIONS {
                 let extra = revs.len() - MAX_SIM_REVISIONS;
@@ -943,5 +1090,5 @@ fn parse(text: &str) -> Option<Parsed> {
             history.insert(name.clone(), revs);
         }
     }
-    Some((out, j["open"].as_str().map(str::to_string), history))
+    Some(((out, j["open"].as_str().map(str::to_string), history), left_out))
 }

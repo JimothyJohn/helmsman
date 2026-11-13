@@ -63,12 +63,14 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="keyboard">Keyboard</h1>
-<p>CODESYS's default keys where the browser leaves them alone, nothing
-on a key the browser owns (F5 and Ctrl R reload, F11 goes full screen).
-The page keeps the browser's default off these. <strong>Ctrl is ⌘ on a
+<p>CODESYS's default keys where no browser uses them, and nothing on a
+key a browser owns (Ctrl D bookmarks the page, Alt 1 is Firefox's first
+tab, F10 the toolbar), checked against Chrome, Edge, Firefox and Safari.
+The editor's own conventions stay: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F
+and Ctrl G, as in every editor on the web. <strong>Ctrl is ⌘ on a
 Mac.</strong> Every menu item shows its key.</p>
 <table>
 <thead>
@@ -85,24 +87,24 @@ Mac.</strong> Every menu item shows its key.</p>
 <td>Save Project</td>
 </tr>
 <tr>
-<td>Ctrl D</td>
+<td>Ctrl Shift Enter</td>
 <td>Deploy</td>
 <td></td>
 </tr>
 <tr>
 <td>Ctrl Enter</td>
-<td>Run or stop the simulation</td>
+<td>Run or pause the simulation</td>
 <td></td>
 </tr>
 <tr>
 <td>Shift F8</td>
-<td>Stop the simulation</td>
+<td>Stop the simulation: initial values, clock to zero</td>
 <td>Stop</td>
 </tr>
 <tr>
-<td>F10</td>
-<td>Step one scan (stopped)</td>
-<td>Step Over</td>
+<td>F8</td>
+<td>Step to the next change (paused or stopped)</td>
+<td>Step Into</td>
 </tr>
 <tr>
 <td>Alt F8</td>
@@ -120,51 +122,51 @@ Mac.</strong> Every menu item shows its key.</p>
 <td>Undo</td>
 </tr>
 <tr>
-<td>Ctrl Y</td>
-<td>Redo in the Structured Text</td>
-<td>Restore</td>
-</tr>
-<tr>
 <td>Ctrl Shift Z</td>
 <td>Redo in the Structured Text</td>
 <td></td>
 </tr>
 <tr>
-<td>Ctrl Shift D</td>
+<td>Ctrl Y (not on a Mac: ⌘Y is the browser's History)</td>
+<td>Redo in the Structured Text</td>
+<td>Restore</td>
+</tr>
+<tr>
+<td>Alt Shift D</td>
 <td>Go to definition: the picked block's variable, at its VAR line</td>
-<td>Go to Definition</td>
+<td></td>
 </tr>
 <tr>
-<td>Ctrl Shift X</td>
+<td>Alt Shift X</td>
 <td>Cross references: every read and write of it lit</td>
-<td>Display Cross References</td>
+<td></td>
 </tr>
 <tr>
-<td>Ctrl B</td>
+<td>Shift F9</td>
 <td>Breakpoint on the picked block (simulation): the scan stops before
-it; F10 runs the rest of the scan, Ctrl Enter goes on to the next
+it; F8 runs the rest of the scan, Ctrl Enter goes on to the next
 stop</td>
 <td></td>
 </tr>
 <tr>
-<td>Ctrl Shift F</td>
+<td>Alt Shift F</td>
 <td>Force the picked input: a switch flips, a number's field opens (on a
 box, an engineer's audited force)</td>
 <td></td>
 </tr>
 <tr>
-<td>Ctrl Shift U</td>
+<td>Alt Shift U</td>
 <td>Release every force on the box</td>
 <td></td>
 </tr>
 <tr>
-<td>Ctrl ]</td>
+<td>Alt ]</td>
 <td>Into the picked block instance's diagram; a stopped simulation steps
 one scan</td>
 <td></td>
 </tr>
 <tr>
-<td>Ctrl [</td>
+<td>Alt [</td>
 <td>Out to the caller's diagram; a stopped simulation steps one
 scan</td>
 <td></td>
@@ -185,27 +187,27 @@ scan</td>
 <td></td>
 </tr>
 <tr>
-<td>Alt 0</td>
+<td>Alt Shift 0</td>
 <td>The left pane's Files tab</td>
 <td>Devices</td>
 </tr>
 <tr>
-<td>Alt 1</td>
+<td>Alt Shift 1</td>
 <td>The left pane's Code tab (the Structured Text)</td>
 <td>POUs</td>
 </tr>
 <tr>
-<td>Alt 2</td>
+<td>Alt Shift 2</td>
 <td>The bottom panel (Trend, Messages)</td>
 <td>Modules</td>
 </tr>
 <tr>
-<td>Alt 3</td>
-<td>The side panel (I/O, Agent)</td>
+<td>Alt Shift 3</td>
+<td>The side panel (I/O, Palette, Agent)</td>
 <td>Messages</td>
 </tr>
 <tr>
-<td>Alt 4</td>
+<td>Alt Shift 4</td>
 <td>The left pane's Devices tab (the I/O map's devices and points)</td>
 <td></td>
 </tr>

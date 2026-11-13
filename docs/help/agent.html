@@ -63,13 +63,14 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="the-agent">The Agent</h1>
 <p>The Agent is the way you program by describing the machine. Open the
 <strong>Agent</strong> tab in the side panel (<kbd>Alt</kbd>
-<kbd>3</kbd>, then the tab), type what the open Structured Text file
-should do, and press <strong>Send</strong>. The file is updated in place
+<kbd>Shift</kbd> <kbd>3</kbd>, then the tab), type what the open
+Structured Text file should do, and press <strong>Send</strong>, the
+yellow paper plane (or <kbd>Enter</kbd>). The file is updated in place
 and the editor shows it; there is no conversation to read through.</p>
 <img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
 
@@ -83,6 +84,13 @@ example:</p>
 latches until stop is pressed.</p>
 </blockquote>
 <p>Nothing runs until you deploy it, as with any edit of your own.</p>
+<p>What the change did is marked until your next edit. In the code,
+lines it added are on a green ground and a red rule stands where it
+removed lines (point at the rule to read them). On the diagram, blocks
+and wires it added are outlined green and those it removed are drawn as
+faint red ghosts where they were. In the simulation the diagram shows
+the change at once; on a box the diagram is what runs, so its marks
+appear when you deploy.</p>
 <h2 id="checked-before-it-is-written">Checked before it is written</h2>
 <p>With every change the Agent writes one or more scenarios: short
 requirement tests, each stating in plain words what it checks, such as
@@ -117,10 +125,10 @@ entry holds the instruction, the Agent's reason, the scenarios that
 passed, the answers that failed and were sent back, and the Agent's
 words. Edits of your own you had not saved are saved first, as their own
 revision, so the version before the change is always there.</p>
-<p><strong>Undo</strong> in the Agent tab puts the file back as it was
-before the last change (a new revision; the change stays in History). It
-is offered while the file is still as the Agent left it; after an edit
-of your own, go back through History instead.</p>
+<p><strong>Undo</strong>, the arrow hooked back beside Send, puts the
+file back as it was before the last change (a new revision; the change
+stays in History). It is offered while the file is still as the Agent
+left it; after an edit of your own, go back through History instead.</p>
 <h2 id="follow-ups">Follow-ups</h2>
 <p>Each instruction goes to the Agent with the whole file and the last
 five instructions carried out on that file, read from History. So "now
@@ -147,12 +155,14 @@ made in it, even for a few selected lines or a block. Nothing may be
 left out: an answer that skips part of the file, or writes "rest
 unchanged" where code should be, is sent back.</p>
 <h2 id="in-the-simulation">In the simulation</h2>
-<p>The playground calls the model from your browser with your own API
-key. Paste it in the tab; "Remember on this device" keeps it in this
-browser only, and the tab says plainly where the key is kept. Running
-the playground from your own machine with a local proxy, or natively
-with the key in the environment, the tab says the key is preloaded so
-you are not left wondering.</p>
+<p>In the playground the Agent is free to try during the early release,
+with no key and no account. What you type is sent to a hosted model
+through our relay, so leave out anything confidential. The relay keeps
+no instruction and no answer; it counts requests so that misuse can be
+stopped. The free chat runs on a small daily allowance shared by
+everyone who tries the playground. When that is used up the tab says so,
+and it opens again by itself, usually within a day. The editor, the
+diagram and the simulation work without it.</p>
 <p>With a built-in example open (they are read-only), the program the
 Agent writes becomes a project of its own: the first time, it asks what
 the program is called, and later new programs land in the same project
@@ -162,14 +172,53 @@ as <code>main.st</code>, the one before kept beside it as
 <p>On a box the Agent goes through the box's relay, which holds the key,
 so no box and no browser holds it. The tab works the same way: sign in
 as an engineer, open a program file, type the instruction and press
-<strong>Send</strong>. The checked change is saved on the box as a
-revision with its History entry, by you, and <strong>Undo</strong> asks
-the box to restore the revision before it. The line at the top of the
-tab says whether the agent is online.</p>
+<strong>Send</strong> or <kbd>Enter</kbd> (<kbd>Shift</kbd>
+<kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a new line).
+The checked change is saved on the box as a revision with its History
+entry, by you, and <strong>Undo</strong> asks the box to restore the
+revision before it. The dot beside the tab's heading says whether the
+agent is online (green), offline (red) or not heard from yet (grey).</p>
 <p>If the agent stores a <strong>proposal</strong> for review instead of
 sending the file back, the file is not touched and the tab offers
 <strong>Review</strong> to open it on the Proposals screen, where an
 approver signs it off under the box's policy.</p>
+<h2 id="get-help">Get help</h2>
+<p>On a box the Agent tab has a second mode, for someone who did not
+write the program and has a machine that does not do what it should. The
+toggle at the top right of the tab switches it: <strong>&lt;
+&gt;</strong> is <strong>Change the program</strong>, <strong>?</strong>
+is <strong>Get help</strong>.</p>
+<img src="img/get-help.png" alt="Get help in the Agent tab: the question, Ask for help, and the issue with its Copy button." width="326">
+
+<p>Sign in (any role), say what you saw or what you want to do in your
+own words, and press <strong>Ask for help</strong>, the yellow paper
+plane (<kbd>Enter</kbd> works too; <kbd>Shift</kbd> <kbd>Enter</kbd> or
+<kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a new line). The page sends your
+words with its recent Messages, and the box adds what it knows: its
+version, the program it runs, its devices and their errors. Passwords,
+PINs and tokens are left out. Nothing on the box changes and nothing is
+filed anywhere.</p>
+<p>What comes back depends on what you asked:</p>
+<ul>
+<li>A report of trouble ("the conveyor stopped, the lamp is red") gets
+<strong>What is likely wrong</strong>, the Agent's diagnosis from the
+box's messages and devices, and <strong>Issue to report it</strong>, a
+Markdown issue that carries your words and the box's details.
+<strong>Copy</strong> takes the whole issue, to paste into a new GitHub
+issue or to give to another agent.</li>
+<li>A question about how things work ("how do I load a program?") gets
+<strong>How to do it</strong>, an answer written from these help pages,
+with the pages it came from linked under <strong>Read more</strong>. No
+issue is written.</li>
+</ul>
+<p>When the agent cannot be reached (the box has no relay, the relay is
+offline, or the agent service does not offer help yet), the box writes
+the issue by itself from your words and its details, and a line above it
+says why there is no diagnosis. For a question it also lists the help
+sections whose headings match it, under <strong>These help pages may
+answer it</strong>. The picture above shows this case.</p>
+<p><strong>Stop</strong>, the red square shown while the Agent is
+working, stops waiting for the answer.</p>
 <h2 id="what-it-will-not-do">What it will not do</h2>
 <p>The Agent changes the open file; it never deploys. It cannot force an
 input, change the I/O map on a box, or approve anything. Its code is

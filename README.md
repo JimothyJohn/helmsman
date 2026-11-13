@@ -32,10 +32,14 @@ app, `TODO.md` the plan. A Rust cargo workspace, crates under
 `crates/helmsman-*`: `helmsman-proto` (CIP originator: discovery, explicit
 messaging, the Class 1 scanner), `helmsman-adapter` (CIP target),
 `helmsman-iec` (ST compiler and interpreter, PLCopen XML), `helmsman-io`
-(I/O map, drivers, Modbus TCP), `helmsman-project` (a project's files and
-archive), `helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live
-diagram), `helmsman-agent` (the chat panel's agent loop), `helmsman-canvas`
-(the browser app). `make help` lists the dev targets. `docs/SOURCES.md`
+(I/O map, drivers, Modbus TCP), `helmsman-modbus` (the Modbus codec,
+`no_std`), `helmsman-project` (a project's files and archive),
+`helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live diagram),
+`helmsman-agent` (the box's agent loop behind the Agent tab),
+`helmsman-canvas` (the browser app). Outside the workspace,
+`crates/helmsman-node` is the ESP32-POE2 edge firmware and
+`crates/helmsman-node-p4` the ESP32-P4 one (`docs/EDGE.md`). `make help` lists
+the dev targets. `docs/SOURCES.md`
 reviews the reference stacks and ODVA documents this project draws on.
 Licensed under the Apache License 2.0 (`LICENSE`, `NOTICE`); `LICENSING.md`
 says which parts of the wider project (the relay, the marketplace, the

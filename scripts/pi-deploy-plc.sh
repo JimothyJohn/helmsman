@@ -201,6 +201,16 @@ if sudo nft list table inet perceptronics >/dev/null 2>&1; then
         sudo nft add rule inet perceptronics input ip saddr $allow udp dport '{ 44818, 2222 }' accept comment '\"helmsman-plc\"'
         echo 'opened 44818 tcp+udp, 2222 udp from $allow'
     fi
+    # The Devices scan broadcasts ListIdentity and each device answers to
+    # the scan's own port from its 44818: conntrack cannot tie a unicast
+    # answer to a broadcast, so policy drop ate every reply (the Pi saw no
+    # ioLogik, 2026-11-06). Accept them from \$allow only.
+    if sudo nft list chain inet perceptronics input | grep -q 'comment \"helmsman-plc-scan\"'; then
+        echo 'scan rule already present'
+    else
+        sudo nft add rule inet perceptronics input ip saddr $allow udp sport 44818 accept comment '\"helmsman-plc-scan\"'
+        echo 'accepting ListIdentity answers (udp from port 44818) from $allow'
+    fi
     case '$api' in
         127.*) ;;
         *)
@@ -233,7 +243,7 @@ local_api="127.0.0.1:$api_port"
 answering=
 for _ in $(seq 1 10); do
     # shellcheck disable=SC2029 # $local_api is meant to expand here.
-    if ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/modules >/dev/null"; then
+    if ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/health >/dev/null"; then
         answering=1
         break
     fi
@@ -250,14 +260,17 @@ ssh "$target" "curl -fsS --max-time 2 http://$local_api/ | grep -q '<canvas' \
 # because it comes from the Pi itself. -k: the certificate is self-signed;
 # its fingerprint, printed below, is what a person checks instead.
 # shellcheck disable=SC2029 # $local_api is meant to expand here.
-ssh "$target" "curl -fsSk --max-time 2 -o /dev/null https://$local_api/api/modules" \
+ssh "$target" "curl -fsSk --max-time 2 -o /dev/null https://$local_api/api/health" \
     || { echo "FAIL: the box API does not answer over HTTPS on the Pi's $local_api" >&2; exit 1; }
-# shellcheck disable=SC2029 # $local_api is meant to expand here.
-fingerprint=$(ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/policy" \
+# Every read needs a session (card read-lock): the unit's token, read on
+# the Pi and never printed here.
+auth='-H "Authorization: Bearer $(sudo cat /var/lib/helmsman-plc/api-token)"'
+# shellcheck disable=SC2029 # $local_api and $auth are meant to expand here.
+fingerprint=$(ssh "$target" "curl -fsS --max-time 2 $auth http://$local_api/api/policy" \
     | grep -o '"fingerprint":"[0-9A-F:]*"' | cut -d'"' -f4 || true)
 if [ "$mode" = projects ]; then
     # shellcheck disable=SC2029 # $local_api is meant to expand here.
-    running="$(ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/running")" \
+    running="$(ssh "$target" "curl -fsS --max-time 2 $auth http://$local_api/api/running")" \
         || { echo "FAIL: the box answers without projects (is it running --projects?)" >&2; exit 1; }
     case "$running" in
         *'"current":true'*) echo "running: $running" ;;

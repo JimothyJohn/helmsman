@@ -15,7 +15,7 @@ roadmap card, by id).
 
 ```
                        ┌──────────────────────────── relay (planned: relay-v0) ─┐
-                       │ per-box token · Anthropic key · metering · prompts     │
+                       │ per-box token · model API key · metering · prompts    │
                        └──────────────▲─────────────────────────────────────────┘
                                       │ HTTPS, box-initiated
  ┌──────────────────────────── the box (Pi 5) ───────┼────────────────────────────┐
@@ -66,9 +66,13 @@ Three directions of traffic, three different rules:
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
 | `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10, 43/14 Read Device Identification), reply checks (exact lengths, exceptions, echoes, identification objects), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
+| `helmsman-profinet` | PROFINET IO, RT class 1, as bytes and as two state machines without I/O (every call takes `now`): DCP (Identify, Set), the DCE/RPC envelope, the Connect / Write / PrmEnd / application-ready / Release blocks, cyclic frames and their layout, alarms; `controller` (an IO controller for one device) and `device` (a simulated IO device for tests and benches). `no_std + alloc`, no dependencies. | built: against its own simulated device and scapy's dissector; no real device yet (`mdrive-bringup`) |
+| `helmsman-dhcp` | A DHCP (IPv4) and BOOTP server for the box's own device network, as bytes and a state machine without I/O (every call takes `now`): the message (RFC 2131, options per RFC 2132 and RFC 3396, BOOTP's 300-octet minimum per RFC 1542), a server that keeps one address per Ethernet address (reservations, the address held before, the one asked for, the pool; a running lease is never taken away), the lease file, and `guard` (a probe DISCOVER, and whether a reply came from another server). `no_std + alloc`, no dependencies. The box runs it with `--dhcp IFACE` (helmsman-plc `dhcp`: the sockets tied to that interface, the probe before serving, the lease file in `<state-dir>/dhcp/leases`, `GET /api/dhcp`). | built: against its own tests and property tests, and the box service on loopback; no device yet |
+| `helmsman-l2` | Raw Ethernet frames of one EtherType on one interface: a BPF device on macOS, a packet socket on Linux; also an interface's IPv4 address and mask (`ipv4_net`) and a UDP socket tied to one interface (`bind_to_interface`: `IP_BOUND_IF`, `SO_BINDTODEVICE`), for the box's DHCP server. The one crate with `unsafe` (libc calls); everything else forbids it. | built: compiled for both, the BPF path not yet run (needs `/dev/bpf*` access) |
 | `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
+| `helmsman-devconf` | Configuration of third-party devices over their own configuration protocols, std only with no dependencies: `moxa_e1200` is the Moxa ioLogik E1200 web console (HTTP client, form and export readers, export / form / set / restart / import / change-password) and `moxa_e1200::sim` (feature `sim`) is a simulated console for tests. A library for now: nothing in the box calls it yet. | built: against its simulator only; the real console was mapped by hand (2026-11-12) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
@@ -90,6 +94,15 @@ With a single program (the default deploy) each scan, every `--scan-ms`
 3. copy `%Q` into assembly 100 (32 B, read by the scanner);
 4. sleep to the next deadline; a late scan skips the periods it missed
    (counted as overruns) rather than bursting.
+
+Each scan's execution time (steps 1 to 3, on a monotonic `Clock` the
+runtime reads twice per scan, scripted in tests) and its start lateness
+(the tick's `now` minus the deadline it was due at) go into a fixed ring
+of the module's newest 1000 scans (`TIMING_WINDOW`; no allocation on the
+scan). `Runtime::timing` gives min, mean, max and a nearest-rank p99 of
+each and when the module last overran; `/api/modules` serves them as
+`timing` (`window`, `exec_us`, `late_us`, `null` before the first scan)
+and `stats.last_overrun_ms_ago`, and the Monitor's status tile shows them.
 
 A fault (division by zero, index out of range, watchdog) zeroes that
 module's outputs and stops it; the adapter stays on the network so the PLC
@@ -139,6 +152,21 @@ scan; the scheduler bounds how often.
   concurrency and time (`modbus-identification`);
   `helmsman_io::resolve`, `device-by-identity`), driver params (`unit`,
   `timeout_ms`, and the serial settings).
+- **Scan** (`POST /api/devices/discover`, `one-scan`): one request asks
+  every protocol the box speaks: the `ListIdentity` sweep, the Modbus
+  identification probe (no `?modbus=1` any more; the old switch is
+  accepted and ignored) and, in a build with `profinet-io` when the
+  running map has a `profinet-io` device naming an interface (`if=`), one
+  PROFINET DCP Identify on it. The answer's `found` is one entry per
+  device: answers that share a MAC are one device, carrying every
+  identity (`identities`: protocol, address, vendor and product fields),
+  whether the map binds it and the library's match; an answer without a
+  MAC joins the device at its address or stands alone. `protocols` says,
+  per protocol, whether it was looked for and why not. `devices` (the
+  EtherNet/IP list) and `modbus` stay for one release for the canvas in
+  the field. The PROFINET Identify is not run by any test on a wire
+  (`resolve::profinet_seen` reads the frames and is tested on built
+  ones).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`
   (metadata, never converted), an optional per-input `poll` period, and a
@@ -212,6 +240,42 @@ scan; the scheduler bounds how often.
   On a box the links share the box's one Class 1 I/O port with its adapter
   (next item); a device line's `io_port=N` gives a link a socket of its own.
 
+- **`profinet`**: `profinet-io`, a PROFINET IO device the box masters
+  as its IO controller (RT class 1). The device line names the station
+  and the modules it is built from, as its GSDML lists them (`device axis
+  profinet-io mdrive if=en0 slots=0:0x1/1:0x1,1:0x30/1:0x1:i128,...`);
+  points are bits and words of the input and output images (every
+  submodule's data in `slots` order), big-endian unless the format ends
+  in `le`. The state machine is `helmsman_profinet::controller`: find the
+  station by name (DCP), give it its address if the line has one, Connect,
+  write the parameter records, PrmEnd, wait for "application ready", then
+  a frame each way every cycle (8 ms by default) with a watchdog of
+  `hold` cycles on both sides. The driver gives it a thread and a `Link`:
+  `SimLink` (a simulated device in the process; `if=sim` under the
+  `profinet-sim` feature loops its outputs to its inputs) or `raw::RawLink`
+  (the `profinet-raw` feature: `helmsman-l2` for the frames, and one UDP
+  socket at port 34964 shared by every link of the box, each datagram
+  handed to the link that last wrote to its sender). Until cyclic data
+  flows a read is a link error whose text is what the startup waits for
+  or why the device refused ("slot 2 holds module 0x99"); a submodule
+  whose data the device marks bad is a point error. Alarms are
+  acknowledged and kept, not yet surfaced. `helmsman-plc`'s `profinet-io`
+  feature turns the real interface on; it is not in the default build
+  until a device has passed the bench. Not done: GSDML import (the
+  `slots=` line is written by hand), record reads, RPC fragmentation (a
+  configuration whose Connect exceeds one datagram is refused at load),
+  RT classes 2 and 3, the box as a PROFINET device.
+  Bench tools: `cargo run -p helmsman-io --features profinet-raw --example
+  profinet_scan -- en0` (who is on the wire) and `--example
+  profinet_watch -- STATION if=... slots=...` (bring one device up and
+  show its inputs); `cargo run -p helmsman-profinet --example
+  startup_pcap` writes a whole startup as a pcap for Wireshark.
+  `/usr/bin/python3 -I scripts/gsdml-slots.py FILE.xml [--slots 1,5,6]
+  [--pdev] [--list]` prints the device line for a vendor's GSDML file
+  (ids, the modules in the slots the access point allows, data lengths),
+  until the box imports GSDML itself. The edge node runs the same
+  controller (docs/EDGE.md "PROFINET on the P4").
+
 - **One Class 1 I/O port per box** (`helmsman_proto::endpoint`). The box
   is a target (scanners send its adapter O->T) and an originator (`enip-io`
   devices send it T->O), and both arrive at UDP 2222. `helmsman-plc` binds
@@ -260,6 +324,60 @@ scan; the scheduler bounds how often.
   combined write-then-read (i2cdev). `helmsman-plc --gpio-chip
   /dev/gpiochipN` picks it; the chip is checked at start. Both features are
   in helmsman-plc's `box`, so the canvas's wasm build has neither.
+- **`profile`** (`device-profiles`, first slice): a device profile is one
+  file per device model (`helmsman-device 1`; vendor, model, kind; the
+  transports that reach it, best first, with their settings; channels by
+  name with type, unit, safe value and their point on every transport).
+  `Profile::map(transport, id, endpoint)` writes the I/O map for one
+  transport, a signal per channel (`rio_di_04_count`), and a profile is
+  accepted only if every transport's map passes the map's own rules.
+  An optional `configure NAME` line (`moxa-e1200` is the only name) says the
+  device has a configuration protocol the box speaks; without it the device
+  has no configuration routes, and a name the box does not know is a profile
+  error naming the line ("Device configuration" below).
+  docs/devices/moxa-iologik-e1213.device is the first: it gives the same
+  40 signals over EtherNet/IP and Modbus TCP and agrees with the two maps
+  written by hand.
+  **A map binds channels, the box picks the protocol**
+  (`profile_driver`, PROTOCOLS.md step 1): `device rio device:moxa-e1213
+  mac=00-90-e8-7e-af-be` names the profile `moxa-e1213.device` (a
+  project file kind, `FileKind::Device`, found by
+  `helmsman_plc::driver_dir` in the project's folder, else the box's
+  driver folder; it must pass `Profile::parse` or the map does not load
+  and the problem names the file and line) and `in part_present bool rio
+  ch:DI-04` binds a channel. `ProfileDriver` wraps the real drivers: it
+  opens the profile's transports in the profile's order, moves to the
+  next on a link error before one has worked (the E1213 whose one
+  EtherNet/IP connection another controller owns ends on Modbus TCP),
+  stays once one works, and starts again from the first after a later
+  link loss. `ch:NAME` becomes that transport's point; a point error
+  stays a point error; the one-writer rule holds on channels. The line's
+  own params are `poll_ms` and `DRIVER.KEY=VALUE` for one transport
+  (`modbus-tcp.unit=2`, `enip-io.port=44818`); anything else is refused
+  as the profile's business. The transport in use is reported
+  (`Driver::transport`, `LinkReport::transport`, `/api/devices`
+  `transport`) for a device's details and failure text only: nobody
+  chooses it. A changed profile file is a changed driver (its digest is
+  part of the link's identity), so it replaces the link at the next
+  load.
+  **Timing by itself** (step 4): a profile transport may give
+  `cycle_ms=A..B`, how fast and how slow the device can be asked over
+  it (the E1213's EtherNet/IP: its EDS's RPI range, 100 ms to 3 s). A
+  device by its profile with no `poll_ms` polls at the fastest scan
+  period of the modules that read or drive its signals (`link::pace`,
+  built from the modules at startup and at every reload), held inside
+  the preferred transport's limits, and the driver asks a cyclic
+  transport for the same rate (`ProfileDriver::pace`: `rpi_ms` on
+  `enip-io`, `cycle_ms` on `profinet-io`, a power of two of ms). A typed
+  `poll_ms` wins. A link paced differently is another link, replaced at
+  the reload. Every link measures its own update period on its
+  `cycle_at` clock (the mean of its last `SAMPLES` = 8 good cycles) and
+  says **healthy**, **slow** (more than twice the poll asked) or **lost**
+  (down, with the driver's sentence); it reports whenever that word or
+  the reason changes (`LinkReport`), and `/api/devices` carries `health`,
+  `poll_ms` and `measured_ms`. The Devices tab and the Monitor do not
+  show the word yet (the canvas is step 3's). Not yet: the canvas's
+  add-by-click (step 3), profiles in the device library.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
@@ -284,7 +402,10 @@ manifest declares, and is checked against.
   the commands that changed since the device last took them, then reads
   every input that is due. A link cycles at the fastest of its device's
   `poll_ms` and its inputs' own; an input without one is read at the
-  device's rate. A *link* error (I/O, an invalid reply) marks the link down:
+  device's rate (a device by its profile with no `poll_ms` is paced by
+  its modules: `profile`, above). A link measures its own update period
+  and says healthy, slow or lost (`Health`, `LinkReport`).
+  A *link* error (I/O, an invalid reply) marks the link down:
   its inputs go missing, and it forgets what the device holds, so every
   output is written again on reconnect. A *point* error (a value the point
   can't hold, a device exception, an unknown tag) stays on that signal: it
@@ -613,12 +734,25 @@ scanned in lockstep on one clock at the project's period; each scan the
 test runs first, its `VAR_OUTPUT`s are copied into the program's
 `VAR_INPUT`s of the same name, the program runs, its `VAR_OUTPUT`s are
 copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
-`ASSERT` failed (named as words, with its declaration line's comment, and
-when), either side faulted or does not compile, a shared port's types
-differ, `DONE` never came within the limit (two minutes of simulated
-time), or the test holds no `ASSERT` at all. The test's first comment is
-the requirement in the engineer's words. Deterministic: no wall clock, no
-I/O.
+`ASSERT` failed (named as words, with its declaration line's comment,
+when, and what the test held of the shared ports then, `lamp=FALSE`; a
+failure on the first scan says the program had not run yet and what a
+test reads is one scan old), either side faulted or does not compile, a
+shared port's types differ, `DONE` never came within the limit (two
+minutes of simulated time), the test holds no `ASSERT` at all, a declared
+`ASSERT` was never called (the block latches `CHECKED` on its first
+call), the test shares no port with the program (reads no output, drives
+no input), so it could pass whatever the program does, the test declares
+a program port in a section that does not connect it (`Misdeclared`: a
+program output in the test's `VAR`, a program input in its `VAR_INPUT`;
+the verdict says where it goes), or it assigns one program input more
+than once at the top level of its body (`DrivenTwice`: a script written
+as if statements waited). The structural ones are found before a scan
+runs, so the verdict names the cause and not the first `ASSERT` that
+happened to fail (2026-11-12: model-written scenarios read an output from
+a plain `VAR` and failed "at 0.00 s" three times over). The test's first
+comment is the requirement in the engineer's words. Deterministic: no
+wall clock, no I/O.
 
 **Untested** (Nick, 2026-11-05). A test file that states its requirement
 (a first comment) but declares no `ASSERT`, or whose PROGRAM has an empty
@@ -631,9 +765,31 @@ green, so an older client reads an untested one as not passed) and an
 `untested` count; `ok` and `red` count only the red ones. A file with no
 comment, a body and no `ASSERT` is still red.
 
+**On the command line** (`cli-test-runner`). `helmsman-plc test
+PROJECT_DIR [--junit FILE] [--scan-ms MS]` (`project::check::cli`) reads
+a project folder with the store's rules (`project::read_folder`, which
+`Projects::read` also uses), builds it as a deploy does
+(`project::build::build`, for a box started with the defaults) and runs
+`project::check::run_tests`, the function the tests route and the deploy
+gate call, so CI runs the box's tests. Exit 0 green or untested, 1 a red
+test, 2 does not build (each problem `DIR/FILE:LINE:COL`), 64 usage, 74
+I/O. A warning (below) is printed on stderr as `DIR/FILE:LINE:COL: warning:
+message` and never changes the status; in the report it is the `build`
+case's `<system-out>`, and the case still passes. `--junit` writes the
+report whole or not at all
+(`project::junit`, by hand, no dependency): a `build` case, then one per
+test file in name order; red is `<failure>`, untested `<skipped/>`. It
+needs `box` (the project rules and the build live there) but opens no
+socket. docs/ci/ holds a GitHub Actions template for a project's own
+repository.
+
 **Writing a requirement** (`POST /api/projects/{p}/requirements`,
-`api::requirements`). The Requirements tab becomes a list of plain-words
-requirements; typing one has the agent write the test behind it. The
+`api::requirements`). *The canvas side of this, the Requirements tab, is
+archived since 2026-11-08 (Nick: "not that useful and creates more issues
+than it solves"; the scenarios the Agent writes with each change are the
+tests) under `crates/helmsman-canvas/archive/requirements/`; the route
+stays on the box without a caller.* The Requirements tab was a list of
+plain-words requirements; typing one had the agent write the test behind it. The
 request is `{text, name?}`: one line (no control characters), 1 to 500
 characters trimmed; `name` is snake case (`spec::name_ok`, 1 to 48 of
 `a-z 0-9 _`, starting with a letter), else the box slugs the words
@@ -685,7 +841,7 @@ answer is tested with the candidate file in place); a box runs them when a
 project opens, after each save (`POST /api/projects/{p}/tests`, token or
 session, nothing changes) and inside the deploy's approval path, where a
 red test refuses with 409 before anything builds (`projects::red_tests`).
-The Requirements tab of the right panel shows one row per test, green or
+The Requirements tab of the right panel (archived 2026-11-08) showed one row per test, green or
 red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
 same gate.
 
@@ -702,7 +858,18 @@ written (`verify::check`): the code taken into a copy through
 `scope::apply`, the scenarios added, compiled, the scenarios run with
 the project's own tests, and the whole-file rule (`verify::full_copy`: no
 elision markers, every POU with its header and END_ line, the landed file
-equal to the code). A failure goes back with what failed, up to two
+equal to the code). Three more rules keep a scenario honest: when the
+answer changes what the file does, a scenario must fail on the file as it
+was (`verify::indistinct`); a scenario marked `replaces test_X` stands only
+when X is red with the new code, and the outcome keeps both wordings
+(`verify::contradicted`, `Check::replaced`); a block that never closes
+means the answer was cut off and is red. A stop for `max_tokens` (page) or
+`budget` (box) is a failed run, never a complete answer. The file goes
+once: when the program is that one file, `<current_program>` points at the
+`text:` in `<edit_scope>`. On a box the check runs at the image sizes and
+scan period the box reports for the project (`tests` in `GET
+/api/projects/{p}`), and an instruction ends if another project is opened
+before its answer is in. A failure goes back with what failed, up to two
 retries (`verify::next`); still red, nothing is written and the tab says
 why. Green is written into the file at once and saved as one revision
 whose Agent page is `instruct::record` (instruction, reason, scenarios,
@@ -804,13 +971,75 @@ signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
   same bounds; a bad file starts with no pins) so they survive a restart,
   while history stays in memory and starts over (card
   `trend-pins-persist`). Signed out, the browser keeps them
-  (`localStorage`, wrapped). `GET /api/trends?signals=a,b` (open, like
-  every read) answers `{now_ms, window_ms, signals: [{name, points: [[t_ms,
+  (`localStorage`, wrapped). `GET /api/trends?signals=a,b` (a session,
+  like every read) answers `{now_ms, window_ms, signals: [{name, points: [[t_ms,
   value]]}], unknown, refused}` and keeps those signals tracked for a day
   after the last ask; the page asks on open, on every pin change and every
   10 min. A person's pins stay tracked while pinned.
 - **The tab** draws up to six pins as steps over the box's window,
   extended by each values event (`at_ms`), the last value held to now.
+
+## The desk (`desk-on-box`, built)
+
+What a person had in front of them on the box's page (the open project
+and file, unsaved edits with the box version each was made against, the
+Agent's input, the screen, the sign-in name, never
+a password or PIN): `crates/helmsman-canvas/src/desk.rs` keeps it in the
+browser (`localStorage`, at most 1 MiB, written at most once a second when
+it changed) and, signed in, on the box per person (`OnBox`), so it follows
+the person between screens.
+
+- **On the box** (`api/desk.rs`): `GET /api/desk` answers the session's
+  own desk (`{owner, desk}`, `desk` null when there is none; 401 signed
+  out) and `PUT /api/desk` sets it (a login session; the box token is no
+  one, 400). The owner is the session's, as for the trend pins (an
+  account, or the role for a role-PIN session); neither route takes one
+  from the request. The body is read into the desk's own fields and
+  written back from them, so anything else in it is dropped. At most
+  512 KiB (413 past it), 64 people (507 for a new one past that, rather
+  than dropping someone's unsaved work); every PUT is audited. Kept in
+  the state directory's `desks/` (0700, one file per owner named by the
+  owner in hex, written atomically, read under the same bound).
+- **Newer wins.** The desk carries `saved_at`, when its work (the edits
+  and the inputs) last changed, never moving back. On sign-in the page
+  asks for the box's desk before sending any, and takes it when it is
+  newer than its own (the project opens again with its file and edits,
+  as after a reload); otherwise its own goes to the box. The box refuses
+  a desk older than the one it holds (409), and the page then reads the
+  newer one. A role change on the same account keeps the desk; signed
+  out, or with the box not answering, the browser's is the desk.
+- **Taking a newer desk never drops an unsaved edit.** The edits are
+  merged per file: one edited here stays as it is here (for a file edited
+  on both screens this page's text stays, and saving it is refused as
+  stale if the box's copy moved), and the other screen's other edits come
+  in. With an unsaved edit in the open project the page stays on that
+  project and file; typed inputs, a conversation and a half-filled form
+  stay too. A different person signing in on the same page (the desk
+  names its owner in this browser) starts the page empty and asks for
+  their desk; an answer for the person before is dropped by its `owner`.
+- **A desk this page cannot read in full.** Each field is read on its own,
+  so a newer page's conversation does not take the edits down. A browser
+  slot that did not read in full is left as it is until the person
+  changes something, and a box desk that is not a desk at all is not
+  fought over: the browser keeps it and the page says so.
+- **The Agent's conversation and the device form** (`desk-agent-and-forms`).
+  The desk also keeps the Agent tab's turns with the box's agent and the
+  last instruction's outcome (`desk::Conversation`), and a half-filled New
+  device form with its points (`devices::NewDevice`; the EDS by its file
+  name in the project, never its bytes). The conversation is capped at
+  128 KiB of the desk: the newest turns first, each with at most 16 KiB of
+  answer, 2 KiB of message and 40 rows (proposals first), and an Undo only
+  while its file is at most 64 KiB. The form keeps 256 rows and 256
+  characters a field, and any setting whose key names a credential
+  (`desk::is_secret_key`: a password, PIN, token, key or secret) is left
+  out. Both count as work, so a change dates the desk. Past the box's
+  512 KiB the conversation goes first, then the form, then the biggest
+  edits. After a
+  reload an instruction that was under way is over with nothing written,
+  and the proposals its turn stored are still linked; a proposal decided
+  since (no longer a draft in the Proposals list) shows as decided and is
+  not offered again. The box reads both into their own shape like the rest
+  of the desk, so any other field is dropped.
 
 ## Snapshots (`snapshots`, built)
 
@@ -885,6 +1114,50 @@ carried as `swap` carries one, new ones start cold, ones dropped have their
 bytes zeroed and signals made safe), run by the scan thread between ticks;
 see the approval policy below.
 
+## RETAIN across a restart (`retain-persist`, built)
+
+A deploy carries every variable; a restart of the box (reboot, power cut,
+killed process) keeps the ones a program declares in a `VAR RETAIN`
+block, and only those (`NON_RETAIN` and plain `VAR` start at their initial
+values). Contract in `crates/helmsman-iec/tests/retain.rs` and
+`crates/helmsman-plc/tests/retain.rs`; code in `helmsman-iec`'s `state.rs`
+(`Program::retain_state`, `State::encode`/`decode`,
+`Program::restore_retain`) and `helmsman-plc`'s `retain.rs` (`box`).
+
+- **The checker warns where RETAIN is not kept**: inside a
+  `FUNCTION_BLOCK` (declare the instance RETAIN in the program instead) or
+  a `FUNCTION`, on `VAR_TEMP` or a located variable. A warning
+  (`Program::warnings`, the checker's first non-blocking diagnostic; the
+  box logs it at start and lists it with the project check, see **Warnings**
+below) never stops the program, since such code compiled
+  when RETAIN was ignored and older projects must still open. Errors only
+  for what was never valid: RETAIN with `NON_RETAIN` or `CONSTANT`, and
+  past `MAX_RETAIN` (65 536) values per program. Nothing is kept in part.
+- **On disk**: `<state-dir>/retain/<module>.ret`, magic `HRT1`, length,
+  CRC-32 and the encoded state (each variable's name, type shape and
+  values). Written through a temporary file, synced, renamed, folder
+  synced.
+- **Rate**: the scan thread never writes. At most once a second it hands
+  the modules' RETAIN values to a writer thread through a latest-wins slot
+  it only `try_lock`s; the writer writes a module only when its values
+  changed. A power cut loses at most the last second. A module a deploy
+  removes, or one with no RETAIN left, has its file removed.
+- **Planned stop**: SIGTERM and SIGINT (`signal-hook`, `flag` only, behind
+  `box`) set a flag the scan loop checks once per scan; it then makes an
+  unthrottled offer (`Writer::offer_now`), waits up to 5 s for the writer
+  (`Writer::flush`), prints `SIGTERM: RETAIN values written, exiting` and
+  exits 0, so a planned stop keeps every RETAIN value. The snapshot store
+  writes on deploy, not periodically, so it needs no last write.
+  `HELMSMAN_EXIT_WITH_STDIN` (tests) still exits at once, unflushed.
+- **At start** each ST module's file is restored by name and type, the
+  rules a deploy carries by; stderr names what was restored, what starts
+  fresh because its type changed or it is new, and what was dropped. A
+  damaged or oversize (over 8 MiB) file is reported, moved aside to
+  `.ret.damaged`, and the module starts cold.
+- A cold restart from the API resets RETAIN too (IEC 61131-3's cold
+  restart). Not yet: RETAIN inside a function block type, and `%M`
+  retention.
+
 ## Box API (`box-api`, built)
 
 `helmsman-plc --api ADDR` (default `127.0.0.1:8080`, `0.0.0.0:8080` for the
@@ -923,13 +1196,34 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   `EventSource` streams follow the page's scheme, so the canvas needs
   nothing.
 
-- **Reads** (`GET`) are open: signals with live values, quality and point errors, modules
-  (source, manifest, ports, status, stats), a module's latest trace (a
-  `GET` requests the next traced scan; 202 until one lands), output commands
-  and safe values, device links, proposals, the audit log, and snapshots
-  (`--store`: history, a snapshot's files, a diff). Two event streams (SSE:
-  one-way is all the canvas needs, and it is plain HTTP, so the same bounded
-  parser serves it): live values and status, and a module's traces.
+- **Reads** (`GET`) need a session like everything else, since card
+  `read-lock` (Nick, 2026-11-08, `secure-defaults`): before it a box bound
+  to the LAN showed its programs, the I/O map, live values, the audit log
+  and the snapshots to whoever reached the socket. The reads: signals with
+  live values, quality and point errors, modules (source, manifest, ports,
+  status, stats), a module's latest trace (a `GET` requests the next
+  traced scan; 202 until one lands), output commands and safe values,
+  device links, the EtherNet/IP adapter (`GET /api/adapter`:
+  `{protocol, bind, on}`, `bind` the address its listener really holds,
+  absent when it is off; the Devices tab names it under the tree and says
+  nothing for an older box's 404), proposals, the audit log, and snapshots (`--store`:
+  history, a snapshot's files, a diff). Two event streams (SSE: one-way
+  is all the canvas needs, and it is plain HTTP, so the same bounded
+  parser serves it): live values and status, and a module's traces. What
+  answers without a session: the canvas's own files (the page has to load
+  to sign in), `GET /api` (the route list), `GET /api/health` (`{up,
+  build}`, nothing else, for a monitor to poll), `GET /api/login`
+  (`{credentials}`: `pins`, `accounts`, `unavailable` or `none`, so the
+  sign-in form knows what to ask before there is a session) and `GET
+  /api/site` (what the beacons already tell the whole LAN; the site view
+  reads it across origins). `GET /api/session` answers 401 itself. A read without a
+  credential is 401 before any routing, so nothing can be probed, and it
+  is logged but never audited. The canvas asks the person to sign in on
+  the first 401 and reads nothing until they do; the EtherNet/IP adapter
+  stays on at boot (being an adapter to another PLC is the job, and it
+  never writes to other controllers), and OPC UA stays loopback-only,
+  anonymous, read-only. The box's own agent, MCP and the test runner send
+  the box token on their reads, as they did on their writes.
 - **Everything else** needs `Authorization: Bearer <token>` (64 hex
   digits, made on first start in `api-token`, mode 0600, under
   `--state-dir` or systemd's `StateDirectory=`, else `helmsman-state` in
@@ -966,8 +1260,10 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   `GET /api/session` says who the cookie (or a bearer session) is, so a
   reloaded page knows; `POST /api/logout` ends it on the box and sends
   `Max-Age=0`; any 401 on a cookie also clears it.
-- **CSRF.** A request authenticated by the cookie (any method but `GET`,
-  which is a read) must carry exactly one `X-Helmsman-Request: 1` (a
+- **CSRF.** A request authenticated by the cookie (any method but `GET`:
+  a read changes nothing, the cookie is `SameSite=Strict`, and the
+  canvas's `EventSource` streams cannot send a header, so a `GET` takes
+  the cookie alone) must carry exactly one `X-Helmsman-Request: 1` (a
   cross-site form cannot send a custom header; a cross-site `fetch` with
   one needs a preflight the box never answers) and an `Origin` equal to
   the scheme the request came over (`https://` over TLS, `http://`
@@ -991,7 +1287,13 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   directory's two files, or one param's value): parsed, compiled against its
   windows, held to its manifest, its signals checked against the box, and,
   when the box runs a change set, carrying the change set applying it would
-  commit, its snapshot id, its diff and its tier. The only way a draft runs
+  commit, its snapshot id, its diff, its tier and a preview of what it
+  does to the running values (`state`: which keep, which reset because
+  they are new or their type changed, which are dropped; `api/carry.rs`,
+  worked out once at creation by restoring freshly compiled target
+  programs from freshly compiled running ones, never from the scan
+  thread's state). An apply answers, and audits, the carry the swap
+  actually made (`Runtime::last_carry`). The only way a draft runs
   is `apply`, the only way back `rollback`, both through the approval
   policy (below). A project deploy (`projects`, below) is an apply of
   the project's build, through the same path, by an engineer's session.
@@ -1024,6 +1326,20 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   are cached a year (`immutable`), everything else revalidates
   (`no-cache`); HTML carries a CSP of `'self'`, `'wasm-unsafe-eval'` and its
   own inline scripts by SHA-256.
+- **Build match** (`build-match`): the box and the canvas are built
+  separately, so both carry a stamp, `HELMSMAN_BUILD`, baked in by
+  `crates/build_stamp.rs` (the build scripts of helmsman-plc and
+  helmsman-canvas `include!` it; helmsman-canvas's build script then
+  rasterizes the glyph library, `assets/glyphs/*.svg`, into alpha masks
+  with resvg, a build dependency that never reaches the wasm graph;
+  `glyph_lib` tints them when it draws, docs/UI.md "Glyph library"):
+  `git describe --always --abbrev=9`,
+  `HELMSMAN_BUILD` from the environment if set, "unknown" without either.
+  Every reply, files and event streams too, carries the box's as
+  `X-Helmsman-Build`; the canvas reads it off its fetches (the device poll
+  every 5 s, so a box restarted on a new build is heard within that) and
+  shows a banner under the header when the two are known and differ
+  (`stamp::differs`; "unknown" on either side is no mismatch).
 
 ## Approval policy (`approval-policy`, built)
 
@@ -1195,7 +1511,12 @@ threads, the Modbus simulator over TCP).
 
 The editor's projects (docs/UI.md "Projects", build step 2):
 `helmsman_plc::project` (folders, rules, `build`, `zip`) and
-`api/projects.rs` (routes); contract in `tests/projects.rs`.
+`api/projects.rs` (routes); contract in `tests/projects.rs`. Every
+release opens every older project: `tests/project_compat.rs` lays down
+one frozen project per release (`tests/fixtures/projects/<release>/`,
+the first `unreleased-20261107`) and opens, builds, scans and tests it
+on the current build; a construct the build no longer accepts is a
+listed problem on its file and line, and the project still opens.
 `helmsman-plc --projects` turns it on: projects live in
 `<state-dir>/projects/<name>/` (`/var/lib/helmsman-plc/projects/` on a
 Pi), the store defaults to `<state-dir>/store/`, and the box boots the
@@ -1216,7 +1537,16 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
 - **Names and contents.** A project is 1..=48 of `a-z 0-9 _ -` (lower
   case, so a case-folding file system never merges two); a file is
   `NAME.st` (1..=64 of `A-Z a-z 0-9 _ -`, no case-only twins), `io.map`
-  or `project.settings`. Checked after percent-decoding, so `..`,
+  or `project.settings`, or a file this release has no use for and
+  **keeps** (a newer release's: `helmsman_project::kept_name`, 1..=64 of
+  `A-Z a-z 0-9 _ - .` starting and ending with a letter or digit, no
+  `..`, no reserved name: a fixed file in another case, `revision.json`,
+  `page.md`, `drivers`, a DOS device name, `.st` / `.eds` / `.wasm` in a
+  form not otherwise valid). A kept file is plain text under the same
+  size caps, at most 64 of them, never parsed or run; the build lists it
+  as a problem ("not used by this release: kept"), and a read, a replace,
+  a `.zip` and the revision history carry it byte for byte. Checked after
+  percent-decoding, so `..`,
   `%2e%2e`, `a%2fb`, `a\b`, `C:` and NUL name nothing. Contents are
   UTF-8 without NUL, other controls (tab, CR, LF aside) or bidirectional
   overrides (no Trojan Source in reviewed code); at most 256 KiB a file,
@@ -1227,21 +1557,20 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   or after a racing save. A save may name the version (SHA-256) it read
   (`version`, or `null` for "new only"): a stale one is 409, so two
   editors never silently clobber each other.
-- **Starters** (`helmsman_project::starters`): the worked machines and
-  templates, real files under `crates/helmsman-project/starters/`, compiled
-  in with `include_str!` so the browser's simulation and a box offer the
-  same text. A starter is `main.st` (the controls and its PROGRAM, one per
-  project), `plant_model.st` (a simulation of the machine, its calls marked
-  PLANT, deleted when real I/O is wired), `io.map` (every signal, on the
-  box's own channels or `screen`, so it deploys with nothing wired) and the
-  shared blocks it uses (`starters/blocks/`). They are built on what the
-  library has (`BLINK_PATTERN` in `stack_light`); PID is written in ST
-  (`pid_loop.st`). The box has no route for them: the canvas holds them and
-  sends a new project as its `.zip` to `POST /api/projects/{p}/zip`.
-  A project opens on its `main.st` when it has one. Tests:
-  `helmsman-canvas/src/starter_tests.rs` (each machine runs on the simulated
-  scan clock and trips when an input is forced) and
-  `box_projects_tests.rs` (each deploys against the real API).
+- **Examples** (`helmsman_canvas::playground::EXAMPLES`; Nick,
+  2026-11-05, which retired the starter machines and templates, kept in
+  git history): five short programs, one idea each, as the first chapters
+  of a Structured Text book teach them. Inputs are `VAR_INPUT`s the I/O
+  tab switches, outputs `VAR_OUTPUT`s it shows. An example opens
+  read-only; picking one asks for a name and makes a project of the
+  program and an `io.map` derived from its ports
+  (`sim_projects::example_project`, `example_io_map`). The box has no
+  route for them: the canvas sends the new project as its `.zip`
+  (`box_projects::create_from`). A project opens on its `main.st` when it
+  has one. Tests: `playground_tests.rs` (each compiles, draws and has
+  I/O, and stays short) and `box_projects_tests.rs` (each deploys against
+  the real API). The edge node's bench programs, the old batch mixer
+  among them, live in `crates/helmsman-node/bench/`.
 - **Build** (`project::build`): each PROGRAM becomes a module named as
   the PROGRAM in lower case. Its `module.st` is every file in name
   order under a `(* file NAME *)` line with every other PROGRAM blanked
@@ -1268,6 +1597,25 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   that is and whether it is still what runs (a later apply or rollback
   moves the head, and `current` goes false). The running project cannot
   be deleted; a rename carries the record.
+- **Warnings** (`checker-warnings-shown`): what a build has to say that
+  does not stop it, `build::build_noted` returning them beside the
+  result, an error or not (`Built::problems` for a good build). Today:
+  the checker's (`helmsman_iec::compile_warned`, so a PROGRAM with an
+  error still lists its RETAIN warnings) located at their file and line
+  like errors, and a `diagram.layout` that will not read. One shape end
+  to end: `{file, line, col, message, severity}` in the check answer's
+  `warnings` (an older box has no such field and the canvas reads none),
+  `severity` `"warning"` here and `"error"` on `diagnostics`. The ST
+  lints (`st-lints`) add an optional `id` and a `blocking` flag to a
+  warning; the canvas already reads both (`projects::Diag`) and a reader
+  that does not know them ignores them. The canvas lists errors first
+  then warnings under the editor (a warning with the word `warning`
+  before it and the warning colour), marks a warning line with a thick
+  underline and no red ground, and logs them as one Messages warning;
+  the browser simulation does the same from `Session::warnings`. A
+  deploy takes no warnings into account, and the deploy route's answer
+  does not list them (the check before it does). `POST
+  /api/proposals/check` (a draft) does not list them yet.
 - **ZIP** (`project::zip`, in the `helmsman-project` crate since the
   simulation uses it too; hand-written on APPNOTE 6.3.10; DEFLATE through
   `miniz_oxide`, already in the lockfile): a download is the files
@@ -1278,7 +1626,8 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   encryption, symlinks or other non-files, names UTF-8, local and central
   headers agreeing. One common top-level folder (a plain name, never
   `..`) is stripped and `__MACOSX/` and `.DS_Store` skipped; anything
-  else must be a project file name at the top level or a WASM driver,
+  else must be a project file name (a kept one too) at the top level or a
+  WASM driver,
   `drivers/NAME.wasm` (NAME a slug; "WASM drivers"), so zip-slip names
   are refused, not cleaned. A refused upload writes nothing, and a
   replacing one leaves the old project whole until the new one is in.
@@ -1297,30 +1646,30 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   engineer or above (an account's, or the engineer's role-PIN session on
   a box without accounts). The box token alone is 403 there: the agent
   drafts proposals, never edits the editor's files. `check` takes the
-  token or any session; reads are open like every `GET`. Every call is
-  audited with the person.
+  token or any session; reads take any session, like every `GET`
+  (card read-lock). Every mutating call is audited with the person.
 
 Endpoints (also in `api/projects.rs` and `GET /api`):
 
 | route | who | body / answer |
 | --- | --- | --- |
-| `GET /api/projects` | open | `{projects: [{name, running}], running}` |
+| `GET /api/projects` | session | `{projects: [{name, running}], running}` |
 | `POST /api/projects` | engineer | `{name}` or `{name, from}` (copy); 201 |
-| `GET /api/projects/{p}` | open | `{name, running, files: [{name, bytes, version}], drivers: [{name, bytes, sha256}]}` |
+| `GET /api/projects/{p}` | session | `{name, running, files: [{name, bytes, version}], drivers: [{name, bytes, sha256}]}` |
 | `DELETE /api/projects/{p}` | engineer | 409 for the running project |
 | `POST /api/projects/{p}/rename` | engineer | `{to}` |
-| `GET /api/projects/{p}/files/{f}` | open | `{name, text, version}` |
+| `GET /api/projects/{p}/files/{f}` | session | `{name, text, version}` |
 | `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
 | `DELETE /api/projects/{p}/files/{f}` | engineer | |
-| `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval}`, or 422 `{diagnostics: [{file, line, col, message}]}` |
+| `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval, diagnostics: [], warnings: [{file, line, col, message, severity: "warning"}]}`, or 422 `{diagnostics: [{file, line, col, message, severity: "error"}], warnings: [...]}`. `warnings` never stop a check, a save or a deploy |
 | `POST /api/projects/{p}/tests` | token or session | `{ok, red: [line], untested, tests: [{file, requirement, state, passed, why, scans, elapsed_ms}]}`; `state` is `passed`, `failed` or `untested` (never red) |
 | `POST /api/projects/{p}/requirements` | engineer | `{text, name?}`; an event stream: the agent writes the requirement's test (see Requirement tests) |
 | `POST /api/projects/{p}/replay` | engineer | sim replay evidence, as `POST /api/proposals/{id}/replay` |
 | `POST /api/projects/{p}/deploy` | engineer | `{replay?}`; as apply, plus `project: {name, recorded}` |
-| `GET /api/projects/{p}/zip` | open | `application/zip` |
+| `GET /api/projects/{p}/zip` | session | `application/zip` |
 | `POST /api/projects/{p}/zip[?replace=true]` | engineer | `application/zip` body; 201 new, 200 replaced |
 | `POST /api/projects/{p}/import?file=F[&replace=true]` | engineer | the file's bytes; 201 `{name, version, bytes}` |
-| `GET /api/running` | open | `{project, snapshot, running, current}` |
+| `GET /api/running` | session | `{project, snapshot, running, current}` |
 
 **In the Editor** (`helmsman-canvas`: `box_projects.rs` decides,
 `box_view.rs` draws, `projects.rs` is the Files sidebar the simulation
@@ -1361,8 +1710,10 @@ and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
 errors and block clicks map to a file and line. Typing only checks
 (`Session::check`: errors marked, the program running and its diagram
-untouched); Deploy compiles and runs it in the page (`Session::set_source`),
-and a project that does not compile is refused with the old program still
+untouched); Deploy compiles and runs it in the page (`Session::deploy`),
+a hot swap as on a box (retained state carried by name and type, the image
+and the clock kept, the notice naming what could not be carried), and a
+project that does not compile is refused with the old program still
 running, as on a box. Upload and Download use `helmsman-project`'s `.zip`;
 `.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
 L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
@@ -1483,6 +1834,37 @@ converts or nothing is written.
   most programs run all 40 scans, so it is never vacuous). A real Studio
   5000 export is still to come (`l5x-real-export`).
 
+### Stop, run and restart a module (`monitor-box-run-stop`, built)
+
+`Runtime::stop`, `run` and `restart` (`runtime.rs`), the control job on
+the swap channel (`api/swap.rs`, `Control`), and the routes
+(`api/control.rs`); contract in `tests/run_stop.rs` (with a property
+test over any mix of stops, runs, restarts and ticks) and the `control`
+tests in `tests/projects.rs`; the Monitor's buttons in
+`box_projects_tests.rs`.
+
+- **What.** `POST /api/modules/{name}/stop` makes the module
+  `Status::Stopped`: not scanned, its `%Q` window zero and its output
+  signals at their safe values at once, the other modules on their
+  schedule. `run` scans it again with its state as it was, on its own
+  phase, so the stop counts as neither scans nor overruns (it also clears
+  a fault). `restart` is a cold restart (`Logic::reset`), on its phase
+  too. Each is idempotent.
+- **When.** The scan thread does it between two ticks with the table
+  locked, like an apply; a job not taken within the swap wait is
+  withdrawn and never lands later (503).
+- **Who.** An engineer login session of at least the role the policy
+  names for `output-affecting` (a stop moves outputs), without the
+  replay; the box token, a PIN alone's lesser roles and an operator get
+  403. Every outcome is audited, refusals too, and only a module the
+  catalog lists is named in the audit.
+- **How long.** Until a run or a restart. A deploy, swap or reload keeps
+  a stopped module stopped (a faulted or held one still restarts
+  running); the box restarting starts every module.
+- **Seen.** `state: "stopped"` with `stopped_by` and `stopped_at` in the
+  module's `status` (`/api/modules`, `/api/modules/{name}`, the values
+  stream); `stopped` in the site counts and in OPC UA's module state.
+
 ### Forced inputs (`force-inputs`, built)
 
 `helmsman_plc::force` (the set and how it applies) and `api/forces.rs`
@@ -1535,8 +1917,11 @@ module's unit tests.
 `helmsman-plc --relay URL --relay-token FILE [--relay-agent v7]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
-an Anthropic key, and names no model, prompt or tool schema: the relay
-serves those per agent version (relay protocol v1).
+a model API key, and names no model, prompt or tool schema: the relay
+serves those per agent version (relay protocol v1). Which model answers is
+the relay deployment's setting (`RELAY_MODEL` in `../agent-relay`; today
+DeepSeek V4.1 Flash through OpenRouter), reported back as the `model` label
+in `relay_usage`; the box treats it as a label.
 
 - **The loop.** One user message: send the conversation to
   `POST /v1/agents/{version}/messages`, assemble the streamed assistant
@@ -2167,8 +2552,19 @@ agent as ST; nothing here writes ST back).
   proven by rendering every scan of a run with the API's own renderer and
   comparing annotations and explanations. Connection status: connecting,
   connected, reconnecting, unreachable after 3 failures; a failed stream
-  is closed and reopened after 2 s doubling to 30 s (the canvas's backoff,
-  not the browser's). The decisions (`remote::BoxState`) are free of I/O
+  is closed and reopened after a steady 2 s (the canvas's backoff, not the
+  browser's). A page no box ever answered falls back to the simulation on
+  the first failure and makes one more look in the background
+  (`remote::Probe`, `BoxState::probe_at`: a single `GET /api/modules`
+  while paused), offered in a popup if a box answers (`box_popup`). The box ends each stream at 600 s, so one that was
+  delivering is reopened at once and the link stays connected; a values
+  stream that opens and then says nothing for 5 s is closed and opened
+  again (and counted), since a half-open connection raises no error. A box
+  that answers `GET /api/modules` is a box even when its 8 stream slots are
+  taken. The page takes the box's streams while it shows any screen, and
+  closes them while it simulates in the browser; the transport keeps only
+  the newest values (and each module's newest trace) of an unread backlog.
+  The decisions (`remote::BoxState`) are free of I/O
   and tested natively against the real API. **Simulation** (the ST
   playground below: docs/playground/, `?playground` or `?demo`, native,
   or "Simulate in this browser" from the ⋯ menu or when the box is
@@ -2187,7 +2583,13 @@ agent as ST; nothing here writes ST back).
   path. A program whose newest scan is over 3 s old, or every program
   while the values stream is down or silent for 3 s, is drawn grey with
   the age: never a colour. It sends only GETs and stream opens (tested);
-  leaving it closes the all-modules stream and reopens the Editor's.
+  leaving it closes the all-modules stream and reopens the Editor's. Over
+  a slow link no poll is asked for again while its last ask is on its
+  way: the 5 s device round waits for all its reads (`/api/devices`,
+  `/api/io_map`, `/api/adapter`), the header badge's 30 s proposals round for its list
+  (contract in `slow_link_tests.rs`: the Monitor against the real API
+  through an in-process proxy with a site VPN's 300 ms round trip,
+  1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
 
 ## Explain mode (`explain-mode`, built)
 
@@ -2229,6 +2631,66 @@ path that drives an output).
   route's profile, see Requirement tests). `GET /api` says whether the box has an
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.
+
+## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
+
+For someone in trouble who did not write the program (Nick, 2026-11-07,
+interview). The box's Agent tab has two modes, "Change the program" (the
+instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`),
+switched by a two-glyph toggle (< > and ?) at the tab's top right; the
+heading names the mode, with a dot for the agent's state beside it (green
+online, red offline, grey until heard; Nick, 2026-11-08):
+the person says what went wrong, and the answer is a plain-language
+diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
+issue or to another agent. Nothing is filed. A question about how things
+work ("How do I load a program?"; Nick, 2026-11-08, after one came back
+as an issue template) is answered from the help pages instead, with
+links to them, and no issue is written.
+
+- **`POST /api/help {question, messages?}`** (`api::help`; any
+  credential, the box token or any login session, since it changes
+  nothing; audited). `messages` is the page's Messages as text
+  (`messages::Log::text`); the box keeps the newest 16 KiB. The box adds
+  its own context: build (version, the build stamp `helmsman_plc::BUILD`
+  that the API sends as `X-Helmsman-Build`, OS, arch), the project it runs and that snapshot
+  (12 hex digits), and each device link with its state, error and
+  address (as `GET /api/devices`).
+- **Redaction** (`help::redact`): every string of the context, the
+  question, and the finished issue (whoever wrote it) lose the box
+  token, the relay token, any run of 32+ hex digits (session tokens,
+  keys), `hmr1_...`, the word after `Bearer`, the value after a secret
+  key and `:` or `=` (`token`, `pin`, `password`, `cookie`,
+  `helmsman_session`, `*_key`, ...) and the digits after `PIN`. A
+  property test and `tests/help.rs` assert that none reaches the relay
+  or the answer.
+- **The agent** is the relay's help profile (`--relay-help-agent V`,
+  default `helmsman/help-v1`, not served yet) with two tools, run in
+  process (`Agent::chat_local`): `submit_issue {diagnosis, title,
+  what_happened, expected?, steps?, suspected_files?}` for trouble, and
+  `answer_question {answer, pages?}` for a question, `pages` being names
+  of help pages. The box checks both (lengths; a suspected file is a
+  relative repository path, optionally `:LINE`, linked to
+  `github.com/JimothyJohn/helmsman/blob/dev/...`; a page must be one of
+  `help::pages::ALL`). One user message: the fixed `help::ASK`, then the
+  question, the context and the help pages in the `<box-data>` envelope.
+  Budget: 4 turns, 32k output tokens, 3 min.
+- **The help pages ride along** (`help::pages`): `docs/help/*.md`, the
+  Markdown the site builds (`scripts/build-help.sh`), compiled into the
+  box with `include_str!` (about 40 KiB per request; the generated
+  keyboard and starters pages are left out). A new page goes into
+  `pages::ALL` and the script's list. Offline, the same pages give the
+  box its own lead for a question (`pages::suggest`): a section whose
+  heading shares a word with the question, ranked by heading then body
+  matches, at most five, deterministic; a report of trouble (no `?`, no
+  question word first) gets no guess.
+- **Without the agent** (no relay, offline, the relay answering
+  `unknown_agent_version`, or neither tool called) the box writes the
+  issue from the question and its context, and `done` says why there is
+  no diagnosis (`stop: "unavailable"` for a profile the relay does not
+  serve). Events: `help` (the context), `text`, `tool_call`,
+  `tool_result`, `retrying`, then `answer {text, pages}` and/or `issue`
+  (at most once each; `issue` always when there is no `answer`), `pages`
+  (the box's suggestion, only without an `answer`), `done` or `error`.
 
 ## Proposal review (`proposal-ui`, built)
 
@@ -2355,6 +2817,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   program is a `helmsman_iec::Program` scanned directly on the page's
   clock (at most 500 scans a frame); the last scan of each frame is
   traced for the diagram. A fault stops it; Run or Step restarts it cold.
+  A fault or a Stop turns the outputs off, as the box does for a module.
   Loading an example or Claude's code compiles it and leaves it stopped.
 - **Virtual I/O** from the program itself: each `VAR_INPUT` a control
   (BOOL: a push button when named like start/stop/reset/pulse, else a
@@ -2364,6 +2827,18 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   value outside its type's range never reaches the program. The Trend
   tab: up to six pinned signals over the last 10 s.
 - **The live diagram** is the box's (`st_view::Viewer`).
+- **The guided tour** (`tour.rs`; `?tour`, Help › Take the tour; Nick,
+  2026-11-06): a card beside the control each step is about, the control
+  outlined, over everything in the `Tooltip` order so no panel moves. A
+  step advances on what the app shows (`tour::Seen`, read by
+  `PlaygroundView::tour_seen`), measured from what it showed when the
+  step began, so Back never lands on a step already done: Blink's name
+  popup, a project of the visitor's own, an edit that compiles, the edit
+  running, a pick, the trend's window or signals, a request to the Agent
+  (or Skip this step). Anchors are `Chrome::hits` keys, the first drawn
+  wins (the control, else its tab, else its pane's strip). Contracts in
+  `tour_tests.rs` (the state machine) and `ui_tests.rs` (`tour`: start to
+  finish on the real interface; Skip leaves the app as it was).
 - **Claude** (its tab). Calls the Messages API from the page:
   `claude-sonnet-5-5` by default (Opus 5.5 and Haiku 5.5 selectable),
   streamed, API version `2026-10-21`, `max_tokens` 16000, effort medium,
@@ -2395,11 +2870,252 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   preflight it never grants), a same-origin `Origin` when one is sent,
   1 MiB bodies; it passes on only `anthropic-version` and `anthropic-beta`
   and serves files only from its directory.
+- **Free chat** (a build setting, off by default). Built with
+  `HELMSMAN_FREE_CHAT_URL` (`scripts/build-playground.sh`), the page
+  sends instructions to the relay's demo function instead
+  (`claude::Route::Free`, the relay's `docs/demo.md`): the body is the
+  turns and nothing else, since the relay there pins the prompt, the model
+  and the output cap, and earlier turns are dropped oldest first to fit
+  its limits. The Agent tab then has no key field and no model picker,
+  and one notice under the box saying the text goes to a hosted model. The
+  page asks the relay once whether the chat is open
+  (`GET /demo/v1/status`); closed or out of reach, the tab says so in
+  place of the box and asks one question (which service the visitor would
+  want), sent once to `POST /demo/v1/survey`. The build puts the relay's
+  origin in the page's `connect-src` in place of the model API's, so a
+  page on the free chat cannot reach the model API at all. A local proxy,
+  when there is one, still wins. Tests: `playground_tests.rs` ("the free
+  chat"), `the_free_chat_tab_has_no_key_and_keeps_the_panel_width`
+  (`ui_tests.rs`).
+- **The Agent ladder** (`agent_ladder_tests.rs`, ignored: it spends
+  tokens). The page's instruction loop (`instruct`, `verify`, the
+  retries) driven against a real model through a relay's free chat, one
+  rung at a time: a rename, a timer period, a new input, a new output, a
+  count, an on-delay, a pulse, a FUNCTION_BLOCK refactor, a selected
+  line, a compile fix, a requirement test replaced, a new project, and a
+  two-step chain. Each rung holds a requirement test the model never
+  sees, run on the file that landed, so "applied" also means "right"; a
+  test in the normal suite checks each one is red on the file before
+  and green on a hand-written answer. The free chat's prompt lives
+  twice, here (`claude::SYSTEM`, for the key and proxy routes) and in
+  the relay's `agents/helmsman/playground-vN/system.md`, and a change
+  to one goes to the other as a new profile id. Run against
+  `agent-relay-local demo` (`RELAY_DEMO_ORIGINS=http://localhost:8790`):
+  `HELMSMAN_LADDER_URL=http://127.0.0.1:8787 cargo test -p
+  helmsman-canvas agent_ladder -- --ignored --nocapture`
+  (`HELMSMAN_LADDER_RUNS`, `HELMSMAN_LADDER_ONLY`); each run's
+  requests, answers and failures land in `target/agent-ladder/`. On
+  2026-11-12, DeepSeek V4.1 Flash with the old prompt passed 0 of 13;
+  with the scenario rules rewritten and the runner's sharper verdicts,
+  33 to 36 of 42 with thinking off and 41 to 42 of 42 with thinking on
+  at low effort (relay profile `playground-v2`), about $0.0015 an
+  instruction.
 - **Publishing.** The built page, loader and wasm (wasm-opt `-Oz` through
   trunk, LTO and `opt-level=s` for this build only: 4.7 MB, 1.9 MB
   gzipped) are committed under `docs/playground/`; rebuild with
   `make playground` after a canvas change. Live once dev is merged to
   master.
+
+## Device configuration (`helmsman-devconf`, built: library and simulator)
+
+Some devices are set up through a protocol of their own, not the one the box
+runs its I/O on. `helmsman-devconf` is where those configurators live, one
+module per device, std only, no dependencies (its HTTP client is written in
+the style of `helmsman-agent`'s: one request per connection, one deadline, a
+capped head and body, no redirects, errors that name kinds and never echo a
+header value or a body). It is a library and tests. The box API and the
+canvas do not call it yet; wiring it in is the next card.
+
+**The Moxa ioLogik E1200 web console (`moxa_e1200`)** is the first device.
+The console is a small HTTP/1.1 server on port 80 and is written down, with
+how it was mapped on the bench E1213 (firmware 3.1, 2026-11-12), in
+`devices/moxa/iologik-e1200-web-console.md` in helmsman-devices; the Python
+client there (`scripts/moxa-e1200-console.py`) is the behavioural
+reference. The operations:
+
+| call | what it does |
+| --- | --- |
+| `Console::connect` | `GET /` for the `ChallID` and `MoxaPass` cookies, sent back on every later request. |
+| `export()` | the configuration export (`ik12NN.txt`, named by `06_6.htm`) parsed into sections and keys, a value's `,(label)` suffix split off. It shows the *staged* settings. |
+| `form(page)` | the settings form of a page as a browser would submit it: a fresh `token`, the hidden `code`, unticked checkboxes left out, `IdleTime` and `WDTime` left out unless `EnableIDLE` and `EnableWD` are ticked, other buttons left out. |
+| `set(page, changes)` | `GET /set.htm?<fields>`, then the export lines that changed. Staged until a restart. |
+| `restart()` | `GET /set_ok.htm?token=`, then waits for the whole return (below). |
+| `import(file, overwrite_network)` | multipart `POST /06_5_1.htm`. The unit reboots by itself, so it waits like `restart()`. The IP in the file is applied only with `overwrite_network`, which defaults to off in every caller. |
+| `change_password(old, new)` | `07.htm`: `OldPwd`, `NewPwd` and `ChallID` computed from the cookie with a hand-written MD5, as the page's script does. The reply says "Change Password OK!" or "Change Password Fail!"; the change applies at once, so the next request has no session. |
+
+What it refuses before sending anything: a page outside
+`[0-9A-Za-z_]{1,32}\.htm`, the pages that act when fetched (`08.htm` Load
+Factory Default, `09.htm` and `set_ok.htm` restart, `set.htm`, the import and
+firmware-update targets) except through their own operation, a field the
+form does not have, a hand-set `token` or `code`, a select value the page
+does not offer, a password over 16 characters or outside printable ASCII, an
+empty new password, and an import file that is not an export. A write is
+never retried; a read is retried once, because the console sometimes drops a
+connection opened right after the last one closed. Between requests it waits
+0.3 s.
+
+**A restart is not one outage.** On the real unit a Save/Restart takes about
+21 s and HTTP comes back twice: down at 1.1 s, up at 11.4 s while Modbus
+(TCP 502) is still down, down again at 14.0 s, up for good at 20.0 s (502 at
+20.1 s, EtherNet/IP 44818 at 20.9 s; the same on two reboots). `restart()` is
+finished only when HTTP was seen down, and afterwards HTTP answers and TCP 502
+accepts. It does not wait for 44818, which is off when EtherNet/IP is
+disabled. The wait is bounded (15 s to see it go down, 120 s to come back).
+Staged settings become running across the reboot.
+
+**The simulator (`moxa_e1200::sim`, feature `sim`)** is a `std` TCP listener
+on `127.0.0.1`, started by the crate's own tests through a self
+dev-dependency. It models cookies; a fresh token per page load; staged and
+running settings, with the export rendering the staged ones; the two-phase
+reboot after `set_ok.htm` and after an import, its phases counted in
+connection attempts so a test needs no clock; a Modbus port that refuses
+while the unit reboots; import with and without `NetConfig_OverWrite`; the
+password change decoded with the stored challenge; and an injected
+"drop the next connection". Its pages are minimal HTML with the same form
+shapes as the real ones (General Settings code 41, DO Safe Mode 116, RESTful
+131, EtherNet/IP 141, password 07.htm code 7), none of Moxa's markup. Its
+assumptions are written next to them in `sim.rs`: `set.htm` accepts only the
+latest token issued for a page's code (what the real unit does with a stale
+token is not known); `OldPwd` for a console without a password is the MD5 of
+the empty string; the export's key names are synthetic except the ones the
+write-up cites. It also has a locked mode (a password set): the login page,
+the `MD5(password + Token)` post and the session cookie as mapped below, and a
+password change that answers "Change Password OK!" or "Change Password Fail!"
+and ends every session.
+
+**A console with a password** (mapped on the bench E1213 with a password set,
+2026-11-12). Every page, the export included, answers 200 with a login page
+until the session logs in: `<FORM name=InputPassword method="post"
+action=home.htm>`, a `Password` field (24 characters at most) and a hidden
+`Token` (39 characters, fresh per login page). The page's script posts
+`Password` = hex MD5 of the password followed by the `Token`, with `Token` and
+`Submit=Submit`. A right password gets the frameset back with `ChallID` and a
+new 39-character `MoxaPass`, which is the session; a wrong one gets the login
+page and no cookie. The password is not in the export: the export through the
+login is identical to the one taken before the password was set.
+`Config::password` holds it (its `Debug` is redacted). A read that meets the
+login page logs in once and repeats; a write that meets it logs in and does
+**not** repeat, and says nothing was written (`LoginBeforeWrite`); with no
+password configured the error is `PasswordRequired`. A refused password is
+tried once per session and then not again, so a stale password cannot lock a
+console out by repetition. After `change_password` succeeds the client keeps
+the new password for its next login.
+
+**Not known, so not done:**
+
+- **Changing a password that is already set.** On the real unit it failed
+  twice, moxa -> empty and moxa -> moxa, "Change Password Fail!", with exactly
+  the fields `07.htm`'s script builds; the first change, from no password,
+  was accepted. Not understood and under investigation. The simulator
+  accepts such a change when `OldPwd` is right, which is **not** known
+  behaviour of the unit; do not rely on `change_password` from a set
+  password.
+- **How the real unit ages sessions.** The simulator ends every session at a
+  reboot and at a password change; a login token is valid only while it is
+  the latest issued. Neither is known for the unit.
+- **The wording of an import's reply.** The reply is not parsed; the export
+  read afterwards is the check.
+- A static `disabled` attribute on a field is ignored (a page's script is
+  not run), as the Python client does.
+- Firmware update and Load Factory Default.
+
+### On the box (`devconf-box`: the box API; the canvas and the agent's read-only tools are the next two cards)
+
+**Attaching.** A device profile (`NAME.device`, `helmsman-device 1`, still
+version 1) may carry one more optional line, `configure moxa-e1200`
+(`helmsman_io::profile::CONFIGURATORS`; the bench E1213 profile has it). An
+unknown name is a profile error naming the line (`configure web-console: not a
+configurator this box has (one of moxa-e1200)`); a profile without the line has
+no configuration routes: they answer 404 for its devices. The routes are for a
+device of the **running map** whose driver is `device:NAME`; the profile is
+the one the box loaded with that map. The console is at the device's host (the
+address its link resolved, else the map's device endpoint), port 80.
+
+**Routes.** `{id}` is the device id in the running I/O map. Every write is
+audited. Reads need what `GET /api/devices` needs (any session or the box
+token); every write needs an **engineer login session** (the box token and
+lesser roles are 403). One operation per device at a time, reads included: a
+second concurrent one gets 409 `{"error": ..., "code": "busy", "busy": "restart"}`.
+
+| route | who | request | answer |
+| --- | --- | --- | --- |
+| `GET /api/devices/{id}/config` | read | | 200 `{device, configurator, endpoint, password_stored, facts, export, snapshot, drift}`; `export` is the unit's export text (staged settings, CRLF); `snapshot` is `{file, version, bytes}` or `null`; `drift` is `null` without a snapshot, else `{changed: [{before, after}], added: [line], removed: [line]}` (the saved `.devconf` against the unit now); 502 when the unit does not answer |
+| `PUT /api/devices/{id}/config/password` | engineer | `{password}` (printable ASCII, 1 to 24) | 200 `{password_stored: true}`; write-only: no route returns it |
+| `DELETE /api/devices/{id}/config/password` | engineer | | 200 `{password_stored: false}` |
+| `POST /api/devices/{id}/config/set` | engineer | `{page: "04_1.htm", changes: {"MOD_LOC": "bench"}}` (1 to 64 changes, text values; a checkbox is `"1"` or `"0"`) | 200 `{staged: true, diff: {changed, added, removed}}`; staged until a restart; 422 for an unknown page or field |
+| `POST /api/devices/{id}/config/restart` | engineer | `{interrupts?: bool}` | 200 `{restarted: true, took_ms}` after the unit is back (about 21 s on the real unit, bounded at 135 s); 409 `{code: "interrupts", modules: [..]}` if the running project reads or drives the device and `interrupts` is not `true` |
+| `POST /api/devices/{id}/config/import` | engineer | `{from: "snapshot"}` or `{text: "<export text>"}`, `overwrite_network?: false`, `interrupts?: bool` | 200 `{imported: true, diff, took_ms}`; the unit reboots by itself, so it waits like a restart; the same 409 gate; the network option is sent only when `true`; 404 `no_snapshot` |
+| `POST /api/devices/{id}/config/password` | engineer | `{new}` (1 to 16) | 200 `{changed: true}`; the old password is the kept one; the kept password becomes `new` |
+| `POST /api/devices/{id}/config/snapshot` | engineer | `{version?}` | reads the unit's export and saves it as `{id}.devconf` in the running project, a project file versioned like any other (`version` is the file's SHA-256 you read, `null` for "new only"; a stale one is 409 `stale`); 200 `{file, version, bytes, revision}`; 409 `no_project` when none runs |
+
+`facts` (from the export): `{firmware, watchdog: {enabled, value, label}, eip_enabled, rest_enabled, outputs: [{channel: "DO-00", safe: {value, label}, power_on: {value, label}}]}`; an item is `null` when the export lacks its key. The firmware is the first `[System Information]` entry whose key says firmware or version (the exact key has not been seen).
+
+**Restart and import are synchronous.** The answer comes when the unit is
+back, so the call holds one API worker for about 21 s (at most 135 s: 15 s to
+see it go down, 120 s to come back). The API has 32 workers and its 5 s
+request deadline bounds only reading the request, not the handler or the
+answer, so the rest of the box is served meanwhile (`tests/devconf.rs` proves
+a restart with a long downtime completes through the real server while other
+calls are answered). The canvas shows the device as restarting (below) and its
+fetch simply waits; it must not time out under 150 s.
+
+**Errors** are `{"error": text, "code": word}` with the statuses above plus: 400
+`malformed` body; 401 no credential; 403 not an engineer; 404 `no_device`,
+`not_configurable`, `no_devconf`, `no_snapshot`; 409 `busy`, `interrupts`,
+`password_required` (the console asks for a password and none is kept),
+`login_refused` (the kept one was refused; it is not tried again by that
+session), `login_before_write` (the write met the login page: logged in again,
+**nothing was written**, run it again), `no_project`, `stale`; 422 `refused`
+(input broke a rule; nothing sent), `not_accepted` (the console did not say
+Configuration Complete), `password_failed` ("Change Password Fail!": the real
+unit refuses a change from a password that is already set, not understood),
+`password_unconfirmed`; 502 the unit did not answer or broke HTTP
+(`unreachable`, `protocol`, `restart_not_observed`, `restart_timeout`); 500
+`store` (the kept password could not be written). No error, event, log line or
+audit entry carries a password.
+
+**The secret store.** A device's console password is the one secret the box
+keeps for a third party, and nothing existing fits it: the box token and the
+accounts are the box's own, and the sinks' `Secret` type holds a header value in
+memory. So `<state-dir>/devconf/ID.password` (directory 0700, file 0600,
+written beside the old one and renamed over it, one line) holds it, and in
+memory it is only a `sink::Secret` (whose `Debug` prints nothing) on its way to
+the configurator's own redacted `Secret`. It is set by `PUT` with an engineer
+session, replaced when `POST .../password` succeeds, removed by `DELETE`, and
+returned by no route: not in `GET .../config` (only `password_stored`), nor in
+a project, a snapshot, an export (the unit's export does not hold it), an
+error, an event, an audit entry or a log line; `tests/devconf.rs` searches
+every response body, the audit log and the captured log for it. `ConfigView`,
+the read path the routes and the agent's tools share (`api::devconf::config_view`),
+has no field that can hold it. The file is plain text at rest, as the box token
+and the TLS key are; a box someone can read the state directory of is lost
+anyway. The configurator logs in at most once per call, and a refused password
+is a 409 `login_refused` the person fixes with `PUT`; the box never retries a
+refused one.
+
+**The saved configuration** is the project file `ID.devconf` (`FileKind::Devconf`,
+stem a lower-case slug like a driver name): the export text as read from the
+unit, in the running project, saved by `POST .../snapshot`, versioned, listed,
+revisioned, zipped and diffed like any project file, ignored by the build.
+It is the source of `import {from: "snapshot"}` and of `drift`.
+
+**The interruption gate.** A restart or an import takes the unit off the
+network for about 21 s. If a module of the running project reads or drives a
+signal bound to the device, the call is 409 `interrupts` naming the modules,
+unless the request says `interrupts: true`. (Writes with `set` stage only and
+are not gated.)
+
+**Which devices have configuration.** Each entry of `GET /api/devices` carries
+`configurator`: the `configure` name of the device's loaded profile
+(`"moxa-e1200"`) or `null`. It comes from the profile the box loaded with the
+running map alone, with no contact with the unit and no device lock, so a
+client learns what can be configured with one cheap read and then calls
+`GET .../config` for the devices that name one.
+
+**While a restart or an import runs**, `GET /api/devices` lists that device as
+`{state: "down", health: "lost", restarting: true, error: "restarting for its
+configuration"}`, whatever its link reports meanwhile: a planned outage, not a
+fault.
 
 ## Trust boundaries
 
@@ -2419,6 +3135,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
 | browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; the box serves HTTPS with a self-signed certificate whose fingerprint the person checks once (journal, ⋯ menu), the cookie is `Secure` over it, and plain HTTP is served only from the box's own host | built (`canvas-token`, `box-https`; `helmsman-plc/tests/https.rs`, `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
 | playground visitor ↔ Claude | the visitor's own key, program and question | the key only in `x-api-key` to api.anthropic.com (redacted `Debug`, page CSP `connect-src` to that host and self), memory unless "remember" is ticked; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run; or the local proxy holds the key | built (`playground`) |
+| playground visitor ↔ free chat | the program and the instruction; one survey answer | a page built with `HELMSMAN_FREE_CHAT_URL` holds no key and sends only the turns, to that one origin (page CSP `connect-src` to it and self, no credentials, no referrer); what a stranger can make it cost is bounded by the relay's demo function, not by the page (its own credit-limited key, one pinned profile, counters that close it: the relay's `docs/demo.md`); the answer is checked like any other and never run | page side built, off until the published page is built with the address (`free-chat`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 
@@ -2428,7 +3145,8 @@ prompt. The agent never touches the Rust core.
 ## Where the planned pieces attach
 
 - `approval-policy` (built, above) → `proposal-ui` (built, above): the
-  canvas shows a draft's `approval` (tier, reasons, what it needs), charts
+  canvas shows a draft's `approval` (tier, reasons, what it needs) and
+  its `state` preview in words above the approve button, charts
   its replay, and posts the PIN (or, with accounts, the login session) to
   `apply`. `box-mcp` (built, above) wraps the same routes;
   `local-accounts` (built, above) replaces role PINs with people, keeping

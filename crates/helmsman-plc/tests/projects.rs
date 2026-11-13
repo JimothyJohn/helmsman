@@ -30,7 +30,7 @@ use helmsman_plc::force::{self, Forces};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::policy::account::{self, Accounts, Logins};
 use helmsman_plc::policy::pin::{Gate, Pins};
-use helmsman_plc::policy::{FLOOR, Role};
+use helmsman_plc::policy::{FLOOR, Policy, Role};
 use helmsman_plc::project::build::{self, Shape};
 use helmsman_plc::project::{self, Files, Projects};
 use helmsman_plc::record::{RecordConfig, Recorder};
@@ -159,8 +159,12 @@ struct Bench {
 }
 
 impl Bench {
-    #[allow(clippy::too_many_lines)]
     fn new() -> Self {
+        Self::with_policy(FLOOR)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn with_policy(policy: Policy) -> Self {
         let d = defaults();
         let md = ModuleDir::from_text(Path::new("conveyor"), MANIFEST, SOURCE.into(), &d).unwrap();
         let sizes = ImageSizes {
@@ -203,11 +207,11 @@ impl Bench {
         let now: helmsman_plc::policy::pin::Clock =
             Arc::new(move || t0 + Duration::from_secs(c.load(Ordering::SeqCst)));
         let approval = Approval {
-            policy: FLOOR,
-            gate: Gate::new(Pins::default(), FLOOR.lockout, Arc::clone(&now)).with_logins(Logins::new(
+            policy,
+            gate: Gate::new(Pins::default(), policy.lockout, Arc::clone(&now)).with_logins(Logins::new(
                 state.clone(),
                 1,
-                FLOOR.lockout,
+                policy.lockout,
                 now,
             )),
             plant: Plant {
@@ -447,8 +451,9 @@ fn send(addr: SocketAddr, method: &str, path: &str, bearer: Option<&str>, ctype:
     }
 }
 
+/// A read with the box token (every read needs a session: card read-lock).
 fn get(addr: SocketAddr, path: &str) -> Resp {
-    send(addr, "GET", path, None, "application/json", b"")
+    send(addr, "GET", path, Some(TOKEN), "application/json", b"")
 }
 
 fn post_json(addr: SocketAddr, path: &str, bearer: Option<&str>, body: &Json) -> Resp {
@@ -491,6 +496,11 @@ fn upload(addr: SocketAddr, s: &str, p: &str, zip: &[u8], replace: bool) -> Resp
 
 fn file(addr: SocketAddr, p: &str, f: &str) -> Resp {
     get(addr, &format!("/api/projects/{p}/files/{f}"))
+}
+
+fn is_executable(m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    m.permissions().mode() & 0o111 != 0
 }
 
 /// Every file under `dir`, recursively, as relative paths.
@@ -1043,6 +1053,110 @@ fn download_then_upload_round_trips_byte_for_byte() {
     assert_eq!(file(b.addr, "desk", "main.st").json()["text"], MAIN);
 }
 
+/// A file this build has no use for (a newer release's) is kept through a
+/// zip download, a replace-upload and a new upload, listed by the upload,
+/// and served as opaque text (card `project-unknown-files`).
+#[test]
+fn a_newer_releases_file_survives_a_download_and_a_replace_upload() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(&s, "orig", &[("main.st", MAIN), ("io.map", MAP)]);
+    let kept = "{\r\n  \"curve\": [0.0, 1.5]\r\n}\r\n";
+    let on_disk = b.projects_root().join("orig").join("pump-curves.json");
+    std::fs::write(&on_disk, kept).unwrap();
+
+    // The download holds it; a replace-upload of that download keeps it.
+    let zip = get(b.addr, "/api/projects/orig/zip");
+    assert_eq!(zip.status, 200, "{zip:?}");
+    let r = upload(b.addr, &s, "orig", &zip.body, true);
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        std::fs::read(&on_disk).unwrap(),
+        kept.as_bytes(),
+        "kept byte for byte"
+    );
+    assert_eq!(r.json()["kept"], json!(["pump-curves.json"]), "{r:?}");
+    let f = file(b.addr, "orig", "pump-curves.json");
+    assert_eq!(f.status, 200, "{f:?}");
+    assert_eq!(f.json()["text"], kept);
+
+    // A new project from such an archive is accepted, and builds.
+    let raw = [
+        Raw::file("main.st", MAIN.as_bytes()),
+        Raw::file("blocks.st", BLOCKS.as_bytes()),
+        Raw::file("io.map", MAP.as_bytes()),
+        Raw::file("recipes.v2", b"recipe 1\n\tfill 30\n"),
+        Raw::file("run.sh", b"rm -rf /"),
+    ];
+    let r = upload(b.addr, &s, "copy", &zip_raw(&raw), false);
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(
+        tree(&b.projects_root().join("copy")),
+        ["blocks.st", "io.map", "main.st", "recipes.v2", "run.sh"]
+    );
+    let mode = std::fs::metadata(b.projects_root().join("copy/run.sh")).unwrap();
+    assert!(!is_executable(&mode), "a kept file is never executable");
+    let files = Projects::in_state_dir(&b.state).unwrap().read("copy").unwrap();
+    let built = build::build(
+        "copy",
+        &files,
+        None,
+        &Shape {
+            defaults: defaults(),
+            i_len: 8,
+            q_len: 8,
+        },
+    )
+    .expect("builds");
+    let mut listed: Vec<&str> = built.problems.iter().map(|p| p.file.as_str()).collect();
+    listed.sort_unstable();
+    assert_eq!(listed, ["recipes.v2", "run.sh"], "{:#?}", built.problems);
+
+    // The zip it downloads again uploads to a byte-identical one.
+    let again = get(b.addr, "/api/projects/copy/zip");
+    let r = upload(b.addr, &s, "twice", &again.body, false);
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(get(b.addr, "/api/projects/twice/zip").body, again.body);
+}
+
+/// Kept files count toward the limits a project has: a count, a size per
+/// file and a total, and a flood of them is refused like any other.
+#[test]
+fn kept_files_are_held_to_the_projects_limits() {
+    let b = Bench::new();
+    let s = b.alice();
+    let many: Vec<Raw> = (0..=project::zip::MAX_ENTRIES)
+        .map(|k| Raw::file(&format!("n{k}.txt"), b"x"))
+        .collect();
+    let few: Vec<Raw> = (0..70).map(|k| Raw::file(&format!("n{k}.txt"), b"x")).collect();
+    let big = vec![b'x'; project::MAX_FILE + 1];
+    let each = vec![b'x'; project::MAX_FILE];
+    let total: Vec<Raw> = (0..4).map(|k| Raw::file(&format!("t{k}.dat"), &each)).collect();
+    let zeros = vec![0u8; 8 << 20];
+    for (what, zip) in [
+        ("past the archive's entries", zip_raw(&many)),
+        ("past the project's kept files", zip_raw(&few)),
+        ("one past the file cap", zip_raw(&[Raw::file("big.dat", &big)])),
+        ("past the project's total", zip_raw(&total)),
+        ("not text", zip_raw(&[Raw::file("blob.bin", b"\xff\xfe\x00")])),
+        (
+            "a bomb",
+            zip_raw(&[Raw {
+                deflate: true,
+                size: Some(100),
+                ..Raw::file("bomb.dat", &zeros)
+            }]),
+        ),
+    ] {
+        let r = upload(b.addr, &s, "flood", &zip, false);
+        assert!(r.status == 422 || r.status == 413, "{what}: {r:?}");
+        assert!(
+            !b.projects_root().join("flood").exists(),
+            "{what}: wrote something"
+        );
+    }
+}
+
 #[test]
 fn hostile_archives_are_refused_and_write_nothing() {
     let b = Bench::new();
@@ -1068,7 +1182,25 @@ fn hostile_archives_are_refused_and_write_nothing() {
             zip_raw(&[Raw::file("a/b/x.st", st), Raw::file("a/c.st", st)]),
         ),
         ("symlink", zip_raw(&[symlink])),
-        ("not a project file", zip_raw(&[Raw::file("run.sh", b"rm -rf /")])),
+        (
+            "a path, not a name",
+            zip_raw(&[Raw::file("sub/run.sh", b"rm -rf /"), Raw::file("x.st", st)]),
+        ),
+        (
+            "space in the name",
+            zip_raw(&[Raw::file("run me.sh", b"rm -rf /")]),
+        ),
+        ("a backslash", zip_raw(&[Raw::file("a\\b.sh", b"x")])),
+        ("a reserved name", zip_raw(&[Raw::file("revision.json", b"{}")])),
+        (
+            "a case twin of a known file",
+            zip_raw(&[Raw::file("IO.MAP", b"x")]),
+        ),
+        ("a dot-leading name", zip_raw(&[Raw::file(".env", b"SECRET=1")])),
+        (
+            "an over-long name",
+            zip_raw(&[Raw::file(&format!("{}.txt", "n".repeat(70)), b"x")]),
+        ),
         ("dot file", zip_raw(&[Raw::file(".evil.st", st)])),
         (
             "duplicate",
@@ -1336,6 +1468,101 @@ END_PROGRAM
             .any(|x| x["file"] == *at && x["line"] == *line);
         assert!(hit, "{name}: want {at}:{line}, got {d}");
     }
+    assert_eq!(b.head(), head);
+}
+
+/// A function block that declares RETAIN: the checker warns (it is not
+/// kept inside a function block) and the project still builds.
+const RETAIN_BLOCKS: &str = "\
+FUNCTION_BLOCK Latch
+VAR_INPUT set : BOOL; reset : BOOL; END_VAR
+VAR_OUTPUT q : BOOL; END_VAR
+VAR RETAIN kept : INT; END_VAR
+  q := (q OR set) AND NOT reset;
+END_FUNCTION_BLOCK
+";
+
+#[test]
+fn warnings_are_listed_by_the_check_and_never_stop_a_deploy() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(
+        &s,
+        "warned",
+        &[("main.st", MAIN), ("blocks.st", RETAIN_BLOCKS), ("io.map", MAP)],
+    );
+    // A layout another release wrote: the API refuses to save one that
+    // does not read, but a folder can hold it.
+    std::fs::write(
+        b.state.join("projects/warned/diagram.layout"),
+        "this is not a layout\n",
+    )
+    .unwrap();
+    let before = b.head();
+    let r = post_json(b.addr, "/api/projects/warned/check", Some(&s), &json!({}));
+    assert_eq!(r.status, 200, "{r:?}");
+    let check = r.json();
+    assert_eq!(check["ok"], true, "{check}");
+    assert_eq!(check["diagnostics"], json!([]), "no errors: {check}");
+    let w = check["warnings"].as_array().unwrap();
+    assert_eq!(w.len(), 2, "{check}");
+    assert!(w.iter().all(|x| x["severity"] == "warning"), "{check}");
+    let retain = w.iter().find(|x| x["file"] == "blocks.st").expect("the RETAIN");
+    assert_eq!(retain["line"], 4, "{check}");
+    assert!(
+        retain["message"]
+            .as_str()
+            .unwrap()
+            .contains("RETAIN inside a function block"),
+        "{check}"
+    );
+    let layout = w
+        .iter()
+        .find(|x| x["file"] == "diagram.layout")
+        .expect("the layout");
+    assert_eq!(layout["line"], 1, "{check}");
+    assert_eq!(b.head(), before, "a check changes nothing");
+    // The deploy is exactly what it is without the warnings.
+    let r = b.deploy(&s, "warned");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["snapshot"], check["snapshot"]);
+    wait("the module running", || b.modules() == ["conveyor"]);
+}
+
+#[test]
+fn a_project_with_an_error_and_a_warning_lists_both_told_apart() {
+    let b = Bench::new();
+    let s = b.alice();
+    let broken = "\
+PROGRAM counter
+VAR n : UDINT; END_VAR
+  n := n + undefined_thing;
+END_PROGRAM
+";
+    b.project(
+        &s,
+        "mixed",
+        &[
+            ("main.st", MAIN),
+            ("blocks.st", RETAIN_BLOCKS),
+            ("z.st", broken),
+            ("io.map", MAP),
+        ],
+    );
+    let head = b.head();
+    let r = post_json(b.addr, "/api/projects/mixed/check", Some(&s), &json!({}));
+    assert_eq!(r.status, 422, "the error fails the check: {r:?}");
+    let j = r.json();
+    let errors = j["diagnostics"].as_array().unwrap();
+    assert!(
+        errors.iter().all(|d| d["severity"] == "error") && errors.iter().any(|d| d["file"] == "z.st"),
+        "{j}"
+    );
+    let warnings = j["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{j}");
+    assert_eq!(warnings[0]["severity"], "warning", "{j}");
+    assert_eq!(warnings[0]["file"], "blocks.st", "{j}");
+    assert_eq!(warnings[0]["line"], 4, "{j}");
     assert_eq!(b.head(), head);
 }
 
@@ -1791,6 +2018,10 @@ impl Drop for Plc {
 }
 
 fn plc_projects(state: &Path) -> Plc {
+    // The box takes the token it finds in its state directory, so the
+    // tests' reads (every read needs a session: card read-lock) use TOKEN.
+    std::fs::create_dir_all(state).unwrap();
+    std::fs::write(state.join("api-token"), TOKEN).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
         .args(["--opcua", "off", "--projects"])
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
@@ -2431,4 +2662,191 @@ fn every_save_is_a_revision_an_engineer_can_read_and_restore() {
         json!({ "text": "x", "pages": "no" }).to_string().as_bytes(),
     );
     assert_eq!(r.status, 400, "{r:?}");
+}
+
+fn control(addr: SocketAddr, s: Option<&str>, module: &str, op: &str) -> Resp {
+    send(
+        addr,
+        "POST",
+        &format!("/api/modules/{module}/{op}"),
+        s,
+        "application/json",
+        b"{}",
+    )
+}
+
+impl Bench {
+    fn conveyor(&self) -> Json {
+        get(self.addr, "/api/modules/conveyor").json()
+    }
+
+    fn state(&self) -> String {
+        self.conveyor()["status"]["state"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
+#[test]
+fn an_engineer_stops_runs_and_restarts_a_module_and_each_is_audited() {
+    let b = Bench::new();
+    let a = b.alice();
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+
+    let r = control(b.addr, Some(&a), "conveyor", "stop");
+    assert_eq!(r.status, 200, "{r:?}");
+    let j = r.json();
+    assert_eq!(j["status"]["state"], "stopped", "{j}");
+    assert_eq!(j["status"]["stopped_by"], "alice (engineer)", "{j}");
+    assert_eq!(
+        b.cmd("lamp"),
+        Some(Value::Bool(false)),
+        "safe at once, before the reply"
+    );
+    b.holds(30, "the lamp held at its safe value", || {
+        b.cmd("lamp") == Some(Value::Bool(false))
+    });
+    wait("reads say stopped", || b.state() == "stopped");
+    let m = b.conveyor();
+    assert_eq!(m["status"]["stopped_by"], "alice (engineer)", "{m}");
+    assert!(m["status"]["stopped_at"].as_u64().is_some(), "{m}");
+    let scans = m["stats"]["scans"].as_u64().unwrap();
+    b.holds(20, "not scanned while stopped", || {
+        b.conveyor()["stats"]["scans"].as_u64() == Some(scans)
+    });
+    let listed = get(b.addr, "/api/modules").json();
+    assert_eq!(listed[0]["status"]["state"], "stopped", "{listed}");
+
+    let r = control(b.addr, Some(&a), "conveyor", "run");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["status"]["state"], "running");
+    wait("the lamp on again", || b.cmd("lamp") == Some(Value::Bool(true)));
+    wait("reads say running", || b.state() == "running");
+    assert!(b.conveyor()["status"].get("stopped_by").is_none());
+
+    let carol = b.login("carol", CAROL);
+    let r = control(b.addr, Some(&carol), "conveyor", "restart");
+    assert_eq!(r.status, 200, "an integrator may too: {r:?}");
+    wait("running after the restart", || b.state() == "running");
+    wait("the lamp on after the restart", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
+
+    assert!(b.audited("module conveyor stopped"));
+    assert!(b.audited("module conveyor run"));
+    assert!(b.audited("module conveyor restarted"));
+}
+
+#[test]
+fn stopping_a_module_needs_an_engineer_session() {
+    let b = Bench::new();
+    let bob = b.login("bob", BOB);
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    for op in ["stop", "run", "restart"] {
+        let r = control(b.addr, None, "conveyor", op);
+        assert_eq!(r.status, 401, "{op}: {r:?}");
+        let r = control(b.addr, Some(TOKEN), "conveyor", op);
+        assert_eq!(r.status, 403, "the box token does not {op}: {r:?}");
+        let r = control(b.addr, Some(&bob), "conveyor", op);
+        assert_eq!(r.status, 403, "an operator does not {op}: {r:?}");
+        let r = control(b.addr, Some("not-a-session"), "conveyor", op);
+        assert_eq!(r.status, 401, "a made-up bearer: {r:?}");
+    }
+    b.holds(20, "the lamp stays on", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
+    assert_eq!(b.state(), "running");
+    assert!(b.audited("module control: stop refused, role below engineer"));
+    assert!(b.audited("module control: stop refused, no session"));
+}
+
+#[test]
+fn unknown_modules_and_controls_change_nothing_and_cannot_inject_the_audit() {
+    let b = Bench::new();
+    let a = b.alice();
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    for (module, op, status) in [
+        ("nope", "stop", 404),
+        ("Conveyor", "stop", 404),
+        ("conveyor", "pause", 404),
+        ("conveyor", "STOP", 404),
+        ("conveyor%0Amodule%20conveyor%20stopped", "stop", 404),
+        ("..%2Fconveyor", "stop", 404),
+        ("%00", "stop", 404),
+    ] {
+        let r = control(b.addr, Some(&a), module, op);
+        assert_eq!(r.status, status, "{module}/{op}: {r:?}");
+    }
+    // A read of it is no route (reads 404 what they do not serve), never a stop.
+    let r = send(
+        b.addr,
+        "GET",
+        "/api/modules/conveyor/stop",
+        Some(&a),
+        "application/json",
+        b"",
+    );
+    assert_eq!(r.status, 404, "{r:?}");
+    let r = send(
+        b.addr,
+        "DELETE",
+        "/api/modules/conveyor/stop",
+        Some(&a),
+        "application/json",
+        b"",
+    );
+    assert_eq!(r.status, 405, "{r:?}");
+    b.holds(20, "the lamp stays on", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
+    let log = get(b.addr, "/api/audit?limit=1000").json();
+    for e in log.as_array().unwrap() {
+        let d = e["detail"].as_str().unwrap_or_default();
+        assert!(!d.contains('\n'), "a newline reached the audit: {d:?}");
+        assert!(!d.ends_with("module conveyor stopped"), "an injected line: {d:?}");
+    }
+}
+
+#[test]
+fn a_stricter_policy_asks_its_output_affecting_role() {
+    let policy = Policy::parse("helmsman-policy 1\noutput-affecting integrator replay=yes\n").unwrap();
+    let b = Bench::with_policy(policy);
+    let a = b.alice();
+    let r = control(b.addr, Some(&a), "conveyor", "stop");
+    assert_eq!(r.status, 403, "an engineer is not enough here: {r:?}");
+    assert!(
+        r.json()["error"].as_str().unwrap().contains("integrator"),
+        "{r:?}"
+    );
+    assert_eq!(b.state(), "running");
+    let carol = b.login("carol", CAROL);
+    let r = control(b.addr, Some(&carol), "conveyor", "stop");
+    assert_eq!(r.status, 200, "{r:?}");
+    wait("stopped", || b.state() == "stopped");
+}
+
+#[test]
+fn a_deploy_keeps_a_stopped_module_stopped() {
+    let b = Bench::new();
+    let a = b.alice();
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    let r = control(b.addr, Some(&a), "conveyor", "stop");
+    assert_eq!(r.status, 200, "{r:?}");
+    b.project(
+        &a,
+        "p",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    let r = b.deploy(&a, "p");
+    assert_eq!(r.status, 200, "{r:?}");
+    b.holds(30, "still stopped after the deploy, the lamp safe", || {
+        b.cmd("lamp") == Some(Value::Bool(false))
+    });
+    wait("reads say stopped", || b.state() == "stopped");
+    let r = control(b.addr, Some(&a), "conveyor", "run");
+    assert_eq!(r.status, 200, "{r:?}");
+    wait("the new program drives the lamp", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
 }

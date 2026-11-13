@@ -22,13 +22,14 @@ use crate::theme::{Theme, theme};
 use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
-/// The ST editor's widget id (its selection is the Agent's scope).
-const SOURCE_ID: &str = "pg-source";
 /// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
+/// Under the Agent's box while the free chat answers it.
+const FREE_NOTICE: &str = "Free to try during the early release. What you type is sent to a hosted \
+     model through our relay, so leave out anything confidential.";
 /// Trend line colours, in signal order (the last, white, is the page's ink
 /// in light mode).
-const TREND: [Color32; TREND_SIGNALS] = [
+pub const TREND: [Color32; TREND_SIGNALS] = [
     YELLOW,
     Color32::from_rgb(0x6E, 0xC6, 0xFF),
     Color32::from_rgb(0x9B, 0xE5, 0x8C),
@@ -50,6 +51,12 @@ pub struct Link {
     /// Answers stopped.
     #[cfg(not(target_arch = "wasm32"))]
     pub aborted: usize,
+    /// Requests sent with no answer expected (the survey).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub posted: Vec<Request>,
+    /// The free chats asked whether they are open, by address.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub free_checks: Vec<String>,
 }
 
 impl Link {
@@ -82,6 +89,29 @@ impl Link {
         }
     }
 
+    /// Asks the free chat at `base` whether it is open. Natively there is
+    /// no network here: a test hands the answer in through `inbox`.
+    fn check_free(&mut self, base: &str, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        self.web.check_free(base, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = ctx;
+            self.free_checks.push(base.to_string());
+        }
+    }
+
+    /// Sends a request that expects no answer (the survey). In the
+    /// browser nothing of the link is needed for that; natively the
+    /// request is kept for the tests.
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::unused_self))]
+    fn post(&mut self, req: Request) {
+        #[cfg(target_arch = "wasm32")]
+        crate::web::post_and_forget(req);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.posted.push(req);
+    }
+
     fn drain(&mut self) -> Vec<crate::claude::Incoming> {
         #[cfg(target_arch = "wasm32")]
         return self.web.drain();
@@ -98,6 +128,9 @@ pub struct PlaygroundView {
     seen: Seen,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
+    /// The Agent's last change, marked on the diagram and in the code
+    /// until the file is edited ([`crate::agent_marks`]).
+    pub agent_change: Option<crate::agent_marks::AgentChange>,
     /// Its shared default layout (the project's) and this browser's
     /// tweaks (`arrange.rs`).
     pub layers: Layers,
@@ -111,11 +144,18 @@ pub struct PlaygroundView {
     pub chat: Chat,
     pub link: Link,
     proxy_asked: bool,
+    /// The free chat was asked whether it is open.
+    free_asked: bool,
+    /// The survey's "other" field while it is typed.
+    survey_other: String,
     /// The device library's index, fetched when the Devices tab scans.
     #[cfg(target_arch = "wasm32")]
     library: crate::web::TextFetch,
     /// A one-line note under the top bar (loaded an example, …).
     pub notice: Option<String>,
+    /// The text of `notice` while it says the program is running in this
+    /// page: it goes when the program stops, faults or restarts.
+    running_notice: Option<String>,
     /// The projects, kept in the browser's storage.
     pub proj: SimProjects,
     pub files_ui: FilesUi,
@@ -140,13 +180,6 @@ pub struct PlaygroundView {
     /// (`crate::requirements`): after every build change, before Deploy
     /// and "Use this code".
     pub tests: crate::requirements::Results,
-    /// The Requirements tab's field and open row.
-    pub req_ui: crate::requirements::ReqUi,
-    /// The requirement being added, and the last one's outcome.
-    pub adding: Option<crate::requirements::Adding>,
-    /// The next requirement request's seq: far from the Agent's, so the
-    /// shared transport's answers go to the right one.
-    req_seq: u64,
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
@@ -188,6 +221,7 @@ impl PlaygroundView {
         let mut v = Self {
             session: Session::new(&proj.build_src()),
             viewer: None,
+            agent_change: None,
             layers: Layers::load(tweaks),
             fresh: false,
             viewer_of: String::new(),
@@ -196,11 +230,14 @@ impl PlaygroundView {
             chat: Chat::new(store),
             link: Link::default(),
             proxy_asked: false,
+            free_asked: false,
+            survey_other: String::new(),
             #[cfg(target_arch = "wasm32")]
             library: crate::web::TextFetch::default(),
             log: crate::messages::Log::default(),
             seen: Seen::default(),
             notice: None,
+            running_notice: None,
             proj,
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
@@ -212,9 +249,6 @@ impl PlaygroundView {
             to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
-            req_ui: crate::requirements::ReqUi::default(),
-            adding: None,
-            req_seq: 1 << 40,
             selection: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
@@ -234,7 +268,7 @@ impl PlaygroundView {
     }
 
     /// Runs the open project's requirement tests against its build and
-    /// keeps the results for the Requirements tab.
+    /// keeps the results (the deploy gate reads them).
     pub fn run_tests(&mut self) {
         let plan = self.proj.test_plan();
         let v = helmsman_iec::spec::run_all(&plan, self.test_settings());
@@ -274,6 +308,57 @@ impl PlaygroundView {
         results.refusal()
     }
 
+    /// Checks a PROGRAM answer (`text`) landing as `main.st` of the saved
+    /// project `name`, with the answer's `scenarios` added: the project's
+    /// own files with them, compiled and its requirement tests run, as the
+    /// project will stand. The scenarios come back named free among the
+    /// project's files (they were named free among the files of the open
+    /// example the answer was checked against). Why not, if it must not land.
+    fn program_into(
+        &self,
+        name: &str,
+        text: &str,
+        scenarios: &[(String, String)],
+    ) -> Result<Vec<(String, String)>, String> {
+        let Some(target) = self.proj.saved.get(name) else {
+            return Ok(scenarios.to_vec());
+        };
+        let mut files = target.0.clone();
+        files.insert(helmsman_project::MAIN.to_string(), text.to_string());
+        let mut taken: Vec<String> = files.keys().cloned().collect();
+        let mut named = Vec::new();
+        for (file, t) in scenarios {
+            let want = file
+                .trim_end_matches(".st")
+                .trim_start_matches(helmsman_iec::spec::TEST_PREFIX);
+            let free = format!(
+                "{}{}.st",
+                helmsman_iec::spec::TEST_PREFIX,
+                crate::requirements::name_for(want, &taken)
+            );
+            taken.push(free.clone());
+            files.insert(free.clone(), t.clone());
+            named.push((free, t.clone()));
+        }
+        let plan = helmsman_iec::spec::plan(
+            files
+                .iter()
+                .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
+        if let Err(d) = helmsman_iec::compile(&plan.main, crate::playground::SIZES) {
+            let first = d.first().map_or_else(String::new, ToString::to_string);
+            return Err(format!(
+                "Refused: with {name}'s other files the program does not compile: {first}"
+            ));
+        }
+        let verdicts = helmsman_iec::spec::run_all(&plan, self.test_settings());
+        match crate::requirements::Results::from_verdicts(&verdicts).refusal() {
+            Some(why) => Err(format!("{why} (the program would replace main.st of {name})")),
+            None => Ok(named),
+        }
+    }
+
     /// Loads the open project's build into the session, compiled and
     /// stopped.
     fn reload(&mut self) {
@@ -305,25 +390,26 @@ impl PlaygroundView {
         self.notice = None;
     }
 
-    /// The compile errors, each with its file and line.
+    /// The compile errors, then the checker's warnings, each with its
+    /// file and line.
     #[must_use]
     pub fn diags(&self) -> Vec<Diag> {
-        self.session
-            .diags
-            .iter()
-            .map(|d| {
-                let (file, line) = self
-                    .proj
-                    .locate(d.pos.line)
-                    .unwrap_or_else(|| (self.proj.current.clone(), d.pos.line));
-                Diag {
-                    file,
-                    line,
-                    col: d.pos.col,
-                    message: d.msg.clone(),
-                }
-            })
-            .collect()
+        let at = |d: &helmsman_iec::Diagnostic| {
+            let (file, line) = self
+                .proj
+                .locate(d.pos.line)
+                .unwrap_or_else(|| (self.proj.current.clone(), d.pos.line));
+            (file, line, d.pos.col, d.msg.clone())
+        };
+        let errors = self.session.diags.iter().map(|d| {
+            let (f, l, c, m) = at(d);
+            Diag::error(f, l, c, m)
+        });
+        let warnings = self.session.warnings.iter().map(|d| {
+            let (f, l, c, m) = at(d);
+            Diag::warning(f, l, c, m)
+        });
+        errors.chain(warnings).collect()
     }
 
     /// Opens `file` at `line` in the ST editor.
@@ -350,6 +436,23 @@ impl PlaygroundView {
                         return;
                     }
                 }
+                // A PROGRAM answer into a project that exists replaces its
+                // main.st: that project's own tests must hold with it, and
+                // the scenarios take names free there.
+                let mut scenarios = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
+                if text.to_ascii_uppercase().contains("PROGRAM ") && self.proj.saved.contains_key(&name) {
+                    match self.program_into(&name, &text, &scenarios) {
+                        Ok(named) => scenarios = named,
+                        Err(why) => {
+                            self.notice = Some(why.clone());
+                            self.log.error(
+                                self.session.now_ms as f64 / 1000.0,
+                                format!("Use this code: {why}"),
+                            );
+                            return;
+                        }
+                    }
+                }
                 // Unsaved edits first (a save is a revision: none when
                 // there is nothing to save).
                 if save && self.proj.dirty() {
@@ -362,8 +465,7 @@ impl PlaygroundView {
                 if text.to_ascii_uppercase().contains("PROGRAM ") {
                     dropped = self.land_program(&name, text);
                     // The scenarios its answer passed, kept as its tests.
-                    let tests = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
-                    for (f, t) in tests {
+                    for (f, t) in scenarios {
                         self.proj.files.insert(f, t);
                     }
                 } else {
@@ -560,11 +662,12 @@ impl PlaygroundView {
             .iter()
             .map(|(n, t)| (n.as_str(), t.as_str()))
             .collect();
-        let value = |name: &str| {
-            self.session
-                .trace
-                .as_ref()
-                .and_then(|t| crate::plant::value_in_trace(t, name))
+        let unit = std::cell::OnceCell::new();
+        let value = |pou: &str, name: &str| {
+            let trace = self.session.trace.as_ref()?;
+            let src = self.session.build.as_ref().map_or("", |b| b.src.as_str());
+            let unit = unit.get_or_init(|| helmsman_iec::ast::parse(src).ok()).as_ref()?;
+            crate::plant::value_in_trace(trace, unit, pou, name)
         };
         let live = |name: &str| self.session.value(name);
         let mut states = crate::plant::states(&files, map, &value, &live);
@@ -660,131 +763,17 @@ impl PlaygroundView {
         }
     }
 
-    /// Adds a requirement: the Agent writes its test when it can be
-    /// reached (the visitor's key or the local proxy); else it is written
-    /// as "no test yet".
-    pub fn add_requirement(&mut self, text: &str, ctx: &egui::Context) {
-        use crate::requirements::{Adding, Phase, name_for, page_request};
-        if self.proj.is_example() || crate::requirements::refusal(text).is_some() {
-            return;
-        }
-        let taken: Vec<String> = self.proj.files.keys().cloned().collect();
-        let name = name_for(text, &taken);
-        self.req_seq += 1;
-        let seq = self.req_seq;
-        let mut a = Adding::in_page(text, &name, seq);
-        match self.chat.route() {
-            Ok(route) => {
-                let programs: Vec<(String, String)> = self
-                    .proj
-                    .files
-                    .iter()
-                    .filter(|(f, _)| {
-                        helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
-                            && !helmsman_iec::spec::is_test(f)
-                    })
-                    .map(|(f, t)| (f.clone(), t.clone()))
-                    .collect();
-                let req = page_request(&route, self.chat.model, text, &name, &programs);
-                self.link.send(seq, req, ctx);
-            }
-            Err(why) if matches!(self.chat.proxy, crate::claude::Proxy::Checking) => {
-                a.phase = Phase::Failed(why.into());
-            }
-            Err(_) => {
-                let file = self.write_test(&name, &helmsman_iec::spec::placeholder(&name, text));
-                a.phase = Phase::Untested {
-                    file,
-                    why: "No agent here: paste an API key in the Agent tab, or open the row and write the test yourself."
-                        .into(),
-                };
-            }
-        }
-        self.adding = Some(a);
-    }
-
-    /// Writes `test_<name>.st` into the open project, saved, and runs the
-    /// tests; the file's name.
-    fn write_test(&mut self, name: &str, text: &str) -> String {
-        let file = format!("test_{name}.st");
-        self.proj.files.insert(file.clone(), text.to_string());
-        self.proj.save();
-        self.run_tests();
-        file
-    }
-
-    /// An answer for the requirement being added: taken (`true`) or not
-    /// one of its pieces.
-    fn requirement_answer(&mut self, m: &crate::claude::Incoming) -> bool {
-        use crate::claude::Incoming;
-        use crate::requirements::{Phase, State};
-        let Some(a) = self.adding.as_mut() else {
-            return false;
-        };
-        let seq = match m {
-            Incoming::Status { seq, .. }
-            | Incoming::Chunk { seq, .. }
-            | Incoming::End { seq }
-            | Incoming::Unreachable { seq, .. } => *seq,
-            Incoming::Proxy(_) => return false,
-        };
-        if seq != a.seq {
-            return seq > 1 << 40;
-        }
-        match m {
-            Incoming::Chunk { text, .. } => a.chunk(text),
-            Incoming::Status { status, body, .. } => {
-                a.phase = Phase::Failed(format!(
-                    "the Agent answered {status}: {}",
-                    body.chars().take(200).collect::<String>()
-                ));
-            }
-            Incoming::Unreachable { why, .. } => a.end(Some(why)),
-            Incoming::End { .. } => {
-                a.end(None);
-                if a.busy() {
-                    let (name, requirement) = (a.name.clone(), a.requirement.clone());
-                    let program = a.page_program();
-                    let text = match &program {
-                        Some(p) => format!("{}{}", helmsman_iec::spec::header(&requirement), p.trim_start()),
-                        None => helmsman_iec::spec::placeholder(&name, &requirement),
-                    };
-                    let file = self.write_test(&name, &text);
-                    let row = self.tests.rows.iter().find(|r| r.file == file).cloned();
-                    let a = self.adding.as_mut().expect("still adding");
-                    a.phase = match (program, row) {
-                        (None, _) => Phase::Untested {
-                            file,
-                            why: "the Agent's answer held no test; open the row to write one".into(),
-                        },
-                        (Some(_), Some(r)) if r.state == State::Untested => Phase::Untested {
-                            file,
-                            why: String::new(),
-                        },
-                        (Some(_), Some(r)) => Phase::Written {
-                            file,
-                            state: r.state,
-                            why: r.why,
-                        },
-                        (Some(_), None) => Phase::Written {
-                            file,
-                            state: State::Failed,
-                            why: "it did not run".into(),
-                        },
-                    };
-                }
-            }
-            Incoming::Proxy(_) => {}
-        }
-        true
-    }
-
     /// Stop: the answer under way is dropped and nothing is written.
     pub fn stop_answer(&mut self) {
+        self.stop_answer_with("stopped");
+    }
+
+    /// [`Self::stop_answer`], saying `why` in the instruction's outcome.
+    fn stop_answer_with(&mut self, why: &str) {
         self.chat.stop();
         self.link.abort();
         if self.instruct.busy() {
-            self.instruct.failed("stopped");
+            self.instruct.failed(why);
         }
     }
 
@@ -1001,12 +990,33 @@ impl PlaygroundView {
         })
     }
 
+    /// The ST editor's widget id for the open file (its selection is the
+    /// Agent's scope).
+    pub fn source_id(&self) -> egui::Id {
+        editor::source_id("pg-source", &self.proj.open, &self.proj.current)
+    }
+
     /// Back to the whole file: the selection and the pick go.
     pub fn whole_file(&mut self, ctx: &egui::Context) {
         self.selection = None;
-        editor::deselect(ctx, egui::Id::unique(SOURCE_ID));
+        editor::deselect(ctx, self.source_id());
         if let Some(v) = &mut self.viewer {
             v.pick = None;
+        }
+    }
+
+    /// An instruction belongs to the project it was typed in: when another
+    /// is open before the answer is in, the run ends with nothing written,
+    /// so no retry is built from the other project's source and tests.
+    fn drop_run_of_another_project(&mut self) {
+        let moved = self
+            .instruct
+            .run
+            .as_ref()
+            .is_some_and(|r| r.project != self.proj.open);
+        if moved {
+            self.stop_answer_with("the open project changed while the Agent was answering");
+            self.log_outcome();
         }
     }
 
@@ -1059,14 +1069,81 @@ impl PlaygroundView {
         let Some(o) = &self.instruct.outcome else { return };
         let at = self.session.now_ms as f64 / 1000.0;
         let mut line = o.status.clone();
+        if let Some(w) = &o.why {
+            line.push_str(" Why: ");
+            line.push_str(w);
+        }
         for p in &o.problems {
             line.push(' ');
             line.push_str(p);
         }
+        // A refusal is an error: the Messages count it in red and open
+        // (Nick, 2026-11-13: errors go there, not in the Agent tab).
         match o.kind {
             Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
-            Kind::Refused | Kind::Failed => self.log.warning(at, line),
+            Kind::Refused | Kind::Failed => self.log.error(at, line),
         }
+    }
+
+    /// The Agent's last change, marked while its file is what the Agent
+    /// wrote: the editor's line marks for the file open, the diagram's
+    /// baseline. The first edit (any other text) clears them.
+    pub(crate) fn agent_marks(&mut self, chrome: &mut Chrome) {
+        let text = self
+            .agent_change
+            .as_ref()
+            .and_then(|c| self.proj.files.get(&c.file))
+            .map(String::as_str);
+        if self
+            .agent_change
+            .as_ref()
+            .is_some_and(|c| !c.holds(&self.proj.open, text))
+        {
+            self.agent_change = None;
+        }
+        let c = self.agent_change.as_ref();
+        chrome.st_marks = c
+            .filter(|c| c.file == self.proj.current)
+            .map(|c| c.lines().clone());
+        if let Some(v) = &mut self.viewer {
+            v.baseline = c.and_then(crate::agent_marks::AgentChange::against);
+        }
+    }
+
+    /// Shows `side` of the Agent's last change in its file, compiled and
+    /// running, marked against the other side; nothing is saved (Save
+    /// keeps the version shown).
+    pub fn show_side(&mut self, side: crate::agent_marks::Side) {
+        let Some(c) = self.agent_change.as_mut() else {
+            return;
+        };
+        if c.project != self.proj.open || c.side == side {
+            return;
+        }
+        c.side = side;
+        let text = c.text(side).to_string();
+        let file = c.file.clone();
+        self.proj.files.insert(file.clone(), text);
+        self.proj.current = file;
+        self.reload_running();
+    }
+
+    /// [`Self::reload`], then running if it builds: a change is seen
+    /// working on the canvas at once.
+    fn reload_running(&mut self) {
+        self.reload();
+        if self.session.build.as_ref().is_some_and(|b| b.module.is_some()) {
+            self.session.set_running(true);
+        }
+    }
+
+    /// The Before / After toggle's state: the side shown while the Agent's
+    /// change is the open project's and its file still shows one side.
+    fn swap(&self) -> Option<crate::agent_marks::Side> {
+        let c = self.agent_change.as_ref()?;
+        (c.project == self.proj.open
+            && c.holds(&self.proj.open, self.proj.files.get(&c.file).map(String::as_str)))
+        .then_some(c.side)
     }
 
     /// A checked answer into the open project: unsaved edits are saved
@@ -1101,6 +1178,15 @@ impl PlaygroundView {
             self.proj.save_as("saved before the Agent's change", None);
         }
         let before = self.proj.revisions().last().map(|r| r.n);
+        let was = self.proj.files.get(&apply.file).cloned().unwrap_or_default();
+        let baseline = self.viewer.as_ref().map(|v| std::rc::Rc::new(v.module.clone()));
+        self.agent_change = Some(crate::agent_marks::AgentChange::new(
+            &apply.project,
+            &apply.file,
+            &was,
+            apply.text.clone(),
+            baseline,
+        ));
         self.proj.files.insert(apply.file.clone(), apply.text.clone());
         for (f, t) in &apply.tests {
             self.proj.files.insert(f.clone(), t.clone());
@@ -1111,7 +1197,10 @@ impl PlaygroundView {
             .take(120)
             .collect();
         self.proj.save_as(&what, Some(&apply.record));
-        self.reload();
+        self.reload_running();
+        if let Some(c) = &mut self.agent_change {
+            c.after_module = self.viewer.as_ref().map(|v| std::rc::Rc::new(v.module.clone()));
+        }
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),
@@ -1209,7 +1298,7 @@ impl PlaygroundView {
             chrome.hit("program name", field.rect);
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if let Some(e) = &p.error {
-                ui.colored_label(RED, e);
+                ui.colored_label(crate::theme::theme(ui).ink(RED), e);
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -1249,6 +1338,7 @@ impl PlaygroundView {
     /// One frame of the Editor.
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
+        self.agent_marks(chrome);
         editor::show(ui, chrome, self);
         if self.devices_ui.take_import() {
             #[cfg(target_arch = "wasm32")]
@@ -1256,6 +1346,12 @@ impl PlaygroundView {
         }
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
+        }
+        if let Some(crate::devices::DeviceAct::Quick(q)) = self.devices_ui.quick_ui(&ui.ctx().clone(), chrome)
+            && self.own_project()
+        {
+            self.proj.add_file(&q.file, q.text.clone());
+            self.apply_wiring(&q.wiring);
         }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
@@ -1309,21 +1405,26 @@ impl PlaygroundView {
             self.proxy_asked = true;
             self.link.check_proxy(ctx);
         }
+        if !self.free_asked
+            && let Some(base) = self.chat.free_base().map(str::to_string)
+        {
+            self.free_asked = true;
+            self.link.check_free(&base, ctx);
+        }
         #[cfg(target_arch = "wasm32")]
         if let Some(r) = self.library.take() {
             match r.and_then(|t| helmsman_project::devlib::Index::parse(&t)) {
                 Ok(index) => self.devices_ui.attach_library(&index),
                 Err(why) => {
                     self.devices_ui.library_note =
-                        Some(format!("the device library could not be read: {why}"))
+                        Some(format!("the device library could not be read: {why}"));
                 }
             }
         }
         for m in self.link.drain() {
-            if !self.requirement_answer(&m) {
-                self.chat.receive(m);
-            }
+            self.chat.receive(m);
         }
+        self.drop_run_of_another_project();
         self.settle(ctx);
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
@@ -1337,14 +1438,70 @@ impl PlaygroundView {
     }
 }
 
+impl PlaygroundView {
+    /// The simulation's state and clock as the label beside the run
+    /// glyphs says them (`running · 12.3s`), and whether that is the
+    /// good state (running, no fault).
+    #[must_use]
+    pub fn run_status(&self) -> (String, bool) {
+        let s = &self.session;
+        #[allow(clippy::cast_precision_loss)]
+        let secs = s.now_ms as f64 / 1000.0;
+        let state = s.state();
+        (
+            format!("{} · {secs:.1}s", state.word()),
+            state == crate::playground::RunState::Running,
+        )
+    }
+
+    /// What the guided tour reads of this view (`crate::tour`), with the
+    /// Editor on screen and the trend panel as `chrome` has it.
+    #[must_use]
+    pub fn tour_seen(&self, chrome: &Chrome) -> crate::tour::Seen {
+        use std::hash::{Hash, Hasher};
+        let hash = |f: &dyn Fn(&mut std::collections::hash_map::DefaultHasher)| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            f(&mut h);
+            h.finish()
+        };
+        let blink = crate::sim_projects::example_project(crate::playground::example("Blink").src).0;
+        let trend = &self.session.trend;
+        crate::tour::Seen {
+            editor: true,
+            naming_blink: self.files_ui.naming == Some(projects::Naming::FromStarter(blink)),
+            open: self.proj.open.clone(),
+            example: self.proj.is_example(),
+            source: hash(&|h| self.proj.files.hash(h)),
+            compiles: self.pending.is_none() && self.session.diags.is_empty(),
+            live: self.session.running
+                && !self.session.stale()
+                && self.proj.running.as_deref() == Some(self.proj.open.as_str()),
+            picked: self
+                .viewer
+                .as_ref()
+                .filter(|v| v.pick.is_some() || v.because.is_some())
+                .map(|v| format!("{:?} {:?}", v.pick, v.because)),
+            trend: hash(&|h| {
+                trend.window_ms.hash(h);
+                trend.signals.hash(h);
+            }),
+            asks: self.chat.seq(),
+            keyed: self.chat.route().is_ok(),
+            trend_open: chrome.trend && chrome.bottom == editor::Bottom::Trend,
+        }
+    }
+}
+
 /// What [`PlaygroundView::watch`] compares against.
 #[derive(Default)]
 struct Seen {
     fault: Option<String>,
     diags: Vec<String>,
+    warned: Option<String>,
     notice: Option<String>,
     storage: Option<String>,
     running: Option<bool>,
+    scans: u64,
 }
 
 impl PlaygroundView {
@@ -1353,12 +1510,31 @@ impl PlaygroundView {
     /// the program starting or stopping.
     fn watch(&mut self, t: f64) {
         let fault = self.session.fault.as_ref().map(ToString::to_string);
+        let ended = (self.seen.running == Some(true) && !self.session.running)
+            || (fault.is_some() && fault != self.seen.fault)
+            || self.session.scans < self.seen.scans;
+        self.seen.scans = self.session.scans;
+        if ended
+            && self
+                .running_notice
+                .take()
+                .is_some_and(|n| self.notice.as_ref() == Some(&n))
+        {
+            self.notice = None;
+        }
         if fault != self.seen.fault {
             if let Some(f) = &fault {
                 self.log
                     .error(t, format!("Fault: {f}. Run or Step restarts the program."));
             }
             self.seen.fault = fault;
+        }
+        let warned = projects::warning_summary(&self.diags());
+        if warned != self.seen.warned {
+            if let Some(w) = &warned {
+                self.log.warning(t, w.clone());
+            }
+            self.seen.warned = warned;
         }
         let diags = self.session.diag_lines();
         if diags != self.seen.diags {
@@ -1424,35 +1600,10 @@ impl PlaygroundView {
 }
 
 impl Body for PlaygroundView {
-    fn toolbar(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
-        // Run, step and restart are glyphs over the diagram (app::glyphs);
-        // here only what state the program is in.
-        let s = &self.session;
-        let state = if s.fault.is_some() {
-            "faulted"
-        } else if s.paused.is_some() {
-            "paused"
-        } else if s.running {
-            "running"
-        } else {
-            "stopped"
-        };
-        #[allow(clippy::cast_precision_loss)]
-        let secs = s.now_ms as f64 / 1000.0;
-        ui.label(
-            RichText::new(format!("{state} · {secs:.1}s"))
-                .monospace()
-                .strong()
-                .color(if s.running && s.fault.is_none() {
-                    GREEN
-                } else {
-                    RED
-                }),
-        )
-        .tip(format!(
-            "The simulation's state and clock, after {} scans.",
-            s.scans
-        ));
+    fn toolbar(&mut self, _ui: &mut egui::Ui, _chrome: &mut Chrome) {
+        // Nothing of the simulation's is in the header: its state and
+        // clock sit beside the run glyphs over the diagram
+        // (`App::glyphs`, [`Self::run_status`]).
     }
 
     fn has_notices(&self) -> bool {
@@ -1463,20 +1614,28 @@ impl Body for PlaygroundView {
             || self.proj.storage_problem.is_some()
     }
 
+    fn alarm(&self) -> bool {
+        self.session.fault.is_some() || self.proj.notice.as_ref().is_some_and(|(_, error)| *error)
+    }
+
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = &self.session.fault {
-            ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
+            let text = format!("Fault: {f}. Run or Step restarts the program.");
+            crate::messages::copyable(ui, chrome, "fault", &text, crate::theme::theme(ui).ink(RED));
         }
         if self.session.paused.is_some() {
             let at = self
                 .paused_line()
                 .map_or_else(String::new, |l| format!(" before line {l}"));
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(WARN, format!("Paused at a breakpoint{at}."))
-                    .tip("The diagram and the values show the scan as it stood just before that statement.");
+                ui.colored_label(
+                    crate::theme::theme(ui).ink(WARN),
+                    format!("Paused at a breakpoint{at}."),
+                )
+                .tip("The diagram and the values show the scan as it stood just before that statement.");
                 ui.label(
-                    RichText::new("F10 runs the rest of the scan. Ctrl Enter goes on to the next stop.")
+                    RichText::new("F8 runs the rest of the scan. Ctrl Enter goes on to the next stop.")
                         .color(t.muted),
                 );
             });
@@ -1485,9 +1644,13 @@ impl Body for PlaygroundView {
             ui.label(RichText::new(n).color(t.muted));
         }
         if let Some((n, error)) = self.proj.notice.clone() {
-            let r = ui.label(RichText::new(n).color(if error { RED } else { t.muted }));
-            chrome.hit("notice", r.rect);
-            if error && self.proj.pending.is_some() {
+            if error {
+                crate::messages::copyable(ui, chrome, "notice", &n, crate::theme::theme(ui).ink(RED));
+            } else {
+                let r = ui.label(RichText::new(n).color(t.muted));
+                chrome.hit("notice", r.rect);
+            }
+            if error && (self.proj.pending.is_some() || self.proj.pending_file.is_some()) {
                 let r = ui
                     .button("Replace")
                     .tip("Saves your version over the one kept in this browser.");
@@ -1511,17 +1674,36 @@ impl Body for PlaygroundView {
         let errors = self.session.diags.len();
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
+        let mut go = false;
+        // The header is the open file's name (Nick, 2026-11-08), then word
+        // wrap, then the → that deploys this version.
+        let name = self.proj.current.clone();
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Structured Text").strong())
-                .tip("The open file. It is checked as you type; Deploy runs it.");
+            ui.spacing_mut().item_spacing.x = 6.0;
+            editor::file_header(
+                ui,
+                chrome,
+                &name,
+                "The open file. It is checked as you type; Deploy runs it.",
+            );
+            editor::wrap_toggle(ui, chrome);
+            go = crate::projects::deploy_arrow(
+                ui,
+                chrome,
+                "code deploy",
+                &Ok(()),
+                "Deploys this version: compiles the open project and runs it in the page (Ctrl Shift Enter, File › Deploy).",
+            );
             if self.pending.is_some() {
-                ui.label(RichText::new("…").color(t.muted))
+                ui.add(crate::theme::whole(RichText::new("…").color(t.muted)))
                     .tip("Checking the edit.");
             } else if errors > 0 {
-                ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED))
-                    .tip("The list under the code has each one. Click an error to go to its line.");
+                ui.add(crate::theme::whole(
+                    RichText::new(format!("✖ {errors} error(s)")).color(crate::theme::theme(ui).ink(RED)),
+                ))
+                .tip("The list under the code has each one. Click an error to go to its line.");
             } else {
-                ui.label(RichText::new("✔ compiles").color(t.muted))
+                ui.add(crate::theme::whole(RichText::new("✔ compiles").color(t.muted)))
                     .tip("The program has no errors.");
             }
             if undeployed {
@@ -1530,19 +1712,21 @@ impl Body for PlaygroundView {
                 } else {
                     "The program running is unchanged. Deploy runs this version."
                 };
-                ui.label(RichText::new("· not deployed").color(t.muted)).tip(note);
+                ui.add(crate::theme::whole(RichText::new("· not deployed").color(t.muted)))
+                    .tip(note);
             }
         });
+        if go {
+            self.deploy();
+        }
         let all = self.diags();
         let current = self.proj.current.clone();
-        let diags: Vec<(u32, u32)> = all
-            .iter()
-            .filter(|d| d.file == current)
-            .map(|d| (d.line, d.col))
-            .collect();
+        let diags = projects::marks_in(&all, &current, false);
+        let warns = projects::marks_in(&all, &current, true);
         let avail = ui.available_height();
-        let list_h = if self.session.diags.is_empty() { 0.0 } else { 110.0 };
+        let list_h = if all.is_empty() { 0.0 } else { 110.0 };
         let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
+        let id = self.source_id();
         let Some(text) = self.proj.current_text_mut() else {
             ui.label(RichText::new("No file open.").color(t.muted))
                 .tip("Open or make one in Files.");
@@ -1550,16 +1734,16 @@ impl Body for PlaygroundView {
         };
         let r = ui
             .allocate_ui(size, |ui| {
-                editor::st_editor(ui, egui::Id::unique(SOURCE_ID), text, &diags, MAX_SOURCE, chrome)
+                editor::st_editor(ui, id, text, &diags, &warns, MAX_SOURCE, chrome)
             })
             .inner;
+        chrome.hit("st editor", r.rect);
         if r.changed() {
             self.edited(now);
         }
         // The selected lines, the Agent's scope while there are some. Read
         // while the editor has focus: an editor without it drops its
         // selection, and moving to the Agent tab takes the focus.
-        let id = egui::Id::unique(SOURCE_ID);
         if ui.ctx().memory(|m| m.has_focus(id)) {
             self.selection = editor::selection(ui.ctx(), id).and_then(|(a, b)| {
                 let text = self.proj.files.get(&current)?;
@@ -1568,7 +1752,7 @@ impl Body for PlaygroundView {
         } else if self.selection.as_ref().is_some_and(|(f, ..)| *f != current) {
             self.selection = None;
         }
-        if !self.session.diags.is_empty() {
+        if !all.is_empty() {
             ui.separator();
             egui::ScrollArea::vertical()
                 .id_salt("pg-diags")
@@ -1690,6 +1874,7 @@ impl Body for PlaygroundView {
                     .fetch(helmsman_project::devlib::DEFAULT_URL, &ui.ctx().clone());
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
+            Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
             Some(crate::devices::DeviceAct::OpenMap) => {
                 self.proj.open_file(helmsman_project::IO_MAP);
                 chrome.show_code();
@@ -1697,7 +1882,8 @@ impl Body for PlaygroundView {
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
-                | crate::devices::DeviceAct::Delete(_),
+                | crate::devices::DeviceAct::Delete(_)
+                | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
         }
@@ -1712,61 +1898,21 @@ impl Body for PlaygroundView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Requirements, Tab::Claude]
+        &[Tab::Io, Tab::Palette, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
-            Tab::Io => self.io(ui),
-            Tab::Requirements => {
-                let ctx = ui.ctx().clone();
-                let act = egui::ScrollArea::vertical()
-                    .id_salt("pg-tests")
-                    .show(ui, |ui| {
-                        let files = &self.proj.files;
-                        let source = |f: &str| files.get(f).cloned();
-                        let cannot_add = self.proj.is_example().then(|| {
-                            "Make this example your own first: click it in Files and name it.".to_string()
-                        });
-                        let view = crate::requirements::View {
-                            results: &self.tests,
-                            adding: self.adding.as_ref(),
-                            busy: false,
-                            cannot_add,
-                            source: &source,
-                            agent: "the Agent (your API key or the local proxy)",
-                        };
-                        crate::requirements::ui(ui, chrome, &view, &mut self.req_ui)
-                    })
-                    .inner;
-                match act {
-                    Some(crate::requirements::Act::Add(text)) => self.add_requirement(&text, &ctx),
-                    Some(crate::requirements::Act::Run) => self.run_tests(),
-                    Some(crate::requirements::Act::Edit(f)) => {
-                        self.proj.open_file(&f);
-                        self.reload();
-                        chrome.show_code();
-                    }
-                    Some(crate::requirements::Act::Delete(f)) => {
-                        self.proj.delete_file(&f);
-                        self.req_ui.open = None;
-                        self.run_tests();
-                    }
-                    Some(crate::requirements::Act::Reword { file, text }) => {
-                        self.proj.files.insert(file, text);
-                        self.proj.save();
-                        self.run_tests();
-                    }
-                    Some(crate::requirements::Act::Rewrite { file, requirement }) => {
-                        self.proj.delete_file(&file);
-                        self.req_ui.open = None;
-                        self.add_requirement(&requirement, &ctx);
-                    }
-                    None => {}
-                }
-            }
+            Tab::Io => self.io(ui, chrome),
+            // The shell draws the palette (`palette::show`).
+            Tab::Palette => {}
             Tab::Claude => self.claude(ui, chrome),
         }
+    }
+
+    fn ask_agent(&mut self, text: &str, ctx: &egui::Context) {
+        text.clone_into(&mut self.instruct.draft);
+        self.send_instruction(ctx);
     }
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -1779,6 +1925,10 @@ impl Body for PlaygroundView {
             let area = ui.available_rect_before_wrap();
             v.breaks.clone_from(&self.session.breaks);
             v.paused = self.session.paused_at();
+            let now = ui.input(|i| i.time);
+            for t in self.session.earlier() {
+                v.saw(t, now);
+            }
             v.canvas(ui, scan);
             let mut jump = None;
             if v.pick != self.last_pick {
@@ -1818,7 +1968,7 @@ impl Body for PlaygroundView {
 }
 
 impl PlaygroundView {
-    fn io(&mut self, ui: &mut egui::Ui) {
+    fn io(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
@@ -1862,7 +2012,9 @@ impl PlaygroundView {
                 }
             });
             for (name, v) in set {
-                self.session.set_input(&name, v);
+                if let Err(why) = self.session.try_input(&name, v) {
+                    self.notice = Some(why);
+                }
             }
             ui.add_space(8.0);
             let outputs_tip = if outputs.is_empty() {
@@ -1876,7 +2028,7 @@ impl PlaygroundView {
             }
             let mut picked = None;
             let (cols, col) = columns(ui);
-            egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
+            let grid = egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
                 for pair in outputs.chunks(cols) {
                     for p in pair {
                         ui.scope(|ui| {
@@ -1889,6 +2041,9 @@ impl PlaygroundView {
                     ui.end_row();
                 }
             });
+            if !outputs.is_empty() {
+                chrome.hit("io outputs", grid.response.rect);
+            }
             if let Some(name) = picked {
                 self.pick(&name);
             }
@@ -1902,17 +2057,19 @@ impl PlaygroundView {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
         }
-        ui.label(RichText::new("Signals").strong().color(t.muted))
-            .tip(format!(
-                "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
-            ));
         let points: Vec<String> = self
             .session
             .outputs()
             .chain(self.session.inputs())
             .map(|p| p.name.clone())
             .collect();
+        // The heading shares the signals' row: on a line of its own it
+        // and the slider left the plot the smallest part of the panel.
         ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Signals").strong().color(t.muted))
+                .tip(format!(
+                    "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
+                ));
             for name in &points {
                 let on = self.session.trend.signals.contains(name);
                 let tip = if on {
@@ -1930,7 +2087,10 @@ impl PlaygroundView {
         });
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
-        self.trend_plot(ui);
+        let plot = self.trend_plot(ui, chrome);
+        if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
+            self.session.trend.move_signal(from, to);
+        }
     }
 
     fn claude(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -1940,7 +2100,14 @@ impl PlaygroundView {
             // Room for the scroll bar: a full-width field plus the bar is
             // wider than the panel, and a resizable panel grows to fit.
             ui.set_max_width(ui.available_width() - 12.0);
+            // The free chat: no key and no model to choose. Closed, it
+            // says so and asks its one question in place of the chat box.
+            let free = self.chat.free_base().is_some();
+            if free && self.free_closed_ui(ui, chrome) {
+                return;
+            }
             match self.chat.proxy {
+                _ if free => {}
                 Proxy::Yes => {
                     ui.label(RichText::new("Using the local proxy").color(t.muted))
                         .tip("The API key stays on this machine.");
@@ -1949,38 +2116,133 @@ impl PlaygroundView {
                     ui.label(RichText::new("Checking for a local proxy…").color(t.muted))
                         .tip("With a local proxy the API key stays on this machine.");
                 }
-                Proxy::No => self.key_ui(ui),
+                Proxy::No => self.key_ui(ui, chrome),
             }
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Model").color(t.muted))
-                    .tip("The model that answers. A larger one is slower and costs more.");
-                // No wider than the panel: a row that overflows a resizable
-                // panel widens it every frame.
-                egui::ComboBox::from_id_salt("pg-model")
-                    .width((ui.available_width() - 40.0).max(60.0))
-                    .selected_text(self.chat.model.label())
-                    .show_ui(ui, |ui| {
-                        for m in Model::ALL {
-                            ui.selectable_value(&mut self.chat.model, m, m.label())
-                                .tip(format!("Answers with {}.", m.label()));
-                        }
-                    })
-                    .response
-                    .tip("The model that answers. A larger one is slower and costs more.");
-            });
+            if !free {
+                self.model_ui(ui);
+            }
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
             let view = crate::instruct::View {
                 target: self.scope().label().replacen("Editing: ", "", 1),
                 blocked: self.chat.route().err().map(str::to_string),
                 undo_blocked: self.undo_blocked(),
+                decided: std::collections::BTreeMap::new(),
+                swap: self.swap(),
+                room_below: Some(if free { 60.0 } else { 0.0 }),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
                 Some(crate::instruct::Act::Stop) => self.stop_answer(),
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
+                Some(crate::instruct::Act::Show(side)) => self.show_side(side),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
+            if free {
+                ui.add_space(6.0);
+                let r = ui
+                    .label(RichText::new(FREE_NOTICE).color(t.muted))
+                    .tip("Nothing you type is kept by the relay. It counts requests so that misuse can be stopped.");
+                chrome.hit("agent free notice", r.rect);
+            }
+        });
+    }
+
+    /// The free chat while it is closed or cannot be reached: what
+    /// happened, and once, which service the visitor would want here.
+    /// `false` when it is open or still being asked (the chat box shows).
+    fn free_closed_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) -> bool {
+        use crate::claude::{Free, SURVEY_CHOICES, SURVEY_OTHER_CHARS};
+        let t = theme(ui);
+        let (text, tip) = match self.chat.free {
+            Free::Open | Free::Checking => return false,
+            Free::Closed { reopens: true } => (
+                "The free chat has used up its turns for now. It opens again by itself, usually within a day.",
+                "The free chat runs on a small daily allowance shared by everyone who tries the playground.",
+            ),
+            Free::Closed { reopens: false } => (
+                "The free chat is closed for now. It opens again once we have looked at some unusual traffic.",
+                "The free chat closes itself when it sees far more requests than people trying the playground would send.",
+            ),
+            Free::Unreachable => (
+                "The free chat cannot be reached from here. The editor, the diagram and the simulation work without it.",
+                "The page could not reach the relay that answers the Agent. A firewall or an ad blocker can cause this.",
+            ),
+        };
+        let r = ui.label(RichText::new(text).strong()).tip(tip);
+        chrome.hit("agent free closed", r.rect);
+        ui.add_space(8.0);
+        if self.chat.surveyed {
+            ui.label(RichText::new("Thank you. That is counted.").color(t.muted))
+                .tip("One answer is counted from each visitor.");
+            return true;
+        }
+        if matches!(self.chat.free, Free::Unreachable) {
+            return true;
+        }
+        let ask = "Which AI service would you want to use here?";
+        ui.label(ask)
+            .tip("One click, counted with everyone else's. Nothing else about you is kept.");
+        let mut pick: Option<&str> = None;
+        // Wrapped: a row of buttons wider than the panel would widen it.
+        ui.horizontal_wrapped(|ui| {
+            for (id, label) in SURVEY_CHOICES {
+                let b = ui.button(label).tip(format!("Counts one answer for: {label}."));
+                chrome.hit(format!("survey {id}"), b.rect);
+                if b.clicked() {
+                    pick = Some(id);
+                }
+            }
+        });
+        ui.add_space(4.0);
+        let field = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.survey_other)
+                    .id_salt("pg-survey-other")
+                    .char_limit(SURVEY_OTHER_CHARS)
+                    .hint_text("Another one")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("Name another service, in a few words. These words are kept for 90 days.");
+        chrome.hit("survey other field", field.rect);
+        let send = ui
+            .add_enabled(!self.survey_other.trim().is_empty(), egui::Button::new("Send"))
+            .tip("Sends the name you typed.");
+        chrome.hit("survey other send", send.rect);
+        if send.clicked() {
+            pick = Some("other");
+        }
+        if let Some(choice) = pick
+            && let Some(req) = self.chat.survey(choice, &self.survey_other)
+        {
+            self.link.post(req);
+        }
+        true
+    }
+
+    /// The model picker of the key and proxy routes.
+    fn model_ui(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Model").color(t.muted))
+                .tip("The model that answers. A larger one is slower and costs more.");
+            // No wider than the panel: a row that overflows a resizable
+            // panel widens it every frame. `width` is only a floor, so
+            // the selected text is truncated to the room (2026-11-08:
+            // with two tabs the panel is narrower than this row was).
+            egui::ComboBox::from_id_salt("pg-model")
+                .width((ui.available_width() - 40.0).max(60.0))
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                // The name alone: the note in brackets is in the list.
+                .selected_text(self.chat.model.label().split(" (").next().unwrap_or_default())
+                .show_ui(ui, |ui| {
+                    for m in Model::ALL {
+                        ui.selectable_value(&mut self.chat.model, m, m.label())
+                            .tip(format!("Answers with {}.", m.label()));
+                    }
+                })
+                .response
+                .tip("The model that answers. A larger one is slower and costs more.");
         });
     }
 
@@ -2011,7 +2273,7 @@ impl PlaygroundView {
         ui.add_space(4.0);
     }
 
-    fn key_ui(&mut self, ui: &mut egui::Ui) {
+    fn key_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let held = "Held in this page only; sent only to api.anthropic.com, billed to your account.";
         let key_tip = if self.chat.from_env {
             format!("{held} Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
@@ -2029,6 +2291,7 @@ impl PlaygroundView {
                     .desired_width(f32::INFINITY),
             )
             .tip(&key_tip);
+        chrome.hit("agent key", r.rect);
         if r.changed() {
             self.chat.key_changed();
         }
@@ -2036,7 +2299,7 @@ impl PlaygroundView {
             ui.label(
                 RichText::new("That does not look like an Anthropic key (sk-ant-…).")
                     .small()
-                    .color(RED),
+                    .color(crate::theme::theme(ui).ink(RED)),
             );
         }
         let mut remember = self.chat.remember;
@@ -2054,7 +2317,7 @@ impl PlaygroundView {
                      Untick, or Forget, on a shared computer.",
                 )
                 .small()
-                .color(RED),
+                .color(crate::theme::theme(ui).ink(RED)),
             );
         }
         // Wrapped: in a plain row a label extends, and a row wider than a
@@ -2072,7 +2335,9 @@ impl PlaygroundView {
         ui.add_space(6.0);
     }
 
-    fn trend_plot(&self, ui: &mut egui::Ui) {
+    /// Draws the trend; returns the rect it filled (the lanes' handles go
+    /// over it).
+    fn trend_plot(&self, ui: &mut egui::Ui, chrome: &Chrome) -> Rect {
         let t = theme(ui);
         let trend = &self.session.trend;
         let rect = ui.available_rect_before_wrap();
@@ -2087,32 +2352,32 @@ impl PlaygroundView {
                 FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
-            return;
+            return rect;
         }
         let n = trend.signals.len();
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / n as f32;
-        let end = trend.samples.back().map_or(0, |s| s.t_ms);
+        let end = trend.samples.last_t().unwrap_or(0);
         let window = trend.window_ms.max(1);
         let start = end.saturating_sub(window);
         // Samples older than the window are kept for a wider one: not drawn.
-        let shown = trend.samples.iter().filter(|s| s.t_ms >= start);
         #[allow(clippy::cast_precision_loss)]
-        let x_of = |t: u64| rect.left() + 90.0 + (rect.width() - 96.0) * ((t - start) as f32 / window as f32);
+        let x_of = |t: u64| {
+            rect.left() + 90.0 + (rect.width() - 90.0 - SCALE_W) * ((t - start) as f32 / window as f32)
+        };
         for (k, name) in trend.signals.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = match k % TREND.len() {
-                5 if !t.dark => t.fg,
-                i => TREND[i],
-            };
-            let (lo, hi) = shown
-                .clone()
-                .filter_map(|s| s.values.get(k).copied().filter(|v| v.is_finite()))
+            let color = lane_color(&t, chrome, name, k);
+            let (lo, hi) = trend
+                .samples
+                .lane(k, start)
+                .map(|(_, v)| v)
+                .filter(|v| v.is_finite())
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let last = trend.samples.back().and_then(|s| s.values.get(k).copied());
+            let last = trend.samples.last_value(k);
             painter.text(
                 Pos2::new(rect.left() + 6.0, top + lane / 2.0),
                 egui::Align2::LEFT_CENTER,
@@ -2120,7 +2385,7 @@ impl PlaygroundView {
                     "{}\n{}",
                     name.to_ascii_lowercase(),
                     last.filter(|v| v.is_finite())
-                        .map_or("–".into(), |v| format!("{v}"))
+                        .map_or("–".into(), |v| Value::Real(v).to_string())
                 ),
                 FontId::monospace(crate::theme::MIN_TEXT),
                 color,
@@ -2136,23 +2401,99 @@ impl PlaygroundView {
                 let f = ((v - lo) / (hi - lo)) as f32;
                 top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
             };
-            let mut pts: Vec<Pos2> = Vec::new();
-            for s in shown.clone() {
-                let Some(v) = s.values.get(k).copied().filter(|v| v.is_finite()) else {
-                    continue;
-                };
-                let p = Pos2::new(x_of(s.t_ms), y_of(v));
-                // Steps, not slopes: a PLC value holds until the next scan.
-                if let Some(prev) = pts.last().copied() {
-                    pts.push(Pos2::new(p.x, prev.y));
-                }
-                pts.push(p);
-            }
+            let pts = lane_points(
+                trend
+                    .samples
+                    .lane(k, start)
+                    .filter(|(_, v)| v.is_finite())
+                    .map(|(t, v)| (x_of(t), y_of(v))),
+            );
             if pts.len() > 1 {
                 painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
             }
         }
+        rect
     }
+}
+
+/// One pixel column of a lane's samples: its first, lowest, highest and
+/// last, each with its place in the column's order.
+struct Column {
+    x: f32,
+    n: usize,
+    first: (usize, f32, f32),
+    lo: (usize, f32, f32),
+    hi: (usize, f32, f32),
+    last: (usize, f32, f32),
+}
+
+impl Column {
+    fn new(c: f32, x: f32, y: f32) -> Self {
+        let e = (0, x, y);
+        Self {
+            x: c,
+            n: 1,
+            first: e,
+            lo: e,
+            hi: e,
+            last: e,
+        }
+    }
+
+    fn add(&mut self, x: f32, y: f32) {
+        let e = (self.n, x, y);
+        self.n += 1;
+        if y < self.lo.2 {
+            self.lo = e;
+        }
+        if y > self.hi.2 {
+            self.hi = e;
+        }
+        self.last = e;
+    }
+
+    /// Its kept samples onto `pts`, in time order, each as a step.
+    fn flush(&self, pts: &mut Vec<Pos2>) {
+        let mut kept = [self.first, self.lo, self.hi, self.last];
+        kept.sort_by_key(|e| e.0);
+        let mut prev = None;
+        for (k, x, y) in kept {
+            if prev == Some(k) {
+                continue;
+            }
+            prev = Some(k);
+            // Steps, not slopes: a PLC value holds until the next scan.
+            if let Some(before) = pts.last().copied() {
+                pts.push(Pos2::new(x, before.y));
+            }
+            pts.push(Pos2::new(x, y));
+        }
+    }
+}
+
+/// The polyline of a lane drawn from its samples (x, y in points, x
+/// rising): a step per sample, but each pixel column of them reduced to
+/// its first, lowest, highest and last, in time order. A 10 minute
+/// window of 10 ms scans is 60 000 samples and draws a few thousand
+/// points, the same picture.
+pub fn lane_points(samples: impl Iterator<Item = (f32, f32)>) -> Vec<Pos2> {
+    let mut pts = Vec::new();
+    let mut column: Option<Column> = None;
+    for (x, y) in samples {
+        match &mut column {
+            Some(c) if c.x.to_bits() == x.floor().to_bits() => c.add(x, y),
+            _ => {
+                if let Some(c) = column.take() {
+                    c.flush(&mut pts);
+                }
+                column = Some(Column::new(x.floor(), x, y));
+            }
+        }
+    }
+    if let Some(c) = column {
+        c.flush(&mut pts);
+    }
+    pts
 }
 
 /// The narrowest trend window, ms (Nick, 2026-11-02: down to 100 ms).
@@ -2177,6 +2518,127 @@ pub fn window_label(ms: u64) -> String {
     } else {
         format!("{secs} s")
     }
+}
+
+/// Width of a lane's label column, which is also its drag handle.
+const LANE_HANDLE_W: f32 = 88.0;
+
+/// A place in the trend's palette as it is drawn on this page: the brand
+/// colours, as ink on the light page, where the last (white) is the
+/// page's own ink.
+#[must_use]
+pub fn palette_color(t: &Theme, index: usize) -> Color32 {
+    match index % TREND.len() {
+        5 if !t.dark => t.fg,
+        i => t.ink(TREND[i]),
+    }
+}
+
+/// The colour of trend signal `name` in lane `k` (both trends): the one
+/// picked for it ([`Chrome::set_color`]), else the colour its name asks
+/// for (`red`, `lamp_green`: the lamp's own, Nick, 2026-11-12), else its
+/// lane's.
+#[must_use]
+pub fn lane_color(t: &Theme, chrome: &Chrome, name: &str, k: usize) -> Color32 {
+    match (chrome.color(name), crate::lamps::colour(name)) {
+        (Some(i), _) => palette_color(t, i),
+        (None, Some(c)) => t.ink(c),
+        (None, None) => palette_color(t, k),
+    }
+}
+
+/// The lane labels of a trend drawn in `rect`, one lane per name, as
+/// drag handles (both trends; Nick, 2026-11-07): drag a label up or down
+/// and its signal moves to the lane it is dropped on, a bar marking
+/// where it will land. A click on a label opens the palette, and the
+/// swatch picked is that signal's colour from then on, on either trend
+/// (Nick, 2026-11-11). The hits are `trend lane <name>` and, while the
+/// palette is open, `trend color <k>`. Returns `(from, to)` when a drag
+/// ends on another lane.
+pub fn lane_handles(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    rect: Rect,
+    names: &[String],
+) -> Option<(usize, usize)> {
+    let n = names.len();
+    if n == 0 {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let lane = rect.height() / n as f32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let lane_at = |y: f32| (((y - rect.top()) / lane).floor().max(0.0) as usize).min(n - 1);
+    let accent = theme(ui).accent;
+    let mut moved = None;
+    for (k, name) in names.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let top = rect.top() + lane * k as f32;
+        let handle = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(LANE_HANDLE_W, lane));
+        let r = ui
+            .interact(
+                handle,
+                ui.scope_id().with(("trend lane", k)),
+                Sense::click_and_drag(),
+            )
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .tip("Click to pick this signal's colour. Drag up or down to move it to another lane.");
+        chrome.hit(format!("trend lane {}", name.to_ascii_lowercase()), handle);
+        let picked = chrome.color(name).unwrap_or(k) % TREND.len();
+        let mut pick = None;
+        let mut swatches = Vec::new();
+        egui::Popup::menu(&r).show(|ui| {
+            let t = theme(ui);
+            ui.horizontal(|ui| {
+                for i in 0..TREND.len() {
+                    let (rect, s) = ui.allocate_exact_size(Vec2::splat(TAP * 0.75), Sense::click());
+                    let s = s.tip("This signal's line and label take this colour.");
+                    ui.painter()
+                        .rect_filled(rect.shrink(4.0), CornerRadius::same(4), palette_color(&t, i));
+                    if i == picked || s.hovered() {
+                        ui.painter().rect_stroke(
+                            rect.shrink(1.0),
+                            CornerRadius::same(6),
+                            Stroke::new(2.0, t.fg),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    swatches.push((format!("trend color {i}"), rect));
+                    if s.clicked() {
+                        pick = Some(i);
+                    }
+                }
+            });
+        });
+        chrome.hits.extend(swatches);
+        if let Some(i) = pick {
+            chrome.set_color(name, i);
+        }
+        let at = ui.ctx().input(|i| i.pointer.latest_pos());
+        if r.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            if let Some(p) = at {
+                let to = lane_at(p.y);
+                // The bar sits on the edge the signal will take: above
+                // the target lane moving up, below it moving down.
+                #[allow(clippy::cast_precision_loss)]
+                let y = rect.top() + lane * (if to > k { to + 1 } else { to }) as f32;
+                ui.painter_at(rect).line_segment(
+                    [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                    Stroke::new(3.0, accent),
+                );
+            }
+        }
+        if r.drag_stopped()
+            && let Some(p) = at
+        {
+            let to = lane_at(p.y);
+            if to != k {
+                moved = Some((k, to));
+            }
+        }
+    }
+    moved
 }
 
 /// The window's width as one slider, logarithmic from [`WINDOW_MIN_MS`]
@@ -2232,6 +2694,10 @@ fn round_window(v: f64) -> u64 {
         .round()
         .clamp(WINDOW_MIN_MS as f64, WINDOW_MAX_MS as f64) as u64
 }
+
+/// The room kept at a trend's right edge for [`scale_labels`]: a trace
+/// that ran to the edge was drawn under them once the window filled.
+pub const SCALE_W: f32 = 64.0;
 
 /// The lane's scale: its top and bottom values at the right edge, so a
 /// line can be read (both trends draw them).
@@ -2339,7 +2805,10 @@ impl PlaygroundView {
     /// the visitor's own first, a project without an `io.map` gets the one
     /// its program's I/O implies (on the box's own channels, which the
     /// rewire question then moves), and the form opens filled in.
-    fn use_device(&mut self, d: crate::devices::NewDevice) {
+    /// A project of the visitor's own to wire a device into: a read-only
+    /// example is copied first, and the copy gets the io.map its program
+    /// implies. `false` when the copy could not be made.
+    fn own_project(&mut self) -> bool {
         if self.proj.is_example() {
             let from = self.proj.open.clone();
             let to = (1..=99)
@@ -2356,7 +2825,7 @@ impl PlaygroundView {
             self.proj.create(&to, Some(&from));
             self.reload();
             if self.proj.is_example() {
-                return;
+                return false;
             }
             self.proj.note(
                 format!("{from} is a read-only example, so it was copied as {to} to wire the device in."),
@@ -2366,6 +2835,13 @@ impl PlaygroundView {
         if !self.proj.files.contains_key(helmsman_project::IO_MAP) {
             let map = crate::sim_projects::example_io_map(&self.proj.build_src());
             self.proj.add_file(helmsman_project::IO_MAP, map);
+        }
+        true
+    }
+
+    fn use_device(&mut self, d: crate::devices::NewDevice) {
+        if !self.own_project() {
+            return;
         }
         // The copy's program and map, for the form's channels.
         let map = self
@@ -2656,10 +3132,11 @@ impl Workspace for PlaygroundView {
     }
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
+        let id = self.source_id();
         let Some(text) = self.proj.current_text_mut() else {
             return false;
         };
-        let done = editor::undo(ctx, egui::Id::unique("pg-source"), text, redo);
+        let done = editor::undo(ctx, id, text, redo);
         if done {
             let t = ctx.input(|i| i.time);
             self.edited(t);
@@ -2688,19 +3165,31 @@ impl Workspace for PlaygroundView {
             );
             return;
         }
+        // What runs is what the files say, in the one layout.
+        if self.proj.format() > 0 {
+            self.edited(f64::NEG_INFINITY);
+        }
         let src = self.proj.build_src();
-        let ok = self.session.set_source(&src);
+        let carried = self.session.deploy(&src);
         self.pending = None;
         self.sync_viewer();
-        if ok {
+        if let Some(carried) = carried {
             self.session.set_running(true);
+            self.seen.running = Some(true);
+            self.seen.scans = self.session.scans;
             self.proj.running = Some(self.proj.open.clone());
             let program = self
                 .viewer
                 .as_ref()
                 .and_then(|v| v.module.program())
                 .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
-            self.notice = Some(format!("{} is running in this page{program}.", self.proj.open));
+            let note = format!(
+                "{} is running in this page{program}.{}",
+                self.proj.open,
+                carried.describe()
+            );
+            self.running_notice = Some(note.clone());
+            self.notice = Some(note);
             self.log.info(
                 self.session.now_ms as f64 / 1000.0,
                 format!("Deployed {}: running in this page{program}.", self.proj.open),
@@ -2782,111 +3271,128 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
     };
     let mut out = None;
     // Wrapped, with a slider that fits: a row wider than the panel grows it.
-    ui.spacing_mut().slider_width = (ui.available_width() - 110.0).clamp(40.0, 100.0);
-    ui.horizontal_wrapped(|ui| match p.widget {
-        Some(Widget::Push) => {
-            let on = p.value == Value::Bool(true);
-            let b = egui::Button::new(
-                RichText::new(&label)
-                    .strong()
-                    .color(if on { BLACK } else { t.fg }),
-            )
-            .fill(if on { YELLOW } else { t.rule })
-            .sense(Sense::click_and_drag())
-            .wrap_mode(egui::TextWrapMode::Truncate)
-            .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-            let r = ui.add(b).tip("Push button: on while held.");
-            out = Some(Value::Bool(r.is_pointer_button_down_on()));
-        }
-        Some(Widget::Toggle) => {
-            let on = p.value == Value::Bool(true);
-            let b = egui::Button::new(
-                RichText::new(format!("{label}: {}", if on { "ON" } else { "OFF" }))
-                    .strong()
-                    .color(if on { BLACK } else { t.fg }),
-            )
-            .fill(if on { YELLOW } else { t.rule })
-            .wrap_mode(egui::TextWrapMode::Truncate)
-            .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-            if ui.add(b).tip("Switch: click to flip.").clicked() {
-                out = Some(Value::Bool(!on));
+    ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(40.0, 100.0);
+    let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
+    ui.horizontal_wrapped(|ui| {
+        crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, t.fg, crate::glyph_lib::tip(glyph));
+        match p.widget {
+            Some(Widget::Push) => {
+                let on = p.value == Value::Bool(true);
+                let b =
+                    egui::Button::new(
+                        RichText::new(&label)
+                            .strong()
+                            .color(if on { BLACK } else { t.fg }),
+                    )
+                    .fill(if on { YELLOW } else { t.rule })
+                    .sense(Sense::click_and_drag())
+                    .wrap_mode(egui::TextWrapMode::Truncate)
+                    .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
+                let r = ui.add(b).tip("Push button: on while held.");
+                out = Some(Value::Bool(r.is_pointer_button_down_on()));
             }
-        }
-        Some(Widget::Int { min, max }) => {
-            ui.label(&label);
-            let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
-            let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
-            let (slo, shi) = (lo.max(-1000), hi.min(1000));
-            let mut v = match p.value {
-                Value::Int(n) => i64::try_from(n).unwrap_or(0),
-                _ => 0,
-            };
-            let before = v;
-            ui.add(egui::Slider::new(&mut v, slo..=shi).show_value(false))
+            Some(Widget::Toggle) => {
+                let on = p.value == Value::Bool(true);
+                let b = egui::Button::new(
+                    RichText::new(format!("{label}: {}", if on { "ON" } else { "OFF" }))
+                        .strong()
+                        .color(if on { BLACK } else { t.fg }),
+                )
+                .fill(if on { YELLOW } else { t.rule })
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
+                if ui.add(b).tip("Switch: click to flip.").clicked() {
+                    out = Some(Value::Bool(!on));
+                }
+            }
+            Some(Widget::Int { min, max }) => {
+                ui.label(&label);
+                let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
+                let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
+                let (slo, shi) = (lo.max(-1000), hi.min(1000));
+                let mut v = match p.value {
+                    Value::Int(n) => i64::try_from(n).unwrap_or(0),
+                    _ => 0,
+                };
+                let before = v;
+                ui.add(
+                    egui::Slider::new(&mut v, slo..=shi)
+                        .clamping(egui::SliderClamping::Edits)
+                        .show_value(false),
+                )
                 .tip(format!(
                     "Drag to set the input, {slo} to {shi}. Type any value in the box."
                 ));
-            if v != before {
-                out = Some(Value::Int(i128::from(v)));
+                if v != before {
+                    out = Some(Value::Int(i128::from(v)));
+                }
+                let id = egui::Id::unique(("io-int", &p.name));
+                let c = crate::commit::number(
+                    ui,
+                    id,
+                    &before.to_string(),
+                    "",
+                    Vec2::new(84.0, TAP * 0.6),
+                    TYPE_HINT,
+                );
+                if let Some(n) = crate::commit::int(&c, lo, hi)
+                    && n != before
+                {
+                    out = Some(Value::Int(i128::from(n)));
+                }
             }
-            let id = egui::Id::unique(("io-int", &p.name));
-            let c = crate::commit::number(
-                ui,
-                id,
-                &before.to_string(),
-                "",
-                Vec2::new(84.0, TAP * 0.6),
-                TYPE_HINT,
-            );
-            if let Some(n) = crate::commit::int(&c, lo, hi)
-                && n != before
-            {
-                out = Some(Value::Int(i128::from(n)));
-            }
-        }
-        Some(Widget::Real) => {
-            ui.label(&label);
-            let mut v = match p.value {
-                Value::Real(r) => r,
-                _ => 0.0,
-            };
-            let before = v;
-            ui.add(egui::Slider::new(&mut v, -100.0..=100.0).show_value(false))
+            Some(Widget::Real) => {
+                ui.label(&label);
+                let mut v = match p.value {
+                    Value::Real(r) => r,
+                    _ => 0.0,
+                };
+                let before = v;
+                ui.add(
+                    egui::Slider::new(&mut v, -100.0..=100.0)
+                        .clamping(egui::SliderClamping::Edits)
+                        .show_value(false),
+                )
                 .tip("Drag to set the input, -100 to 100. Type any value in the box.");
-            if v.to_bits() != before.to_bits() && v.is_finite() {
-                out = Some(Value::Real(v));
+                if v.to_bits() != before.to_bits() && v.is_finite() {
+                    out = Some(Value::Real(v));
+                }
+                let id = egui::Id::unique(("io-real", &p.name));
+                let c = crate::commit::number(
+                    ui,
+                    id,
+                    &before.to_string(),
+                    "",
+                    Vec2::new(84.0, TAP * 0.6),
+                    TYPE_HINT,
+                );
+                if let Some(x) = crate::commit::real(&c)
+                    && x.to_bits() != before.to_bits()
+                {
+                    out = Some(Value::Real(x));
+                }
             }
-            let id = egui::Id::unique(("io-real", &p.name));
-            let c = crate::commit::number(
-                ui,
-                id,
-                &before.to_string(),
-                "",
-                Vec2::new(84.0, TAP * 0.6),
-                TYPE_HINT,
-            );
-            if let Some(x) = crate::commit::real(&c)
-                && x.to_bits() != before.to_bits()
-            {
-                out = Some(Value::Real(x));
-            }
-        }
-        Some(Widget::Time) => {
-            ui.label(&label);
-            let mut ms = match p.value {
-                Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
-                _ => 0,
-            };
-            let before = ms;
-            ui.add(egui::Slider::new(&mut ms, 0..=10_000).show_value(false))
+            Some(Widget::Time) => {
+                ui.label(&label);
+                let mut ms = match p.value {
+                    Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
+                    _ => 0,
+                };
+                let before = ms;
+                ui.add(
+                    egui::Slider::new(&mut ms, 0..=10_000)
+                        .clamping(egui::SliderClamping::Edits)
+                        .show_value(false),
+                )
                 .tip("Drag to set the time, up to 10 s.");
-            ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
-                .tip("The time in ms. Drag, or double-click to type it, up to a day.");
-            if ms != before {
-                out = Some(Value::Int(i128::from(ms) * 1_000_000));
+                ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
+                    .tip("The time in ms. Drag, or double-click to type it, up to a day.");
+                if ms != before {
+                    out = Some(Value::Int(i128::from(ms) * 1_000_000));
+                }
             }
+            None => {}
         }
-        None => {}
     });
     out
 }
@@ -2904,15 +3410,28 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
     } else {
         format!("{name} = {}", show(p.ty, p.value))
     };
-    let b = egui::Button::new(
-        RichText::new(text)
-            .monospace()
-            .size(crate::theme::MIN_TEXT)
-            .color(if on { t.accent } else { t.fg }),
-    )
-    .wrap_mode(egui::TextWrapMode::Truncate)
-    .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
-    ui.add(b).tip("Click to pick its block in the diagram.").clicked()
+    // On is the lamp's own colour when its name has one (red, yellow,
+    // green...; `lamps`), else green, as a TRUE value in the diagram and
+    // a lamp on the Monitor are. Its glyph takes the same colour.
+    let color = if on {
+        t.ink(crate::lamps::colour(&p.name).unwrap_or(GREEN))
+    } else {
+        t.fg
+    };
+    let glyph = crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool);
+    ui.horizontal(|ui| {
+        crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, color, crate::glyph_lib::tip(glyph));
+        let b = egui::Button::new(
+            RichText::new(text)
+                .monospace()
+                .size(crate::theme::MIN_TEXT)
+                .color(color),
+        )
+        .wrap_mode(egui::TextWrapMode::Truncate)
+        .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
+        ui.add(b).tip("Click to pick its block in the diagram.").clicked()
+    })
+    .inner
 }
 
 /// A value for a readout (TIME in ms).

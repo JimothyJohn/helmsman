@@ -56,12 +56,12 @@ pub struct PlantState {
 
 /// Every `{state}` of `files` (name, text), with its measurement from
 /// `map` (an `in` signal named as `plant::measurement_names` says, on a
-/// device), its model value from `value(name)` and the measuring signal's
+/// device), its model value from `value(pou, name)` and the measuring signal's
 /// value from `live(signal)`.
 pub fn states(
     files: &[(&str, &str)],
     map: &MapText,
-    value: &dyn Fn(&str) -> Option<Value>,
+    value: &dyn Fn(&str, &str) -> Option<Value>,
     live: &dyn Fn(&str) -> Option<Value>,
 ) -> Vec<PlantState> {
     let mut out = Vec::new();
@@ -86,7 +86,7 @@ pub fn states(
                     })
             });
             out.push(PlantState {
-                value: value(&v.name),
+                value: value(&v.pou, &v.name),
                 measured_by,
                 suggestion: plant::suggest(&v),
                 from_sensor: false,
@@ -185,15 +185,21 @@ pub fn substitutions(states: &[PlantState], src: &str) -> Vec<(String, String)> 
     out
 }
 
-/// A state's value from a traced scan: the scalar whose path ends in the
-/// variable's name (`PLANT.LEVEL_M`), the first when several instances
-/// hold one.
+/// A state's value from a traced scan: the scalar at the state's own
+/// path (`instance_paths`: the variable of the program, or of the first
+/// instance of the function block that declares it), so a name that
+/// the program and a function block both hold reads the right one.
 #[must_use]
-pub fn value_in_trace(trace: &helmsman_iec::trace::Trace, name: &str) -> Option<Value> {
-    let want = name.to_ascii_uppercase();
-    trace.values().find_map(|(path, v)| {
-        let last = path.rsplit('.').next().unwrap_or(path);
-        (last.eq_ignore_ascii_case(&want) || path.eq_ignore_ascii_case(&want)).then_some(v)
+pub fn value_in_trace(
+    trace: &helmsman_iec::trace::Trace,
+    unit: &helmsman_iec::ast::Unit,
+    pou: &str,
+    name: &str,
+) -> Option<Value> {
+    instance_paths(unit, pou, name).iter().find_map(|want| {
+        trace
+            .values()
+            .find_map(|(path, v)| path.eq_ignore_ascii_case(want).then_some(v))
     })
 }
 
@@ -576,7 +582,7 @@ impl PlantUi {
             chrome.hit("sensor unit", u.rect);
             if let Some(err) = &f.error {
                 ui.add_space(4.0);
-                ui.label(RichText::new(err).color(RED));
+                ui.label(RichText::new(err).color(crate::theme::theme(ui).ink(RED)));
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -637,7 +643,7 @@ END_FUNCTION_BLOCK
     #[test]
     fn states_join_the_measurement_by_name_and_suggest_for_the_rest() {
         let files = [("plant_model.st", MODEL), ("io.map", "not st")];
-        let value = |n: &str| (n == "level_m").then_some(Value::Real(1.52));
+        let value = |_: &str, n: &str| (n == "level_m").then_some(Value::Real(1.52));
         let live = |n: &str| (n == "level_raw").then_some(Value::Real(12420.0));
         let s = states(&files, &map(), &value, &live);
         assert_eq!(s.len(), 3);
@@ -661,7 +667,7 @@ END_FUNCTION_BLOCK
     #[test]
     fn the_sensor_form_writes_one_in_line_and_refuses_bad_fields() {
         let files = [("plant_model.st", MODEL)];
-        let s = states(&files, &map(), &|_| None, &|_| None);
+        let s = states(&files, &map(), &|_, _| None, &|_| None);
         let devices = [DeviceChoice {
             name: "e1213".into(),
             driver: "modbus-tcp".into(),
@@ -799,7 +805,7 @@ END_PROGRAM
              in  parts_in int box di:0\n\
              out level_raw_m real box do:0 unit=m\n",
         );
-        let s = states(&[("plant_model.st", WELL)], &map, &|_| None, &|_| None);
+        let s = states(&[("plant_model.st", WELL)], &map, &|_, _| None, &|_| None);
         assert_eq!(s.len(), 3, "{s:?}");
         assert_eq!(s[1].measured_by, None, "an out line measures nothing");
         let mut subs = substitutions(&s, WELL);
@@ -838,7 +844,7 @@ END_PROGRAM
     #[test]
     fn the_simulation_runs_a_measured_state_from_its_signal() {
         let map = iomap::skim("in  level_m_in real box i2c:1:0x48:0:i16 unit=m\n");
-        let s = states(&[("plant_model.st", WELL)], &map, &|_| None, &|_| None);
+        let s = states(&[("plant_model.st", WELL)], &map, &|_, _| None, &|_| None);
         let mut session = crate::playground::Session::new(WELL);
         assert!(session.build.is_some(), "{:?}", session.diags);
         session.step();
@@ -868,5 +874,35 @@ END_PROGRAM
             Some(Value::Real(2.5)),
             "back to the model"
         );
+    }
+
+    #[test]
+    fn a_state_reads_its_own_variable_when_the_program_has_one_of_the_name() {
+        let src = "FUNCTION_BLOCK tank
+VAR
+  level_m : REAL := 2.5;  {state unit=m}
+END_VAR
+END_FUNCTION_BLOCK
+PROGRAM p
+VAR
+  level_m : REAL := 9.0;
+  t : tank;
+END_VAR
+t();
+END_PROGRAM
+";
+        let mut session = crate::playground::Session::new(src);
+        session.step();
+        let trace = session.trace.as_ref().expect("a traced scan");
+        let unit = helmsman_iec::ast::parse(src).unwrap();
+        assert_eq!(
+            value_in_trace(trace, &unit, "tank", "level_m"),
+            Some(Value::Real(2.5))
+        );
+        assert_eq!(
+            value_in_trace(trace, &unit, "p", "level_m"),
+            Some(Value::Real(9.0))
+        );
+        assert_eq!(value_in_trace(trace, &unit, "tank", "nothing"), None);
     }
 }

@@ -422,8 +422,9 @@ fn request(addr: SocketAddr, method: &str, path: &str, auth: bool, body: &str) -
     }
 }
 
+/// A read with the box token (every read needs a session: card read-lock).
 fn get(addr: SocketAddr, path: &str) -> Resp {
-    request(addr, "GET", path, false, "")
+    request(addr, "GET", path, true, "")
 }
 
 fn post(addr: SocketAddr, path: &str, body: &Json) -> Resp {
@@ -596,6 +597,127 @@ fn a_logic_change_needs_a_replay_of_exactly_itself_then_an_engineer_pin() {
     assert_eq!(m["stats"]["scans"].as_u64().map(|n| n > 0), Some(true), "{m}");
     assert_eq!(b.cmd("lamp"), Some(Value::Bool(true)));
     assert_audit_complete(&b);
+}
+
+// ---- what a deploy keeps ----------------------------------------------------
+
+/// `n` retyped (UDINT to INT) and a new `count`: the rest keep.
+const SOURCE_RETYPED: &str = "
+PROGRAM conveyor
+VAR_INPUT start : BOOL; speed : REAL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
+VAR n : INT; count : INT; END_VAR
+  n := n + 1;
+  lamp := start AND speed > 1.0;
+END_PROGRAM";
+
+/// `n` gone.
+const SOURCE_NO_N: &str = "
+PROGRAM conveyor
+VAR_INPUT start : BOOL; speed : REAL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
+  lamp := start AND speed > 1.0;
+END_PROGRAM";
+
+fn names(j: &Json) -> Vec<String> {
+    j.as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_proposal_previews_what_it_keeps_resets_and_drops_and_the_audit_says_what_it_did() {
+    let b = Bench::new();
+    let (id, draft) = b.module(MANIFEST, SOURCE_RETYPED);
+    let state = &draft["state"];
+    assert_eq!(state["preview"], true, "{draft}");
+    assert_eq!(state["running"], true, "{state}");
+    let m = &state["modules"][0];
+    assert_eq!(m["module"], "conveyor", "{state}");
+    assert_eq!(names(&m["kept"]), ["START", "SPEED", "LAMP"], "{state}");
+    assert_eq!(
+        m["reset"],
+        json!([{ "name": "N", "why": "type changed" }, { "name": "COUNT", "why": "new" }]),
+        "{state}"
+    );
+    assert_eq!(m["dropped"], json!([]), "{state}");
+    assert_eq!(state["kept"], 3);
+    assert_eq!(
+        state["summary"],
+        "keeps 3 values, resets N (type changed), starts COUNT at the initial value (new)"
+    );
+    assert_eq!(
+        get(b.addr, &format!("/api/proposals/{id}")).json()["state"],
+        *state
+    );
+
+    // A removed variable is dropped; the unchanged ones count as kept.
+    let (_, gone) = b.module(MANIFEST, SOURCE_NO_N);
+    let dropped = &gone["state"];
+    assert_eq!(names(&dropped["modules"][0]["dropped"]), ["N"], "{dropped}");
+    assert_eq!(dropped["modules"][0]["reset"], json!([]), "{dropped}");
+    assert_eq!(dropped["kept"], 3, "{dropped}");
+    assert_eq!(dropped["summary"], "keeps 3 values, drops N");
+
+    // A param change keeps everything.
+    let p = b.param(2.0);
+    let pj = get(b.addr, &format!("/api/proposals/{p}")).json();
+    assert_eq!(pj["state"]["summary"], "keeps 4 values", "{pj}");
+
+    // Applied: the answer, the proposal and the audit entry say what the
+    // swap did, no longer a preview.
+    let rep = b.replay(&format!("/api/proposals/{id}"));
+    let r = b.apply(id, "engineer", ENGINEER, Some(rep));
+    assert_eq!(r.status, 200, "{r:?}");
+    let done = &r.json()["state"];
+    assert_eq!(done["preview"], false, "{done}");
+    assert_eq!(
+        done["modules"], state["modules"],
+        "the deploy did what the preview said"
+    );
+    assert_eq!(
+        get(b.addr, &format!("/api/proposals/{id}")).json()["applied_state"],
+        *done
+    );
+    let log = audit(b.addr);
+    let entry = log
+        .iter()
+        .find(|e| e["status"] == 200 && e["path"].as_str().unwrap().ends_with("/apply"))
+        .unwrap_or_else(|| panic!("no apply entry: {log:?}"));
+    let detail = entry["detail"].as_str().unwrap();
+    assert!(
+        detail.ends_with(
+            "; state: keeps 3 values, resets N (type changed), starts COUNT at the initial value (new)"
+        ),
+        "{detail}"
+    );
+    assert_audit_complete(&b);
+}
+
+#[test]
+fn a_new_module_has_nothing_running_to_keep_and_the_running_ones_keep_theirs() {
+    let b = Bench::new();
+    let manifest = "name     mixer\nauthor   Test <test@example.com>\nscan_ms  2\nreads\ndrives\n";
+    let source = "PROGRAM mixer\nVAR x : INT; END_VAR\n  x := x + 1;\nEND_PROGRAM";
+    let (_, d) = b.module(manifest, source);
+    let state = &d["state"];
+    assert_eq!(state["preview"], true, "{d}");
+    let mixer = state["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["module"] == "mixer")
+        .unwrap_or_else(|| panic!("{state}"));
+    assert_eq!(mixer["new"], true, "{state}");
+    assert_eq!(state["kept"], 4, "conveyor keeps all of its own: {state}");
+    let text = state["summary"].as_str().unwrap();
+    assert!(
+        text.contains("new module mixer: nothing running to keep"),
+        "{text}"
+    );
+    assert!(text.starts_with("keeps 4 values"), "{text}");
 }
 
 // ---- output-affecting ------------------------------------------------------

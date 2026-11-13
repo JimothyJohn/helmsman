@@ -381,6 +381,17 @@ into the code.
   p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
   application layer runs over RTU (`rtu.rs`), which also takes reply lengths
   from it.
+- **Gateway exceptions** (card `gateway-unit-down`;
+  `helmsman-io` `driver::Error::is_link`): the exception code table (§7
+  pp.47-49) lists 0x0A "Gateway Path Unavailable" (the gateway could not
+  allocate an internal path from input port to output port; usually
+  misconfigured or overloaded) and 0x0B "Gateway Target Device Failed to
+  Respond" (no response from the target device; usually not present on the
+  network), both p.49 (checked against the fetched PDF, the sha256 above).
+  A Modbus TCP gateway answers them for a dead serial unit; the driver
+  treats both as a link error of that unit alone, and the connection and the
+  other units behind the gateway stay up. Every other code stays a refused
+  point.
 - **Read Device Identification** (card `modbus-identification`;
   `crates/helmsman-modbus` `pdu::read_device_id` / `reply::device_id`,
   `helmsman-io` `modbus::app::read_device_identification` and
@@ -414,6 +425,18 @@ into the code.
 - **Leaned on by** `modbus.rs` and `sim.rs`: the 7-byte MBAP header
   (transaction id, protocol id 0, length counting unit id + PDU, unit id;
   §3.1.3 p.5) and port 502 (p.5).
+- **Leaned on by** `modbus.rs`'s shared connection (`Client`, `Line`) and
+  `sim.rs`'s `Gateway`, read again 2026-11-07 (same sha256, `pdftotext
+  -layout`, the page footer's "n/46"): the server copies the transaction
+  id back "for transaction pairing", and the unit id routes a request to
+  a serial slave "through a gateway" (§3.1.3 pp.5-6); a client should
+  open few connections to one server, "one connection per application",
+  and transactions sharing a connection are told apart by transaction id
+  (§4.2.1.1 p.10, implementation rules 3 and 4); past a server's
+  connection limit "the oldest unused connection is closed" (§4.2.1.2
+  p.12); a transaction id "must be unique" on a connection at a time,
+  and the TCP-to-serial gateway reconciles TCP's several requests in
+  flight with the serial line's one (§4.4.1.2 p.23).
 - **How to cite:** `TCP §<x> p.<n>`.
 
 ### Modbus Organization, MODBUS over Serial Line Specification and Implementation Guide V1.02 (2006-12-20, 44 pp)
@@ -670,6 +693,164 @@ into the code.
 - **How to cite:** `MCP 2026-07-28 <page> § <heading>`, e.g.
   `MCP 2026-07-28 basic/transports/streamable-http § Server Validation`.
 
+### IEC 61131-3, by secondary references (the standard itself is not held)
+
+- **The standard:** IEC 61131-3 "Programmable controllers – Part 3:
+  Programming languages", current edition 4.0, IEC 61131-3:2025 (May 2025;
+  https://webstore.iec.ch/en/publication/68533), after edition 3.0 of 2013.
+  Decided (Nick, 2026-11-08, TODO card `iec-standard-source`): not bought.
+  Nothing in this repo cites a clause, table or page of the standard, and
+  nothing may until a copy is held; "IEC 61131-3 Structured Text" in the
+  docs means the language as the references below and ruSTy describe it.
+- **What pins the semantics instead:** agreement with ruSTy
+  (`crates/helmsman-iec/tests/oracle.rs`, docker/rusty/, an independent
+  compiler of the same language; its own reading of the standard is not
+  ours to cite) and the PLCopen TC6 corpus above. Where they and a
+  reference disagree, the disagreement is written down in the test
+  (`small_int_negation_is_dint_wide_on_both_sides` in oracle.rs was the
+  pattern while the two disagreed; Nick's call on 2026-11-08 moved ours
+  to ruSTy's side, and the test now pins the agreement).
+- **Secondary references, marked as such:**
+  - Fernhill Software, "Structured Text (ST)", in the Fernhill SCADA help,
+    https://www.fernhillsoftware.com/help/iec-61131/structured-text/
+    (version 4.39, read 2026-11-08). One page per statement (assignment,
+    function call, IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN; FOR EACH is
+    Fernhill's own) and a "Common Elements" section for types, literals
+    and operators. It names no edition of the standard, and some of it is
+    Fernhill's dialect: check a claim against ruSTy before leaning on it.
+  - The PLCopen Coding Guidelines v1.0 (2016), for the lints (card
+    `st-lints`): a free PDF from https://www.plcopen.org/downloads
+    (no login; checked 2026-11-08). The entry with its rule numbers
+    arrives with that card.
+- **How to cite:** `IEC 61131-3 (secondary: Fernhill ST "<page>")`, never
+  a `§` of the standard. A behaviour pinned by the oracle cites the oracle
+  test by name.
+
+### PROFINET IO, by secondary references (IEC 61158 is not held)
+
+- **The standard:** PROFINET IO is IEC 61158-5-10 (services) and
+  IEC 61158-6-10 (protocol), with IEC 61784-2 for the profiles; PI
+  publishes the same text to its members. None of it is held, so nothing
+  in this repo cites a clause of it. What `helmsman-profinet` puts on the
+  wire is taken from the three open implementations below, and each
+  layout is cited by file and function where the code states it.
+- **p-net** (rtlabs-com/p-net, commit `19782d52`, read 2026-11-10): an IO
+  device stack in C, dual-licensed GPLv3 / commercial. **Read for facts,
+  nothing copied**: no code, table or test vector of it is in this
+  repository. It is the device side of every exchange, so it says what a
+  device accepts: `src/device/pf_block_reader.c` (the Connect's blocks:
+  `pf_get_ar_param`, `pf_get_iocr_param`, `pf_get_alarm_cr_request`,
+  `pf_get_exp_api_module`; `pf_get_control`, `pf_get_write_request`; the
+  RPC header in `pf_get_dce_rpc_header` and the NDR checks in
+  `pf_get_ndr_data_req`), `pf_block_writer.c` (the responses, the block
+  header's length rule, the alarm PDUs), `pf_cmrpc.c` (the RPC session:
+  one per activity UUID, the reply port, "application ready" sent to UDP
+  0x8894 on the controller with interface `dea00002-...`, the response
+  flags), `pf_cmdev.c` (`pf_cmdev_check_iocr_param`: frame id ranges,
+  data length 40..1440, clock factors, hold time; `pf_cmdev_fix_frame_id`:
+  the device picks the output frame id when asked with 0xFFFF; a
+  submodule without data is treated as an input),
+  `src/common/pf_ppm.c` and `pf_cpm_driver_sw.c` (the cyclic frame: data,
+  cycle counter, data status, transfer status; a consumer reads the last
+  four bytes and takes only the exact length; the counter must advance by
+  1..=61440), `pf_dcp.c` (DCP), `pf_alarm.c` (RTA sequence numbers),
+  `pf_types.h` and `include/pnet_api.h` (block types, status codes).
+- **Wireshark's PROFINET dissectors** (wireshark/wireshark, commit
+  `cd59fea3`, `plugins/epan/profinet/`): `packet-dcerpc-pn-io.c` for the
+  interface UUIDs and block types (agreeing with p-net) and the RTA PDU
+  type in the low nibble; `packet-pn-dcp.c` for DCP.
+- **scapy's PROFINET layers** (secdev/scapy, `scapy/contrib/pnio*.py`):
+  used as an independent reader. `cargo run -p helmsman-profinet
+  --example startup_pcap` writes a startup between our controller and
+  our simulated device; scapy 2.x dissects its DCP frames and every RPC
+  (Connect request and response, the record write, PrmEnd, application
+  ready, Release) field for field as built (run 2026-11-10 with `uv run
+  --with scapy`). It mislabels the RTA acknowledgement PDU (it reads our
+  0x13 as type DATA); p-net and Wireshark both put the type in the low
+  nibble, so ours stands.
+- **DCE 1.1: Remote Procedure Call** (The Open Group, C706, 1997;
+  https://pubs.opengroup.org/onlinepubs/9629399/chap12.htm, read
+  2026-11-10): chapter "RPC PDU Encodings", "Connectionless RPC PDUs":
+  the 80-byte header field by field, the PDU types (request 0 ..
+  cancel_ack 10) and the first flags byte (lastfrag 0x02, frag 0x04,
+  nofack 0x08, maybe 0x10, idempotent 0x20, broadcast 0x40). This one is
+  the primary source for the RPC envelope.
+- **What no source here settles, and the bench must:** the port a real
+  device answers from and expects later calls at (ours follows the
+  response's source port); whether a given device insists on the
+  advanced startup; fragmented responses (not reassembled); behaviour
+  with a device that has interface and port submodules left out.
+- **How to cite:** `p-net <file> <function>`, `Wireshark <file>`,
+  `C706 ch. "RPC PDU Encodings"`; never a `§` of IEC 61158.
+
+### macOS BPF and Linux packet sockets (raw Ethernet, `helmsman-l2`)
+
+- `bpf(4)` and the SDK's `net/bpf.h` (MacOSX.sdk on the Studio,
+  2026-11-10): the ioctl numbers and the layout of `struct bpf_hdr`
+  (20 bytes, `bh_caplen` at 8, `bh_hdrlen` at 16) were read by compiling
+  a C program against the header and printing them, and getifaddrs'
+  `sockaddr_dl` the same way; `helmsman-l2`'s constants are those
+  values. Not run: `/dev/bpf*` is root-only on the Studio until
+  `scratch/27-bpf-access.sh` is run, so the BPF path has parsed
+  synthetic buffers and compiled, and has not carried a frame.
+- `packet(7)`: `AF_PACKET` / `SOCK_RAW` bound to an interface and an
+  `EtherType`. Compiled for aarch64-unknown-linux-gnu, not run.
+
+### DHCP and BOOTP (IETF RFCs, read 2026-11-13, `helmsman-dhcp`)
+
+- **RFC 2131**, Dynamic Host Configuration Protocol: Table 1 (the
+  message's fields and sizes), section 3 (the magic cookie
+  99.130.83.99), Table 3 (what an OFFER, ACK and NAK carry: lease time
+  required in OFFER and ACK, never in NAK; server identifier in all
+  three; requested address never), 4.1 (where a reply goes: `giaddr`,
+  then `ciaddr`, then the BROADCAST bit, else unicast to `yiaddr` and
+  `chaddr`; a NAK is broadcast), 4.3.2 (a REQUEST's four forms told
+  apart by server identifier, requested address and `ciaddr`; INIT-REBOOT
+  with no record is silent), 4.3.3 and 4.3.4 (DECLINE and RELEASE).
+  `helmsman-dhcp` drops relayed requests (`giaddr` set) on purpose: it
+  serves only its own segment.
+- **RFC 2132**, DHCP Options and BOOTP Vendor Extensions: the option
+  codes used (1, 3, 50, 51, 52, 53, 54, 58, 59) and option 52's values.
+- **RFC 3396**, Encoding Long Options: one code in several pieces is one
+  option, joined in the order options field, `file`, `sname`.
+- **RFC 1542**, Clarifications and Extensions for BOOTP: 2.1 (300 octets
+  is the smallest message), 2.2 (the BROADCAST flag is `flags`' top bit),
+  3.5 (unused vendor octets are zero), 5.4 (a reply on the server's own
+  network: broadcast when B is set, else unicast to `yiaddr`, port 68).
+- What the RFCs leave open and was chosen here: an offer holds its
+  address 60 s, a declined address is out of the pool 600 s, a BOOTP
+  binding never expires (a BOOTP client never renews), and a renewal
+  from a client the server has no record of is taken back on when its
+  address is free in the pool (the box lost its lease file).
+
+### Browser keyboard shortcuts (Chrome, Edge, Safari, Firefox), read 2026-11-08
+
+- **Where:** Chrome, "Chrome keyboard shortcuts"
+  (https://support.google.com/chrome/answer/157179; Windows & Linux and
+  Mac tables); Microsoft Edge, "Keyboard shortcuts in Microsoft Edge"
+  (https://support.microsoft.com/en-us/microsoft-edge/keyboard-shortcuts-in-microsoft-edge-50d3edab-30d9-c7e4-21ce-37fe2713cfad;
+  Windows and macOS); Safari User Guide, "Keyboard and other shortcuts"
+  (https://support.apple.com/guide/safari/keyboard-and-other-shortcuts-cpsh003/mac);
+  Firefox from its source, since the support page would not serve a
+  script: `browser/base/content/browser-sets.inc.xhtml` (the keyset,
+  `modifiers` and `key` or `keycode` per command; `accel` is Ctrl on
+  Windows and Linux, ⌘ on a Mac) joined with
+  `browser/locales/en-US/browser/browserSets.ftl` (the English key
+  letters), both at github.com/mozilla-firefox/firefox `main`; the
+  tab-switching digits are `__NUM_SELECT_TAB_MODIFIER__` there (Alt on
+  Windows and Linux, ⌘ on a Mac).
+- **Leaned on by** `crates/helmsman-canvas/src/hotkeys.rs`: the module
+  doc's table and `BROWSER` / `BROWSER_MAC`, the chords a browser owns in
+  our key space, which `no_shortcut_is_a_browsers` keeps the table off
+  (Nick, 2026-11-08: Ctrl D deployed and the browser bookmarked). What
+  moved: Deploy to Ctrl Shift Enter, Step to F8, the panes to Alt Shift
+  0 to 4, Go to definition and Cross references to Alt Shift D and X,
+  Breakpoint to Shift F9, Force and Release all to Alt Shift F and U, the
+  step chords to Alt ] and Alt [; Ctrl Y redoes off a Mac only.
+- **How to cite:** `Chrome shortcuts (Mac) "⌘ + d"`, `Edge shortcuts
+  (Windows) "Ctrl+Shift+U"`, `Firefox browser-sets.inc.xhtml
+  key_togglePictureInPicture`.
+
 ### PKWARE, APPNOTE.TXT, .ZIP File Format Specification, version 6.3.10 (2022-11-01)
 
 - **Where:** https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT,
@@ -749,7 +930,76 @@ into the code.
   (`helmsman_adapter::e1213`, the device doc), the profile's channel counts
   and connection limit, the Modbus example map. Bit positions within the
   status words and the counters' byte order are inferred, and say so.
+- **Also leaned on by** `helmsman-devconf`'s Moxa console configurator for
+  the factory defaults and the connection limits it must not break (the
+  console itself is not in the manual; see the next entry).
 - **How to cite:** `E1200 manual v15.10 p. X-N`.
+
+### The ioLogik E1200 web console, as written down in helmsman-devices (mapped 2026-11-12)
+
+- **What:** `devices/moxa/iologik-e1200-web-console.md` in helmsman-devices
+  (branch `dev`), with its client `scripts/moxa-e1200-console.py` and tests
+  `tests/test_moxa_console.py`: the console's cookies, the configuration
+  export, the form-and-token write, the staged-versus-running split, and
+  what was done to the bench E1213 (firmware V3.1 Build19110615) to map it.
+  Later facts from the same unit (2026-11-12), given to this work by the
+  person who ran them and not yet in that document: Save/Restart takes
+  about 21 s with HTTP up twice (11.4 s with TCP 502 still down, down again
+  at 14.0 s, up for good at 20.0 s), its reply arrives in about 0.1 s,
+  an import (`POST 06_5_1.htm`) reboots the unit by itself ("System
+  configuration file imported and restart successfully."), staged settings
+  become running across the reboot, and the password change's three fields
+  (`ChallID`, `OldPwd`, `NewPwd` from MD5 and an XOR with the `ChallID`
+  cookie's MD5), whose six test vectors were computed by running Moxa's own
+  `md5.js` and `Xor()` under node.
+  Measured on the same unit with a password set (2026-11-12, helmsman-devices
+  #15): the login page and its `MD5(password + Token)` post to `home.htm`,
+  the session cookie, "Change Password OK!" and "Change Password Fail!",
+  the change applying at once, and the export being unchanged by the
+  password. A change from a set password failed on the unit and is not
+  understood.
+- **Where:** the helmsman-devices repository; the facts are first-hand from
+  one E1213, not a vendor document. Moxa's HTML and scripts are not copied
+  into this repository.
+- **Leaned on by:** `crates/helmsman-devconf` (`moxa_e1200`, its simulator
+  and its tests). The simulator's assumptions are listed in its module
+  documentation.
+- **How to cite:** `E1200 web console write-up, section <name>`; the vendor
+  vectors as `password.rs` `VENDOR`.
+
+### Novanta IMS MDrive files (read 2026-11-10, no unit on the bench)
+
+- **GSDML:** `GSDML-V2.2-mdrive-SchneiderElectic-20130530.xml`, SHA-256
+  `3271ffc6dddf37bf4578e6da91a9096ac90841cab54c041a816f0899fb3070c1`, in
+  the "LMD Ethernet TCP/IP Application 2.4.0.9" zip from
+  https://www.novantaims.com/dloads/firmware/ (with `SEM_MDrivever1_2.eds`
+  and the firmware image). No licence text; **not committed**, facts
+  restated in docs/devices/novanta-mdrive.md.
+- **Product manual:** "Lexium MDrive Ethernet with circular connectors
+  LMDxE57C/85C", V1.00, 03.2015,
+  https://novanta.com/robotics-automation/wp-content/uploads/sites/3/2015/04/LMDxE57-85C.pdf
+  (protocols §1.2.1, default address §6, configuration ch. 7), read by a
+  research pass, not re-read.
+- **Not read:** the "Profinet IO Fieldbus Manual" (the I/O byte map) and
+  Novanta's S7 workbook.
+
+### Universal Robots fieldbus files (read 2026-11-10, no robot on the bench)
+
+- **GSDML:** `GSDML-V2.45-UR-PROFIsafe-20251201.xml`, SHA-256
+  `830c49c679c45113e7f951a5c9b92ec89909d64c15ac057e5b807fe87a030d94`,
+  from https://s3-eu-west-1.amazonaws.com/ur-support-site/160022/GSDML-V2.45-UR-PROFIsafe-20251201.xml.zip;
+  the module table in docs/devices/universal-robots.md was read from it
+  with a script. Not committed.
+- **EDS:** `UniversalRobot.eds`, SHA-256
+  `c3e930f63bf56c21af010fdf89ae3e8de196080df791ca6af6b32e436a75da62`,
+  https://s3-eu-west-1.amazonaws.com/ur-support-site/18712/UniversalRobot.eds.
+- **Guides (read by a research pass, not re-read):** the PROFINET guide
+  https://www.universal-robots.com/articles/ur/interface-communication/profinet-how-to-guide-e-series/,
+  the Modbus server article
+  https://www.universal-robots.com/articles/ur/interface-communication/modbus-server/
+  and its register table, the protocol overview
+  https://www.universal-robots.com/developer/communication-protocol/,
+  and the forum threads on URSim (28222, 17631, 6042).
 
 ### The host's ARP table: `proc(5)` and `arp(8)`
 

@@ -1,0 +1,20 @@
+[package]
+name = "helmsman-l2"
+version = "0.1.0"
+description = "Raw Ethernet frames of one EtherType on one interface: BPF on macOS, a packet socket on Linux"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# The one crate that talks to the kernel below IP, and so the one place
+# outside the standard library where this workspace writes `unsafe`:
+# PROFINET's cyclic data, alarms and DCP are Ethernet frames of EtherType
+# 0x8892, which no safe API in the tree sends (rustix has no link-layer
+# socket address and no BPF ioctls). `libc` is the only dependency and is
+# already in the lock under the standard library's neighbours.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true

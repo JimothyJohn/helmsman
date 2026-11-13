@@ -4,33 +4,48 @@ The simulation runs the controller inside the page, scan by scan, against
 inputs you set yourself. It is what the playground is, and what a box's
 page falls back to when no box answers.
 
+New to it? The [guided tour](https://helmsman.advin.io/playground/?tour)
+copies the Blink example, changes it, deploys it and reads its trend,
+with each step pointing at the control it is about.
+
 ## Running
 
-A project opens running. The glyphs over the diagram run or stop it
-(<kbd>Ctrl</kbd> <kbd>Enter</kbd>; <kbd>Shift</kbd> <kbd>F8</kbd> stops),
-step one scan while stopped (<kbd>F10</kbd>), and restart from initial
-values with the clock at zero. The same three buttons and keys are in
-the Monitor's header. The state in the header says which it is; the
-clock beside it is the program's own time.
+A project opens running. The glyphs over the diagram run or pause it
+(<kbd>Ctrl</kbd> <kbd>Enter</kbd>), stop it (<kbd>Shift</kbd>
+<kbd>F8</kbd>), step it (<kbd>F8</kbd>, while paused or stopped), and
+restart it from initial values with the clock at zero. The same buttons
+and keys are in the Monitor's header. The state beside the glyphs says
+which it is; the clock with it is the program's own time.
 
-<img src="img/monitor-stopped.png" alt="The Monitor's header with the program stopped: run, step and restart beside the crumbs." width="700">
+Pause holds the program where it is: every variable and output keeps its
+value and the clock stands until you run or step. Stop ends the run: the
+variables go back to their initial values, the outputs go off, the clock
+and the trend go to zero, and the diagram shows no values until the
+program runs again.
+
+Step runs to the next change. It scans until a value changes or the
+program takes another path through its statements, and shows that scan.
+A timer's elapsed time counting up does not count as a change, so a step
+lands on the scan where the timer's output turns on. If nothing changes in 60 seconds of program time, the step stops
+there and the Messages tab says so.
+
+<img src="img/monitor-stopped.png" alt="The Monitor's header with the program paused: run, stop, step and restart beside the crumbs." width="700">
 
 One program runs in the page at a time. Opening or deploying another
 stops the one before.
 
 ## Breakpoints
 
-Pick a block in the diagram and press <kbd>Ctrl</kbd> <kbd>B</kbd> (or
+Pick a block in the diagram and press <kbd>Shift</kbd> <kbd>F9</kbd> (or
 **Edit › Breakpoint**): a red dot marks it. The next scan that reaches
 the block stops just before it runs, the simulation stops with it, and
 the diagram and every value show the scan as it stood at that moment.
-The block is framed in orange and the notice under the header names its
-line. <kbd>F10</kbd> runs the rest of that scan.
+The block is framed in orange and the Messages tab names its line. <kbd>F8</kbd> runs the rest of that scan.
 <kbd>Ctrl</kbd> <kbd>Enter</kbd> goes on to the next stop: the same
 block's next pass in a loop, another breakpoint, or the next scan. An
 input you change while stopped shows at once in what the diagram shows.
 A breakpoint inside a function block stops in every instance of it.
-<kbd>Ctrl</kbd> <kbd>B</kbd> on the block again clears it. Stopping at a
+<kbd>Shift</kbd> <kbd>F9</kbd> on the block again clears it. Stopping at a
 breakpoint changes nothing the program does: the scan runs exactly as it
 would have.
 
@@ -42,6 +57,13 @@ program running stay as they were. **Deploy** (<kbd>Ctrl</kbd>
 <kbd>D</kbd>) compiles your text and runs it, if it compiles. If it does
 not, the errors are listed under the editor, a click on one goes there,
 and the last good program keeps running.
+
+Save and Deploy put each file you edited into one layout: two spaces a
+level, keywords in capitals, one statement a line, a space round each
+operator. Only spacing, line breaks and capitals change, and your
+comments stay as you wrote them. A file you did not edit is not
+rewritten, and text that cannot be read yet (a stray character, a
+comment left open) is left as you typed it.
 
 Undo and Redo (<kbd>Ctrl</kbd> <kbd>Z</kbd>, <kbd>Ctrl</kbd> <kbd>Y</kbd>)
 work in the editor and from the Edit menu.
@@ -81,10 +103,16 @@ the belt or the compressors, so that it moves with nothing wired.
 The Trend tab along the bottom plots the signals you pin, up to six,
 each in its own lane with its last value. The Window slider sets how
 much of the past the pane shows, from 100 ms to 10 minutes on a
-logarithmic scale, and the plot follows as you drag; history is kept for
-the widest, so widening shows what already ran. The lane's scale is at its right edge: it rounds out to an even step
-and moves only when the values cross one. Pin from the tab's list.
-History restarts when you change the set.
+logarithmic scale (it opens on 30 s), and the plot follows as you drag;
+history is kept for the widest, so widening shows what already ran. The
+lane's scale is at its right edge: it rounds out to an even step and
+moves only when the values cross one. Pin from the tab's list. History
+restarts when you change the set. To put the lanes in another order,
+drag a lane's name up or down and drop it on the lane it should take;
+its history moves with it. Click a lane's name to pick that signal's
+colour from the palette; the browser keeps your choice. Until you pick
+one, a signal named after a colour (`red`, `lamp_green`) is drawn in
+that colour, the same as its lamp.
 
 ![The Trend tab: three pinned signals, the Window slider, a lane each with its scale at the right edge.](img/trend.png)
 

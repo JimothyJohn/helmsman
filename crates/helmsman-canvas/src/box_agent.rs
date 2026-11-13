@@ -30,12 +30,14 @@
 // Natively nothing carries the answers back but the tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
+use eframe::egui::Color32;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 use crate::claude::{Event, Sse};
 
 /// The box's longest message, in characters (`api::chat::MAX_MESSAGE`).
-pub const MAX_MESSAGE: usize = 8000;
+pub const MAX_MESSAGE: usize = 200_000;
 /// Most text kept per turn; a runaway stream is cut here.
 pub const MAX_TEXT: usize = 256 * 1024;
 /// Most tool, proposal and notice rows per turn.
@@ -46,6 +48,8 @@ pub const MAX_TURNS: usize = 50;
 const MAX_LINE: usize = 600;
 
 pub const CHAT_URL: &str = "/api/chat";
+/// Seconds before a status read that failed is asked again.
+pub const STATUS_RETRY_S: f64 = 5.0;
 pub const STATUS_URL: &str = "/api/chat/status";
 
 /// The agent as the box reports it.
@@ -98,15 +102,16 @@ impl Status {
         }
     }
 
-    /// The status in a few words, for the tab (its tooltip is [`Self::line`]).
+    /// The dot beside the Agent tab's heading (Nick, 2026-11-08): green
+    /// online, red offline or without a relay, grey while unknown. Its
+    /// tooltip is [`Self::line`].
     #[must_use]
-    pub const fn short(&self) -> &'static str {
+    pub const fn dot(&self) -> Color32 {
+        use crate::st_view::brand::{GREEN, RED, STEEL};
         match self {
-            Self::Unread => "Agent on this box",
-            Self::Unknown => "Agent status unknown",
-            Self::Unconfigured(_) => "No agent on this box",
-            Self::Online => "Agent online",
-            Self::Offline(_) => "Agent offline",
+            Self::Unread | Self::Unknown => STEEL,
+            Self::Online => GREEN,
+            Self::Unconfigured(_) | Self::Offline(_) => RED,
         }
     }
 
@@ -118,7 +123,8 @@ impl Status {
 }
 
 /// A row of a turn other than its text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Item {
     /// A tool the agent ran; `result` once it answered.
     Tool {
@@ -138,7 +144,8 @@ pub enum Item {
 }
 
 /// How a turn ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum End {
     /// `done`: its stop (`end_turn`, `budget`, `refusal`, `offline`) and
     /// the box's words for anything but a plain end.
@@ -149,19 +156,22 @@ pub enum End {
     Stopped,
 }
 
-/// One message and what came back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One message and what came back (kept in the desk, `crate::desk`,
+/// so a reload shows it again).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Turn {
     pub user: String,
     pub text: String,
     pub items: Vec<Item>,
     /// `None` while it streams.
     pub end: Option<End>,
+    #[serde(skip)]
     cut: bool,
 }
 
 impl Turn {
-    fn new(user: String) -> Self {
+    pub(crate) fn new(user: String) -> Self {
         Self {
             user,
             text: String::new(),
@@ -258,6 +268,8 @@ pub struct BoxAgent {
     sse: Option<Sse>,
     /// Asked for `GET /api/chat/status` and not answered yet.
     pub status_asked: bool,
+    /// Page time before which a status read that failed is not asked again.
+    status_after: f64,
 }
 
 impl Default for BoxAgent {
@@ -276,7 +288,19 @@ impl BoxAgent {
             seq: 0,
             sse: None,
             status_asked: false,
+            status_after: 0.0,
         }
+    }
+
+    /// Whether to ask for the status now (and, if so, marks it asked): it
+    /// is not known yet, no read is on its way, and the last one that
+    /// failed is [`STATUS_RETRY_S`] old.
+    pub fn status_due(&mut self, now: f64) -> bool {
+        if self.status == Status::Unread && !self.status_asked && now >= self.status_after {
+            self.status_asked = true;
+            return true;
+        }
+        false
     }
 
     /// A turn is streaming: its stream is open and it has not ended. After
@@ -352,13 +376,15 @@ impl BoxAgent {
         }
     }
 
-    /// `GET /api/chat/status` answered.
-    pub fn status_answer(&mut self, status: u16, body: &str) {
+    /// `GET /api/chat/status` answered, at page time `now`.
+    pub fn status_answer(&mut self, status: u16, body: &str, now: f64) {
         self.status_asked = false;
         if status == 200
             && let Ok(j) = serde_json::from_str::<Json>(body)
         {
             self.status = Status::parse(&j);
+        } else {
+            self.status_after = now + STATUS_RETRY_S;
         }
     }
 
@@ -507,6 +533,18 @@ fn error_text(status: u16, body: &str) -> String {
         (0, None) => "the box did not answer".into(),
         (s, None) => format!("the box answered {s}"),
     }
+}
+
+/// `s` cut to at most `max` bytes, at a character boundary (`String::truncate`
+/// panics inside a multi-byte character, and a reply from the box may hold
+/// any).
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub fn cut(s: &mut String, max: usize) {
+    let mut at = max.min(s.len());
+    while !s.is_char_boundary(at) {
+        at -= 1;
+    }
+    s.truncate(at);
 }
 
 /// At most `n` characters of `s`, control characters but newlines and

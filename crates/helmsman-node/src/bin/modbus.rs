@@ -22,7 +22,7 @@ use core::time::Duration as CoreDuration;
 
 use embassy_executor::Spawner;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embassy_net::{IpAddress, IpEndpoint, Ipv4Address};
+use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Ipv4Cidr, StaticConfigV4};
 use embassy_time::{Duration, Instant, Ticker, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
@@ -68,6 +68,12 @@ const LOG_SINK: &str = match option_env!("LOG_SINK") {
     Some(a) => a,
     None => "10.0.0.41:9514",
 };
+/// A fixed address instead of DHCP: `NODE_STATIC_IP=192.168.3.55/24` (and
+/// `NODE_GATEWAY=192.168.3.1` if the sink or the block is off the subnet)
+/// at build time. Unset: DHCP. The settings record (docs/EDGE.md Phase 4)
+/// replaces this.
+const STATIC_IP: Option<&str> = option_env!("NODE_STATIC_IP");
+const GATEWAY: Option<&str> = option_env!("NODE_GATEWAY");
 
 const SCAN: Duration = Duration::from_millis(10);
 /// A Modbus request that takes longer than this is a link error.
@@ -147,10 +153,32 @@ async fn main(spawner: Spawner) -> ! {
     };
     spawner.spawn(ethernet::eth_net_task(runner)).ok();
     spawner.spawn(ethernet::eth_link_task(emac_ptr)).ok();
-    spawner.spawn(ethernet::eth_dhcp_task(stack, emac_ptr)).ok();
+    // The DNS list is heapless's Vec, which this crate does not name.
+    #[allow(clippy::default_trait_access)]
+    let addressing = match STATIC_IP {
+        None => ethernet::Addressing::Dhcp,
+        Some(cidr) => match parse_cidr(cidr) {
+            Some(address) => ethernet::Addressing::Static(StaticConfigV4 {
+                address,
+                gateway: GATEWAY.and_then(parse_ipv4),
+                dns_servers: Default::default(),
+            }),
+            None => {
+                println!("FATAL: NODE_STATIC_IP {cidr:?} is not a.b.c.d/nn");
+                loop {
+                    Timer::after(Duration::from_secs(60)).await;
+                }
+            }
+        },
+    };
+    spawner
+        .spawn(ethernet::eth_dhcp_task(stack, emac_ptr, addressing))
+        .ok();
 
     println!("waiting for the link and a lease...");
     stack.wait_config_up().await;
+    // A fixed address is "up" before the PHY has negotiated.
+    stack.wait_link_up().await;
 
     let Some(block) = parse_endpoint(E1213_ADDR, E1213_PORT) else {
         println!("FATAL: E1213_ADDR {E1213_ADDR:?} is not an IPv4 address");
@@ -334,23 +362,30 @@ async fn report(udp: &mut UdpSocket<'_>, sink: Option<IpEndpoint>, line: &str) {
     }
 }
 
-/// `a.b.c.d` with `port`.
-fn parse_endpoint(addr: &str, port: u16) -> Option<IpEndpoint> {
+/// `a.b.c.d`.
+fn parse_ipv4(addr: &str) -> Option<Ipv4Address> {
     let mut octets = [0u8; 4];
     let mut n = 0;
-    for part in addr.split('.') {
+    for part in addr.trim().split('.') {
         if n == 4 {
             return None;
         }
         octets[n] = part.parse().ok()?;
         n += 1;
     }
-    (n == 4).then(|| {
-        IpEndpoint::new(
-            IpAddress::Ipv4(Ipv4Address::new(octets[0], octets[1], octets[2], octets[3])),
-            port,
-        )
-    })
+    (n == 4).then(|| Ipv4Address::new(octets[0], octets[1], octets[2], octets[3]))
+}
+
+/// `a.b.c.d/nn`.
+fn parse_cidr(s: &str) -> Option<Ipv4Cidr> {
+    let (ip, prefix) = s.split_once('/')?;
+    let prefix: u8 = prefix.parse().ok().filter(|p| *p <= 32)?;
+    Some(Ipv4Cidr::new(parse_ipv4(ip)?, prefix))
+}
+
+/// `a.b.c.d` with `port`.
+fn parse_endpoint(addr: &str, port: u16) -> Option<IpEndpoint> {
+    parse_ipv4(addr).map(|ip| IpEndpoint::new(IpAddress::Ipv4(ip), port))
 }
 
 /// `a.b.c.d:port`.
@@ -358,4 +393,3 @@ fn parse_endpoint_port(s: &str) -> Option<IpEndpoint> {
     let (host, port) = s.rsplit_once(':')?;
     parse_endpoint(host, port.parse().ok()?)
 }
-

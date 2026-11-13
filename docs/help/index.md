@@ -11,22 +11,31 @@ part is still to come.
 
 The [playground](../playground/) runs a controller inside the page, with no
 install and nothing to sign up for. It opens with a small example running:
-a lamp that blinks. The diagram in the middle is the program as it runs,
+a traffic light, its three lamps lit in turn in the corner of the diagram.
+The diagram in the middle is the program as it runs,
 live; the Structured Text that makes it is one key away (View › Structured
-Text, or <kbd>Alt</kbd> <kbd>1</kbd>).
+Text, or <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>).
 
-![The playground as it opens: the blink example running, its diagram in the middle, the Structured Text on the left, the I/O panel on the right and the trend along the bottom.](img/editor.png)
+![The playground as it opens: the traffic light example running, its diagram in the middle, the Structured Text on the left, the I/O panel on the right and the trend along the bottom.](img/editor.png)
 
-Things to try, in order:
+The [guided tour](https://helmsman.advin.io/playground/?tour) walks you
+through it in the playground itself: each step points at the control it
+is about and moves on when you use it. It takes a few minutes, and Help ›
+Take the tour starts it again any time.
 
-1. Watch the lamp on the diagram: Blink's timer flips it every 500 ms.
+Or try these yourself, in order:
+
+1. Watch the traffic light in the diagram's corner: green for three
+   seconds, yellow for one, red for three, and the same lamps in the same
+   colours on the trend below. Switch `run` off in the I/O panel on the
+   right and the light stops on red.
 2. Open **Files** on the left and click **Read and write**. Give it a
    name: it opens as a program of your own, running. Click the `switch`
    block on the diagram; it is an input, the click flips it, and the lamp
    follows.
 3. Open the Structured Text and change something. The program keeps
    running what it had; the editor marks any error as you type. Press
-   **Deploy** (File › Deploy, <kbd>Ctrl</kbd> <kbd>D</kbd>) to run your
+   **Deploy** (File › Deploy, <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>Enter</kbd>) to run your
    change.
 4. Click an output block, say the lamp. Everything that drives it stays
    lit and the rest dims: that is the diagram's answer to "why".
@@ -47,6 +56,8 @@ simulation by itself and says so.
 
 ## Where things are
 
+- [Load a program](load.html): what download, go online and the rest are
+  called here, and deploying step by step.
 - [The Editor](editor.html): the screen, its menus and glyphs, the
   diagram, the panels.
 - [The simulation](simulation.html): running, stepping, inputs, the trend.
@@ -56,5 +67,5 @@ simulation by itself and says so.
   forcing, the Monitor.
 - [The Agent](agent.html): writing and changing programs from a
   description.
-- [Keyboard](keyboard.html) and [Examples and starters](starters.html),
+- [Keyboard](keyboard.html) and [Examples](starters.html),
   generated from the program itself.

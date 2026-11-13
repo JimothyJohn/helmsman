@@ -3,12 +3,14 @@
 //! up (the view draws it each frame after the Editor, as the Files tab's
 //! confirmations are).
 
+use std::fmt::Write as _;
+
 use eframe::egui::{self, RichText, Vec2};
 
 use crate::device_form::{
     self, Dir, Kind, PROFILES, PointRow, SigTy, Use, check_settings, param, schema, set_param,
 };
-use crate::devices::{DeviceAct, DevicesUi, NewDevice, PROTOCOLS};
+use crate::devices::{DeviceAct, DevicesUi, NewDevice, PROTOCOLS, QuickAdd};
 use crate::editor::Chrome;
 use crate::st_view::TAP;
 use crate::theme::theme;
@@ -52,7 +54,7 @@ impl DevicesUi {
             points(ui, chrome, &mut d, &program, rows_h);
             if let Some(err) = &d.error {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(err).color(RED)).wrap());
+                ui.add(egui::Label::new(RichText::new(err).color(crate::theme::theme(ui).ink(RED))).wrap());
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -76,7 +78,7 @@ impl DevicesUi {
                         Some(old) => device_form::map_without(&self.map, old),
                         None => self.map.clone(),
                     };
-                    let taken = map.devices.iter().any(|x| x.name.eq_ignore_ascii_case(&d.name));
+                    let taken = map.devices.iter().any(|x| x.name == d.name);
                     let w = check_settings(d.driver(), &d.params)
                         .and_then(|()| {
                             if taken {
@@ -111,6 +113,101 @@ impl DevicesUi {
         out
     }
 
+    /// The quick form (add by click, PROTOCOLS.md step 3): the device's
+    /// name, the channels it will get once the profile came, Add or
+    /// Cancel. Returns what Add writes once the name passes.
+    pub fn quick_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
+        let mut q = self.quick.clone()?;
+        let mut out = None;
+        let mut done = false;
+        let m = crate::theme::near_pointer(ctx, "device-quick").show(ctx, |ui| {
+            ui.set_min_width(WIDTH * 0.75);
+            ui.set_max_width(WIDTH * 0.75);
+            let what = format!("{} {}", q.vendor, q.model).trim().to_string();
+            ui.label(RichText::new(format!("Add {what}")).strong().size(20.0));
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Name").tip("What the program calls the device. Each channel becomes a signal named after it: rio and DI-04 give rio_di_04.");
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut q.name).desired_width(200.0))
+                    .tip("The device's name in the program: a letter, then letters, digits or _.");
+                chrome.hit("quick name", r.rect);
+            });
+            ui.add_space(6.0);
+            match &q.profile {
+                None => {
+                    ui.label(RichText::new("Reading its channels from the device library…").color(theme(ui).muted));
+                }
+                Some(Err(why)) => {
+                    ui.add(egui::Label::new(RichText::new(why).color(theme(ui).ink(RED))).wrap());
+                }
+                Some(Ok((_, skim))) => {
+                    let n = skim.channels.len();
+                    let over = if skim.transports.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" over {}", skim.transports.join(", then "))
+                    };
+                    ui.label(RichText::new(format!("{n} channel(s){over}:")).color(theme(ui).muted))
+                        .tip("Every channel the device has, as a signal of the project. The box picks the protocol from the list, best first, and falls back by itself.");
+                    let rows_h = (ctx.content_rect().height() * 0.3).clamp(120.0, 320.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(rows_h)
+                        .show(ui, |ui| {
+                            let dev = if q.name.trim().is_empty() { "device" } else { q.name.trim() };
+                            for c in &skim.channels {
+                                let mut line = format!(
+                                    "{:<3} {}  {}",
+                                    c.dir,
+                                    helmsman_project::profile_skim::signal_name(dev, &c.name),
+                                    c.ty
+                                );
+                                if let Some(u) = &c.unit {
+                                    let _ = write!(line, " {u}");
+                                }
+                                ui.add(egui::Label::new(RichText::new(line).monospace()).truncate());
+                            }
+                        });
+                }
+            }
+            if let Some(err) = &q.error {
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new(err).color(theme(ui).ink(RED))).wrap());
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let ready = matches!(q.profile, Some(Ok(_)));
+                let ok = ui
+                    .add_enabled(ready, egui::Button::new(RichText::new("Add").strong()).min_size(tall))
+                    .tip("Copies the device's profile into the project and adds the device and every channel to io.map.");
+                chrome.hit("quick ok", ok.rect);
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Closes the form. Nothing is added.");
+                chrome.hit("quick cancel", no.rect);
+                if ok.clicked() {
+                    match quick_add(&q, &self.map) {
+                        Ok(a) => {
+                            out = Some(DeviceAct::Quick(a));
+                            done = true;
+                        }
+                        Err(e) => q.error = Some(e),
+                    }
+                } else if no.clicked() {
+                    done = true;
+                }
+            });
+        });
+        chrome.hit("quick form", m.response.rect);
+        if done || m.should_close() {
+            self.quick = None;
+        } else {
+            self.quick = Some(q);
+        }
+        out
+    }
+
     /// The Rename question: the new name, what it changes (the view's
     /// [`RenamePlan`] in `rename_plan`), Rename or Cancel.
     pub fn rename_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
@@ -139,7 +236,9 @@ impl DevicesUi {
                     true
                 }
                 Some(Err(why)) if text != old => {
-                    ui.add(egui::Label::new(RichText::new(why).color(RED)).wrap());
+                    ui.add(
+                        egui::Label::new(RichText::new(why).color(crate::theme::theme(ui).ink(RED))).wrap(),
+                    );
                     false
                 }
                 _ => false,
@@ -199,7 +298,7 @@ impl DevicesUi {
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
                 let ok = ui
-                    .add(egui::Button::new(RichText::new("Delete").strong().color(RED)).min_size(tall))
+                    .add(egui::Button::new(RichText::new("Delete").strong().color(crate::theme::theme(ui).ink(RED))).min_size(tall))
                     .tip("Deletes the lines. Save keeps the change; Deploy runs it.");
                 chrome.hit("delete ok", ok.rect);
                 let no = ui
@@ -317,7 +416,7 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
             }
         });
     if let Err(e) = check_settings(d.driver(), &d.params) {
-        ui.add(egui::Label::new(RichText::new(e).color(RED)).wrap());
+        ui.add(egui::Label::new(RichText::new(e).color(crate::theme::theme(ui).ink(RED))).wrap());
     }
     // The line io.map gets, read-only.
     // One line, cut at the edge: a wrap would change the centred form's
@@ -505,4 +604,59 @@ fn use_combo(
         }
         r.on = true;
     }
+}
+
+/// What the quick form's Add writes, or why not: the name an identifier
+/// the map does not have yet, the profile as a project file, the device
+/// line `device NAME device:PROFILE IDENTITY`, and one signal a channel.
+///
+/// # Errors
+/// The name, in words.
+pub fn quick_add(
+    q: &crate::devices::Quick,
+    map: &helmsman_project::iomap::MapText,
+) -> Result<QuickAdd, String> {
+    let name = q.name.trim();
+    if !helmsman_project::iomap::device_name_ok(name) {
+        return Err(format!(
+            "A device name is a letter, then letters, digits or _ (not {name:?})."
+        ));
+    }
+    if map.devices.iter().any(|d| d.name.eq_ignore_ascii_case(name)) {
+        return Err(format!("A device called {name} is in io.map already."));
+    }
+    let Some(Ok((text, skim))) = &q.profile else {
+        return Err("The device's channels have not come yet.".into());
+    };
+    let stem = q
+        .file
+        .strip_suffix(helmsman_project::DEVICE_EXT)
+        .ok_or_else(|| format!("{}: not a profile file name", q.file))?;
+    let mut signals = Vec::with_capacity(skim.channels.len());
+    for c in &skim.channels {
+        let signal = helmsman_project::profile_skim::signal_name(name, &c.name);
+        if map.signals.iter().any(|s| s.name.eq_ignore_ascii_case(&signal)) {
+            return Err(format!("{signal} is wired already in io.map: pick another name."));
+        }
+        let mut line = format!("{:<3} {signal} {} {name} ch:{}", c.dir, c.ty, c.name);
+        if let Some(u) = &c.unit {
+            let _ = write!(line, " unit={u}");
+        }
+        if let Some(v) = &c.safe {
+            let _ = write!(line, " safe={v}");
+        }
+        signals.push(line);
+    }
+    Ok(QuickAdd {
+        file: q.file.clone(),
+        text: text.clone(),
+        wiring: device_form::Wiring {
+            device: name.to_string(),
+            device_line: format!("device {name} device:{stem} {}", q.identity),
+            signals,
+            replace: Vec::new(),
+            declare: Vec::new(),
+            replaces: None,
+        },
+    })
 }

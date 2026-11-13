@@ -5,8 +5,10 @@
 //! natively against the real API, so the calls tested are the calls made.
 //!
 //! - `GET /api/proposals`, `GET /api/proposals/{id}`: the list and one
-//!   draft, with its tier (`approval`), always the box's: nothing here
-//!   classifies a change.
+//!   draft, with its tier (`approval`) and what it keeps and resets of the
+//!   running values (`state`, a preview; `applied_state` once applied),
+//!   always the box's: nothing here classifies a change or works out a
+//!   carry.
 //! - `GET /api/modules/{name}`: what runs now, for the source and
 //!   diagram diffs and the manifest's old values.
 //! - `GET /api/signals`: which signals are box outputs.
@@ -112,6 +114,9 @@ pub enum Call {
     Logout,
     /// `GET /api/session`: who the page's cookie is.
     Session,
+    /// `GET /api/login`: how this box signs in (the one read open before
+    /// a session, card read-lock).
+    LoginHow,
 }
 
 /// Who this page is signed in as (the box holds the session; the page
@@ -587,6 +592,85 @@ pub struct Drawn {
     pub diff: ModuleDiff,
 }
 
+/// Most names of one kind the screen lists; past it, "and N more".
+pub const SHOWN: usize = 8;
+
+/// What a deploy does to the running values, as the box worked it out:
+/// the proposal's preview (`state`), or once applied what the deploy did
+/// (`applied_state`). Never worked out here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Values {
+    /// Worked out before approving, against what ran then.
+    pub preview: bool,
+    /// The box ran something to keep values from.
+    pub running: bool,
+    /// The box's sentence: "keeps 12 values, resets COUNT (type changed)".
+    pub summary: String,
+    /// Values that carry over.
+    pub kept: u64,
+    /// Values that start again at their initial value, with why (`type
+    /// changed` or `new`). The screen lists [`SHOWN`] of them.
+    pub reset: Vec<(String, String)>,
+    /// Values no longer declared. The screen lists [`SHOWN`] of them.
+    pub dropped: Vec<String>,
+}
+
+impl Values {
+    /// From the box's `state` JSON; `None` when it has none.
+    #[must_use]
+    pub fn parse(j: &Json) -> Option<Self> {
+        let summary = j["summary"].as_str()?.to_string();
+        let modules = j["modules"].as_array().map_or(&[][..], Vec::as_slice);
+        let qualify = modules.len() > 1;
+        let name = |m: &Json, v: &str| {
+            if qualify {
+                format!("{}.{v}", m["module"].as_str().unwrap_or("?"))
+            } else {
+                v.to_string()
+            }
+        };
+        let mut reset = Vec::new();
+        let mut dropped = Vec::new();
+        for m in modules {
+            for r in m["reset"].as_array().into_iter().flatten() {
+                let v = name(m, r["name"].as_str().unwrap_or("?"));
+                reset.push((v, r["why"].as_str().unwrap_or("new").to_string()));
+            }
+            for d in m["dropped"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Json::as_str)
+            {
+                dropped.push(name(m, d));
+            }
+        }
+        Some(Self {
+            preview: j["preview"] != false,
+            running: j["running"] != false,
+            summary,
+            kept: j["kept"].as_u64().unwrap_or(0),
+            reset,
+            dropped,
+        })
+    }
+
+    /// The line the approval screen shows above the button.
+    #[must_use]
+    pub fn sentence(&self) -> String {
+        let when = if self.preview {
+            "Before you approve"
+        } else {
+            "Applied"
+        };
+        if self.running {
+            format!("{when}: this deploy {}.", self.summary)
+        } else {
+            format!("{when}: nothing is running to keep, so every value starts at its initial value.")
+        }
+    }
+}
+
 /// The proposal on screen.
 #[derive(Debug, Clone)]
 pub struct Open {
@@ -607,6 +691,13 @@ pub struct Open {
 }
 
 impl Open {
+    /// What the deploy keeps and resets of the running values: what it did
+    /// once applied, else the box's preview.
+    #[must_use]
+    pub fn values(&self) -> Option<Values> {
+        Values::parse(&self.json["applied_state"]).or_else(|| Values::parse(&self.json["state"]))
+    }
+
     /// The box's tier for this draft; never worked out here.
     #[must_use]
     pub fn tier(&self) -> Option<&str> {
@@ -656,6 +747,10 @@ pub struct Review {
     pub list_error: Option<String>,
     pub open: Option<Open>,
     pub policy: Option<Json>,
+    /// How the box signs in (`pins`, `accounts`, `unavailable`, `none`),
+    /// from `GET /api/login`: readable before a session, unlike the
+    /// policy.
+    pub how: Option<String>,
     /// Box output signals, upper-cased.
     pub outputs: Vec<String>,
     /// The history entry for what runs, after an apply.
@@ -666,6 +761,8 @@ pub struct Review {
     pub login_problem: Option<String>,
     /// A login is on its way.
     pub logging_in: bool,
+    /// A list is on its way: the badge's round waits for it.
+    listing: bool,
     queue: Vec<Request>,
 }
 
@@ -678,9 +775,19 @@ impl Review {
         r
     }
 
-    /// Asks for the list again, alone (the header's badge).
+    /// Asks for the list again, alone.
     pub fn relist(&mut self) {
+        self.listing = true;
         self.queue.push(Request::get(Call::List, "/api/proposals".into()));
+    }
+
+    /// The header badge's round: the list again, unless one is still on
+    /// its way (over a slow link the rounds would stack up behind each
+    /// other, card canvas-slow-link).
+    pub fn badge_relist(&mut self) {
+        if !self.listing {
+            self.relist();
+        }
     }
 
     /// Proposals waiting for a decision: the drafts.
@@ -697,6 +804,7 @@ impl Review {
         self.queue.push(Request::get(Call::Policy, "/api/policy".into()));
         self.queue
             .push(Request::get(Call::Session, "/api/session".into()));
+        self.queue.push(Request::get(Call::LoginHow, "/api/login".into()));
     }
 
     /// What to send now.
@@ -715,7 +823,10 @@ impl Review {
     /// `unavailable`; `None` until the policy came.
     #[must_use]
     pub fn credentials(&self) -> Option<&str> {
-        self.policy.as_ref()?["credentials"].as_str()
+        self.policy
+            .as_ref()
+            .and_then(|p| p["credentials"].as_str())
+            .or(self.how.as_deref())
     }
 
     /// `alice (engineer)` or `operator (PIN)`, while signed in.
@@ -835,6 +946,9 @@ impl Review {
     pub fn answer(&mut self, call: Call, a: &Answer, now: f64) {
         let ok = (200..300).contains(&a.status);
         let j: Option<Json> = serde_json::from_str(&a.body).ok();
+        if call == Call::List {
+            self.listing = false;
+        }
         match call {
             Call::List => match j.as_ref().and_then(Json::as_array) {
                 Some(list) if ok => {
@@ -858,6 +972,11 @@ impl Review {
                 }
             }
             Call::Policy => self.policy = j.filter(|_| ok),
+            Call::LoginHow => {
+                self.how = j
+                    .filter(|_| ok)
+                    .and_then(|j| j["credentials"].as_str().map(str::to_string));
+            }
             Call::Snapshots => {
                 self.head = j
                     .filter(|_| ok)
@@ -920,11 +1039,14 @@ impl Review {
                         && undo.is_some()
                     {
                         o.json["status"] = json!("applied");
+                        if let Some(state) = j.as_ref().map(|j| &j["state"]).filter(|s| s.is_object()) {
+                            o.json["applied_state"] = state.clone();
+                        }
                         o.undo = undo;
                     }
                     self.queue
                         .push(Request::get(Call::Snapshots, "/api/snapshots".into()));
-                    self.queue.push(Request::get(Call::List, "/api/proposals".into()));
+                    self.relist();
                 } else {
                     let r = refusal(a, now);
                     let ended = r.why == Why::SignIn;
@@ -944,6 +1066,9 @@ impl Review {
                 if let Some(s) = session {
                     self.session = Some(s);
                     self.login_problem = None;
+                    // Every read needs the session (card read-lock): what
+                    // was refused before it is read now.
+                    self.refresh();
                     return;
                 }
                 let error = j
@@ -1215,6 +1340,9 @@ mod tests {
             0.0,
         );
         assert_eq!(r.signed_in(), Some(format!("{role} (PIN)")));
+        // The refresh a sign-in starts (every read needs the session, card
+        // read-lock): not what these tests look at.
+        let _ = r.poll();
     }
 
     fn opened() -> Review {
@@ -1402,7 +1530,16 @@ mod tests {
     fn a_reload_finds_the_cookie_session_and_sign_out_ends_it_on_the_box() {
         let mut r = Review::new();
         let calls: Vec<Call> = r.poll().into_iter().map(|q| q.call).collect();
-        assert_eq!(calls, [Call::List, Call::Signals, Call::Policy, Call::Session]);
+        assert_eq!(
+            calls,
+            [
+                Call::List,
+                Call::Signals,
+                Call::Policy,
+                Call::Session,
+                Call::LoginHow
+            ]
+        );
         r.answer(
             Call::Session,
             &ans(401, &json!({ "error": "not logged in" })),

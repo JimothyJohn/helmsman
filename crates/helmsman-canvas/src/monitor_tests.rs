@@ -9,8 +9,11 @@ use helmsman_iec::Value;
 use crate::app::{App, Screen, Source, wants_monitor, wants_sim};
 use crate::box_tests::{Bench, DEMO};
 use crate::editor::Chrome;
-use crate::monitor::{Feed, Group, NARROW, STALE_AFTER, Shape, Tile, TileKind};
-use crate::remote::{Cmd, Fetch, Msg, Stream};
+use crate::monitor::{
+    Feed, Fresh, Group, Lamp, Line, Load, Monitor, NARROW, Program, Run, STALE_AFTER, Shape, Tile, TileKind,
+    micros_text,
+};
+use crate::remote::{Cmd, Fetch, Msg, ScanTiming, SpreadUs, Stream};
 use crate::review::{Method, Session};
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
@@ -571,7 +574,7 @@ fn the_monitor_never_writes() {
             matches!(
                 c,
                 Cmd::Get(
-                    Fetch::Modules | Fetch::Source(_) | Fetch::Module(_) | Fetch::Devices | Fetch::IoMap,
+                    Fetch::Modules | Fetch::Source(_) | Fetch::Module(_) | Fetch::Devices | Fetch::IoMap | Fetch::Adapter,
                     u
                 ) if u.starts_with("/api/")
             ) || matches!(c, Cmd::Listen(..) | Cmd::Close(_)),
@@ -686,4 +689,288 @@ fn open_diagram_on_a_box_opens_that_module_at_that_instance() {
         sent.contains(&Cmd::Listen(Stream::Trace, crate::remote::trace_url("line"))),
         "{sent:?}"
     );
+}
+
+/// Card `scan-stats`: a feed of hand-made programs, to put exact numbers
+/// on a status tile.
+struct Loads(Vec<(&'static str, Option<Load>)>);
+
+impl Feed for Loads {
+    fn programs(&self, _now: f64) -> Vec<Program<'_>> {
+        self.0
+            .iter()
+            .map(|(name, load)| Program {
+                name: (*name).into(),
+                run: Run::Running,
+                period_ms: Some(10.0),
+                scans: 5,
+                src: None,
+                values: None,
+                fresh: Fresh::Live,
+                note: None,
+                load: *load,
+            })
+            .collect()
+    }
+
+    fn trouble(&self, _now: f64) -> Option<String> {
+        None
+    }
+}
+
+fn load_lines(feed: &Loads, program: &str, detail: bool) -> Vec<Line> {
+    let groups = Monitor::default().groups(feed, 0.0, detail);
+    let g = groups.iter().find(|g| g.program == program).unwrap();
+    tile(g, &format!("status {program}")).lines.clone()
+}
+
+fn timing(exec: [f64; 4], late: [f64; 4]) -> ScanTiming {
+    let s = |[min, mean, max, p99]: [f64; 4]| SpreadUs { min, mean, max, p99 };
+    ScanTiming {
+        window: 1000,
+        exec: s(exec),
+        late: s(late),
+    }
+}
+
+#[test]
+fn scan_detail_shows_scan_time_jitter_and_overruns_with_a_tooltip_each() {
+    let feed = Loads(vec![(
+        "line",
+        Some(Load {
+            timing: Some(timing([8.0, 12.4, 41.0, 30.0], [20.0, 85.0, 1250.0, 900.0])),
+            overruns: 3,
+            overrun_ago: Some(12.5),
+        }),
+    )]);
+    let lines = load_lines(&feed, "line", true);
+    let keys: Vec<&str> = lines.iter().map(|l| l.key.as_str()).collect();
+    assert_eq!(keys, ["load line/exec", "load line/late", "load line/overruns"]);
+    assert_eq!(lines[0].text, "scan 12 µs · peak 41 µs");
+    assert_eq!(lines[1].text, "jitter 85 µs · peak 1.25 ms");
+    assert_eq!(lines[2].text, "overruns 3 · 12 s ago");
+    for l in &lines {
+        assert!(!l.tip.is_empty(), "{l:?}");
+    }
+    assert!(
+        lines[0].tip.contains("over its last 1000 scans"),
+        "{}",
+        lines[0].tip
+    );
+    assert!(lines[0].tip.contains("99 in 100 under 30 µs"), "{}", lines[0].tip);
+    assert!(
+        lines[0].tip.contains("the scan period is 10 ms"),
+        "{}",
+        lines[0].tip
+    );
+    assert!(
+        lines[1].tip.contains("99 in 100 under 900 µs"),
+        "{}",
+        lines[1].tip
+    );
+    let warn: Vec<bool> = lines.iter().map(|l| l.warn).collect();
+    assert_eq!(warn, [false, false, true], "a recent overrun draws the eye");
+}
+
+#[test]
+fn a_recent_overrun_shows_for_everyone_and_an_old_one_only_in_scan_detail() {
+    let at = |ago: Option<f64>, overruns| {
+        Loads(vec![(
+            "line",
+            Some(Load {
+                timing: Some(timing([1.0; 4], [1.0; 4])),
+                overruns,
+                overrun_ago: ago,
+            }),
+        )])
+    };
+    let recent = load_lines(&at(Some(5.0), 1), "line", false);
+    assert_eq!(recent.len(), 1, "{recent:?}");
+    assert_eq!(
+        (recent[0].text.as_str(), recent[0].warn),
+        ("overruns 1 · 5 s ago", true)
+    );
+    assert_eq!(
+        load_lines(&at(Some(600.0), 1), "line", false),
+        [],
+        "old news is off the wall"
+    );
+    let old = load_lines(&at(Some(600.0), 1), "line", true);
+    assert_eq!(
+        (old[2].text.as_str(), old[2].warn),
+        ("overruns 1 · 10 min ago", false)
+    );
+    let none = load_lines(&at(None, 0), "line", true);
+    assert_eq!((none[2].text.as_str(), none[2].warn), ("no overruns", false));
+    assert_eq!(load_lines(&at(None, 0), "line", false), []);
+}
+
+#[test]
+fn no_measurements_show_nothing_made_up() {
+    // An older box: counts but no timing. The simulation: no load at all.
+    let feed = Loads(vec![
+        (
+            "old",
+            Some(Load {
+                timing: None,
+                overruns: 0,
+                overrun_ago: None,
+            }),
+        ),
+        ("sim", None),
+    ]);
+    let old: Vec<String> = load_lines(&feed, "old", true)
+        .into_iter()
+        .map(|l| l.text)
+        .collect();
+    assert_eq!(old, ["no overruns"]);
+    assert_eq!(load_lines(&feed, "sim", true), []);
+    let mut s = sim_line();
+    s.app.chrome.scan = true;
+    for g in s.groups() {
+        for t in &g.tiles {
+            assert_eq!(t.lines, [], "the simulation has no real clock: {t:?}");
+        }
+    }
+}
+
+#[test]
+fn times_read_in_the_unit_that_fits() {
+    assert_eq!(micros_text(0.0), "0.0 µs");
+    assert_eq!(micros_text(8.46), "8.5 µs");
+    assert_eq!(micros_text(120.4), "120 µs");
+    assert_eq!(micros_text(1250.0), "1.25 ms");
+    assert_eq!(micros_text(35_000.0), "35 ms");
+    assert_eq!(micros_text(-3.0), "0.0 µs");
+}
+
+/// Against a real box API: an engineer with "Scan detail" on sees the
+/// box's measured numbers, each line on screen to hover.
+#[test]
+fn an_engineer_sees_the_boxs_scan_load() {
+    let (b, mut h, mut sent) = box_line();
+    h.sign_in(Some("engineer"));
+    h.press("monitor scan");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let lines = loop {
+        serve(&mut h, &b, &mut sent);
+        let now = h.time;
+        let state = &mut h.app.boxv.as_mut().unwrap().state;
+        for (name, data) in b.events("/api/events", 1) {
+            state.apply(Msg::Event(Stream::Values, name, data), now);
+        }
+        h.frame(vec![]);
+        let groups = h.groups();
+        let g = groups.iter().find(|g| g.program == "line").unwrap();
+        let lines = tile(g, "status line").lines.clone();
+        if lines.len() == 3 {
+            break lines;
+        }
+        assert!(std::time::Instant::now() < deadline, "no scan load: {lines:?}");
+    };
+    assert!(lines[0].text.starts_with("scan "), "{lines:?}");
+    assert!(lines[1].text.starts_with("jitter "), "{lines:?}");
+    h.frame(vec![]);
+    for l in &lines {
+        assert!(h.app.chrome.rect(&l.key).is_some(), "{} not on screen", l.key);
+    }
+    let state = &h.app.boxv.as_ref().unwrap().state;
+    let t = state
+        .modules
+        .iter()
+        .find(|m| m.name == "line")
+        .and_then(|m| m.timing)
+        .unwrap();
+    assert!(t.window > 0 && t.window <= 1000, "{t:?}");
+    for s in [t.exec, t.late] {
+        assert!(s.min <= s.mean && s.mean <= s.max && s.p99 <= s.max, "{t:?}");
+    }
+}
+
+/// `t` laid out in a tile `w` wide at scale 1.
+fn laid(t: &Tile, w: f32) -> crate::monitor::Laid {
+    let ctx = egui::Context::default();
+    let mut out = None;
+    let input = RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(w, 800.0))),
+        ..Default::default()
+    };
+    let mut full = ctx.run_ui(input, |ui| out = Some(crate::monitor::layout_tile(ui, t, 1.0, w)));
+    full.textures_delta.clear();
+    out.unwrap()
+}
+
+fn plain(kind: TileKind) -> Tile {
+    Tile {
+        key: "t".into(),
+        title: "Station".into(),
+        sub: "S1".into(),
+        kind,
+        lamps: Vec::new(),
+        stale: None,
+        into: None,
+        lines: Vec::new(),
+    }
+}
+
+/// Texts overlap, or leave the tile.
+fn assert_apart(l: &crate::monitor::Laid, w: f32) {
+    let boxes = l.text_boxes();
+    for (i, a) in boxes.iter().enumerate() {
+        assert!(a.min.x >= 0.0 && a.max.x <= w + 0.5, "{a:?} leaves a {w} pt tile");
+        assert!(
+            a.max.y <= l.height + 0.5,
+            "{a:?} leaves the tile, {} high",
+            l.height
+        );
+        for b in &boxes[i + 1..] {
+            assert!(!a.shrink(0.5).intersects(b.shrink(0.5)), "{a:?} overlaps {b:?}");
+        }
+    }
+}
+
+/// A phone's tile (card monitor-tile-wrap): a long name and a value on one
+/// row used to be painted over each other and out of the tile.
+#[test]
+fn a_lamps_long_name_is_elided_so_it_never_covers_its_value() {
+    let mut t = plain(TileKind::Outputs);
+    t.lamps = vec![
+        Lamp {
+            name: "an output with a very long name that no tile is wide enough for".into(),
+            path: "x".into(),
+            value: Some(Value::Real(f64::from(23.7f32))),
+        },
+        Lamp {
+            name: "lamp".into(),
+            path: "y".into(),
+            value: Some(Value::Bool(true)),
+        },
+    ];
+    for w in [260.0, 340.0, 520.0] {
+        assert_apart(&laid(&t, w), w);
+    }
+}
+
+/// A fault's message is wrapped to the tile and the tile grows with it,
+/// instead of being cut mid-sentence at the tile's edge.
+#[test]
+fn a_fault_message_wraps_and_the_tile_grows_with_it() {
+    let short = laid(
+        &plain(TileKind::Status(Run::Faulted("division by zero".into()))),
+        300.0,
+    );
+    let mut t = plain(TileKind::Status(Run::Faulted(
+        "Fault: division by zero in station S1 at line 42, in the assignment to the flow rate, \
+         after the divisor read zero from the level transmitter"
+            .into(),
+    )));
+    t.stale = Some("no data for 12 s, the box stopped answering and this is the last it said".into());
+    let long = laid(&t, 300.0);
+    assert!(
+        long.height > short.height + 40.0,
+        "{} against {}",
+        long.height,
+        short.height
+    );
+    assert_apart(&long, 300.0);
 }

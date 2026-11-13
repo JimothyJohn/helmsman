@@ -1,0 +1,53 @@
+# Requirement tests for a Helmsman project kept in git.
+#
+# A TEMPLATE for your project's repository, not a workflow of Helmsman's
+# own: copy it to .github/workflows/helmsman-test.yml there, set the two
+# values under `env`, and every pull request and push runs the project's
+# check and its test_*.st files, the same tests a box runs before it
+# deploys. A red test or a project that does not build fails the run; a
+# requirement with no test yet does not. docs/ci/README.md has the rest.
+name: helmsman test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # The project folder (main.st, io.map, project.settings, test_*.st),
+  # relative to the repository root.
+  PROJECT_DIR: .
+  # The Helmsman commit your boxes run (full SHA), so CI tests with the
+  # same build rules and simulation.
+  HELMSMAN_REV: 0000000000000000000000000000000000000000
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+      # Builds helmsman-plc from source at HELMSMAN_REV (a few minutes).
+      - name: Install helmsman-plc
+        run: cargo install --locked --git https://github.com/JimothyJohn/helmsman --rev "$HELMSMAN_REV" helmsman-plc
+      # Exit 0: builds, nothing red. 1: a red test. 2: does not build
+      # (each problem as FILE:LINE:COL). The summary shows each result.
+      - name: Check the project and run its requirement tests
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          {
+            echo '```'
+            helmsman-plc test "$PROJECT_DIR" --junit helmsman-test.xml 2>&1
+          } | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      # helmsman-test.xml is JUnit XML: point your test-report action or
+      # artifact upload at it here if you use one.

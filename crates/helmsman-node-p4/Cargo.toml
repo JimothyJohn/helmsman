@@ -1,0 +1,107 @@
+[package]
+name = "helmsman-node-p4"
+version = "0.1.0"
+description = "Helmsman edge node firmware for the ESP32-P4 (Waveshare ESP32-P4-ETH): the runtime, Modbus TCP and EtherNet/IP on one PoE port"
+edition = "2024"
+# esp-rtos 0.4 asks for 1.95; the Waveshare board runs on upstream stable
+# (riscv32imafc is a tier 2 target), unlike the Xtensa node next door.
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/JimothyJohn/helmsman"
+publish = false
+
+# Not a workspace member (the root Cargo.toml excludes crates/helmsman-node*):
+# the target, the linker scripts and the esp-rs stack must not reach the host
+# gate. Own Cargo.lock; built by `scripts/node-build.sh` with NODE_BOARD=p4-eth.
+# The empty table makes this crate its own workspace root wherever the
+# checkout sits: an excluded package makes cargo keep searching upward, and
+# from a worktree under .claude/worktrees/ that search reaches the main
+# checkout's Cargo.toml.
+[workspace]
+
+[[bin]]
+name = "modbus"
+path = "src/bin/modbus.rs"
+
+[[bin]]
+name = "enip"
+path = "src/bin/enip.rs"
+
+[[bin]]
+name = "node"
+path = "src/bin/node.rs"
+
+[[bin]]
+name = "profinet"
+path = "src/bin/profinet.rs"
+
+[dependencies]
+# The runtime, without std: the clock comes in through `scan_at`, the
+# float functions from libm (helmsman-iec's `libm` feature).
+helmsman-iec = { path = "../helmsman-iec", default-features = false, features = ["libm"] }
+# The Modbus codec (PDUs, reply checks, MBAP), no_std, no deps.
+helmsman-modbus = { path = "../helmsman-modbus" }
+# EtherNet/IP without std: encapsulation, CPF, Forward_Open/Close and the
+# Class 1 producer and consumer (`class1`), the same bytes the box sends.
+helmsman-proto = { path = "../helmsman-proto", default-features = false }
+
+# PROFINET IO without std: the frames, the RPCs and the controller as a
+# state machine, the same one the box's `profinet-io` driver runs.
+helmsman-profinet = { path = "../helmsman-profinet" }
+# `select` over the raw frames, the RPC socket and the controller's next
+# deadline; already in the lock under embassy-net.
+embassy-futures = "0.1"
+
+# esp-hal 1.2 is the first release with the P4's EMAC (basic, work in
+# progress upstream); the rest of the esp-rs stack at the versions that
+# pair with it (esp-hal's own embassy_ethernet example, tag esp-hal-v1.2.2).
+esp-hal = { version = "1.2.2", features = ["esp32p4", "unstable", "rt"] }
+esp-rtos = { version = "0.4.0", features = ["esp32p4", "embassy"] }
+esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32p4"] }
+esp-alloc = { version = "0.11.0", features = ["esp32p4", "internal-heap-stats"] }
+esp-println = { version = "0.18.0", features = ["esp32p4"] }
+# `custom-halt`: after the panic message the node restarts (`custom_halt`
+# in src/lib.rs); esp-backtrace's default is to spin for ever, which on a
+# controller is a dead node until someone cycles its power.
+esp-backtrace = { version = "0.20.0", features = ["esp32p4", "panic-handler", "println", "custom-halt"] }
+embassy-executor = "0.10"
+embassy-time = { version = "0.5", features = ["generic-queue-8"] }
+# `auto-icmp-echo-reply`: a controller that does not answer ping is a
+# support call at commissioning; smoltcp answers echo only with this on.
+embassy-net = { version = "0.9", features = ["dhcpv4", "medium-ethernet", "proto-ipv4", "tcp", "udp", "auto-icmp-echo-reply"] }
+# The driver trait itself, already in the tree under embassy-net: the
+# wrapper in src/ethernet.rs that hands transmit checksums to smoltcp
+# implements it.
+embassy-net-driver = "0.2"
+embedded-io-async = "0.7"
+static_cell = "2.1"
+# What a node serves and stores (settings record, program slots, HTTP, the
+# box API subset, the router), no_std, host-tested.
+helmsman-nodecore = { path = "../helmsman-nodecore" }
+# The flash behind the settings and program slots in the nvs partition, and
+# the blocking mutex for the state the scan loop and the server share.
+esp-storage = { version = "0.10.0", features = ["esp32p4"] }
+embedded-storage = "0.3.2"
+embassy-sync = "0.8"
+
+# The root workspace's lint set, repeated because this crate is not a member.
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+
+[profile.release]
+# Speed is what is measured; frame pointers stay for esp-backtrace.
+opt-level = 3
+debug = 2
+codegen-units = 1
+lto = "fat"
+incremental = false
+overflow-checks = false
+debug-assertions = false
+
+[profile.dev]
+# The interpreter in a debug build is too slow to say anything; always
+# build release for the board.
+opt-level = 1

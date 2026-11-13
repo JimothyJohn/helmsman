@@ -14,6 +14,7 @@ use crate::cip;
 use crate::codec::{DecodeError, Reader, Writer};
 use crate::cpf::{self, Item};
 use crate::encap::{Command, Frame, PROTOCOL_VERSION, Status};
+use alloc::{vec, vec::Vec};
 
 /// `RegisterSession` request bytes. Session handle is zero until the reply.
 #[must_use]
@@ -153,7 +154,8 @@ pub fn decode_send_rr_data_with_items(
     let mut r = Reader::new(frame.payload);
     let _interface_handle = r.u32_le()?;
     let _timeout = r.u16_le()?;
-    let items = cpf::decode(r.rest())?;
+    // A device's reply: it may echo socket-address items past its count.
+    let items = cpf::decode_reply(r.rest())?;
     let data = cpf::find(&items, cpf::item::UNCONNECTED_DATA).ok_or(DecodeError::Invalid(
         "SendRRData reply has no unconnected data item",
     ))?;

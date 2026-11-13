@@ -50,6 +50,7 @@ use super::approve::{self, Approval, Target};
 use super::{Ctx, Request, Response, audit, audit_full, audited, clean, is_json};
 use crate::policy::Role;
 use crate::project::build::{self, Built, Shape};
+use crate::project::check;
 use crate::project::{self, FileKind, Files, Projects, Refusal, Running};
 use crate::store::SnapshotId;
 
@@ -110,6 +111,7 @@ pub(super) fn get(ctx: &Ctx, rest: &[&str]) -> Response {
                     "drivers": drivers.iter().map(|(n, b)| json!({
                         "name": n, "bytes": b.len(), "sha256": project::version(b),
                     })).collect::<Vec<_>>(),
+                    "tests": tests_json(&test_settings(ctx)),
                 }),
             ),
             Err(r) => refusal(&r),
@@ -454,6 +456,7 @@ fn upload(
                 json!({
                     "name": name,
                     "files": files.0.keys().collect::<Vec<_>>(),
+                    "kept": files.kept().map(|(n, _)| n).collect::<Vec<_>>(),
                     "drivers": drivers.keys().collect::<Vec<_>>(),
                 }),
                 format!(
@@ -632,8 +635,8 @@ fn import(
 }
 
 /// `POST /api/projects/{p}/check`: what a deploy would build, its
-/// modules, its tier against what runs, or every problem with its file
-/// and line. Nothing changes.
+/// modules, its tier against what runs and its `warnings` (which never
+/// stop it), or every problem with its file and line. Nothing changes.
 fn check(req: &Request, ctx: &Ctx, name: &str) -> Response {
     let what = format!("project {}", clean(name));
     match built(ctx, name) {
@@ -649,6 +652,7 @@ fn check(req: &Request, ctx: &Ctx, name: &str) -> Response {
                 })).collect::<Vec<_>>(),
                 "approval": tier,
                 "diagnostics": [],
+                "warnings": diags_json(&b.problems, "warning"),
             });
             audited(ctx, req, 200, &body, &format!("{what}: checked, builds"))
         }
@@ -668,14 +672,21 @@ fn shape(appr: &Approval) -> Shape {
 /// image sizes (the simulation's defaults on a box with no approval path).
 pub(super) fn test_settings(ctx: &Ctx) -> spec::Settings {
     match &ctx.approval {
-        Some(appr) => spec::Settings::new(ImageSizes {
-            i: appr.plant.i_len,
-            q: appr.plant.q_len,
-            m: appr.plant.defaults.m,
-        })
-        .period(appr.plant.defaults.period),
+        Some(appr) => check::test_settings(&shape(appr)),
         None => spec::Settings::new(ImageSizes { i: 32, q: 32, m: 256 }),
     }
+}
+
+/// How this box runs requirement tests, for a client that checks a change
+/// the way the box will (the canvas's Agent): the scan period and the
+/// image sizes, bytes.
+fn tests_json(s: &spec::Settings) -> Json {
+    json!({
+        "scan_ms": u64::try_from(s.period.as_millis()).unwrap_or(u64::MAX),
+        "i": s.sizes.i,
+        "q": s.sizes.q,
+        "m": s.sizes.m,
+    })
 }
 
 /// Project `name`'s requirement tests, run (`helmsman_iec::spec`), or
@@ -695,8 +706,7 @@ fn run_tests(ctx: &Ctx, name: &str) -> Result<Vec<spec::Verdict>, (u16, Json, St
             r.why.clone(),
         )
     })?;
-    let plan = spec::plan(files.st());
-    Ok(spec::run_all(&plan, test_settings(ctx)))
+    Ok(check::run_tests(&files, test_settings(ctx)))
 }
 
 /// One test's result. `state` is `passed`, `failed` or `untested` (no
@@ -789,20 +799,37 @@ pub(super) fn built(ctx: &Ctx, name: &str) -> Result<Built, (u16, Json, String)>
         )
     })?;
     let running = ctx.running();
-    build::build(name, &files, running.as_ref(), &shape(appr)).map_err(|diags| {
+    let (built, problems) = build::build_noted(name, &files, running.as_ref(), &shape(appr));
+    built.map_err(|diags| {
         let n = diags.len();
         (
             422,
             json!({
                 "error": "the project does not build",
                 "changed": false,
-                "diagnostics": diags.iter().map(|d| json!({
-                    "file": d.file, "line": d.line, "col": d.col, "message": d.message,
-                })).collect::<Vec<_>>(),
+                "diagnostics": diags_json(&diags, "error"),
+                "warnings": diags_json(&problems, "warning"),
             }),
             format!("does not build ({n} problem(s))"),
         )
     })
+}
+
+/// A project's problems as the API lists them, each `file`, `line`,
+/// `col`, `message` and a `severity`: `"error"` stops a build,
+/// `"warning"` never does (a RETAIN that is not kept yet, a layout file
+/// that does not read). A later lint adds an optional `id` and a
+/// `blocking` flag to a warning; a reader that does not know them
+/// ignores them.
+fn diags_json(ds: &[build::Diag], severity: &str) -> Vec<Json> {
+    ds.iter()
+        .map(|d| {
+            json!({
+                "file": d.file, "line": d.line, "col": d.col, "message": d.message,
+                "severity": severity,
+            })
+        })
+        .collect()
 }
 
 /// After a deploy committed `snapshot`: records `name` as the running

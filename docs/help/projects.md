@@ -11,8 +11,8 @@ shows them.
 
 - **New project** and **Copy project** are in the File menu; a right-click
   on the pane's blank space offers New project too, and a right-click on a
-  project offers Copy, Rename and Delete. A copy of an example or a
-  starter is how you begin from one.
+  project offers Copy, Rename and Delete. A copy of an example is how
+  you begin from one.
 - **New file** is the button under the files. A file is Structured Text
   (`.st`), the I/O map, or one of the editor's own. A double click on a
   file opens it on the Code tab.
@@ -49,8 +49,9 @@ shows them.
 every file with unsaved edits. A mark in the header shows there are some.
 Saving changes nothing about what runs.
 
-**Deploy** (<kbd>Ctrl</kbd> <kbd>D</kbd>, File › Deploy) saves first,
-then compiles the project and runs it: in the page in the simulation, on
+**Deploy** (<kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>Enter</kbd>, File › Deploy, or the → arrow
+right of the Structured Text header and beside the running program in
+Files) saves first, then compiles the project and runs it: in the page in the simulation, on
 the box through its approval policy on a box. A project that does not
 compile is refused with its errors by file and line.
 
@@ -62,8 +63,8 @@ and offers Reload; the other files land.
 A requirement is worth keeping as a test. A file named `test_NAME.st` is
 one: a PROGRAM that drives the program's inputs, lets the clock run and
 checks the outputs. Its first comment states the requirement in your
-words; the **Requirements** tab of the side panel shows one row per test,
-green or red, and for a red one which check failed and when.
+words. The Agent writes one for each change it makes, and a red one names
+itself in the Deploy error with which check failed and when.
 
 ```st
 (* The lamp is on within 2 s of start_pb. *)
@@ -90,8 +91,8 @@ The page runs the tests whenever the project's build changes; a box runs
 them when a project opens, after each save and before every deploy
 (`POST /api/projects/{p}/tests` runs them on demand). **A red test refuses
 Deploy and the Agent's "Use this code"**, naming the requirement, so a
-change cannot land past a requirement it breaks. Ask the Agent to write
-the first tests from your requirements, then edit them like any file.
+change cannot land past a requirement it breaks. The Agent writes the
+tests with each change; edit them like any file.
 
 ## Upload and download
 
@@ -105,19 +106,19 @@ program's `scan_ms`, unless you have set one there already.
 
 ## Examples
 
-Five short **examples** teach one thing each: Blink, Read and write,
+Six short **examples** teach one thing each: Traffic light, Blink, Read and write,
 Logic (AND, OR, NOT), a start/stop latch and a counter. Click one and
 give it a name: it becomes a program of your own to change. On a box the
 same list makes the program on the box, its inputs and outputs on the
 box's own channels so it runs with nothing wired.
 
-[Examples and starters](starters.html) lists them, generated from the
+[Examples](starters.html) lists them, generated from the
 program itself.
 
 ## The I/O map
 
 `io.map` binds the program's inputs and outputs to channels: a line per
 signal with its direction, name, type, the device and the channel, and
-for an output its safe value. The starters' maps use the box's own
+for an output its safe value. The examples' maps use the box's own
 channels and say in a comment to check them before deploying to a box
 with anything wired.

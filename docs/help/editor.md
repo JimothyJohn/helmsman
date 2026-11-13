@@ -15,32 +15,41 @@ One row along the top.
   each pane, and has Light mode (dark is the default; the browser
   remembers your choice). Help opens these pages, the keyboard table, and About
   Helmsman (the version and build).
-- **The state**: `running`, `stopped` or `faulted`, green when running,
-  red otherwise, with the program's clock. On a box this is the link to
-  the box instead.
+- On a box, **the link**: whether the page is connected to the box. The
+  simulation's state and clock sit beside the run glyphs over the
+  diagram.
 - On the right: the project's name, a mark when it has unsaved edits, the
-  **Editor | Monitor** toggle, a yellow **waiting** badge when proposals
+  **Editor | Monitor** toggle (the code brackets and a screen; hover
+  either for its name), a yellow **waiting** badge when proposals
   wait for an approver (it opens the Proposals screen) and, on a box,
   **Sign in**.
 
 <img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
 
-If something needs saying, a line appears under the header while it is
-true: a fault, a deploy under way or refused, a file someone else saved
-since you opened it (with a Reload). The Messages tab along the bottom
-keeps those lines after they have gone.
+Anything the page has to say is in the **Messages** tab of the bottom
+panel. Its first rows are what is true now: a fault, a deploy under way
+or refused, a file someone else saved since you opened it (with a
+Reload). Under them is the log of what happened. When an error comes in
+the tab turns red and pulses for a few seconds, and it stays red until
+you have looked at it and the error no longer stands. If the bottom
+panel was shut, an error opens it.
 
 ![The same screen in light mode, View › Light mode.](img/editor-light.png)
 
 ## The glyphs
 
 A strip of buttons sits over the diagram's top-right corner. In the
-simulation: run or stop (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), step one scan
-(<kbd>F10</kbd>, when stopped), and restart from initial values. On both:
-save, upload a file into the project, download the project as a `.zip`,
-and **?** for these pages. Hover one for its name and key.
+simulation it starts with the state (`running`, `paused`, `stopped` or
+`faulted`) and the program's clock, then: run or pause (<kbd>Ctrl</kbd>
+<kbd>Enter</kbd>), stop (<kbd>Shift</kbd> <kbd>F8</kbd>), step to the
+next change (<kbd>F8</kbd>, while paused or stopped), and restart from
+initial values. Pause holds every value where it is. Stop ends the run:
+the values go back to their initial ones, the outputs go off and the
+clock goes to zero. On both: save, upload a file into the project,
+download the project as a `.zip`, and **?** for these pages. Hover one
+for its name and key.
 
-<img src="img/glyphs.png" alt="The glyph strip: stop, step, restart, then save, upload and download." width="300">
+<img src="img/glyphs.png" alt="The glyph strip: the state and clock, pause, stop, step, restart, then save, upload and download." width="485">
 
 ## The diagram
 
@@ -56,20 +65,21 @@ you cannot draw into it. What you can do:
 - **Ask why.** Click an output or any assignment: everything that drives
   its value stays lit and the rest dims. Click empty space to clear.
 - **Go to the code.** Click any block and the Structured Text pane scrolls
-  to its line. Edit › Go to definition (<kbd>Ctrl</kbd> <kbd>Shift</kbd>
+  to its line. Edit › Go to definition (<kbd>Alt</kbd> <kbd>Shift</kbd>
   <kbd>D</kbd>) jumps to where the picked block's variable is declared;
-  Cross references (<kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>X</kbd>) lights
+  Cross references (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>X</kbd>) lights
   every read and write of it.
 - **Switch an input.** An input's block is a control: a switch flips on
   a click, a push button is on while you hold it, a number takes what you
   type and keeps it when you press <kbd>Enter</kbd> (<kbd>Esc</kbd> puts
   the old value back). In the simulation these are the virtual inputs;
   on a box they are forces (see [On a box](box.html)).
-- **Go into a block.** Double-click a function block instance to see its
-  own diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the breadcrumbs come back
-  up. From the keyboard, pick the instance and press <kbd>Ctrl</kbd>
-  <kbd>]</kbd> to go in and <kbd>Ctrl</kbd> <kbd>[</kbd> to come out (the
-  instance stays picked, so <kbd>Ctrl</kbd> <kbd>]</kbd> goes back in).
+- **Go into a block.** A function block instance with a diagram of its
+  own is drawn as a stack of cards with a double chevron in its header.
+  Double-click it to see that diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the breadcrumbs come back
+  up. From the keyboard, pick the instance and press <kbd>Alt</kbd>
+  <kbd>]</kbd> to go in and <kbd>Alt</kbd> <kbd>[</kbd> to come out (the
+  instance stays picked, so <kbd>Alt</kbd> <kbd>]</kbd> goes back in).
   With the simulation stopped, each also steps one scan, so you watch
   the instance work as you move through the levels.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
@@ -78,7 +88,7 @@ you cannot draw into it. What you can do:
   drag on empty space, zoom with the wheel; the diagram never leaves the
   view, and a double-click on empty space fits it again.
 
-![The lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims.](img/diagram-why.png)
+![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs.](img/diagram-why.png)
 
 Values that would clutter the diagram are left off it: a constant shows
 its name alone, a time reads as `T#500ms`. A wire that would cross the
@@ -87,11 +97,12 @@ instead of a long lead. Fitting the diagram to the view never shrinks it
 past the point where its labels read: a big program shows its left part
 and you pan.
 
-**Icons.** A block can carry one character at the left of its header, so
-you can tell a timer from a counter at a glance: the standard blocks have
-built-in ones (T for timers, # for counters, ↑ and ↓ for the edge
-detectors, S and R for the bistables, ~ for the blink pattern), and a file
-named `icons.map` in the project adds your own, one rule a line:
+**Icons.** A block carries a small picture at the left of its header, so
+you can tell a timer from a counter at a glance: the standard blocks
+have their own (a stopwatch for the timers, tally marks for the
+counters, a padlock for the bistables, a rising step for the edge
+detectors, ~ for the blink pattern), and a file named `icons.map` in the
+project gives any block one character of your own, one rule a line:
 
 ```
 MOTOR = M        # every block of type MOTOR
@@ -99,16 +110,32 @@ conveyor* = >    # every variable or instance whose name starts so
 TON = ⏱          # over the built-in one
 ```
 
-The project's rules win over the built-in ones. Zoomed out past where the
-label is drawn, the icon stands alone at a readable size.
+The project's rules win over the built-in pictures. Zoomed out past
+where the label is drawn, the icon stands alone at a readable size.
+
+**Lamps.** The program's BOOL outputs are also lamps in the bottom-right
+corner of the diagram, lit as the program runs. An output named after a
+colour (`red`, `lamp_green`, `amber`) is a lamp of that colour, in the
+I/O panel's list and on the trend too; a red, a yellow and a green
+together are drawn as a traffic light. Any other output is a pilot lamp
+with its name under it.
+
+**Glyphs.** Every point in the I/O panel and the Devices list carries a
+small picture of what it is, read from its name: `start_pb` a push
+button, `e_stop` an emergency stop, `mode_sel` a selector switch, a
+colour or `lamp` a pilot lamp, `alarm`, `interlock`, `phase` or `step`,
+`hmi`, `timer`, `count`, `latch`, `edge` each their own; any other BOOL
+input is a switch, any other BOOL output a pilot lamp, a number a gauge.
+Hover one to read its name. The pictures are an early set and will be
+redrawn.
 
 ## The panes
 
-- **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
-  the project's files, the examples and starters, and the program tree
+- **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
+  the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
-  next. **Devices** (<kbd>Alt</kbd> <kbd>4</kbd>): at the top, **I/O
+  next. **Devices** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): at the top, **I/O
   wiring** links to the project's `io.map`, the file that says which
   program variable is wired to which device point; then the devices it
   names, each with its points under it, their live
@@ -145,23 +172,46 @@ label is drawn, the icon stands alone at a readable size.
   sensor that would; right-click one and Add a sensor… writes that
   signal into the map. When that signal is one of the program's inputs,
   in the same unit, the simulation runs the model from it: set it in
-  the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
-  Structured Text editor. Errors are marked on the line as you type; the
-  program running does not change until you deploy. The key for a tab
+  the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>): the
+  Structured Text editor, headed by the open file's name. The code is
+  coloured by what each word is: keywords, types, numbers and times,
+  comments, the program's inputs and outputs, and addresses. Errors are
+  marked on the line as you type; the program running does not change
+  until you deploy. A hint is underlined in blue: a variable that is
+  never used, one that is set and never read, or a variable assigned to
+  itself. Hover its line for what it says. A hint never stops a deploy. An
+  arrow in the gutter stands on the first line of every block that
+  folds: a program or function block, a VAR section, an IF, a CASE or a
+  loop. Click it to fold the block to its first and last lines, with a
+  note of how many lines are hidden, and click it again to open it. A
+  folded block opens by itself when a line inside it has to be seen: an
+  error or a warning, a line you jumped to, the caret moving into it, or
+  a search. The word-wrap button beside the file name wraps long
+  lines at the pane's width, or, off, keeps each line on one row with a
+  scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
-- **The bottom panel** (<kbd>Alt</kbd> <kbd>2</kbd>): the **Trend** of the
-  signals you pin, with a long time axis, and **Messages**, the last two
-  hundred things the page had to say, with the error count on the tab.
-- **The side panel**, on the right (<kbd>Alt</kbd> <kbd>3</kbd>): **I/O**,
+  A double click on any tab, on this pane or the side panel, hides that
+  pane. The tabs are glyphs; hover one for its name. A hidden pane keeps
+  its tabs down the strip at the edge, and a click on one opens the pane
+  on that tab.
+- **The bottom panel** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>): the **Trend** of the
+  signals you pin, with a long time axis, and **Messages**: what needs
+  saying now, then the last two hundred things the page had to say, with
+  the error count beside the tab. Tick or untick info, warnings and
+  errors to list or leave out each.
+- **The side panel**, on the right (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
-  diagram does not show; **Requirements**, the project's requirement tests,
-  one row each, green or red with why, with **Edit** (new words; the
-  agent rewrites the test for them, or only the words change) and
-  **Delete** (asks first) on every row (see [Requirement tests](projects.html#requirement-tests));
-  and **Agent**, where you type what the open file should do and it
-  is updated (see [The Agent](agent.html)).
+  diagram does not show; **Palette**, pictures of the common pieces of a
+  machine and a program (push button, emergency stop, selector, pilot
+  lamp, alarm, interlock, timer, counter, latch, edge, sequence step,
+  operator screen): drag one onto the diagram, or click it, and the
+  Agent is asked to add it to the program, which waits for Deploy like
+  any change; and **Agent**, where you type what the open file should do
+  and it is updated (see [The Agent](agent.html)).
 
-<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
+<img src="img/palette-tab.png" alt="The Palette tab: twelve pictures to drag onto the diagram." width="300">
+
+<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 
 <img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
 

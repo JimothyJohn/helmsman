@@ -45,18 +45,30 @@ impl Storage for Broken {
 }
 
 const BLOCKS: &str = "FUNCTION_BLOCK Latch
-VAR_INPUT set : BOOL; reset : BOOL; END_VAR
-VAR_OUTPUT q : BOOL; END_VAR
-  q := (q OR set) AND NOT reset;
+VAR_INPUT
+  set : BOOL;
+  reset : BOOL;
+END_VAR
+VAR_OUTPUT
+  q : BOOL;
+END_VAR
+q := (q OR set) AND NOT reset;
 END_FUNCTION_BLOCK
 ";
 
 const MAIN: &str = "PROGRAM conveyor
-VAR_INPUT start : BOOL; stop : BOOL; END_VAR
-VAR_OUTPUT lamp : BOOL; END_VAR
-VAR l : Latch; END_VAR
-  l(set := start, reset := stop);
-  lamp := l.q;
+VAR_INPUT
+  start : BOOL;
+  stop : BOOL;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+VAR
+  l : Latch;
+END_VAR
+l(set := start, reset := stop);
+lamp := l.q;
 END_PROGRAM
 ";
 
@@ -116,19 +128,19 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
     let store = Shared::default();
     let mut v = PlaygroundView::with_storage(Box::new(store.clone()));
     let (first, file) = example_project(crate::playground::EXAMPLES[0].src);
-    assert_eq!((first.as_str(), file.as_str()), ("blink", "blink.st"));
-    assert_eq!(v.title(), "blink", "opens the first example");
+    assert_eq!((first.as_str(), file.as_str()), ("traffic", "traffic.st"));
+    assert_eq!(v.title(), "traffic", "opens the first example");
     assert!(v.session.running, "running, as the playground always opened");
     let rows = v.proj.rows();
     assert!(rows.iter().all(ProjectRow::example), "{rows:?}");
     assert_eq!(rows.len(), crate::playground::EXAMPLES.len());
-    assert!(rows.iter().any(|r| r.name == "blink" && r.running));
+    assert!(rows.iter().any(|r| r.name == "traffic" && r.running));
     // Edited and saved: a copy under a free name, opened; the example
     // itself is unchanged.
     v.proj.current_text_mut().unwrap().insert_str(0, "(* mine *)\n");
     assert!(v.dirty());
     v.save();
-    assert_eq!(v.title(), "blink-2");
+    assert_eq!(v.title(), "traffic-2");
     assert!(!v.dirty());
     assert!(
         v.proj
@@ -136,17 +148,17 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
             .as_ref()
             .unwrap()
             .0
-            .contains("saved your copy as blink-2")
+            .contains("saved your copy as traffic-2")
     );
     assert!(
-        v.proj.examples["blink"]
-            .get("blink.st")
+        v.proj.examples["traffic"]
+            .get("traffic.st")
             .unwrap()
-            .starts_with("PROGRAM blink")
+            .starts_with("PROGRAM traffic")
     );
     // The next visit finds it, open.
     let again = PlaygroundView::with_storage(Box::new(store));
-    assert_eq!(again.title(), "blink-2");
+    assert_eq!(again.title(), "traffic-2");
     assert!(again.proj.files[&again.proj.current].starts_with("(* mine *)"));
 }
 
@@ -173,9 +185,9 @@ fn a_project_of_several_files_deploys_in_the_page_and_errors_point_at_their_file
     *v.proj.current_text_mut().unwrap() = MAIN.replace("lamp := l.q;", "lamp := l.q +;");
     v.deploy();
     let d = v.diags();
-    assert_eq!((d[0].file.as_str(), d[0].line), ("main.st", 6), "{d:?}");
+    assert_eq!((d[0].file.as_str(), d[0].line), ("main.st", 13), "{d:?}");
     assert!(v.notice.as_ref().unwrap().contains("does not compile"));
-    // Clicking it (in the app) opens main.st at line 6.
+    // Clicking it (in the app) opens main.st at line 13.
     v.proj.open_file("blocks.st");
     let mut app = App::sim();
     app.sim = Some(v);
@@ -190,7 +202,7 @@ fn a_project_of_several_files_deploys_in_the_page_and_errors_point_at_their_file
         .center();
     click(&ctx, &mut app, at, 1.0);
     assert_eq!(app.sim.as_ref().unwrap().proj.current, "main.st");
-    assert_eq!(app.chrome.line, Some(6));
+    assert_eq!(app.chrome.line, Some(13));
 }
 
 #[test]
@@ -270,6 +282,8 @@ fn download_then_upload_round_trips_in_the_simulation_and_with_the_box() {
 fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     let mut app = App::sim();
     app.sim = Some(PlaygroundView::with_storage(Box::new(Broken)));
+    // What the page has to say is in the Messages tab.
+    app.chrome.bottom = crate::editor::Bottom::Messages;
     let ctx = egui::Context::default();
     for k in 0..30 {
         frame(&ctx, &mut app, f64::from(k) / 60.0);
@@ -297,7 +311,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     let junk = Shared(Rc::new(RefCell::new(Some("{not json".into()))));
     let v = PlaygroundView::with_storage(Box::new(junk));
     assert!(v.proj.storage_problem.is_some());
-    assert_eq!(v.title(), "blink");
+    assert_eq!(v.title(), "traffic");
     let evil = serde_json::json!({
         "format": "helmsman-projects 1",
         "open": "../etc",
@@ -309,7 +323,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     });
     let v = PlaygroundView::with_storage(Box::new(Shared(Rc::new(RefCell::new(Some(evil.to_string()))))));
     assert_eq!(v.proj.saved.keys().collect::<Vec<_>>(), ["fine"]);
-    assert_eq!(v.title(), "blink", "the open name it held is not a project");
+    assert_eq!(v.title(), "traffic", "the open name it held is not a project");
 }
 
 #[test]
@@ -373,7 +387,7 @@ fn two_programs_in_the_simulation_are_refused_at_the_second() {
     v.open_project("pair");
     v.proj.new_file("other.st");
     *v.proj.current_text_mut().unwrap() =
-        "PROGRAM other\nVAR x : INT; END_VAR\nx := 1;\nEND_PROGRAM\n".into();
+        "PROGRAM other\nVAR\n  x : INT;\nEND_VAR\nx := 1;\nEND_PROGRAM\n".into();
     v.deploy();
     let d = v.diags();
     assert!(
@@ -586,7 +600,7 @@ fn opening_or_deploying_another_program_stops_the_one_running() {
         Some("broken"),
         "a new project compiles and runs"
     );
-    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\n  x := ;\nEND_PROGRAM\n".into();
+    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\nx :=;\nEND_PROGRAM\n".into();
     v.deploy();
     assert!(v.session.running, "the last good build still runs");
     assert!(!v.session.diags.is_empty(), "and the error is listed");
@@ -600,7 +614,7 @@ fn the_log_keeps_refused_deploys_faults_and_state_changes() {
     v.open_project("blink");
     v.proj.create("broken", None);
     v.open_project("broken");
-    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\n  x := ;\nEND_PROGRAM\n".into();
+    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\nx :=;\nEND_PROGRAM\n".into();
     v.deploy();
     let errors: Vec<String> = v
         .log
@@ -612,7 +626,7 @@ fn the_log_keeps_refused_deploys_faults_and_state_changes() {
         errors.iter().any(|e| e.contains("Deploy of broken refused")),
         "{errors:?}"
     );
-    assert!(v.log.label().contains("error"), "{}", v.log.label());
+    assert!(v.log.errors() > 0, "{}", v.log.text());
     let before = v.log.len();
     let ctx = eframe::egui::Context::default();
     let input = eframe::egui::RawInput {
@@ -655,7 +669,7 @@ fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
     let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
     v.open_project("blink");
     assert!(!v.proj.dirty());
-    let code = "PROGRAM lamp_test\nVAR lamp : BOOL; END_VAR\nlamp := TRUE;\nEND_PROGRAM\n";
+    let code = "PROGRAM lamp_test\nVAR\n  lamp : BOOL;\nEND_VAR\nlamp := TRUE;\nEND_PROGRAM\n";
     v.take_code(code.into());
     // The conversation's first PROGRAM asks for its name (agent-iterations).
     assert_eq!(v.proj.open, "blink", "nothing lands before the name");
@@ -670,7 +684,7 @@ fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
     assert_eq!(v.proj.open, "lamp_test");
     assert!(v.proj.files.contains_key("v1.st"));
     // A block goes into the open project as a file.
-    let fb = "FUNCTION_BLOCK debounce\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nq := x;\nEND_FUNCTION_BLOCK\n";
+    let fb = "FUNCTION_BLOCK debounce\nVAR_INPUT\n  x : BOOL;\nEND_VAR\nVAR_OUTPUT\n  q : BOOL;\nEND_VAR\nq := x;\nEND_FUNCTION_BLOCK\n";
     v.take_code(fb.into());
     assert_eq!(v.proj.open, "lamp_test");
     assert_eq!(v.proj.current, "debounce.st");
@@ -684,4 +698,300 @@ fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
         "asked"
     );
     assert!(!v.proj.files.contains_key("v2.st"), "nothing landed yet");
+}
+
+/// A storage with a backup slot beside the main one, both readable after
+/// the projects took them.
+#[derive(Clone, Default)]
+struct Backed {
+    main: Rc<RefCell<Option<String>>>,
+    backup: Rc<RefCell<Option<String>>>,
+}
+
+impl Storage for Backed {
+    fn load(&self) -> Result<Option<String>, String> {
+        Ok(self.main.borrow().clone())
+    }
+
+    fn save(&mut self, text: &str) -> Result<(), String> {
+        *self.main.borrow_mut() = Some(text.to_string());
+        Ok(())
+    }
+
+    fn backup(&mut self, text: &str) -> Result<(), String> {
+        *self.backup.borrow_mut() = Some(text.to_string());
+        Ok(())
+    }
+}
+
+/// 2026-11-08 review: what the browser stored in a format this page does
+/// not read (a newer page's, or one bad top-level field) is not written
+/// over by the first project opened. It is kept as a backup and left alone
+/// until the person saves, and the same for a store whose projects broke a
+/// rule and were left out.
+#[test]
+fn a_store_this_page_cannot_read_is_backed_up_and_left_alone_until_a_save() {
+    let ok = "PROGRAM fine\nEND_PROGRAM\n";
+    let newer = serde_json::json!({
+        "format": "helmsman-projects 2",
+        "open": "mine",
+        "projects": { "mine": { "main.st": ok } },
+    })
+    .to_string();
+    let partly = serde_json::json!({
+        "format": "helmsman-projects 1",
+        "open": "mine",
+        "projects": {
+            "mine": { "main.st": ok },
+            "broken": { "main.st": ok, "../x.st": "y" },
+        },
+    })
+    .to_string();
+    for raw in [newer, partly, "{not json".to_string()] {
+        let store = Backed::default();
+        *store.main.borrow_mut() = Some(raw.clone());
+        let mut s = SimProjects::load(Box::new(store.clone()));
+        assert!(s.storage_problem.is_some(), "said: {raw}");
+        s.open_project(&example_project(crate::playground::EXAMPLES[1].src).0);
+        assert_eq!(
+            store.main.borrow().as_deref(),
+            Some(raw.as_str()),
+            "opening a project writes nothing: {raw}"
+        );
+        assert_eq!(store.backup.borrow().as_deref(), Some(raw.as_str()), "backed up");
+        // The person saves: now the store is written, the backup stays.
+        s.create("fresh", None);
+        let now = store.main.borrow().clone().unwrap();
+        assert_ne!(now, raw);
+        assert!(now.contains("\"fresh\""), "{now}");
+        assert_eq!(
+            store.backup.borrow().as_deref(),
+            Some(raw.as_str()),
+            "backup kept"
+        );
+    }
+}
+
+/// A project's revisions go with its name, and a deleted project's do not
+/// come back under a new project of the same name.
+#[test]
+fn renaming_keeps_a_projects_history_and_deleting_drops_it() {
+    let store = Shared::default();
+    let mut s = SimProjects::load(Box::new(store.clone()));
+    s.create("a", None);
+    s.current_text_mut().unwrap().push_str("(* one *)\n");
+    s.save();
+    s.current_text_mut().unwrap().push_str("(* two *)\n");
+    s.save();
+    assert_eq!(s.revisions().len(), 2);
+    s.rename("a", "b");
+    assert_eq!(s.open, "b");
+    assert_eq!(s.revisions().len(), 2, "the revisions went with it");
+    assert!(!s.history.contains_key("a"));
+    let again = SimProjects::load(Box::new(store.clone()));
+    assert_eq!(
+        again.history["b"].len(),
+        2,
+        "and survive the next persist and reload"
+    );
+    s.delete("b");
+    assert!(!s.history.contains_key("b"), "gone with the project");
+    s.create("b", None);
+    s.save();
+    assert_eq!(
+        s.revisions().iter().map(|r| r.n).collect::<Vec<_>>(),
+        [1],
+        "a new project of that name starts its own history"
+    );
+}
+
+/// The box refuses a file name that differs only by case (409) and an
+/// import onto a name that is taken, offering Replace; so does the
+/// simulation.
+#[test]
+fn files_follow_the_boxs_rules_for_case_and_for_imports_onto_a_taken_name() {
+    let mut s = SimProjects::load(Box::new(Shared::default()));
+    s.create("p", None);
+    s.add_file("blocks.st", "(* blocks *)\n".into());
+    s.rename_file("blocks.st", "MAIN.st");
+    assert!(s.files.contains_key("blocks.st") && !s.files.contains_key("MAIN.st"));
+    assert!(s.notice.as_ref().unwrap().1, "{:?}", s.notice);
+
+    // The same name: refused and offered, not overwritten.
+    let before = s.files.clone();
+    s.upload("blocks.st", b"(* imported *)\n");
+    assert_eq!(s.files, before, "nothing overwritten");
+    let (msg, err) = s.notice.clone().unwrap();
+    assert!(err && msg.contains("already has that file"), "{msg}");
+    assert!(s.pending_file.is_some());
+    s.replace();
+    assert_eq!(s.files["blocks.st"], "(* imported *)\n");
+    assert!(s.pending_file.is_none());
+
+    // A name that differs only by case is refused and not offered.
+    s.upload("BLOCKS.st", b"(* other *)\n");
+    assert!(!s.files.contains_key("BLOCKS.st"));
+    assert!(s.pending_file.is_none());
+    assert!(s.notice.as_ref().unwrap().1);
+}
+
+/// 2026-11-10 (card `project-unknown-files`): a stored project whose
+/// `diagram.layout` does not read, or that holds a file this page has no use
+/// for (a newer release's), is not dropped on load, and neither is a
+/// revision with either. Only a save or an upload refuses a bad layout.
+#[test]
+fn a_stored_project_and_its_history_survive_a_layout_that_does_not_read_and_an_unknown_file() {
+    let ok = "PROGRAM fine\nEND_PROGRAM\n";
+    let files = serde_json::json!({
+        "main.st": ok,
+        "diagram.layout": "helmsman-layout 9\nwho knows\n",
+        "pump-curves.json": "{\r\n  \"curve\": [0, 1]\r\n}\r\n",
+    });
+    let rev = |n: u32| {
+        serde_json::json!({
+            "n": n, "at_ms": 1, "by": "you", "what": "saved", "page": null, "files": files,
+        })
+    };
+    let raw = serde_json::json!({
+        "format": "helmsman-projects 1",
+        "open": "mine",
+        "projects": { "mine": files },
+        "history": { "mine": [rev(1), rev(2)] },
+    })
+    .to_string();
+    let store = Backed::default();
+    *store.main.borrow_mut() = Some(raw);
+    let s = SimProjects::load(Box::new(store.clone()));
+    assert!(s.storage_problem.is_none(), "{:?}", s.storage_problem);
+    assert!(store.backup.borrow().is_none(), "nothing was left out");
+    let kept = s.saved.get("mine").expect("the project is kept");
+    assert_eq!(
+        kept.get("pump-curves.json"),
+        Some("{\r\n  \"curve\": [0, 1]\r\n}\r\n")
+    );
+    assert_eq!(kept.get("diagram.layout"), Some("helmsman-layout 9\nwho knows\n"));
+    assert_eq!(s.history["mine"].len(), 2, "both revisions kept");
+
+    // A name that is not safe is still left out, as before.
+    let unsafe_name = serde_json::json!({
+        "format": "helmsman-projects 1",
+        "projects": { "mine": { "main.st": ok, "../x": "y" } },
+    })
+    .to_string();
+    let store = Backed::default();
+    *store.main.borrow_mut() = Some(unsafe_name);
+    let s = SimProjects::load(Box::new(store));
+    assert!(s.storage_problem.is_some() && !s.saved.contains_key("mine"));
+}
+
+// ---- Structured Text is formatted on Save and on Deploy (Nick, 2026-11-11) ----
+
+/// A valid program in no particular layout: lower-case keywords, whole
+/// sections on one line, no final line end.
+const MESSY: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nif start then lamp := TRUE; else lamp := FALSE; end_if;\nEND_PROGRAM";
+
+/// A program in a layout of its own, which a save must not touch unless
+/// its file was edited.
+const OTHER: &str = "PROGRAM other\nVAR x : INT; END_VAR\nx := 1;\nEND_PROGRAM\n";
+
+/// A project `name` saved as it is given, with no formatting (`save_as`
+/// does none), so what a test calls untouched is untouched.
+fn seeded(name: &str, files: &[(&str, &str)]) -> SimProjects {
+    let mut p = SimProjects::load(Box::new(Shared::default()));
+    p.create(name, None);
+    p.files.clear();
+    for (n, t) in files {
+        p.files.insert((*n).to_string(), (*t).to_string());
+    }
+    p.save_as("seeded", None);
+    assert!(!p.dirty(), "{:?}", p.notice);
+    p
+}
+
+/// Nick, 2026-11-11: Save puts an edited `.st` file in the one layout. A
+/// `.st` file with no edits and a file that is not Structured Text
+/// (io.map, edited or not) are kept byte for byte, and saving again
+/// changes nothing.
+#[test]
+fn save_formats_an_edited_st_file_and_leaves_the_others_byte_for_byte() {
+    let map = "in   start   bool   box   di:0\n";
+    let mut p = seeded(
+        "fmt",
+        &[
+            ("main.st", OTHER),
+            ("other.st", OTHER),
+            ("io.map", "in start bool box di:0\n"),
+        ],
+    );
+    // main.st and io.map are edited; other.st is not touched.
+    p.files.insert("main.st".into(), MESSY.into());
+    p.files.insert("io.map".into(), map.into());
+    let tidy = helmsman_iec::tidy::format(MESSY);
+    assert_ne!(tidy, MESSY, "the fixture needs formatting");
+    assert!(tidy.contains("IF start THEN"), "keywords in capitals: {tidy}");
+
+    p.save();
+    assert!(!p.dirty(), "{:?}", p.notice);
+    let stored = |p: &SimProjects, f: &str| p.saved["fmt"].0[f].clone();
+    assert_eq!(stored(&p, "main.st"), tidy, "the edited file is stored formatted");
+    assert_eq!(p.files["main.st"], tidy, "and the editor shows what was stored");
+    assert_eq!(
+        stored(&p, "io.map"),
+        map,
+        "an edited io.map is not Structured Text"
+    );
+    assert_eq!(stored(&p, "other.st"), OTHER, "untouched, so not rewritten");
+
+    // Saving again: nothing is edited, nothing changes.
+    let before = p.saved["fmt"].0.clone();
+    assert_eq!(p.format(), 0);
+    p.save();
+    assert_eq!(p.saved["fmt"].0, before);
+    assert_eq!(p.files, before);
+}
+
+/// Nick, 2026-11-11: a file that does not compile is still saved: laid
+/// out as far as it goes, and every character that is not white space
+/// (code and comments) survives, keywords apart from their capitals.
+#[test]
+fn a_file_that_does_not_compile_is_still_saved_with_everything_in_it() {
+    let broken = "(* keep me *)\nPROGRAM p\nVAR x : INT; END_VAR\nIF x > 1 THEN x := 2;\n(* and me *) x := x +;\nEND_PROGRAM";
+    let mut p = seeded("broken", &[("main.st", OTHER)]);
+    p.files.insert("main.st".into(), broken.into());
+    p.save();
+    assert!(!p.dirty(), "{:?}", p.notice);
+    let stored = p.saved["broken"].0["main.st"].clone();
+    let bare = |t: &str| {
+        t.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    assert_eq!(bare(&stored), bare(broken), "nothing lost: {stored}");
+    assert_ne!(stored, broken, "and its layout was tidied: {stored}");
+    assert!(stored.ends_with('\n'), "{stored:?}");
+    assert_eq!(p.files["main.st"], stored);
+}
+
+/// Nick, 2026-11-11: Deploy in the page formats the edited file first, so
+/// the program that runs is the formatted text.
+#[test]
+fn deploy_in_the_page_formats_the_edited_file_and_runs_the_formatted_text() {
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.proj.create("run", None);
+    v.open_project("run");
+    v.proj.open_file("main.st");
+    *v.proj.current_text_mut().unwrap() = MESSY.into();
+    let tidy = helmsman_iec::tidy::format(MESSY);
+    v.deploy();
+    assert!(v.session.running, "{:?}", v.notice);
+    assert_eq!(v.proj.files["main.st"], tidy, "the file is the formatted text");
+    assert_eq!(
+        v.session.build.as_ref().expect("a program").src,
+        tidy,
+        "and that is what was built and runs"
+    );
+    assert_eq!(v.session.src, tidy, "the editor's source follows");
+    // The edits stay edits until Save: Deploy does not save.
+    assert!(v.proj.dirty());
 }

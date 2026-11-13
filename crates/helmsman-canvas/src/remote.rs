@@ -19,7 +19,12 @@
 //! say what is happening: a failed stream is closed and reopened after
 //! [`backoff`] ([`RETRY_SECS`], the same every time, counted down on the
 //! status line), and after [`UNREACHABLE_AFTER`] failures in a row the
-//! box is called unreachable (still retrying).
+//! box is called unreachable (still retrying). Two cases are not
+//! failures: the box ends every stream at 600 s by design, so a stream
+//! that was delivering is reopened at once and the link stays connected;
+//! and a stream that delivers nothing for [`SILENT_AFTER`] seconds (a
+//! half-open connection raises no error) is closed and opened again, which
+//! does count.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -33,10 +38,33 @@ use serde_json::Value as Json;
 /// before anything ever worked) after which the box is "unreachable".
 pub const UNREACHABLE_AFTER: u32 = 3;
 
-/// Seconds between retries: a steady 5 s, so the countdown on the status
+/// Seconds without a values event after which the stream is taken for
+/// dead and opened again. The box publishes every 100 ms, and the Monitor
+/// greys out at [`crate::monitor::STALE_AFTER`], so this is later than
+/// that: the engineer is told before the reconnect.
+pub const SILENT_AFTER: f64 = 5.0;
+
+/// Seconds between retries: a steady 2 s, so the countdown on the status
 /// line reads the same every time (Nick, 2026-11-01; it was 2 s doubling
-/// to 30, which read as a hang).
-pub const RETRY_SECS: f64 = 5.0;
+/// to 30, which read as a hang) and a box that comes back is seen soon
+/// (Nick, 2026-11-13: 5 s was too slow).
+pub const RETRY_SECS: f64 = 2.0;
+
+/// The second look for a box, while the page simulates: one module list
+/// read, asked once ([`BoxState::probe_at`]) and answered once.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Probe {
+    /// None asked for.
+    Off,
+    /// Asked for at this page time.
+    Due(f64),
+    /// Sent; no answer yet.
+    Asked,
+    /// A box answered.
+    Found,
+    /// Nothing answered.
+    Missed,
+}
 
 /// Seconds to wait before retry number `failures` (1-based).
 #[must_use]
@@ -45,7 +73,7 @@ pub fn backoff(_failures: u32) -> f64 {
 }
 
 /// What to fetch once.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Fetch {
     Modules,
     Module(String),
@@ -56,18 +84,48 @@ pub enum Fetch {
     /// `GET /api/io_map`: the map the box runs (the Devices tab, when
     /// no project's own map is open).
     IoMap,
+    /// `GET /api/adapter`: where the box's `EtherNet/IP` adapter listens
+    /// (the Devices tab). An older box has no such route.
+    Adapter,
 }
 
 /// How often the Devices tab's link states are asked for, s.
 const DEVICES_EVERY: f64 = 5.0;
 
-/// Where the Devices tab's two reads stand.
+/// Where the Devices tab's three reads stand.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DevicesPoll {
     /// Never asked (`None`), or last answered at this page time.
     Answered(Option<f64>),
-    /// Asked, not answered yet.
-    Asking,
+    /// Asked; which of the reads are still on their way. The next round
+    /// waits for all of them, so a slow link never has two of any in
+    /// flight (card canvas-slow-link).
+    Asking {
+        devices: bool,
+        io_map: bool,
+        adapter: bool,
+    },
+}
+
+impl DevicesPoll {
+    /// The read for `which` answered at `now`.
+    fn answered(&mut self, which: &Fetch, now: f64) {
+        if let Self::Asking {
+            devices,
+            io_map,
+            adapter,
+        } = self
+        {
+            match which {
+                Fetch::Devices => *devices = false,
+                Fetch::IoMap => *io_map = false,
+                _ => *adapter = false,
+            }
+            if !*devices && !*io_map && !*adapter {
+                *self = Self::Answered(Some(now));
+            }
+        }
+    }
 }
 
 /// An event stream.
@@ -82,13 +140,14 @@ pub enum Stream {
 }
 
 impl Stream {
-    /// The SSE event name the stream carries.
+    /// The SSE event names the stream carries: the values stream also
+    /// pushes the agent's state (`agent`) when it changes.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     #[must_use]
-    pub const fn event(self) -> &'static str {
+    pub const fn events(self) -> &'static [&'static str] {
         match self {
-            Self::Values => "values",
-            Self::Trace | Self::Traces => "trace",
+            Self::Values => &["values", "agent"],
+            Self::Trace | Self::Traces => &["trace"],
         }
     }
 }
@@ -116,6 +175,108 @@ pub enum Msg {
     /// An event's name and data.
     Event(Stream, String, String),
     Failed(Stream),
+    /// The box's build stamp, as a reply's [`crate::stamp::HEADER`] said.
+    Build(String),
+}
+
+/// What the transport has heard and the canvas has not taken yet. A
+/// page that is not drawing (a hidden tab) takes nothing for a while, and
+/// the box sends ten values events a second, so the newest of the events
+/// that replace each other is all that is kept: the values (each is the
+/// whole picture), the agent's state, and each module's trace. Messages
+/// that mean something in sequence (opened, failed, fetches) all stay, and
+/// an event is only replaced by a newer one of its stream that follows the
+/// same open.
+#[derive(Debug, Default)]
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub struct Inbox {
+    msgs: Vec<Msg>,
+}
+
+/// What a later event of a stream makes redundant.
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+enum Replaces {
+    Values,
+    Agent,
+    Trace(String),
+}
+
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+impl Replaces {
+    fn of(stream: Stream, name: &str, data: &str) -> Option<Self> {
+        #[derive(serde::Deserialize)]
+        struct Module {
+            module: String,
+        }
+        match (stream, name) {
+            (Stream::Values, "values") => Some(Self::Values),
+            (Stream::Values, "agent") => Some(Self::Agent),
+            (Stream::Trace | Stream::Traces, "trace") => serde_json::from_str::<Module>(data)
+                .ok()
+                .map(|m| Self::Trace(m.module)),
+            _ => None,
+        }
+    }
+}
+
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+impl Inbox {
+    pub fn push(&mut self, msg: Msg) {
+        let key = match &msg {
+            Msg::Event(s, n, d) => Replaces::of(*s, n, d).map(|k| (*s, k)),
+            _ => None,
+        };
+        if let Some((stream, key)) = key {
+            for old in self.msgs.iter_mut().rev() {
+                match old {
+                    // An open or a failure of the stream is a boundary.
+                    Msg::Opened(s) | Msg::Failed(s) if *s == stream => break,
+                    Msg::Event(s, n, d) if *s == stream && Replaces::of(*s, n, d).as_ref() == Some(&key) => {
+                        *old = msg;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.msgs.push(msg);
+    }
+
+    /// What arrived since the last call.
+    pub fn take(&mut self) -> Vec<Msg> {
+        std::mem::take(&mut self.msgs)
+    }
+}
+
+/// Which reply to a fetch is the newest asked for: a slow, old reply must
+/// not overwrite a newer one that already landed.
+#[derive(Debug, Default)]
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub struct Gets {
+    issued: HashMap<Fetch, u64>,
+    applied: HashMap<Fetch, u64>,
+    next: u64,
+}
+
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+impl Gets {
+    /// A number for a fetch being sent.
+    pub fn issue(&mut self, what: &Fetch) -> u64 {
+        self.next += 1;
+        self.issued.insert(what.clone(), self.next);
+        self.next
+    }
+
+    /// Whether the reply to fetch number `n` should be applied: not if a
+    /// newer reply of the same kind already was.
+    pub fn accept(&mut self, what: &Fetch, n: u64) -> bool {
+        if self.applied.get(what).is_some_and(|&a| a > n) {
+            return false;
+        }
+        self.applied.insert(what.clone(), n);
+        true
+    }
 }
 
 /// How the canvas is doing at reaching the box.
@@ -124,6 +285,10 @@ pub enum Link {
     /// Nothing has worked or failed yet.
     Connecting,
     Connected,
+    /// The box answered a read with 401: every read needs a session (card
+    /// read-lock), and this page has none. Nothing is read or retried
+    /// until [`BoxState::unlock`].
+    SignIn,
     /// It worked, or is trying; the last attempt failed. Retrying at `at`.
     Reconnecting {
         failures: u32,
@@ -266,14 +431,65 @@ impl Scan for BoxScan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleRow {
     pub name: String,
-    /// `starting`, `running`, `held` or `faulted`.
+    /// `starting`, `running`, `held`, `faulted` or `stopped` (by an
+    /// engineer, card monitor-box-run-stop).
     pub state: String,
     pub fault: Option<String>,
+    /// Who stopped it, when it is stopped.
+    pub stopped_by: Option<String>,
     pub scans: u64,
     /// The scan period, ms.
     pub scan_ms: Option<f64>,
     /// Deadlines missed because a scan ran late.
     pub overruns: u64,
+    /// How long before the box's last publication it last overran, s;
+    /// `None`: never, or a box too old to say.
+    pub overrun_ago: Option<f64>,
+    /// Scan load over the newest scans; `None` before the first scan, or
+    /// from a box too old to measure it.
+    pub timing: Option<ScanTiming>,
+}
+
+/// Smallest, mean, largest and 99th percentile of a set of times, µs.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SpreadUs {
+    pub min: f64,
+    pub mean: f64,
+    pub max: f64,
+    pub p99: f64,
+}
+
+impl SpreadUs {
+    fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            min: j["min"].as_f64()?,
+            mean: j["mean"].as_f64()?,
+            max: j["max"].as_f64()?,
+            p99: j["p99"].as_f64()?,
+        })
+    }
+}
+
+/// A module's scan load as the box measured it (`timing` on
+/// `/api/modules`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ScanTiming {
+    /// Scans the numbers cover: the module's newest, up to 1000.
+    pub window: u64,
+    /// How long each scan ran.
+    pub exec: SpreadUs,
+    /// How late each scan started after its deadline.
+    pub late: SpreadUs,
+}
+
+impl ScanTiming {
+    fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            window: j["window"].as_u64().filter(|&n| n > 0)?,
+            exec: SpreadUs::parse(&j["exec_us"])?,
+            late: SpreadUs::parse(&j["late_us"])?,
+        })
+    }
 }
 
 impl ModuleRow {
@@ -282,9 +498,12 @@ impl ModuleRow {
             name: j["name"].as_str()?.to_string(),
             state: j["status"]["state"].as_str().unwrap_or("?").to_string(),
             fault: j["status"]["fault"]["text"].as_str().map(str::to_string),
+            stopped_by: j["status"]["stopped_by"].as_str().map(str::to_string),
             scans: j["stats"]["scans"].as_u64().unwrap_or(0),
             scan_ms: j["scan_ms"].as_f64(),
             overruns: j["stats"]["overruns"].as_u64().unwrap_or(0),
+            overrun_ago: j["stats"]["last_overrun_ms_ago"].as_f64().map(|ms| ms / 1000.0),
+            timing: ScanTiming::parse(&j["timing"]),
         })
     }
 }
@@ -307,13 +526,30 @@ pub struct Watched {
 }
 
 impl Watched {
+    /// Asks for the source again (after a deploy), unless it is on its way.
+    fn refetch(&mut self, name: &str, queue: &mut Vec<Cmd>) {
+        if !self.asking && self.scan.is_some() {
+            self.asking = true;
+            queue.push(Cmd::Get(Fetch::Source(name.into()), module_url(name)));
+        }
+    }
+
     /// Lowers the source against the newest scan when either is new;
     /// asks for the source (again, if the program changed under it).
     fn relower(&mut self, name: &str, generation: &mut u64, queue: &mut Vec<Cmd>) {
         let Some(scan) = self.scan.as_ref() else {
             return;
         };
-        if self.lowered.as_ref().is_some_and(|l| l.table == scan.table) {
+        // What was lowered against other statements reads these values
+        // wrongly: gone until the source for these arrives.
+        if self.lowered.as_ref().is_some_and(|l| l.table != scan.table) {
+            self.lowered = None;
+        }
+        if self
+            .lowered
+            .as_ref()
+            .is_some_and(|l| self.source.as_deref().is_none_or(|s| s == l.src))
+        {
             return;
         }
         let stale = self.fetched_for.as_ref().is_some_and(|t| *t != scan.table);
@@ -393,6 +629,11 @@ pub struct DeviceRow {
     pub error: Option<String>,
     /// Where the box found it (a `mac=` or `cip=` endpoint resolved).
     pub address: Option<String>,
+    /// The protocol a device by its profile is reached over, once the box
+    /// said (`transport`).
+    pub transport: Option<String>,
+    /// `healthy`, `slow` or `lost`, once the link reported (`health`).
+    pub health: Option<String>,
 }
 
 impl DeviceRow {
@@ -402,7 +643,34 @@ impl DeviceRow {
             state: j["state"].as_str().unwrap_or("unknown").to_string(),
             error: j["error"].as_str().map(str::to_string),
             address: j["address"].as_str().map(str::to_string),
+            transport: j["transport"].as_str().map(str::to_string),
+            health: j["health"].as_str().map(str::to_string),
         })
+    }
+}
+
+/// The box's `EtherNet/IP` adapter (`GET /api/adapter`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterRow {
+    pub protocol: String,
+    /// The address it listens on; `None` when it is off.
+    pub bind: Option<String>,
+    pub on: bool,
+}
+
+impl AdapterRow {
+    pub(crate) fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            protocol: j["protocol"].as_str()?.to_string(),
+            bind: j["bind"].as_str().map(str::to_string),
+            on: j["on"].as_bool()?,
+        })
+    }
+
+    /// The address to show: only while the adapter is on and says where.
+    #[must_use]
+    pub fn listening(&self) -> Option<&str> {
+        self.bind.as_deref().filter(|_| self.on)
     }
 }
 
@@ -493,6 +761,8 @@ pub fn segment(name: &str) -> String {
 }
 
 /// Everything the canvas knows about the box it watches.
+// Each flag is its own fact (what is on show, what is old, what is open).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub struct BoxState {
     pub modules: Vec<ModuleRow>,
@@ -508,9 +778,15 @@ pub struct BoxState {
     pub forces: Vec<ForceRow>,
     /// Each device link's state, as last listed.
     pub devices: Vec<DeviceRow>,
+    /// The box's `EtherNet/IP` adapter, as last read (`None` until read,
+    /// and for a box without the route).
+    pub adapter: Option<AdapterRow>,
     /// The map the box runs, as last read (`None` until read, or when the
     /// box runs none).
     pub io_map: Option<String>,
+    /// The last read of each failed, so what shows is old.
+    devices_stale: bool,
+    io_map_stale: bool,
     devs: DevicesPoll,
     /// The values stream's last `seq`.
     pub seq: Option<u64>,
@@ -518,6 +794,15 @@ pub struct BoxState {
     pub values_at: Option<f64>,
     /// The box's clock at the newest values event (`at_ms`).
     pub values_at_ms: Option<u64>,
+    /// Counts the box's restarts as the values stream shows them (its
+    /// clock and `seq` start again): a series on the old clock is void.
+    epoch: u64,
+    /// The agent's state, as the values stream's `agent` event last said,
+    /// until the view takes it.
+    agent: Option<Json>,
+    /// The box's build stamp, as its newest reply named it (card
+    /// build-match); `None` until one has.
+    pub build: Option<String>,
     /// Every module, as the Monitor watches it (while it shows).
     pub programs: BTreeMap<String, Watched>,
     /// The Monitor shows: every module's traces are streamed.
@@ -525,6 +810,20 @@ pub struct BoxState {
     traces: Retry,
     connected: bool,
     ever_connected: bool,
+    /// The current values stream has delivered an event.
+    streaming: bool,
+    /// Page time of the last sign of life of the values stream (it opened,
+    /// or delivered); `None` while it is down or being opened (the browser
+    /// times a connect out by itself).
+    heard: Option<f64>,
+    /// Nobody is looking at the box: its streams are closed.
+    paused: bool,
+    /// The second look for a box while paused ([`Probe`]).
+    probe: Probe,
+    /// The box refused a read for want of a session ([`Link::SignIn`]).
+    locked: bool,
+    /// The lock is new and the page has not yet been asked to sign in.
+    prompt: bool,
     values: Retry,
     trace: Retry,
     list: Retry,
@@ -555,16 +854,28 @@ impl BoxState {
             signals: Vec::new(),
             forces: Vec::new(),
             devices: Vec::new(),
+            adapter: None,
             io_map: None,
+            devices_stale: false,
+            io_map_stale: false,
             devs: DevicesPoll::Answered(None),
             seq: None,
             values_at: None,
             values_at_ms: None,
+            epoch: 0,
+            agent: None,
+            build: None,
             programs: BTreeMap::new(),
             monitor: false,
             traces: Retry::default(),
             connected: false,
             ever_connected: false,
+            streaming: false,
+            heard: None,
+            paused: false,
+            probe: Probe::Off,
+            locked: false,
+            prompt: false,
             values: Retry::default(),
             trace: Retry::default(),
             list: Retry::default(),
@@ -580,6 +891,20 @@ impl BoxState {
 
     /// What to do now: queued commands and retries that are due.
     pub fn poll(&mut self, now: f64) -> Vec<Cmd> {
+        if self.paused
+            && let Probe::Due(at) = self.probe
+            && now >= at
+        {
+            self.probe = Probe::Asked;
+            self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
+            return std::mem::take(&mut self.queue);
+        }
+        if self.paused || self.locked {
+            // Closing is all that is left to do for a box nobody watches,
+            // or one that will not answer without a session.
+            self.queue.retain(|c| matches!(c, Cmd::Close(_)));
+            return std::mem::take(&mut self.queue);
+        }
         if self.values.due(now) {
             self.queue.push(Cmd::Listen(Stream::Values, "/api/events".into()));
         }
@@ -589,9 +914,14 @@ impl BoxState {
         if let DevicesPoll::Answered(at) = self.devs
             && at.is_none_or(|t| now - t >= DEVICES_EVERY)
         {
-            self.devs = DevicesPoll::Asking;
+            self.devs = DevicesPoll::Asking {
+                devices: true,
+                io_map: true,
+                adapter: true,
+            };
             self.queue.push(Cmd::Get(Fetch::Devices, "/api/devices".into()));
             self.queue.push(Cmd::Get(Fetch::IoMap, "/api/io_map".into()));
+            self.queue.push(Cmd::Get(Fetch::Adapter, "/api/adapter".into()));
         }
         if self.monitor && self.traces.due(now) {
             self.queue.push(Cmd::Listen(Stream::Traces, TRACES_URL.into()));
@@ -603,6 +933,7 @@ impl BoxState {
             }
         }
         self.generation = generation;
+        self.watch_values(now);
         if let Some(name) = self.selected.clone() {
             if !self.monitor && self.trace.due(now) {
                 self.queue.push(Cmd::Listen(Stream::Trace, trace_url(&name)));
@@ -613,6 +944,117 @@ impl BoxState {
             }
         }
         std::mem::take(&mut self.queue)
+    }
+
+    /// A values stream that has said nothing for [`SILENT_AFTER`] is dead
+    /// without having failed (a half-open connection: the power cut, the
+    /// laptop's Wi-Fi asleep): close it, open it again, and count it.
+    fn watch_values(&mut self, now: f64) {
+        // Waiting out a backoff is a failure already counted.
+        if self.values.at.is_none() && self.heard.is_some_and(|h| now - h > SILENT_AFTER) {
+            self.connected = false;
+            self.streaming = false;
+            self.values.failures += 1;
+            self.heard = None;
+            self.queue.push(Cmd::Close(Stream::Values));
+            self.queue.push(Cmd::Listen(Stream::Values, "/api/events".into()));
+        }
+    }
+
+    /// Nobody looks at the box now (the page simulates in the browser):
+    /// close its streams and stop retrying them.
+    pub fn pause(&mut self) {
+        if self.paused {
+            return;
+        }
+        self.paused = true;
+        self.queue.extend([
+            Cmd::Close(Stream::Values),
+            Cmd::Close(Stream::Trace),
+            Cmd::Close(Stream::Traces),
+        ]);
+        self.values.at = None;
+        self.trace.at = None;
+        self.traces.at = None;
+    }
+
+    /// Whether [`Self::pause`]d.
+    #[must_use]
+    pub const fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// The box is looked at again: its streams reopen, its list is read.
+    pub fn resume(&mut self) {
+        if !self.paused {
+            return;
+        }
+        self.paused = false;
+        self.heard = None;
+        self.streaming = false;
+        self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
+        self.queue.push(Cmd::Listen(Stream::Values, "/api/events".into()));
+        if self.monitor {
+            self.queue.push(Cmd::Listen(Stream::Traces, TRACES_URL.into()));
+        } else if let Some(name) = self.selected.clone() {
+            self.queue.push(Cmd::Listen(Stream::Trace, trace_url(&name)));
+        }
+    }
+
+    /// A read came back 401: the box wants a session for every read (card
+    /// read-lock). Streams close, nothing is retried, and the link says
+    /// so; the failure counts stay as they were, since the box is there.
+    fn lock(&mut self) {
+        if self.locked {
+            return;
+        }
+        self.locked = true;
+        self.prompt = true;
+        self.connected = false;
+        self.streaming = false;
+        self.heard = None;
+        self.queue.extend([
+            Cmd::Close(Stream::Values),
+            Cmd::Close(Stream::Trace),
+            Cmd::Close(Stream::Traces),
+        ]);
+        self.values.at = None;
+        self.trace.at = None;
+        self.traces.at = None;
+        self.list.at = None;
+        self.detail.at = None;
+    }
+
+    /// Whether the box wants a session before it answers a read.
+    #[must_use]
+    pub const fn locked(&self) -> bool {
+        self.locked
+    }
+
+    /// Once: the page should open its sign-in panel for this lock.
+    pub const fn take_prompt(&mut self) -> bool {
+        std::mem::replace(&mut self.prompt, false)
+    }
+
+    /// The page signed in: read and stream again, from the start.
+    pub fn unlock(&mut self) {
+        if !self.locked {
+            return;
+        }
+        self.locked = false;
+        self.prompt = false;
+        self.values = Retry::default();
+        self.list = Retry::default();
+        self.detail = Retry::default();
+        self.traces = Retry::default();
+        self.devs = DevicesPoll::Answered(None);
+        self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
+        self.queue.push(Cmd::Listen(Stream::Values, "/api/events".into()));
+        if self.monitor {
+            self.queue.push(Cmd::Listen(Stream::Traces, TRACES_URL.into()));
+        } else if let Some(name) = self.selected.clone() {
+            self.queue.push(Cmd::Listen(Stream::Trace, trace_url(&name)));
+        }
     }
 
     /// The soonest retry, for scheduling a repaint.
@@ -634,7 +1076,10 @@ impl BoxState {
 
     #[must_use]
     pub fn link(&self) -> Link {
-        let r = if self.ever_connected || self.values.failures > 0 {
+        if self.locked {
+            return Link::SignIn;
+        }
+        let r = if self.ever_connected {
             self.values
         } else {
             // Nothing streamed yet: a failing module list says as much.
@@ -684,9 +1129,55 @@ impl BoxState {
         self.programs.retain(|n, _| names.contains(&n.as_str()));
     }
 
-    /// Reads the module list again (after a deploy changed it).
+    /// Reads the module list again, and the sources shown (after a deploy
+    /// changed them): a literal or a threshold edited in place leaves the
+    /// statements as they were, and nothing else would say the source moved.
     pub fn relist(&mut self) {
         self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
+        if let Some(name) = self.selected.clone() {
+            self.queue
+                .push(Cmd::Get(Fetch::Module(name.clone()), module_url(&name)));
+        }
+        for (name, w) in &mut self.programs {
+            w.refetch(name, &mut self.queue);
+        }
+    }
+
+    /// Whether the devices' states are the last read's, which the newest
+    /// read failed to renew.
+    #[must_use]
+    pub const fn devices_stale(&self) -> bool {
+        self.devices_stale
+    }
+
+    /// Whether the map shown is the last read's, which the newest read
+    /// failed to renew.
+    #[must_use]
+    pub const fn io_map_stale(&self) -> bool {
+        self.io_map_stale
+    }
+
+    /// How many times the box was seen to restart: its clock went back.
+    #[must_use]
+    pub const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// The agent's state the values stream pushed, once.
+    pub fn take_agent(&mut self) -> Option<Json> {
+        self.agent.take()
+    }
+
+    /// Keeps the chosen module while the box still runs it, else chooses
+    /// the first.
+    fn reselect(&mut self) {
+        let keep = self
+            .selected
+            .as_ref()
+            .is_some_and(|s| self.modules.iter().any(|m| &m.name == s));
+        if !keep && let Some(first) = self.modules.first().map(|m| m.name.clone()) {
+            self.select(&first);
+        }
     }
 
     /// Watch `name` instead.
@@ -710,44 +1201,110 @@ impl BoxState {
         }
     }
 
+    /// Asks for one more look for the box at page time `at`, while the
+    /// page simulates (paused): a single module list read, whose answer
+    /// [`Self::probe`] says. Asked once: a later call changes nothing.
+    pub fn probe_at(&mut self, at: f64) {
+        if self.probe == Probe::Off {
+            self.probe = Probe::Due(at);
+        }
+    }
+
+    /// Where the second look for the box stands.
+    #[must_use]
+    pub const fn probe(&self) -> Probe {
+        self.probe
+    }
+
     /// Takes in what the transport saw at page time `now` (seconds).
     pub fn apply(&mut self, msg: Msg, now: f64) {
+        if self.probe == Probe::Asked
+            && let Msg::Got(Fetch::Modules, r) = &msg
+        {
+            let found = r
+                .as_ref()
+                .ok()
+                .and_then(|b| parse(b))
+                .and_then(|j| rows(&j, ModuleRow::parse))
+                .is_some();
+            self.probe = if found { Probe::Found } else { Probe::Missed };
+        }
+        if let Msg::Got(_, Err(e)) = &msg
+            && e == "HTTP 401"
+        {
+            // The box is there and wants a session for every read: no
+            // failure to count, nothing to retry until the page signs in.
+            self.lock();
+            return;
+        }
+        if self.locked && matches!(msg, Msg::Failed(_)) {
+            // A stream the lock closed, or one the box refused: not a
+            // failure of the link.
+            return;
+        }
         match msg {
             Msg::Got(Fetch::Modules, Ok(body)) => {
                 match parse(&body).as_ref().and_then(|j| rows(j, ModuleRow::parse)) {
                     Some(list) => {
                         self.list.ok();
+                        // The box answered: it is a box, whatever its
+                        // streams do (all its slots may be taken).
+                        self.ever_connected = true;
                         self.modules = list;
                         self.prune();
-                        let keep = self
-                            .selected
-                            .as_ref()
-                            .is_some_and(|s| self.modules.iter().any(|m| &m.name == s));
-                        if !keep && let Some(first) = self.modules.first().map(|m| m.name.clone()) {
-                            self.select(&first);
-                        }
+                        self.reselect();
                     }
                     None => self.list.failed(now),
                 }
             }
             Msg::Got(Fetch::Modules, Err(_)) => self.list.failed(now),
             Msg::Got(Fetch::Devices, r) => {
-                self.devs = DevicesPoll::Answered(Some(now));
-                if let Some(list) = r
+                self.devs.answered(&Fetch::Devices, now);
+                let list = r
                     .ok()
                     .as_deref()
                     .and_then(parse)
-                    .and_then(|j| rows(&j, DeviceRow::parse))
-                {
+                    .and_then(|j| rows(&j, DeviceRow::parse));
+                // A failed read leaves the last one on show, marked old.
+                self.devices_stale = list.is_none();
+                if let Some(list) = list {
                     self.devices = list;
                 }
             }
             Msg::Got(Fetch::IoMap, r) => {
-                self.io_map = r
+                self.devs.answered(&Fetch::IoMap, now);
+                // 404: the box runs no map, which is an answer. Any other
+                // failure keeps the map that was read, marked old.
+                if r.as_ref().is_err_and(|e| e == "HTTP 404") {
+                    self.io_map = None;
+                    self.io_map_stale = false;
+                } else {
+                    let text = r
+                        .ok()
+                        .as_deref()
+                        .and_then(parse)
+                        .and_then(|j| j["text"].as_str().map(str::to_string));
+                    self.io_map_stale = text.is_none();
+                    if text.is_some() {
+                        self.io_map = text;
+                    }
+                }
+            }
+            Msg::Got(Fetch::Adapter, r) => {
+                self.devs.answered(&Fetch::Adapter, now);
+                // 404: an older box, which has nothing to say. Any other
+                // failure leaves the last read on show; none of it is a
+                // failure of the link.
+                if r.as_ref().is_err_and(|e| e == "HTTP 404") {
+                    self.adapter = None;
+                } else if let Some(row) = r
                     .ok()
                     .as_deref()
                     .and_then(parse)
-                    .and_then(|j| j["text"].as_str().map(str::to_string));
+                    .and_then(|j| AdapterRow::parse(&j))
+                {
+                    self.adapter = Some(row);
+                }
             }
             Msg::Got(Fetch::Source(name), r) => {
                 let Some(w) = self.programs.get_mut(&name) else {
@@ -789,37 +1346,58 @@ impl BoxState {
                 }
             }
             Msg::Opened(Stream::Values) => {
-                self.values.ok();
-                self.connected = true;
+                // The failures count starts over with the first event, not
+                // here: a stream that opens and fails at once is no better
+                // than one that never opened.
+                self.heard = Some(now);
                 self.ever_connected = true;
+                if self.values.failures == 0 {
+                    self.connected = true;
+                }
             }
             Msg::Opened(Stream::Trace) => self.trace.ok(),
             Msg::Opened(Stream::Traces) => self.traces.ok(),
-            Msg::Failed(s) => {
-                let r = match s {
-                    Stream::Values => {
-                        self.connected = false;
-                        &mut self.values
-                    }
-                    Stream::Trace => &mut self.trace,
-                    Stream::Traces => &mut self.traces,
-                };
-                r.failed(now);
+            Msg::Failed(Stream::Values) => {
+                self.heard = None;
+                if std::mem::take(&mut self.streaming) {
+                    // It was delivering, so this is the box ending it (it
+                    // does at 600 s) or a blip: open it again at once, and
+                    // keep saying connected. A second failure is the box
+                    // being gone, and backs off.
+                    self.queue.push(Cmd::Listen(Stream::Values, "/api/events".into()));
+                } else {
+                    self.connected = false;
+                    self.values.failed(now);
+                }
+            }
+            Msg::Failed(Stream::Trace) => self.trace.failed(now),
+            Msg::Failed(Stream::Traces) => self.traces.failed(now),
+            Msg::Event(Stream::Values, name, data) if name == "agent" => {
+                self.agent = parse(&data);
             }
             Msg::Event(Stream::Values, name, data) if name == "values" => {
                 if let Some(j) = parse(&data) {
                     self.values.ok();
                     self.connected = true;
                     self.ever_connected = true;
-                    self.seq = j["seq"].as_u64();
+                    self.streaming = true;
+                    self.heard = Some(now);
+                    let (seq, at_ms) = (j["seq"].as_u64(), j["at_ms"].as_u64());
+                    if at_ms.zip(self.values_at_ms).is_some_and(|(n, o)| n < o)
+                        || seq.zip(self.seq).is_some_and(|(n, o)| n < o)
+                    {
+                        self.epoch += 1;
+                    }
+                    self.seq = seq;
                     self.values_at = Some(now);
-                    self.values_at_ms = j["at_ms"].as_u64();
+                    self.values_at_ms = at_ms;
                     if let Some(s) = rows(&j["signals"], SignalRow::parse) {
                         self.signals = s;
                     }
                     if let Some(m) = rows(&j["modules"], ModuleRow::parse) {
                         self.modules = m;
                         self.prune();
+                        self.reselect();
                     }
                     if let Some(f) = rows(&j["forces"], ForceRow::parse) {
                         self.forces = f;
@@ -852,6 +1430,7 @@ impl BoxState {
             }
             // Any other stream's events are not this view's.
             Msg::Event(..) => {}
+            Msg::Build(b) => self.build = Some(b),
         }
     }
 
@@ -861,7 +1440,14 @@ impl BoxState {
         let (Some(name), Some(scan)) = (self.selected.clone(), self.scan.as_ref()) else {
             return;
         };
-        if self.lowered.as_ref().is_some_and(|l| l.table == scan.table) {
+        if self.lowered.as_ref().is_some_and(|l| l.table != scan.table) {
+            self.lowered = None;
+        }
+        if self
+            .lowered
+            .as_ref()
+            .is_some_and(|l| self.source.as_deref().is_none_or(|s| s == l.src))
+        {
             return;
         }
         let Some(src) = self.source.clone() else {
@@ -924,10 +1510,55 @@ pub fn trace_url(name: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Card read-lock: a 401 on any read means the box wants a session.
+    /// Nothing is retried or counted as a failure until the page signs
+    /// in; then the reads and streams start again from the top.
+    #[test]
+    fn a_401_locks_the_box_until_the_page_signs_in() {
+        let mut s = BoxState::new();
+        let _ = s.poll(0.0);
+        s.apply(Msg::Got(Fetch::Modules, Err("HTTP 401".into())), 1.0);
+        assert_eq!(s.link(), Link::SignIn);
+        assert!(s.locked());
+        assert!(s.take_prompt(), "the sign-in panel opens once");
+        assert!(!s.take_prompt());
+        let closing = s.poll(1.0);
+        assert!(
+            closing.iter().all(|c| matches!(c, Cmd::Close(_))) && !closing.is_empty(),
+            "{closing:?}"
+        );
+        assert_eq!(s.poll(100.0), [], "nothing is read or retried while locked");
+        // The streams the lock closed report failing: not a failure of the link.
+        s.apply(Msg::Failed(Stream::Values), 2.0);
+        assert_eq!(s.link(), Link::SignIn);
+        assert_eq!(s.next_retry(), None);
+        // A second 401 changes nothing.
+        s.apply(Msg::Got(Fetch::Devices, Err("HTTP 401".into())), 3.0);
+        assert!(!s.take_prompt(), "asked once per lock");
+
+        s.unlock();
+        assert!(!s.locked());
+        assert_eq!(s.link(), Link::Connecting);
+        let again = s.poll(4.0);
+        assert!(
+            again.contains(&Cmd::Get(Fetch::Modules, "/api/modules".into())),
+            "{again:?}"
+        );
+        assert!(
+            again.contains(&Cmd::Listen(Stream::Values, "/api/events".into())),
+            "{again:?}"
+        );
+        s.apply(Msg::Opened(Stream::Values), 4.1);
+        assert_eq!(s.link(), Link::Connected);
+        // Any other failed read is still a failure, as before.
+        s.apply(Msg::Got(Fetch::Modules, Err("HTTP 500".into())), 5.0);
+        assert!(!s.locked());
+    }
+
     #[test]
     fn the_retry_wait_is_the_same_every_time() {
         let d: Vec<f64> = (1..=7).map(backoff).collect();
-        assert_eq!(d, [5.0; 7]);
+        assert_eq!(d, [2.0; 7]);
         assert!((backoff(u32::MAX) - RETRY_SECS).abs() < f64::EPSILON);
     }
 
@@ -991,9 +1622,10 @@ mod tests {
             [
                 Cmd::Get(Fetch::Modules, "/api/modules".into()),
                 Cmd::Listen(Stream::Values, "/api/events".into()),
-                // The Devices tab's two reads, every DEVICES_EVERY.
+                // The Devices tab's three reads, every DEVICES_EVERY.
                 Cmd::Get(Fetch::Devices, "/api/devices".into()),
                 Cmd::Get(Fetch::IoMap, "/api/io_map".into()),
+                Cmd::Get(Fetch::Adapter, "/api/adapter".into()),
             ]
         );
         assert_eq!(s.link(), Link::Connecting);
@@ -1006,12 +1638,12 @@ mod tests {
             s.link(),
             Link::Reconnecting {
                 failures: 1,
-                at: 15.0
+                at: 12.0
             }
         );
-        assert_eq!(s.poll(14.9), [], "not before the backoff");
-        assert_eq!(s.next_retry(), Some(15.0));
-        assert_eq!(s.poll(15.0), [Cmd::Listen(Stream::Values, "/api/events".into())]);
+        assert_eq!(s.poll(11.9), [], "not before the backoff");
+        assert_eq!(s.next_retry(), Some(12.0));
+        assert_eq!(s.poll(12.0), [Cmd::Listen(Stream::Values, "/api/events".into())]);
         assert_eq!(s.next_retry(), None);
 
         let now = failed_values(&mut s, 2, 13.0);
@@ -1026,6 +1658,9 @@ mod tests {
         );
         assert_eq!(s.link(), Link::Connected, "an event is as good as an open");
         assert_eq!(s.seq, Some(9));
+        // The stream was delivering: its end is reopened at once, quietly.
+        s.apply(Msg::Failed(Stream::Values), now);
+        assert_eq!(s.link(), Link::Connected);
         s.apply(Msg::Failed(Stream::Values), now);
         assert!(
             matches!(s.link(), Link::Reconnecting { failures: 1, .. }),
@@ -1060,6 +1695,42 @@ mod tests {
             "{:?}",
             s.link()
         );
+    }
+
+    #[test]
+    fn a_slow_io_map_is_not_asked_for_again_while_it_is_on_its_way() {
+        // Over a slow link the map's reply can trail the devices' by more
+        // than DEVICES_EVERY: the next round waits for both, or the reads
+        // stack up behind each other (card canvas-slow-link).
+        let mut s = BoxState::new();
+        let gets = |cmds: Vec<Cmd>| -> Vec<Fetch> {
+            cmds.into_iter()
+                .filter_map(|c| match c {
+                    Cmd::Get(f @ (Fetch::Devices | Fetch::IoMap | Fetch::Adapter), _) => Some(f),
+                    _ => None,
+                })
+                .collect()
+        };
+        let round = [Fetch::Devices, Fetch::IoMap, Fetch::Adapter];
+        assert_eq!(gets(s.poll(0.0)), round);
+        s.apply(Msg::Got(Fetch::Devices, Ok("[]".into())), 0.3);
+        s.apply(Msg::Got(Fetch::Adapter, Err("HTTP 404".into())), 0.3);
+        for now in [5.3, 10.0, 60.0] {
+            assert_eq!(gets(s.poll(now)), [], "the map is still on its way at {now}");
+        }
+        s.apply(Msg::Got(Fetch::IoMap, Err("HTTP 404".into())), 61.0);
+        assert_eq!(
+            gets(s.poll(65.9)),
+            [],
+            "a round every DEVICES_EVERY after the last answer"
+        );
+        assert_eq!(gets(s.poll(66.0)), round);
+        // Any may come first.
+        s.apply(Msg::Got(Fetch::IoMap, Err("HTTP 404".into())), 66.2);
+        s.apply(Msg::Got(Fetch::Adapter, Err("HTTP 404".into())), 66.3);
+        assert_eq!(gets(s.poll(80.0)), [], "the devices are still on their way");
+        s.apply(Msg::Got(Fetch::Devices, Ok("[]".into())), 80.0);
+        assert_eq!(gets(s.poll(85.0)), round);
     }
 
     #[test]

@@ -455,24 +455,24 @@ fn unknown_users_cost_as_much_as_known_ones() {
         },
         c,
     );
-    let time = |user: &str| {
-        let mut v: Vec<Duration> = (0..5)
-            .map(|_| {
-                let t = Instant::now();
-                let _ = l.login(user, "not-the-password");
-                t.elapsed()
-            })
-            .collect();
-        v.sort();
-        v[2]
-    };
-    let known = time("alice");
-    let unknown = time("nobody");
-    let long = {
+    // Load only ever adds time to a run of fixed work, so the fastest of
+    // many runs is the cost of the work itself. The three paths are
+    // interleaved so a busy spell hits all of them, and a pause in one
+    // run cannot move the minimum.
+    let once = |user: &str, password: &str| {
         let t = Instant::now();
-        let _ = l.login("alice", &"x".repeat(1 << 20));
+        let _ = l.login(user, password);
         t.elapsed()
     };
+    let big = "x".repeat(1 << 20);
+    let (mut known, mut unknown, mut long) = (Duration::MAX, Duration::MAX, Duration::MAX);
+    for _ in 0..15 {
+        known = known.min(once("alice", "not-the-password"));
+        unknown = unknown.min(once("nobody", "not-the-password"));
+        long = long.min(once("alice", &big));
+    }
+    // An unknown user that skipped the hash would cost microseconds
+    // against milliseconds, far outside this band.
     let ratio = unknown.as_secs_f64() / known.as_secs_f64();
     assert!(
         (0.5..2.0).contains(&ratio),
@@ -1023,6 +1023,61 @@ fn a_pin_login_sets_an_httponly_cookie_the_page_never_sees() {
     assert_secrets_kept(&b, &[&s, &bearer_tok]);
 }
 
+/// Card read-lock: a read takes the page's cookie alone, with no
+/// same-origin proof (a read changes nothing, the cookie is
+/// `SameSite=Strict`, and the canvas's `EventSource` cannot send a
+/// header); a cookie the box did not issue is 401 and cleared; and a
+/// write on the cookie still needs the proof.
+#[test]
+fn a_cookie_alone_reads_but_still_cannot_write() {
+    let b = Bench::with_accounts(None);
+    let s = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    let cookie = format!("helmsman_session={s}");
+    for path in ["/api/modules", "/api/signals", "/api/session", "/api/projects"] {
+        let r = raw(b.addr, "GET", path, &[("Cookie", &cookie)], "");
+        assert!(
+            r.status == 200 || r.status == 404,
+            "GET {path} on the cookie alone: {r:?}"
+        );
+        assert!(
+            r.set_cookies().is_empty(),
+            "a read neither sets nor clears the cookie: {r:?}"
+        );
+    }
+    // The values stream, as an EventSource opens it: the cookie, nothing
+    // else. Only the head is read: the stream stays open for minutes.
+    let mut stream = TcpStream::connect(b.addr).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    write!(
+        stream,
+        "GET /api/events HTTP/1.1\r\nHost: box\r\nAccept: text/event-stream\r\nCookie: {cookie}\r\n\r\n"
+    )
+    .unwrap();
+    let mut head = [0u8; 15];
+    stream.read_exact(&mut head).unwrap();
+    assert_eq!(&head, b"HTTP/1.1 200 OK", "the stream opens on the cookie alone");
+    drop(stream);
+    // Not the box's cookie: 401, and the browser is told to drop it.
+    let fake = format!("helmsman_session={}", "a".repeat(64));
+    let r = raw(b.addr, "GET", "/api/modules", &[("Cookie", &fake)], "");
+    assert_eq!(r.status, 401, "{r:?}");
+    assert!(r.cleared(), "{r:?}");
+    // Without any credential: 401, and nothing to clear.
+    let r = raw(b.addr, "GET", "/api/modules", &[], "");
+    assert_eq!(r.status, 401, "{r:?}");
+    assert!(r.set_cookies().is_empty(), "{r:?}");
+    // A write on the cookie alone is still 403: the proof is for writes.
+    let id = b.param(0.5);
+    let r = raw(
+        b.addr,
+        "POST",
+        &format!("/api/proposals/{id}/apply"),
+        &[("Cookie", &cookie)],
+        "{}",
+    );
+    assert_eq!(r.status, 403, "{r:?}");
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_cookie_without_a_same_origin_proof_is_refused() {
@@ -1517,6 +1572,198 @@ fn assert_secrets_kept(b: &Bench, tokens: &[&str]) {
     }
 }
 
+// ---- the desk on the box (card desk-on-box) -----------------------------------
+
+fn token_of(r: &Resp) -> String {
+    r.json()["token"].as_str().unwrap().to_string()
+}
+
+fn desk_of(addr: SocketAddr, session: &str) -> Resp {
+    request(addr, "GET", "/api/desk", Some(session), "")
+}
+
+/// A desk is the session's own: no route names another person's, and
+/// neither a query nor a path reaches it (IDOR); signed out there is none
+/// to read, and the box token is no one.
+#[test]
+fn a_persons_desk_is_never_anyone_elses() {
+    let b = Bench::with_accounts(Some(accounts()));
+    let alice = token_of(&login(b.addr, "alice", ALICE));
+    let bob = token_of(&login(b.addr, "bob", BOB));
+    let desk = json!({
+        "saved_at": 10,
+        "project": "line",
+        "file": "main.st",
+        "drafts": { "line": { "main.st": { "text": "(* alice's secret edit *)", "version": "v1" } } },
+        "agent": "alice's half-typed instruction",
+    });
+    let r = request(b.addr, "PUT", "/api/desk", Some(&alice), &desk.to_string());
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["owner"], "user:alice");
+    let mine = desk_of(b.addr, &alice).json();
+    assert_eq!(mine["owner"], "user:alice");
+    assert_eq!(mine["desk"]["agent"], "alice's half-typed instruction");
+    // Bob, however he asks, gets his own (none yet).
+    for path in [
+        "/api/desk",
+        "/api/desk?owner=user:alice",
+        "/api/desk?user=alice",
+        "/api/desk?owner=user%3Aalice",
+    ] {
+        let r = request(b.addr, "GET", path, Some(&bob), "");
+        assert_eq!(r.status, 200, "{path}: {r:?}");
+        let j = r.json();
+        assert_eq!(
+            (j["owner"].as_str(), &j["desk"]),
+            (Some("user:bob"), &Json::Null),
+            "{path}"
+        );
+        assert!(!r.body.contains("secret"), "{path}: {r:?}");
+    }
+    for path in [
+        "/api/desk/user:alice",
+        "/api/desk/alice",
+        "/api/desk/user%3Aalice",
+        "/api/desk/..%2Fuser:alice",
+    ] {
+        let r = request(b.addr, "GET", path, Some(&bob), "");
+        assert_eq!(r.status, 404, "{path}: {r:?}");
+        assert!(!r.body.contains("secret"), "{path}: {r:?}");
+    }
+    // Bob's PUT never touches alice's, even naming her.
+    let hers = json!({ "saved_at": 99, "owner": "user:alice", "user": "alice", "agent": "bob was here" });
+    let r = request(b.addr, "PUT", "/api/desk", Some(&bob), &hers.to_string());
+    assert_eq!(
+        (r.status, r.json()["owner"].as_str()),
+        (200, Some("user:bob")),
+        "{r:?}"
+    );
+    assert_eq!(
+        desk_of(b.addr, &alice).json()["desk"]["agent"],
+        "alice's half-typed instruction"
+    );
+    let r = request(
+        b.addr,
+        "PUT",
+        "/api/desk/user:alice",
+        Some(&bob),
+        &hers.to_string(),
+    );
+    assert!(matches!(r.status, 404 | 405), "{r:?}");
+    // Signed out: nothing to read or write; the token is no one.
+    let r = get(b.addr, "/api/desk");
+    assert_eq!(r.status, 401, "{r:?}");
+    assert!(!r.body.contains("secret"));
+    let r = request(b.addr, "GET", "/api/desk", Some("not-a-session"), "");
+    assert_eq!(r.status, 401, "{r:?}");
+    let r = request(b.addr, "PUT", "/api/desk", None, &desk.to_string());
+    assert_eq!(r.status, 401, "{r:?}");
+    let r = request(b.addr, "PUT", "/api/desk", Some(TOKEN), &desk.to_string());
+    assert_eq!(r.status, 400, "{r:?}");
+    // Logged out, the session reads nothing.
+    let r = request(b.addr, "POST", "/api/logout", Some(&alice), "");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(desk_of(b.addr, &alice).status, 401);
+    // Each write is audited, naming the person.
+    let log = audit(b.addr);
+    let puts: Vec<&Json> = log.iter().filter(|e| e["path"] == "/api/desk").collect();
+    assert!(
+        puts.iter().any(|e| e["user"] == "alice" && e["status"] == 200),
+        "{puts:?}"
+    );
+    assert!(puts.iter().any(|e| e["status"] == 400), "{puts:?}");
+    assert_secrets_kept(&b, &[&alice, &bob]);
+}
+
+/// The box keeps the desk's fields and nothing else: a password or PIN in
+/// the body is dropped, never stored or answered back. Oversized and
+/// malformed bodies are refused and audited; an older desk does not write
+/// over a newer one.
+#[test]
+fn a_desk_keeps_no_password_or_pin_and_refuses_oversized_bodies() {
+    use helmsman_plc::api::desk::MAX_DESK;
+    let b = Bench::with_accounts(Some(accounts()));
+    let alice = token_of(&login(b.addr, "alice", ALICE));
+    let body = json!({
+        "saved_at": 5,
+        "user": "alice",
+        "password": ALICE,
+        "pin": ENGINEER_PIN,
+        "credentials": { "password": ALICE },
+        "agent": "blink",
+    });
+    let r = request(b.addr, "PUT", "/api/desk", Some(&alice), &body.to_string());
+    assert_eq!(r.status, 200, "{r:?}");
+    let back = desk_of(b.addr, &alice);
+    assert_eq!(back.json()["desk"]["agent"], "blink");
+    assert_eq!(back.json()["desk"]["user"], "alice");
+    for secret in [ALICE, ENGINEER_PIN, "password", "\"pin\""] {
+        assert!(!back.body.contains(secret), "{secret}: {back:?}");
+    }
+    // Oversized: refused whole, the desk before it stands.
+    let big = json!({ "saved_at": 6, "agent": "x".repeat(MAX_DESK) }).to_string();
+    let r = request(b.addr, "PUT", "/api/desk", Some(&alice), &big);
+    assert_eq!(r.status, 413, "{r:?}");
+    assert_eq!(desk_of(b.addr, &alice).json()["desk"]["agent"], "blink");
+    // Malformed, or not an object, or a wrong type: refused.
+    for bad in [
+        "",
+        "{",
+        "[]",
+        "null",
+        "7",
+        r#"{"agent":7}"#,
+        r#"{"drafts":{"p":{"f":3}}}"#,
+    ] {
+        let r = request(b.addr, "PUT", "/api/desk", Some(&alice), bad);
+        assert_eq!(r.status, 400, "{bad:?}: {r:?}");
+    }
+    // Older than what the box holds: refused, and told which it holds.
+    let old = json!({ "saved_at": 4, "agent": "older" }).to_string();
+    let r = request(b.addr, "PUT", "/api/desk", Some(&alice), &old);
+    assert_eq!((r.status, r.json()["saved_at"].as_u64()), (409, Some(5)), "{r:?}");
+    assert_eq!(desk_of(b.addr, &alice).json()["desk"]["agent"], "blink");
+    let log = audit(b.addr);
+    for status in [200, 400, 409, 413] {
+        assert!(
+            log.iter()
+                .any(|e| e["path"] == "/api/desk" && e["status"] == status),
+            "{status} audited: {log:?}"
+        );
+    }
+    assert_secrets_kept(&b, &[&alice]);
+}
+
+/// Without accounts, a role-PIN session's desk is the role's: the
+/// operator's and the engineer's are apart, and a second engineer session
+/// reads the first's.
+#[test]
+fn a_pin_sessions_desk_is_its_roles() {
+    let b = Bench::with_accounts(None);
+    let eng = pin_login(b.addr, "engineer", ENGINEER_PIN).session();
+    let op = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    let r = page(
+        b.addr,
+        "PUT",
+        "/api/desk",
+        &eng,
+        &json!({ "saved_at": 1, "agent": "engineer's" }).to_string(),
+    );
+    assert_eq!(
+        (r.status, r.json()["owner"].as_str()),
+        (200, Some("role:engineer")),
+        "{r:?}"
+    );
+    let r = page(b.addr, "GET", "/api/desk", &op, "");
+    assert_eq!(
+        (r.json()["owner"].as_str(), &r.json()["desk"]),
+        (Some("role:operator"), &Json::Null)
+    );
+    let again = pin_login(b.addr, "engineer", ENGINEER_PIN).session();
+    let r = page(b.addr, "GET", "/api/desk", &again, "");
+    assert_eq!(r.json()["desk"]["agent"], "engineer's", "{r:?}");
+    assert_secrets_kept(&b, &[&eng, &op, &again]);
+}
 // ---- the bench ----------------------------------------------------------------
 
 fn defaults() -> Defaults {
@@ -1799,8 +2046,9 @@ fn request(addr: SocketAddr, method: &str, path: &str, bearer: Option<&str>, bod
     }
 }
 
+/// A read with the box token (every read needs a session: card read-lock).
 fn get(addr: SocketAddr, path: &str) -> Resp {
-    request(addr, "GET", path, None, "")
+    request(addr, "GET", path, Some(TOKEN), "")
 }
 
 fn login(addr: SocketAddr, user: &str, password: &str) -> Resp {

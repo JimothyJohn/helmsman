@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use helmsman_diagram::{Scan, annotate, explain, lower, lower_table};
 use helmsman_iec::{Image, ImageSizes, Value, compile};
 use helmsman_plc::api::{
-    Api, Catalog, Config, Devices, Limits, Live, MemAudit, MemProposals, ModuleInfo, Publisher, Shared,
-    render,
+    Api, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, ModuleInfo, Publisher,
+    Shared, render,
 };
 use helmsman_plc::{Module as Slot, Runtime, Sample, SignalTable, Window};
 use serde_json::Value as Json;
@@ -99,6 +99,11 @@ pub const fn scripted(ms: u64) -> [bool; 3] {
 
 /// [`DEMO`] on a real runtime, the way the box runs it, with the
 /// real API over it. The scripted shift drives `%IX0.0..2`.
+/// The bench box's API token; what the tests' reads carry, standing for
+/// the signed-in page's cookie (every read needs a session, card
+/// read-lock).
+pub const TOKEN: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
 pub struct Bench {
     api: Option<Api>,
     pub addr: SocketAddr,
@@ -130,6 +135,20 @@ impl Bench {
 
     /// [`Self::with`] and a chat route (`POST /api/chat`) to `chat`'s relay.
     pub fn with_chat(programs: &[(&str, &str)], chat: Option<helmsman_plc::api::chat::Setup>) -> Self {
+        Self::build(programs, chat, None)
+    }
+
+    /// [`Self::new`], with an EtherNet/IP adapter at `adapter` for
+    /// `GET /api/adapter` to name (`None`: the adapter is off).
+    pub fn with_adapter(adapter: Option<SocketAddr>) -> Self {
+        Self::build(&[("cell", DEMO)], None, adapter)
+    }
+
+    fn build(
+        programs: &[(&str, &str)],
+        chat: Option<helmsman_plc::api::chat::Setup>,
+        adapter: Option<SocketAddr>,
+    ) -> Self {
         let n = programs.len();
         let slots = programs
             .iter()
@@ -157,7 +176,7 @@ impl Bench {
         let live = Arc::new(Live::default());
         let cfg = Config {
             bind: "127.0.0.1:0".parse().unwrap(),
-            token: "0".repeat(64),
+            token: TOKEN.into(),
             limits: Limits::default(),
             stream_every: Duration::from_millis(10),
             memory: 0,
@@ -174,7 +193,11 @@ impl Bench {
             approval: None,
             chat,
         };
-        let api = Api::start(cfg, shared).unwrap();
+        let extras = Extras {
+            adapter,
+            ..Extras::default()
+        };
+        let api = Api::start_with(cfg, shared, extras).unwrap();
         let addr = api.addr();
         let stop = Arc::new(AtomicBool::new(false));
         let table = Arc::new(Mutex::new(table));
@@ -212,13 +235,31 @@ impl Bench {
 
     /// `GET path`: the status and body.
     pub fn get(&self, path: &str) -> (u16, String) {
+        let (status, _, body) = self.get_build(path);
+        (status, body)
+    }
+
+    /// [`Self::get`], with the build stamp the reply named (the header a
+    /// browser's `fetch` reads, card build-match).
+    pub fn get_build(&self, path: &str) -> (u16, Option<String>, String) {
         let mut s = TcpStream::connect(self.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-        write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n\r\n").unwrap();
+        // The box token stands for the signed-in page's cookie: every
+        // read needs a session (card read-lock).
+        write!(
+            s,
+            "GET {path} HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+        )
+        .unwrap();
         let mut out = String::new();
         s.read_to_string(&mut out).unwrap();
         let (head, body) = out.split_once("\r\n\r\n").unwrap();
-        (head[9..12].parse().unwrap(), body.to_string())
+        let build = head.split("\r\n").skip(1).find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.eq_ignore_ascii_case(crate::stamp::HEADER)
+                .then(|| v.trim().to_string())
+        });
+        (head[9..12].parse().unwrap(), build, body.to_string())
     }
 
     /// Opens the event stream at `path` and returns its first `n` events
@@ -226,7 +267,11 @@ impl Bench {
     pub fn events(&self, path: &str, n: usize) -> Vec<(String, String)> {
         let mut s = TcpStream::connect(self.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-        write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n\r\n").unwrap();
+        write!(
+            s,
+            "GET {path} HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+        )
+        .unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut buf = String::new();
         let mut chunk = [0u8; 8192];
@@ -283,7 +328,10 @@ pub fn watch(b: &Bench) -> (BoxState, Vec<Msg>) {
         for cmd in s.poll(now) {
             match cmd {
                 Cmd::Get(what, url) => {
-                    let (status, body) = b.get(&url);
+                    let (status, build, body) = b.get_build(&url);
+                    if let Some(build) = build {
+                        feed(&mut s, Msg::Build(build), now);
+                    }
                     let r = if status == 200 {
                         Ok(body)
                     } else {
@@ -448,9 +496,9 @@ fn an_unknown_module_and_a_dead_box_are_told_apart() {
         Msg::Got(Fetch::Module("nope".into()), Err("HTTP 404".into())),
         0.0,
     );
-    assert!(s.poll(4.9).is_empty(), "retried after the backoff, not at once");
+    assert!(s.poll(1.9).is_empty(), "retried after the backoff, not at once");
     assert_eq!(
-        s.poll(5.0),
+        s.poll(2.0),
         [Cmd::Get(
             Fetch::Module("nope".into()),
             crate::remote::module_url("nope")

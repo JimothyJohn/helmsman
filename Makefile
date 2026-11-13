@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-serve playground playground-serve node-build node-clippy
+.PHONY: help install-dev lint fmt test-unit test-integration test-all help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -42,7 +42,7 @@ test-interop:  ## Interop suite against HELMSMAN_OPENER_ADDR (default 127.0.0.1,
 # ---- Structured Text oracle -------------------------------------------------
 
 rusty-image:  ## Build the pinned ruSTy compiler image (test oracle only, never linked).
-	docker build -t helmsman/rusty:1.0.7 docker/rusty
+	docker build -t helmsman/rusty:1.0.8 docker/rusty
 
 test-oracle:  ## Differential test of the ST interpreter against ruSTy (needs Docker).
 	./scripts/test-oracle.sh
@@ -70,6 +70,9 @@ canvas:  ## Run the canvas (the simulation) as a native window.
 canvas-web:  ## Build the canvas for the browser into target/canvas-dist (the box serves it: helmsman-plc --ui).
 	./scripts/canvas-web.sh
 
+canvas-smoke:  ## Drive target/canvas-dist in headless Chromium: console errors, panics, a screenshot per step (make canvas-web first; BOX=1 also starts a loopback box).
+	python3 -I scripts/canvas-smoke.py $(if $(BOX),--box,)
+
 playground:  ## Build the public ST playground into docs/playground (commit it; Pages serves master's docs/).
 	./scripts/build-playground.sh
 
@@ -79,7 +82,7 @@ playground-serve:  ## The playground on 127.0.0.1:8791 with Claude through a loc
 canvas-serve:  ## Serve the canvas on :8790 (all interfaces) with live rebuild.
 	./scripts/canvas-serve.sh
 
-node-build:  ## Build the edge node's firmware for the ESP32-POE2 (needs the esp toolchain; docs/EDGE.md).
+node-build:  ## Build the edge node's firmware: ESP32-POE2 (esp toolchain) or NODE_BOARD=p4-eth (docs/EDGE.md).
 	./scripts/node-build.sh
 
 node-clippy:  ## Clippy the edge node's firmware with warnings denied.

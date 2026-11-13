@@ -7,6 +7,12 @@
 //! down into that instance, Back and the breadcrumbs go up, and "Open
 //! diagram" hands that scope to the Editor.
 //!
+//! A box's status tiles also carry its scan load (card `scan-stats`): for
+//! an engineer with "Scan detail" on, how long the scan takes, how late it
+//! starts and the overruns, a tooltip on each; for everyone, an overrun in
+//! the last [`OVERRUN_RECENT`] seconds in the attention colour. The
+//! simulation runs in the page on no real clock, so it shows none.
+//!
 //! Where the values come from is a [`Feed`]: the box (`BoxState`, its
 //! values stream and every module's traces on one stream) or the
 //! simulation in the page (`PlaygroundView`). The tiles do not care which.
@@ -20,8 +26,12 @@
 //! things a tap changes are which level is shown and the Editor's scope.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use eframe::egui::text::LayoutJob;
+use eframe::egui::{
+    self, Color32, CornerRadius, FontId, Galley, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+};
 use helmsman_diagram::Scan;
 use helmsman_iec::Value;
 use helmsman_iec::ast::{self, PouKind, Section, TypeRef};
@@ -30,7 +40,7 @@ use crate::editor::Chrome;
 use crate::glyphs;
 use crate::hotkeys::Action;
 use crate::playground_view::PlaygroundView;
-use crate::remote::{BoxState, Link};
+use crate::remote::{BoxState, Link, ScanTiming};
 use crate::st_view::TAP;
 use crate::st_view::brand::{WHITE, YELLOW};
 use crate::theme::theme;
@@ -38,6 +48,10 @@ use crate::tips::Tip;
 
 /// Seconds without a new scan after which a program's tiles go grey.
 pub const STALE_AFTER: f64 = 3.0;
+
+/// An overrun this recent (seconds) shows on the status tile for
+/// everyone, in the attention colour.
+pub const OVERRUN_RECENT: f64 = 60.0;
 
 /// Narrower than this (points) and the app opens on the Monitor: a phone.
 pub const NARROW: f32 = 600.0;
@@ -51,7 +65,9 @@ pub const RED: Color32 = Color32::from_rgb(0xE5, 0x39, 0x35);
 pub enum Run {
     Starting,
     Running,
-    Stopped,
+    /// Not scanning: the simulation stopped, or a box module an engineer
+    /// stopped (who, when the box says), its outputs at their safe values.
+    Stopped(Option<String>),
     Held,
     Faulted(String),
 }
@@ -83,6 +99,18 @@ pub struct Program<'a> {
     pub fresh: Fresh,
     /// Why it cannot be shown in full.
     pub note: Option<String>,
+    /// Its scan load as a box measured it; `None` in the simulation.
+    pub load: Option<Load>,
+}
+
+/// A box module's scan load.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Load {
+    /// `None` before the first scan, or from a box too old to measure.
+    pub timing: Option<ScanTiming>,
+    pub overruns: u64,
+    /// Seconds since it last overran; `None`: never (or not said).
+    pub overrun_ago: Option<f64>,
 }
 
 /// Where the Monitor's values come from. Read-only by construction.
@@ -101,11 +129,16 @@ impl Feed for BoxState {
             .map(|m| {
                 let w = self.programs.get(&m.name);
                 let at = w.and_then(|w| w.at);
+                // A module that scans slower than the limit sends a scan
+                // that seldom: three of its periods is as long as it may
+                // be quiet.
+                let limit = STALE_AFTER.max(m.scan_ms.map_or(0.0, |ms| 3.0 * ms / 1000.0));
                 Program {
                     name: m.name.clone(),
                     run: match m.state.as_str() {
                         "running" => Run::Running,
                         "held" => Run::Held,
+                        "stopped" => Run::Stopped(m.stopped_by.clone()),
                         "faulted" => Run::Faulted(m.fault.clone().unwrap_or_default()),
                         _ => Run::Starting,
                     },
@@ -114,7 +147,7 @@ impl Feed for BoxState {
                     src: w.and_then(|w| w.lowered.as_ref()).map(|l| l.src.as_str()),
                     values: w.and_then(|w| w.scan.as_ref()).map(|s| s as &dyn Scan),
                     fresh: match at {
-                        Some(t) if now - t <= STALE_AFTER => Fresh::Live,
+                        Some(t) if now - t <= limit => Fresh::Live,
                         Some(t) => Fresh::Stale {
                             age: Some(now - t),
                             why: "no new scan".into(),
@@ -125,6 +158,11 @@ impl Feed for BoxState {
                         },
                     },
                     note: w.and_then(|w| w.problem.clone()),
+                    load: Some(Load {
+                        timing: m.timing,
+                        overruns: m.overruns,
+                        overrun_ago: m.overrun_ago,
+                    }),
                 }
             })
             .collect()
@@ -140,6 +178,7 @@ impl Feed for BoxState {
                 Some(_) => None,
             },
             Link::Connecting => Some("connecting to the box".into()),
+            Link::SignIn => Some("sign in to watch this box".into()),
             Link::Reconnecting { .. } => Some("lost the box; reconnecting".into()),
             Link::Unreachable { .. } => Some("box unreachable".into()),
         }
@@ -162,7 +201,7 @@ impl Feed for PlaygroundView {
             ),
             (None, true) => (Run::Running, Fresh::Live),
             (None, false) => (
-                Run::Stopped,
+                Run::Stopped(None),
                 Fresh::Stale {
                     age: None,
                     why: "stopped".into(),
@@ -178,6 +217,7 @@ impl Feed for PlaygroundView {
             values: s.trace.as_ref().map(|t| t as &dyn Scan),
             fresh,
             note: None,
+            load: None,
         }]
     }
 
@@ -349,6 +389,20 @@ pub struct Tile {
     pub stale: Option<String>,
     /// Where a tap goes: (program, instance prefix).
     pub into: Option<(String, String)>,
+    /// A status tile's scan load lines, each with its tooltip.
+    pub lines: Vec<Line>,
+}
+
+/// One line of numbers on a status tile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Line {
+    /// The name tests and hits know it by: `load line/exec`.
+    pub key: String,
+    pub text: String,
+    /// What the number means and what is normal.
+    pub tip: String,
+    /// Drawn in the attention colour.
+    pub warn: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -367,13 +421,19 @@ pub enum Wish {
     Act(Action),
 }
 
-/// The simulation's transport as the Monitor shows it: whether a program
-/// is built, and whether it runs. A box has none (card
-/// monitor-box-run-stop): its Monitor stays watch-only.
+/// The transport as the Monitor shows it: whether there is something to
+/// run, and whether it runs. In the simulation: run or stop, step and
+/// restart. On a box (`on_box`; card monitor-box-run-stop, an engineer
+/// signed in only): stop or run and restart of the program shown, or of
+/// every program at the top level, each through the box's audited route.
+/// Anyone else's box Monitor has none and stays watch-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Transport {
     pub built: bool,
-    pub running: bool,
+    /// Running, paused or stopped. A box's is running or paused (its
+    /// stop holds the program where it was).
+    pub state: crate::playground::RunState,
+    pub on_box: bool,
 }
 
 /// The Monitor's own state: which level is shown. Values are the feed's.
@@ -422,6 +482,99 @@ fn status_sub(p: &Program<'_>, detail: bool) -> String {
     format!("{period}{} scans", p.scans)
 }
 
+/// A time given in µs, in the unit that reads best: "8.5 µs", "120 µs",
+/// "1.25 ms", "35 ms".
+#[must_use]
+pub fn micros_text(us: f64) -> String {
+    let us = us.max(0.0);
+    if us < 10.0 {
+        format!("{us:.1} µs")
+    } else if us < 1000.0 {
+        format!("{us:.0} µs")
+    } else if us < 10_000.0 {
+        format!("{:.2} ms", us / 1000.0)
+    } else {
+        format!("{:.0} ms", us / 1000.0)
+    }
+}
+
+/// The status tile's scan load lines. With `detail` (an engineer's
+/// choice): scan time, start lateness and overruns, when the box measured
+/// them. Without: only an overrun in the last [`OVERRUN_RECENT`] seconds.
+/// None for the simulation, which has no real clock to measure.
+fn load_lines(p: &Program<'_>, detail: bool) -> Vec<Line> {
+    let Some(load) = p.load else {
+        return Vec::new();
+    };
+    let key = |what: &str| format!("load {}/{what}", p.name);
+    let period = p
+        .period_ms
+        .map_or_else(String::new, |ms| format!(" (the scan period is {ms} ms)"));
+    let mut out = Vec::new();
+    if detail && let Some(t) = load.timing {
+        out.push(Line {
+            key: key("exec"),
+            text: format!(
+                "scan {} · peak {}",
+                micros_text(t.exec.mean),
+                micros_text(t.exec.max)
+            ),
+            tip: format!(
+                "Scan time: how long the program takes to run once, over its last {n} scans. \
+                 Average {avg}, 99 in 100 under {p99}, longest {max}, shortest {min}. \
+                 Normal is well under the scan period{period}; a scan that takes longer \
+                 makes the next one start late.",
+                n = t.window,
+                avg = micros_text(t.exec.mean),
+                p99 = micros_text(t.exec.p99),
+                max = micros_text(t.exec.max),
+                min = micros_text(t.exec.min),
+            ),
+            warn: false,
+        });
+        out.push(Line {
+            key: key("late"),
+            text: format!(
+                "jitter {} · peak {}",
+                micros_text(t.late.mean),
+                micros_text(t.late.max)
+            ),
+            tip: format!(
+                "Jitter: how late each scan started after the moment it was due, over its last {n} scans. \
+                 Average {avg}, 99 in 100 under {p99}, latest {max}. \
+                 Normal is a fraction of a millisecond on a quiet box; a busy computer \
+                 or a long scan of another program adds to it.",
+                n = t.window,
+                avg = micros_text(t.late.mean),
+                p99 = micros_text(t.late.p99),
+                max = micros_text(t.late.max),
+            ),
+            warn: false,
+        });
+    }
+    let recent = load.overrun_ago.filter(|&a| a <= OVERRUN_RECENT);
+    if detail || recent.is_some() {
+        let when = load
+            .overrun_ago
+            .map_or_else(String::new, |a| format!(" · {} ago", age_text(a)));
+        out.push(Line {
+            key: key("overruns"),
+            text: if load.overruns == 0 {
+                "no overruns".into()
+            } else {
+                format!("overruns {}{when}", load.overruns)
+            },
+            tip: "Overruns: scan deadlines missed since the box started, because a scan \
+                  started too late. The program skips the scans it missed and carries on \
+                  at its scan period. Normal is none, or a rare one when the computer is \
+                  busy. The line is yellow for a minute after each overrun."
+                .into(),
+            warn: recent.is_some(),
+        });
+    }
+    out
+}
+
 impl Monitor {
     fn shape(&mut self, name: &str, src: Option<&str>) -> Option<&Shape> {
         let src = src?;
@@ -468,6 +621,7 @@ impl Monitor {
                 lamps: Vec::new(),
                 stale: trouble.clone().map(|t| format!("stale · {t}")),
                 into: None,
+                lines: load_lines(p, detail),
             };
             let mut tiles = vec![status];
             let name = p.name.clone();
@@ -503,6 +657,7 @@ impl Monitor {
                             lamps: lamps(&scope.outs),
                             stale: stale.clone(),
                             into: None,
+                            lines: Vec::new(),
                         });
                     }
                     for &kid in &scope.kids {
@@ -515,6 +670,7 @@ impl Monitor {
                             lamps: lamps(&s.outs),
                             stale: stale.clone(),
                             into: Some((name.clone(), s.prefix.clone())),
+                            lines: Vec::new(),
                         });
                     }
                 }
@@ -654,7 +810,9 @@ impl Monitor {
                 }
                 let last = i + 1 == crumbs.len();
                 let rt = egui::RichText::new(text).size(size).monospace();
-                let rt = if last {
+                // The crumb you are on is the accent; at the top, where it
+                // is the only one, it is a plain title and no link.
+                let rt = if last && crumbs.len() > 1 {
                     rt.strong().color(t.accent)
                 } else {
                     rt.color(t.fg)
@@ -695,7 +853,9 @@ impl Monitor {
                         egui::Button::selectable(chrome.scan, egui::RichText::new("Scan detail").size(size))
                             .min_size(Vec2::new(TAP * 2.5 * k, TAP * k)),
                     )
-                    .on_hover_text("the scan period and count on each status tile (kept in this browser)");
+                    .on_hover_text(
+                        "the scan period and count, scan time, jitter and overruns on each status tile (kept in this browser)",
+                    );
                 chrome.hit("monitor scan", scan.rect);
                 if scan.clicked() {
                     chrome.scan = !chrome.scan;
@@ -717,27 +877,82 @@ impl Monitor {
         }
     }
 
-    /// The simulation's transport, the Editor's glyphs under the same keys
-    /// (`run`, `step`, `restart`), so the hotkeys' tests and the page's
-    /// behave alike on either screen.
+    /// The box modules the transport acts on: the program shown, or every
+    /// module at the top level.
+    #[must_use]
+    pub fn targets(&self, modules: &[crate::remote::ModuleRow]) -> Vec<String> {
+        match &self.at {
+            Some((program, _)) => modules
+                .iter()
+                .filter(|m| m.name == *program)
+                .map(|m| m.name.clone())
+                .collect(),
+            None => modules.iter().map(|m| m.name.clone()).collect(),
+        }
+    }
+
+    /// The transport, the Editor's glyphs under the same keys (`run`,
+    /// `step`, `restart`), so the hotkeys' tests and the page's behave
+    /// alike on either screen. A box has no step.
     fn transport(&mut self, ui: &mut egui::Ui, t: Transport, chrome: &mut Chrome) {
+        if t.on_box {
+            let (icon, tip) = if t.state == crate::playground::RunState::Running {
+                (
+                    glyphs::Icon::Stop,
+                    "Stop on the box: the program stops scanning and its outputs go to their safe values until you run it again (an engineer's; audited).",
+                )
+            } else {
+                (
+                    glyphs::Icon::Run,
+                    "Run on the box: the program scans again from where it stopped (an engineer's; audited).",
+                )
+            };
+            let items = [
+                ("run", icon, t.built, tip, Action::RunStop),
+                (
+                    "restart",
+                    glyphs::Icon::Restart,
+                    t.built,
+                    "Restart on the box: every variable back to its initial value, then run (an engineer's; audited).",
+                    Action::Restart,
+                ),
+            ];
+            for (key, icon, enabled, tip, act) in items {
+                let r = glyphs::button(ui, icon, enabled, false, tip);
+                chrome.hit(key, r.rect);
+                if r.clicked() {
+                    self.wish = Some(Wish::Act(act));
+                }
+            }
+            return;
+        }
         let (icon, tip) = if !t.built {
             (
                 glyphs::Icon::Run,
                 "Run (Ctrl+Enter): the program does not compile yet.",
             )
-        } else if t.running {
-            (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+        } else if t.state == crate::playground::RunState::Running {
+            (
+                glyphs::Icon::Pause,
+                "Pause (Ctrl+Enter): the program holds where it is, every value kept.",
+            )
         } else {
             (glyphs::Icon::Run, "Run (Ctrl+Enter)")
         };
         let items = [
             ("run", icon, t.built, tip, Action::RunStop),
             (
+                "stop",
+                glyphs::Icon::Stop,
+                t.built && t.state != crate::playground::RunState::Stopped,
+                "Stop (Shift+F8): ends the run. Every value goes back to its initial one, the outputs go off and the clock to zero.",
+                Action::Stop,
+            ),
+            (
                 "step",
                 glyphs::Icon::Step,
-                t.built && !t.running,
-                "Step one scan (F10)",
+                t.built && t.state != crate::playground::RunState::Running,
+                "Step to the next change (F8): scans until a value changes or the program takes another path.",
                 Action::Step,
             ),
             (
@@ -762,20 +977,27 @@ impl Monitor {
         let gap = 12.0 * k;
         let width = ui.available_width();
         let min = (260.0 * k).min(width);
-        let cols = (((width + gap) / (min + gap)).floor() as usize).max(1);
-        let w = (width - gap * (cols - 1) as f32) / cols as f32;
+        // No more columns than tiles: two tiles on a wide screen take the
+        // width between them, each up to twice the least width, where a
+        // four-column grid left half the screen empty.
+        let cols = (((width + gap) / (min + gap)).floor() as usize).clamp(1, tiles.len().max(1));
+        let w = ((width - gap * (cols - 1) as f32) / cols as f32).min(min * 2.0);
         for row in tiles.chunks(cols) {
-            let h = row
-                .iter()
-                .map(|t| tile_height(t, k))
-                .fold(TAP * 2.0 * k, f32::max);
+            let laid: Vec<Laid> = row.iter().map(|t| layout_tile(ui, t, k, w)).collect();
+            let h = laid.iter().map(|l| l.height).fold(TAP * 2.0 * k, f32::max);
             let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
             for (i, t) in row.iter().enumerate() {
                 let x = rect.min.x + i as f32 * (w + gap);
                 let r = Rect::from_min_size(Pos2::new(x, rect.min.y), Vec2::new(w, h));
                 let resp = ui.interact(r, ui.scope_id().with(&t.key), Sense::click());
                 chrome.hit(t.key.clone(), r);
-                draw_tile(ui, r, t, k, resp.hovered() && t.into.is_some());
+                let lines = draw_tile(ui, r, t, k, resp.hovered() && t.into.is_some(), &laid[i]);
+                for (line, lr) in t.lines.iter().zip(lines) {
+                    chrome.hit(line.key.clone(), lr);
+                    let _ = ui
+                        .interact(lr, ui.scope_id().with(&line.key), Sense::hover())
+                        .on_hover_text(&line.tip);
+                }
                 if resp.clicked()
                     && let Some(to) = &t.into
                 {
@@ -787,23 +1009,184 @@ impl Monitor {
     }
 }
 
-fn tile_height(t: &Tile, k: f32) -> f32 {
-    let head = 64.0 * k;
-    let body = match &t.kind {
-        TileKind::Status(Run::Faulted(_)) => 70.0 * k,
-        TileKind::Status(_) => 48.0 * k,
-        _ => t.lamps.len().max(1) as f32 * 30.0 * k,
-    };
-    let foot = if t.stale.is_some() { 26.0 * k } else { 0.0 };
-    head + body + foot + 12.0 * k
+/// A load line's height, before scaling.
+const LINE_H: f32 = 24.0;
+
+/// One thing a tile draws, placed from the tile's top-left corner.
+enum Piece {
+    Text(Pos2, Arc<Galley>),
+    /// A lamp's dot: centre, radius; filled, or (stale) a ring.
+    Dot(Pos2, f32, Option<Color32>),
 }
 
-fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
-    let p = ui.painter_at(r);
+/// A tile laid out for a width: what it draws, where its load lines went,
+/// and how tall it came out. The height follows the text (a fault message
+/// wraps to the tile, a long name is elided), so no text is cut off by the
+/// tile's edge.
+pub struct Laid {
+    pieces: Vec<Piece>,
+    spots: Vec<Rect>,
+    pub height: f32,
+    y: f32,
+    pad: f32,
+    inner: f32,
+}
+
+impl Laid {
+    /// `text` wrapped to the tile's inner width at the cursor, which moves
+    /// down by the text's height, or by `step` where that is more.
+    fn wrapped(&mut self, ui: &egui::Ui, text: &str, style: (FontId, Color32), step: f32) -> Rect {
+        let mut job = LayoutJob::simple(text.to_string(), style.0, style.1, self.inner);
+        job.wrap.break_anywhere = true;
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let at = Pos2::new(self.pad, self.y);
+        let high = galley.size().y.max(step);
+        self.y += high;
+        self.pieces.push(Piece::Text(at, galley));
+        Rect::from_min_size(at, Vec2::new(self.inner, high))
+    }
+
+    /// The boxes of the text pieces (tests: none may overlap or leave the
+    /// tile).
+    #[cfg(test)]
+    pub fn text_boxes(&self) -> Vec<Rect> {
+        self.pieces
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Text(at, g) => Some(Rect::from_min_size(*at, g.size())),
+                Piece::Dot(..) => None,
+            })
+            .collect()
+    }
+}
+
+/// `text` on one row at most `wrap` wide, ending in an ellipsis where it
+/// does not fit.
+fn elided(ui: &egui::Ui, text: &str, font: FontId, color: Color32, wrap: f32) -> Arc<Galley> {
+    let mut job = LayoutJob::simple(text.to_string(), font, color, wrap.max(1.0));
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// Lays `t` out in a tile `w` wide at scale `k`.
+pub fn layout_tile(ui: &egui::Ui, t: &Tile, k: f32, w: f32) -> Laid {
     let th = theme(ui);
     let stale = t.stale.is_some();
+    let ink = if stale { th.muted } else { th.fg };
+    let pad = 14.0 * k;
+    let mut l = Laid {
+        pieces: Vec::new(),
+        spots: Vec::new(),
+        height: 0.0,
+        y: pad,
+        pad,
+        inner: (w - 2.0 * pad).max(1.0),
+    };
+    let title = if t.into.is_some() {
+        format!("{} ›", t.title)
+    } else {
+        t.title.clone()
+    };
+    l.wrapped(ui, &title, (FontId::proportional(24.0 * k), ink), 30.0 * k);
+    let small = (14.0 * k).max(crate::theme::MIN_TEXT);
+    l.wrapped(ui, &t.sub, (FontId::monospace(small), th.muted), 26.0 * k);
+    match &t.kind {
+        TileKind::Status(run) => {
+            let (word, color) = match run {
+                Run::Running => ("RUNNING", crate::theme::theme(ui).ink(GREEN)),
+                Run::Faulted(_) => ("FAULTED", crate::theme::theme(ui).ink(RED)),
+                Run::Held => ("HELD", th.accent),
+                Run::Stopped(_) => ("STOPPED", th.muted),
+                Run::Starting => ("STARTING", th.muted),
+            };
+            let color = if stale { th.muted } else { color };
+            l.wrapped(ui, word, (FontId::proportional(30.0 * k), color), 40.0 * k);
+            if let Run::Stopped(Some(by)) = run {
+                let text = format!("outputs at safe values · by {by}");
+                l.wrapped(ui, &text, (FontId::proportional(small), ink), 22.0 * k);
+            }
+            if let Run::Faulted(f) = run {
+                l.wrapped(ui, f, (FontId::proportional(small), ink), 22.0 * k);
+            }
+            for line in &t.lines {
+                let color = if stale {
+                    th.muted
+                } else if line.warn {
+                    th.accent
+                } else {
+                    ink
+                };
+                let font = FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT));
+                let spot = l.wrapped(ui, &line.text, (font, color), LINE_H * k);
+                l.spots.push(spot);
+            }
+        }
+        TileKind::Outputs | TileKind::Instance => {
+            if t.lamps.is_empty() {
+                let font = FontId::proportional((16.0 * k).max(crate::theme::MIN_TEXT));
+                l.wrapped(ui, "no outputs", (font, th.muted), 30.0 * k);
+            }
+            for lamp in &t.lamps {
+                let mid = l.y + 12.0 * k;
+                let rad = 9.0 * k;
+                let (dot, value) = match lamp.value {
+                    Some(Value::Bool(on)) => (Some(on), None),
+                    v => (None, Some(crate::st_view::show(v))),
+                };
+                match dot {
+                    Some(on) if !stale => {
+                        l.pieces.push(Piece::Dot(
+                            Pos2::new(pad + rad, mid),
+                            rad,
+                            Some(if on { GREEN } else { RED }),
+                        ));
+                    }
+                    Some(_) => l.pieces.push(Piece::Dot(Pos2::new(pad + rad, mid), rad, None)),
+                    None => {}
+                }
+                let x = if dot.is_some() || value.is_none() {
+                    pad + rad * 2.0 + 10.0 * k
+                } else {
+                    pad
+                };
+                let size = (18.0 * k).max(crate::theme::MIN_TEXT);
+                // The value keeps its room (at most half the row); the
+                // name gets what is left and is elided to it.
+                let value = value.map(|v| {
+                    let color = if stale { th.muted } else { th.accent };
+                    elided(ui, &v, FontId::monospace(size), color, l.inner * 0.5)
+                });
+                let gap = if value.is_some() { 10.0 * k } else { 0.0 };
+                let room = w - pad - x - value.as_ref().map_or(0.0, |g| g.size().x) - gap;
+                let name = elided(ui, &lamp.name, FontId::proportional(size), ink, room);
+                l.pieces
+                    .push(Piece::Text(Pos2::new(x, mid - name.size().y / 2.0), name));
+                if let Some(g) = value {
+                    let at = Pos2::new(w - pad - g.size().x, mid - g.size().y / 2.0);
+                    l.pieces.push(Piece::Text(at, g));
+                }
+                l.y += 30.0 * k;
+            }
+        }
+    }
+    if let Some(s) = &t.stale {
+        l.y += 4.0 * k;
+        let font = FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT));
+        l.wrapped(ui, s, (font, th.muted), 22.0 * k);
+    }
+    l.height = (l.y + pad).max(TAP * 2.0 * k);
+    l
+}
+
+/// Draws `t`, laid out as `laid`, in `r`; returns where each of its
+/// [`Line`]s went.
+fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool, laid: &Laid) -> Vec<Rect> {
+    let p = ui.painter_at(r);
+    let th = theme(ui);
     // A stale tile sinks halfway back into the page.
-    let fill = if stale {
+    let fill = if t.stale.is_some() {
         th.panel.gamma_multiply(0.5)
     } else {
         th.panel
@@ -816,119 +1199,18 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
         Stroke::new(1.5 * k, edge),
         StrokeKind::Inside,
     );
-    let ink = if stale { th.muted } else { th.fg };
-    let pad = 14.0 * k;
-    let mut y = r.min.y + pad;
-    let title = if t.into.is_some() {
-        format!("{} ›", t.title)
-    } else {
-        t.title.clone()
-    };
-    p.text(
-        Pos2::new(r.min.x + pad, y),
-        egui::Align2::LEFT_TOP,
-        title,
-        FontId::proportional(24.0 * k),
-        ink,
-    );
-    y += 30.0 * k;
-    p.text(
-        Pos2::new(r.min.x + pad, y),
-        egui::Align2::LEFT_TOP,
-        &t.sub,
-        FontId::monospace((14.0 * k).max(crate::theme::MIN_TEXT)),
-        th.muted,
-    );
-    y += 26.0 * k;
-    match &t.kind {
-        TileKind::Status(run) => {
-            let (word, color) = match run {
-                Run::Running => ("RUNNING", GREEN),
-                Run::Faulted(_) => ("FAULTED", RED),
-                Run::Held => ("HELD", th.accent),
-                Run::Stopped => ("STOPPED", th.muted),
-                Run::Starting => ("STARTING", th.muted),
-            };
-            let color = if stale { th.muted } else { color };
-            p.text(
-                Pos2::new(r.min.x + pad, y),
-                egui::Align2::LEFT_TOP,
-                word,
-                FontId::proportional(30.0 * k),
-                color,
-            );
-            y += 40.0 * k;
-            if let Run::Faulted(f) = run {
-                p.text(
-                    Pos2::new(r.min.x + pad, y),
-                    egui::Align2::LEFT_TOP,
-                    f,
-                    FontId::proportional((14.0 * k).max(crate::theme::MIN_TEXT)),
-                    ink,
-                );
-                y += 22.0 * k;
+    for piece in &laid.pieces {
+        match piece {
+            Piece::Text(at, g) => {
+                p.galley(r.min + at.to_vec2(), g.clone(), th.fg);
             }
-        }
-        TileKind::Outputs | TileKind::Instance => {
-            if t.lamps.is_empty() {
-                p.text(
-                    Pos2::new(r.min.x + pad, y),
-                    egui::Align2::LEFT_TOP,
-                    "no outputs",
-                    FontId::proportional((16.0 * k).max(crate::theme::MIN_TEXT)),
-                    th.muted,
-                );
-                y += 30.0 * k;
+            Piece::Dot(c, rad, Some(fill)) => {
+                p.circle_filled(r.min + c.to_vec2(), *rad, *fill);
             }
-            for l in &t.lamps {
-                let mid = y + 12.0 * k;
-                let rad = 9.0 * k;
-                let c = Pos2::new(r.min.x + pad + rad, mid);
-                let (lamp, text) = match l.value {
-                    Some(Value::Bool(on)) => (Some(on), None),
-                    v => (None, Some(crate::st_view::show(v))),
-                };
-                match lamp {
-                    Some(on) if !stale => {
-                        p.circle_filled(c, rad, if on { GREEN } else { RED });
-                    }
-                    Some(_) => {
-                        p.circle_stroke(c, rad, Stroke::new(1.5 * k, th.muted));
-                    }
-                    None => {}
-                }
-                let x = if lamp.is_some() || text.is_none() {
-                    r.min.x + pad + rad * 2.0 + 10.0 * k
-                } else {
-                    r.min.x + pad
-                };
-                p.text(
-                    Pos2::new(x, mid),
-                    egui::Align2::LEFT_CENTER,
-                    &l.name,
-                    FontId::proportional((18.0 * k).max(crate::theme::MIN_TEXT)),
-                    ink,
-                );
-                if let Some(v) = text {
-                    p.text(
-                        Pos2::new(r.max.x - pad, mid),
-                        egui::Align2::RIGHT_CENTER,
-                        v,
-                        FontId::monospace((18.0 * k).max(crate::theme::MIN_TEXT)),
-                        if stale { th.muted } else { th.accent },
-                    );
-                }
-                y += 30.0 * k;
+            Piece::Dot(c, rad, None) => {
+                p.circle_stroke(r.min + c.to_vec2(), *rad, Stroke::new(1.5 * k, th.muted));
             }
         }
     }
-    if let Some(s) = &t.stale {
-        p.text(
-            Pos2::new(r.min.x + pad, y + 4.0 * k),
-            egui::Align2::LEFT_TOP,
-            s,
-            FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT)),
-            th.muted,
-        );
-    }
+    laid.spots.iter().map(|s| s.translate(r.min.to_vec2())).collect()
 }

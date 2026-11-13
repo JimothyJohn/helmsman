@@ -10,7 +10,8 @@
 //! `pycomm3/packets/logix.py` (`ReadTagFragmentedResponsePacket`: 2-byte type
 //! for atomics, 4 bytes for structures). See `docs/SOURCES.md`.
 
-use std::fmt;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::codec::{DecodeError, Reader, Writer};
 

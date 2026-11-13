@@ -13,6 +13,7 @@ use eframe::egui::{
     text::LayoutJob, text_edit::TextEditState,
 };
 
+use crate::glyphs::Icon;
 use crate::st_view::TAP;
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
@@ -21,7 +22,9 @@ use crate::tips::Tip;
 pub const CHROME_KEY: &str = "helmsman-canvas/editor";
 
 /// Width of a collapsed sidebar, points.
-pub const STRIP: f32 = 30.0;
+pub const STRIP: f32 = 48.0;
+/// The side of a tab's glyph in a pane's header row, points.
+pub const TAB: f32 = TAP * 0.75;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
@@ -30,20 +33,20 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
-    /// The project's requirement tests, green or red (`helmsman_iec::spec`).
-    Requirements,
+    /// The glyph library's pieces to drag onto the diagram (`palette`).
+    Palette,
     Claude,
 }
 
 impl Tab {
     /// Every tab, in the panel's order.
-    pub const ALL: [Self; 3] = [Self::Io, Self::Requirements, Self::Claude];
+    pub const ALL: [Self; 3] = [Self::Io, Self::Palette, Self::Claude];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Requirements => "Requirements",
+            Self::Palette => "Palette",
             Self::Claude => "Agent",
         }
     }
@@ -52,16 +55,28 @@ impl Tab {
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Io => "The program's inputs and outputs with their live values.",
-            Self::Requirements => "The project's requirement tests, green or red. A red test stops Deploy.",
-            Self::Claude => "Ask the agent about the program, or have it propose a change.",
+            Self::Io => "I/O: the program's inputs and outputs with their live values.",
+            Self::Palette => {
+                "Palette: controls and program pieces. Drag one onto the diagram and the Agent adds it."
+            }
+            Self::Claude => "Agent: ask the agent about the program, or have it propose a change.",
+        }
+    }
+
+    /// The tab's glyph (Nick, 2026-11-11: glyphs, the tooltip names them).
+    #[must_use]
+    pub const fn icon(self) -> Icon {
+        match self {
+            Self::Io => Icon::Io,
+            Self::Palette => Icon::Palette,
+            Self::Claude => Icon::Agent,
         }
     }
 
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
-            Self::Requirements => "tests",
+            Self::Palette => "palette",
             Self::Claude => "claude",
         }
     }
@@ -76,6 +91,28 @@ pub enum Bottom {
 }
 
 impl Bottom {
+    /// Every tab, left to right.
+    pub const ALL: [Self; 2] = [Self::Trend, Self::Messages];
+
+    #[must_use]
+    pub const fn icon(self) -> Icon {
+        match self {
+            Self::Trend => Icon::Trend,
+            Self::Messages => Icon::Messages,
+        }
+    }
+
+    /// The tab button's tooltip.
+    #[must_use]
+    pub const fn tip(self) -> &'static str {
+        match self {
+            Self::Trend => "Trend: pinned signals over time (Alt+Shift+2).",
+            Self::Messages => {
+                "Messages: what needs saying now and what happened (connections, deploys, faults and errors), newest last. Red while an error stands or one has come in since you last looked."
+            }
+        }
+    }
+
     const fn key(self) -> &'static str {
         match self {
             Self::Trend => "trend",
@@ -100,22 +137,24 @@ impl Pane {
     /// Every tab, left to right.
     pub const ALL: [Self; 3] = [Self::Files, Self::Devices, Self::Code];
 
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Files => "Files",
-            Self::Devices => "Devices",
-            Self::Code => "Code",
-        }
-    }
-
     /// The tab button's tooltip.
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Files => "The projects and the open one's files (Alt+0 opens or shuts it).",
-            Self::Devices => "The I/O map: the remote modules and their points (Alt+4 opens or shuts it).",
-            Self::Code => "The Structured Text of the open file (Alt+1 opens or shuts it).",
+            Self::Files => "Files: the projects and the open one's files (Alt+Shift+0 opens or shuts it).",
+            Self::Devices => {
+                "Devices: the I/O map, the remote modules and their points (Alt+Shift+4 opens or shuts it)."
+            }
+            Self::Code => "Code: the Structured Text of the open file (Alt+Shift+1 opens or shuts it).",
+        }
+    }
+
+    #[must_use]
+    pub const fn icon(self) -> Icon {
+        match self {
+            Self::Files => Icon::Files,
+            Self::Devices => Icon::Devices,
+            Self::Code => Icon::Code,
         }
     }
 
@@ -131,12 +170,17 @@ impl Pane {
 /// The left pane's width when first opened, points: one width for every
 /// tab (Nick, 2026-11-01); 200 since the third tab (three tab buttons and
 /// the hide chevron must fit the row, or the pane grows every frame); 240
-/// since 2026-11-05 (Nick: "just a bit wider").
-pub const LEFT_W: f32 = 240.0;
-/// The right panel's width when first opened, points: 236 since the
-/// Requirements tab (three tab buttons and the hide chevron must fit the
-/// row, or the panel grows every frame).
+/// since 2026-11-05 (Nick: "just a bit wider"); 320 since 2026-11-10 (at
+/// 240 the Code tab held 19 characters a row and wrapped a 14-line
+/// program to 24 rows; at 320 it holds 27).
+pub const LEFT_W: f32 = 320.0;
+/// The right panel's width when first opened, points: 236 since
+/// 2026-11-05 (the tab buttons and the hide chevron must fit the row, or
+/// the panel grows every frame; the Requirements tab is archived since
+/// 2026-11-08, the width kept).
 pub const RIGHT_W: f32 = 236.0;
+/// How many trend colour picks a browser keeps.
+pub const MAX_COLORS: usize = 64;
 
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
 /// and what was drawn where this frame (tests click by it).
@@ -172,6 +216,27 @@ pub struct Chrome {
     pub diagram: Rect,
     /// The find box over the ST pane, while open (Ctrl F).
     pub find: Option<crate::find::Find>,
+    /// What the Agent's last change added and removed in the open file,
+    /// set by the workspace each frame; drawn only while the editor's text
+    /// is what the Agent wrote ([`crate::agent_marks`]).
+    pub st_marks: Option<crate::agent_marks::StMarks>,
+    /// Word wrap in the Code tab: long lines wrap at the pane's width
+    /// (on, the default) or run on behind a sideways scroll bar (Nick,
+    /// 2026-11-08). The toggle sits in the Code header.
+    pub wrap: bool,
+    /// The colours picked for trend signals (Nick, 2026-11-11): a
+    /// signal's name, lower-cased, and its place in the trend's palette.
+    /// A signal not here takes its lane's colour.
+    pub colors: Vec<(String, usize)>,
+    /// The style hints of the file in the Code tab (`crate::st_hints`).
+    pub hints: crate::st_hints::Hints,
+    /// The blocks folded in the Code tab (`crate::st_fold`).
+    pub folds: crate::st_fold::Folds,
+    /// The Devices tab's Advanced switch (PROTOCOLS.md step 3): today's
+    /// New device form, Import device… and Use this device, with their
+    /// protocols, addresses and typed points. Off, a device is added by
+    /// a click on what the scan found. Remembered per browser.
+    pub advanced: bool,
 }
 
 impl Default for Chrome {
@@ -190,6 +255,12 @@ impl Default for Chrome {
             hits: Vec::new(),
             diagram: Rect::NOTHING,
             find: None,
+            st_marks: None,
+            wrap: true,
+            colors: Vec::new(),
+            hints: crate::st_hints::Hints::default(),
+            folds: crate::st_fold::Folds::default(),
+            advanced: false,
         }
     }
 }
@@ -198,8 +269,14 @@ impl Chrome {
     /// What is kept per browser, as text.
     #[must_use]
     pub fn saved(&self) -> String {
+        let colors = if self.colors.is_empty() {
+            String::new()
+        } else {
+            let all: Vec<String> = self.colors.iter().map(|(n, i)| format!("{n}:{i}")).collect();
+            format!(" colors={}", all.join(","))
+        };
         format!(
-            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={}",
+            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={} wrap={} advanced={}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             self.pane.key(),
@@ -207,7 +284,9 @@ impl Chrome {
             u8::from(self.scan),
             u8::from(self.trend),
             self.bottom.key(),
-            u8::from(self.light)
+            u8::from(self.light),
+            u8::from(self.wrap),
+            u8::from(self.advanced)
         )
     }
 
@@ -227,6 +306,17 @@ impl Chrome {
                 Some(("scan", v)) => c.scan = v == "1",
                 Some(("trend", v)) => c.trend = v == "1",
                 Some(("light", v)) => c.light = v == "1",
+                Some(("wrap", v)) => c.wrap = v == "1",
+                Some(("advanced", v)) => c.advanced = v == "1",
+                Some(("colors", v)) => {
+                    c.colors = v
+                        .split(',')
+                        .filter_map(|e| e.rsplit_once(':'))
+                        .filter_map(|(n, i)| Some((n.to_string(), i.parse().ok()?)))
+                        .filter(|(n, _)| !n.is_empty())
+                        .take(MAX_COLORS)
+                        .collect();
+                }
                 Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
                 Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
@@ -238,6 +328,29 @@ impl Chrome {
             }
         }
         c
+    }
+
+    /// The palette place picked for trend signal `name`, if one was.
+    #[must_use]
+    pub fn color(&self, name: &str) -> Option<usize> {
+        self.colors
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, i)| *i)
+    }
+
+    /// Gives trend signal `name` palette place `index`. The oldest pick
+    /// goes once [`MAX_COLORS`] are kept.
+    pub fn set_color(&mut self, name: &str, index: usize) {
+        // What the saved text cannot hold is not a signal's name.
+        if name.is_empty() || name.contains([' ', ',', '=']) {
+            return;
+        }
+        self.colors.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        self.colors.push((name.to_ascii_lowercase(), index));
+        if self.colors.len() > MAX_COLORS {
+            self.colors.remove(0);
+        }
     }
 
     /// Notes that `key` was drawn at `rect`.
@@ -288,7 +401,7 @@ impl Chrome {
         self.pane = Pane::Devices;
     }
 
-    /// Alt 4, View › Devices: the Devices tab, or the pane shut when that
+    /// Alt Shift 4, View › Devices: the Devices tab, or the pane shut when that
     /// is what shows.
     pub fn toggle_devices(&mut self) {
         if self.devices_open() {
@@ -298,7 +411,7 @@ impl Chrome {
         }
     }
 
-    /// Alt 1, View › Structured Text: the Code tab, or the pane shut when
+    /// Alt Shift 1, View › Structured Text: the Code tab, or the pane shut when
     /// that is what shows.
     pub fn toggle_code(&mut self) {
         if self.code_open() {
@@ -308,7 +421,7 @@ impl Chrome {
         }
     }
 
-    /// Alt 0, View › Files: the Files tab, or the pane shut when that is
+    /// Alt Shift 0, View › Files: the Files tab, or the pane shut when that is
     /// what shows.
     pub fn toggle_files(&mut self) {
         if self.files_open() {
@@ -415,7 +528,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Side panel",
         right,
         &k(Action::Panel),
-        "Shows or hides the panel on the right: I/O, Requirements, Agent.",
+        "Shows or hides the panel on the right: I/O, Palette, Agent.",
     ) {
         chrome.right = !right;
     }
@@ -478,6 +591,14 @@ pub fn select(ctx: &egui::Context, id: egui::Id, a: usize, b: usize) {
     state.store(ctx, id);
 }
 
+/// The id of the ST editor showing `file` of `project` in `view`. One id
+/// per file: egui keeps the undo history, caret and scroll under it, and
+/// a shared id would put one file's text into another on Undo.
+#[must_use]
+pub fn source_id(view: &str, project: &str, file: &str) -> egui::Id {
+    egui::Id::unique((view, project, file))
+}
+
 /// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
 /// `text`, through the editor's own undo stack; whether anything changed.
 pub fn undo(ctx: &egui::Context, id: egui::Id, text: &mut String, redo: bool) -> bool {
@@ -512,9 +633,13 @@ pub trait Body {
     /// Whether [`Self::notices`] has anything to say.
     fn has_notices(&self) -> bool;
     /// What needs saying now (a fault, a deploy under way or refused, a
-    /// stale file with its Reload): a line under the header, only while
-    /// there is one.
+    /// stale file with its Reload): the first rows of the Messages tab,
+    /// only while there is one (Nick, 2026-11-11: not a line under the
+    /// header).
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// Whether one of them is an error that still stands (a fault, a
+    /// refused save or deploy): the Messages tab stays red while it does.
+    fn alarm(&self) -> bool;
     /// The left pane's Files tab: the projects, the open one's files and
     /// the program tree.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
@@ -530,13 +655,49 @@ pub trait Body {
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome);
+    /// Asks the Agent `text` as if it had been typed in the Agent tab
+    /// and sent (a palette piece clicked or dropped).
+    fn ask_agent(&mut self, text: &str, ctx: &egui::Context);
     /// The diagram with its breadcrumbs; a block click calls
     /// [`Chrome::goto`].
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
 }
 
-/// A collapsed sidebar's strip as one button: a chevron pointing `left`
-/// or right, the strip's full height, tinted under the pointer.
+/// A tab of a collapsed sidebar, as [`strip`] draws it.
+struct StripTab {
+    icon: Icon,
+    /// Its hit's name, as in the open pane's header.
+    key: String,
+    tip: &'static str,
+    on: bool,
+}
+
+/// A collapsed sidebar's strip (Nick, 2026-11-11): the pane's tabs as
+/// glyphs down it, each opening the pane on that tab, and under them the
+/// rest of the strip as one button that opens it where it was. Returns
+/// the tab clicked, if one was, and the button.
+fn strip(
+    ui: &mut egui::Ui,
+    tabs: &[StripTab],
+    left: bool,
+    hover: &str,
+    hits: &mut Vec<(String, Rect)>,
+) -> (Option<usize>, egui::Response) {
+    let mut picked = None;
+    let side = ui.available_width().clamp(STRIP - 16.0, TAB);
+    for (k, t) in tabs.iter().enumerate() {
+        let r =
+            crate::glyphs::tab(ui, t.icon, side, t.on, None).tip(format!("{} Opens the pane on it.", t.tip));
+        hits.push((t.key.clone(), r.rect));
+        if r.clicked() {
+            picked = Some(k);
+        }
+    }
+    (picked, strip_toggle(ui, left, hover))
+}
+
+/// The rest of a collapsed sidebar's strip as one button: a chevron
+/// pointing `left` or right, tinted under the pointer.
 fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
     let size = Vec2::new(
         ui.available_width().max(STRIP - 8.0),
@@ -578,15 +739,11 @@ fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
 
 /// One frame of the Editor.
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
-    if body.has_notices() {
-        egui::Panel::top("ed-notices").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
-        });
-    }
     let mut hits = Vec::new();
     let mut left = chrome.left;
     let mut pane = chrome.pane;
     let (left0, pane0) = (left, pane);
+    let mut hide = false;
     let flip = egui::Panel::show_switched(
         ui,
         &mut left,
@@ -601,13 +758,17 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             let toggle = if open {
                 let mut t = None;
                 // Tabs: Files | Devices | Code, the hide chevron at the right.
+                // A double click on a tab hides the pane too (Nick, 2026-11-07).
                 ui.horizontal(|ui| {
                     for p in Pane::ALL {
-                        let r = crate::theme::tab(ui, pane == p, p.label(), Vec2::new(0.0, TAP * 0.75))
-                            .tip(p.tip());
+                        let r = crate::glyphs::tab(ui, p.icon(), TAB, pane == p, None)
+                            .tip(format!("{} Double-click hides the pane.", p.tip()));
                         hits.push((format!("pane {}", p.key()), r.rect));
                         if r.clicked() {
                             pane = p;
+                        }
+                        if r.double_clicked() {
+                            hide = true;
                         }
                     }
                     // The chevron at the right edge, or right after the
@@ -635,11 +796,22 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 }
                 t
             } else {
-                Some(strip_toggle(ui, false, "Shows the pane."))
+                let tabs = Pane::ALL.map(|p| StripTab {
+                    icon: p.icon(),
+                    key: format!("pane {}", p.key()),
+                    tip: p.tip(),
+                    on: pane == p,
+                });
+                let (picked, t) = strip(ui, &tabs, false, "Shows the pane.", &mut hits);
+                if let Some(k) = picked {
+                    pane = Pane::ALL[k];
+                    hide = true;
+                }
+                Some(t)
             };
             if let Some(t) = toggle {
                 hits.push(("left".to_string(), t.rect));
-                t.clicked()
+                t.clicked() || hide
             } else {
                 false
             }
@@ -664,6 +836,9 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     }
     let mut right = chrome.right;
     let mut tab = chrome.tab;
+    let mut hide_right = false;
+    // A palette piece clicked or dropped on the diagram: the Agent's.
+    let mut asked: Option<crate::palette::Item> = None;
     let flip = egui::Panel::show_switched(
         ui,
         &mut right,
@@ -677,25 +852,46 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             let toggle = if open {
                 let mut t = None;
                 ui.horizontal(|ui| {
-                    t = Some(header_toggle(ui, false, "Hides the panel (Alt+3)."));
+                    t = Some(header_toggle(ui, false, "Hides the panel (Alt+Shift+3)."));
                     for &k in tabs {
-                        let r = crate::theme::tab(ui, tab == k, k.label(), Vec2::new(0.0, TAP * 0.75))
-                            .tip(k.tip());
+                        let r = crate::glyphs::tab(ui, k.icon(), TAB, tab == k, None)
+                            .tip(format!("{} Double-click hides the panel.", k.tip()));
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
                             tab = k;
                         }
+                        if r.double_clicked() {
+                            hide_right = true;
+                        }
                     }
                 });
                 ui.separator();
-                body.tab(ui, tab, chrome);
+                if tab == Tab::Palette {
+                    asked = crate::palette::show(ui, &mut hits);
+                } else {
+                    body.tab(ui, tab, chrome);
+                }
                 t
             } else {
-                Some(strip_toggle(ui, true, "Shows the panel (Alt+3)."))
+                let strip_tabs: Vec<StripTab> = tabs
+                    .iter()
+                    .map(|&k| StripTab {
+                        icon: k.icon(),
+                        key: format!("tab {}", k.key()),
+                        tip: k.tip(),
+                        on: tab == k,
+                    })
+                    .collect();
+                let (picked, t) = strip(ui, &strip_tabs, true, "Shows the panel (Alt+Shift+3).", &mut hits);
+                if let Some(k) = picked {
+                    tab = tabs[k];
+                    hide_right = true;
+                }
+                Some(t)
             };
             if let Some(t) = toggle {
                 hits.push(("right".to_string(), t.rect));
-                t.clicked()
+                t.clicked() || hide_right
             } else {
                 false
             }
@@ -709,67 +905,104 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     chrome.tab = tab;
     chrome.hits.extend(hits);
 
+    // The Messages tab is where every notice and error is (Nick,
+    // 2026-11-11): red while an error stands or has come in unread, and
+    // pulsing for a few seconds after a new one. A new error opens the
+    // panel if it was shut, so it is never out of sight.
+    let now = ui.input(|i| i.time);
+    let standing = body.alarm();
+    let alarm = body.messages().alarm(now, standing);
+    if body.messages().take_fresh() && !chrome.trend {
+        chrome.trend = true;
+        chrome.bottom = Bottom::Messages;
+    }
+    if body.messages().flashing(now) {
+        ui.ctx().request_repaint();
+    }
+    let errors = body.messages().errors();
     let mut trend = chrome.trend;
     egui::Panel::bottom("ed-trend")
         .resizable(true)
-        .default_size(200.0)
+        // Tabs, the signals' row and the slider take about 110 pt: at
+        // 200 the plot under them had 50.
+        .default_size(280.0)
         .show_collapsible(ui, &mut trend, |ui| {
-            // Tabs: Trend | Messages (errors counted on the tab).
-            let label = body.messages().label();
             ui.horizontal(|ui| {
-                for (b, text, key, tip) in [
-                    (
-                        Bottom::Trend,
-                        "Trend".to_string(),
-                        "bottom trend",
-                        "Pinned signals over time (Alt+2).",
-                    ),
-                    (
-                        Bottom::Messages,
-                        label,
-                        "bottom messages",
-                        "What happened: connections, deploys, faults and errors, newest last.",
-                    ),
-                ] {
-                    let r =
-                        crate::theme::tab(ui, chrome.bottom == b, &text, Vec2::new(64.0, TAP * 0.6)).tip(tip);
-                    chrome.hit(key, r.rect);
+                for b in Bottom::ALL {
+                    let alarm = alarm.filter(|_| b == Bottom::Messages);
+                    let r = crate::glyphs::tab(ui, b.icon(), TAB, chrome.bottom == b, alarm).tip(b.tip());
+                    chrome.hit(format!("bottom {}", b.key()), r.rect);
                     if r.clicked() {
                         chrome.bottom = b;
                     }
+                }
+                if errors > 0 {
+                    let red = theme(ui).ink(crate::st_view::brand::RED);
+                    let r = ui
+                        .label(egui::RichText::new(errors.to_string()).strong().color(red))
+                        .tip(if errors == 1 {
+                            "One error in the Messages.".to_string()
+                        } else {
+                            format!("{errors} errors in the Messages.")
+                        });
+                    chrome.hit("bottom errors", r.rect);
                 }
             });
             ui.separator();
             match chrome.bottom {
                 Bottom::Trend => body.trend(ui, chrome),
-                Bottom::Messages => body.messages().ui(ui, chrome),
+                Bottom::Messages => {
+                    if body.has_notices() {
+                        ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
+                        ui.separator();
+                    }
+                    body.messages().ui(ui, chrome);
+                }
             }
         });
     chrome.trend = trend;
+    // The open file's style hints, once the typing has settled.
+    if let Some(line) = chrome.hints.settled(now) {
+        body.messages().info(now, line);
+    }
 
     egui::CentralPanel::no_frame().show(ui, |ui| {
         chrome.diagram = ui.available_rect_before_wrap();
         body.diagram(ui, chrome);
     });
+    if let Some(item) = asked.or_else(|| crate::palette::dropped(ui.ctx(), chrome.diagram)) {
+        chrome.tab = Tab::Claude;
+        body.ask_agent(item.ask, ui.ctx());
+    }
 }
 
-/// The ST, with line numbers, diagnostics marked (`(line, column)`), and
+/// The ST, with line numbers, errors marked (`(line, column)`), warnings
+/// marked the same way but lighter (an underline, no ground, and the
+/// gutter number in the warning colour), and
 /// the line [`Chrome::goto`] sent it to scrolled into view and marked. A
 /// `&mut &str` is read-only (on a box); a `String` is edited in place, up
-/// to `limit` characters. Lines wrap at the pane's width; a wrapped line
-/// is numbered once, on its first row.
+/// to `limit` characters. Lines wrap at the pane's width while
+/// [`Chrome::wrap`] is on, a wrapped line numbered once, on its first
+/// row; off, each line is one row and the code scrolls sideways.
 pub fn st_editor(
     ui: &mut egui::Ui,
     id: egui::Id,
     text: &mut dyn egui::TextBuffer,
     diags: &[(u32, u32)],
+    warns: &[(u32, u32)],
     limit: usize,
     chrome: &mut Chrome,
 ) -> egui::Response {
     let font = FontId::monospace(crate::theme::MONO);
     let row = ui.fonts_mut(|f| f.row_height(&font));
     let found = crate::find::row(ui, &mut chrome.find, id, text.as_str());
-    let mut scroll = egui::ScrollArea::vertical().id_salt(id.with("scroll"));
+    let wrap_on = chrome.wrap;
+    let mut scroll = if wrap_on {
+        egui::ScrollArea::vertical()
+    } else {
+        egui::ScrollArea::both()
+    }
+    .id_salt(id.with("scroll"));
     if let Some(line) = chrome.jump.take() {
         #[allow(clippy::cast_precision_loss)]
         let y = (line.saturating_sub(4)) as f32 * row;
@@ -801,6 +1034,41 @@ pub fn st_editor(
         crate::find::select(ui.ctx(), id, s, r.clone(), true);
     }
     let t = theme(ui);
+    let now = ui.input(|i| i.time);
+    let hinted: Vec<helmsman_iec::hints::Hint> = chrome.hints.of(text.as_str(), now).to_vec();
+    let hints: Vec<(u32, u32)> = hinted.iter().map(|h| (h.pos.line, h.pos.col)).collect();
+    // Folding (`crate::st_fold`): a folded block's inner lines are laid
+    // out with no height. A fold opens when a line inside it has to be
+    // seen: a problem's, the one a block click went to, the caret moving
+    // in; and all of them while the find box is open, so every match shows.
+    let blocks = crate::st_fold::foldable(text.as_str());
+    let caret = TextEditState::load(ui.ctx(), id)
+        .and_then(|s| s.cursor.char_range())
+        .map(|r| {
+            let ends = text
+                .as_str()
+                .chars()
+                .take(r.primary.index.into())
+                .filter(|c| *c == '\n')
+                .count();
+            u32::try_from(ends + 1).unwrap_or(u32::MAX)
+        });
+    let shown: Vec<u32> = diags
+        .iter()
+        .chain(warns)
+        .map(|(l, _)| *l)
+        .chain(chrome.line)
+        .collect();
+    if found.is_some() {
+        chrome.folds.open_all();
+    }
+    let folded = chrome.folds.settle(id, &blocks, &shown, caret);
+    let lines = Lines {
+        errors: diags,
+        warnings: warns,
+        hints: &hints,
+        folded: &folded,
+    };
     let marks: Vec<(std::ops::Range<usize>, Color32)> = found
         .as_ref()
         .map(|f| {
@@ -815,25 +1083,58 @@ pub fn st_editor(
         })
         .unwrap_or_default();
     let at = chrome.line;
+    let agent = chrome
+        .st_marks
+        .clone()
+        .filter(|m| m.applies(text.as_str()))
+        .unwrap_or_default();
+    let added = agent.added.clone();
     scroll
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 let digit = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
                 let gutter_w = digit * 3.0;
+                // The fold arrows' column, left of the line numbers.
+                let arrow_w = (digit * 1.4).ceil();
                 // Slack for the editor's own margin and the scroll bar: wider
                 // than the pane and a resizable pane grows to fit, every frame.
-                let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
+                let wrap = if wrap_on {
+                    (ui.available_width() - gutter_w - arrow_w - 2.0 * ui.spacing().item_spacing.x - 32.0)
+                        .max(60.0)
+                } else {
+                    f32::INFINITY
+                };
+                // The width the text edit really wraps at (its margins
+                // come off the width it is given) is told by its layouter;
+                // the gutter uses the last frame's, or the estimate on the
+                // first.
+                let wrap_key = id.with("wrap");
+                let edit_wrap = if wrap_on {
+                    ui.data(|d| d.get_temp::<f32>(wrap_key)).unwrap_or(wrap - 8.0)
+                } else {
+                    f32::INFINITY
+                };
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
-                let mut job = highlight(text.as_str(), diags, at, &font, wrap, &t);
+                let mut job = highlight(text.as_str(), &lines, at, &added, &font, edit_wrap, &t);
                 crate::find::mark(&mut job, &marks);
                 let galley = ui.fonts_mut(|f| f.layout_job(job));
                 let mut gutter = LayoutJob::default();
                 for (n, number) in numbering(galley.rows.iter().map(|r| r.ends_with_newline)) {
+                    if crate::st_fold::hidden(&folded, u32::try_from(n).unwrap_or(u32::MAX)) {
+                        // A row of no height, as the code beside it has.
+                        gutter.append("\n", 0.0, gone(&font));
+                        continue;
+                    }
                     let bad = diags.iter().any(|(l, _)| *l as usize == n);
                     let here = at.is_some_and(|l| l as usize == n);
+                    let warned = warns.iter().any(|(l, _)| *l as usize == n);
                     let color = if bad {
-                        RED
+                        crate::theme::theme(ui).ink(RED)
+                    } else if warned {
+                        crate::theme::theme(ui).ink(crate::st_view::brand::WARN)
+                    } else if hints.iter().any(|(l, _)| *l as usize == n) {
+                        t.ink(HINT)
                     } else if here {
                         t.accent
                     } else {
@@ -847,28 +1148,335 @@ pub fn st_editor(
                     gutter.append(&label, 0.0, TextFormat::simple(font.clone(), color));
                 }
                 gutter.wrap.max_width = f32::INFINITY;
+                fold_arrows(ui, id, &galley, arrow_w, row, &blocks, &folded, chrome);
                 ui.label(gutter);
+                // Wrap off: the editor is as wide as its longest line (plus
+                // its margins) and the scroll area scrolls to it; the pane
+                // keeps its width because the scroll area clips.
+                let desired = if wrap_on { wrap } else { galley.size().x + 16.0 };
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-                    let mut job = highlight(buf.as_str(), diags, at, &font, wrap, &t);
+                    let wrap = if wrap_on { wrap } else { f32::INFINITY };
+                    ui.data_mut(|d| d.insert_temp(wrap_key, wrap));
+                    let mut job = highlight(buf.as_str(), &lines, at, &added, &font, wrap, &t);
                     crate::find::mark(&mut job, &marks);
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
                 // A tooltip would sit over the code under the pointer while
                 // the engineer types; the pane's tab button has one.
-                ui.add(
-                    egui::TextEdit::multiline(text) // tip: exempt
-                        .id(id)
-                        .code_editor()
-                        .desired_width(wrap)
-                        .char_limit(limit)
-                        .desired_rows(24)
-                        .lock_focus(true)
-                        .layouter(&mut layouter),
-                )
+                let out = egui::TextEdit::multiline(text) // tip: exempt
+                    .id(id)
+                    .code_editor()
+                    .desired_width(desired)
+                    .char_limit(limit)
+                    .desired_rows(24)
+                    .lock_focus(true)
+                    .layouter(&mut layouter)
+                    .show(ui);
+                // The gutter was laid out a frame behind a change of width.
+                if wrap_on
+                    && ui
+                        .data(|d| d.get_temp::<f32>(wrap_key))
+                        .is_some_and(|w| (w - edit_wrap).abs() > 0.01)
+                {
+                    ui.ctx().request_repaint();
+                }
+                removed_rules(ui, &out, &agent.removed, chrome);
+                hint_tips(ui, &out, &hinted, chrome);
+                fold_marks(ui, &out, &folded, &font, chrome);
+                out.response.response
             })
             .inner
         })
         .inner
+}
+
+/// The Code header's word-wrap toggle, drawn as "code wrap" for the
+/// tests: on, long lines wrap at the pane's width; off, each line is one
+/// row and the code scrolls sideways ([`Chrome::wrap`]).
+pub fn wrap_toggle(ui: &mut egui::Ui, chrome: &mut Chrome) {
+    let tip = if chrome.wrap {
+        "Word wrap is on: a long line wraps at the pane's width. Click for one row per line, scrolled sideways."
+    } else {
+        "Word wrap is off: each line is one row, scrolled sideways. Click to wrap long lines at the pane's width."
+    };
+    let r = crate::glyphs::button_sized(
+        ui,
+        crate::glyphs::Icon::Wrap,
+        crate::glyphs::ROW,
+        true,
+        chrome.wrap,
+        tip,
+    );
+    chrome.hit("code wrap", r.rect);
+    if r.clicked() {
+        chrome.wrap = !chrome.wrap;
+    }
+}
+
+/// The Code header's name: the open file, truncated to leave the row's
+/// glyphs and notes their room, drawn as "code file" for the tests.
+pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str) {
+    // Two glyphs, their spacing and a short note stay on the row.
+    let room = (ui.available_width() - 2.0 * (crate::glyphs::ROW + 6.0) - 120.0).max(60.0);
+    let r = ui
+        .scope(|ui| {
+            ui.set_max_width(room);
+            ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
+        })
+        .inner
+        .tip(tip);
+    chrome.hit("code file", r.rect);
+}
+
+/// The format of a line a fold hides: laid out, so the text edit still
+/// holds it, with no height and no ink.
+fn gone(font: &FontId) -> TextFormat {
+    TextFormat {
+        line_height: Some(0.0),
+        ..TextFormat::simple(font.clone(), Color32::TRANSPARENT)
+    }
+}
+
+/// The top of each source line's first row in `galley`, by line number
+/// less one, and the bottom of the last row.
+fn line_tops(galley: &egui::Galley) -> (Vec<f32>, f32) {
+    let mut tops = Vec::new();
+    let mut first = true;
+    for r in &galley.rows {
+        if first {
+            tops.push(r.rect().top());
+        }
+        first = r.ends_with_newline;
+    }
+    (tops, galley.rows.last().map_or(0.0, |r| r.rect().bottom()))
+}
+
+/// The fold arrows (Nick, 2026-11-11: an arrow in the gutter on every
+/// block that folds): a column `width` wide and as tall as the code, an
+/// arrow on the first line of each block, pointing down while the block
+/// is open and right while it is folded. A click folds or opens it. The
+/// hits are `fold <line>`.
+#[allow(clippy::too_many_arguments)]
+fn fold_arrows(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    galley: &egui::Galley,
+    width: f32,
+    row: f32,
+    blocks: &[crate::st_fold::Foldable],
+    folded: &[crate::st_fold::Foldable],
+    chrome: &mut Chrome,
+) {
+    let (column, _) = ui.allocate_exact_size(Vec2::new(width, galley.size().y), Sense::hover());
+    let (tops, _) = line_tops(galley);
+    let t = theme(ui);
+    for b in blocks {
+        // An arrow on a line that is itself folded away has nowhere to be.
+        if crate::st_fold::hidden(folded, b.first) {
+            continue;
+        }
+        let Some(top) = tops.get(b.first.saturating_sub(1) as usize) else {
+            continue;
+        };
+        let rect = Rect::from_min_size(
+            Pos2::new(column.left(), column.top() + top),
+            Vec2::new(width, row),
+        );
+        let shut = chrome.folds.folded(b.first);
+        let tip = if shut {
+            format!("Opens this block: {} line(s) are folded away.", b.hides())
+        } else {
+            format!(
+                "Folds this block: its {} line(s) are hidden until you open it again.",
+                b.hides()
+            )
+        };
+        let r = ui
+            .interact(rect, id.with(("fold", b.first)), Sense::click())
+            .on_hover_text(tip);
+        chrome.hit(format!("fold {}", b.first), rect);
+        let color = if r.hovered() { t.accent } else { t.muted };
+        let c = rect.center();
+        let s = (width * 0.32).min(row * 0.22);
+        let points = if shut {
+            vec![
+                Pos2::new(c.x - s * 0.6, c.y - s),
+                Pos2::new(c.x + s * 0.8, c.y),
+                Pos2::new(c.x - s * 0.6, c.y + s),
+            ]
+        } else {
+            vec![
+                Pos2::new(c.x - s, c.y - s * 0.6),
+                Pos2::new(c.x + s, c.y - s * 0.6),
+                Pos2::new(c.x, c.y + s * 0.8),
+            ]
+        };
+        ui.painter()
+            .add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+        if r.clicked() {
+            chrome.folds.toggle(b.first);
+        }
+    }
+}
+
+/// After the first line of each folded block: how many lines it hides.
+/// The hits are `folded <line>`.
+fn fold_marks(
+    ui: &egui::Ui,
+    out: &egui::text_edit::TextEditOutput,
+    folded: &[crate::st_fold::Foldable],
+    font: &FontId,
+    chrome: &mut Chrome,
+) {
+    let t = theme(ui);
+    for b in folded {
+        // Folded inside an outer fold: not on screen.
+        if crate::st_fold::hidden(folded, b.first) {
+            continue;
+        }
+        // The last row of the block's first line.
+        let mut line = 1;
+        let mut end = None;
+        for r in &out.galley.rows {
+            if line == b.first {
+                end = Some(r.rect());
+            }
+            if r.ends_with_newline {
+                line += 1;
+            }
+            if line > b.first {
+                break;
+            }
+        }
+        let Some(end) = end else { continue };
+        let at = out.galley_pos + Vec2::new(end.right() + 10.0, end.center().y);
+        let rect = ui.painter().text(
+            at,
+            egui::Align2::LEFT_CENTER,
+            if b.hides() == 1 {
+                "… 1 line".to_string()
+            } else {
+                format!("… {} lines", b.hides())
+            },
+            font.clone(),
+            t.muted,
+        );
+        chrome.hit(format!("folded {}", b.first), rect);
+    }
+}
+
+/// A style hint's colour: a calm blue, apart from the red of an error
+/// and the orange of a warning.
+pub const HINT: Color32 = Color32::from_rgb(0x6E, 0xC6, 0xFF);
+
+/// What each hinted line says, on hover (Nick, 2026-11-11: style hints
+/// are a lighter level: an underline and a word on request, no list).
+/// The hits are `hint <line>`.
+fn hint_tips(
+    ui: &egui::Ui,
+    out: &egui::text_edit::TextEditOutput,
+    hints: &[helmsman_iec::hints::Hint],
+    chrome: &mut Chrome,
+) {
+    if hints.is_empty() {
+        return;
+    }
+    // Each source line's rows, top to bottom, by 1-based line number.
+    let mut spans: Vec<(f32, f32)> = Vec::new();
+    let mut first = true;
+    for r in &out.galley.rows {
+        let (top, bottom) = (r.rect().top(), r.rect().bottom());
+        if first {
+            spans.push((top, bottom));
+        } else if let Some(s) = spans.last_mut() {
+            s.1 = bottom;
+        }
+        first = r.ends_with_newline;
+    }
+    let left = out.galley_pos.x;
+    let right = out.response.rect.right();
+    let mut said: Vec<u32> = Vec::new();
+    for h in hints {
+        let line = h.pos.line;
+        let Some(&(top, bottom)) = spans.get(line.saturating_sub(1) as usize) else {
+            continue;
+        };
+        if said.contains(&line) {
+            continue;
+        }
+        said.push(line);
+        let band = Rect::from_min_max(
+            Pos2::new(left, out.galley_pos.y + top),
+            Pos2::new(right, out.galley_pos.y + bottom),
+        );
+        let text: Vec<String> = hints
+            .iter()
+            .filter(|o| o.pos.line == line)
+            .map(|o| format!("Hint: {}.", o.msg))
+            .collect();
+        ui.interact(band, out.response.id.with(("hint", line)), egui::Sense::hover())
+            .on_hover_text(format!("{}\nA hint never stops a deploy.", text.join("\n")));
+        chrome.hit(format!("hint {line}"), band);
+    }
+}
+
+/// Where the Agent's change removed lines: a red rule between the rows
+/// they stood between, its tooltip the removed text (a text editor holds
+/// only the file's own lines, so the gone ones are told, not inserted).
+fn removed_rules(
+    ui: &egui::Ui,
+    out: &egui::text_edit::TextEditOutput,
+    removed: &[(u32, Vec<String>)],
+    chrome: &mut Chrome,
+) {
+    if removed.is_empty() {
+        return;
+    }
+    let rows = &out.galley.rows;
+    // The top of each source line's first row, by 1-based line number.
+    let mut tops: Vec<f32> = Vec::new();
+    let mut first = true;
+    for r in rows {
+        if first {
+            tops.push(r.rect().top());
+        }
+        first = r.ends_with_newline;
+    }
+    let bottom = rows.last().map_or(0.0, |r| r.rect().bottom());
+    let left = out.galley_pos.x;
+    let right = out.response.rect.right();
+    for (line, gone) in removed {
+        let y = out.galley_pos.y
+            + tops
+                .get(line.saturating_sub(1) as usize)
+                .copied()
+                .unwrap_or(bottom);
+        let band = Rect::from_min_max(Pos2::new(left, y - 3.0), Pos2::new(right, y + 3.0));
+        ui.painter().line_segment(
+            [Pos2::new(left, y), Pos2::new(right, y)],
+            Stroke::new(2.0, crate::st_view::brand::RED.gamma_multiply(0.85)),
+        );
+        let n = gone.len();
+        ui.painter().text(
+            Pos2::new(right - 4.0, y),
+            egui::Align2::RIGHT_CENTER,
+            format!("−{n}"),
+            FontId::monospace(crate::theme::MIN_TEXT),
+            crate::theme::theme(ui).ink(crate::st_view::brand::RED),
+        );
+        let r = ui.interact(
+            band,
+            out.response.id.with(("removed", *line)),
+            egui::Sense::hover(),
+        );
+        let mut tip = format!("The Agent removed {n} line(s) here:");
+        for g in gone {
+            tip.push('\n');
+            tip.push_str(g);
+        }
+        r.on_hover_text(tip);
+        chrome.hit(format!("removed lines {line}"), band);
+    }
 }
 
 /// The gutter beside laid-out rows (`ends_with_newline` per row): each
@@ -889,14 +1497,32 @@ pub fn numbering(rows: impl Iterator<Item = bool>) -> Vec<(usize, bool)> {
     .collect()
 }
 
+/// The lines of a source with a problem, `(line, column)`: errors, and
+/// warnings (which never stop the build).
+#[derive(Debug, Clone, Copy)]
+pub struct Lines<'a> {
+    pub errors: &'a [(u32, u32)],
+    pub warnings: &'a [(u32, u32)],
+    /// Style hints (`helmsman_iec::hints`): the lightest mark, and only
+    /// on a line with no error or warning.
+    pub hints: &'a [(u32, u32)],
+    /// The blocks folded (`crate::st_fold`): their inner lines are laid
+    /// out with no height.
+    pub folded: &'a [crate::st_fold::Foldable],
+}
+
 /// The ST as a layout wrapped at `wrap` points: a line with a diagnostic
-/// on a red ground, its column to the end of the word underlined; the
-/// line `at` (a block click sent the editor there) on a grey ground.
+/// on a red ground, its column to the end of the word underlined; a line
+/// with only a warning (`warns`) has no ground, just that word
+/// underlined, thicker and in the warning colour; the
+/// line `at` (a block click sent the editor there) on a grey ground; a
+/// line the Agent's last change added (`added`) on a green ground.
 #[must_use]
 pub fn highlight(
     text: &str,
-    diags: &[(u32, u32)],
+    lines: &Lines,
     at: Option<u32>,
+    added: &[u32],
     font: &FontId,
     wrap: f32,
     t: &Theme,
@@ -904,24 +1530,68 @@ pub fn highlight(
     let mut job = LayoutJob::default();
     let plain = TextFormat::simple(font.clone(), t.code);
     let bad_ground = t.bad;
+    let (diags, warns) = (lines.errors, lines.warnings);
+    // Each run of code in its own colour (`crate::st_syntax`); a word a
+    // diagnostic underlines keeps the page's ink.
+    let runs = crate::st_syntax::tints(text);
+    let tinted = |job: &mut LayoutJob, piece: &str, base: usize, format: &TextFormat| {
+        let mut at = 0;
+        while at < piece.len() {
+            let (end, tint) = crate::st_syntax::tint_at(&runs, base + at);
+            let to = end.saturating_sub(base).clamp(at + 1, piece.len());
+            // A run never ends inside a character, but a clamp may.
+            let to = (to..=piece.len())
+                .find(|&k| piece.is_char_boundary(k))
+                .unwrap_or(piece.len());
+            let mut f = format.clone();
+            f.color = tint.color(t);
+            f.italics = tint == crate::st_syntax::Tint::Comment;
+            job.append(&piece[at..to], 0.0, f);
+            at = to;
+        }
+    };
+    let mut base = 0;
     for (k, line) in text.split_inclusive('\n').enumerate() {
         let n = u32::try_from(k + 1).unwrap_or(u32::MAX);
-        let Some(&(_, col)) = diags.iter().find(|(l, _)| *l == n) else {
+        let line_base = base;
+        base += line.len();
+        if crate::st_fold::hidden(lines.folded, n) {
+            job.append(line, 0.0, gone(font));
+            continue;
+        }
+        let error = diags.iter().find(|(l, _)| *l == n);
+        let warn = warns.iter().find(|(l, _)| *l == n);
+        let hint = lines.hints.iter().find(|(l, _)| *l == n);
+        let Some(&(_, col)) = error.or(warn).or(hint) else {
             let format = if at == Some(n) {
                 TextFormat {
                     background: t.rule,
-                    color: t.fg,
+                    ..plain.clone()
+                }
+            } else if added.contains(&n) {
+                TextFormat {
+                    background: crate::st_view::brand::GREEN.gamma_multiply(0.22),
                     ..plain.clone()
                 }
             } else {
                 plain.clone()
             };
-            job.append(line, 0.0, format);
+            tinted(&mut job, line, line_base, &format);
             continue;
         };
-        let ground = TextFormat {
-            background: bad_ground,
-            ..plain.clone()
+        let (ground, line_color, width) = if error.is_some() {
+            (
+                TextFormat {
+                    background: bad_ground,
+                    ..plain.clone()
+                },
+                RED,
+                1.5,
+            )
+        } else if warn.is_some() {
+            (plain.clone(), crate::st_view::brand::WARN, 3.0)
+        } else {
+            (plain.clone(), t.ink(HINT), 1.5)
         };
         // Columns count characters from 1.
         let start = line
@@ -939,17 +1609,17 @@ pub fn highlight(
                     .filter(|c| *c != '\n')
                     .map_or(0, char::len_utf8),
             );
-        job.append(&line[..start], 0.0, ground.clone());
+        tinted(&mut job, &line[..start], line_base, &ground);
         job.append(
             &rest[..word],
             0.0,
             TextFormat {
-                underline: Stroke::new(1.5, RED),
+                underline: Stroke::new(width, line_color),
                 color: t.fg,
                 ..ground.clone()
             },
         );
-        job.append(&rest[word..], 0.0, ground);
+        tinted(&mut job, &rest[word..], line_base + start + word, &ground);
     }
     job.wrap.max_width = wrap;
     job

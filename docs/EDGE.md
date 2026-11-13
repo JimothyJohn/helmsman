@@ -488,6 +488,413 @@ timeout; the node cannot do that part without power or network, so the
 test proves the block does it.
 
 
+*Resumed 2026-11-08, the POE-ISO (poe-iso-rack-03, WROOM).* Split test
+first: supervictor's known-good Ethernet firmware on the same board, cable
+and port took a lease and uplinked in 11 s, so the fault was ours. Found
+by diffing the two firmwares: this crate enabled esp-hal's `psram`
+feature for every board, and `esp_hal::init` then brought up a PSRAM the
+WROOM does not have over GPIO16/17, GPIO17 being the POE-ISO's RMII clock
+pin. With `psram` off for that board (`--no-default-features --features
+poe-iso`) the node took a lease at once. Then, on 10.0.0.x, its reports
+reached the Studio for 50 s and stopped: the Studio is on that subnet
+twice (a wired alias and Wi-Fi) and answered the node through the access
+point, and the modbus image dialled a dead E1213 address every scan, each
+dial spending the stack's one ARP request per second (smoltcp's neighbour
+cache is silent for 1 s after any request, for every address), so the
+node could never re-resolve the sink once that entry expired at 60 s.
+Fixed: the Modbus client backs off 2 s after a failed connect. The bench
+then moved to the Studio link with a **static address**
+(`NODE_STATIC_IP=192.168.3.55/24`; most plants commission controllers on
+static networks with no DHCP, Nick 2026-11-08): one Modbus TCP connection
+to the E1213 (192.168.3.60) held, about 31 reads and 31 writes a second,
+the chase on DO-00..02, reports every 10 s to the Studio's wired port,
+the first end-to-end node run. The node answered ARP and TCP (a SYN to a
+closed port got its RST in 1 s) but not ping: smoltcp answers ICMP echo
+only with its `auto-icmp-echo-reply` feature, now on in both node crates.
+Numbers to carry: the 10 ms scan ran at a 30 ms mean because the two
+Modbus round trips are synchronous inside the scan loop; the node's I/O
+moves to its own task with the API work (Phase 4).
+
+**Phase 3, the ESP32-P4 and EtherNet/IP (planned 2026-11-08).** Nick
+bought a Waveshare ESP32-P4-ETH with its PoE module (ESP32-P4NRW32: dual
+RISC-V at 400 MHz with a double-precision FPU, 768 KB SRAM, 32 MB PSRAM,
+32 MB flash, IP101GRI PHY, one Ethernet MAC). What was checked before it
+arrived, so the first day on the board is spent on the two real unknowns:
+
+- **Ethernet in Rust.** esp-hal merged basic EMAC support for the classic
+  ESP32 (#5546) and the P4 (#5556) in May 2026, still marked work in
+  progress: an embassy-net adapter, a `MdioBus` trait for external PHYs,
+  and raw `transmit` / `receive` of whole frames. Community fallback:
+  `esp-p4-eth`, tested on exactly this board and PHY, pre-1.0, DHCP not
+  validated end to end. Unknown until the board runs: which of the two
+  brings the IP101GRI up.
+- **TLS.** supervictor's edge firmware runs mbedTLS (`mbedtls-rs`, the
+  esp-rs fork) on the classic ESP32 in 112 KB of heap, so TLS on a node is
+  proven on this chip family; the WROVER spike left it out for memory, not
+  capability. The fork ships prebuilt libraries for riscv32imc and
+  riscv32imac, not the P4's riscv32imafc, so it compiles mbedTLS with
+  clang and cmake on the fly: feasible, untested on a P4. `embedded-tls`
+  (pure Rust TLS 1.3 client, no_std, no allocator) is the fallback and
+  still calls itself work in progress, with certificate verification on
+  std only. TLS belongs on the uplink to the relay (a per-node client
+  certificate) and the deploy channel (plus a signed image); the field bus
+  stays plain Modbus and CIP, as on every PLC.
+- **Protocols on one port.** Modbus TCP, EtherNet/IP (TCP 44818 explicit,
+  UDP 2222 Class 1) and PROFINET RT class 1 are built to share a switched
+  plant network and can share the node's one PoE port. PROFINET's
+  EtherType 0x8892 frames never reach smoltcp (its raw socket is
+  IP-level), so a frame splitter in front of embassy-net is needed, which
+  esp-hal's raw `receive` allows. There is no usable open PROFINET IO
+  controller (p-net is device-side; the PI community stack needs
+  membership; `profinet-rs` is GPL-3.0-only and libpcap), so it would be
+  our own implementation. **EtherCAT does not fit**: a master needs a
+  dedicated port with the slave chain hanging directly off it (the
+  segment reflects every frame back; a switch adds a store-and-forward
+  hop per cycle), the P4 has one MAC, and on a PoE node that port is the
+  uplink. EtherCAT stays a box feature on a second NIC (`ethercat-master`).
+- **Verified on the host, 2026-11-08, before the board arrived.** The whole
+  P4 firmware stack compiles on upstream *stable* Rust for
+  `riscv32imafc-unknown-none-elf` with no build-std: esp-hal 1.2.2 (the
+  first release with the P4's EMAC: `esp32p4`, `unstable`, `rt`), esp-rtos
+  0.4, esp-bootloader-esp-idf 0.6, esp-alloc 0.11, esp-println 0.18,
+  esp-backtrace 0.20, embassy-executor 0.10, embassy-net 0.9, together
+  with helmsman-iec, helmsman-modbus and helmsman-proto without std. The
+  esp-rs mbedTLS fork does **not** build for the P4 at the rev supervictor
+  pins (`4329f17`: a bindgen field mismatch), and does at its current main
+  (`07aeabb`), with Homebrew LLVM's clang first on `PATH`: Apple's clang
+  has no RISC-V backend, and the esp toolchain's "clang" directory holds
+  libraries only. So TLS on the P4 node is a known-good recipe, not a
+  question.
+- **Code side, done.** `helmsman-proto` builds `no_std + alloc` without its
+  default `std` feature (#296): encapsulation, CPF, CIP, the identity
+  item, Forward_Open / Forward_Close and the Class 1 packet, the Logix
+  read layouts and the EDS parser, plus `class1` (the transport-free
+  producer and consumer of a Class 1 connection, which the box's
+  `scanner` threads now run too). `scripts/lint.sh` builds that half for
+  thumbv7em. **`crates/helmsman-node-p4`** is the P4 firmware, its own
+  package outside the workspace like helmsman-node, on stable: `board`
+  (the Waveshare pin map, the efuse MAC), `ethernet` (esp-hal's EMAC
+  driver under embassy-net with DHCP, the PHY polled every 500 ms),
+  `modbus` (the POE2's client, unchanged), `enip` (an explicit session
+  over embassy-net TCP for `RegisterSession` and `SendRRData`, and
+  `IoConnection`: `Forward_Open` through it, `class1::{Producer,
+  Consumer}` around the UDP socket, the E1213's O->T port quirk honoured)
+  and two binaries. `modbus` is the POE2's Phase 2 firmware on the P4.
+  `enip` opens an Exclusive Owner connection to the E1213 (configuration
+  100, O->T 102 one byte under a run/idle header, T->O 101 51 bytes
+  modeless, RPI 100 ms), runs the chase program at a 10 ms scan with the
+  DI bits and DO status as its inputs, produces at the RPI, counts late
+  scans, packets each way, ignored datagrams, losses and reopens, and
+  reports every 10 s over serial and UDP; `ENIP_INPUT_ONLY=1` at build
+  time asks for Input Only instead, which runs beside the try box's
+  exclusive owner. Both link (`cargo build --release`), espflash builds a
+  526 KB app image from the `enip` ELF, and the main stack is about
+  130 KB with a 256 KB heap. `NODE_BOARD=p4-eth scripts/node-build.sh`
+  and `NODE_BOARD=p4-eth scripts/node-flash.sh [enip|modbus]` are the
+  entry points. Nothing has run on hardware yet.
+- **First day on the board, in order.** (1) `espflash board-info` over USB,
+  Ethernet unplugged, and the MAC noted. (2) Flash `modbus`, unplug USB,
+  plug PoE: a lease and the chase on the E1213's outputs says the EMAC,
+  the PHY and the stack work. (3) Flash `enip` with `ENIP_INPUT_ONLY=1`
+  beside the try box: T->O packets arriving says the Class 1 path works.
+  (4) Stop the try box's enip-io (or point it at Modbus) and flash the
+  Exclusive Owner build: the chase over CIP. (5) Measure the PoE module's
+  isolation before USB and PoE are ever connected together.
+
+- **On the board, 2026-11-10** (the Waveshare ESP32-P4-ETH without its PoE
+  module, on USB and on the bench link in the POE-ISO's switch port). The
+  chip is an ESP32-P4 at revision v3.2 (ROM `esp32p4-eco7-20260109`), MAC
+  e8:f6:0a:e8:16:e1, 32 MB flash. What ran, in order:
+  - **Flashing.** espflash 3.3.0 does not talk to a v3.x chip ("Timeout
+    while running ReadReg command"); esptool 5.6 and espflash 4.7.0 do.
+    `scripts/node-flash.sh` refuses an older espflash for this board and
+    takes `ESPFLASH=` for another build of the tool. The image boots under
+    espflash 4.7's bootloader (ESP-IDF v6.1) with no change to the build.
+  - **Ethernet came up on the first image**: esp-hal 1.2.2's EMAC driver
+    brought the IP101GRI up with the pin map in `board.rs`, the `modbus`
+    image took a static address, answered ping in under 1 ms and ran the
+    chase on the E1213 over Modbus TCP. esp-p4-eth, the fallback, was not
+    needed.
+  - **One driver fault: no frame over 262 bytes left the board.** Ping
+    answered up to 220 bytes of payload and not from 230 up; the node
+    acknowledged a 600-byte TCP segment (receive was fine) and never sent
+    an HTTP reply. esp-hal 1.2.2 starts the P4's MAC with transmit
+    store-and-forward on, which its transmit checksum insertion needs,
+    and the P4's transmit FIFO does not hold a whole frame. Upstream
+    `main` now ties store-and-forward to a per-chip transmit checksum
+    property (`esp-hal/src/ethernet/mac.rs`, `dma_init_op_mode`, read
+    2026-11-10); no release carries it. `ethernet.rs` clears the bit
+    after the driver starts and wraps the driver so smoltcp computes
+    transmit checksums (`CutThroughTx`); 1472-byte pings and the whole API
+    answer since. Drop the wrapper when an esp-hal release has the fix.
+  - **The commissioning run, as on the POE-ISO.** First boot at
+    192.168.127.250 with the factory record and the seeded chase; a save
+    on the settings form (name press-5, site line-a, static
+    192.168.3.56/24, a token) restarted the node on the bench link with
+    the record and the program back from flash; ping; every read route;
+    a tokenless and a wrong-token write refused (401); a broken program
+    refused with the checker's line (422) and the old one kept running; a
+    deploy (201), stop and run (200); the values stream; the E1213 up at
+    192.168.3.60. The node is left in this state.
+  - **Numbers.** The chase: 10 ms scan, zero late scans in steady state,
+    51 to 72 us of execution a scan (about 1 ms on the POE-ISO), 133 KB of
+    heap in use. A cell the WROOM cannot hold, the batch-mixer bench
+    program with its six blocks and a simulated tank (431 lines, 12 KB of
+    source, built in the session and not in the repo): compiled on the
+    node in under 80 ms, 0.95 to 1.05 ms of execution a scan at 10 ms with
+    no late scans after the deploy, 253 KB of heap in use and a peak of
+    377 KB while compiling. A deploy costs one to four late scans (the
+    compile runs on the scan's core).
+  - **Memory is not the 768 KB on the datasheet.** esp-hal's linker script
+    gives the application 440 KB of the SRAM (256 KB is reserved for the
+    L2 cache, `RESERVED_L2_CACHE` in its `memory.x`, which also has 128 KB
+    and 0 as choices; the second-stage bootloader's region above is a
+    further 68 KB that can be reclaimed); the `node` image takes 320 KB of
+    it as heap and leaves a 58 KB main stack. The first deploy of the cell ran that heap out and
+    panicked, and the node then sat silent: esp-backtrace spins after a
+    panic by default. Two changes: the module's 32 MB of PSRAM is a second
+    heap region (esp-hal's P4 PSRAM driver, defaults; esp-alloc fills the
+    internal region first, so a compile spills over instead of failing),
+    and a panic restarts the node (`custom_halt` in `lib.rs`). The restart
+    was not seen on the board: with the PSRAM in, nothing ran out again.
+    Not measured: whether any of the running cell's data sits in PSRAM,
+    and what that costs a scan. `/api/node` still reports the internal
+    320 KB as the heap size, so a peak can read higher than the size.
+  - **Not kept across a restart: a program over its flash slot.** The
+    12 KB cell ran but was answered `kept: false` ("the program does not
+    fit its flash slot"): the settings and program slots share the 24 KiB
+    `nvs` partition. The partition table the firmware-update card plans
+    is where a larger slot comes from.
+  - **EtherNet/IP: the E1213 refuses the Input Only open.** The `enip`
+    image built with `ENIP_INPUT_ONLY=1` registered its session and got
+    general status 0x01 with no extended status for the `Forward_Open`,
+    in a reply that stops after the originator serial; the decoder read
+    that as truncated until `helmsman_proto::io::Refused::decode` learned
+    the short form (the bytes are its regression test). The cause,
+    found the same evening with a Python originator: this unit's firmware
+    (V3.1) holds one Class 1 connection at a time, and the try box had
+    it. Alone on the unit the node's request opens as it is
+    (docs/devices/moxa-iologik-e1213.md, "On the bench"). So a node and a
+    box cannot both hold a cyclic connection to this unit; the second
+    reads it over Modbus TCP.
+  - **EtherNet/IP from the node, with the unit free** (the same evening,
+    no box running). The `enip` image as Input Only: the open succeeded
+    (O->T to the unit's port 5222, as its reply asks), and over 40 s 340
+    heartbeats went out and 340 input packets came in at the 100 ms RPI,
+    none lost, none ignored. As Exclusive Owner: the same counts over
+    70 s (640 each way, one open, no losses), the unit refused a second
+    owner from the Studio with 0x0106 meanwhile, and a Modbus read from
+    the Studio saw coils 0 to 2 step every 500 ms with the looped inputs
+    one sample behind: the chase runs on the outputs over CIP. Scan: 10 ms
+    with about 310 us of work a cycle once connected. The image's own
+    match count sat near 53 % against 47 %, which is what a 500 ms step
+    read back through two 100 ms RPIs looks like and is no check of the
+    loop.
+  - **The scan no longer waits for an open.** On those runs each boot's
+    first two opens ended in "connect timed out" inside the scan loop and
+    199 scans were late before the first packet. Two causes, both fixed
+    and run on the board the same night: the explicit session (connect,
+    `RegisterSession`, `Forward_Open`, `Forward_Close`) now has a task of
+    its own and the scan loop takes its answer when it is there; and the
+    first open waits for the link (a fixed address is "up" before the PHY
+    has negotiated) and gives the TCP connect 3 s, because the first
+    connect to an address the stack has not resolved completes on the
+    SYN's retransmission a second later, which a 1 s limit cut off. Now:
+    the first open succeeds 1.1 s after the link comes up with no failed
+    attempt and no late scan, and against an address nobody answers the
+    opens time out every 5 s while the scan stays at 57 us a cycle with
+    no late scan.
+  - **The node's Modbus link came up two to four seconds late at every
+    boot; now it comes up with the link.** With temporary timestamps on
+    the console: the I/O task started dialling 0.7 s after start, two
+    seconds before the PHY had a link (a fixed address is configured at
+    once), spent its attempts and sat in the 2 s back-off, once or twice:
+    the block was up 3.1 or 5.5 s after start. The I/O task (and the
+    `modbus` image) now waits for the link, and a failed connect is
+    followed by attempts at once, after 250 ms, 500 ms and 1 s before the
+    2 s back-off that a unit which is not there gets. Over 18 boots: 17
+    connected on the first attempt, within 12 ms of the link coming up
+    (2.7 or 3.2 s after start); one lost its first address request and
+    connected 1.35 s after the link, where the flat back-off made that
+    2.4 s. The stack asks for an address at most once a second, which is
+    that one boot's floor. A longer connect limit, tried first, was
+    worse (5.7 s every boot) and is not what `enip.rs` should keep
+    either if its first open ever matters. The same change is in
+    crates/helmsman-node (the POE-ISO), built and linted, not run: that
+    board is off the network.
+  - **The fixed `enip` image as Exclusive Owner, and a loss.** Open at
+    link-up, no late scan. A `Forward_Close` sent from the Studio with
+    the node's connection triad ended the connection under it: the node
+    saw 800 ms without input, handed the close to the link task (the
+    unit had dropped the session, so it failed, harmlessly), and
+    reopened 2 s later; no scan was late through any of it.
+  - **A panic restarts the node, seen.** A build that panicked on purpose
+    printed its message, restarted (`rst:0x3 (SW_SYS_RESET)`) and came
+    back with settings and program from flash. The first try showed the
+    restart cutting the message off after its first line; `custom_halt`
+    now waits 250 ms for the console before it resets.
+  - **Where the memory is.** `/api/node`'s `heap` now gives the internal
+    region as `used` and `size` and the PSRAM as `external`; the node's
+    page and its report line say it too. Idle with the chase: 136 KB
+    internal, nothing external. The 431-line cell running: 225 KB
+    internal and 45 KB external after one deploy, 166 KB and 104 KB after
+    a second (what lands where depends on what the compile held at the
+    time), and 950 to 1050 us a scan in both, so that much of a program's
+    data in PSRAM costs nothing that shows at this scan. A run with all
+    of it in SRAM was not made. Back on the chase, external use is 0.
+  - **Not done:** the PoE module's isolation (the module is not fitted),
+    TLS with mbedtls-rs.
+
+Sources for this phase: esp-hal issue #4163 and PRs #5546 / #5556
+(`github.com/esp-rs/esp-hal`), `github.com/babasha/esp-p4-eth`,
+`github.com/esp-rs/mbedtls-rs` (mbedtls-rs-sys README, "Precompilation"),
+`docs.rs/embedded-tls` 0.19, `docs.rs/smoltcp` (socket::raw), the Zephyr
+ESP32-P4 features page (one 10/100 Ethernet MAC, RMII), the Waveshare
+ESP32-P4-ETH wiki, `github.com/pasrom/profinet-rs`,
+`github.com/rtlabs-com/p-net`, the ETG EtherCAT FAQ, and
+supervictor `supervictor/edge/{Cargo.toml,src/config.rs}`; all read
+2026-11-08. For the bench run: esp-hal 1.2.2 `src/ethernet/{mac,dma,
+embassy_net}.rs` and `ld/esp32p4/memory.x` as published, and
+`esp-hal/src/ethernet/{mac,dma,embassy_net}.rs` on `main` at
+`github.com/esp-rs/esp-hal`, read 2026-11-10.
+
+**Phase 4, a node you can commission, deploy to and watch (2026-11-08, on
+the POE-ISO).** Nick's brief: set up a node's network like supervictor
+now does, connect to it, update the runtime, and watch it from the host
+canvas, so a user has one robust experience. The decisions (interview):
+a fixed factory address like Moxa's (192.168.127.250/24), DHCP as an
+option; program deploy before firmware OTA; the node serves the box API
+subset so the existing canvas box view works unchanged; a bearer token
+from the settings record guards writes; programs compile on the node;
+status is scan health, memory and fieldbus links. What exists:
+
+- **`crates/helmsman-nodecore`** (workspace member, `no_std + alloc`,
+  host-tested): the settings record and the program slots in the `nvs`
+  partition (two slots each, sequence-numbered, checksummed, 24 KiB in
+  all, the partition espflash writes by default), a bounded HTTP/1.1
+  reader and writer with SSE framing, the box API's JSON shapes
+  (`render.rs`'s field names) plus `/api/node` and `/api/settings`, the
+  node's own page with the settings form, and the router whose effects
+  (deploy, control, save settings) the firmware carries out. The
+  canvas's `node_api_tests.rs` parses the node's JSON with the same code
+  that parses a box, so the two cannot drift apart unnoticed.
+- **`helmsman-node`'s `node` binary** (`api` feature; `scripts/node-build.sh
+  api`, `scripts/node-flash.sh node`): settings and program from flash
+  (factory record written on an empty partition), the I/O task on its
+  own (the scan never waits on Modbus), two HTTP connections on the
+  settings' port, the site beacon, a report line every 10 s. Verified on
+  poe-iso-rack-03 from the Studio over the wire: first boot at the
+  factory address with the page and every read route answering; a save
+  on the page (the first save needs no token and sets one) wrote the
+  record and restarted the node on static 192.168.3.55; record and
+  program came back from flash; ping; the values stream; `PUT
+  /api/modules/blink` with the token compiled, ran and was kept (201),
+  stop and run (200), a broken program refused with the checker's line
+  (422) and the old program kept running, a tokenless write refused
+  (401); a settings re-save restarted the node and the deployed program
+  came back from flash. Scan: 10 ms, zero late scans in steady state,
+  about 1 ms of work, the E1213 up at 192.168.3.60.
+- **Two WROOM lessons.** (1) The main stack is what the linker leaves above
+  `.bss`, and the task pools sit at the very top of `.bss`: at 112 KiB of
+  heap the stack was 42 KiB, compiling the program at boot overran it by
+  a few hundred bytes, the pools read as "spawned" and the first spawn
+  failed Busy, which looked like a dead link; esp-hal's stack guard is a
+  word 60 B below the stack base and a frame larger than that steps over
+  it. 96 KiB of heap leaves 59 KiB of stack. (2) Memory: 153 KiB of
+  196 KiB used with one small program resident, most of it the runtime's
+  parsed standard library; compiling a second program beside the first
+  ran the heap out and reset the node, so a deploy now drops the running
+  program, compiles, and restores the old one from its source if the new
+  one fails, and only a program that runs is written to flash. A real
+  cell program is a P4 job.
+- **The host canvas opens a node by address.** `?box=http://192.168.3.55:8080`
+  on any canvas page (the dev server's, or a box page served with
+  `--site`) sends every box read and the values stream to that origin;
+  only an origin is accepted, never a path. Verified 2026-11-09 in a
+  headless Chromium against the node: the canvas fetched `/api/modules`,
+  `/api/devices`, `/api/io_map`, opened `/api/events`, selected the chase
+  module and fetched its source, and showed "chase running" with its scan
+  count and the twelve signals live on the I/O tab; the trace stream it
+  also asks for answers 404 on a node, so the diagram pane says it is
+  waiting for a traced scan. (From an agent session the browser itself
+  cannot reach the LAN, macOS Local Network privacy; a TCP forwarder run
+  by Apple's python on localhost stands in.) Writes too, since card
+  `canvas-node-token` (2026-11-09): on such a page the sign-in panel asks
+  for the node's token instead of a user, keeps it in that browser for
+  that origin only (`localStorage`, never the URL), and the transport
+  sends it as `Authorization: Bearer` on every call there (the node
+  answers the preflight), so Deploy, Save, Stop and Run work from the UI.
+  Forget drops it. A box watched by address still refuses the preflight,
+  so that path is a node's today.
+- **The block and its points are a setting: the I/O map** (card
+  `node-io-map`, 2026-11-09). The node keeps an io.map text in the box's
+  format beside the program in its flash slot (frame version 2; a version
+  1 frame reads as a program with no map): one `device NAME modbus-tcp
+  IP[:PORT] [unit=N]` line and `in NAME bool DEV di:N` / `out NAME bool
+  DEV coil:N` lines, bool points only, indexes 0..15 (two image bytes a
+  direction). `PUT /api/io_map` (`{"text"}` or `text/plain`, the token)
+  and the settings page's map form parse it first (`helmsman_nodecore::
+  iomap`: the bad line comes back as a 422), write it, and restart; at
+  boot the I/O task takes the block's address, unit and the counts from
+  it, and the signals carry the map's names, so the canvas's Devices tab
+  shows `estop` and `motor` rather than `di0` and `do0`. No map on flash
+  means the factory map: the E1213 at the build-time `E1213_ADDR`, eight
+  inputs and four coils named as the first builds did. Run on the POE-ISO
+  on 2026-11-09, flashed from an agent session at the dev tip: the
+  settings record and the chase survived the new frame (press-4 at
+  192.168.3.55, E1213 up, 0 late at 10 ms); the factory map showed; a
+  wrong and a missing token were 401, `device rio enip ...` was 422
+  "line 1"; a named map saved (`{saved, restarting}`), and after the
+  restart `/api/io_map` held it and `/api/signals` read `estop, run_pb,
+  jam, motor, lamp, horn` with the chase running. The bench node keeps
+  that named map now.
+- **`helmsman-node-p4` has the same binary** (`node`, from the same
+  modules; esp-storage 0.10 and esp-bootloader-esp-idf 0.6 for the P4),
+  built and lint clean, waiting for the board.
+- **Bench topology.** The Studio is on 10.0.0.0/24 twice (a wired alias and
+  Wi-Fi) and answers wired nodes through the access point; nodes live on
+  the 192.168.3.x link with the E1213 and the Studio's en0, static.
+- **Left in this phase:** firmware OTA (supervictor's installer and
+  rollback policy); an I/O map setting for the block's address and point
+  names; writes from the canvas (deploy, controls) need a token field in
+  the canvas, today they are `curl` with the bearer.
+
+### PROFINET on the P4 (2026-11-11)
+
+The box's PROFINET IO controller (docs/ARCHITECTURE.md `profinet`,
+`helmsman-profinet`) is a state machine without I/O, so the node runs
+the same one. What the node adds:
+
+- **Raw frames beside the IP stack** (`ethernet::l2` in
+  crates/helmsman-node-p4). PROFINET's cyclic data, alarms and DCP are
+  Ethernet frames of EtherType 0x8892, below embassy-net. The driver
+  wrapper the stack runs on copies received frames of that type into a
+  queue as the stack takes them off the MAC (the stack drops them as a
+  type it does not know), and sends queued frames on the stack's next
+  poll of the driver, which queuing one asks for. One MAC, one receive
+  path, no second driver.
+- **The RPCs** go through an ordinary embassy-net UDP socket bound to
+  port 34964.
+- **`profinet::step`**: send what the controller has, wait for a frame,
+  a datagram or its next deadline, hand it over.
+- **The `profinet` image** (`NODE_BOARD=p4-eth scripts/node-flash.sh
+  profinet`; `PN_STATION`, `PN_SLOTS`, `PN_IP`, `PN_CYCLE_MS` at build
+  time, the same text as a box's device line): brings one device up,
+  outputs at zero, and reports state and the first input bytes.
+
+**On the board, 2026-11-11.** The image runs on the Waveshare
+ESP32-P4-ETH: it takes its address, sends an Identify for `mdrive` every
+second and reports "no station named "mdrive" answers", and answers ping
+meanwhile (203 856 bytes of flash, 129 KB of main stack left). The node
+image built with the same driver wrapper came back as press-5 with its
+settings, served a 1095-byte `/api/signals` and kept its Modbus link to
+the E1213, so the tap costs the IP side nothing visible. **Not seen:** a
+frame of ours on the wire (a capture on the Studio needs sudo), a reply
+received through the tap, or a connection: there is no PROFINET device
+on the bench yet (TODO.md `mdrive-bringup`). Not in the `node` image
+either: there the device would come from the node's I/O map, which has
+no PROFINET line yet.
+
 ## Out of scope for the spike
 
 Deploy endpoint, signed images, A/B program slots and the power-cut-during-
@@ -535,7 +942,8 @@ Pico, enclosures, a PCB. Any field power from the node.
 - This repo: `crates/helmsman-iec` (`lib.rs`, `interp.rs`, `state.rs`,
   `trace.rs`, `check.rs`, `examples/trace_bench.rs`),
   `crates/helmsman-io/src/{modbus.rs, driver.rs}`,
-  `crates/helmsman-plc/src/runtime.rs`, `crates/helmsman-project/starters/`.
+  `crates/helmsman-plc/src/runtime.rs`, `crates/helmsman-project/starters/`
+  (as of 2026-10-25; the batch mixer now lives in `crates/helmsman-node/bench/`).
 - `core` float method availability: a `#![no_std]` crate calling the
   twelve `f64` methods named above, `cargo check` on rustc 1.99.1
   (2026-10-13), twelve `E0599` errors.

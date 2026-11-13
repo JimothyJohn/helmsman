@@ -68,6 +68,9 @@ mod prelude {
 /// the ones [`trace::StmtInfo`] carries, so a view finds a statement's
 /// [`trace::StmtId`] by POU, line and column.
 pub mod ast {
+    #[cfg(not(feature = "std"))]
+    use crate::prelude::*;
+
     pub use crate::lexer::Pos;
     pub use crate::parser::{
         Arg, BinOp, Block, CaseArm, CaseLabel, Expr, ExprKind, Field, Init, LabelValue, Pou, PouKind,
@@ -85,6 +88,21 @@ pub mod ast {
         })
     }
 
+    /// The directly represented addresses (`IX0.1`, without the `%`) the
+    /// code writes, in order of appearance with repeats: tokens, so none
+    /// inside a comment or a string. Empty when `src` does not tokenise.
+    #[must_use]
+    pub fn direct_addresses(src: &str) -> Vec<String> {
+        crate::lexer::lex(src, false)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(t, _)| match t {
+                crate::lexer::Tok::Direct(d) => Some(d),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The standard function blocks ([`crate::LIBRARY`]), parsed.
     #[must_use]
     pub fn library() -> &'static Unit {
@@ -94,6 +112,7 @@ pub mod ast {
 
 mod check;
 mod fmath;
+pub mod hints;
 mod interp;
 pub mod l5x;
 pub mod ladder;
@@ -102,8 +121,11 @@ mod once;
 mod parser;
 pub mod plcopen;
 mod rename;
+pub mod scan;
 pub mod spec;
 mod state;
+mod suggest;
+pub mod tidy;
 pub mod trace;
 mod types;
 mod xml;
@@ -121,7 +143,7 @@ pub use check::{Area, Diagnostic, ImageSizes};
 pub use interp::{BadParam, Fault, FaultKind, Image};
 pub use lexer::Pos;
 pub use rename::rename_ident;
-pub use state::{Carry, State};
+pub use state::{Carry, DecodeError, MAX_DEPTH, State};
 pub use types::{Ty, Value};
 
 use check::{AggKind, Checked, Type};
@@ -131,6 +153,11 @@ use trace::{Recorder, StmtId, Trace, TraceMap};
 
 /// Instructions one scan may execute before it faults (see [`FaultKind::Watchdog`]).
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
+
+/// Most values (slots: one per elementary variable, element or member) a
+/// program's `RETAIN` variables may take; the checker refuses more, so a
+/// box never quietly keeps only some of them across a restart.
+pub const MAX_RETAIN: usize = 1 << 16;
 
 /// Source of the standard function blocks.
 pub const LIBRARY: &str = include_str!("library.st");
@@ -212,15 +239,33 @@ fn run_on(
 /// # Errors
 /// Every syntax or type error found, sorted by position.
 pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>> {
-    let unit = parser::parse(src, false).map_err(|e| {
-        vec![Diagnostic {
-            pos: e.pos,
-            msg: e.msg,
-        }]
-    })?;
-    let mut code = check::check(library(), &unit, sizes)?;
+    compile_warned(src, sizes).0
+}
+
+/// [`compile`], and what the checker has to say that does not stop a
+/// program ([`Program::warnings`]) even when the source does not compile:
+/// an error and a warning in one source are both listed. A source that
+/// does not parse has no warnings.
+pub fn compile_warned(src: &str, sizes: ImageSizes) -> (Result<Program, Vec<Diagnostic>>, Vec<Diagnostic>) {
+    let unit = match parser::parse(src, false) {
+        Ok(u) => u,
+        Err(e) => {
+            return (
+                Err(vec![Diagnostic {
+                    pos: e.pos,
+                    msg: e.msg,
+                }]),
+                Vec::new(),
+            );
+        }
+    };
+    let (checked, warnings) = check::check(library(), &unit, sizes);
+    (checked.map(|code| program_of(code, sizes)), warnings)
+}
+
+fn program_of(mut code: check::Checked, sizes: ImageSizes) -> Program {
     let counters = trace::number(&mut code);
-    Ok(Program {
+    Program {
         sizes,
         mem: code.mem_init.clone(),
         code,
@@ -230,7 +275,7 @@ pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>>
         cold: true,
         counters,
         map: Once::new(),
-    })
+    }
 }
 
 /// Compiles a `PLCopen` TC6 XML project (see [`plcopen`]) holding one
@@ -252,6 +297,14 @@ pub fn compile_plcopen(xml: &str, sizes: ImageSizes) -> Result<Program, Vec<Diag
 }
 
 impl Program {
+    /// What the checker said that did not stop the program (today: RETAIN
+    /// where it is not kept across a restart), in source order. Show them
+    /// beside the program; they never block it.
+    #[must_use]
+    pub fn warnings(&self) -> &[Diagnostic] {
+        &self.code.warnings
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.code.pous[self.code.program].name

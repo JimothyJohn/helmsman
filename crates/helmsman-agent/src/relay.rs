@@ -5,7 +5,7 @@
 //!
 //! The box never names a model, a system prompt, tools or `max_tokens`:
 //! the relay owns them per agent version. The box never holds an
-//! Anthropic key either; the token here is the relay's per-box token.
+//! model API key either; the token here is the relay's per-box token.
 
 use std::fmt;
 use std::time::Duration;
@@ -69,12 +69,20 @@ pub fn token_ok(t: &str) -> bool {
     })
 }
 
-/// Whether `v` is a plausible agent version (`v1`, `v2`, ...).
+/// Whether `v` is a plausible agent version: an alias (`v7`,
+/// `explain-v2`) or a profile id, `<namespace>/<name>`
+/// (`helmsman/help-v1`), each part 1 to 32 of `A-Z a-z 0-9 - _ .`.
 #[must_use]
 pub fn version_ok(v: &str) -> bool {
-    (1..=32).contains(&v.len())
-        && v.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+    let part = |p: &str| {
+        (1..=32).contains(&p.len())
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+    };
+    match v.split_once('/') {
+        Some((ns, name)) => part(ns) && part(name),
+        None => part(v),
+    }
 }
 
 /// Why a turn did not complete.
@@ -299,6 +307,32 @@ pub fn turn(cfg: &Config, messages: &[Json], on: &mut dyn FnMut(Delta<'_>)) -> R
             Ok(Step::Done(t)) => return Ok(t),
             Ok(Step::Failed(e)) => return Err(Error::Stream(e)),
             Err(m) => return Err(Error::Malformed(m.0)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_ok;
+
+    /// Relay protocol v1 "Naming an agent profile": an alias or a
+    /// `<namespace>/<name>` id.
+    #[test]
+    fn a_version_is_an_alias_or_a_profile_id() {
+        for ok in ["v7", "explain-v2", "tests-v1", "helmsman/help-v1", "helmsman/v7"] {
+            assert!(version_ok(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "/",
+            "helmsman/",
+            "/v1",
+            "a/b/c",
+            "a b",
+            "v1?x",
+            &"x".repeat(33),
+        ] {
+            assert!(!version_ok(bad), "{bad}");
         }
     }
 }

@@ -14,6 +14,14 @@
 //! project's folder ([`Found::eds`]) and [`layout`] hands to the driver
 //! in place of the name; the stored map keeps the name.
 //!
+//! A device's profile too: a map line `device ID device:NAME ...` runs on
+//! the profile `NAME.device` (`helmsman_io::profile_driver`), the
+//! project's own file (a project file kind, beside its `io.map`) else the
+//! box's (in its driver folder). It must pass
+//! `helmsman_io::profile::Profile::parse`, or the map does not load and
+//! the problem names the file; its text joins [`Found::drivers`] under
+//! its file name, so a changed profile is a changed driver.
+//!
 //! A map line `device ID wasm:NAME ...` runs on `drivers/NAME.wasm`. Where
 //! it is looked for is [`Sources`]: the project's folder first (the project
 //! being deployed, else the one recorded as running), then the box's, so a
@@ -53,6 +61,7 @@ use std::sync::{Mutex, PoisonError};
 
 use helmsman_io::IoMap;
 use helmsman_io::driver::wasm_name;
+use helmsman_io::profile_driver::{file_name as profile_file, profile_name};
 pub use helmsman_project::{DRIVER_EXT, MAX_DRIVER, driver_name};
 
 use crate::drivers::{Drivers, MAX_DRIVERS};
@@ -582,6 +591,10 @@ impl Sources {
                     Err(why) => found.problems.push(format!("device {}: eds={name}: {why}", d.id)),
                 }
             }
+            if let Some(name) = profile_name(&d.driver) {
+                self.profile(&d.id, name, &mut found);
+                continue;
+            }
             let Some(name) = wasm_name(&d.driver) else {
                 continue;
             };
@@ -611,6 +624,57 @@ impl Sources {
             }
         }
         found
+    }
+
+    /// Profile `name` for device `id`: the project's `NAME.device`, else
+    /// the box's, checked, into `found` under its file name; a problem
+    /// naming the file when it is missing or will not parse.
+    fn profile(&self, id: &str, name: &str, found: &mut Found) {
+        let file = profile_file(name);
+        let problem = |why: String| format!("device {id}: device:{}: {why}", helmsman_project::clean(name));
+        if helmsman_project::file_name(&file) != Some(helmsman_project::FileKind::Device) {
+            found.problems.push(problem(format!(
+                "not a profile name (1 to {} of a-z 0-9 _ -, starting with a letter or digit)",
+                helmsman_project::NAME_LEN
+            )));
+            return;
+        }
+        if found.drivers.contains_key(&file) {
+            return;
+        }
+        let mut places = Vec::new();
+        if let Some((project, dir)) = &self.project {
+            places.push((format!("project {project}"), dir.join(&file)));
+        }
+        if let Some(dir) = &self.boxed {
+            places.push(("the box".to_string(), dir.join(&file)));
+        }
+        for (place, path) in places {
+            let bytes = match read(&path) {
+                Ok(None) => continue,
+                Ok(Some(b)) => b,
+                Err(why) => {
+                    found.problems.push(problem(format!("{file} in {place}: {why}")));
+                    return;
+                }
+            };
+            let checked = std::str::from_utf8(&bytes)
+                .map_err(|_| vec![(0, "not UTF-8 text".to_string())])
+                .and_then(|t| helmsman_io::profile::Profile::parse(t).map(|_| ()));
+            match checked {
+                Ok(()) => {
+                    found.drivers.insert(file, bytes);
+                }
+                Err(errs) => found.problems.extend(errs.iter().map(|(n, e)| {
+                    let at = if *n == 0 { String::new() } else { format!(":{n}") };
+                    problem(format!("{file}{at} in {place}: {e}"))
+                })),
+            }
+            return;
+        }
+        found.problems.push(problem(format!(
+            "no file {file} in the project or on the box (add the device's profile to the project)"
+        )));
     }
 
     /// The project's EDS file `name` (`NAME.eds`, a project file kind), as

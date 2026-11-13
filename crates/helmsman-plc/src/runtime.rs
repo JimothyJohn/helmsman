@@ -10,6 +10,9 @@
 //! - a module's outputs reach the image only when its scan completes;
 //! - a module that faults has its output window zeroed and is stopped, and
 //!   the others keep their schedule;
+//! - an engineer may stop a module ([`Runtime::stop`]), which then is not
+//!   scanned, its output window zero and its output signals safe, until
+//!   [`Runtime::run`] or [`Runtime::restart`]; a deploy leaves it stopped;
 //! - a module that falls behind skips the periods it missed (counted as
 //!   overruns) instead of bursting to catch up;
 //! - a module's `VAR_INPUT`s and `VAR_OUTPUT`s are bound to signals by name
@@ -24,11 +27,13 @@
 //!   completed scan: within one tick if the source comes first in scan
 //!   order, the tick before otherwise.
 //!
-//! The runtime has no clock of its own: [`Runtime::tick`] takes `now`, so
-//! scheduling is deterministic under test.
+//! The runtime has no clock of its own for scheduling: [`Runtime::tick`]
+//! takes `now`, so scheduling is deterministic under test. How long each
+//! scan runs is read from a [`Clock`] (monotonic by default, scripted in
+//! tests) and kept with each start's lateness for [`Runtime::timing`].
 
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use helmsman_iec::{Carry, Fault, FaultKind, Image, PortDir, Program};
 
@@ -99,6 +104,10 @@ pub enum Status {
     Held,
     /// Stopped by this fault; its outputs are zero.
     Faulted(Fault),
+    /// Stopped by an engineer ([`Runtime::stop`]): not scanned, its outputs
+    /// zero and its output signals safe, until [`Runtime::run`] or
+    /// [`Runtime::restart`]. A deploy or reload keeps it stopped.
+    Stopped,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -109,6 +118,142 @@ pub struct Stats {
     pub overruns: u64,
     /// Deadlines skipped because the module was held.
     pub held: u64,
+}
+
+/// Scans [`Timing`] covers: a module's newest this many. At a 10 ms period
+/// that is the last 10 s; a slow module's window spans longer.
+pub const TIMING_WINDOW: usize = 1000;
+
+/// The smallest, mean, largest and 99th percentile (nearest rank: no more
+/// than 1 in 100 above it) of a set of durations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Spread {
+    pub min: Duration,
+    pub mean: Duration,
+    pub max: Duration,
+    pub p99: Duration,
+}
+
+/// A module's scan load over its newest [`TIMING_WINDOW`] scans.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Timing {
+    /// Scans in the window; 0 before the first, when the spreads mean
+    /// nothing.
+    pub scans: usize,
+    /// How long each scan ran, by the runtime's [`Clock`]: from copying
+    /// its inputs in to handing its outputs on.
+    pub exec: Spread,
+    /// How late each scan started: the tick's `now` minus the deadline the
+    /// scan was due at.
+    pub late: Spread,
+    /// `now` of the tick that last counted an overrun; `None`: never.
+    pub last_overrun: Option<Duration>,
+}
+
+/// Where the runtime reads the time a scan takes: any monotonic reading
+/// (only differences are used). [`Clock::monotonic`] for a box;
+/// [`Clock::new`] scripts it in a test.
+pub struct Clock(Box<dyn Fn() -> Duration + Send + Sync>);
+
+impl Clock {
+    /// The time since this clock was made, from [`Instant`].
+    #[must_use]
+    pub fn monotonic() -> Self {
+        let base = Instant::now();
+        Self(Box::new(move || base.elapsed()))
+    }
+
+    /// A clock that reads `f`, called twice per scan run (before and
+    /// after), never for a held module.
+    pub fn new(f: impl Fn() -> Duration + Send + Sync + 'static) -> Self {
+        Self(Box::new(f))
+    }
+
+    fn now(&self) -> Duration {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for Clock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Clock")
+    }
+}
+
+/// The newest [`TIMING_WINDOW`] scans' execution times and lateness, in
+/// nanoseconds, overwritten oldest first. Fixed size: recording a scan
+/// never allocates.
+struct Ring {
+    exec: [u64; TIMING_WINDOW],
+    late: [u64; TIMING_WINDOW],
+    len: usize,
+    head: usize,
+    last_overrun: Option<Duration>,
+}
+
+impl Ring {
+    fn new() -> Box<Self> {
+        Box::new(Self {
+            exec: [0; TIMING_WINDOW],
+            late: [0; TIMING_WINDOW],
+            len: 0,
+            head: 0,
+            last_overrun: None,
+        })
+    }
+
+    fn record(&mut self, exec: Duration, late: Duration) {
+        let ns = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+        self.exec[self.head] = ns(exec);
+        self.late[self.head] = ns(late);
+        self.head = (self.head + 1) % TIMING_WINDOW;
+        self.len = (self.len + 1).min(TIMING_WINDOW);
+    }
+
+    fn timing(&self) -> Timing {
+        Timing {
+            scans: self.len,
+            exec: spread(&self.exec[..self.len]),
+            late: spread(&self.late[..self.len]),
+            last_overrun: self.last_overrun,
+        }
+    }
+}
+
+impl fmt::Debug for Ring {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Ring")
+            .field("len", &self.len)
+            .field("last_overrun", &self.last_overrun)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The [`Spread`] of `ns` (nanoseconds); all zero for none. Selects the
+/// p99 in a copy on the stack: no allocation.
+fn spread(ns: &[u64]) -> Spread {
+    let Some(n) = std::num::NonZeroUsize::new(ns.len()) else {
+        return Spread::default();
+    };
+    let n = n.get();
+    let mut copy = [0u64; TIMING_WINDOW];
+    let copy = &mut copy[..n];
+    copy.copy_from_slice(ns);
+    let sum: u128 = copy.iter().map(|&v| u128::from(v)).sum();
+    let mean = u64::try_from(sum / n as u128).unwrap_or(u64::MAX);
+    // Nearest rank: the ceil(0.99 n)-th smallest.
+    let rank = (n * 99).div_ceil(100);
+    let (_, p99, _) = copy.select_nth_unstable(rank - 1);
+    let p99 = *p99;
+    let (min, max) = copy
+        .iter()
+        .fold((u64::MAX, 0), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    Spread {
+        min: Duration::from_nanos(min),
+        mean: Duration::from_nanos(mean),
+        max: Duration::from_nanos(max),
+        p99: Duration::from_nanos(p99),
+    }
 }
 
 /// Why a set of modules cannot run together.
@@ -208,6 +353,7 @@ struct Slot {
     status: Status,
     next: Duration,
     stats: Stats,
+    timing: Box<Ring>,
     tap: TraceTap,
 }
 
@@ -219,6 +365,12 @@ pub struct Runtime {
     i_len: usize,
     /// `now` of the last tick.
     last: Option<Duration>,
+    /// What the last [`Runtime::reconfigure`] or [`Runtime::rebind`] did
+    /// to each kept module's state, by module name in scan order (a new
+    /// module is not here: it starts cold).
+    carried: Vec<(String, Carry)>,
+    /// What each scan's execution time is read from.
+    clock: Clock,
 }
 
 impl Runtime {
@@ -257,6 +409,7 @@ impl Runtime {
                 status: Status::Running,
                 next: Duration::ZERO,
                 stats: Stats::default(),
+                timing: Ring::new(),
                 tap: TraceTap::default(),
             })
             .collect();
@@ -265,7 +418,15 @@ impl Runtime {
             outputs: vec![0; q_len],
             i_len,
             last: None,
+            carried: Vec::new(),
+            clock: Clock::monotonic(),
         })
+    }
+
+    /// Reads each scan's execution time from `clock` from now on (a
+    /// runtime starts on [`Clock::monotonic`]).
+    pub fn set_clock(&mut self, clock: Clock) {
+        self.clock = clock;
     }
 
     /// Replaces the module named `module.name` between its scans: its
@@ -290,7 +451,8 @@ impl Runtime {
     ///   to zero and signals it stops driving go safe now, as no module
     ///   drives them any more.
     /// - A faulted or held module restarts ([`Status::Running`]): the fault
-    ///   is cleared and its state carries like any other. A faulted module
+    ///   is cleared and its state carries like any other; a stopped one
+    ///   stays [`Status::Stopped`]. A faulted module
     ///   is next due at its first deadline after the last tick, so the time
     ///   it spent stopped is not counted as overruns. Otherwise the next
     ///   deadline stays as scheduled and a new period applies after it.
@@ -332,17 +494,12 @@ impl Runtime {
         let m = image.m.len().min(s.image.m.len());
         image.m[..m].copy_from_slice(&s.image.m[..m]);
 
-        if let (Status::Faulted(_), Some(last)) = (s.status, self.last)
-            && s.next <= last
-        {
-            let period = module.period.as_nanos();
-            let rem = u64::try_from(last.saturating_sub(s.next).as_nanos() % period)
-                .expect("remainder below a 24 h period");
-            s.next = last
-                .saturating_add(module.period)
-                .saturating_sub(Duration::from_nanos(rem));
+        if let (Status::Faulted(_), Some(last)) = (s.status, self.last) {
+            s.next = resumed(s.next, last, module.period);
         }
-        s.status = Status::Running;
+        if s.status != Status::Stopped {
+            s.status = Status::Running;
+        }
         s.module = module;
         s.ports = ports;
         s.image = image;
@@ -358,7 +515,7 @@ impl Runtime {
     /// - A module whose name was running before is carried exactly as
     ///   [`Runtime::swap`] carries it: retained state by name and type,
     ///   `%M` over the shared length, its trace tap, its schedule (a
-    ///   faulted or held one restarts Running).
+    ///   faulted or held one restarts Running, a stopped one stays stopped).
     /// - A new module starts cold and is due at the last tick's `now`.
     /// - No glitch: `%Q` bytes and output signals that some module of the
     ///   new set drives hold their last values until that module's first
@@ -473,6 +630,7 @@ impl Runtime {
     fn carry(&mut self, modules: Vec<Module>, ports: Vec<Vec<PortBinding>>) {
         let mut old: Vec<Option<Slot>> = std::mem::take(&mut self.slots).into_iter().map(Some).collect();
         let now = self.last.unwrap_or(Duration::ZERO);
+        self.carried.clear();
         for (mut module, ports) in modules.into_iter().zip(ports) {
             let mut image = Image::new(module.program.sizes());
             let q = module.q;
@@ -483,27 +641,26 @@ impl Runtime {
                 .and_then(Option::take);
             let slot = match prev {
                 Some(s) => {
-                    let _ = module.program.restore(&s.module.program);
+                    let carry = module.program.restore(&s.module.program);
+                    self.carried.push((module.name.clone(), carry));
                     let m = image.m.len().min(s.image.m.len());
                     image.m[..m].copy_from_slice(&s.image.m[..m]);
                     let mut next = s.next;
-                    if let (Status::Faulted(_), Some(last)) = (s.status, self.last)
-                        && next <= last
-                    {
-                        let rem =
-                            u64::try_from(last.saturating_sub(next).as_nanos() % module.period.as_nanos())
-                                .expect("remainder below a 24 h period");
-                        next = last
-                            .saturating_add(module.period)
-                            .saturating_sub(Duration::from_nanos(rem));
+                    if let (Status::Faulted(_), Some(last)) = (s.status, self.last) {
+                        next = resumed(next, last, module.period);
                     }
                     Slot {
                         module,
                         ports,
                         image,
-                        status: Status::Running,
+                        status: if s.status == Status::Stopped {
+                            Status::Stopped
+                        } else {
+                            Status::Running
+                        },
                         next,
                         stats: s.stats,
+                        timing: s.timing,
                         tap: s.tap,
                     }
                 }
@@ -514,6 +671,7 @@ impl Runtime {
                     status: Status::Running,
                     next: now,
                     stats: Stats::default(),
+                    timing: Ring::new(),
                     tap: TraceTap::default(),
                 },
             };
@@ -542,11 +700,13 @@ impl Runtime {
         let mut faults = Vec::new();
         self.last = Some(now);
         for s in &mut self.slots {
-            if matches!(s.status, Status::Faulted(_)) || s.next > now {
+            if matches!(s.status, Status::Faulted(_) | Status::Stopped) || s.next > now {
                 continue;
             }
             let q = &mut self.outputs[s.module.q.start..][..s.module.q.len];
             if set_inputs(s, table) {
+                let started = self.clock.now();
+                let late = now.saturating_sub(s.next);
                 s.status = Status::Running;
                 let w = s.module.i;
                 for (k, b) in s.image.i.iter_mut().enumerate() {
@@ -585,6 +745,7 @@ impl Runtime {
                         faults.push((s.module.name.clone(), fault));
                     }
                 }
+                s.timing.record(self.clock.now().saturating_sub(started), late);
             } else {
                 q.fill(0);
                 make_safe(s, table);
@@ -600,6 +761,7 @@ impl Runtime {
                 let rem = u64::try_from(behind % period).expect("remainder below a 24 h period");
                 let skipped = u64::try_from(behind / period + 1).unwrap_or(u64::MAX);
                 s.stats.overruns = s.stats.overruns.saturating_add(skipped);
+                s.timing.last_overrun = Some(now);
                 s.next = now
                     .saturating_add(s.module.period)
                     .saturating_sub(Duration::from_nanos(rem));
@@ -615,14 +777,84 @@ impl Runtime {
     }
 
     /// When the next running or held module is due; `None` once all have
-    /// stopped.
+    /// stopped (by a fault or an engineer).
     #[must_use]
     pub fn next_deadline(&self) -> Option<Duration> {
         self.slots
             .iter()
-            .filter(|s| !matches!(s.status, Status::Faulted(_)))
+            .filter(|s| !matches!(s.status, Status::Faulted(_) | Status::Stopped))
             .map(|s| s.next)
             .min()
+    }
+
+    /// Stops `name` between scans (an engineer's Stop): it is not scanned,
+    /// its `%Q` window goes to zero and its output signals to their safe
+    /// values in `table` now, and the other modules keep their schedule.
+    /// Stopping a stopped module changes nothing.
+    ///
+    /// # Errors
+    /// [`ConfigError::UnknownModule`]: nothing changed.
+    pub fn stop(&mut self, name: &str, table: &mut SignalTable) -> Result<(), ConfigError> {
+        let s = self.slot_mut(name)?;
+        let q = s.module.q;
+        s.status = Status::Stopped;
+        make_safe(s, table);
+        self.outputs[q.start..][..q.len].fill(0);
+        Ok(())
+    }
+
+    /// Runs `name` again (an engineer's Run): a stopped or faulted module
+    /// is [`Status::Running`] with its state as it was, due at its first
+    /// deadline after the last tick on its own phase, so the time it was
+    /// stopped counts as neither scans nor overruns. A fault is cleared. A
+    /// running or held module is left as it is.
+    ///
+    /// # Errors
+    /// [`ConfigError::UnknownModule`]: nothing changed.
+    pub fn run(&mut self, name: &str) -> Result<(), ConfigError> {
+        let last = self.last;
+        let s = self.slot_mut(name)?;
+        if matches!(s.status, Status::Stopped | Status::Faulted(_)) {
+            if let Some(last) = last {
+                s.next = resumed(s.next, last, s.module.period);
+            }
+            s.status = Status::Running;
+        }
+        Ok(())
+    }
+
+    /// A cold restart of `name` (an engineer's Restart): every variable at
+    /// its initial value, `%M` zero, a fault cleared, a stop ended, and due
+    /// at its next deadline on its own phase, so a restart is never counted
+    /// as an overrun. Its outputs hold what they hold until that scan.
+    ///
+    /// # Errors
+    /// [`ConfigError::UnknownModule`]: nothing changed.
+    pub fn restart(&mut self, name: &str) -> Result<(), ConfigError> {
+        let last = self.last;
+        let k = self
+            .slots
+            .iter()
+            .position(|s| s.module.name == name)
+            .ok_or_else(|| ConfigError::UnknownModule(name.into()))?;
+        let s = &mut self.slots[k];
+        s.module.program.reset();
+        let q = s.module.q;
+        let mut image = Image::new(s.module.program.sizes());
+        image.q.copy_from_slice(&self.outputs[q.start..][..q.len]);
+        s.image = image;
+        s.status = Status::Running;
+        if let Some(last) = last {
+            s.next = resumed(s.next, last, s.module.period);
+        }
+        Ok(())
+    }
+
+    fn slot_mut(&mut self, name: &str) -> Result<&mut Slot, ConfigError> {
+        self.slots
+            .iter_mut()
+            .find(|s| s.module.name == name)
+            .ok_or_else(|| ConfigError::UnknownModule(name.into()))
     }
 
     fn slot(&self, name: &str) -> Option<&Slot> {
@@ -637,6 +869,15 @@ impl Runtime {
     #[must_use]
     pub fn stats(&self, name: &str) -> Option<Stats> {
         self.slot(name).map(|s| s.stats)
+    }
+
+    /// A module's scan load: execution time and start lateness over its
+    /// newest [`TIMING_WINDOW`] scans, and when it last overran. Kept
+    /// across a swap, deploy or restart like its [`Stats`]. Costs a copy
+    /// and a selection of the window, no allocation.
+    #[must_use]
+    pub fn timing(&self, name: &str) -> Option<Timing> {
+        self.slot(name).map(|s| s.timing.timing())
     }
 
     /// A module's scan period and its `%I` and `%Q` windows.
@@ -669,6 +910,14 @@ impl Runtime {
     /// Module names, in scan order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.slots.iter().map(|s| s.module.name.as_str())
+    }
+
+    /// What the last [`Runtime::reconfigure`] or [`Runtime::rebind`] did
+    /// to the state of each module it kept, by name in scan order; a module
+    /// it added is not listed (it started cold). Empty before either ran.
+    #[must_use]
+    pub fn last_carry(&self) -> &[(String, Carry)] {
+        &self.carried
     }
 }
 
@@ -872,6 +1121,18 @@ fn signal_ty(st: helmsman_iec::Ty) -> helmsman_io::Ty {
     } else {
         helmsman_io::Ty::Int
     }
+}
+
+/// A stopped module's next deadline: `next` if it is still ahead of
+/// `last`, else its first deadline after `last` on the same phase.
+fn resumed(next: Duration, last: Duration, period: Duration) -> Duration {
+    if next > last {
+        return next;
+    }
+    let rem = u64::try_from(last.saturating_sub(next).as_nanos() % period.as_nanos())
+        .expect("remainder below a 24 h period");
+    last.saturating_add(period)
+        .saturating_sub(Duration::from_nanos(rem))
 }
 
 fn make_safe(s: &Slot, table: &mut SignalTable) {

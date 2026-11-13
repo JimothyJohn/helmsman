@@ -12,6 +12,15 @@ helmsman-adapter = { path = "../helmsman-adapter" }
 # The chat panel's agent loop (relay client and tools), for the box API's
 # /api/chat; https follows ours.
 helmsman-agent = { path = "../helmsman-agent", default-features = false, optional = true }
+# Configuring a device through its own protocol (the box API's
+# /api/devices/{id}/config; std only, no dependencies of its own).
+helmsman-devconf = { path = "../helmsman-devconf", optional = true }
+# The DHCP server on the device port (`--dhcp`, crate::dhcp): the server
+# itself (no_std, no dependencies), and helmsman-l2 to tie its sockets to
+# the one interface (IP_BOUND_IF / SO_BINDTODEVICE; libc, already in the
+# lock).
+helmsman-dhcp = { path = "../helmsman-dhcp", optional = true }
+helmsman-l2 = { path = "../helmsman-l2", optional = true }
 # Explain mode: the box explains its own traces (/api/explain).
 helmsman-diagram = { path = "../helmsman-diagram", optional = true }
 helmsman-iec = { path = "../helmsman-iec" }
@@ -30,9 +39,15 @@ ring = { version = "0.17.14", optional = true }
 # A project's rules and its .zip (`project`), shared with the canvas's
 # simulation; pure Rust (miniz_oxide for DEFLATE).
 helmsman-project = { path = "../helmsman-project", optional = true }
+# SIGTERM / SIGINT as a flag the scan loop polls, so a planned stop writes the
+# RETAIN values first. std has no signal API and the crate forbids unsafe;
+# without its default features it is signal-hook-registry and libc only.
+signal-hook = { version = "0.4.6", default-features = false, optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
 
 [dev-dependencies]
+# The simulated Moxa console the device-configuration routes are tested against (tests/devconf.rs).
+helmsman-devconf = { path = "../helmsman-devconf", features = ["sim"] }
 # Deflated entries for hostile upload archives (tests/projects.rs).
 miniz_oxide = "0.9.1"
 # The box build itself never enables `unrestricted`; its tests play scanner.
@@ -40,7 +55,7 @@ helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
 # The simulated Moxa ioLogik E1213 (tests/enip_link.rs, which drives
 # helmsman-io's driver directly; the box's own is the `enip-io` feature). `wasm`: a WASM driver behind a link (tests/wasm_driver.rs).
-helmsman-io = { path = "../helmsman-io", features = ["enip-sim", "wasm"] }
+helmsman-io = { path = "../helmsman-io", features = ["enip-sim", "profinet-sim", "wasm"] }
 # The WASM tier's test modules are hand-written WAT, assembled in the test.
 wat = { version = "1.262.0", default-features = false }
 # An independent OPC UA client to test the box's server against
@@ -70,8 +85,15 @@ workspace = true
 # scripts/lint.sh keeps compiling) refuses a map naming `enip-io` as "not
 # in this build".
 default = ["box", "https", "enip-io"]
-box = ["dep:rusqlite", "dep:ring", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
+box = ["dep:rusqlite", "dep:helmsman-devconf", "dep:helmsman-dhcp", "dep:helmsman-l2", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
 enip-io = ["box", "helmsman-io/enip"]
+# `profinet-io` on a real interface: PROFINET IO devices the box masters
+# as their controller, over raw Ethernet (helmsman-io's `profinet-raw`,
+# which brings in helmsman-l2, the workspace's one crate with `unsafe`).
+# Not in the default build until a real device has passed the bench
+# (TODO.md `mdrive-bringup`); a box built without it loads a map naming
+# `profinet-io` and reports the device's link down, saying why.
+profinet-io = ["box", "helmsman-io/profinet-raw"]
 # `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,
 # run by an interpreter under fuel and memory limits, and the map's WASM
 # drivers (`wasm:NAME`, helmsman-io's `wasm`). In `box`; the canvas's
@@ -86,6 +108,18 @@ required-features = ["box"]
 
 [[test]]
 name = "api"
+required-features = ["box"]
+
+[[test]]
+name = "devconf"
+required-features = ["box"]
+
+[[test]]
+name = "dhcp"
+required-features = ["box"]
+
+[[test]]
+name = "profile_link"
 required-features = ["box"]
 
 [[test]]
@@ -169,11 +203,27 @@ name = "projects"
 required-features = ["box"]
 
 [[test]]
+name = "project_compat"
+required-features = ["box"]
+
+[[test]]
+name = "project_names"
+required-features = ["box"]
+
+[[test]]
 name = "requirements"
 required-features = ["box"]
 
 [[test]]
+name = "help"
+required-features = ["box"]
+
+[[test]]
 name = "trend"
+required-features = ["box"]
+
+[[test]]
+name = "desk"
 required-features = ["box"]
 
 [[test]]
@@ -182,4 +232,12 @@ required-features = ["box", "https"]
 
 [[test]]
 name = "firstboot"
+required-features = ["box"]
+
+[[test]]
+name = "retain"
+required-features = ["box"]
+
+[[test]]
+name = "test_cli"
 required-features = ["box"]

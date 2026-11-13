@@ -174,6 +174,21 @@ pub fn clear_cookie() -> String {
 /// The refusal: 403 without the proof, 401 (and the cookie cleared) when
 /// the cookie is no live session.
 pub(super) fn by_cookie(req: &mut Request, ctx: &Ctx) -> Result<(), Response> {
+    by_cookie_with(req, ctx, true)
+}
+
+/// [`by_cookie`] for a read (`GET`): the cookie alone, no same-origin
+/// proof. A read changes nothing, the cookie is `SameSite=Strict` so no
+/// other site's page makes the browser send it, and the canvas's event
+/// streams (`EventSource`) cannot carry a custom header at all.
+///
+/// # Errors
+/// 401 (and the cookie cleared) when the cookie is no live session.
+pub(super) fn by_cookie_read(req: &mut Request, ctx: &Ctx) -> Result<(), Response> {
+    by_cookie_with(req, ctx, false)
+}
+
+fn by_cookie_with(req: &mut Request, ctx: &Ctx, proof: bool) -> Result<(), Response> {
     let log = |why: &str| {
         (ctx.cfg.log)(&format!(
             "api: refused {} {} (session cookie: {why})",
@@ -181,7 +196,7 @@ pub(super) fn by_cookie(req: &mut Request, ctx: &Ctx) -> Result<(), Response> {
             clean(&req.path)
         ));
     };
-    if let Err(why) = same_origin(req) {
+    if proof && let Err(why) = same_origin(req) {
         log(why);
         return Err(Response::error(403, why));
     }

@@ -153,7 +153,7 @@ fn an_edit_keeps_the_breakpoints_whose_statements_stayed_put() {
     assert_eq!(s.paused, None, "a new build drops the paused scan");
     assert_eq!(s.breaks, vec![at(&s, 5)]);
     s.toggle_break(at(&s, 5));
-    assert!(s.breaks.is_empty(), "Ctrl B again clears it");
+    assert!(s.breaks.is_empty(), "Shift F9 again clears it");
 }
 
 #[test]

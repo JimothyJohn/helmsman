@@ -49,6 +49,15 @@ impl fmt::Display for Error {
             Self::Type { want, got } => write!(f, "type: point is {want:?}, value is {got:?}"),
             Self::Io(e) => write!(f, "io: {e}"),
             Self::Protocol(m) => write!(f, "protocol: {m}"),
+            Self::Exception(helmsman_modbus::GATEWAY_PATH_UNAVAILABLE) => {
+                write!(
+                    f,
+                    "the gateway has no path to the unit, misconfigured or overloaded (exception 0x0a)"
+                )
+            }
+            Self::Exception(helmsman_modbus::GATEWAY_TARGET_FAILED) => {
+                write!(f, "the unit behind the gateway did not respond (exception 0x0b)")
+            }
             Self::Exception(c) => write!(f, "device exception {c:#04x}"),
             Self::Point(m) => write!(f, "point: {m}"),
             Self::ReadOnly(a) => write!(f, "{a} is read-only"),
@@ -60,11 +69,20 @@ impl fmt::Display for Error {
 
 impl Error {
     /// Whether the error means the link to the device is broken (I/O
-    /// trouble, a reply that isn't valid), as opposed to one point being
-    /// refused. After a link error nothing the device holds can be trusted.
+    /// trouble, a reply that isn't valid, a Modbus gateway saying the unit
+    /// behind it is not there: exceptions 0x0A and 0x0B, App §7 p.47), as
+    /// opposed to one point being refused. After a link error nothing the
+    /// device holds can be trusted.
     #[must_use]
     pub const fn is_link(&self) -> bool {
-        matches!(self, Self::Io(_) | Self::Protocol(_))
+        matches!(
+            self,
+            Self::Io(_)
+                | Self::Protocol(_)
+                | Self::Exception(
+                    helmsman_modbus::GATEWAY_PATH_UNAVAILABLE | helmsman_modbus::GATEWAY_TARGET_FAILED
+                )
+        )
     }
 }
 
@@ -111,6 +129,13 @@ pub trait Driver {
     fn address(&self) -> Option<String> {
         None
     }
+
+    /// The protocol the device is reached over, for a driver that picks
+    /// one ([`crate::profile_driver`]: the transport in use, once it has
+    /// worked); `None` for a driver that speaks one protocol.
+    fn transport(&self) -> Option<String> {
+        None
+    }
 }
 
 /// How a map names a driver compiled to WebAssembly: `wasm:NAME`, NAME
@@ -137,16 +162,34 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
         }
         crate::logix::DRIVER => crate::logix::Point::parse(addr).map(|p| p.info()),
         crate::enip::DRIVER => crate::enip::Point::parse(addr).map(|p| p.info()),
+        crate::profinet::DRIVER => crate::profinet::Point::parse(addr).map(|p| p.info()),
         other if wasm_name(other).is_some() => Err(Error::UnknownDriver(format!(
             "{other}: not a WASM driver this box has approved"
         ))),
-        other => Err(Error::UnknownDriver(other.into())),
+        other => Err(no_profile(other).unwrap_or_else(|| Error::UnknownDriver(other.into()))),
     }
+}
+
+/// For a `device:NAME` driver name, the error when no profile was given
+/// with it: the box finds `NAME.device` and parses and opens such a
+/// device on it ([`crate::profile_driver`]).
+fn no_profile(driver: &str) -> Option<Error> {
+    crate::profile_driver::profile_name(driver).map(|name| {
+        Error::UnknownDriver(format!(
+            "{driver}: no profile {} in the project or on the box",
+            crate::profile_driver::file_name(name)
+                .chars()
+                .take(64)
+                .flat_map(char::escape_debug)
+                .collect::<String>()
+        ))
+    })
 }
 
 /// As [`parse_point`], knowing the device: a driver whose points depend on
 /// the device's params (`enip-io`: assembly sizes, channel counts, an
-/// input-only connection) checks them here.
+/// input-only connection; `profinet-io`: the modules and their data
+/// lengths) checks them here.
 ///
 /// # Errors
 /// As [`parse_point`], plus params that don't parse and points the
@@ -154,19 +197,25 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
 pub fn parse_point_on(device: &Device, addr: &str) -> Result<PointInfo, Error> {
     match device.driver.as_str() {
         crate::enip::DRIVER => crate::enip::parse_on(&device.params, addr),
+        crate::profinet::DRIVER => crate::profinet::parse_on(&device.endpoint, &device.params, addr),
         driver => parse_point(driver, addr),
     }
 }
 
 /// What the one-writer rule compares for an output point: the point
-/// itself, or for `enip-io` each output bit it drives (so `do:0` and
-/// `out:0.0` are the same writer).
+/// itself, or for `enip-io` and `profinet-io` each output bit it drives
+/// (so `do:0` and `out:0.0` are the same writer).
 #[must_use]
 pub fn output_keys(driver: &str, addr: &str) -> Vec<String> {
-    match (driver, crate::enip::Point::parse(addr)) {
-        (crate::enip::DRIVER, Ok(p)) => p.out_bits(),
-        _ => vec![addr.to_string()],
+    match driver {
+        crate::enip::DRIVER => crate::enip::Point::parse(addr).map(|p| p.out_bits()).ok(),
+        crate::profinet::DRIVER => crate::profinet::Point::parse(addr).map(|p| p.out_bits()).ok(),
+        d if crate::profile_driver::profile_name(d).is_some() => {
+            Some(vec![crate::profile_driver::output_key(addr)])
+        }
+        _ => None,
     }
+    .unwrap_or_else(|| vec![addr.to_string()])
 }
 
 /// Opens a driver for `device` by its driver name. Network drivers connect
@@ -210,6 +259,11 @@ pub fn open_on(
             "{}: this build has no enip-io (helmsman-io's `enip` feature)",
             crate::enip::DRIVER
         ))),
-        other => Err(Error::UnknownDriver(other.into())),
+        crate::profinet::DRIVER => Ok(Box::new(crate::profinet::ProfinetDriver::new(
+            &device.endpoint,
+            &device.params,
+            crate::profinet::opener(),
+        )?)),
+        other => Err(no_profile(other).unwrap_or_else(|| Error::UnknownDriver(other.into()))),
     }
 }

@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="projects">Projects</h1>
 <p>A project is a folder of files: the program's Structured Text (one or
@@ -78,8 +78,7 @@ Editor</a>). The Files tab of the left pane shows them.</p>
 <li><strong>New project</strong> and <strong>Copy project</strong> are
 in the File menu; a right-click on the pane's blank space offers New
 project too, and a right-click on a project offers Copy, Rename and
-Delete. A copy of an example or a starter is how you begin from
-one.</li>
+Delete. A copy of an example is how you begin from one.</li>
 <li><strong>New file</strong> is the button under the files. A file is
 Structured Text (<code>.st</code>), the I/O map, or one of the editor's
 own. A double click on a file opens it on the Code tab.</li>
@@ -117,19 +116,21 @@ diagram.</li>
 <p><strong>Save</strong> (<kbd>Ctrl</kbd> <kbd>S</kbd>, File › Save, the
 glyph) writes every file with unsaved edits. A mark in the header shows
 there are some. Saving changes nothing about what runs.</p>
-<p><strong>Deploy</strong> (<kbd>Ctrl</kbd> <kbd>D</kbd>, File › Deploy)
-saves first, then compiles the project and runs it: in the page in the
-simulation, on the box through its approval policy on a box. A project
-that does not compile is refused with its errors by file and line.</p>
+<p><strong>Deploy</strong> (<kbd>Ctrl</kbd> <kbd>Shift</kbd>
+<kbd>Enter</kbd>, File › Deploy, or the → arrow right of the Structured
+Text header and beside the running program in Files) saves first, then
+compiles the project and runs it: in the page in the simulation, on the
+box through its approval policy on a box. A project that does not
+compile is refused with its errors by file and line.</p>
 <p>On a box, a file someone else saved since you opened it is refused
 alone and offers Reload; the other files land.</p>
 <h2 id="requirement-tests">Requirement tests</h2>
 <p>A requirement is worth keeping as a test. A file named
 <code>test_NAME.st</code> is one: a PROGRAM that drives the program's
 inputs, lets the clock run and checks the outputs. Its first comment
-states the requirement in your words; the <strong>Requirements</strong>
-tab of the side panel shows one row per test, green or red, and for a
-red one which check failed and when.</p>
+states the requirement in your words. The Agent writes one for each
+change it makes, and a red one names itself in the Deploy error with
+which check failed and when.</p>
 <pre class="st"><code>(* The lamp is on within 2 s of start_pb. *)
 PROGRAM test_lamp
 VAR_INPUT lamp : BOOL; END_VAR            (* the program&#39;s output *)
@@ -154,8 +155,8 @@ runs them when a project opens, after each save and before every deploy
 (<code>POST /api/projects/{p}/tests</code> runs them on demand).
 <strong>A red test refuses Deploy and the Agent's "Use this
 code"</strong>, naming the requirement, so a change cannot land past a
-requirement it breaks. Ask the Agent to write the first tests from your
-requirements, then edit them like any file.</p>
+requirement it breaks. The Agent writes the tests with each change; edit
+them like any file.</p>
 <h2 id="upload-and-download">Upload and download</h2>
 <p><strong>Download</strong> (the glyph, File › Download) gives you the
 project as a <code>.zip</code>. <strong>Upload</strong> takes a
@@ -167,17 +168,18 @@ periodic task of a ladder export keeps its period: the import writes it
 into <code>project.settings</code> as that program's
 <code>scan_ms</code>, unless you have set one there already.</p>
 <h2 id="examples">Examples</h2>
-<p>Five short <strong>examples</strong> teach one thing each: Blink,
-Read and write, Logic (AND, OR, NOT), a start/stop latch and a counter.
-Click one and give it a name: it becomes a program of your own to
-change. On a box the same list makes the program on the box, its inputs
-and outputs on the box's own channels so it runs with nothing wired.</p>
-<p><a href="starters.html">Examples and starters</a> lists them,
-generated from the program itself.</p>
+<p>Six short <strong>examples</strong> teach one thing each: Traffic
+light, Blink, Read and write, Logic (AND, OR, NOT), a start/stop latch
+and a counter. Click one and give it a name: it becomes a program of
+your own to change. On a box the same list makes the program on the box,
+its inputs and outputs on the box's own channels so it runs with nothing
+wired.</p>
+<p><a href="starters.html">Examples</a> lists them, generated from the
+program itself.</p>
 <h2 id="the-io-map">The I/O map</h2>
 <p><code>io.map</code> binds the program's inputs and outputs to
 channels: a line per signal with its direction, name, type, the device
-and the channel, and for an output its safe value. The starters' maps
+and the channel, and for an output its safe value. The examples' maps
 use the box's own channels and say in a comment to check them before
 deploying to a box with anything wired.</p>
 </main>

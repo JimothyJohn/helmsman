@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpEndpoint, Stack};
-use embassy_time::{Duration, with_timeout};
+use embassy_time::{Duration, Instant, with_timeout};
 use embedded_io_async::{Read, Write};
 use helmsman_modbus::{MBAP_LEN, READ_DISCRETE_INPUTS, mbap, pdu, reply};
 
@@ -50,7 +50,25 @@ pub struct Client<'a> {
     tid: u16,
     /// Connections opened since start: a reconnect count for the record.
     pub connects: u32,
+    /// After a failed connect, no new attempt before this: a dead or
+    /// absent unit would otherwise be dialled every scan, and each dial
+    /// spends the stack's one ARP request per second (smoltcp's neighbour
+    /// cache is silent for 1 s after any request, for every address), so
+    /// nothing else on the node could resolve a neighbour; the 2026-11-08
+    /// run lost its report sink that way.
+    retry_at: Option<Instant>,
+    /// Connects failed in a row. The wait before the next attempt grows
+    /// with it ([`Client::connect_failed`]): right after the link comes
+    /// up the first attempts can fail for half a second or so (the P4 on
+    /// the bench switch, 2026-11-10: about every other boot), and a flat
+    /// [`CONNECT_BACKOFF`] turned that into a unit that came up two
+    /// seconds late.
+    failures: u8,
 }
+
+/// How long a failed connect keeps the link quiet, once the first few
+/// quicker attempts have failed too.
+pub const CONNECT_BACKOFF: Duration = Duration::from_secs(2);
 
 impl<'a> Client<'a> {
     /// `rx` and `tx` are the socket's buffers for the client's whole life
@@ -73,6 +91,8 @@ impl<'a> Client<'a> {
             connected: false,
             tid: 0,
             connects: 0,
+            retry_at: None,
+            failures: 0,
         }
     }
 
@@ -80,21 +100,42 @@ impl<'a> Client<'a> {
         if self.connected {
             return Ok(());
         }
+        if self.retry_at.is_some_and(|t| Instant::now() < t) {
+            return Err(Error::Link("backing off after a failed connect"));
+        }
         match with_timeout(self.timeout, self.socket.connect(self.endpoint)).await {
             Ok(Ok(())) => {
                 self.connected = true;
                 self.connects += 1;
+                self.retry_at = None;
+                self.failures = 0;
                 Ok(())
             }
             Ok(Err(_)) => {
-                self.socket.abort();
+                self.connect_failed();
                 Err(Error::Link("connect refused"))
             }
             Err(_) => {
-                self.socket.abort();
+                self.connect_failed();
                 Err(Error::Link("connect timed out"))
             }
         }
+    }
+
+    /// After a failed connect: the next attempt may come at once, then
+    /// after 250 ms, 500 ms, 1 s, and from there every
+    /// [`CONNECT_BACKOFF`], which is what a unit that is not there gets.
+    fn connect_failed(&mut self) {
+        self.socket.abort();
+        self.failures = self.failures.saturating_add(1);
+        let wait = match self.failures {
+            1 => return,
+            2 => Duration::from_millis(250),
+            3 => Duration::from_millis(500),
+            4 => Duration::from_secs(1),
+            _ => CONNECT_BACKOFF,
+        };
+        self.retry_at = Some(Instant::now() + wait);
     }
 
     fn drop_link(&mut self) {

@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <style>
+      /* The site's own palette and faces (docs/index.html). */
+      @font-face {
+        font-family: "Saira Stencil One";
+        src: url("assets/fonts/SairaStencilOne-400.woff2") format("woff2");
+        font-weight: 400;
+      }
+      @font-face {
+        font-family: "Barlow Condensed";
+        src: url("assets/fonts/BarlowCondensed-700.woff2") format("woff2");
+        font-weight: 700;
+      }
+      :root {
+        --yellow: #ffc20e;
+        --black: #141414;
+        --graphite: #3a3a3a;
+        --ink: #f2f2f2;
+        --dim: #8c8c8c;
+        --stencil: "Saira Stencil One", sans-serif;
+        --cond: "Barlow Condensed", sans-serif;
+        --mono: "IBM Plex Mono", monospace;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--black);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--black);
+      }
+      #shake {
+        position: absolute;
+        inset: 0;
+      }
+      .full {
+        position: absolute;
+        inset: 0;
+      }
+      .stencil {
+        font-family: var(--stencil);
+        font-weight: 400;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        line-height: 0.95;
+      }
+      .cond {
+        font-family: var(--cond);
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      .w {
+        display: inline-block;
+      }
+
+      /* 1. The complaints, stacked on the beat, then slashed. */
+      #tired-label {
+        position: absolute;
+        left: 160px;
+        top: 130px;
+        color: var(--yellow);
+        font-size: 44px;
+        letter-spacing: 0.32em;
+      }
+      .gripe {
+        position: absolute;
+        left: 160px;
+        color: var(--ink);
+        font-size: 104px;
+        line-height: 1;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+      }
+      #g1 { top: 270px; }
+      #g2 { top: 420px; }
+      #g3 { top: 570px; }
+      #g4 { top: 720px; }
+      #slash-wrap {
+        position: absolute;
+        left: -240px;
+        top: 528px;
+        width: 2400px;
+        height: 72px;
+      }
+      #slash {
+        width: 2400px;
+        height: 72px;
+        background: var(--yellow);
+      }
+
+      /* 2. The claim, on the yellow the slash became. */
+      #claim {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding-left: 160px;
+        background: var(--yellow);
+        color: var(--black);
+      }
+      #claim h1 {
+        font-size: 250px;
+      }
+      #claim h1 .hot {
+        background: var(--black);
+        color: var(--yellow);
+        padding: 0 28px;
+        margin-left: -8px;
+      }
+      #claim-sub {
+        margin-top: 52px;
+        font-size: 54px;
+        letter-spacing: 0.16em;
+      }
+
+      /* 3. Describe */
+      #describe {
+        background: var(--yellow);
+      }
+      #describe-card {
+        background: var(--black);
+      }
+      #describe-label {
+        position: absolute;
+        left: 230px;
+        top: 150px;
+        font-size: 110px;
+        color: var(--black);
+      }
+      #describe-text {
+        position: absolute;
+        left: 300px;
+        top: 392px;
+        width: 1320px;
+        color: var(--ink);
+        font: 400 60px/1.45 var(--mono);
+      }
+      #describe-text span {
+        opacity: 0;
+      }
+
+      /* 4. Validate: the real app, with the camera on the diagram and trend. */
+      #cam {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+      }
+      #app {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+        object-fit: contain;
+      }
+      #hl {
+        position: absolute;
+        left: 404px;
+        top: 816px;
+        width: 880px;
+        height: 94px;
+        border: 5px solid var(--yellow);
+      }
+      #cursor {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 72px;
+        height: 72px;
+      }
+      #band-fill {
+        position: absolute;
+        left: 1540px;
+        top: 0;
+        width: 380px;
+        height: 1080px;
+        background: var(--yellow);
+        color: var(--black);
+      }
+      #band-step {
+        position: absolute;
+        left: 40px;
+        top: 150px;
+        font-size: 64px;
+      }
+      .band-line {
+        position: absolute;
+        left: 40px;
+        top: 440px;
+        width: 300px;
+        font-size: 60px;
+        line-height: 1.02;
+        letter-spacing: 0.03em;
+      }
+
+      /* 5. Approve */
+      #s5-fill {
+        background: var(--yellow);
+      }
+      #approve {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding-left: 160px;
+        color: var(--black);
+      }
+      #approve-step {
+        font-size: 210px;
+      }
+      #approve p.cond {
+        font-size: 72px;
+        letter-spacing: 0.06em;
+        margin-top: 30px;
+      }
+
+      /* 6. What is built, stacked on the beat. */
+      #s6 {
+        background: var(--black);
+      }
+      #built-label {
+        position: absolute;
+        left: 160px;
+        top: 110px;
+        color: var(--yellow);
+        font-size: 44px;
+        letter-spacing: 0.32em;
+      }
+      .fact {
+        position: absolute;
+        left: 160px;
+        display: flex;
+        align-items: center;
+        gap: 40px;
+        color: var(--ink);
+        font-size: 92px;
+        line-height: 1;
+        white-space: nowrap;
+      }
+      .fact i {
+        display: block;
+        width: 34px;
+        height: 34px;
+        flex: none;
+        background: var(--yellow);
+      }
+      #f1 { top: 210px; }
+      #f2 { top: 340px; }
+      #f3 { top: 470px; }
+      #f4 { top: 600px; }
+      #f5 { top: 730px; }
+      #f6 { top: 860px; }
+
+      /* 7. End card */
+      #end {
+        background: var(--yellow);
+        color: var(--black);
+      }
+      #lockup {
+        position: absolute;
+        left: 0;
+        top: 250px;
+        width: 1920px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 56px;
+      }
+      #mark {
+        width: 260px;
+        height: 260px;
+        flex: none;
+      }
+      #mark img {
+        display: block;
+        width: 260px;
+        height: 260px;
+      }
+      #wordmark {
+        font-size: 190px;
+        line-height: 0.85;
+      }
+      #descriptor {
+        font-size: 44px;
+        letter-spacing: 0.46em;
+        margin-top: 22px;
+      }
+      #cta {
+        position: absolute;
+        left: 0;
+        top: 640px;
+        width: 1920px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 48px;
+      }
+      #cta-btn {
+        background: var(--black);
+        color: var(--yellow);
+        font: 600 44px/1 var(--mono);
+        padding: 34px 44px;
+      }
+      #cta-url {
+        font: 600 48px/1 var(--mono);
+      }
+      #early {
+        position: absolute;
+        left: 0;
+        top: 830px;
+        width: 1920px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 28px;
+        font: 400 36px/1 var(--mono);
+      }
+      #early b {
+        background: var(--graphite);
+        color: #fff;
+        font-weight: 600;
+        padding: 14px 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 30 s at 120 BPM: a beat is 0.5 s, a bar 2 s, and every cut and landing
+         below sits on that grid (assets/music/bed.mp3 starts on a beat). -->
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="32"
+      data-width="1920"
+      data-height="1080"
+      data-motion-blur="on"
+    >
+      <div id="shake">
+        <!-- 1. 0-4.2 s: four complaints from the site's "From the field", one a beat,
+             then one slash through all of them that floods the frame. -->
+        <div id="s1" class="clip full" data-start="0" data-duration="4.2" data-track-index="1" data-track-kind="graphics" style="z-index: 1">
+          <p id="tired-label" class="cond">What engineers are tired of</p>
+          <p id="g1" class="gripe cond">A virtual machine per version</p>
+          <p id="g2" class="gripe cond">Licence keys, dongles and trial timers</p>
+          <p id="g3" class="gripe cond">Project files you can't compare</p>
+          <p id="g4" class="gripe cond">Stopping the machine for a change</p>
+          <div id="slash-wrap"><div id="slash"></div></div>
+        </div>
+
+        <!-- 2. 4.2-8.0 s: the claim. -->
+        <div id="s2" class="clip full" data-start="4.2" data-duration="3.8" data-track-index="2" data-track-kind="graphics" style="z-index: 2">
+          <div id="claim" class="full">
+            <h1 class="stencil"><span class="w">Write</span> <span class="w">specs,</span><br /><span class="w">not</span> <span class="w hot">code</span></h1>
+            <p id="claim-sub" class="cond">The soft PLC you program by describing the machine</p>
+          </div>
+        </div>
+
+        <!-- 4. 12.2-21.6 s: the playground running the Start/stop latch example
+             (assets/app-latch.mp4, recorded by ../helmsman-ad/tools/capture.py).
+             Root time = recording time + 11.7. -->
+        <div id="cam" style="z-index: 4">
+          <video
+            id="app"
+            class="clip"
+            data-start="12.2"
+            data-duration="9.4"
+            data-media-start="0.5"
+            data-track-index="4"
+            src="assets/app-latch.mp4"
+            muted
+            playsinline
+          ></video>
+          <div id="hl-clip" class="clip full" data-start="12.35" data-duration="9.25" data-track-index="5" data-track-kind="graphics" data-layout-ignore>
+            <div id="hl"></div>
+          </div>
+          <div id="cursor-clip" class="clip full" data-start="12.35" data-duration="9.25" data-track-index="6" data-track-kind="graphics" data-layout-ignore>
+            <svg id="cursor" viewBox="0 0 32 32" aria-hidden="true">
+              <path d="M4 2 L4 26 L10.5 20 L15 30 L19 28 L14.5 18.5 L23 18.5 Z" fill="#ffffff" stroke="#141414" stroke-width="2" stroke-linejoin="round" />
+            </svg>
+          </div>
+        </div>
+
+        <!-- 3. 8.0-12.6 s: the spec, typed on a card that grows into the app's ground. -->
+        <div id="s3" class="clip full" data-start="8.0" data-duration="4.6" data-track-index="3" data-track-kind="graphics" style="z-index: 5">
+          <div id="describe" class="full"></div>
+          <div id="describe-card" class="full"></div>
+          <p id="describe-label" class="stencil">1. Describe</p>
+          <p id="describe-text" data-text="Start turns the motor on and it stays on; stop turns it off."></p>
+        </div>
+
+        <div id="band" class="clip full" data-start="12.35" data-duration="9.4" data-track-index="7" data-track-kind="graphics" style="z-index: 6">
+          <div id="band-fill">
+            <p id="band-step" class="stencil">2.<br />Validate</p>
+            <p id="band-a" class="band-line cond">The agent writes standard Structured Text</p>
+            <p id="band-b" class="band-line cond">Press start: the motor latches on</p>
+            <p id="band-c" class="band-line cond">Press stop: it drops</p>
+            <p id="band-d" class="band-line cond">The trend shows every signal</p>
+          </div>
+        </div>
+
+        <!-- 5. 21.5-24.0 s: the band sweeps across into the ground. -->
+        <div id="s5" class="clip full" data-start="21.5" data-duration="2.5" data-track-index="8" data-track-kind="graphics" style="z-index: 7">
+          <div id="s5-fill" class="full"></div>
+          <div id="approve" class="full">
+            <p id="approve-step" class="stencil">3. Approve</p>
+            <p id="approve-a" class="cond">An engineer signs off with a PIN</p>
+            <p id="approve-b" class="cond">Every version is kept</p>
+          </div>
+        </div>
+
+        <!-- 6. 24.0-28.0 s: what is built, one line a beat, stacked the way the
+             complaints were. Each line is a claim from docs/index.html. -->
+        <div id="s6" class="clip full" data-start="24" data-duration="4.0" data-track-index="9" data-track-kind="graphics" style="z-index: 8">
+          <p id="built-label" class="cond">What is built</p>
+          <p id="f1" class="fact cond"><i></i>Over 1,300 tests on every change</p>
+          <p id="f2" class="fact cond"><i></i>A fixed scan, bounded by a watchdog</p>
+          <p id="f3" class="fact cond"><i></i>Standard IEC 61131-3 Structured Text</p>
+          <p id="f4" class="fact cond"><i></i>EtherNet/IP and Modbus TCP</p>
+          <p id="f5" class="fact cond"><i></i>Changes taken between two scans</p>
+          <p id="f6" class="fact cond"><i></i>No licence keys</p>
+        </div>
+
+        <!-- 7. 28.0-32.0 s: the end card. The mark slams on the riser's peak. -->
+        <div id="s7" class="clip full" data-start="28" data-duration="4.0" data-track-index="10" data-track-kind="graphics" style="z-index: 9">
+          <div id="end" class="full">
+            <div id="lockup">
+              <div id="mark"><img src="assets/helmsman-mark-black.svg" alt="" /></div>
+              <div id="name">
+                <p id="wordmark" class="stencil">Helmsman</p>
+                <p id="descriptor" class="cond">Factory automation</p>
+              </div>
+            </div>
+            <div id="cta">
+              <p id="cta-btn">Try it in your browser</p>
+              <p id="cta-url">helmsman.advin.io</p>
+            </div>
+            <p id="early"><b>Early release</b><span>Open source (Apache 2.0)</span></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sound. The bed is the clock; effects sit on visible actions, each placed so
+           its measured peak lands a frame after its picture. -->
+      <audio id="bed" class="clip" data-start="0" data-duration="32" data-track-index="20" data-volume="0.9" src="assets/music/bed.mp3"></audio>
+      <audio id="sfx-slash" class="clip" data-start="3.4" data-duration="0.5" data-track-index="21" data-volume="0.6" src="assets/sfx/whoosh.mp3"></audio>
+      <audio id="sfx-flood" class="clip" data-start="3.99" data-duration="2.0" data-track-index="22" data-volume="0.75" data-fade-out="0.6" src="assets/sfx/impact-bass-1.mp3"></audio>
+      <audio id="sfx-out" class="clip" data-start="7.7" data-duration="0.5" data-track-index="21" data-volume="0.45" src="assets/sfx/whoosh-short.mp3"></audio>
+      <audio id="sfx-typing" class="clip" data-start="8.35" data-duration="1.3" data-track-index="23" data-volume="0.55" data-fade-out="0.15" src="assets/sfx/typing.mp3"></audio>
+      <audio id="sfx-grow" class="clip" data-start="11.95" data-duration="0.5" data-track-index="21" data-volume="0.45" src="assets/sfx/whoosh.mp3"></audio>
+      <audio id="sfx-run" class="clip" data-start="13" data-duration="0.36" data-track-index="24" data-volume="0.8" src="assets/sfx/click.mp3"></audio>
+      <audio id="sfx-start" class="clip" data-start="15.04" data-duration="0.36" data-track-index="24" data-volume="0.8" src="assets/sfx/click.mp3"></audio>
+      <audio id="sfx-stop" class="clip" data-start="18.44" data-duration="0.36" data-track-index="24" data-volume="0.8" src="assets/sfx/click.mp3"></audio>
+      <audio id="sfx-sweep" class="clip" data-start="21.4" data-duration="0.5" data-track-index="21" data-volume="0.45" src="assets/sfx/whoosh-short.mp3"></audio>
+      <audio id="sfx-riser" class="clip" data-start="24.74" data-duration="3.48" data-track-index="25" data-volume="0.5" data-fade-in="0.8" src="assets/sfx/riser.mp3"></audio>
+      <audio id="sfx-mark" class="clip" data-start="28.14" data-duration="2.1" data-track-index="22" data-volume="0.8" data-fade-out="0.8" src="assets/sfx/impact-bass-1.mp3"></audio>
+    </div>
+
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      const land = "expo.out";
+      const move = "power2.inOut";
+
+      // A short decaying shake of the whole frame, the same every render.
+      const jolt = (at, amp) => {
+        const steps = [
+          [amp, -amp * 0.6],
+          [-amp * 0.7, amp * 0.5],
+          [amp * 0.4, -amp * 0.3],
+          [-amp * 0.15, amp * 0.1],
+          [0, 0],
+        ];
+        steps.forEach(([x, y], i) => tl.to("#shake", { x, y, duration: 0.033, ease: "none" }, at + i * 0.033));
+      };
+      const slam = (sel, at, from = 1.35) =>
+        tl.fromTo(
+          sel,
+          { opacity: 0, scale: from, filter: "blur(12px)" },
+          { opacity: 1, scale: 1, filter: "blur(0px)", duration: 0.2, ease: land },
+          at,
+        );
+      const blurIn = (sel, at, stagger = 0.07) =>
+        tl.fromTo(sel, { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.14, stagger, ease: "power2.out" }, at);
+      const blurOut = (sel, at) => tl.to(sel, { opacity: 0, filter: "blur(8px)", duration: 0.14, ease: "power2.in" }, at);
+
+      // ---- 1. Complaints, one a beat; the slash on beat 7 floods on beat 8. ----
+      // The label and the first complaint are on frame 0: it is the thumbnail.
+      gsap.set(".gripe", { transformOrigin: "0% 50%" });
+      ["#g2", "#g3", "#g4"].forEach((g, i) => {
+        slam(g, 0.5 + i * 0.5, 1.25);
+        jolt(0.5 + i * 0.5, 5);
+      });
+      tl.to(".gripe, #tired-label", { opacity: 0.45, duration: 0.15 }, 3.5);
+      gsap.set("#slash-wrap", { rotation: -6, transformOrigin: "50% 50%" });
+      gsap.set("#slash", { transformOrigin: "0% 50%" });
+      tl.fromTo("#slash", { scaleX: 0 }, { scaleX: 1, duration: 0.18, ease: "power3.out" }, 3.5);
+      // The slash becomes the ground: it thickens past the frame and the claim cuts in on it.
+      tl.to("#slash", { scaleY: 20, duration: 0.45, ease: "power3.in" }, 3.75);
+      jolt(4.2, 18);
+
+      // ---- 2. The claim, a word an eighth note. ----
+      ["#claim h1 .w:nth-child(1)", "#claim h1 .w:nth-child(2)", "#claim h1 .w:nth-child(4)", "#claim h1 .w:nth-child(5)"].forEach((w, i) =>
+        slam(w, 4.25 + i * 0.25, 1.6),
+      );
+      jolt(5.0, 10);
+      blurIn("#claim-sub", 5.5);
+      tl.to("#claim", { x: -260, opacity: 0, filter: "blur(14px)", duration: 0.22, ease: "power3.in" }, 7.75);
+
+      // ---- 3. Describe: the card opens, the spec is typed, the card becomes the app's ground. ----
+      const spec = document.querySelector("#describe-text");
+      spec.innerHTML = [...spec.dataset.text].map((c) => "<span>" + c + "</span>").join("");
+      tl.fromTo("#describe-card", { clipPath: "inset(50% 12% 50% 12%)" }, { clipPath: "inset(28% 12% 28% 12%)", duration: 0.3, ease: land }, 8.0);
+      slam("#describe-label", 8.1, 1.2);
+      tl.fromTo("#describe-text span", { opacity: 0 }, { opacity: 1, duration: 0.01, stagger: 0.02 }, 8.35);
+      tl.to("#describe-label", { opacity: 0, duration: 0.12 }, 11.9);
+      blurOut("#describe-text", 11.9);
+      tl.to("#describe", { opacity: 0, duration: 0.01 }, 12);
+      // fromTo: the browser shortens the resting inset to two values, which a plain to() cannot interpolate.
+      tl.fromTo(
+        "#describe-card",
+        { clipPath: "inset(28% 12% 28% 12%)" },
+        { clipPath: "inset(0% 0% 0% 0%)", duration: 0.3, ease: move, immediateRender: false },
+        12,
+      );
+      tl.to("#describe-card", { opacity: 0, duration: 0.15, ease: "power1.out" }, 12.25);
+
+      // ---- 4. Validate. Recorded presses in root time: run 13.0, start 15.04-15.54,
+      // stop 18.44-18.95. The camera works the frame: whole app, the diagram for the
+      // presses, diagram and trend together for the result, then the whole app again.
+      tl.fromTo("#band-fill", { x: 380 }, { x: 0, duration: 0.35, ease: land }, 12.4);
+      slam("#band-step", 12.55, 1.2);
+      const lines = [
+        ["#band-a", 12.75, 14.85],
+        ["#band-b", 15.1, 18.25],
+        ["#band-c", 18.5, 19.8],
+        ["#band-d", 19.95, 21.45],
+      ];
+      gsap.set(".band-line", { opacity: 0 });
+      lines.forEach(([sel, at, out]) => {
+        blurIn(sel, at);
+        blurOut(sel, out);
+      });
+
+      // A view is the content rectangle's top-left corner and its scale.
+      const view = (s, vx, vy) => ({ scale: s, x: -vx * s, y: -vy * s });
+      gsap.set("#cam", { transformOrigin: "0px 0px" });
+      const FULL = view(1, 0, 0);
+      const DIAGRAM = view(1.8, 420, 80);
+      const RESULT = view(1.5, 300, 360);
+      tl.fromTo("#cam", FULL, { ...DIAGRAM, duration: 0.5, ease: move }, 13.25);
+      tl.to("#cam", { ...RESULT, duration: 0.5, ease: move }, 15.75);
+      tl.to("#cam", { ...FULL, duration: 0.5, ease: move }, 19.2);
+
+      // The motor's row on the trend, once start has latched it.
+      tl.fromTo("#hl", { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.3, ease: land }, 16.35);
+
+      // Cursor positions are in the app's own 1920 x 1080 frame (points x 1.5).
+      const RUN = { x: 1075, y: 163 };
+      const START = { x: 498, y: 360 };
+      const STOP = { x: 498, y: 540 };
+      const REST = { x: 900, y: 600 };
+      const press = (at, until) => {
+        tl.to("#cursor", { scale: 0.82, duration: 0.07, ease: "power2.out", transformOrigin: "12% 6%" }, at - 0.03);
+        tl.to("#cursor", { scale: 1, duration: 0.12, ease: "power2.out" }, until);
+      };
+      tl.fromTo("#cursor", { x: 1500, y: 760 }, { ...RUN, duration: 0.4, ease: land }, 12.45);
+      press(13, 13.1);
+      tl.to("#cursor", { ...START, duration: 0.6, ease: move }, 13.9);
+      press(15.04, 15.54);
+      tl.to("#cursor", { ...REST, duration: 0.5, ease: move }, 15.75);
+      tl.to("#cursor", { ...STOP, duration: 0.5, ease: move }, 17.8);
+      press(18.44, 18.95);
+      tl.to("#cursor", { ...REST, duration: 0.5, ease: move }, 19.2);
+
+      // ---- 5. Approve: the band sweeps across into the ground. ----
+      tl.to("#band-step", { opacity: 0, duration: 0.12 }, 21.35);
+      tl.fromTo("#s5-fill", { clipPath: "inset(0% 0% 0% 80.21%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.35, ease: move }, 21.5);
+      tl.fromTo("#approve-step", { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.35, ease: land }, 21.75);
+      tl.fromTo("#approve-a", { opacity: 0, x: -40 }, { opacity: 1, x: 0, duration: 0.3, ease: land }, 22);
+      tl.fromTo("#approve-b", { opacity: 0, x: -40 }, { opacity: 1, x: 0, duration: 0.3, ease: land }, 22.5);
+      jolt(21.75, 8);
+
+      // ---- 6. What is built: a line a beat, each slammed in like the complaints were. ----
+      blurIn("#built-label", 23.95);
+      gsap.set(".fact", { transformOrigin: "0% 50%" });
+      ["#f1", "#f2", "#f3", "#f4", "#f5", "#f6"].forEach((f, i) => {
+        slam(f, 24 + i * 0.5, 1.25);
+        tl.fromTo(f + " i", { scale: 0 }, { scale: 1, duration: 0.16, ease: "back.out(2)" }, 24.06 + i * 0.5);
+        jolt(24 + i * 0.5, 4);
+      });
+
+      // ---- 7. End card: the mark slams on the riser's peak, then the name and the call. ----
+      tl.fromTo("#mark", { scale: 3.2, rotation: -120, opacity: 0 }, { scale: 1, rotation: 0, opacity: 1, duration: 0.18, ease: "power4.in" }, 28);
+      jolt(28.18, 20);
+      tl.fromTo("#wordmark", { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.4, ease: land }, 28.45);
+      tl.fromTo("#descriptor", { opacity: 0 }, { opacity: 1, duration: 0.25 }, 28.75);
+      tl.fromTo("#cta-btn", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(1.4)" }, 29);
+      tl.fromTo("#cta-url", { opacity: 0 }, { opacity: 1, duration: 0.25 }, 29.2);
+      tl.fromTo("#early", { opacity: 0 }, { opacity: 1, duration: 0.25 }, 29.5);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

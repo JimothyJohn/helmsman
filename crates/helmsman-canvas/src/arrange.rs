@@ -194,6 +194,9 @@ impl Layers {
         }
         let Some(key) = self.key.clone() else { return };
         let mine = v.arrangement().minus(&self.applied);
+        // Moves of blocks this version lacks stay: the next deploy may
+        // bring them back.
+        let mine = self.personal(&key).updated(&mine, v);
         self.put(&key, &mine);
         self.seen = v.edits();
     }

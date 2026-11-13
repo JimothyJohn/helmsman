@@ -171,6 +171,26 @@ pub struct Devices {
     /// (`helmsman_io::Driver::address`): the resolved address of a
     /// `mac=`, `cip=` or `modbus=` endpoint, or the host's.
     addresses: Mutex<BTreeMap<String, String>>,
+    /// By link name: the protocol a device by its profile is on now.
+    transports: Mutex<BTreeMap<String, String>>,
+    /// By link name: what it says of its device's timing.
+    health: Mutex<BTreeMap<String, Timing>>,
+    /// By link name: the reason the box itself has taken the device off
+    /// the network (a restart for its configuration). Listed as the
+    /// device's state whatever its link reports meanwhile.
+    held: Mutex<BTreeMap<String, String>>,
+}
+
+/// What a link says of its device's timing (`helmsman_plc::link::Health`
+/// and the numbers behind it, in ms).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Timing {
+    /// `healthy`, `slow` or `lost`.
+    pub health: String,
+    /// The update period the link measures, once it has its samples.
+    pub measured_ms: Option<u64>,
+    /// The poll period the link runs at.
+    pub poll_ms: u64,
 }
 
 impl std::fmt::Debug for Devices {
@@ -189,7 +209,38 @@ impl Devices {
             links: Mutex::new(names.into_iter().map(|n| (n, None)).collect()),
             browsers: Mutex::new(BTreeMap::new()),
             addresses: Mutex::new(BTreeMap::new()),
+            transports: Mutex::new(BTreeMap::new()),
+            health: Mutex::new(BTreeMap::new()),
+            held: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The box takes device `name` off the network on purpose (a restart
+    /// for its configuration, `api::devconf`): until [`Devices::release`]
+    /// it is listed lost with `reason`, not as a fault.
+    pub fn hold(&self, name: &str, reason: &str) {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_string(), reason.to_string());
+    }
+
+    /// Ends a [`Devices::hold`].
+    pub fn release(&self, name: &str) {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
+    }
+
+    /// Why the box holds device `name` off the network, if it does.
+    #[must_use]
+    pub fn held(&self, name: &str) -> Option<String> {
+        self.held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
     /// Lets the box API browse device `name`'s tags (a controller it only
@@ -233,6 +284,51 @@ impl Devices {
         }
     }
 
+    /// The protocol link `name` reaches its device over, for a device by
+    /// its profile: set while the link is up on one, cleared when it goes
+    /// down (the next transport is not known until one works).
+    pub fn set_transport(&self, name: &str, transport: Option<String>) {
+        let mut t = self.transports.lock().unwrap_or_else(PoisonError::into_inner);
+        match transport {
+            Some(v) => t.insert(name.to_string(), v),
+            None => t.remove(name),
+        };
+    }
+
+    /// Records what link `name` says of its device's timing: the health
+    /// word (`healthy`, `slow`, `lost`), the update period it measures
+    /// and the poll it runs at, in ms.
+    pub fn set_health(&self, name: &str, health: &str, measured_ms: Option<u64>, poll_ms: u64) {
+        self.health.lock().unwrap_or_else(PoisonError::into_inner).insert(
+            name.to_string(),
+            Timing {
+                health: health.to_string(),
+                measured_ms,
+                poll_ms,
+            },
+        );
+    }
+
+    /// What link `name` says of its device's timing, once it reported.
+    #[must_use]
+    pub fn health(&self, name: &str) -> Option<Timing> {
+        self.health
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
+    }
+
+    /// The protocol link `name` is on now, if its driver picks one.
+    #[must_use]
+    pub fn transport(&self, name: &str) -> Option<String> {
+        self.transports
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
+    }
+
     /// Where link `name` last found its device, if its driver said.
     #[must_use]
     pub fn address(&self, name: &str) -> Option<String> {
@@ -258,6 +354,14 @@ impl Devices {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|(n, _)| n != name);
+        self.transports
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
+        self.health
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(name);
     }
 
     /// Every link: name, then up (`Some(Ok)`), down with why, or not yet known.

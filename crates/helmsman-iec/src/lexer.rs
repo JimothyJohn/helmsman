@@ -205,7 +205,13 @@ impl Lexer<'_> {
                 (Some(_), _) => {
                     self.bump();
                 }
-                (None, _) => return Err(Self::err(start, "unterminated comment")),
+                (None, _) => {
+                    let end = if close == b')' { "*)" } else { "*/" };
+                    return Err(Self::err(
+                        start,
+                        format!("this comment is never closed: end it with {end}"),
+                    ));
+                }
             }
         }
     }
@@ -380,9 +386,16 @@ impl Lexer<'_> {
                 return Err(Self::err(start, "STRING literals are not supported yet"));
             }
             _ => {
+                let hint = match (c, self.peek(0)) {
+                    (b'!', Some(b'=')) => "; write <> for not equal",
+                    (b'!', _) => "; write NOT for not",
+                    (b'|', Some(b'|')) => "; write OR",
+                    (b'#', _) => "; comments are written (* like this *) or // like this",
+                    _ => "",
+                };
                 return Err(Self::err(
                     start,
-                    format!("unexpected character {:?}", char::from(c)),
+                    format!("unexpected character {:?}{hint}", char::from(c)),
                 ));
             }
         };
@@ -506,6 +519,15 @@ impl Lexer<'_> {
 /// Tokenises `src`. Stops at the first error. `system` admits `__` names
 /// (the built-in library).
 pub fn lex(src: &str, system: bool) -> Result<Vec<(Tok, Pos)>, LexError> {
+    lex_spans(src, system).map(|(toks, _)| toks)
+}
+
+/// The tokens with their starts, and where each one ends.
+pub type Spans = (Vec<(Tok, Pos)>, Vec<Pos>);
+
+/// [`lex`], with where each token ends (the position just after it), so
+/// an error about something missing can point where it goes.
+pub fn lex_spans(src: &str, system: bool) -> Result<Spans, LexError> {
     let mut l = Lexer {
         src: src.as_bytes(),
         i: 0,
@@ -513,12 +535,14 @@ pub fn lex(src: &str, system: bool) -> Result<Vec<(Tok, Pos)>, LexError> {
         system,
     };
     let mut out = Vec::new();
+    let mut ends = Vec::new();
     loop {
         let (t, p) = l.next()?;
         let eof = t == Tok::Eof;
         out.push((t, p));
+        ends.push(l.pos);
         if eof {
-            return Ok(out);
+            return Ok((out, ends));
         }
     }
 }

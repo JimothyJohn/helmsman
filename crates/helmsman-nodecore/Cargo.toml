@@ -1,0 +1,23 @@
+[package]
+name = "helmsman-nodecore"
+version = "0.1.0"
+description = "What an edge node serves and stores, with no socket or flash in it: the settings record, a bounded HTTP parser, the box API subset a canvas reads, and the router"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `no_std + alloc`. The two node firmwares (crates/helmsman-node on the
+# Xtensa POE-ISO / POE2, crates/helmsman-node-p4 on the ESP32-P4) run this
+# over their sockets and flash; the canvas's tests parse what it renders,
+# so a node and a box are read by the same code. docs/EDGE.md Phase 4.
+[dependencies]
+# JSON without std: the box API's bodies are `json!` values here too, so the
+# field names are the box's (crates/helmsman-plc/src/api/render.rs).
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true

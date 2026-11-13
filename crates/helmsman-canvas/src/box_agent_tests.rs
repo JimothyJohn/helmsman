@@ -17,7 +17,9 @@ use helmsman_plc::api::chat;
 use proptest::prelude::*;
 use serde_json::{Value as Json, json};
 
-use crate::box_agent::{BoxAgent, End, Incoming, Item, MAX_MESSAGE, MAX_TEXT, MAX_TURNS, Status};
+use crate::box_agent::{
+    BoxAgent, End, Incoming, Item, MAX_MESSAGE, MAX_TEXT, MAX_TURNS, STATUS_RETRY_S, Status, cut,
+};
 use crate::box_tests::{Bench, DEMO};
 
 const RELAY_TOKEN: &str = "hmr1_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
@@ -180,9 +182,11 @@ fn unchunk(mut s: &str) -> String {
 
 fn get(addr: SocketAddr, path: &str) -> (u16, String) {
     let mut s = TcpStream::connect(addr).unwrap();
+    // The box token stands for the signed-in page's cookie (card read-lock).
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAuthorization: Bearer {}\r\n\r\n",
+        crate::box_tests::TOKEN
     )
     .unwrap();
     let mut raw = String::new();
@@ -215,7 +219,40 @@ fn turn(a: &mut BoxAgent, b: &Bench, message: &str, piece: usize, token: Option<
 
 fn status(a: &mut BoxAgent, b: &Bench) {
     let (s, body) = get(b.addr, "/api/chat/status");
-    a.status_answer(s, &body);
+    a.status_answer(s, &body, 0.0);
+}
+
+/// A status read the box refuses is asked again on a cadence, not on every
+/// frame (the dot stays grey, the tab keeps drawing, and each answer
+/// repaints).
+#[test]
+fn a_failed_status_read_is_asked_again_on_the_cadence_not_every_frame() {
+    let mut a = BoxAgent::new();
+    assert!(a.status_due(10.0), "asked once");
+    assert!(!a.status_due(10.0), "not twice while on its way");
+    a.status_answer(500, "", 10.1);
+    for frame in 0..600 {
+        assert!(!a.status_due(10.1 + f64::from(frame) / 200.0), "frame {frame}");
+    }
+    assert!(a.status_due(10.1 + STATUS_RETRY_S), "after the cadence");
+    a.status_answer(200, r#"{"state":"online"}"#, 16.0);
+    assert!(!a.status_due(100.0), "known: never asked again");
+}
+
+#[test]
+fn a_reply_cut_to_a_size_never_splits_a_character() {
+    let mut s = "aé€😀".repeat(10);
+    for max in 0..s.len() + 3 {
+        let mut t = s.clone();
+        cut(&mut t, max);
+        assert!(t.len() <= max && s.starts_with(&t), "{max}");
+        assert!(
+            max - t.len() < 4 || t.len() == s.len(),
+            "cut no more than a character: {max}"
+        );
+    }
+    cut(&mut s, 1 << 20);
+    assert_eq!(s.chars().count(), 40);
 }
 
 #[test]
@@ -558,4 +595,16 @@ proptest! {
         prop_assert!(a.turns[0].end.is_some());
         prop_assert!(a.turns[0].items.len() <= crate::box_agent::MAX_ITEMS);
     }
+}
+
+/// Nick, 2026-11-08: the Agent tab shows the state as a dot, green online,
+/// red offline or without a relay, grey until heard.
+#[test]
+fn the_status_dot_is_green_online_red_offline_grey_unknown() {
+    use crate::st_view::brand::{GREEN, RED, STEEL};
+    assert_eq!(Status::Online.dot(), GREEN);
+    assert_eq!(Status::Offline("down".into()).dot(), RED);
+    assert_eq!(Status::Unconfigured(String::new()).dot(), RED);
+    assert_eq!(Status::Unread.dot(), STEEL);
+    assert_eq!(Status::Unknown.dot(), STEEL);
 }

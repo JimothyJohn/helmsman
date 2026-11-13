@@ -41,13 +41,16 @@
 //!   later apply or rollback moves it.
 
 pub mod build;
+pub mod check;
 pub mod history;
+pub mod junit;
 pub mod settings;
 
 pub use helmsman_project::{
-    DRIVER_EXT, DRIVERS, Drivers, EDS_EXT, FILE_NAMES, FileKind, Files, IO_MAP, LAYOUT, MAX_DRIVER,
-    MAX_DRIVERS, MAX_FILE, MAX_FILES, MAX_TOTAL, NAME_LEN, SETTINGS, STEM_LEN, check_file, check_text,
-    driver_name, eds_file_name, file_name, from_zip, from_zip_with_drivers, layout, project_name, zip,
+    DRIVER_EXT, DRIVERS, Drivers, EDS_EXT, FILE_NAMES, FileKind, Files, IO_MAP, KEPT_LEN, LAYOUT, MAX_DRIVER,
+    MAX_DRIVERS, MAX_FILE, MAX_FILES, MAX_KEPT, MAX_TOTAL, NAME_LEN, SETTINGS, STEM_LEN, check_file,
+    check_text, driver_name, eds_file_name, file_name, from_zip, from_zip_with_drivers, kept_name, layout,
+    project_file, project_name, zip,
 };
 
 use std::collections::BTreeMap;
@@ -188,6 +191,69 @@ pub(crate) fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<(
         return Err(e);
     }
     Ok(())
+}
+
+/// Why a project folder could not be read ([`read_folder`]).
+#[derive(Debug)]
+pub enum Unread {
+    /// The folder, or the file named, failed to read (a link is
+    /// `InvalidData`: nothing in a project is followed).
+    Io(Option<String>, io::Error),
+    /// The file named breaks the content rules ([`check_text`]).
+    Text(String, String),
+}
+
+/// Every project file in folder `dir`, read as the store reads one of its
+/// projects ([`Projects::read`]): a name that is not a project file's
+/// (temporaries, `drivers/`, anything else) is left out; a file that is a
+/// link, too large or not clean text is an error. How `helmsman-plc test`
+/// reads a project kept outside a box.
+///
+/// A file this release has no use for ([`kept_name`]) is read too, so a
+/// replace keeps it, but only as far as it is plain text of the usual size:
+/// one that is a link, a folder, too large or not clean text is left out
+/// (as every such name was before), and so are the ones past [`MAX_KEPT`]
+/// or [`MAX_TOTAL`], taken in name order, so a folder someone filled by
+/// hand cannot make a read unbounded.
+///
+/// # Errors
+/// The folder or a file cannot be read, or a file breaks the rules.
+pub fn read_folder(dir: &Path) -> Result<Files, Unread> {
+    let mut files = BTreeMap::new();
+    let mut kept = Vec::new();
+    for e in fs::read_dir(dir).map_err(|e| Unread::Io(None, e))? {
+        let e = e.map_err(|e| Unread::Io(None, e))?;
+        let Some(file) = e.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if file_name(&file).is_none() {
+            if kept_name(&file) {
+                kept.push((file, e.path()));
+            }
+            continue; // temporaries, and anything not ours
+        }
+        let bytes = read_file(&e.path(), MAX_FILE).map_err(|e| Unread::Io(Some(file.clone()), e))?;
+        let text = check_text(&bytes).map_err(|e| Unread::Text(file.clone(), e))?;
+        files.insert(file, text.to_string());
+    }
+    kept.sort();
+    let mut total: usize = files.values().map(String::len).sum();
+    let mut count = 0;
+    for (file, path) in kept {
+        let Ok(bytes) = read_file(&path, MAX_FILE) else {
+            continue;
+        };
+        let Ok(text) = check_text(&bytes) else {
+            continue;
+        };
+        if count >= MAX_KEPT || total + text.len() > MAX_TOTAL {
+            continue;
+        }
+        count += 1;
+        total += text.len();
+        files.insert(file, text.to_string());
+    }
+    Ok(Files(files))
 }
 
 /// Reads a regular file of at most `cap` bytes, refusing links.
@@ -354,20 +420,10 @@ impl Projects {
 
     fn read_locked(&self, name: &str) -> R<Files> {
         let dir = self.dir(name)?;
-        let mut files = BTreeMap::new();
-        for e in fs::read_dir(&dir).map_err(|e| Refusal::io(&e))? {
-            let e = e.map_err(|e| Refusal::io(&e))?;
-            let Some(file) = e.file_name().to_str().map(str::to_string) else {
-                continue;
-            };
-            if file_name(&file).is_none() {
-                continue; // temporaries, and anything not ours
-            }
-            let bytes = read_file(&e.path(), MAX_FILE).map_err(|e| Refusal::io(&e))?;
-            let text = check_text(&bytes).map_err(|e| Refusal::new(500, format!("{file} on disk: {e}")))?;
-            files.insert(file, text.to_string());
-        }
-        Ok(Files(files))
+        read_folder(&dir).map_err(|e| match e {
+            Unread::Io(_, e) => Refusal::io(&e),
+            Unread::Text(file, e) => Refusal::new(500, format!("{file} on disk: {e}")),
+        })
     }
 
     /// One file's text.
@@ -376,7 +432,7 @@ impl Projects {
     /// No such project or file.
     pub fn file(&self, name: &str, file: &str) -> R<String> {
         let files = self.read(name)?;
-        if file_name(file).is_none() {
+        if !project_file(file) {
             return Err(Refusal::new(404, "no such file"));
         }
         files
@@ -582,7 +638,7 @@ impl Projects {
     pub fn remove(&self, name: &str, file: &str) -> R<()> {
         let _g = self.guard();
         let dir = self.dir(name)?;
-        if file_name(file).is_none() {
+        if !project_file(file) {
             return Err(Refusal::new(404, "no such file"));
         }
         let path = dir.join(file);

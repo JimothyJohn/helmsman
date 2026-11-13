@@ -17,11 +17,15 @@ use crate::projects::Workspace;
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
 use crate::st_view::brand::{BLACK, GRAPHITE, YELLOW};
+use crate::stamp;
 use crate::theme::{self, theme};
 use crate::tips::Tip;
 
 /// The header's height, points: one row, as tall as the two it replaced.
 pub const HEADER_H: f32 = 48.0;
+/// The least room the header's title is drawn in on a phone, points:
+/// about six characters. With less it is left out, not cut to "T…".
+const TITLE_ROOM: f32 = 70.0;
 
 /// The product site, and its help page (Help menu, the ? glyph).
 pub const SITE_URL: &str = "https://helmsman.advin.io/";
@@ -30,9 +34,40 @@ pub const HELP_URL: &str = "https://helmsman.advin.io/help/";
 /// Seconds between re-reads of the proposal list for the ⋯ badge.
 const PROPOSALS_EVERY: f64 = 30.0;
 
+/// Longest a Run, Stop or Restart sent to a box holds the next one back
+/// while the box's list still shows the state it was decided from, s.
+const CONTROL_HOLD: f64 = 5.0;
+
+/// A Run, Stop or Restart sent to a box, until the box's list shows it.
+struct ControlSent {
+    /// Page time the hold ends.
+    until: f64,
+    op: &'static str,
+    /// The targets' (name, state) it was decided from.
+    states: Vec<(String, String)>,
+}
+
 /// What Upload's file picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x,.eds";
+/// The largest file a picker takes, bytes: read whole into the page, so
+/// checked against the file's size before it is.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub const MAX_PICK: f64 = helmsman_project::devlib::MAX_BYTES as f64;
+
+/// Why a picked file of `size` bytes is not read, if it is not.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[must_use]
+pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
+    (size > MAX_PICK).then(|| {
+        format!(
+            "{name} was not read: it is {:.1} MB and upload takes files up to {:.0} MB.",
+            size / 1_048_576.0,
+            MAX_PICK / 1_048_576.0
+        )
+    })
+}
+
 /// What the Devices tab's "Import device…" picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const DEVICE_ACCEPT: &str = ".eds";
@@ -44,6 +79,32 @@ pub enum Source {
     Box,
     /// The program running in this page against virtual I/O.
     Sim,
+}
+
+/// Whether the shortcut `a` applies on `screen` of `source`. What acts on
+/// the open project (Save, Deploy, Upload, Force, Undo, the step chords)
+/// does so only where that project is on screen: Deploy's key on the Monitor or
+/// the Proposals must not deploy a project the engineer cannot see. The
+/// simulation's run controls work on the Editor and the Monitor.
+#[must_use]
+pub fn can_act(a: Action, screen: Screen, source: Source) -> bool {
+    match a {
+        Action::Save
+        | Action::Deploy
+        | Action::Upload
+        | Action::Download
+        | Action::Force
+        | Action::ReleaseAll
+        | Action::Undo
+        | Action::Redo
+        | Action::GoToDefinition
+        | Action::CrossReferences
+        | Action::StepInto
+        | Action::StepOut
+        | Action::Breakpoint => screen == Screen::Editor,
+        Action::RunStop | Action::Stop | Action::Step => source == Source::Sim && screen != Screen::Proposals,
+        _ => true,
+    }
 }
 
 /// Which screen fills the window under the header.
@@ -74,6 +135,52 @@ pub fn wants_sim(query: &str, mode: Option<&str>) -> bool {
     mode == Some("playground") || has(query, "playground") || has(query, "demo")
 }
 
+/// The box or node this page should watch instead of its own origin:
+/// `?box=http://192.168.3.55:8080` (a node on the floor, or another box).
+/// Only an origin is taken, `http://` or `https://`, a host of letters,
+/// digits, `.` and `-`, an optional port, nothing after it; anything else
+/// is ignored, so a link cannot point the canvas's requests at a path.
+/// `%3A` and `%2F` are undone, which is how a browser pastes the value.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[must_use]
+pub fn box_origin(query: &str) -> Option<String> {
+    let raw = query
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("box="))?;
+    let decoded = raw
+        .replace("%3A", ":")
+        .replace("%3a", ":")
+        .replace("%2F", "/")
+        .replace("%2f", "/");
+    let decoded = decoded.trim_end_matches('/');
+    let rest = decoded
+        .strip_prefix("http://")
+        .map(|r| ("http://", r))
+        .or_else(|| decoded.strip_prefix("https://").map(|r| ("https://", r)))?;
+    let (scheme, hostport) = rest;
+    let (host, port) = match hostport.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (hostport, None),
+    };
+    if host.is_empty()
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        return None;
+    }
+    if let Some(p) = port
+        && (p.is_empty()
+            || p.len() > 5
+            || !p.bytes().all(|b| b.is_ascii_digit())
+            || p.parse::<u16>().is_err())
+    {
+        return None;
+    }
+    Some(format!("{scheme}{hostport}"))
+}
+
 /// Whether a page with this query string opens on the Monitor: `?monitor`
 /// (a wall TV's link), and the old floor screen's `?andon`. (`?site` is
 /// gone.)
@@ -81,6 +188,14 @@ pub fn wants_sim(query: &str, mode: Option<&str>) -> bool {
 #[must_use]
 pub fn wants_monitor(query: &str) -> bool {
     has(query, "monitor") || has(query, "andon")
+}
+
+/// Whether a page with this query string starts the guided tour:
+/// `?tour` (the help pages link `/playground/?tour`).
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[must_use]
+pub fn wants_tour(query: &str) -> bool {
+    has(query, "tour")
 }
 
 // Independent UI flags (menu open, served by a box, first frame routed,
@@ -95,6 +210,10 @@ pub struct App {
     pub chrome: Chrome,
     /// The sign-in panel under the header is open.
     pub login: bool,
+    /// Who was signed in last frame, so the sign-in panel closes the
+    /// frame a sign-in or sign-out lands (the answer comes frames after
+    /// the panel's button; Nick, 2026-11-07).
+    login_seen: Option<String>,
     /// The box's Editor, built the first time it is shown.
     pub boxv: Option<BoxView>,
     /// The simulation's, likewise.
@@ -110,8 +229,24 @@ pub struct App {
     /// The page fell back to the simulation by itself (no box answered);
     /// once, so ⋯ › Back to this box is not undone.
     fell_back: bool,
+    /// The box popup that asks something, open (`crate::box_popup`).
+    asking: crate::box_popup::Asking,
+    /// The found popup was shown (once).
+    found_shown: bool,
+    /// The Lost popup was hidden; shown again once the box is back.
+    pub(crate) lost_hidden: bool,
+    /// When the page started watching the box (the Connecting popup waits
+    /// a moment before it shows).
+    watch_from: Option<f64>,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
+    /// The last Run, Stop or Restart sent to the box: until when it holds,
+    /// which, and the targets' states it was decided from. The box's list lags a
+    /// command by a publish, so a second click on the same state would
+    /// decide, and send, again.
+    ctl: Option<ControlSent>,
+    /// The guided tour, while it runs (`?tour`, Help › Take the tour).
+    pub tour: Option<crate::tour::Tour>,
 }
 
 impl App {
@@ -119,8 +254,23 @@ impl App {
         // A page the box serves watches that box; docs/playground/ (and
         // the old `?playground` and `?demo` links) run the simulation, as
         // does the native window.
+        // `?box=ORIGIN` watches a node or another box from wherever this
+        // page is served (the dev server, or a box page with `--site`).
         #[cfg(target_arch = "wasm32")]
-        let mut app = if crate::web::wants_sim() {
+        let mut app = if let Some(origin) = crate::web::box_origin() {
+            crate::web::set_base(&origin);
+            let mut app = Self::boxed();
+            // The sign-in panel asks for that origin's token (card
+            // canvas-node-token); the one this browser kept for it, if any,
+            // makes the page an engineer there from the first frame.
+            let review = app.review.get_or_insert_with(ReviewView::new);
+            if let Some(token) = crate::web::remembered_token(&origin) {
+                crate::web::set_token(Some(&token));
+                review.state.session = Some(crate::node_token::session());
+            }
+            review.remote = Some(origin);
+            app
+        } else if crate::web::wants_sim() {
             Self::sim()
         } else {
             Self::boxed()
@@ -137,6 +287,10 @@ impl App {
         if crate::web::wants_monitor() {
             app.open_monitor();
         }
+        #[cfg(target_arch = "wasm32")]
+        if app.source == Source::Sim && crate::web::wants_tour() {
+            app.tour = Some(crate::tour::Tour::new());
+        }
         app
     }
 
@@ -152,6 +306,7 @@ impl App {
             served_by_box: false,
             chrome,
             login: false,
+            login_seen: None,
             boxv: None,
             sim: None,
             review: None,
@@ -159,7 +314,46 @@ impl App {
             routed: false,
             about: false,
             fell_back: false,
+            asking: crate::box_popup::Asking::None,
+            found_shown: false,
+            lost_hidden: false,
+            watch_from: None,
             listed: None,
+            ctl: None,
+            tour: None,
+        }
+    }
+
+    /// The desk (`crate::desk`) and the App: the screen and the sign-in
+    /// name come back once from before a reload, and are handed to the box
+    /// view to keep every frame. A password or PIN never is.
+    fn desk(&mut self) {
+        let Some(b) = &mut self.boxv else { return };
+        if let Some(d) = b.restored.take() {
+            if self.screen == Screen::Editor && d.screen.as_deref() == Some("monitor") {
+                self.screen = Screen::Monitor;
+            }
+            if !d.user.is_empty() {
+                let r = self.review.get_or_insert_with(ReviewView::new);
+                if r.user_input.is_empty() {
+                    r.user_input = d.user;
+                }
+            }
+        }
+        b.desk_screen = match self.screen {
+            Screen::Editor => Some("editor".into()),
+            Screen::Monitor => Some("monitor".into()),
+            Screen::Proposals => b.desk_screen.take(),
+        };
+        if let Some(r) = &self.review {
+            b.desk_user.clone_from(&r.user_input);
+            b.decided = r
+                .state
+                .list
+                .iter()
+                .filter(|p| p.status != "draft")
+                .map(|p| (p.id, p.status.clone()))
+                .collect();
         }
     }
 
@@ -229,6 +423,26 @@ impl App {
         }
     }
 
+    /// Files the picker could not read, told in Messages (the page used to
+    /// drop them without a word).
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn pick_failed(&mut self, errors: Vec<String>, now: f64) {
+        for e in errors {
+            match self.source {
+                Source::Box => {
+                    if let Some(b) = &mut self.boxv {
+                        Body::messages(b).error(now, e);
+                    }
+                }
+                Source::Sim => {
+                    if let Some(s) = &mut self.sim {
+                        Body::messages(s).error(now, e);
+                    }
+                }
+            }
+        }
+    }
+
     /// What the header names: the program or module open.
     #[must_use]
     pub fn title(&self) -> String {
@@ -248,6 +462,7 @@ impl App {
     /// can drive it without a window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        hotkeys::swallow_text(&ctx);
         let now = ctx.input(|i| i.time);
         theme::apply(&ctx, self.chrome.light);
         if self.source == Source::Sim && self.screen == Screen::Proposals {
@@ -260,50 +475,105 @@ impl App {
                 self.screen = Screen::Monitor;
             }
         }
-        if let Some(b) = &mut self.boxv {
-            b.state.set_monitor(self.screen == Screen::Monitor);
+        if self.source == Source::Box {
+            if let Some(b) = &mut self.boxv {
+                b.state.resume();
+                b.state.set_monitor(self.screen == Screen::Monitor);
+                // Card read-lock: a box answers no read without a session.
+                // The first 401 opens the sign-in panel once; a sign-in
+                // starts the reads again.
+                let signed_in = self
+                    .review
+                    .as_ref()
+                    .is_some_and(|r| r.state.signed_in().is_some());
+                if b.state.locked() && signed_in {
+                    b.state.unlock();
+                } else if b.state.take_prompt() {
+                    self.login = true;
+                }
+            }
+        } else if let Some(b) = self.boxv.as_mut().filter(|b| !b.state.paused()) {
+            b.park(&ctx);
         }
         // Proposals are read from the start, so the badge knows.
         if self.source == Source::Box {
             let r = self.review.get_or_insert_with(ReviewView::new);
             if self.listed.is_none_or(|t| now - t >= PROPOSALS_EVERY) {
                 if self.listed.is_some() {
-                    r.state.relist();
+                    r.state.badge_relist();
                 }
                 self.listed = Some(now);
             }
-            if self.screen != Screen::Proposals {
+            if self.screen == Screen::Proposals {
+                // Nothing else draws the box here, and its streams carry
+                // on: take what they bring, or it piles up unread.
+                self.boxv.get_or_insert_with(BoxView::new).tick(&ctx);
+            } else {
                 r.tick(&ctx, now);
             }
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(PROPOSALS_EVERY));
         }
         #[cfg(target_arch = "wasm32")]
-        self.uploaded(crate::web::take_picked());
+        {
+            self.uploaded(crate::web::take_picked());
+            self.pick_failed(crate::web::take_pick_errors(), ctx.input(|i| i.time));
+        }
         let session = self.session();
         let engineer = is_engineer(session.as_ref()).is_ok();
         if let Some(b) = &mut self.boxv {
             b.session = session;
         }
+        self.desk();
         // No box ever answered this page: it is the simulation then, by
-        // itself (Nick, 2026-11-01). A box that answered and went away
-        // stays the box: its last diagram is worth more than a demo.
+        // itself (Nick, 2026-11-01), on the first failed look (Nick,
+        // 2026-11-13: not after three), with a second look in the
+        // background once the simulation is up. A box that answered and
+        // went away stays the box: its last diagram is worth more than a
+        // demo.
         if self.source == Source::Box
             && !self.fell_back
-            && let Some(b) = &self.boxv
-            && matches!(b.state.link(), crate::remote::Link::Unreachable { .. })
+            && let Some(b) = &mut self.boxv
+            && matches!(
+                b.state.link(),
+                crate::remote::Link::Unreachable { .. } | crate::remote::Link::Reconnecting { .. }
+            )
             && !b.state.ever_connected()
         {
+            b.state.probe_at(now + crate::box_popup::PROBE_AFTER);
             self.fell_back = true;
+            self.asking = crate::box_popup::Asking::NoBox;
             self.source = Source::Sim;
             if self.screen == Screen::Proposals {
                 self.screen = Screen::Editor;
             }
             let s = self.sim.get_or_insert_with(PlaygroundView::new);
             s.notice = Some(
-                "No box answered at this address: simulating in this browser (⋯ › Back to this box).".into(),
+                "No box answered at this address: simulating in this browser (View › Back to this box)."
+                    .into(),
             );
         }
-        let header = self.header(ui);
+        // The second look, while the simulation runs.
+        if self.source == Source::Sim
+            && let Some(b) = &mut self.boxv
+        {
+            match b.state.probe() {
+                crate::remote::Probe::Due(at) => {
+                    b.probe_tick(&ctx);
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).max(0.05)));
+                }
+                crate::remote::Probe::Asked => {
+                    b.probe_tick(&ctx);
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                crate::remote::Probe::Found if !self.found_shown => {
+                    self.found_shown = true;
+                    self.asking = crate::box_popup::Asking::Found;
+                }
+                _ => {}
+            }
+        }
+        let mut header = self.header(ui);
+        header.extend(self.build_banner(ui));
         self.chrome.hits.clear();
         match (self.screen, self.source) {
             (Screen::Proposals, _) => {
@@ -341,20 +611,46 @@ impl App {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.state.set_monitor(true);
                 b.tick(&ctx);
-                self.monitor.show(ui, &b.state, &mut self.chrome, engineer, None);
+                // Card monitor-box-run-stop: an engineer's Stop, Run and
+                // Restart; anyone else's Monitor stays watch-only.
+                let targets = self.monitor.targets(&b.state.modules);
+                let t = engineer.then(|| Transport {
+                    built: !targets.is_empty(),
+                    state: if b
+                        .state
+                        .modules
+                        .iter()
+                        .any(|m| targets.contains(&m.name) && m.state != "stopped")
+                    {
+                        crate::playground::RunState::Running
+                    } else {
+                        crate::playground::RunState::Paused
+                    },
+                    on_box: true,
+                });
+                self.monitor.show(ui, &b.state, &mut self.chrome, engineer, t);
             }
             (Screen::Monitor, Source::Sim) => {
                 let s = self.sim.get_or_insert_with(PlaygroundView::new);
                 s.tick(&ctx);
                 let t = Transport {
                     built: s.session.build.is_some(),
-                    running: s.session.running,
+                    state: s.session.state(),
+                    on_box: false,
                 };
                 self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));
             }
         }
         match self.monitor.wish.take() {
             Some(Wish::Diagram { program, prefix }) => self.open_diagram(&program, &prefix),
+            Some(Wish::Act(a)) if self.source == Source::Box => {
+                let targets = self
+                    .boxv
+                    .as_ref()
+                    .map(|b| self.monitor.targets(&b.state.modules))
+                    .unwrap_or_default();
+                self.box_control(a, &targets, now);
+            }
             Some(Wish::Act(a)) => self.act(a, &ctx),
             None => {}
         }
@@ -364,12 +660,60 @@ impl App {
         for a in hotkeys::pressed(&ctx) {
             self.act(a, &ctx);
         }
+        self.tour_ui(&ctx);
+        self.box_popup(&ctx, now);
         theme::pointer_cursor(&ctx);
+    }
+
+    /// What the page is doing about the box, as a popup
+    /// (`crate::box_popup`), and what the person pressed in it.
+    fn box_popup(&mut self, ctx: &egui::Context, now: f64) {
+        use crate::box_popup::{Act, Seen, show, which};
+        let Some(b) = &self.boxv else { return };
+        if self.source == Source::Box {
+            self.watch_from.get_or_insert(now);
+        }
+        let link = b.state.link();
+        if link == crate::remote::Link::Connected {
+            self.lost_hidden = false;
+        }
+        let seen = Seen {
+            on_box: self.source == Source::Box,
+            link,
+            ever_connected: b.state.ever_connected(),
+            waited: now - self.watch_from.unwrap_or(now),
+            asking: self.asking,
+            probe: b.state.probe(),
+            lost_hidden: self.lost_hidden,
+        };
+        let Some(p) = which(&seen) else { return };
+        #[cfg(target_arch = "wasm32")]
+        let here = crate::web::box_address();
+        #[cfg(not(target_arch = "wasm32"))]
+        let here = "this address".to_string();
+        match show(ctx, &mut self.chrome, p, &here) {
+            Some(Act::Ok | Act::Keep) => self.asking = crate::box_popup::Asking::None,
+            Some(Act::Connect) => {
+                self.asking = crate::box_popup::Asking::None;
+                self.source = Source::Box;
+                self.screen = Screen::Editor;
+            }
+            Some(Act::Hide) => self.lost_hidden = true,
+            Some(Act::Simulate) => {
+                self.lost_hidden = true;
+                self.source = Source::Sim;
+                self.screen = Screen::Editor;
+            }
+            None => {}
+        }
     }
 
     /// Does what a shortcut (or its menu item) asks; nothing where it
     /// does not apply (Run in a box's page, Sign in in the simulation).
     pub fn act(&mut self, a: Action, ctx: &egui::Context) {
+        if !can_act(a, self.screen, self.source) {
+            return;
+        }
         match a {
             Action::Save => {
                 if let Some(w) = self.workspace()
@@ -390,9 +734,6 @@ impl App {
             }
             Action::RunStop | Action::Stop | Action::Step => {
                 // On the Editor and the Monitor alike (Nick, 2026-11-01).
-                if self.source != Source::Sim || self.screen == Screen::Proposals {
-                    return;
-                }
                 let Some(s) = self.sim.as_mut() else { return };
                 if s.session.build.is_none() {
                     return;
@@ -402,10 +743,17 @@ impl App {
                         let on = !s.session.running;
                         s.session.set_running(on);
                     }
-                    Action::Stop => s.session.set_running(false),
+                    Action::Stop => s.session.stop(),
                     _ => {
-                        if !s.session.running {
-                            s.session.step();
+                        if !s.session.running && !s.session.step_to_change() {
+                            let at = ctx.input(|i| i.time);
+                            s.log.info(
+                                at,
+                                format!(
+                                    "Step: nothing changed in {} s of program time.",
+                                    crate::playground::STEP_MS / 1000
+                                ),
+                            );
                         }
                     }
                 }
@@ -503,6 +851,53 @@ impl App {
 
     /// The Editor's diagram of `program` (empty: the one open), at the
     /// instance `prefix` (empty: the program).
+    /// A box's transport, from the Monitor or the Editor (card
+    /// monitor-box-run-stop): Run/Stop stops every running one of
+    /// `targets`, or runs them all when none runs; Restart restarts each.
+    /// A second click before the box shows the first one's effect (or
+    /// [`CONTROL_HOLD`] seconds) is ignored. The box checks the session
+    /// and audits.
+    fn box_control(&mut self, a: Action, targets: &[String], now: f64) {
+        let Some(b) = self.boxv.as_mut() else {
+            return;
+        };
+        let states: Vec<(String, String)> = b
+            .state
+            .modules
+            .iter()
+            .filter(|m| targets.contains(&m.name))
+            .map(|m| (m.name.clone(), m.state.clone()))
+            .collect();
+        let running: Vec<String> = b
+            .state
+            .modules
+            .iter()
+            .filter(|m| targets.contains(&m.name) && m.state != "stopped")
+            .map(|m| m.name.clone())
+            .collect();
+        let (op, names) = match a {
+            Action::RunStop if running.is_empty() => ("run", targets.to_vec()),
+            Action::RunStop => ("stop", running),
+            Action::Restart => ("restart", targets.to_vec()),
+            _ => return,
+        };
+        if self
+            .ctl
+            .as_ref()
+            .is_some_and(|c| now < c.until && c.op == op && c.states == states)
+        {
+            return;
+        }
+        self.ctl = Some(ControlSent {
+            until: now + CONTROL_HOLD,
+            op,
+            states,
+        });
+        for n in names {
+            b.projects.control(&n, op);
+        }
+    }
+
     pub fn open_diagram(&mut self, program: &str, prefix: &str) {
         self.screen = Screen::Editor;
         match self.source {
@@ -533,21 +928,33 @@ impl App {
         let waiting = self.waiting();
         let title = self.title();
         let engineer = is_engineer(self.session().as_ref()).is_ok();
+        // A phone's width: the wordmark, the open view's status and the
+        // "simulation" tag give way, so the mark's group and the screens'
+        // never overlap; the title takes what is left and elides.
+        let narrow = ui.ctx().content_rect().width() < NARROW;
         let panel = egui::Panel::top("header").show(ui, |ui| {
             let size = Vec2::new(ui.available_width(), HEADER_H);
             let t = theme(ui);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // The wordmark is the way to the site.
-                let mark = ui
-                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent)).frame(false))
-                    .tip(format!("Opens {SITE_URL} in a new tab."));
-                hits.push(("mark".to_string(), mark.rect));
-                if mark.clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
+                // The wordmark is the way to the site (the About window links
+                // it, on a phone).
+                if !narrow {
+                    let mark = ui
+                        .add(
+                            egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent))
+                                .frame(false),
+                        )
+                        .tip(format!("Opens {SITE_URL} in a new tab."));
+                    hits.push(("mark".to_string(), mark.rect));
+                    if mark.clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
+                    }
                 }
                 self.menus(ui, engineer, waiting, &mut hits);
-                ui.separator();
-                self.actions(ui, &mut hits);
+                if !narrow {
+                    ui.separator();
+                    self.actions(ui, &mut hits);
+                }
                 // The right-hand group, laid out from the window's edge
                 // leftwards (the order below is right to left).
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -574,14 +981,21 @@ impl App {
                     }
                     ui.separator();
                     self.dirty_mark(ui, &mut hits);
-                    if self.source == Source::Sim {
+                    if self.source == Source::Sim && !narrow {
                         ui.label(RichText::new("simulation").color(t.muted))
                             .tip("The program runs in this page. Nothing reaches a controller.");
                     }
-                    let r = ui
-                        .label(RichText::new(&title).strong().monospace().color(t.fg))
-                        .tip("The open project.");
-                    hits.push(("title".to_string(), r.rect));
+                    // A phone signed out has a letter's room left here:
+                    // "T…" says nothing, so the title waits for room.
+                    if !narrow || ui.available_width() >= TITLE_ROOM {
+                        let r = ui
+                            .add(
+                                egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
+                                    .truncate(),
+                            )
+                            .tip("The open project.");
+                        hits.push(("title".to_string(), r.rect));
+                    }
                     m.rect
                 })
                 .inner
@@ -599,10 +1013,59 @@ impl App {
         hits
     }
 
+    /// Card build-match: a strip under the header, on every screen, when
+    /// the box answers as a different build from this page (a page left
+    /// open over an update, or a `--ui` built from another release).
+    /// Nothing to compare ([`stamp::differs`]) shows nothing.
+    fn build_banner(&self, ui: &mut egui::Ui) -> Vec<(String, Rect)> {
+        let mut hits = Vec::new();
+        let theirs = match (&self.source, &self.boxv) {
+            (Source::Box, Some(b)) => b.state.build.as_deref(),
+            _ => None,
+        };
+        let Some(theirs) = theirs.filter(|t| stamp::differs(stamp::CANVAS, Some(t))) else {
+            return hits;
+        };
+        let frame = egui::Frame::new()
+            .fill(YELLOW)
+            .inner_margin(egui::Margin::symmetric(8, 4));
+        let panel = egui::Panel::top("build-match").frame(frame).show(ui, |ui| {
+            // Wrapped, so a narrow window grows the strip's height and
+            // never a panel's width.
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(
+                        "This editor is from a different release than the controller. \
+                         Reload the page to get the controller's own.",
+                    )
+                    .color(BLACK),
+                )
+                .tip(format!(
+                    "This page is build {}; the controller is build {theirs}. A page left open \
+                     over an update keeps the old editor until it reloads.",
+                    stamp::CANVAS
+                ));
+                let r = ui
+                    .add(egui::Button::new(RichText::new("Reload").strong()))
+                    .tip("Reloads this page from the controller.");
+                hits.push(("reload".to_string(), r.rect));
+                if r.clicked() {
+                    #[cfg(target_arch = "wasm32")]
+                    crate::web::reload();
+                }
+            });
+        });
+        hits.push(("build banner".to_string(), panel.response.rect));
+        hits
+    }
+
     /// Editor | Monitor as one two-way toggle: the active side filled.
     fn screen_toggle(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
-        let half = Vec2::new(TAP * 1.6, TAP * 0.62);
         let t = theme(ui);
+        // Each side a glyph (Nick, 2026-11-12: the app should speak in
+        // pictures): the code brackets for the Editor, a screen for the
+        // Monitor; the tooltip names them.
+        let half = Vec2::new(TAP * 1.3, TAP * 0.62);
         let (rect, _) = ui.allocate_exact_size(Vec2::new(half.x * 2.0, half.y), egui::Sense::hover());
         ui.painter().rect_filled(rect, CornerRadius::same(6), t.rule);
         ui.painter().rect_stroke(
@@ -612,10 +1075,10 @@ impl App {
             egui::StrokeKind::Inside,
         );
         let sides = [
-            (Screen::Editor, "Editor", "editor"),
-            (Screen::Monitor, "Monitor", "monitor"),
+            (Screen::Editor, crate::glyphs::Icon::Code, "editor"),
+            (Screen::Monitor, crate::glyphs::Icon::Monitor, "monitor"),
         ];
-        for (k, (screen, label, key)) in sides.into_iter().enumerate() {
+        for (k, (screen, icon, key)) in sides.into_iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let r = Rect::from_min_size(rect.min + Vec2::new(half.x * k as f32, 0.0), half);
             let id = ui.scope_id().with(key);
@@ -628,11 +1091,11 @@ impl App {
                 ui.painter()
                     .rect_filled(r.shrink(2.0), CornerRadius::same(5), YELLOW);
             }
-            ui.painter().text(
-                r.center(),
-                egui::Align2::CENTER_CENTER,
-                label,
-                egui::FontId::proportional(crate::theme::BODY),
+            let side = r.height() * 0.62;
+            crate::glyphs::paint(
+                ui.painter(),
+                Rect::from_center_size(r.center(), Vec2::splat(side)),
+                icon,
                 if on { BLACK } else { t.fg },
             );
             hits.push((key.to_string(), r));
@@ -649,8 +1112,11 @@ impl App {
     }
 
     /// The glyph buttons over the diagram's top-right corner: run/stop,
-    /// step and restart in the simulation, then save, upload, download
-    /// and help. Drawn after the screen, so they sit on top.
+    /// step and restart in the simulation (on a box, an engineer's stop or
+    /// run and restart of what it runs, card monitor-box-run-stop; no key
+    /// does it there, so a stray Ctrl+Enter never stops a machine), then
+    /// save, upload, download and help. Drawn after the screen, so they
+    /// sit on top.
     fn glyphs(&mut self, ui: &mut egui::Ui) {
         if self.screen != Screen::Editor || self.chrome.diagram == Rect::NOTHING {
             return;
@@ -677,12 +1143,58 @@ impl App {
         };
         let upload_tip = blocked("Upload a .zip, .st, .xml or .l5x file into the project");
         let has_ws = self.workspace().is_some();
+        // Signed out of a box with no project open, none of these glyphs
+        // has anything to act on: the strip is not drawn.
+        if self.source == Source::Box && !has_ws && self.session().is_none() {
+            return;
+        }
         let sim = (self.source == Source::Sim).then(|| {
             self.sim
                 .as_ref()
                 .map(|s| (s.session.build.is_some(), s.session.running))
                 .unwrap_or_default()
         });
+        // The simulation's state and clock sit with the glyphs that change
+        // them (Nick, 2026-11-11), not in the header.
+        let stopped = self
+            .sim
+            .as_ref()
+            .is_none_or(|s| s.session.state() == crate::playground::RunState::Stopped);
+        let status = self
+            .sim
+            .as_ref()
+            .filter(|s| self.source == Source::Sim && s.session.build.is_some())
+            .map(|s| {
+                let (text, good) = s.run_status();
+                let t = theme(ui);
+                let color = t.ink(if good {
+                    crate::st_view::brand::GREEN
+                } else {
+                    crate::st_view::brand::RED
+                });
+                let tip = format!(
+                    "The simulation's state and clock, after {} scans.",
+                    s.session.scans
+                );
+                (text, color, tip)
+            });
+        let engineer = is_engineer(self.session().as_ref()).is_ok();
+        // What the glyphs act on is what the Monitor's do.
+        let targets = self
+            .boxv
+            .as_ref()
+            .map(|b| self.monitor.targets(&b.state.modules))
+            .unwrap_or_default();
+        let on_box = self
+            .boxv
+            .as_ref()
+            .filter(|_| self.source == Source::Box && engineer)
+            .map(|b| {
+                let m = b.state.modules.iter().filter(|m| targets.contains(&m.name));
+                let (any, running) = m.fold((false, false), |(_, r), m| (true, r || m.state != "stopped"));
+                (any, running)
+            });
+
         egui::Area::new(egui::Id::unique("glyphs"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
@@ -694,6 +1206,12 @@ impl App {
                     .inner_margin(4.0)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            if let Some((text, color, tip)) = &status {
+                                let r = ui
+                                    .label(RichText::new(text).monospace().strong().color(*color))
+                                    .tip(tip);
+                                hits.push(("state".to_string(), r.rect));
+                            }
                             let mut g =
                                 |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {
                                     let r = glyphs::button(ui, icon, enabled, on, tip);
@@ -709,11 +1227,27 @@ impl App {
                                         "Run (Ctrl+Enter): the program does not compile yet.",
                                     )
                                 } else if running {
-                                    (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+                                    (
+                                        glyphs::Icon::Pause,
+                                        "Pause (Ctrl+Enter): the program holds where it is, every value kept.",
+                                    )
                                 } else {
                                     (glyphs::Icon::Run, "Run (Ctrl+Enter)")
                                 };
                                 g(ui, "run", icon, built, false, tip, Action::RunStop);
+                                g(
+                                    ui,
+                                    "stop",
+                                    glyphs::Icon::Stop,
+                                    built && !stopped,
+                                    false,
+                                    if stopped {
+                                        "Stop (Shift+F8): the program is stopped."
+                                    } else {
+                                        "Stop (Shift+F8): ends the run. Every value goes back to its initial one, the outputs go off and the clock to zero."
+                                    },
+                                    Action::Stop,
+                                );
                                 g(
                                     ui,
                                     "step",
@@ -721,9 +1255,9 @@ impl App {
                                     built && !running,
                                     false,
                                     if running {
-                                        "Step one scan (F10): stop the program first."
+                                        "Step to the next change (F8): pause the program first."
                                     } else {
-                                        "Step one scan (F10)"
+                                        "Step to the next change (F8): scans until a value changes or the program takes another path."
                                     },
                                     Action::Step,
                                 );
@@ -734,6 +1268,30 @@ impl App {
                                     built,
                                     false,
                                     "Restart: initial values, clock to zero",
+                                    Action::Restart,
+                                );
+                                ui.separator();
+                            }
+                            if let Some((any, running)) = on_box {
+                                let (icon, tip) = if running {
+                                    (
+                                        glyphs::Icon::Stop,
+                                        "Stop on the box: the program stops scanning and its outputs go to their safe values until you run it again (an engineer's; audited).",
+                                    )
+                                } else {
+                                    (
+                                        glyphs::Icon::Run,
+                                        "Run on the box: the program scans again from where it stopped (an engineer's; audited).",
+                                    )
+                                };
+                                g(ui, "run", icon, any, false, tip, Action::RunStop);
+                                g(
+                                    ui,
+                                    "restart",
+                                    glyphs::Icon::Restart,
+                                    any,
+                                    false,
+                                    "Restart on the box: every variable back to its initial value, then run (an engineer's; audited).",
                                     Action::Restart,
                                 );
                                 ui.separator();
@@ -770,7 +1328,13 @@ impl App {
             });
         let ctx = ui.ctx().clone();
         for a in act {
-            self.act(a, &ctx);
+            // On a box the run and restart glyphs are the box's (the
+            // simulation's are not drawn there): every module it runs.
+            if on_box.is_some() && matches!(a, Action::RunStop | Action::Restart) {
+                self.box_control(a, &targets, ctx.input(|i| i.time));
+            } else {
+                self.act(a, &ctx);
+            }
         }
         self.chrome.hits.extend(hits);
     }
@@ -778,7 +1342,7 @@ impl App {
     /// Help › About: the product, its version and build, the licence, the site.
     fn about_ui(&mut self, ctx: &egui::Context, hits: &mut Vec<(String, Rect)>) {
         let mut open = self.about;
-        egui::Window::new("About Helmsman")
+        let shown = egui::Window::new("About Helmsman")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
@@ -791,7 +1355,7 @@ impl App {
                 ui.label(format!(
                     "Version {} (build {})",
                     env!("CARGO_PKG_VERSION"),
-                    env!("HELMSMAN_GIT_SHA")
+                    stamp::CANVAS
                 ));
                 ui.label("Early release. Licensed under the Apache License, Version 2.0.");
                 // The box's HTTPS certificate, to compare with the
@@ -818,20 +1382,42 @@ impl App {
                         ctx.open_url(egui::OpenUrl::new_tab(SITE_URL));
                     }
                 });
-                ui.add_space(6.0);
-                let c = ui.button("Close").tip("Closes this window.");
-                hits.push(("about close".to_string(), c.rect));
-                if c.clicked() {
-                    self.about = false;
-                }
             });
-        if !open {
+        // The X in its corner, a click anywhere outside it or Escape shuts
+        // it (Nick, 2026-11-11: no Close button under the text).
+        let rect = shown.map(|s| s.response.rect);
+        if let Some(r) = rect {
+            hits.push(("about".to_string(), r));
+        }
+        if !open || rect.is_none_or(|r| theme::dismissed(ctx, "about", &[r])) {
             self.about = false;
         }
     }
 
     /// File, Edit and View: what exists today, nothing greyed for later.
     fn menus(
+        &mut self,
+        ui: &mut egui::Ui,
+        engineer: bool,
+        waiting: Option<usize>,
+        hits: &mut Vec<(String, Rect)>,
+    ) {
+        if ui.ctx().content_rect().width() >= NARROW {
+            self.menu_buttons(ui, engineer, waiting, hits);
+            return;
+        }
+        // A phone's width has no room for four menus beside the mark and
+        // the screens: one button holds them as submenus.
+        ui.scope(|ui| {
+            egui::containers::menu::menu_style(ui.style_mut());
+            let m = ui.menu_button("Menu", |ui| self.menu_buttons(ui, engineer, waiting, hits));
+            hits.push(("bar menu".to_string(), m.response.rect));
+        });
+    }
+
+    /// File, Edit, View and Help, as buttons of the row (or, on a phone,
+    /// the submenus of its one Menu button).
+    fn menu_buttons(
         &mut self,
         ui: &mut egui::Ui,
         engineer: bool,
@@ -1175,6 +1761,19 @@ impl App {
                 ) {
                     ctx.open_url(egui::OpenUrl::new_tab(format!("{HELP_URL}#keyboard")));
                 }
+                if self.source == Source::Sim
+                    && menu_item(
+                        ui,
+                        &mut chrome,
+                        "help tour",
+                        "Take the tour",
+                        self.tour.is_some(),
+                        "A guided tour of the playground: each step points at a control and moves on when you use it.",
+                    )
+                {
+                    self.tour = Some(crate::tour::Tour::new());
+                    self.screen = Screen::Editor;
+                }
                 ui.separator();
                 if menu_item(
                     ui,
@@ -1191,6 +1790,31 @@ impl App {
         });
         hits.extend(chrome.hits.drain(before..));
         self.chrome = chrome;
+    }
+
+    /// The guided tour over the window, while it runs: reads the
+    /// simulation's state, moves the tour on, and draws its card.
+    fn tour_ui(&mut self, ctx: &egui::Context) {
+        let Some(tour) = &mut self.tour else { return };
+        let seen = match (self.screen, self.source, &self.sim) {
+            (Screen::Editor, Source::Sim, Some(s)) => s.tour_seen(&self.chrome),
+            _ => crate::tour::Seen::default(),
+        };
+        tour.observe(&seen);
+        let deploy = hotkeys::label(ctx, Action::Deploy);
+        let effect = crate::tour::ui(ctx, tour, &seen, &mut self.chrome, &deploy);
+        if tour.ended {
+            self.tour = None;
+        }
+        match effect {
+            Some(crate::tour::Effect::CloseNaming) => {
+                if let Some(s) = &mut self.sim {
+                    s.files_ui.naming = None;
+                }
+            }
+            Some(crate::tour::Effect::Help) => ctx.open_url(egui::OpenUrl::new_tab(HELP_URL)),
+            None => {}
+        }
     }
 
     /// The open view's actions in the header: the simulation's run
@@ -1231,21 +1855,48 @@ impl App {
         }
     }
 
-    /// Sign in, or who is signed in: on a box only.
+    /// Sign in, or who is signed in: on a box only. Signed in, the role's
+    /// glyph leads the name: a hard hat for an operator, a wrench and a
+    /// screwdriver for an engineer or an integrator (Nick, 2026-11-07).
     fn login_button(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         if self.source != Source::Box {
             return;
         }
-        let text = self
-            .review
-            .as_ref()
-            .and_then(|r| r.state.signed_in())
-            .map_or_else(|| "Sign in".to_string(), |who| format!("● {who}"));
+        let session = self.review.as_ref().and_then(|r| r.state.session.clone());
+        let who = session.as_ref().map(crate::review::Session::label);
+        if who != self.login_seen {
+            self.login = false;
+            self.login_seen.clone_from(&who);
+        }
+        let icon = session.as_ref().map(|s| match s.role.as_str() {
+            "operator" => (glyphs::Icon::HardHat, YELLOW, "an operator"),
+            _ => (glyphs::Icon::Tools, theme(ui).fg, "an engineer"),
+        });
+        let text = who.clone().unwrap_or_else(|| "Sign in".to_string());
+        let tip = match (&who, icon) {
+            (Some(w), Some((_, _, role))) => {
+                format!("Signed in as {w}, {role}. Click to sign out or change who is signed in.")
+            }
+            _ => "Sign in to edit, deploy, force inputs and approve proposals.".to_string(),
+        };
+        let mut clicked = false;
+        if let Some((icon, color, _)) = icon {
+            let side = ui.spacing().interact_size.y;
+            let (at, r) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::click());
+            glyphs::paint(ui.painter(), at.shrink(side * 0.12), icon, color);
+            let key = if icon == glyphs::Icon::HardHat {
+                "operator"
+            } else {
+                "engineer"
+            };
+            hits.push((format!("role {key}"), at));
+            clicked |= r.tip(&tip).clicked();
+        }
         let b = ui
             .add(egui::Button::selectable(self.login, RichText::new(text).strong()))
-            .tip("Sign in to edit, deploy, force inputs and approve proposals, or sign out.");
+            .tip(&tip);
         hits.push(("sign in".to_string(), b.rect));
-        if b.clicked() {
+        if clicked || b.clicked() {
             self.login = !self.login;
         }
     }
@@ -1256,7 +1907,7 @@ impl App {
         let Some(r) = &mut self.review else { return };
         let was = r.state.session.is_some();
         r.rects.clear();
-        egui::Area::new(egui::Id::unique("header-login"))
+        let panel = egui::Area::new(egui::Id::unique("header-login"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at.right_bottom() + Vec2::new(0.0, 4.0))
@@ -1269,8 +1920,15 @@ impl App {
                     ui.set_max_width(300.0);
                     r.login_ui(ui);
                 });
-            });
+            })
+            .response
+            .rect;
         hits.extend(r.rects.iter().map(|(k, rect)| (format!("login {k}"), *rect)));
+        // A click outside the panel shuts it; one on the button that
+        // opened it is that button's to handle.
+        if theme::dismissed(ctx, "header-login", &[panel, at]) {
+            self.login = false;
+        }
         // Signed in or out: the panel has done its job.
         let now = r.state.session.is_some();
         if was != now {
@@ -1304,5 +1962,43 @@ impl eframe::App for App {
         theme::Theme::for_mode(visuals.dark_mode)
             .bg
             .to_normalized_gamma_f32()
+    }
+}
+
+#[cfg(test)]
+mod box_origin_tests {
+    use super::box_origin;
+
+    #[test]
+    fn takes_an_origin_and_nothing_more() {
+        assert_eq!(
+            box_origin("?box=http://192.168.3.55:8080"),
+            Some("http://192.168.3.55:8080".into())
+        );
+        assert_eq!(
+            box_origin("?monitor&box=https://press-4.local"),
+            Some("https://press-4.local".into())
+        );
+        assert_eq!(
+            box_origin("?box=http%3A%2F%2F192.168.3.55%3A8080%2F"),
+            Some("http://192.168.3.55:8080".into())
+        );
+        assert_eq!(
+            box_origin("?box=http://192.168.3.55:8080/"),
+            Some("http://192.168.3.55:8080".into())
+        );
+    }
+
+    #[test]
+    fn refuses_paths_schemes_and_junk() {
+        assert_eq!(box_origin("?box=http://192.168.3.55:8080/api"), None);
+        assert_eq!(box_origin("?box=ftp://x"), None);
+        assert_eq!(box_origin("?box=192.168.3.55:8080"), None);
+        assert_eq!(box_origin("?box=http://"), None);
+        assert_eq!(box_origin("?box=http://a:99999"), None);
+        assert_eq!(box_origin("?box=http://a b"), None);
+        assert_eq!(box_origin("?box=javascript://alert(1)"), None);
+        assert_eq!(box_origin("?playground"), None);
+        assert_eq!(box_origin(""), None);
     }
 }

@@ -1,6 +1,8 @@
 //! The published playground (docs/playground/, served by GitHub Pages
 //! from master) is a page that opens in playground mode, loads only what
-//! is beside it, and may talk only to its own site and the Claude API.
+//! is beside it, and may talk only to its own site and one other origin:
+//! the relay's demo function when it is built for the free chat, else the
+//! Claude API for a visitor's own key.
 
 use std::path::Path;
 
@@ -18,19 +20,77 @@ fn csp(html: &str) -> &str {
     &rest[start..start + end]
 }
 
-fn check(html: &str) {
+/// The model API, for a page that takes the visitor's own key.
+const MODEL_API: &str = "https://api.anthropic.com";
+
+/// Whether `origin` is a function URL of the relay's demo (the free chat):
+/// `https://<label>.lambda-url.<region>.on.aws`, nothing after it.
+fn is_free_chat(origin: &str) -> bool {
+    origin
+        .strip_prefix("https://")
+        .and_then(|host| host.split_once(".lambda-url."))
+        .is_some_and(|(label, rest)| {
+            let plain = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+            plain(label) && rest.strip_suffix(".on.aws").is_some_and(plain)
+        })
+}
+
+/// The page may connect to itself and to exactly one other origin, which
+/// `other` accepts.
+fn check(html: &str, other: impl Fn(&str) -> bool) {
     assert!(html.contains("<canvas id=\"canvas\" data-mode=\"playground\">"));
     let csp = csp(html);
     for must in [
         "default-src 'self'",
-        "connect-src 'self' https://api.anthropic.com;",
         "base-uri 'none'",
         "form-action 'none'",
         "object-src 'none'",
     ] {
         assert!(csp.contains(must), "CSP lacks {must}: {csp}");
     }
-    assert!(!csp.contains("connect-src *") && !csp.contains("http:"), "{csp}");
+    let connect: Vec<&str> = csp
+        .split(';')
+        .map(str::trim)
+        .filter(|d| d.starts_with("connect-src"))
+        .collect();
+    assert_eq!(connect.len(), 1, "one connect-src: {csp}");
+    let sources: Vec<&str> = connect[0].split_whitespace().skip(1).collect();
+    assert_eq!(sources.len(), 2, "itself and one origin: {csp}");
+    assert_eq!(sources[0], "'self'", "{csp}");
+    assert!(
+        other(sources[1]),
+        "connect-src may not name {}: {csp}",
+        sources[1]
+    );
+    assert!(!csp.contains('*') && !csp.contains("http:"), "{csp}");
+}
+
+#[test]
+fn only_a_demo_function_url_passes_for_the_free_chat() {
+    for ok in [
+        "https://iup63z6bv5rz2fwtwexyw3pvoi0spenq.lambda-url.us-east-1.on.aws",
+        "https://abc.lambda-url.eu-west-1.on.aws",
+    ] {
+        assert!(is_free_chat(ok), "{ok}");
+    }
+    for bad in [
+        "",
+        "*",
+        "https://*",
+        "https://*.lambda-url.us-east-1.on.aws",
+        "http://abc.lambda-url.us-east-1.on.aws",
+        "https://abc.lambda-url.us-east-1.on.aws/",
+        "https://abc.lambda-url.us-east-1.on.aws.evil.example",
+        "https://evil.example/abc.lambda-url.us-east-1.on.aws",
+        "https://abc.lambda-url..on.aws",
+        "https://.lambda-url.us-east-1.on.aws",
+        "https://a.b.lambda-url.us-east-1.on.aws",
+        "https://evil.example",
+        MODEL_API,
+        "'self'",
+    ] {
+        assert!(!is_free_chat(bad), "{bad}");
+    }
 }
 
 /// A page's source brings in the loading screen, before the loader.
@@ -136,8 +196,11 @@ fn the_app_tells_the_screen_how_starting_went() {
 
 #[test]
 fn the_source_page_is_locked_to_the_api() {
+    // The source names the model API; a build for the free chat replaces
+    // it with the relay's origin (scripts/build-playground.sh, which stops
+    // if this line is not the one it knows).
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    check(&read(&root.join("playground.html")));
+    check(&read(&root.join("playground.html")), |o| o == MODEL_API);
 }
 
 #[test]
@@ -145,7 +208,9 @@ fn the_published_page_is_built_and_complete() {
     const PUBLIC_URL: &str = "/playground/";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/playground");
     let html = read(&dir.join("index.html"));
-    check(&html);
+    // Published on the free chat, or on the visitor's own key: one of the
+    // two, never both, and nothing else.
+    check(&html, |o| o == MODEL_API || is_free_chat(o));
     // trunk's loader, from the Pages path, and the files it names are there.
     assert!(
         !html.contains("/helmsman/playground/"),

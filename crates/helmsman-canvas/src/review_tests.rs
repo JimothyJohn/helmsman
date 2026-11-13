@@ -32,7 +32,9 @@ use helmsman_plc::store::{ChangeSet, Meta, ModuleFiles, Store};
 use helmsman_plc::{Runtime, SignalTable, Window};
 use serde_json::{Value as Json, json};
 
-use crate::review::{Answer, Call, Delta, Method, Phase, Replay, Request, Review, Target, Why};
+use crate::review::{
+    Answer, Call, Delta, Method, Phase, Replay, Request, Review, SHOWN, Target, Values, Why,
+};
 
 #[test]
 fn explain_rides_the_same_cookie_and_is_refused_without_it() {
@@ -60,7 +62,7 @@ fn explain_rides_the_same_cookie_and_is_refused_without_it() {
     assert!(a.body.contains("no relay"), "{a:?}");
 }
 
-const OPERATOR: &str = "op-246810";
+pub const OPERATOR: &str = "op-246810";
 const ENGINEER: &str = "eng-135797";
 
 const MANIFEST: &str = "\
@@ -485,12 +487,87 @@ fn refused(p: &Phase) -> (Why, String) {
 }
 
 #[test]
+fn the_review_shows_the_box_s_preview_of_what_the_deploy_keeps() {
+    let b = Bench::new();
+    let id = b.horn();
+    let mut r = Review::new();
+    // Every read needs a session (card read-lock): an operator's will do.
+    r.login_pin("operator", OPERATOR.into());
+    settle(&b, &mut r, 0.0);
+    r.open(id);
+    settle(&b, &mut r, 0.0);
+    let v = r
+        .open
+        .as_ref()
+        .unwrap()
+        .values()
+        .expect("the box sent its preview");
+    assert!(v.preview && v.running, "{v:?}");
+    assert_eq!(v.kept, 5, "START, SPEED, LAMP, N and the BLINK timer: {v:?}");
+    assert_eq!(v.reset, [("HORN".to_string(), "new".to_string())]);
+    assert!(v.dropped.is_empty(), "{v:?}");
+    assert_eq!(
+        v.sentence(),
+        "Before you approve: this deploy keeps 5 values, starts HORN at the initial value (new)."
+    );
+}
+
+#[test]
+fn values_name_modules_when_several_and_say_when_nothing_runs() {
+    let many: Vec<String> = (0..40).map(|n| format!("V{n}")).collect();
+    let j = json!({
+        "preview": false,
+        "running": true,
+        "kept": 2,
+        "modules": [
+            { "module": "a", "new": false, "kept": ["X", "Y"], "reset": [{ "name": "COUNT", "why": "type changed" }], "dropped": many },
+            { "module": "b", "new": true, "kept": [], "reset": [], "dropped": [] },
+        ],
+        "summary": "keeps 2 values, resets a.COUNT (type changed), drops a.V0 and 39 more",
+    });
+    let v = Values::parse(&j).unwrap();
+    assert!(!v.preview);
+    assert_eq!(v.reset, [("a.COUNT".to_string(), "type changed".to_string())]);
+    assert_eq!(v.dropped.len(), 40, "all kept; the screen lists {SHOWN}");
+    assert_eq!(v.dropped[0], "a.V0");
+    assert!(
+        v.sentence().starts_with("Applied: this deploy keeps 2 values"),
+        "{}",
+        v.sentence()
+    );
+
+    let none = Values::parse(
+        &json!({ "preview": true, "running": false, "kept": 0, "modules": [],
+        "summary": "nothing running to keep: every value starts at its initial value" }),
+    )
+    .unwrap();
+    assert_eq!(
+        none.sentence(),
+        "Before you approve: nothing is running to keep, so every value starts at its initial value."
+    );
+    assert_eq!(Values::parse(&Json::Null), None, "an older box sends none");
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn review_replay_approve_and_undo_against_the_real_box() {
     let b = Bench::new();
     let first = b.draft(&json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 0.5 }));
     let id = b.horn();
     let mut r = Review::new();
+    settle(&b, &mut r, 0.0);
+    assert_eq!(r.list, [], "nothing is read before a sign-in (card read-lock)");
+    assert!(
+        r.list_error.as_deref().is_some_and(|e| e.contains("401")),
+        "{:?}",
+        r.list_error
+    );
+    assert_eq!(
+        r.credentials(),
+        Some("pins"),
+        "how to sign in is readable before one"
+    );
+    r.login_pin("operator", OPERATOR.into());
     settle(&b, &mut r, 0.0);
     assert_eq!(
         r.list.iter().map(|x| x.id).collect::<Vec<_>>(),
@@ -553,7 +630,9 @@ fn review_replay_approve_and_undo_against_the_real_box() {
 
     let t = Target::Proposal(id);
     let step = |r: &Review| r.open.as_ref().unwrap().step.clone();
-    // Not signed in: nothing is sent.
+    // Signed out again (the operator above was for reading): nothing is sent.
+    r.logout();
+    settle(&b, &mut r, 1.0);
     r.approve(&t, 1.0);
     assert_eq!(r.poll(), Vec::<Request>::new());
     assert_eq!(refused(&step(&r).phase).0, Why::SignIn);
@@ -856,11 +935,10 @@ fn on_a_box_with_accounts_the_screen_logs_in_and_approves_as_the_person() {
         by_pin.login_problem
     );
     assert_eq!((by_pin.signed_in(), other.session()), (None, None));
+    // Signed out, the proposal cannot even be read (card read-lock).
     by_pin.open(p);
     settle_in(&b, &other, &mut by_pin, 3.0);
-    by_pin.approve(&Target::Proposal(p), 3.0);
-    assert_eq!(by_pin.poll(), Vec::<Request>::new());
-    assert_eq!(refused(&by_pin.open.as_ref().unwrap().step.phase).0, Why::SignIn);
+    assert!(by_pin.open.is_none(), "{:?}", by_pin.open.as_ref().map(|o| o.id));
 
     // The account disabled while she is signed in: the next call is 401,
     // the box clears the cookie, and the screen goes back to signing in.

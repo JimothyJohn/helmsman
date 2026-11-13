@@ -50,6 +50,11 @@ pub const KEEP: f32 = 120.0;
 /// its left part and you pan, instead of shrinking to an unreadable whole
 /// (Nick, 2026-11-01).
 pub const LEGIBLE: f32 = 0.75;
+/// The largest zoom a fit goes to: a port's name (10 units of type) is
+/// then the 16 pt the rest of the app holds to ([`crate::theme::MIN_TEXT`])
+/// and a block's label 18. At the 1.2 it was, a small program sat in a
+/// sixth of the canvas with 12 pt port names (2026-11-10).
+pub const FIT_MAX: f32 = 1.6;
 /// The band along the diagram's top the glyph buttons sit in, points: a
 /// fit keeps the diagram below it.
 pub const GLYPH_BAND: f32 = 52.0;
@@ -117,7 +122,7 @@ impl Cam {
 
     fn fit(&mut self, area: Rect, size: (f32, f32)) {
         let (w, h) = (size.0.max(1.0) + 60.0, size.1.max(1.0) + 60.0);
-        self.zoom = (area.width() / w).min(area.height() / h).clamp(LEGIBLE, 1.2);
+        self.zoom = (area.width() / w).min(area.height() / h).clamp(LEGIBLE, FIT_MAX);
         self.origin = area.min;
         self.offset = Vec2::splat(30.0 * self.zoom);
         self.fitted = true;
@@ -182,6 +187,14 @@ pub struct Viewer {
     pub breaks: Vec<StmtId>,
     /// The statement a paused scan stopped before.
     pub paused: Option<StmtId>,
+    /// The program as the diagram showed it when the Agent's last change
+    /// landed ([`crate::agent_marks`]): what that change added is outlined
+    /// green and what it removed drawn as red ghosts, against it. The host
+    /// sets it each frame and clears it at the engineer's next edit.
+    pub baseline: Option<std::rc::Rc<Module>>,
+    /// The diff of `baseline` to `module`, kept while neither changes:
+    /// (the baseline's address, the source it was made against, the diff).
+    change: Option<(usize, String, helmsman_diagram::diff::ModuleDiff)>,
 }
 
 /// One row of the program tree.
@@ -278,6 +291,25 @@ impl Arrangement {
         )
     }
 
+    /// `self` brought up to date by `newer`, the moves now read off `v`:
+    /// those of blocks `v` has are `newer`'s alone (a move undone is
+    /// gone), while those of blocks `v` lacks stay, for an edit that
+    /// brings the block back. When too many stay for a layout file, the
+    /// oldest go first.
+    #[must_use]
+    pub fn updated(&self, newer: &Self, v: &Viewer) -> Self {
+        let mut out: Vec<_> = self
+            .0
+            .iter()
+            .filter(|(p, l, t, k, _)| v.block(p, l, t, *k).is_none())
+            .cloned()
+            .collect();
+        let room = helmsman_project::layout::MAX_MOVES.saturating_sub(newer.len());
+        out.drain(..out.len().saturating_sub(room));
+        out.extend(newer.0.iter().cloned());
+        Self(out)
+    }
+
     /// Only the moves of blocks `v` has.
     #[must_use]
     pub fn within(&self, v: &Viewer) -> Self {
@@ -350,7 +382,36 @@ impl Viewer {
             icons: crate::icons::Icons::default(),
             breaks: Vec::new(),
             paused: None,
+            baseline: None,
+            change: None,
         }
+    }
+
+    /// What the Agent's last change added on the diagram shown (block
+    /// ids of the new diagram) and what it removed (block ids of the old
+    /// one, with the old diagram): empty with no baseline.
+    pub(crate) fn agent_change(&mut self) -> (Vec<NodeId>, Vec<NodeId>) {
+        let Some(base) = self.baseline.clone() else {
+            self.change = None;
+            return (Vec::new(), Vec::new());
+        };
+        let key = std::rc::Rc::as_ptr(&base) as usize;
+        if self
+            .change
+            .as_ref()
+            .is_none_or(|(k, src, _)| *k != key || *src != self.src)
+        {
+            let d = helmsman_diagram::diff::modules(&base, &self.module);
+            self.change = Some((key, self.src.clone(), d));
+        }
+        let Some((_, _, d)) = &self.change else {
+            return (Vec::new(), Vec::new());
+        };
+        let pou = &self.module.pous[self.scopes[self.scope].pou].name;
+        (
+            d.new_nodes(pou, helmsman_diagram::diff::Change::Added),
+            d.removed_nodes(pou),
+        )
     }
 
     /// The picked block if it reads a variable: its path and its index
@@ -373,7 +434,7 @@ impl Viewer {
     }
 
     /// The statement the picked block or region was lowered from: what a
-    /// breakpoint (Ctrl B) goes on.
+    /// breakpoint (Shift F9) goes on.
     #[must_use]
     pub fn picked_stmt(&self) -> Option<StmtId> {
         let d = self.diagram();
@@ -476,6 +537,15 @@ impl Viewer {
             {
                 *g = *held;
             }
+        }
+    }
+
+    /// A scan that ran since the last frame and is not the one drawn:
+    /// what ran in it stays lit for [`HOLD`] all the same, so a statement
+    /// lights every time it runs, whichever scan of a frame that was in.
+    pub fn saw(&mut self, scan: &dyn Scan, now: f64) {
+        if let Some(mut l) = self.live(Some(scan)) {
+            self.hold(&mut l, now);
         }
     }
 
@@ -704,7 +774,7 @@ impl Viewer {
                 } else {
                     ui.add_space(18.0);
                 }
-                let text = RichText::new(&s.label).monospace();
+                let text = RichText::new(&s.label);
                 if ui
                     .selectable_label(row.scope == self.scope, text)
                     .tip("Shows this one's diagram.")
@@ -833,16 +903,32 @@ impl Viewer {
         for path in self.outputs() {
             let value = scan.and_then(|s| s.get(&path));
             let on = value == Some(Value::Bool(true));
+            let color = if on {
+                crate::lamps::colour(&path).map_or(t.accent, |c| t.ink(c))
+            } else {
+                t.fg
+            };
             let text = RichText::new(format!("{} {path} = {}", if on { "●" } else { "○" }, show(value)))
                 .monospace()
-                .color(if on { t.accent } else { t.fg });
-            let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
-                .min_size(Vec2::new(ui.available_width(), TAP));
-            if ui
-                .add(row)
-                .tip("Click to light why it has this value in the diagram.")
-                .clicked()
-            {
+                .color(color);
+            let glyph = crate::glyph_lib::for_point(&path, false, matches!(value, Some(Value::Bool(_))));
+            let clicked = ui
+                .horizontal(|ui| {
+                    crate::glyph_lib::show(
+                        ui,
+                        glyph,
+                        crate::glyphs::ROW,
+                        color,
+                        crate::glyph_lib::tip(glyph),
+                    );
+                    let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
+                        .min_size(Vec2::new(ui.available_width(), TAP));
+                    ui.add(row)
+                        .tip("Click to light why it has this value in the diagram.")
+                        .clicked()
+                })
+                .inner;
+            if clicked {
                 self.because = Some(path);
             }
         }
@@ -910,7 +996,24 @@ impl Viewer {
             .position(|s| s.prefix.eq_ignore_ascii_case(&want))
     }
 
-    /// Opens the picked block instance's diagram (Ctrl ]); whether the
+    /// The blocks on the diagram shown that open into a diagram of their
+    /// own (a user function block's instances): drawn as a stack with a
+    /// chevron, so it shows that a double click goes deeper (Nick,
+    /// 2026-11-11).
+    #[must_use]
+    pub fn openable(&self) -> Vec<NodeId> {
+        self.diagram()
+            .nodes
+            .iter()
+            .filter(|n| match &n.kind {
+                NodeKind::Fb { instance, .. } => self.instance_scope(instance).is_some(),
+                _ => false,
+            })
+            .map(|n| n.id)
+            .collect()
+    }
+
+    /// Opens the picked block instance's diagram (Alt ]); whether the
     /// pick was an instance with a diagram of its own.
     pub fn step_into(&mut self) -> bool {
         let Some(Pick::Node(n)) = self.pick else {
@@ -927,8 +1030,8 @@ impl Viewer {
         true
     }
 
-    /// Up to the caller's diagram (Ctrl [), the instance just left picked
-    /// there so Ctrl ] goes back in; whether there was a level up.
+    /// Up to the caller's diagram (Alt [), the instance just left picked
+    /// there so Alt ] goes back in; whether there was a level up.
     pub fn step_out(&mut self) -> bool {
         let Some(up) = self.parent() else {
             return false;
@@ -1071,6 +1174,22 @@ impl Viewer {
             .map(|h| self.references(h))
             .filter(|r| !r.is_empty())
             .or_else(|| self.path(scan));
+        let (added, removed) = self.agent_change();
+        let opens = self.openable();
+        if response.hovered()
+            && let Some(p) = hover
+            && self.instance_at(cam, p).is_some()
+        {
+            response.clone().on_hover_text_at_pointer(
+                "This block has a diagram of its own. Double-click opens it (Alt ] with it picked).",
+            );
+        }
+        let pou = &self.module.pous[self.scopes[self.scope].pou].name;
+        let old = self
+            .baseline
+            .as_ref()
+            .and_then(|b| b.pou(pou))
+            .map(|p| &p.diagram);
         draw(
             &painter,
             &t,
@@ -1086,8 +1205,23 @@ impl Viewer {
                 icons: &self.icons,
                 breaks: &self.breaks,
                 paused: self.paused,
+                added: &added,
+                opens: &opens,
+                ghosts: old.map(|o| (o, removed.as_slice())),
             },
         );
+        // The program's BOOL outputs as lamps in the corner (a traffic
+        // light for a red, a yellow and a green), on the program's own
+        // diagram only: a block instance's outputs are not the machine's.
+        if let Some(scan) = scan
+            && self.scopes[self.scope].prefix.is_empty()
+        {
+            let outs = self.outputs();
+            let fixture = crate::lamps::fixture(outs.iter().map(|p| (p.as_str(), scan.get(p))));
+            if let Some(f) = &fixture {
+                crate::lamps::paint(&painter, area, f);
+            }
+        }
     }
 
     /// What drives the "because" variable's value in `scan`, on the
@@ -1108,6 +1242,22 @@ impl Viewer {
     pub const fn highlighted(&self) -> Option<&Drivers> {
         self.lit.as_ref()
     }
+}
+
+/// `text` on one row at most `width` wide, ending in an ellipsis where it
+/// does not fit.
+fn fitted(
+    painter: &egui::Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(text.to_string(), font, color, width.max(1.0));
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    painter.layout_job(job)
 }
 
 pub fn show(v: Option<Value>) -> String {
@@ -1166,6 +1316,55 @@ pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
     })
 }
 
+/// The Agent's added blocks and wires (the brand green), and its
+/// removed ones (the brand red, ghosted).
+const ADDED: Color32 = brand::GREEN;
+
+/// Blocks the Agent's change removed, drawn where they were in the old
+/// diagram: a faint red fill, a red outline and their label, and the old
+/// wires between two removed blocks, so what went is seen in place.
+fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[NodeId]) {
+    let z = cam.zoom;
+    let red = brand::RED;
+    for w in &old.wires {
+        if removed.contains(&w.from) && removed.contains(&w.to) {
+            let (a, b) = (old.node(w.from), old.node(w.to));
+            let (ax, ay) = out_port(a, w.out);
+            let (bx, by) = in_port(b, w.inp);
+            bezier(
+                painter,
+                cam.to_screen(ax, ay),
+                cam.to_screen(bx, by),
+                z,
+                red.gamma_multiply(0.45),
+                1.2,
+            );
+        }
+    }
+    for id in removed {
+        let Some(n) = old.nodes.get(id.0 as usize) else {
+            continue;
+        };
+        let r = cam.rect(&n.rect);
+        painter.rect_filled(r, CornerRadius::same(4), red.gamma_multiply(0.12));
+        painter.rect_stroke(
+            r,
+            CornerRadius::same(4),
+            Stroke::new(1.5 * z.max(0.6), red.gamma_multiply(0.7)),
+            StrokeKind::Outside,
+        );
+        if z > 0.35 {
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                &n.label,
+                font(11.5 * z),
+                red.gamma_multiply(0.75),
+            );
+        }
+    }
+}
+
 /// What [`draw`] marks on the diagram beside the scan.
 #[derive(Clone, Copy)]
 struct Marks<'a> {
@@ -1184,6 +1383,13 @@ struct Marks<'a> {
     breaks: &'a [StmtId],
     /// The statement a paused scan stopped before: outlined.
     paused: Option<StmtId>,
+    /// Blocks the Agent's last change added: outlined green.
+    added: &'a [NodeId],
+    /// Blocks that open into a diagram of their own: drawn as a stack.
+    opens: &'a [NodeId],
+    /// Blocks it removed, in the old diagram: drawn as red ghosts where
+    /// they were.
+    ghosts: Option<(&'a Diagram, &'a [NodeId])>,
 }
 
 /// Where a statement is marked on the diagram: the blocks it ends in, or
@@ -1311,6 +1517,9 @@ fn draw(
         icons,
         breaks,
         paused,
+        added,
+        opens,
+        ghosts,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -1438,18 +1647,19 @@ fn draw(
         if w.negated {
             bubble(painter, t, pb, z, live.and_then(|l| l.input(d, k)), f);
         }
+        if added.contains(&w.from) || added.contains(&w.to) {
+            bezier(painter, pa, end, z, ADDED.gamma_multiply(0.85), 1.5);
+        }
         if text
             && let Some(v) = v
             && !matches!(v, Value::Bool(_))
             && let Some(label) = value_text(d, w.from, v, vars)
         {
-            painter.text(
-                pa + Vec2::new(4.0, -7.0) * z,
-                Align2::LEFT_CENTER,
-                label,
-                font(10.0 * z),
-                t.fg.gamma_multiply(f),
-            );
+            // At most the wire's own length (and a block's width) wide.
+            let room = (end.x - pa.x - 8.0 * z).clamp(48.0 * z, 120.0 * z);
+            let g = fitted(painter, &label, font(10.0 * z), t.fg.gamma_multiply(f), room);
+            let at = pa + Vec2::new(4.0, -7.0) * z;
+            painter.galley(at - Vec2::new(0.0, g.size().y / 2.0), g, t.fg);
         }
     }
     // Nodes.
@@ -1477,6 +1687,17 @@ fn draw(
         // keeps its instance's ports apart (a function block) has a body
         // of its own; an operator, function or literal is one shade.
         let two_tone = n.kind.headed();
+        let deeper = opens.contains(&n.id);
+        if deeper {
+            // Two cards behind it, each a step down and right: there is
+            // more under this block.
+            for k in [2.0, 1.0] {
+                let back = r.translate(Vec2::splat(3.5 * k * z));
+                painter.rect_filled(back, radius, t.bg);
+                painter.rect_filled(back, radius, head.gamma_multiply(0.45 * fade));
+                painter.rect_stroke(back, radius, Stroke::new(1.0 * z, t.edge), StrokeKind::Outside);
+            }
+        }
         if two_tone {
             painter.rect_filled(r, radius, t.panel.gamma_multiply(fade.max(0.7) * on_path));
             painter.rect_filled(
@@ -1507,6 +1728,30 @@ fn draw(
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        if deeper {
+            // A double chevron at the header's right end: go in.
+            let c = Pos2::new(r.right() - 9.0 * z, h.center().y);
+            let (dx, dy) = (3.0 * z, 4.0 * z);
+            let stroke = Stroke::new(1.6 * z.max(0.6), ink.gamma_multiply(fade));
+            for off in [-2.5 * z, 2.5 * z] {
+                painter.add(egui::Shape::line(
+                    vec![
+                        Pos2::new(c.x + off - dx / 2.0, c.y - dy),
+                        Pos2::new(c.x + off + dx / 2.0, c.y),
+                        Pos2::new(c.x + off - dx / 2.0, c.y + dy),
+                    ],
+                    stroke,
+                ));
+            }
+        }
+        if added.contains(&n.id) {
+            painter.rect_stroke(
+                r.expand(3.0 * z),
+                CornerRadius::same(6),
+                Stroke::new(2.5 * z.max(0.6), ADDED),
+                StrokeKind::Outside,
+            );
+        }
         if here_nodes.contains(&n.id) {
             paused_outline(painter, r, z);
         }
@@ -1516,22 +1761,47 @@ fn draw(
         // The block's one-character icon: at the header's left edge beside
         // the label, or alone and large enough to read when the label is
         // too small to draw (Nick, 2026-11-01).
-        let icon = icons.of(n);
-        if !text && let Some(i) = icon {
-            painter.text(
-                r.center(),
-                Align2::CENTER_CENTER,
-                i,
-                font((14.0 * z).max(11.0)),
-                ink.gamma_multiply(fade),
-            );
+        // A standard block takes its picture from the glyph library
+        // instead of its character (`Icons::glyph`).
+        let glyph = icons.glyph(n);
+        let icon = if glyph.is_some() { None } else { icons.of(n) };
+        if !text {
+            if let Some(g) = glyph {
+                let side = (18.0 * z).max(14.0);
+                crate::glyph_lib::paint(
+                    painter,
+                    Rect::from_center_size(r.center(), Vec2::splat(side)),
+                    g,
+                    ink.gamma_multiply(fade),
+                );
+            } else if let Some(i) = icon {
+                painter.text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    i,
+                    font((14.0 * z).max(11.0)),
+                    ink.gamma_multiply(fade),
+                );
+            }
         }
         if text {
             let band = if two_tone { h } else { r };
             // With an icon the label sits right of it, so the two never
             // overlap on a block sized to its label alone.
             let mut centre = band.center();
-            if let Some(i) = icon {
+            if let Some(g) = glyph {
+                let side = 11.0 * z;
+                crate::glyph_lib::paint(
+                    painter,
+                    Rect::from_min_size(
+                        Pos2::new(band.left() + 3.0 * z, band.center().y - side / 2.0),
+                        Vec2::splat(side),
+                    ),
+                    g,
+                    ink.gamma_multiply(fade),
+                );
+                centre.x += 7.0 * z;
+            } else if let Some(i) = icon {
                 painter.text(
                     Pos2::new(band.left() + 3.0 * z, band.center().y),
                     Align2::LEFT_CENTER,
@@ -1585,19 +1855,26 @@ fn draw(
                 && let Some(label) = value_text(d, n.id, v, vars)
             {
                 let color = match v {
-                    Value::Bool(true) => brand::GREEN,
-                    Value::Bool(false) => brand::RED,
+                    Value::Bool(true) => t.ink(brand::GREEN),
+                    Value::Bool(false) => t.ink(brand::RED),
                     _ => t.fg,
                 };
-                painter.text(
-                    Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0),
-                    Align2::CENTER_CENTER,
-                    label,
+                // Elided to the block, never spilling out of it.
+                let g = fitted(
+                    painter,
+                    &label,
                     font(11.0 * z),
                     color.gamma_multiply(on_path),
+                    r.width() - 6.0 * z,
                 );
+                let mid = Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0);
+                painter.galley(mid - g.size() / 2.0, g, color);
             }
         }
+    }
+    // Last, so what the Agent removed shows over whatever took its place.
+    if let Some((old, removed)) = ghosts {
+        draw_ghosts(painter, cam, old, removed);
     }
 }
 
@@ -1626,6 +1903,45 @@ IF pulse.Q THEN
 END_IF;
 END_PROGRAM
 ";
+
+    /// Nick, 2026-11-11: a block with a diagram of its own is marked as
+    /// one, so it shows that a double click goes deeper. A library block
+    /// (a TON, a CTU) has none and is not.
+    #[test]
+    fn only_blocks_with_a_diagram_of_their_own_are_marked_as_opening() {
+        let src = crate::box_tests::DEMO;
+        let session = Session::new(src);
+        assert!(session.diags.is_empty(), "{:?}", session.diag_lines());
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let mut v = Viewer::new(src, module);
+        let d = v.diagram().clone();
+        let fbs: Vec<(String, bool)> = d
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::Fb { instance, .. } => {
+                    Some((instance.to_ascii_uppercase(), v.openable().contains(&n.id)))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            fbs.contains(&("M".into(), true)),
+            "the motor block opens: {fbs:?}"
+        );
+        assert!(
+            fbs.contains(&("BLINK".into(), false)),
+            "a timer does not: {fbs:?}"
+        );
+        assert!(fbs.contains(&("PARTS".into(), false)), "nor a counter: {fbs:?}");
+        // Every block marked opens, and inside the motor nothing does.
+        for n in v.openable() {
+            v.pick = Some(super::Pick::Node(n));
+            assert!(v.step_into(), "a marked block opens");
+            assert!(v.openable().is_empty(), "the motor calls no block of its own");
+            assert!(v.step_out());
+        }
+    }
 
     #[test]
     fn a_statement_that_ran_one_scan_stays_lit_for_hold_then_dims() {
@@ -1677,6 +1993,53 @@ END_PROGRAM
         assert!(!l.ran[lamp]);
         assert_eq!(l.gates[region], Gate::NotReached);
     }
+
+    /// The lamp's assignment runs one scan in fifty. A frame of two scans
+    /// draws the second, so half the time the flip is in the scan that is
+    /// not drawn: it lit on some flips and not on others (Nick,
+    /// 2026-11-11).
+    #[test]
+    fn a_one_scan_statement_lights_every_time_it_runs_whichever_scan_of_the_frame() {
+        let mut session = Session::new(SRC);
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let mut v = Viewer::new(SRC, module);
+        let d = v.diagram().clone();
+        let lamp = d
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Write { path: "LAMP".into() })
+            .unwrap();
+        session.set_running(true);
+        session.advance(0.0);
+        let (mut flips, mut lit, mut was_on, mut was_lit) = (0, 0, false, false);
+        let mut both = [false; 2];
+        // 20 ms frames of two 10 ms scans, 6 s: the lamp flips every 510 ms,
+        // so in the first scan of a frame and in the second by turns.
+        for frame in 1..=300 {
+            let now = f64::from(frame) * 0.02;
+            session.advance(now);
+            for t in session.earlier() {
+                v.saw(t, now);
+            }
+            let trace = session.trace.as_ref().unwrap();
+            let on = session.value("lamp") == Some(helmsman_iec::Value::Bool(true));
+            if on != was_on {
+                flips += 1;
+                both[usize::from(trace.get("pulse.Q") == Some(helmsman_iec::Value::Bool(true)))] = true;
+            }
+            was_on = on;
+            let mut l = v.live(Some(trace as &dyn helmsman_diagram::Scan)).unwrap();
+            v.hold(&mut l, now);
+            lit += usize::from(l.ran[lamp] && !was_lit);
+            was_lit = l.ran[lamp];
+        }
+        assert!(flips >= 10, "{flips} flips");
+        assert_eq!(
+            both, [true; 2],
+            "flips in the drawn scan and in the one before it"
+        );
+        assert_eq!(lit, flips, "the assignment lit once per flip");
+    }
 }
 
 /// What a block's value reads as (cards `period` value, node fills).
@@ -1684,6 +2047,8 @@ END_PROGRAM
 mod value_tests {
     use helmsman_diagram::NodeKind;
     use helmsman_iec::Value;
+
+    use eframe::egui;
 
     use super::{Viewer, value_text};
     use crate::playground::Session;
@@ -1754,6 +2119,41 @@ END_PROGRAM
             Some("7"),
             "no declarations known: as the value prints"
         );
+    }
+
+    /// A REAL is an f32 widened; the diagram, the I/O tab and the banners
+    /// show it as the f32 (23.7, not 23.700000762939453).
+    #[test]
+    fn a_real_reads_short_and_a_long_value_is_elided_to_its_block() {
+        let v = viewer();
+        let d = v.diagram();
+        let vars = v.module.program().map(|p| &p.vars);
+        let plus = node(&v, &NodeKind::Op { op: "+".into() });
+        let real = Value::Real(f64::from(23.7f32));
+        assert_eq!(value_text(d, plus, real, vars).as_deref(), Some("23.7"));
+        assert_eq!(super::show(Some(real)), "23.7");
+
+        let ctx = egui::Context::default();
+        let mut width = 0.0;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 300.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            let g = super::fitted(
+                ui.painter(),
+                "0.30000000000000004000",
+                egui::FontId::monospace(11.0),
+                egui::Color32::WHITE,
+                40.0,
+            );
+            width = g.size().x;
+        });
+        out.textures_delta.clear();
+        assert!(width <= 40.5, "{width} pt wide in a 40 pt block");
     }
 }
 
