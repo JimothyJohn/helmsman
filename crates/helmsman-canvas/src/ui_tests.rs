@@ -42,8 +42,18 @@ impl Harness {
     /// The page as it opened before the traffic light took first place
     /// (2026-11-12): the Blink example open and running. The tests that
     /// click its LAMP block or count its lines start here.
-    fn blink() -> Self {
+    /// The simulation with its Code tab shown (the page opens on the
+    /// Agent since 2026-11-13).
+    fn code() -> Self {
         let mut h = Self::new(App::sim());
+        h.app.chrome.show_code();
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h
+    }
+
+    fn blink() -> Self {
+        let mut h = Self::code();
         h.app.sim.as_mut().expect("the simulation").open_project("blink");
         h.frame(vec![]);
         h.frame(vec![]);
@@ -533,7 +543,7 @@ mod glyphs_and_help {
     #[test]
     fn the_agents_send_is_a_glyph() {
         let mut h = Harness::new(App::sim());
-        h.app.chrome.tab = crate::editor::Tab::Claude;
+        h.app.chrome.show(crate::editor::Pane::Claude);
         h.frame(vec![]);
         h.frame(vec![]);
         let send = h.rect("agent send");
@@ -631,7 +641,7 @@ mod polish {
 
     use super::{App, Harness, Screen};
     use crate::app::HEADER_H;
-    use crate::editor::{Tab, numbering};
+    use crate::editor::{Pane, numbering};
 
     impl Harness {
         pub(super) fn key(&mut self, modifiers: Modifiers, key: Key) {
@@ -656,7 +666,7 @@ mod polish {
     /// Keyboard): the simulation's run controls, the panes, Save.
     #[test]
     fn the_shortcuts_run_step_stop_save_and_toggle_the_panes() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::code();
         assert!(
             h.app.sim.as_ref().unwrap().session.running,
             "the playground opens running"
@@ -674,9 +684,8 @@ mod polish {
         assert!(h.app.sim.as_ref().unwrap().session.running, "Ctrl+Enter runs");
         h.key(Modifiers::COMMAND, Key::Enter);
         assert!(!h.app.sim.as_ref().unwrap().session.running, "and stops");
-        // The panes: the simulation starts on the left pane's Code tab.
+        // The panes, from the Code tab.
         assert!(h.app.chrome.code_open());
-        let right = h.app.chrome.right;
         let pane = Modifiers::ALT.plus(Modifiers::SHIFT);
         h.key(pane, Key::Num1);
         assert!(!h.app.chrome.left, "Alt+Shift+1 on the Code tab shuts the pane");
@@ -693,8 +702,23 @@ mod polish {
         );
         h.key(pane, Key::Num1);
         assert!(h.app.chrome.code_open());
+        // Alt+Shift+5: the left pane's tab to a pane on the right, the
+        // one under it shown on the left (Nick, 2026-11-13).
+        assert!(h.app.chrome.rights.is_empty(), "every tab on the left at first");
+        h.key(pane, Key::Num5);
+        assert_eq!(h.app.chrome.rights, [Pane::Code]);
+        assert!(h.app.chrome.code_open(), "the Code tab shown on the right");
+        assert_eq!(h.app.chrome.pane, Pane::Io, "the tab under it on the left");
+        assert!(h.app.chrome.left, "the left pane stays open");
+        h.wait(0.3);
+        assert!(h.has("right"), "the right pane drawn");
         h.key(pane, Key::Num3);
-        assert_eq!(h.app.chrome.right, !right, "Alt+Shift+3: the side panel");
+        assert!(
+            !h.app.chrome.right && !h.app.chrome.code_open(),
+            "Alt+Shift+3 shuts the right pane"
+        );
+        h.key(pane, Key::Num3);
+        assert!(h.app.chrome.code_open(), "and opens it");
         // Alt alone on a digit is Firefox's tab switch: not ours any more.
         h.key(Modifiers::ALT, Key::Num1);
         assert!(h.app.chrome.code_open(), "Alt+1 does nothing");
@@ -1060,11 +1084,14 @@ END_PROGRAM",
         h.view_menu("view files");
         assert!(!h.app.chrome.left, "again: the pane shuts");
         h.view_menu("view panel");
-        assert!(!h.app.chrome.right);
+        assert!(
+            h.app.chrome.rights.is_empty(),
+            "nothing docked on the right: nothing to show"
+        );
         h.view_menu("view tab claude");
         assert!(
-            h.app.chrome.right && h.app.chrome.tab == Tab::Claude,
-            "a tab opens the panel"
+            h.app.chrome.left && h.app.chrome.showing(Pane::Claude),
+            "a tab opens its pane"
         );
         assert!(h.app.chrome.trend, "the Trend runs along the bottom");
         h.view_menu("view trend");
@@ -1084,7 +1111,7 @@ END_PROGRAM",
 
     #[test]
     fn the_file_menu_saves_and_the_edit_menu_undoes_a_typed_character() {
-        let mut h = Harness::new(App::sim());
+        let mut h = Harness::code();
         assert!(h.app.chrome.code_open(), "the ST open");
         let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
@@ -1131,6 +1158,8 @@ END_PROGRAM",
         use crate::agent_marks::Side;
         use crate::instruct_tests::{LAMP, follows};
         let mut h = Harness::new(App::sim());
+        // Docked right: the Agent at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
         h.press("tab claude");
         h.wait(0.2);
         {
@@ -1335,6 +1364,8 @@ END_PROGRAM",
     fn the_agent_tabs_outcomes_leave_the_panels_their_width() {
         use crate::instruct::{Attempt, Kind, Outcome, Run, Undo};
         let mut h = Harness::new(App::sim());
+        // Docked right: the Agent at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
         h.press("tab claude");
         h.wait(0.2);
         let left = h.rect("left");
@@ -1395,7 +1426,7 @@ END_PROGRAM",
 
     #[test]
     fn the_third_tab_reads_agent() {
-        assert_eq!(Tab::Claude.label(), "Agent");
+        assert_eq!(crate::editor::Tab::Claude.label(), "Agent");
     }
 
     #[test]
@@ -1417,7 +1448,7 @@ mod chrome {
 
     use super::{Harness, node, sim_view, write_to};
     use crate::app::{App, Screen, Source, wants_sim};
-    use crate::editor::{Chrome, Pane, STRIP, Tab};
+    use crate::editor::{Chrome, Pane, STRIP};
     use crate::projects::Act;
 
     #[test]
@@ -1553,6 +1584,8 @@ mod chrome {
     #[test]
     fn both_sidebars_collapse_to_a_strip_and_come_back() {
         let mut h = Harness::new(App::sim());
+        // Docked right: a tab on each side, so both panes are measured.
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
         assert!(h.app.chrome.left && h.app.chrome.right);
         for (side, edge) in [("left", 0.0), ("right", h.size.x)] {
             let open = h.rect(side);
@@ -1575,7 +1608,7 @@ mod chrome {
         h.wait(0.5);
         // Remembered per browser: what the app saves reads back the same.
         let back = Chrome::restored(&h.app.chrome.saved());
-        assert_eq!((back.left, back.right, back.pane), (false, false, Pane::Code));
+        assert_eq!((back.left, back.right, back.pane), (false, false, Pane::Claude));
     }
 
     /// Nick, 2026-11-11: a folded pane keeps its tabs as glyphs down the
@@ -1583,13 +1616,15 @@ mod chrome {
     #[test]
     fn a_folded_panes_strip_keeps_its_tabs_and_each_opens_the_pane_on_it() {
         let mut h = Harness::new(App::sim());
+        // Docked right: a tab on each side, so both panes are measured.
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
         h.press("left");
         h.press("right");
         h.wait(0.5);
         assert!(!h.app.chrome.left && !h.app.chrome.right);
         for key in ["pane files", "pane devices", "pane code", "tab io", "tab claude"] {
             let r = h.rect(key);
-            let edge = if key.starts_with("pane") { 0.0 } else { h.size.x };
+            let edge = if key == "tab io" { h.size.x } else { 0.0 };
             assert!(
                 (r.center().x - edge).abs() <= STRIP,
                 "{key} is on its strip: {r:?}"
@@ -1603,10 +1638,10 @@ mod chrome {
         h.wait(0.5);
         assert!(h.app.chrome.left, "the pane opens");
         assert_eq!(h.app.chrome.pane, Pane::Devices, "on the tab clicked");
-        h.press("tab claude");
+        h.press("tab io");
         h.wait(0.5);
-        assert!(h.app.chrome.right, "the panel opens");
-        assert_eq!(h.app.chrome.tab, Tab::Claude);
+        assert!(h.app.chrome.right, "the right pane opens");
+        assert!(h.app.chrome.showing(Pane::Io));
         // The chevron under them still opens a pane where it was.
         h.press("left");
         h.wait(0.5);
@@ -1784,13 +1819,14 @@ mod chrome {
     #[test]
     fn the_left_pane_has_files_and_code_tabs_and_one_width() {
         let mut h = Harness::blink();
-        assert!(h.app.chrome.code_open(), "the simulation opens on Code");
+        assert!(h.app.chrome.code_open(), "the Code tab shown");
         let code = h.rect("pane code");
         let files = h.rect("pane files");
-        let devices = h.rect("pane devices");
+        // Every tab in the one pane (Nick, 2026-11-13), the Agent first.
+        let xs: Vec<f32> = Pane::ALL.iter().map(|p| h.rect(&p.hit()).left()).collect();
         assert!(
-            files.right() <= devices.left() && devices.right() <= code.left(),
-            "Files | Devices | Code, left to right"
+            xs.windows(2).all(|w| w[0] < w[1]),
+            "Agent | Code | I/O | Devices | Files | History | Palette, left to right: {xs:?}"
         );
         let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.press("pane files");
@@ -1813,8 +1849,8 @@ mod chrome {
         assert_eq!(back.pane, Pane::Code);
         assert_eq!(
             Chrome::restored("st=1").pane,
-            Pane::Code,
-            "the old key still reads"
+            Pane::Claude,
+            "a layout from before the one pane opens on the Agent"
         );
     }
 
@@ -3070,9 +3106,8 @@ mod chrome {
         assert!(h.app.chrome.code_open(), "two open the Code tab");
     }
 
-    /// Nick 2026-11-07: a double click on any pane tab (Files, Devices,
-    /// Code; I/O, Agent and the rest on the right) hides that pane; one
-    /// click only picks the tab.
+    /// Nick 2026-11-07: a double click on any pane tab hides that pane, on
+    /// either side; one click only picks the tab.
     #[test]
     fn double_clicking_a_tab_hides_its_pane_and_one_click_does_not() {
         let mut h = Harness::new(App::sim());
@@ -3093,7 +3128,9 @@ mod chrome {
             h.wait(0.2);
             assert!(h.app.chrome.left, "the strip brings it back after {key}");
         }
-        h.app.chrome.right = true;
+        // The same on the right, with two tabs docked there.
+        h.app.chrome.dock(Pane::Io, true);
+        h.app.chrome.dock(Pane::Claude, true);
         h.wait(0.2);
         let tabs: Vec<String> = h
             .app
@@ -3101,7 +3138,7 @@ mod chrome {
             .hits
             .iter()
             .map(|(k, _)| k.clone())
-            .filter(|k| k.starts_with("tab "))
+            .filter(|k| k == "tab io" || k == "tab claude")
             .collect();
         assert!(
             tabs.iter().any(|k| k == "tab io") && tabs.iter().any(|k| k == "tab claude"),
@@ -3256,34 +3293,154 @@ mod chrome {
         assert_eq!(files(&h).get("blink.st"), Some(&text), "pasted across projects");
     }
 
+    /// Nick, 2026-11-13: every tab in one pane on the left, the Agent
+    /// shown; a tab dragged to the window's right edge docks in a pane
+    /// there, and dragged back onto the left pane it returns.
+    #[test]
+    fn a_tab_dragged_to_the_right_edge_docks_there_and_back() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        assert_eq!(h.app.chrome.lefts, Pane::ALL, "every tab on the left");
+        assert_eq!(h.app.chrome.pane, Pane::Claude, "the Agent shown");
+        assert!(!h.has("right"), "no right pane drawn");
+        let wide = h.app.chrome.diagram;
+        // Dropped on the diagram: nothing moves.
+        let io = h.rect("tab io").center();
+        h.drag(io, wide.center());
+        assert!(h.app.chrome.rights.is_empty(), "the diagram is no place to dock");
+        // Dropped at the right edge: docked there, shown, the Agent kept.
+        let io = h.rect("tab io").center();
+        h.drag(io, Pos2::new(h.size.x - 20.0, 300.0));
+        h.wait(0.3);
+        assert_eq!(h.app.chrome.rights, [Pane::Io]);
+        assert!(h.app.chrome.showing(Pane::Io) && h.app.chrome.showing(Pane::Claude));
+        assert!(h.has("right") && h.has("io outputs"));
+        assert!(
+            h.app.chrome.diagram.width() < wide.width(),
+            "the diagram makes room"
+        );
+        // Back onto the left pane.
+        let io = h.rect("tab io").center();
+        let left = h.rect("pane code").center() + egui::vec2(0.0, 200.0);
+        h.drag(io, left);
+        h.wait(0.3);
+        assert!(h.app.chrome.rights.is_empty() && h.app.chrome.lefts.contains(&Pane::Io));
+        assert!(h.app.chrome.showing(Pane::Io), "shown where it landed");
+        assert!(!h.has("right"), "the empty right pane goes");
+    }
+
+    /// Docking keeps the shown tab unless it is the one moved: then the
+    /// tab under it shows, or the one before when it was the last. The
+    /// regression: docking I/O while the Agent showed switched the left
+    /// pane to Devices.
+    #[test]
+    fn docking_a_tab_shows_the_one_under_it_only_when_it_was_shown() {
+        let mut c = Chrome::default();
+        c.dock(Pane::Io, true);
+        assert_eq!((c.pane, c.side), (Pane::Claude, Pane::Io), "the Agent stays");
+        c.pane = Pane::Code;
+        c.send_right();
+        assert_eq!(
+            (c.pane, c.side),
+            (Pane::Devices, Pane::Code),
+            "the tab under Code"
+        );
+        assert_eq!(c.rights, [Pane::Io, Pane::Code]);
+        c.pane = Pane::Palette;
+        c.send_right();
+        assert_eq!(c.pane, Pane::History, "the last one: the one before");
+        c.dock(Pane::Io, false);
+        assert_eq!(
+            (c.pane, c.side),
+            (Pane::Io, Pane::Palette),
+            "back on the left, shown; the right keeps its tab"
+        );
+        assert_eq!(c.lefts.last(), Some(&Pane::Io), "at the end");
+        // Everything to the right: the left pane has nothing, and still draws.
+        while !c.lefts.is_empty() {
+            c.pane = c.lefts[0];
+            c.send_right();
+        }
+        assert_eq!(c.rights.len(), Pane::ALL.len());
+        let mut h = Harness::new(App::sim());
+        h.app.chrome = c;
+        h.wait(0.3);
+        assert!(!h.has("left") && h.has("right"), "only the right pane");
+    }
+
+    proptest::proptest! {
+        /// Any run of docks and sends keeps every tab in exactly one pane,
+        /// each pane showing one of its own.
+        #[test]
+        fn docking_keeps_every_tab_once(moves in proptest::collection::vec((0usize..7, proptest::bool::ANY, proptest::bool::ANY), 0..40)) {
+            let mut c = Chrome::default();
+            for (k, right, send) in moves {
+                if send {
+                    // Alt Shift 5 on whichever left tab shows.
+                    if !c.lefts.is_empty() {
+                        c.pane = c.lefts[k % c.lefts.len()];
+                    }
+                    c.send_right();
+                } else {
+                    c.dock(Pane::ALL[k], right);
+                }
+                let mut all: Vec<Pane> = c.lefts.iter().chain(&c.rights).copied().collect();
+                all.sort_by_key(|p| Pane::ALL.iter().position(|q| q == p));
+                proptest::prop_assert_eq!(&all[..], &Pane::ALL[..]);
+                proptest::prop_assert!(c.lefts.is_empty() || c.lefts.contains(&c.pane));
+                proptest::prop_assert!(c.rights.is_empty() || c.rights.contains(&c.side));
+                proptest::prop_assert_eq!(Chrome::restored(&c.saved()).rights, c.rights.clone());
+            }
+        }
+    }
+
     #[test]
     fn the_layout_read_back_from_storage_is_forgiving() {
         let mut c = Chrome::default();
-        c.tab = Tab::Claude;
+        c.dock(Pane::Io, true);
         c.pane = Pane::Code;
         c.scan = true;
         c.trend = false;
         let back = Chrome::restored(&c.saved());
-        assert_eq!(
-            (back.left, back.right, back.pane, back.tab, back.scan, back.trend),
-            (true, true, Pane::Code, Tab::Claude, true, false)
-        );
+        assert_eq!(back, c, "{}", c.saved());
+        assert_eq!(back.rights, [Pane::Io]);
+        assert!(!back.lefts.contains(&Pane::Io));
         // Anything else keeps the defaults; the Why tab is gone.
+        for junk in [
+            "",
+            "left",
+            "tab=why",
+            "=== =1",
+            "dock=2 lefts=why,,code rights=code",
+        ] {
+            let c = Chrome::restored(junk);
+            let mut all: Vec<Pane> = c.lefts.iter().chain(&c.rights).copied().collect();
+            all.sort_by_key(|p| Pane::ALL.iter().position(|q| q == p));
+            assert_eq!(all, Pane::ALL, "every tab once: {junk:?}");
+        }
         for junk in ["", "left", "tab=why", "=== =1"] {
             assert_eq!(Chrome::restored(junk), Chrome::default(), "{junk:?}");
         }
-        let c = Chrome::restored("right=yes left=0 pane=code scan=yes \u{0}");
+        let c = Chrome::restored("dock=2 right=yes left=0 pane=code scan=yes \u{0}");
         assert_eq!(
-            (c.left, c.right, c.pane, c.tab, c.scan),
-            (false, false, Pane::Code, Tab::Io, false)
+            (c.left, c.right, c.pane, c.scan),
+            (false, false, Pane::Code, false)
         );
+        // A layout from before 2026-11-13 (two side panels): its panes
+        // are not read back, the rest is.
+        let old = Chrome::restored("left=1 right=1 pane=files tab=io scan=1 light=1");
+        assert_eq!(
+            (old.pane, old.lefts.clone(), old.rights.len()),
+            (Pane::Claude, Pane::ALL.to_vec(), 0)
+        );
+        assert!(old.scan && old.light);
     }
 
     #[test]
     fn the_st_toggle_opens_and_closes_the_editor_and_a_block_click_sends_it_to_the_line() {
         let mut h = Harness::blink();
         let editor = h.editor_id();
-        assert!(h.app.chrome.code_open(), "the simulation starts with the ST open");
+        assert!(h.app.chrome.code_open(), "the Code tab shown");
         assert!(h.ctx.read_response(editor).is_some());
         h.view_menu("view st");
         assert!(!h.app.chrome.code_open());
@@ -3340,7 +3497,7 @@ mod simulated {
 
     use super::{Harness, node, sim_view, write_to};
     use crate::app::App;
-    use crate::editor::Tab;
+    use crate::editor::Pane;
     use crate::st_view::{Pick, TAP, node_near};
 
     fn stations() -> Harness {
@@ -3365,7 +3522,7 @@ mod simulated {
         // with the Trend folded away from the bottom.
         h.app.chrome.trend = false;
         h.wait(0.5);
-        let far = Pos2::new(h.rect("right").left() - 30.0, h.size.y - 6.0);
+        let far = Pos2::new(h.app.chrome.diagram.right() - 30.0, h.size.y - 6.0);
         h.click(far);
         assert_eq!(sim_view(&h).pick, None);
     }
@@ -3393,8 +3550,8 @@ mod simulated {
     #[test]
     fn scroll_pans_pinch_zooms_and_the_instance_view_switches_diagrams() {
         let mut h = stations();
-        // Between the ST (files 230, ST 440) and the right panel.
-        let centre = Pos2::new(h.rect("right").left() - 150.0, 450.0);
+        // Inside the diagram, left of its right edge.
+        let centre = Pos2::new(h.app.chrome.diagram.right() - 150.0, 450.0);
         let before = sim_view(&h).cams[0];
         h.frame(vec![
             Event::PointerMoved(centre),
@@ -3469,17 +3626,17 @@ mod simulated {
     #[test]
     fn the_trend_runs_along_the_bottom_and_the_tabs_are_io_and_agent() {
         let mut h = Harness::new(App::sim());
-        assert_eq!(h.app.chrome.tab, Tab::Io);
+        assert_eq!(h.app.chrome.pane, Pane::Claude, "the Agent first");
         h.wait(0.3);
-        let panel = h.rect("right");
-        for (key, tab) in [("tab claude", Tab::Claude), ("tab io", Tab::Io)] {
+        let panel = h.rect("left");
+        for (key, tab) in [("tab io", Pane::Io), ("tab claude", Pane::Claude)] {
             h.press(key);
-            assert_eq!(h.app.chrome.tab, tab);
+            assert_eq!(h.app.chrome.pane, tab);
         }
         h.wait(0.3);
-        // The Agent tab's content fits the panel: at most the scroll bar's
+        // The Agent tab's content fits the pane: at most the scroll bar's
         // width more, never the rows that used to widen it by a third.
-        let grown = panel.left() - h.rect("right").left();
+        let grown = h.rect("left").right() - panel.right();
         assert!((0.0..=8.0).contains(&grown), "the panel grew {grown} pt");
         assert!(!h.has("tab trend"), "no Trend tab");
         assert!(h.app.chrome.trend, "open by default");
@@ -3642,6 +3799,8 @@ mod simulated {
     fn the_agent_tab_names_the_scope_before_the_instruction() {
         use crate::scope::Scope;
         let mut h = Harness::new(App::sim());
+        // Docked right: the Agent at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
         h.wait(0.3);
         let right = h.rect("right");
         h.press("pane code");
@@ -3814,6 +3973,8 @@ mod simulated {
     #[test]
     fn long_device_identities_and_names_leave_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
+        // Docked right: a tab on each side, so both panes are measured.
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
         h.wait(0.3);
         let left = h.rect("left");
         let right = h.rect("right");
@@ -3857,6 +4018,8 @@ mod simulated {
     #[test]
     fn a_long_warning_row_wraps_and_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
+        // Docked right: a tab on each side, so both panes are measured.
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
         h.press("pane code");
         h.wait(0.3);
         let (left, right) = (h.rect("left"), h.rect("right"));
@@ -3882,6 +4045,8 @@ mod simulated {
     fn the_free_chat_tab_has_no_key_and_keeps_the_panel_width() {
         use crate::claude::{Free, Incoming};
         let mut h = Harness::new(App::sim());
+        // Docked right: the Agent at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
         h.wait(0.3);
         let right = h.rect("right");
         h.press("tab claude");
@@ -3949,6 +4114,8 @@ mod simulated {
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
+        // Docked right: a tab on each side, so both panes are measured.
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
         h.wait(0.3);
         let left = h.rect("left");
         let right = h.rect("right");
@@ -3985,7 +4152,7 @@ mod boxed {
     use crate::app::{App, Source};
     use crate::box_tests::{Bench, watch};
     use crate::box_view::BoxView;
-    use crate::editor::Tab;
+    use crate::editor::Pane;
     use crate::remote::{Link, Msg, Stream};
     use crate::stamp;
     use crate::theme::Theme;
@@ -4156,6 +4323,8 @@ mod boxed {
     #[test]
     fn a_box_of_another_build_shows_the_banner() {
         let mut h = Harness::new(App::boxed());
+        // Docked right: a tab on each side, so both panes are measured.
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
         h.wait(0.3);
         let (left, right) = (h.rect("left"), h.rect("right"));
         assert!(!h.has("build banner"), "no stamp heard yet");
@@ -4366,6 +4535,8 @@ mod boxed {
         let bench = Bench::new();
         let (state, _) = watch(&bench);
         let mut h = Harness::new(App::boxed());
+        // Docked right: the Agent at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
         h.app.boxv.as_mut().unwrap().state = state;
         h.wait(0.3);
         let left = h.rect("left");
@@ -4548,6 +4719,8 @@ mod boxed {
         state.apply(Msg::Got(Fetch::Adapter, Ok(body)), 1.0);
         state.io_map = Some("in ready bool box di:0\n".into());
         let mut h = Harness::new(App::boxed());
+        // Docked right: a tab on each side, so both panes are measured.
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
         h.app.boxv.as_mut().unwrap().state = state;
         h.frame(vec![]);
         h.frame(vec![]);
@@ -4711,7 +4884,7 @@ mod boxed {
             !h.has("tab trend") && h.has("tab claude"),
             "I/O and the Agent on a box (the Trend is along the bottom)"
         );
-        assert_eq!(h.app.chrome.tab, Tab::Io);
+        assert_eq!(h.app.chrome.pane, Pane::Claude, "the Agent first");
 
         // The ST open beside the diagram, read-only.
         h.view_menu("view st");
@@ -5375,13 +5548,15 @@ mod tour {
         let mut h = Harness::new(App::sim());
         h.app.tour = Some(Tour::new());
         h.wait(0.3);
-        let (left, right) = (h.rect("left"), h.rect("right"));
+        // One pane on the default layout (every tab on the left).
+        assert!(!h.has("right"), "no right pane until a tab is docked there");
+        let left = h.rect("left");
         card_is_fair(&h, "welcome");
         assert_eq!(anchor(&h), None, "the welcome sits in the middle");
         h.press("tour start");
         h.wait(0.2);
         assert_eq!(step(&h), Step::OpenBlink);
-        // The playground opens on the Code tab: the card points at Files.
+        // The playground opens on the Agent: the card points at Files.
         assert_eq!(anchor(&h).as_deref(), Some("pane files"));
         card_is_fair(&h, "files tab");
         h.press("pane files");
@@ -5428,6 +5603,10 @@ mod tour {
         let sim = h.app.sim.as_ref().unwrap();
         assert!(sim.session.running && !sim.session.stale(), "the edit runs");
         assert_eq!(sim.proj.running.as_deref(), Some(mine.as_str()));
+        // The Code tab is in front: the card points at the I/O tab first.
+        assert_eq!(anchor(&h).as_deref(), Some("tab io"));
+        h.press("tab io");
+        h.wait(0.2);
         assert_eq!(anchor(&h).as_deref(), Some("io outputs"));
         card_is_fair(&h, "outputs");
         // The lamp, the first output.
@@ -5469,11 +5648,9 @@ mod tour {
         h.wait(0.2);
         assert!(h.app.tour.is_none());
         assert!(!h.has("tour card"));
-        // The side panels kept their widths the whole way.
+        // The pane kept its width the whole way.
         let l = h.rect("left").right() - left.right();
-        let r = right.left() - h.rect("right").left();
         assert!((0.0..=8.0).contains(&l), "the left pane grew {l} pt");
-        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
     }
 
     /// Skip at the first card, or at the first step, leaves the app as a
@@ -5597,7 +5774,7 @@ mod glyph_library {
 
     use super::Harness;
     use crate::app::App;
-    use crate::editor::Tab;
+    use crate::editor::Pane;
 
     /// How many library glyphs (meshes on a texture other than the font
     /// atlas) the last frame drew inside `area`.
@@ -5655,8 +5832,8 @@ mod glyph_library {
         let before = h.app.chrome.diagram;
         let tab = h.rect("tab palette").center();
         h.click(tab);
-        assert_eq!(h.app.chrome.tab, Tab::Palette);
-        let panel = Rect::from_min_max(egui::pos2(before.right(), 0.0), egui::pos2(h.size.x, h.size.y));
+        assert!(h.app.chrome.showing(Pane::Palette));
+        let panel = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(before.left(), h.size.y));
         assert_eq!(glyphs_in(&h, panel), 12, "the twelve pieces are drawn");
         assert_eq!(h.app.chrome.diagram, before, "the grid fits the panel");
         let sent = |h: &Harness| h.app.sim.as_ref().unwrap().link.sent.len();
@@ -5669,7 +5846,7 @@ mod glyph_library {
         let piece = h.rect("palette push-button").center();
         h.drag(piece, h.app.chrome.diagram.center());
         assert_eq!(sent(&h), 1);
-        assert_eq!(h.app.chrome.tab, Tab::Claude, "the answer's tab");
+        assert!(h.app.chrome.showing(Pane::Claude), "the answer's tab");
         let body = &h.app.sim.as_ref().unwrap().link.sent[0].1.body;
         assert!(body.contains("Add a push button"), "{body}");
         // A click asks too.
@@ -5688,7 +5865,7 @@ mod glyph_library {
     #[test]
     fn every_output_in_the_io_tab_has_a_glyph_and_the_panel_keeps_its_width() {
         let mut h = Harness::new(App::sim());
-        h.app.chrome.tab = Tab::Io;
+        h.app.chrome.show(Pane::Io);
         let before = h.app.chrome.diagram;
         h.wait(0.3);
         let outputs = h.rect("io outputs");
@@ -5893,6 +6070,10 @@ mod devconf {
     #[test]
     fn the_panel_keeps_its_width_with_the_section_and_its_lines_open() {
         let mut h = open("engineer");
+        // Docked right: the Devices tab at the right pane's default
+        // width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Devices, true);
+        h.wait(0.3);
         let (left, right) = (h.rect("left"), h.rect("right"));
         answer(&mut h, ConfigOp::Read, 200, &facts());
         h.press("config drift rio");

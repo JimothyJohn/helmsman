@@ -255,10 +255,10 @@ impl Tour {
                 Step::Name => &["name"],
                 Step::Edit => &["st editor", "pane code", "left"],
                 Step::Deploy => &["file deploy", "bar file"],
-                Step::Watch => &["io outputs", "tab io", "right"],
+                Step::Watch => &["io outputs", "tab io"],
                 Step::Trend => &["trend window", "bottom trend"],
-                Step::Agent if seen.keyed => &["agent instruction", "tab claude", "right"],
-                Step::Agent => &["agent key", "tab claude", "right"],
+                Step::Agent if seen.keyed => &["agent instruction", "tab claude"],
+                Step::Agent => &["agent key", "tab claude"],
             }
         };
         keys.iter().map(|k| (*k).to_string()).collect()

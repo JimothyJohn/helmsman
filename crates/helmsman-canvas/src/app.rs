@@ -297,9 +297,9 @@ impl App {
     /// The simulation, on a page no box serves.
     #[must_use]
     pub fn sim() -> Self {
-        // Writing ST is what a visitor came for: the editor starts open.
-        let mut chrome = Chrome::default();
-        chrome.show_code();
+        // The Agent first (Nick, 2026-11-13): asking for the program is
+        // what a visitor does most; the Code tab is one click away.
+        let chrome = Chrome::default();
         Self {
             screen: Screen::Editor,
             source: Source::Sim,
@@ -845,6 +845,7 @@ impl App {
             Action::Devices => self.chrome.toggle_devices(),
             Action::St => self.chrome.toggle_code(),
             Action::Panel => self.chrome.right = !self.chrome.right,
+            Action::DockRight => self.chrome.send_right(),
             Action::Trend => self.chrome.trend = !self.chrome.trend,
         }
     }

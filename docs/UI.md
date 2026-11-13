@@ -23,7 +23,7 @@ this; change it here first when a decision changes.
   to the site) and a menu bar: File (New project, Copy project, Save,
   Deploy, Upload, Download),
   Edit (Undo, Redo, Go to definition, Cross references), View (Editor /
-  Monitor, Structured Text, Files, the side panel and its tabs, Trend,
+  Monitor, Structured Text, Files, Devices, the right pane, Tab to the right, the Agent's tabs, Trend,
   Zoom to fit, the layout items, Scan detail for an engineer, and Light
   mode: dark by default, the choice kept per browser with the layout) and Help
   (Help and Keyboard shortcuts on the site, About Helmsman: version,
@@ -51,10 +51,20 @@ this; change it here first when a decision changes.
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
+- **One pane of tabs, on the left, the Agent first** (Nick, 2026-11-13:
+  two side panels by default was too many; one keeps the diagram wide and
+  the focus where it is most of the time). All seven tabs start there:
+  Agent (shown), Code, I/O, Devices, Files, History, Palette. A tab's glyph
+  dragged to the window's right edge (96 pt, lit while a tab is dragged)
+  docks it in a right pane (236 pt) that exists only while it holds a
+  tab; dragged back onto the left pane it returns. Alt Shift 5 sends the
+  left pane's tab to the right and shows the one under it on the left.
+  The tabs shrink to share one row with the chevron (24 pt at the least,
+  then they wrap). Kept per browser (`dock=2` in the layout text; a
+  layout from before is read with its panes reset).
 - **Panes collapse** from their chevron, their Alt key, or a double click
-  on any of their tabs (Nick, 2026-11-07), on the left pane and the side
-  panel alike.
-- **Left pane, collapsible, tabs (320 pt):** Files (the projects, the
+  on any of their tabs (Nick, 2026-11-07), on either side.
+- **The tabs (left pane 320 pt):** Files (the projects, the
   open one expanded with its files under it, Nick 2026-11-13: no
   separate files section and no program tree, the diagram's crumbs
   reach the POUs; a right-click on a project offers Copy, Rename,
@@ -141,10 +151,10 @@ this; change it here first when a decision changes.
   for every tab (320 pt since 2026-11-10, so the Code tab holds 27
   characters a row); Alt Shift 0, Alt Shift 4 and Alt Shift 1 open the
   pane on its tab, or shut it when that tab shows.
-- **Right panel, collapsible, tabs (236 pt):** I/O
+- **More tabs:** I/O
   (values; inputs the diagram does not show), Palette (the glyph
   library's pieces, `palette`: a click, or a drag onto the diagram, sends
-  the piece's request to the Agent as if typed, and the panel turns to
+  the piece's request to the Agent as if typed, and its pane turns to
   the Agent tab; Nick, 2026-11-12) and Agent. (The Requirements
   tab of 2026-11-05, a list of requirements in plain words with the agent
   writing the test behind each, is archived since 2026-11-08 under
@@ -352,11 +362,12 @@ focused text field alone, never to the editor's history as well
 | Alt F8 | Sign in (box) | Login |
 | Ctrl F8 | Sign out (box) | Logout |
 | Ctrl Z, Ctrl Shift Z; Ctrl Y off a Mac | Undo, Redo in the ST editor | Undo, Restore |
-| Alt Shift 0 | The left pane's Files tab | Devices view (Alt 1 to 9 are Firefox's tabs on Windows and Linux) |
-| Alt Shift 1 | The left pane's Code tab (the Structured Text) | POUs view |
+| Alt Shift 0 | The Files tab | Devices view (Alt 1 to 9 are Firefox's tabs on Windows and Linux) |
+| Alt Shift 1 | The Code tab (the Structured Text) | POUs view |
 | Alt Shift 2 | Trend along the bottom | Modules view |
-| Alt Shift 3 | Side panel | Messages view |
-| Alt Shift 4 | The left pane's Devices tab | |
+| Alt Shift 3 | The right pane, once a tab is docked there | Messages view |
+| Alt Shift 4 | The Devices tab | |
+| Alt Shift 5 | The left pane's tab to the right pane, the next one shown on the left | |
 | Alt Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition (Ctrl Shift D bookmarks every tab) |
 | Alt Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References (Ctrl Shift X is Firefox's text direction) |
 | Shift F9 | Breakpoint on the picked block (simulation): the scan stops before it, framed in orange; Ctrl Enter goes on to the next stop | (Toggle Breakpoint is F9, Edge's reader; Ctrl B is Firefox's bookmarks) |
