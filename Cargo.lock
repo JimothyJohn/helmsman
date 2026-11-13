@@ -1649,6 +1649,7 @@ dependencies = [
  "async-opcua",
  "helmsman-adapter",
  "helmsman-agent",
+ "helmsman-devconf",
  "helmsman-diagram",
  "helmsman-iec",
  "helmsman-io",

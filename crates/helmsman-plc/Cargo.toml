@@ -12,6 +12,9 @@ helmsman-adapter = { path = "../helmsman-adapter" }
 # The chat panel's agent loop (relay client and tools), for the box API's
 # /api/chat; https follows ours.
 helmsman-agent = { path = "../helmsman-agent", default-features = false, optional = true }
+# Configuring a device through its own protocol (the box API's
+# /api/devices/{id}/config; std only, no dependencies of its own).
+helmsman-devconf = { path = "../helmsman-devconf", optional = true }
 # Explain mode: the box explains its own traces (/api/explain).
 helmsman-diagram = { path = "../helmsman-diagram", optional = true }
 helmsman-iec = { path = "../helmsman-iec" }
@@ -37,6 +40,8 @@ signal-hook = { version = "0.4.6", default-features = false, optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
 
 [dev-dependencies]
+# The simulated Moxa console the device-configuration routes are tested against (tests/devconf.rs).
+helmsman-devconf = { path = "../helmsman-devconf", features = ["sim"] }
 # Deflated entries for hostile upload archives (tests/projects.rs).
 miniz_oxide = "0.9.1"
 # The box build itself never enables `unrestricted`; its tests play scanner.
@@ -74,7 +79,7 @@ workspace = true
 # scripts/lint.sh keeps compiling) refuses a map naming `enip-io` as "not
 # in this build".
 default = ["box", "https", "enip-io"]
-box = ["dep:rusqlite", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
+box = ["dep:rusqlite", "dep:helmsman-devconf", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
 enip-io = ["box", "helmsman-io/enip"]
 # `profinet-io` on a real interface: PROFINET IO devices the box masters
 # as their controller, over raw Ethernet (helmsman-io's `profinet-raw`,
@@ -97,6 +102,10 @@ required-features = ["box"]
 
 [[test]]
 name = "api"
+required-features = ["box"]
+
+[[test]]
+name = "devconf"
 required-features = ["box"]
 
 [[test]]
