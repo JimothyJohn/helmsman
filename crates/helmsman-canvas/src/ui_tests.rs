@@ -250,6 +250,33 @@ fn node(v: &Viewer, f: impl Fn(&NodeKind) -> bool) -> (Pos2, f32) {
     )
 }
 
+/// The bounds of the line and path strokes the last frame drew inside
+/// `area` (a hand-drawn glyph is lines and paths; the fills under it are
+/// rects, left out).
+fn stroke_bounds_in(h: &Harness, area: Rect) -> Rect {
+    fn walk(s: &egui::Shape, area: Rect, out: &mut Rect) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
+            egui::Shape::LineSegment { points, .. } => {
+                for p in points.iter().filter(|p| area.contains(**p)) {
+                    out.extend_with(*p);
+                }
+            }
+            egui::Shape::Path(path) => {
+                for p in path.points.iter().filter(|p| area.contains(**p)) {
+                    out.extend_with(*p);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Rect::NOTHING;
+    for c in &h.shapes {
+        walk(&c.shape, area, &mut out);
+    }
+    out
+}
+
 fn write_to(path: &str) -> impl Fn(&NodeKind) -> bool + '_ {
     move |k| *k == NodeKind::Write { path: path.into() }
 }
@@ -462,23 +489,40 @@ mod glyphs_and_help {
     }
 
     /// The UI review of 2026-11-10: "Monitor" touched the edge of the
-    /// Editor | Monitor switch, whose sides were a fixed width. Each side
-    /// is its label and padding either side of it.
+    /// Editor | Monitor switch. Since 2026-11-13 each side is a glyph (the
+    /// code brackets, a screen): the two sides are a tap target wide, the
+    /// same width, and each glyph's strokes stay clear of its side's edge.
     #[test]
-    fn the_mode_switch_pads_its_labels() {
+    fn the_mode_switch_is_two_glyphs_clear_of_its_edges() {
         let h = Harness::new(App::sim());
-        let font = eframe::egui::FontId::proportional(crate::theme::BODY);
-        for (key, label) in [("editor", "Editor"), ("monitor", "Monitor")] {
-            let text = h
-                .ctx
-                .fonts_mut(|f| {
-                    f.layout_no_wrap(label.to_string(), font.clone(), eframe::egui::Color32::WHITE)
-                })
-                .size()
-                .x;
-            let side = h.rect(key).width();
-            assert!(side >= text + 20.0, "{label}: {text} pt of text in {side} pt");
+        let (editor, monitor) = (h.rect("editor"), h.rect("monitor"));
+        assert!((editor.width() - monitor.width()).abs() < 0.01);
+        assert!(editor.width() >= crate::st_view::TAP, "a tap target: {editor:?}");
+        for side in [editor, monitor] {
+            let ink = super::stroke_bounds_in(&h, side);
+            assert!(ink.is_positive(), "a glyph in {side:?}");
+            assert!(
+                side.shrink(4.0).contains_rect(ink),
+                "{ink:?} clear of the edges of {side:?}"
+            );
         }
+        assert!(!h.drew("Editor") && !h.drew("Monitor"), "no words in the switch");
+    }
+
+    /// The Agent tab's Send is a paper plane, not the word (2026-11-13).
+    #[test]
+    fn the_agents_send_is_a_glyph() {
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.tab = crate::editor::Tab::Claude;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let send = h.rect("agent send");
+        let ink = super::stroke_bounds_in(&h, send);
+        assert!(
+            ink.is_positive() && send.shrink(2.0).contains_rect(ink),
+            "{ink:?} in {send:?}"
+        );
+        assert!(!h.drew("Send"), "no word on it");
     }
 
     /// The same review: a small program sat in a sixth of the canvas at
@@ -5173,7 +5217,7 @@ mod lamps {
 
 /// The glyph library beside every point (`glyph_lib`).
 mod glyph_library {
-    use eframe::egui::{Rect, Shape, TextureId};
+    use eframe::egui::{self, Rect, Shape, TextureId};
 
     use super::Harness;
     use crate::app::App;
@@ -5202,10 +5246,74 @@ mod glyph_library {
     }
 
     #[test]
+    fn the_traffic_lights_timer_block_carries_the_timer_glyph_in_its_header() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let v = super::sim_view(&h);
+        let (centre, width) = super::node(
+            v,
+            |k| matches!(k, helmsman_diagram::NodeKind::Fb { fb, .. } if fb == "TON"),
+        );
+        let block = Rect::from_center_size(centre, eframe::egui::vec2(width, width));
+        assert_eq!(
+            glyphs_in(&h, block),
+            1,
+            "the TON block's header has the timer glyph"
+        );
+    }
+
+    /// The Palette tab (`palette`): a piece dragged onto the diagram, or
+    /// clicked, is sent to the Agent as its request, and the panel turns
+    /// to the Agent tab to show the answer coming.
+    #[test]
+    fn a_palette_piece_dropped_on_the_diagram_or_clicked_asks_the_agent() {
+        let mut h = Harness::new(App::sim());
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .chat
+            .key_mut()
+            .push_str("sk-ant-test-key");
+        // The panels' widths show as the diagram's: it keeps its size.
+        let before = h.app.chrome.diagram;
+        let tab = h.rect("tab palette").center();
+        h.click(tab);
+        assert_eq!(h.app.chrome.tab, Tab::Palette);
+        let panel = Rect::from_min_max(egui::pos2(before.right(), 0.0), egui::pos2(h.size.x, h.size.y));
+        assert_eq!(glyphs_in(&h, panel), 12, "the twelve pieces are drawn");
+        assert_eq!(h.app.chrome.diagram, before, "the grid fits the panel");
+        let sent = |h: &Harness| h.app.sim.as_ref().unwrap().link.sent.len();
+        assert_eq!(sent(&h), 0);
+        // Dropped outside the diagram (back on the panel): nothing.
+        let piece = h.rect("palette push-button").center();
+        h.drag(piece, piece + eframe::egui::vec2(0.0, 300.0));
+        assert_eq!(sent(&h), 0, "dropped on the panel");
+        // Dropped on the diagram: asked.
+        let piece = h.rect("palette push-button").center();
+        h.drag(piece, h.app.chrome.diagram.center());
+        assert_eq!(sent(&h), 1);
+        assert_eq!(h.app.chrome.tab, Tab::Claude, "the answer's tab");
+        let body = &h.app.sim.as_ref().unwrap().link.sent[0].1.body;
+        assert!(body.contains("Add a push button"), "{body}");
+        // A click asks too.
+        h.app.sim.as_mut().unwrap().stop_answer();
+        h.click(tab);
+        h.click(h.rect("palette timer").center());
+        assert_eq!(sent(&h), 2);
+        assert!(
+            h.app.sim.as_ref().unwrap().link.sent[1]
+                .1
+                .body
+                .contains("Add a timer (TON)")
+        );
+    }
+
+    #[test]
     fn every_output_in_the_io_tab_has_a_glyph_and_the_panel_keeps_its_width() {
         let mut h = Harness::new(App::sim());
         h.app.chrome.tab = Tab::Io;
-        let before = h.rect("right").width();
+        let before = h.app.chrome.diagram;
         h.wait(0.3);
         let outputs = h.rect("io outputs");
         // The traffic light's three lamps.
@@ -5215,10 +5323,389 @@ mod glyph_library {
             "run is a control on the diagram"
         );
         assert_eq!(
-            h.rect("right").width(),
-            before,
+            h.app.chrome.diagram, before,
             "the glyph column did not widen the panel"
         );
+    }
+}
+
+/// A device's own configuration on the Devices tab (`device_config.rs`).
+mod devconf {
+    use super::Harness;
+    use crate::app::App;
+    use crate::box_projects::{Buf, OpenProject, PCall, PReq};
+    use crate::box_tests::{Bench, watch};
+    use crate::device_config::ConfigOp;
+    use crate::review::{Answer, Session};
+
+    const MAP: &str = "device rio device:moxa-e1213 mac=00-90-e8-7e-af-be\nin part bool rio ch:DI-04\n\
+                       device plain device:other-box mac=00-90-e8-7e-af-bf\nin other bool plain ch:DI-00\n";
+    const SECRET: &str = "hunter2-secret";
+
+    fn buf(text: &str) -> Buf {
+        Buf {
+            text: text.into(),
+            base: text.into(),
+            loaded: true,
+            ..Buf::default()
+        }
+    }
+
+    fn facts() -> String {
+        r#"{"device":"rio","facts":{"firmware":"V3.1",
+            "watchdog":{"enabled":false,"value":"0","label":"Disabled"},
+            "outputs":[
+              {"channel":"DO-00","safe":{"value":"0"},"power_on":{"value":"1"}},
+              {"channel":"DO-01","safe":{"value":"0"},"power_on":{"value":"1"}},
+              {"channel":"DO-02","safe":{"value":"0"},"power_on":{"value":"0"}}],
+            "eip_enabled":false,"rest_enabled":true},
+            "snapshot":{"file":"rio.devconf","version":"v","bytes":9},
+            "drift":{"changed":[{"before":"A=1","after":"A=2"}],"added":["B=2"],"removed":["C=3"]},
+            "password_stored":true}"#
+            .into()
+    }
+
+    /// A signed-in box view with a project whose map has a configurable
+    /// device (`rio`) and one that is not (`plain`), the Devices tab open.
+    fn open(role: &str) -> Harness {
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        let v = h.app.boxv.as_mut().unwrap();
+        v.state = state;
+        v.projects.available = Some(true);
+        // The app hands the box view the review view's session each frame.
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("alice".into()),
+            role: role.into(),
+        });
+        let v = h.app.boxv.as_mut().unwrap();
+        let mut o = OpenProject {
+            name: "demo".into(),
+            ..OpenProject::default()
+        };
+        o.bufs.insert("io.map".into(), buf(MAP));
+        o.bufs.insert(
+            "moxa-e1213.device".into(),
+            buf("helmsman-device 1\nvendor Moxa\nconfigure moxa-e1200\n"),
+        );
+        o.bufs.insert(
+            "other-box.device".into(),
+            buf("helmsman-device 1\nvendor Other\n"),
+        );
+        v.projects.open = Some(o);
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.3);
+        h
+    }
+
+    fn sent(h: &mut Harness) -> Vec<PReq> {
+        h.frame(vec![]);
+        std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
+    }
+
+    fn answer(h: &mut Harness, op: ConfigOp, status: u16, body: &str) {
+        let ctx = h.ctx.clone();
+        let a = Answer {
+            status,
+            retry_after: None,
+            body: body.into(),
+        };
+        let t = h.time;
+        h.app.boxv.as_mut().unwrap().step_all(
+            &ctx,
+            Vec::new(),
+            vec![(PCall::Config("rio".into(), op), a)],
+            t,
+        );
+        h.wait(0.2);
+    }
+
+    /// All the text the last frame drew.
+    fn texts(h: &mut Harness) -> String {
+        fn walk(s: &eframe::egui::Shape, out: &mut String) {
+            match s {
+                eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                eframe::egui::Shape::Text(t) => {
+                    out.push_str(t.galley.text());
+                    out.push('\n');
+                }
+                _ => {}
+            }
+        }
+        // An opening window draws nothing on its first frame.
+        h.wait(0.1);
+        let mut out = String::new();
+        for c in &h.shapes {
+            walk(&c.shape, &mut out);
+        }
+        out
+    }
+
+    fn config_calls(reqs: &[PReq]) -> Vec<(&'static str, String, String)> {
+        reqs.iter()
+            .filter(|r| matches!(r.call, PCall::Config(..)))
+            .map(|r| {
+                (
+                    r.method,
+                    r.url.clone(),
+                    r.body
+                        .as_ref()
+                        .map(|b| String::from_utf8_lossy(b).into_owned())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    /// Reads the configuration of `rio` only: its profile names a configurator,
+    /// the other's does not.
+    fn ready(role: &str) -> Harness {
+        let mut h = open(role);
+        let first = sent(&mut h);
+        assert_eq!(
+            config_calls(&first),
+            [("GET", "/api/devices/rio/config".to_string(), String::new())],
+            "one read, for the device whose profile has a configuration"
+        );
+        answer(&mut h, ConfigOp::Read, 200, &facts());
+        let _ = sent(&mut h);
+        h
+    }
+
+    #[test]
+    fn the_section_is_for_a_device_with_configuration_and_reads_first_in_plain_words() {
+        let mut h = ready("engineer");
+        assert!(h.has("config actions rio"));
+        assert!(
+            !h.has("config actions plain"),
+            "a device without configuration has no section"
+        );
+        let t = texts(&mut h);
+        for want in [
+            "Outputs hold their state if this box stops: the device's watchdog is off.",
+            "DO-00 and DO-01 switch on at power-up.",
+            "EtherNet/IP is off on the device.",
+            "firmware V3.1",
+        ] {
+            assert!(t.contains(want), "{want:?} not in:\n{t}");
+        }
+        assert!(!t.contains("HTTP"), "no protocol talk");
+        // The box says there is nothing to configure: the section goes.
+        let mut h = open("engineer");
+        answer(
+            &mut h,
+            ConfigOp::Read,
+            404,
+            r#"{"error":"x","code":"not_configurable"}"#,
+        );
+        assert!(!h.has("config actions rio"));
+    }
+
+    #[test]
+    fn drift_counts_in_words_and_shows_its_lines_on_demand() {
+        let mut h = ready("engineer");
+        assert!(texts(&mut h).contains("3 settings differ from the project's saved configuration"));
+        assert!(!texts(&mut h).contains("A=2"));
+        h.press("config drift rio");
+        h.wait(0.2);
+        let t = texts(&mut h);
+        assert!(t.contains("A=2") && t.contains("B=2") && t.contains("C=3"), "{t}");
+    }
+
+    #[test]
+    fn the_panel_keeps_its_width_with_the_section_and_its_lines_open() {
+        let mut h = open("engineer");
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        answer(&mut h, ConfigOp::Read, 200, &facts());
+        h.press("config drift rio");
+        h.press("config actions rio");
+        h.wait(0.3);
+        assert!(
+            (0.0..=8.0).contains(&(h.rect("left").right() - left.right())),
+            "the left pane grew"
+        );
+        assert!(
+            (0.0..=8.0).contains(&(right.left() - h.rect("right").left())),
+            "the right panel grew"
+        );
+    }
+
+    #[test]
+    fn an_operator_cannot_act_and_is_told_why() {
+        let mut h = ready("operator");
+        assert!(h.has("config locked rio"));
+        h.press("config actions rio");
+        h.press("config item snapshot");
+        h.press("config item apply");
+        assert!(config_calls(&sent(&mut h)).is_empty(), "nothing was sent");
+        assert!(!h.has("config form"), "no question opened");
+    }
+
+    #[test]
+    fn an_engineer_saves_a_snapshot() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item snapshot");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            (calls[0].0, calls[0].1.as_str()),
+            ("POST", "/api/devices/rio/config/snapshot")
+        );
+    }
+
+    #[test]
+    fn a_restart_says_the_outage_first_and_asks_again_when_modules_are_interrupted() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item apply");
+        assert!(texts(&mut h).contains("offline for about 21 seconds"));
+        assert!(
+            config_calls(&sent(&mut h)).is_empty(),
+            "nothing before the confirmation"
+        );
+        h.press("config confirm");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(
+            (calls[0].0, calls[0].1.as_str(), calls[0].2.as_str()),
+            ("POST", "/api/devices/rio/config/restart", "{}")
+        );
+        assert!(
+            texts(&mut h).contains("restarting"),
+            "the device is shown restarting"
+        );
+        answer(
+            &mut h,
+            ConfigOp::Restart,
+            409,
+            r#"{"error":"the project reads it","code":"interrupts","modules":["fill","mix"]}"#,
+        );
+        let t = texts(&mut h);
+        assert!(t.contains("fill, mix"), "names the modules: {t}");
+        assert!(!t.contains("409"), "no raw status");
+        assert!(
+            config_calls(&sent(&mut h)).is_empty(),
+            "asks again before resending"
+        );
+        h.press("config confirm");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(calls[0].2, r#"{"interrupts":true}"#);
+        answer(
+            &mut h,
+            ConfigOp::Restart,
+            200,
+            r#"{"restarted":true,"took_ms":21000}"#,
+        );
+        assert!(texts(&mut h).contains("Applied."));
+    }
+
+    #[test]
+    fn a_refusal_is_shown_in_the_boxs_words() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item snapshot");
+        let _ = sent(&mut h);
+        answer(
+            &mut h,
+            ConfigOp::Snapshot,
+            409,
+            r#"{"error":"No project is running.","code":"no_project"}"#,
+        );
+        let t = texts(&mut h);
+        assert!(t.contains("No project is running."), "{t}");
+        assert!(!t.contains("409"));
+    }
+
+    #[test]
+    fn a_change_is_staged_and_says_so_until_a_restart() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item settings");
+        h.press("config safe DO-02");
+        h.press("config stage");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(calls[0].1, "/api/devices/rio/config/set");
+        assert!(
+            calls[0].2.contains("11_safeM.htm") && calls[0].2.contains(r#""SetSM02":"1""#),
+            "{}",
+            calls[0].2
+        );
+        assert!(!texts(&mut h).contains("Staged, not applied yet"));
+        answer(&mut h, ConfigOp::Set, 200, r#"{"staged":true,"diff":{}}"#);
+        assert!(texts(&mut h).contains("Staged, not applied yet"));
+        assert!(h.has("config staged rio"));
+        // The read after it, then a restart clears the note.
+        let _ = sent(&mut h);
+        answer(&mut h, ConfigOp::Restart, 200, r#"{"restarted":true}"#);
+        assert!(!texts(&mut h).contains("Staged, not applied yet"));
+    }
+
+    #[test]
+    fn a_restore_keeps_the_ip_and_asks_before_it_runs() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item restore");
+        assert!(texts(&mut h).contains("IP address stays as it is"));
+        assert_eq!(config_calls(&sent(&mut h)).len(), 0);
+        h.press("config confirm");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(calls[0].1, "/api/devices/rio/config/import");
+        assert_eq!(
+            calls[0].2, r#"{"from":"snapshot"}"#,
+            "the network overwrite is never sent"
+        );
+    }
+
+    #[test]
+    fn the_password_field_never_shows_a_stored_value_or_what_was_typed_afterwards() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item password");
+        assert!(texts(&mut h).contains("A password is stored."));
+        h.press("config password field");
+        h.frame(vec![eframe::egui::Event::Text(SECRET.into())]);
+        h.frame(vec![]);
+        assert!(!texts(&mut h).contains(SECRET), "typed text is masked");
+        h.press("config password go");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(
+            (calls[0].0, calls[0].1.as_str()),
+            ("PUT", "/api/devices/rio/config/password")
+        );
+        assert!(calls[0].2.contains(SECRET), "the box gets it");
+        answer(&mut h, ConfigOp::SetPassword, 200, r#"{"password_stored":true}"#);
+        assert!(!texts(&mut h).contains(SECRET));
+        assert!(!format!("{:?}", h.app.boxv.as_ref().unwrap().devices_ui.config).contains(SECRET));
+        // Opened again, the field is empty.
+        h.press("config actions rio");
+        h.press("config item password");
+        assert!(!texts(&mut h).contains(SECRET));
+        let _ = sent(&mut h);
+        let mut sent_again = false;
+        h.press("config password field");
+        h.frame(vec![]);
+        if h.has("config password go") {
+            h.press("config password go");
+            sent_again = !config_calls(&sent(&mut h)).is_empty();
+        }
+        assert!(!sent_again, "an empty field sends nothing");
+    }
+
+    #[test]
+    fn a_failed_read_says_why_and_can_be_asked_again() {
+        let mut h = open("engineer");
+        let _ = sent(&mut h);
+        answer(
+            &mut h,
+            ConfigOp::Read,
+            502,
+            r#"{"error":"The device did not answer.","code":"unreachable"}"#,
+        );
+        assert!(texts(&mut h).contains("The device did not answer."));
+        h.press("config again rio");
+        assert_eq!(config_calls(&sent(&mut h)).len(), 1);
     }
 }
 

@@ -30,8 +30,9 @@ this; change it here first when a decision changes.
   build, licence, and on a box its certificate fingerprint). After them
   the program's state, green running, red stopped or faulted (a box: its
   link). On the right the project's name, its edited mark, a "n waiting"
-  badge when proposals wait, the Editor | Monitor toggle (a click on
-  either side flips it), Sign in on a box, and ? in the very corner (help
+  badge when proposals wait, the Editor | Monitor toggle (a glyph a
+  side since 2026-11-13, `< >` and a screen; a click on either side
+  flips it), Sign in on a box, and ? in the very corner (help
   on the site). Proposals and "Simulate in this browser / Back to this
   box" are View items. A fault, a deploy under way or a stale file shows
   on a line under the header only while it lasts. Below the narrow width
@@ -89,7 +90,23 @@ this; change it here first when a decision changes.
   `device NAME device:PROFILE IDENTITY` with the identity the scan saw,
   and one `ch:` signal per channel named `NAME_channel`. No protocol,
   address, byte order or cycle time is asked. A device the library does
-  not know says so and offers Advanced. **Advanced** (a tick box beside
+  not know says so and offers Advanced. **Device configuration**
+  (2026-11-13, `devconf-canvas`, `device_config.rs`): under an open
+  device whose profile has `configure moxa-e1200`, a Configuration section
+  reads first, in words: the firmware, what the outputs do if the box stops
+  (the device's watchdog), which outputs switch on at power-up, whether
+  EtherNet/IP and the RESTful interface are on, and how many settings differ
+  from the project's saved `ID.devconf` (the lines on demand). One Actions
+  control holds the engineer's work: Save a snapshot; Change a setting (the
+  watchdog and its time, each output's safe value, EtherNet/IP, RESTful),
+  staged on the device and marked "Staged, not applied yet" until Apply;
+  Apply (restart), which says first that the device is offline for about
+  21 s and, when the box answers 409, names the modules it would interrupt
+  and asks again; Restore from snapshot (the IP address stays as it is);
+  the stored console password (write-only, the field never shows a value)
+  and Change the console's password. Everyone else sees the controls
+  disabled with the reason as the tooltip. Errors are the box's own words.
+  **Advanced** (a tick box beside
   Scan, off by default, remembered in the browser) is the older way: a
   right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
@@ -123,7 +140,10 @@ this; change it here first when a decision changes.
   characters a row); Alt Shift 0, Alt Shift 4 and Alt Shift 1 open the
   pane on its tab, or shut it when that tab shows.
 - **Right panel, collapsible, tabs (236 pt):** I/O
-  (values; inputs the diagram does not show) and Agent. (The Requirements
+  (values; inputs the diagram does not show), Palette (the glyph
+  library's pieces, `palette`: a click, or a drag onto the diagram, sends
+  the piece's request to the Agent as if typed, and the panel turns to
+  the Agent tab; Nick, 2026-11-12) and Agent. (The Requirements
   tab of 2026-11-05, a list of requirements in plain words with the agent
   writing the test behind each, is archived since 2026-11-08 under
   `crates/helmsman-canvas/archive/requirements/`: the scenarios the Agent
@@ -225,7 +245,13 @@ this; change it here first when a decision changes.
   keeps nothing (a private window) still works; the projects last until
   the page closes.
 - **Glyph library** (Nick, 2026-11-12: "the app shouldn't even need
-  words"). One SVG a glyph in `crates/helmsman-canvas/assets/glyphs/`,
+  words"). The panels' action buttons are glyphs too (2026-11-13,
+  `glyphs::action`): Send and Ask for help a yellow paper plane, Stop a
+  red square, Undo a hooked arrow; the Editor | Monitor switch `< >` and
+  a screen. Words stay where they are the safeguard or the content:
+  menus, form labels, dialog confirmations (OK, Cancel, Restore this
+  revision, Use this code), Release on a forced input, Sign in, and the
+  Devices tab's buttons until the device configuration work lands. One SVG a glyph in `crates/helmsman-canvas/assets/glyphs/`,
   rasterized to alpha masks by the crate's build script and tinted in the
   theme's colours when drawn (`glyph_lib`); redrawing one is replacing
   its file. Placeholders in the spirit of emoji until Nick draws the set.
@@ -236,8 +262,10 @@ this; change it here first when a decision changes.
   `interlock`, `phase`/`step`, `hmi`, `timer`, `count`, `latch`, `edge`),
   else a switch for a BOOL input, a pilot lamp for a BOOL output, a gauge
   for a number; a device by its driver (the box, the screen, an I/O
-  module). Next: the standard blocks on the diagram (timer, counter,
-  latch, edge) and a palette to drag from.
+  module). The standard blocks on the diagram carry theirs in the
+  header (timer, counter, latch, edge; `Icons::glyph`), where a rule of
+  the project's `icons.map` naming the block or its type still puts its
+  character instead. The Palette tab holds the pieces to drag.
 - **Lamps** (Nick, 2026-11-12: the first screen should speak without
   words). The program's BOOL outputs are lamps in the diagram's
   bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a

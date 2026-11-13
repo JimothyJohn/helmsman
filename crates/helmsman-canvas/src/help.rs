@@ -394,8 +394,7 @@ pub fn heading(
 /// The question, Ask or Stop, and the answer: the diagnosis and the issue
 /// with its Copy button.
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi, v: &View) -> Option<Act> {
-    use crate::st_view::TAP;
-    use crate::st_view::brand::{BLACK, RED, WARN, YELLOW};
+    use crate::st_view::brand::{RED, WARN};
 
     let t = crate::theme::theme(ui);
     let mut act = None;
@@ -415,21 +414,19 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
     let why_not = v.blocked.clone().or_else(|| refusal(&s.draft));
     ui.horizontal_wrapped(|ui| {
         if busy {
-            let r = ui
-                .add(egui::Button::new("Stop").min_size(Vec2::new(TAP * 1.5, TAP * 0.75)))
-                .tip("Stops waiting for the answer.");
+            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Stop, true, false)
+                .tip("Stop: stops waiting for the answer.");
             chrome.hit("help stop", r.rect);
             if r.clicked() {
                 act = Some(Act::Stop);
             }
         } else {
-            let ask = egui::Button::new(RichText::new("Ask for help").strong().color(BLACK))
-                .fill(YELLOW)
-                .min_size(Vec2::new(TAP * 1.5, TAP * 0.75));
-            let r = ui.add_enabled(why_not.is_none(), ask).tip(why_not.clone().unwrap_or_else(|| {
-                "Sends what you wrote and the box's details to the Agent. Nothing is changed and nothing is filed."
-                    .to_string()
-            }));
+            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true).tip(
+                why_not.clone().unwrap_or_else(|| {
+                    "Ask for help: sends what you wrote and the box's details to the Agent. Nothing is changed and nothing is filed."
+                        .to_string()
+                }),
+            );
             chrome.hit("help ask", r.rect);
             if r.clicked() || (enter && why_not.is_none()) {
                 act = Some(Act::Ask);

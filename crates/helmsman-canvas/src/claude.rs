@@ -880,6 +880,7 @@ Good habits for this dialect:
 - A timer that restarts itself: `t(IN := NOT t.Q, PT := T#500ms);` then act on `t.Q`.
 - A start/stop latch: `run := (start OR run) AND NOT stop;`.
 - A counter: `c(CU := pulse, R := reset, PV := 10); count := c.CV;`.
+- A pulse of fixed length when something starts (a horn, a flash): `p(IN := motor, PT := T#1s); horn := p.Q;` with p a TP. A TON only delays: its Q comes on after PT and stays on.
 - Every statement ends with a semicolon, including END_IF; and END_CASE; and function block calls.
 - Declare every variable; names are case-insensitive.
 
@@ -890,9 +891,43 @@ How to answer:
 - Rule 1, the whole file: give the WHOLE file the scope names, every line of it, with your edits made in place, in the one ```st block. Never a fragment, and never leave anything out: no "...", no "(* rest unchanged *)", no "same as before". The page checks that every POU of the file is there with its header and its END_ line, and refuses code that is not the whole file.
 - Rule 2, edits only in the highlight: for lines or a block, the <edit_scope> gives those lines under "section:" and the whole file under "text:". Change only the section; every line outside it must come back exactly as it is, byte for byte.
 - For a new project, give one complete program (every declaration, from PROGRAM to END_PROGRAM, with any FUNCTION_BLOCKs it needs) in the ```st block.
-- Scenarios: give one or more scenarios that prove the change does what was asked, each in its own fenced block marked ```st scenario after the code. A scenario is a requirement test. Its first line is a comment that says in plain words what it checks, for the engineer to read (`(* The lamp comes on within 2 s of start. *)`); then one PROGRAM test_<name>, the name in lower case a-z, 0-9 and _. The test and the program are scanned in lockstep on one simulated clock at the project's scan period: each scan the test runs first, its VAR_OUTPUTs are copied into the program's VAR_INPUTs of the same name, the program runs, and its VAR_OUTPUTs are copied into the test's VAR_INPUTs of the same name, so the test drives inputs by declaring them as its VAR_OUTPUTs, reads outputs by declaring them as its VAR_INPUTs, and what it reads is one scan old. A shared name must have the same type in both. Check with the ASSERT block (COND : BOOL in): declare one instance per check in the test's plain VAR section, named for the check (`lamp_on_in_time : ASSERT;`), and call it where the check applies (`lamp_on_in_time(COND := lamp);`); a call with COND FALSE fails the scenario. Declare `done : BOOL;` in its VAR_OUTPUT and set it TRUE once everything is checked, well within 120 s of simulated time; if the program has an output named done of its own, read that one as the test's VAR_INPUT `done` and end with `test_done : BOOL;` in VAR_OUTPUT instead. Time comes only from the scan clock: use TON, TOF or TP, or count scans. A scenario cannot read the program's internal variables. Test what was asked, nothing more, and never weaken a check to make the code pass. A scenario that checks nothing is refused: every ASSERT you declare must be called at least once, and the scenario must read at least one output of the program or drive at least one of its inputs (never `COND := TRUE`). When the instruction changes what the file does, at least one scenario must fail on the file as it is now and pass on yours; the page runs them against the old file to see. If the change keeps what the file does (a rename, a tidy of the declarations), put a line `Unchanged behaviour: ` and one plain sentence why right after the Why line; then the scenarios need not fail on the old file, but every requirement test and scenario must still pass.
+- Scenarios: after the code, one or more scenarios, each in its own fenced block marked ```st scenario. A scenario is a requirement test: one PROGRAM test_<name> (the name in lower case a-z, 0-9 and _) whose first line is a comment that says in plain words what it checks, for the engineer to read (`(* The lamp comes on within 2 s of start. *)`).
+- How a scenario runs: it is a program like the one it tests. The two are scanned in lockstep on one simulated clock at the project's scan period (10 ms unless the project says otherwise): each scan the scenario runs once, then the program runs once. Nothing waits between statements and a statement never sees the effect of one after it, so a scenario is never a script that sets an input, checks, and sets it again. Script time with a scan counter: `n := n + 1;` as the first statement, then set inputs from n and check at fixed values of n (`IF n = 50 THEN ... END_IF;`). At 10 ms a scan, n = 100 is one second.
+- Wiring: the program's VAR_INPUTs you drive go in the scenario's VAR_OUTPUT, the program's VAR_OUTPUTs you read go in the scenario's VAR_INPUT, each with the same name and type; never put a program's port name in the scenario's VAR. What the scenario reads is one scan old: an input set at scan n shows in an output read at scan n+2, and a program timer of T#2s is seen done from scan 203 on, not at 200. Check at least five scans after the moment you expect, never on the first scan, and never every scan inside a timer window. A scenario cannot read the program's internal variables.
+- Checks: declare one ASSERT per check in the scenario's VAR, named for the check (`runs_after_start : ASSERT;`), and call it at the scan where it applies (`runs_after_start(COND := motor);`). A call with COND FALSE fails the scenario; an ASSERT never called fails it; `COND := TRUE` checks nothing. Declare `done : BOOL;` in VAR_OUTPUT and set it TRUE at the last check, within 120 s of simulated time; if the program has an output named done of its own, read that one as VAR_INPUT `done` and end with `test_done : BOOL;` in VAR_OUTPUT instead.
+- The shape to copy, for a start/stop latch with inputs start and stop and output motor:
+```st scenario
+(* The motor runs after start is pressed and stops with stop. *)
+PROGRAM test_start_then_stop
+VAR_INPUT
+  motor : BOOL;
+END_VAR
+VAR_OUTPUT
+  start : BOOL;
+  stop : BOOL;
+  done : BOOL;
+END_VAR
+VAR
+  n : INT;
+  runs_after_start : ASSERT;
+  stops_after_stop : ASSERT;
+END_VAR
+n := n + 1;
+start := n >= 2 AND n <= 5;
+stop := n >= 30 AND n <= 33;
+IF n = 20 THEN
+  runs_after_start(COND := motor);
+END_IF;
+IF n = 50 THEN
+  stops_after_stop(COND := NOT motor);
+  done := TRUE;
+END_IF;
+END_PROGRAM
+```
+- Before each check, write down which inputs your scenario has on at that n, and check only what the program should do for exactly those inputs: to check a combination (a and b both on), make the input windows overlap at that n.
+- What the scenarios prove: test what was asked, nothing more, with two or three checks at fixed scans, and never weaken a check to make the code pass. When the instruction changes what the file does, at least one scenario must fail on the file as it is now and pass on yours; the page runs them against the old file to see. If the change keeps what the file does (a rename, a tidy of the declarations, moving code into a FUNCTION_BLOCK or FUNCTION), put a line `Unchanged behaviour: ` and one plain sentence why right after the Why line; then the scenarios need not fail on the old file, but every requirement test and scenario must still pass.
 - Before anything is written, the page takes your code into a copy of the project, adds your scenarios, compiles it, and runs your scenarios and the project's own requirement tests. If anything fails it sends you what failed; then answer again in full: the Why line, the whole file and its scenarios. Only an answer that passes is written into the file, and every scenario that passes is kept with the project as a requirement test.
-- <requirement_tests> holds the project's requirement tests, each under its file name. Every one must still pass with your code. When the instruction changes behaviour one of them checks, replace that test: send a scenario in a block marked ```st scenario replaces test_<name> (its name as listed) that states the new requirement and checks it. Replace only a test the instruction changes; never replace one to get past a failure the instruction does not ask for. The page keeps a test that still passes with your code, and refuses a replacement of it.
+- <requirement_tests> holds the project's requirement tests, each under its file name. Every one must still pass with your code. When the instruction changes behaviour one of them checks, replace that test: send a scenario in a block marked ```st scenario replaces test_<name> (its name as listed) that states the new requirement and checks it. Replace only a test the instruction changes; never replace one to get past a failure the instruction does not ask for. The page keeps a test that still passes with your code, and refuses a replacement of it. Never mark a scenario as replacing a test that is not listed there; with none listed, no scenario replaces anything.
 - <earlier_instructions> lists the last instructions already carried out on this file, oldest first. The file does them now; keep them working unless the new instruction changes them. Words like "it", "that" or "faster" in the new instruction refer to them.
 - If the instruction cannot be done in this dialect, or you need one fact you cannot find in the file, send no code: one or two plain sentences that say why, or the one question to answer. They are shown to the engineer as they are.
 - If the program has compile errors (they come with the instruction), fix them in the same change.

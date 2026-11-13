@@ -19,7 +19,8 @@ One row along the top.
   simulation's state and clock sit beside the run glyphs over the
   diagram.
 - On the right: the project's name, a mark when it has unsaved edits, the
-  **Editor | Monitor** toggle, a yellow **waiting** badge when proposals
+  **Editor | Monitor** toggle (the code brackets and a screen; hover
+  either for its name), a yellow **waiting** badge when proposals
   wait for an approver (it opens the Proposals screen) and, on a box,
   **Sign in**.
 
@@ -96,11 +97,12 @@ instead of a long lead. Fitting the diagram to the view never shrinks it
 past the point where its labels read: a big program shows its left part
 and you pan.
 
-**Icons.** A block can carry one character at the left of its header, so
-you can tell a timer from a counter at a glance: the standard blocks have
-built-in ones (T for timers, # for counters, ↑ and ↓ for the edge
-detectors, S and R for the bistables, ~ for the blink pattern), and a file
-named `icons.map` in the project adds your own, one rule a line:
+**Icons.** A block carries a small picture at the left of its header, so
+you can tell a timer from a counter at a glance: the standard blocks
+have their own (a stopwatch for the timers, tally marks for the
+counters, a padlock for the bistables, a rising step for the edge
+detectors, ~ for the blink pattern), and a file named `icons.map` in the
+project gives any block one character of your own, one rule a line:
 
 ```
 MOTOR = M        # every block of type MOTOR
@@ -108,8 +110,8 @@ conveyor* = >    # every variable or instance whose name starts so
 TON = ⏱          # over the built-in one
 ```
 
-The project's rules win over the built-in ones. Zoomed out past where the
-label is drawn, the icon stands alone at a readable size.
+The project's rules win over the built-in pictures. Zoomed out past
+where the label is drawn, the icon stands alone at a readable size.
 
 **Lamps.** The program's BOOL outputs are also lamps in the bottom-right
 corner of the diagram, lit as the program runs. An output named after a
@@ -199,12 +201,15 @@ redrawn.
   errors to list or leave out each.
 - **The side panel**, on the right (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
-  diagram does not show; **Requirements**, the project's requirement tests,
-  one row each, green or red with why, with **Edit** (new words; the
-  agent rewrites the test for them, or only the words change) and
-  **Delete** (asks first) on every row (see [Requirement tests](projects.html#requirement-tests));
-  and **Agent**, where you type what the open file should do and it
-  is updated (see [The Agent](agent.html)).
+  diagram does not show; **Palette**, pictures of the common pieces of a
+  machine and a program (push button, emergency stop, selector, pilot
+  lamp, alarm, interlock, timer, counter, latch, edge, sequence step,
+  operator screen): drag one onto the diagram, or click it, and the
+  Agent is asked to add it to the program, which waits for Deploy like
+  any change; and **Agent**, where you type what the open file should do
+  and it is updated (see [The Agent](agent.html)).
+
+<img src="img/palette-tab.png" alt="The Palette tab: twelve pictures to drag onto the diagram." width="300">
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 

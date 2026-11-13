@@ -89,9 +89,8 @@ pub fn for_point(name: &str, input: bool, bool_ty: bool) -> &'static str {
 }
 
 /// The glyph for a standard function block, by its type; `None` for a
-/// type the library has no picture of. The diagram and the palette (the
-/// next steps of the library) draw these; until then tests pin it.
-#[cfg(test)]
+/// type the library has no picture of. The diagram draws it in the
+/// block's header (`icons::Icons::glyph`).
 #[must_use]
 pub fn for_block(fb: &str) -> Option<&'static str> {
     Some(match fb.to_ascii_uppercase().as_str() {

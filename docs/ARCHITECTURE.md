@@ -733,15 +733,25 @@ scanned in lockstep on one clock at the project's period; each scan the
 test runs first, its `VAR_OUTPUT`s are copied into the program's
 `VAR_INPUT`s of the same name, the program runs, its `VAR_OUTPUT`s are
 copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
-`ASSERT` failed (named as words, with its declaration line's comment, and
-when), either side faulted or does not compile, a shared port's types
-differ, `DONE` never came within the limit (two minutes of simulated
-time), the test holds no `ASSERT` at all, a declared `ASSERT` was never
-called (the block latches `CHECKED` on its first call), or the test
-shares no port with the program (reads no output, drives no input), so
-it could pass whatever the program does. The test's first comment is
-the requirement in the engineer's words. Deterministic: no wall clock, no
-I/O.
+`ASSERT` failed (named as words, with its declaration line's comment,
+when, and what the test held of the shared ports then, `lamp=FALSE`; a
+failure on the first scan says the program had not run yet and what a
+test reads is one scan old), either side faulted or does not compile, a
+shared port's types differ, `DONE` never came within the limit (two
+minutes of simulated time), the test holds no `ASSERT` at all, a declared
+`ASSERT` was never called (the block latches `CHECKED` on its first
+call), the test shares no port with the program (reads no output, drives
+no input), so it could pass whatever the program does, the test declares
+a program port in a section that does not connect it (`Misdeclared`: a
+program output in the test's `VAR`, a program input in its `VAR_INPUT`;
+the verdict says where it goes), or it assigns one program input more
+than once at the top level of its body (`DrivenTwice`: a script written
+as if statements waited). The structural ones are found before a scan
+runs, so the verdict names the cause and not the first `ASSERT` that
+happened to fail (2026-11-12: model-written scenarios read an output from
+a plain `VAR` and failed "at 0.00 s" three times over). The test's first
+comment is the requirement in the engineer's words. Deterministic: no
+wall clock, no I/O.
 
 **Untested** (Nick, 2026-11-05). A test file that states its requirement
 (a first comment) but declares no `ASSERT`, or whose PROGRAM has an empty
@@ -2889,6 +2899,29 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   when there is one, still wins. Tests: `playground_tests.rs` ("the free
   chat"), `the_free_chat_tab_has_no_key_and_keeps_the_panel_width`
   (`ui_tests.rs`).
+- **The Agent ladder** (`agent_ladder_tests.rs`, ignored: it spends
+  tokens). The page's instruction loop (`instruct`, `verify`, the
+  retries) driven against a real model through a relay's free chat, one
+  rung at a time: a rename, a timer period, a new input, a new output, a
+  count, an on-delay, a pulse, a FUNCTION_BLOCK refactor, a selected
+  line, a compile fix, a requirement test replaced, a new project, and a
+  two-step chain. Each rung holds a requirement test the model never
+  sees, run on the file that landed, so "applied" also means "right"; a
+  test in the normal suite checks each one is red on the file before
+  and green on a hand-written answer. The free chat's prompt lives
+  twice, here (`claude::SYSTEM`, for the key and proxy routes) and in
+  the relay's `agents/helmsman/playground-vN/system.md`, and a change
+  to one goes to the other as a new profile id. Run against
+  `agent-relay-local demo` (`RELAY_DEMO_ORIGINS=http://localhost:8790`):
+  `HELMSMAN_LADDER_URL=http://127.0.0.1:8787 cargo test -p
+  helmsman-canvas agent_ladder -- --ignored --nocapture`
+  (`HELMSMAN_LADDER_RUNS`, `HELMSMAN_LADDER_ONLY`); each run's
+  requests, answers and failures land in `target/agent-ladder/`. On
+  2026-11-12, DeepSeek V4.1 Flash with the old prompt passed 0 of 13;
+  with the scenario rules rewritten and the runner's sharper verdicts,
+  33 to 36 of 42 with thinking off and 41 to 42 of 42 with thinking on
+  at low effort (relay profile `playground-v2`), about $0.0015 an
+  instruction.
 - **Publishing.** The built page, loader and wasm (wasm-opt `-Oz` through
   trunk, LTO and `opt-level=s` for this build only: 4.7 MB, 1.9 MB
   gzipped) are committed under `docs/playground/`; rebuild with

@@ -83,10 +83,10 @@ table, and About Helmsman (the version and build).</li>
 to the box. The simulation's state and clock sit beside the run glyphs
 over the diagram.</li>
 <li>On the right: the project's name, a mark when it has unsaved edits,
-the <strong>Editor | Monitor</strong> toggle, a yellow
-<strong>waiting</strong> badge when proposals wait for an approver (it
-opens the Proposals screen) and, on a box, <strong>Sign
-in</strong>.</li>
+the <strong>Editor | Monitor</strong> toggle (the code brackets and a
+screen; hover either for its name), a yellow <strong>waiting</strong>
+badge when proposals wait for an approver (it opens the Proposals
+screen) and, on a box, <strong>Sign in</strong>.</li>
 </ul>
 <img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
 
@@ -160,17 +160,18 @@ would cross the whole diagram is drawn as a pair of tagged stubs naming
 the signal instead of a long lead. Fitting the diagram to the view never
 shrinks it past the point where its labels read: a big program shows its
 left part and you pan.</p>
-<p><strong>Icons.</strong> A block can carry one character at the left
+<p><strong>Icons.</strong> A block carries a small picture at the left
 of its header, so you can tell a timer from a counter at a glance: the
-standard blocks have built-in ones (T for timers, # for counters, ↑ and
-↓ for the edge detectors, S and R for the bistables, ~ for the blink
-pattern), and a file named <code>icons.map</code> in the project adds
+standard blocks have their own (a stopwatch for the timers, tally marks
+for the counters, a padlock for the bistables, a rising step for the
+edge detectors, ~ for the blink pattern), and a file named
+<code>icons.map</code> in the project gives any block one character of
 your own, one rule a line:</p>
 <pre><code>MOTOR = M        # every block of type MOTOR
 conveyor* = &gt;    # every variable or instance whose name starts so
 TON = ⏱          # over the built-in one</code></pre>
-<p>The project's rules win over the built-in ones. Zoomed out past where
-the label is drawn, the icon stands alone at a readable size.</p>
+<p>The project's rules win over the built-in pictures. Zoomed out past
+where the label is drawn, the icon stands alone at a readable size.</p>
 <p><strong>Lamps.</strong> The program's BOOL outputs are also lamps in
 the bottom-right corner of the diagram, lit as the program runs. An
 output named after a colour (<code>red</code>, <code>lamp_green</code>,
@@ -268,14 +269,17 @@ or leave out each.</li>
 <li><strong>The side panel</strong>, on the right (<kbd>Alt</kbd>
 <kbd>Shift</kbd> <kbd>3</kbd>): <strong>I/O</strong>, every input and
 output with its value and a control for each input the diagram does not
-show; <strong>Requirements</strong>, the project's requirement tests,
-one row each, green or red with why, with <strong>Edit</strong> (new
-words; the agent rewrites the test for them, or only the words change)
-and <strong>Delete</strong> (asks first) on every row (see <a
-href="projects.html#requirement-tests">Requirement tests</a>); and
-<strong>Agent</strong>, where you type what the open file should do and
-it is updated (see <a href="agent.html">The Agent</a>).</li>
+show; <strong>Palette</strong>, pictures of the common pieces of a
+machine and a program (push button, emergency stop, selector, pilot
+lamp, alarm, interlock, timer, counter, latch, edge, sequence step,
+operator screen): drag one onto the diagram, or click it, and the Agent
+is asked to add it to the program, which waits for Deploy like any
+change; and <strong>Agent</strong>, where you type what the open file
+should do and it is updated (see <a href="agent.html">The
+Agent</a>).</li>
 </ul>
+<img src="img/palette-tab.png" alt="The Palette tab: twelve pictures to drag onto the diagram." width="300">
+
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 
 <img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">

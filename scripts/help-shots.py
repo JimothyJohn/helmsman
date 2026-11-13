@@ -52,6 +52,7 @@ SHOTS = {
     "context-menu": ("?playground", layout(pane="files"), [("wait", 1500), ("rclick", 55, 373), ("wait", 800)], clip(0, 52, 360, 560)),
     "io-tab": ("?playground", layout(tab="io"), [("wait", 1500)], clip(1098, 52, 302, 423)),
     "agent-tab": ("?playground", layout(tab="claude"), [("wait", 1500)], clip(1098, 52, 302, 393)),
+    "palette-tab": ("?playground", layout(tab="palette"), [("wait", 1500)], clip(1098, 52, 302, 393)),
     "trend": ("?playground", layout(bottom="trend"), [("wait", 8000)], clip(320, 580, 836, 280)),
     "monitor": ("?playground&monitor", layout(), [("wait", 3000)], None),
     "monitor-stopped": ("?playground&monitor", layout(), [("wait", 2000), ("key", "Control+Enter"), ("wait", 1200)], clip(0, 52, 1400, 260)),
