@@ -24,11 +24,12 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | Ctrl F | Find in the Structured Text (Enter: next, Esc: close) |  |
 | Ctrl G | The next match |  |
 | Ctrl Shift G | The previous match |  |
-| Alt Shift 0 | The left pane's Files tab | Devices |
-| Alt Shift 1 | The left pane's Code tab (the Structured Text) | POUs |
+| Alt Shift 0 | The Files tab | Devices |
+| Alt Shift 1 | The Code tab (the Structured Text) | POUs |
 | Alt Shift 2 | The bottom panel (Trend, Messages) | Modules |
-| Alt Shift 3 | The side panel (I/O, Palette, Agent) | Messages |
-| Alt Shift 4 | The left pane's Devices tab (the I/O map's devices and points) |  |
+| Alt Shift 3 | The right pane, once a tab is docked there | Messages |
+| Alt Shift 4 | The Devices tab (the I/O map's devices and points) |  |
+| Alt Shift 5 | The left pane's tab to a pane on the right, the next one shown on the left |  |
 | Alt ↑ | Up one level in the diagram | |
 
 Reserved, not built yet: F2 / Shift F2 for the Agent.
