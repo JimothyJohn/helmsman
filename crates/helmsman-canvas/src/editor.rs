@@ -33,17 +33,20 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
+    /// The glyph library's pieces to drag onto the diagram (`palette`).
+    Palette,
     Claude,
 }
 
 impl Tab {
     /// Every tab, in the panel's order.
-    pub const ALL: [Self; 2] = [Self::Io, Self::Claude];
+    pub const ALL: [Self; 3] = [Self::Io, Self::Palette, Self::Claude];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
+            Self::Palette => "Palette",
             Self::Claude => "Agent",
         }
     }
@@ -53,6 +56,9 @@ impl Tab {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Io => "I/O: the program's inputs and outputs with their live values.",
+            Self::Palette => {
+                "Palette: controls and program pieces. Drag one onto the diagram and the Agent adds it."
+            }
             Self::Claude => "Agent: ask the agent about the program, or have it propose a change.",
         }
     }
@@ -62,6 +68,7 @@ impl Tab {
     pub const fn icon(self) -> Icon {
         match self {
             Self::Io => Icon::Io,
+            Self::Palette => Icon::Palette,
             Self::Claude => Icon::Agent,
         }
     }
@@ -69,6 +76,7 @@ impl Tab {
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
+            Self::Palette => "palette",
             Self::Claude => "claude",
         }
     }
@@ -520,7 +528,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Side panel",
         right,
         &k(Action::Panel),
-        "Shows or hides the panel on the right: I/O, Agent.",
+        "Shows or hides the panel on the right: I/O, Palette, Agent.",
     ) {
         chrome.right = !right;
     }
@@ -647,6 +655,9 @@ pub trait Body {
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome);
+    /// Asks the Agent `text` as if it had been typed in the Agent tab
+    /// and sent (a palette piece clicked or dropped).
+    fn ask_agent(&mut self, text: &str, ctx: &egui::Context);
     /// The diagram with its breadcrumbs; a block click calls
     /// [`Chrome::goto`].
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
@@ -826,6 +837,8 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut right = chrome.right;
     let mut tab = chrome.tab;
     let mut hide_right = false;
+    // A palette piece clicked or dropped on the diagram: the Agent's.
+    let mut asked: Option<crate::palette::Item> = None;
     let flip = egui::Panel::show_switched(
         ui,
         &mut right,
@@ -853,7 +866,11 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     }
                 });
                 ui.separator();
-                body.tab(ui, tab, chrome);
+                if tab == Tab::Palette {
+                    asked = crate::palette::show(ui, &mut hits);
+                } else {
+                    body.tab(ui, tab, chrome);
+                }
                 t
             } else {
                 let strip_tabs: Vec<StripTab> = tabs
@@ -953,6 +970,10 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         chrome.diagram = ui.available_rect_before_wrap();
         body.diagram(ui, chrome);
     });
+    if let Some(item) = asked.or_else(|| crate::palette::dropped(ui.ctx(), chrome.diagram)) {
+        chrome.tab = Tab::Claude;
+        body.ask_agent(item.ask, ui.ctx());
+    }
 }
 
 /// The ST, with line numbers, errors marked (`(line, column)`), warnings

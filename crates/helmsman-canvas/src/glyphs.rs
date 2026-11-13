@@ -55,6 +55,8 @@ pub enum Icon {
     Trend,
     /// A list of lines, each behind its mark: the Messages tab.
     Messages,
+    /// Four squares: the Palette tab (the glyph library's pieces).
+    Palette,
 }
 
 /// The side of a glyph button, points.
@@ -234,6 +236,18 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 vec![at(0.2, 0.72), at(0.42, 0.38), at(0.62, 0.58), at(0.96, 0.1)],
                 stroke,
             ));
+        }
+        Icon::Palette => {
+            let g = b.width() * 0.16;
+            let s = (b.width() - g) / 2.0;
+            for (x, y) in [(l, t), (l + s + g, t), (l, t + s + g), (l + s + g, t + s + g)] {
+                p.rect_stroke(
+                    Rect::from_min_size(Pos2::new(x, y), Vec2::splat(s)),
+                    CornerRadius::same(2),
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+            }
         }
         Icon::Messages => {
             for k in [0.14, 0.5, 0.86] {

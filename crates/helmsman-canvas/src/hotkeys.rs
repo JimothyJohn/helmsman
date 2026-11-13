@@ -415,7 +415,7 @@ const fn does(action: Action) -> &'static str {
         Action::Devices => "The left pane's Devices tab (the I/O map's devices and points)",
         Action::St => "The left pane's Code tab (the Structured Text)",
         Action::Trend => "The bottom panel (Trend, Messages)",
-        Action::Panel => "The side panel (I/O, Agent)",
+        Action::Panel => "The side panel (I/O, Palette, Agent)",
         Action::GoToDefinition => "Go to definition: the picked block's variable, at its VAR line",
         Action::CrossReferences => "Cross references: every read and write of it lit",
         Action::Breakpoint => {

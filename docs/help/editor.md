@@ -200,12 +200,15 @@ redrawn.
   errors to list or leave out each.
 - **The side panel**, on the right (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
-  diagram does not show; **Requirements**, the project's requirement tests,
-  one row each, green or red with why, with **Edit** (new words; the
-  agent rewrites the test for them, or only the words change) and
-  **Delete** (asks first) on every row (see [Requirement tests](projects.html#requirement-tests));
-  and **Agent**, where you type what the open file should do and it
-  is updated (see [The Agent](agent.html)).
+  diagram does not show; **Palette**, pictures of the common pieces of a
+  machine and a program (push button, emergency stop, selector, pilot
+  lamp, alarm, interlock, timer, counter, latch, edge, sequence step,
+  operator screen): drag one onto the diagram, or click it, and the
+  Agent is asked to add it to the program, which waits for Deploy like
+  any change; and **Agent**, where you type what the open file should do
+  and it is updated (see [The Agent](agent.html)).
+
+<img src="img/palette-tab.png" alt="The Palette tab: twelve pictures to drag onto the diagram." width="300">
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 
