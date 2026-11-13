@@ -15,6 +15,12 @@ helmsman-agent = { path = "../helmsman-agent", default-features = false, optiona
 # Configuring a device through its own protocol (the box API's
 # /api/devices/{id}/config; std only, no dependencies of its own).
 helmsman-devconf = { path = "../helmsman-devconf", optional = true }
+# The DHCP server on the device port (`--dhcp`, crate::dhcp): the server
+# itself (no_std, no dependencies), and helmsman-l2 to tie its sockets to
+# the one interface (IP_BOUND_IF / SO_BINDTODEVICE; libc, already in the
+# lock).
+helmsman-dhcp = { path = "../helmsman-dhcp", optional = true }
+helmsman-l2 = { path = "../helmsman-l2", optional = true }
 # Explain mode: the box explains its own traces (/api/explain).
 helmsman-diagram = { path = "../helmsman-diagram", optional = true }
 helmsman-iec = { path = "../helmsman-iec" }
@@ -79,7 +85,7 @@ workspace = true
 # scripts/lint.sh keeps compiling) refuses a map naming `enip-io` as "not
 # in this build".
 default = ["box", "https", "enip-io"]
-box = ["dep:rusqlite", "dep:helmsman-devconf", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
+box = ["dep:rusqlite", "dep:helmsman-devconf", "dep:helmsman-dhcp", "dep:helmsman-l2", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
 enip-io = ["box", "helmsman-io/enip"]
 # `profinet-io` on a real interface: PROFINET IO devices the box masters
 # as their controller, over raw Ethernet (helmsman-io's `profinet-raw`,
@@ -106,6 +112,10 @@ required-features = ["box"]
 
 [[test]]
 name = "devconf"
+required-features = ["box"]
+
+[[test]]
+name = "dhcp"
 required-features = ["box"]
 
 [[test]]

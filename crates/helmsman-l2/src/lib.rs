@@ -105,7 +105,7 @@ pub fn bpf_filter(ethertype: u16) -> [BpfInsn; 7] {
 mod sys;
 
 #[cfg(unix)]
-pub use sys::{RawSocket, addresses};
+pub use sys::{RawSocket, addresses, bind_to_interface, ipv4_net};
 
 /// What an interface is on the network.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
