@@ -179,6 +179,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 2d
   difficulty: med
   id: relay-device-profile-agent
+  notes: 2026-11-13: propose_profile taken by the helmsman-devices-8d session as agent helmsman/v10 (agent-relay worktree .claude/worktrees/propose-profile); publish_profile waits on device-profile-publish-path.
   asked: 2026-11-12
   by: claude-session
   notes: You have some manuals and EDS files for the Murrelektronik to ry building this out before it's connected.
