@@ -49,6 +49,7 @@ mod devices;
 mod diff_ui;
 mod editor;
 mod find;
+mod glyph_lib;
 mod glyphs;
 mod help;
 mod history_ui;

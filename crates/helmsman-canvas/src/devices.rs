@@ -959,9 +959,19 @@ fn menu_item(
 /// One row of the tree, cut at the pane's edge so a long address never
 /// widens it (CLAUDE.md: a resizable egui panel grows to any row that
 /// overflows it).
-fn row(ui: &mut egui::Ui, text: RichText, indent: f32) -> egui::Response {
+/// A tree row: `text` after `indent`, with a glyph of the library before
+/// it in `color` when it has one.
+fn glyph_row(
+    ui: &mut egui::Ui,
+    glyph: Option<(&str, Color32)>,
+    text: RichText,
+    indent: f32,
+) -> egui::Response {
     ui.horizontal(|ui| {
         ui.add_space(indent);
+        if let Some((g, color)) = glyph {
+            crate::glyph_lib::show(ui, g, crate::glyphs::ROW, color, crate::glyph_lib::tip(g));
+        }
         ui.add(egui::Label::new(text).truncate().sense(Sense::click()))
     })
     .inner
@@ -1042,6 +1052,8 @@ impl DevicesUi {
                         Vec2::new(ui.available_width(), h),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
+                            let g = crate::glyph_lib::for_device(&n.driver);
+                            crate::glyph_lib::show(ui, g, crate::glyphs::ROW, t.fg, crate::glyph_lib::tip(g));
                             ui.add(
                                 egui::Label::new(RichText::new(head.as_str()).strong())
                                     .truncate()
@@ -1135,7 +1147,9 @@ impl DevicesUi {
                     (Some(Value::Bool(true)), _) => t.accent,
                     _ => t.fg,
                 };
-                let r = row(ui, RichText::new(text).color(color), 22.0);
+                let glyph =
+                    crate::glyph_lib::for_point(&p.signal, p.dir == "in", p.ty.eq_ignore_ascii_case("bool"));
+                let r = glyph_row(ui, Some((glyph, color)), RichText::new(text).color(color), 22.0);
                 chrome.hit(format!("point {}", p.signal), r.rect);
                 if write.is_ok() && r.double_clicked() {
                     self.renaming = Some((p.signal.clone(), p.signal.clone()));

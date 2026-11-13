@@ -83,3 +83,6 @@ helmsman-io = { path = "../helmsman-io" }
 
 [lints]
 workspace = true
+
+[build-dependencies]
+resvg = { version = "0.50", default-features = false }

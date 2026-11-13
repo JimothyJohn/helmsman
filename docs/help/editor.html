@@ -153,7 +153,7 @@ Pan with a drag on empty space, zoom with the wheel; the diagram never
 leaves the view, and a double-click on empty space fits it again.</li>
 </ul>
 <p><img src="img/diagram-why.png"
-alt="The lamp&#39;s assignment picked: it is outlined, what drives it stays lit and the rest dims." /></p>
+alt="The green lamp&#39;s assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs." /></p>
 <p>Values that would clutter the diagram are left off it: a constant
 shows its name alone, a time reads as <code>T#500ms</code>. A wire that
 would cross the whole diagram is drawn as a pair of tagged stubs naming
@@ -178,6 +178,17 @@ output named after a colour (<code>red</code>, <code>lamp_green</code>,
 and on the trend too; a red, a yellow and a green together are drawn as
 a traffic light. Any other output is a pilot lamp with its name under
 it.</p>
+<p><strong>Glyphs.</strong> Every point in the I/O panel and the Devices
+list carries a small picture of what it is, read from its name:
+<code>start_pb</code> a push button, <code>e_stop</code> an emergency
+stop, <code>mode_sel</code> a selector switch, a colour or
+<code>lamp</code> a pilot lamp, <code>alarm</code>,
+<code>interlock</code>, <code>phase</code> or <code>step</code>,
+<code>hmi</code>, <code>timer</code>, <code>count</code>,
+<code>latch</code>, <code>edge</code> each their own; any other BOOL
+input is a switch, any other BOOL output a pilot lamp, a number a gauge.
+Hover one to read its name. The pictures are an early set and will be
+redrawn.</p>
 <h2 id="the-panes">The panes</h2>
 <ul>
 <li><strong>The left pane</strong> has three tabs.

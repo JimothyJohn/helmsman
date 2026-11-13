@@ -5171,4 +5171,55 @@ mod lamps {
     }
 }
 
+/// The glyph library beside every point (`glyph_lib`).
+mod glyph_library {
+    use eframe::egui::{Rect, Shape, TextureId};
+
+    use super::Harness;
+    use crate::app::App;
+    use crate::editor::Tab;
+
+    /// How many library glyphs (meshes on a texture other than the font
+    /// atlas) the last frame drew inside `area`.
+    fn glyphs_in(h: &Harness, area: Rect) -> usize {
+        fn walk(s: &Shape, area: Rect, n: &mut usize) {
+            match s {
+                Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, n)),
+                Shape::Mesh(m)
+                    if m.texture_id != TextureId::default()
+                        && m.vertices.first().is_some_and(|v| area.contains(v.pos)) =>
+                {
+                    *n += 1;
+                }
+                _ => {}
+            }
+        }
+        let mut n = 0;
+        for c in &h.shapes {
+            walk(&c.shape, area, &mut n);
+        }
+        n
+    }
+
+    #[test]
+    fn every_output_in_the_io_tab_has_a_glyph_and_the_panel_keeps_its_width() {
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.tab = Tab::Io;
+        let before = h.rect("right").width();
+        h.wait(0.3);
+        let outputs = h.rect("io outputs");
+        // The traffic light's three lamps.
+        assert_eq!(glyphs_in(&h, outputs), 3);
+        assert!(
+            h.app.chrome.rect("io inputs").is_none(),
+            "run is a control on the diagram"
+        );
+        assert_eq!(
+            h.rect("right").width(),
+            before,
+            "the glyph column did not widen the panel"
+        );
+    }
+}
+
 mod shell;

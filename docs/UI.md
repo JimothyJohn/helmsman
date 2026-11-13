@@ -224,6 +224,20 @@ this; change it here first when a decision changes.
   compile is refused and the old program keeps running. A browser that
   keeps nothing (a private window) still works; the projects last until
   the page closes.
+- **Glyph library** (Nick, 2026-11-12: "the app shouldn't even need
+  words"). One SVG a glyph in `crates/helmsman-canvas/assets/glyphs/`,
+  rasterized to alpha masks by the crate's build script and tinted in the
+  theme's colours when drawn (`glyph_lib`); redrawing one is replacing
+  its file. Placeholders in the spirit of emoji until Nick draws the set.
+  Today a glyph stands beside every point in the I/O tab, the box's
+  signal list, the outputs list and the Devices tree: by the words of the
+  point's name (`start_pb` a push button, `e_stop` an emergency stop,
+  `mode_sel` a selector, a colour or `lamp` a pilot lamp, `alarm`,
+  `interlock`, `phase`/`step`, `hmi`, `timer`, `count`, `latch`, `edge`),
+  else a switch for a BOOL input, a pilot lamp for a BOOL output, a gauge
+  for a number; a device by its driver (the box, the screen, an I/O
+  module). Next: the standard blocks on the diagram (timer, counter,
+  latch, edge) and a palette to drag from.
 - **Lamps** (Nick, 2026-11-12: the first screen should speak without
   words). The program's BOOL outputs are lamps in the diagram's
   bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a

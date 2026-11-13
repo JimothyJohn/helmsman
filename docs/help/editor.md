@@ -118,6 +118,15 @@ I/O panel's list and on the trend too; a red, a yellow and a green
 together are drawn as a traffic light. Any other output is a pilot lamp
 with its name under it.
 
+**Glyphs.** Every point in the I/O panel and the Devices list carries a
+small picture of what it is, read from its name: `start_pb` a push
+button, `e_stop` an emergency stop, `mode_sel` a selector switch, a
+colour or `lamp` a pilot lamp, `alarm`, `interlock`, `phase` or `step`,
+`hmi`, `timer`, `count`, `latch`, `edge` each their own; any other BOOL
+input is a switch, any other BOOL output a pilot lamp, a number a gauge.
+Hover one to read its name. The pictures are an early set and will be
+redrawn.
+
 ## The panes
 
 - **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):

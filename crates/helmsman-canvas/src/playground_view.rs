@@ -3216,123 +3216,128 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
     };
     let mut out = None;
     // Wrapped, with a slider that fits: a row wider than the panel grows it.
-    ui.spacing_mut().slider_width = (ui.available_width() - 110.0).clamp(40.0, 100.0);
-    ui.horizontal_wrapped(|ui| match p.widget {
-        Some(Widget::Push) => {
-            let on = p.value == Value::Bool(true);
-            let b = egui::Button::new(
-                RichText::new(&label)
-                    .strong()
-                    .color(if on { BLACK } else { t.fg }),
-            )
-            .fill(if on { YELLOW } else { t.rule })
-            .sense(Sense::click_and_drag())
-            .wrap_mode(egui::TextWrapMode::Truncate)
-            .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-            let r = ui.add(b).tip("Push button: on while held.");
-            out = Some(Value::Bool(r.is_pointer_button_down_on()));
+    ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(40.0, 100.0);
+    let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
+    ui.horizontal_wrapped(|ui| {
+        crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, t.fg, crate::glyph_lib::tip(glyph));
+        match p.widget {
+            Some(Widget::Push) => {
+                let on = p.value == Value::Bool(true);
+                let b =
+                    egui::Button::new(
+                        RichText::new(&label)
+                            .strong()
+                            .color(if on { BLACK } else { t.fg }),
+                    )
+                    .fill(if on { YELLOW } else { t.rule })
+                    .sense(Sense::click_and_drag())
+                    .wrap_mode(egui::TextWrapMode::Truncate)
+                    .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
+                let r = ui.add(b).tip("Push button: on while held.");
+                out = Some(Value::Bool(r.is_pointer_button_down_on()));
+            }
+            Some(Widget::Toggle) => {
+                let on = p.value == Value::Bool(true);
+                let b = egui::Button::new(
+                    RichText::new(format!("{label}: {}", if on { "ON" } else { "OFF" }))
+                        .strong()
+                        .color(if on { BLACK } else { t.fg }),
+                )
+                .fill(if on { YELLOW } else { t.rule })
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
+                if ui.add(b).tip("Switch: click to flip.").clicked() {
+                    out = Some(Value::Bool(!on));
+                }
+            }
+            Some(Widget::Int { min, max }) => {
+                ui.label(&label);
+                let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
+                let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
+                let (slo, shi) = (lo.max(-1000), hi.min(1000));
+                let mut v = match p.value {
+                    Value::Int(n) => i64::try_from(n).unwrap_or(0),
+                    _ => 0,
+                };
+                let before = v;
+                ui.add(
+                    egui::Slider::new(&mut v, slo..=shi)
+                        .clamping(egui::SliderClamping::Edits)
+                        .show_value(false),
+                )
+                .tip(format!(
+                    "Drag to set the input, {slo} to {shi}. Type any value in the box."
+                ));
+                if v != before {
+                    out = Some(Value::Int(i128::from(v)));
+                }
+                let id = egui::Id::unique(("io-int", &p.name));
+                let c = crate::commit::number(
+                    ui,
+                    id,
+                    &before.to_string(),
+                    "",
+                    Vec2::new(84.0, TAP * 0.6),
+                    TYPE_HINT,
+                );
+                if let Some(n) = crate::commit::int(&c, lo, hi)
+                    && n != before
+                {
+                    out = Some(Value::Int(i128::from(n)));
+                }
+            }
+            Some(Widget::Real) => {
+                ui.label(&label);
+                let mut v = match p.value {
+                    Value::Real(r) => r,
+                    _ => 0.0,
+                };
+                let before = v;
+                ui.add(
+                    egui::Slider::new(&mut v, -100.0..=100.0)
+                        .clamping(egui::SliderClamping::Edits)
+                        .show_value(false),
+                )
+                .tip("Drag to set the input, -100 to 100. Type any value in the box.");
+                if v.to_bits() != before.to_bits() && v.is_finite() {
+                    out = Some(Value::Real(v));
+                }
+                let id = egui::Id::unique(("io-real", &p.name));
+                let c = crate::commit::number(
+                    ui,
+                    id,
+                    &before.to_string(),
+                    "",
+                    Vec2::new(84.0, TAP * 0.6),
+                    TYPE_HINT,
+                );
+                if let Some(x) = crate::commit::real(&c)
+                    && x.to_bits() != before.to_bits()
+                {
+                    out = Some(Value::Real(x));
+                }
+            }
+            Some(Widget::Time) => {
+                ui.label(&label);
+                let mut ms = match p.value {
+                    Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
+                    _ => 0,
+                };
+                let before = ms;
+                ui.add(
+                    egui::Slider::new(&mut ms, 0..=10_000)
+                        .clamping(egui::SliderClamping::Edits)
+                        .show_value(false),
+                )
+                .tip("Drag to set the time, up to 10 s.");
+                ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
+                    .tip("The time in ms. Drag, or double-click to type it, up to a day.");
+                if ms != before {
+                    out = Some(Value::Int(i128::from(ms) * 1_000_000));
+                }
+            }
+            None => {}
         }
-        Some(Widget::Toggle) => {
-            let on = p.value == Value::Bool(true);
-            let b = egui::Button::new(
-                RichText::new(format!("{label}: {}", if on { "ON" } else { "OFF" }))
-                    .strong()
-                    .color(if on { BLACK } else { t.fg }),
-            )
-            .fill(if on { YELLOW } else { t.rule })
-            .wrap_mode(egui::TextWrapMode::Truncate)
-            .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-            if ui.add(b).tip("Switch: click to flip.").clicked() {
-                out = Some(Value::Bool(!on));
-            }
-        }
-        Some(Widget::Int { min, max }) => {
-            ui.label(&label);
-            let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
-            let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
-            let (slo, shi) = (lo.max(-1000), hi.min(1000));
-            let mut v = match p.value {
-                Value::Int(n) => i64::try_from(n).unwrap_or(0),
-                _ => 0,
-            };
-            let before = v;
-            ui.add(
-                egui::Slider::new(&mut v, slo..=shi)
-                    .clamping(egui::SliderClamping::Edits)
-                    .show_value(false),
-            )
-            .tip(format!(
-                "Drag to set the input, {slo} to {shi}. Type any value in the box."
-            ));
-            if v != before {
-                out = Some(Value::Int(i128::from(v)));
-            }
-            let id = egui::Id::unique(("io-int", &p.name));
-            let c = crate::commit::number(
-                ui,
-                id,
-                &before.to_string(),
-                "",
-                Vec2::new(84.0, TAP * 0.6),
-                TYPE_HINT,
-            );
-            if let Some(n) = crate::commit::int(&c, lo, hi)
-                && n != before
-            {
-                out = Some(Value::Int(i128::from(n)));
-            }
-        }
-        Some(Widget::Real) => {
-            ui.label(&label);
-            let mut v = match p.value {
-                Value::Real(r) => r,
-                _ => 0.0,
-            };
-            let before = v;
-            ui.add(
-                egui::Slider::new(&mut v, -100.0..=100.0)
-                    .clamping(egui::SliderClamping::Edits)
-                    .show_value(false),
-            )
-            .tip("Drag to set the input, -100 to 100. Type any value in the box.");
-            if v.to_bits() != before.to_bits() && v.is_finite() {
-                out = Some(Value::Real(v));
-            }
-            let id = egui::Id::unique(("io-real", &p.name));
-            let c = crate::commit::number(
-                ui,
-                id,
-                &before.to_string(),
-                "",
-                Vec2::new(84.0, TAP * 0.6),
-                TYPE_HINT,
-            );
-            if let Some(x) = crate::commit::real(&c)
-                && x.to_bits() != before.to_bits()
-            {
-                out = Some(Value::Real(x));
-            }
-        }
-        Some(Widget::Time) => {
-            ui.label(&label);
-            let mut ms = match p.value {
-                Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
-                _ => 0,
-            };
-            let before = ms;
-            ui.add(
-                egui::Slider::new(&mut ms, 0..=10_000)
-                    .clamping(egui::SliderClamping::Edits)
-                    .show_value(false),
-            )
-            .tip("Drag to set the time, up to 10 s.");
-            ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
-                .tip("The time in ms. Drag, or double-click to type it, up to a day.");
-            if ms != before {
-                out = Some(Value::Int(i128::from(ms) * 1_000_000));
-            }
-        }
-        None => {}
     });
     out
 }
@@ -3350,22 +3355,28 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
     } else {
         format!("{name} = {}", show(p.ty, p.value))
     };
-    let b = egui::Button::new(
-        RichText::new(text)
-            .monospace()
-            .size(crate::theme::MIN_TEXT)
-            // On is the lamp's own colour when its name has one (red,
-            // yellow, green...; `lamps`), else green, as a TRUE value in
-            // the diagram and a lamp on the Monitor are.
-            .color(if on {
-                t.ink(crate::lamps::colour(&p.name).unwrap_or(GREEN))
-            } else {
-                t.fg
-            }),
-    )
-    .wrap_mode(egui::TextWrapMode::Truncate)
-    .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
-    ui.add(b).tip("Click to pick its block in the diagram.").clicked()
+    // On is the lamp's own colour when its name has one (red, yellow,
+    // green...; `lamps`), else green, as a TRUE value in the diagram and
+    // a lamp on the Monitor are. Its glyph takes the same colour.
+    let color = if on {
+        t.ink(crate::lamps::colour(&p.name).unwrap_or(GREEN))
+    } else {
+        t.fg
+    };
+    let glyph = crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool);
+    ui.horizontal(|ui| {
+        crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, color, crate::glyph_lib::tip(glyph));
+        let b = egui::Button::new(
+            RichText::new(text)
+                .monospace()
+                .size(crate::theme::MIN_TEXT)
+                .color(color),
+        )
+        .wrap_mode(egui::TextWrapMode::Truncate)
+        .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
+        ui.add(b).tip("Click to pick its block in the diagram.").clicked()
+    })
+    .inner
 }
 
 /// A value for a readout (TIME in ms).
