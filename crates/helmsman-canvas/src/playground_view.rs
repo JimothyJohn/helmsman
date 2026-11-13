@@ -1269,10 +1269,7 @@ impl PlaygroundView {
                 .cloned()
                 .unwrap_or_default();
         }
-        self.reload();
-        if self.session.build.as_ref().is_some_and(|b| b.module.is_some()) {
-            self.session.set_running(true);
-        }
+        self.reload_running();
         // What this revision changed, marked as the Agent's changes are.
         let file = self.proj.current.clone();
         let after = self.proj.files.get(&file).cloned().unwrap_or_default();
