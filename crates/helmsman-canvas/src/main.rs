@@ -33,6 +33,7 @@ mod arrange_tests;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;
+mod box_popup;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_projects_tests;

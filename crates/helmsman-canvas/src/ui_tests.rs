@@ -4554,7 +4554,7 @@ mod boxed {
         assert!(
             b.status(t, &Theme::dark())
                 .0
-                .starts_with("● reconnecting (retry in 5s)"),
+                .starts_with("● reconnecting (retry in 2s)"),
             "{:?}",
             b.status(t, &Theme::dark())
         );
@@ -4586,36 +4586,216 @@ mod boxed {
 mod fallback {
     use super::Harness;
     use crate::app::{App, Source};
-    use crate::remote::{Link, Msg, Stream};
+    use crate::box_popup::PROBE_AFTER;
+    use crate::remote::{Fetch, Msg, Probe, Stream};
 
-    /// Nick, 2026-11-01: a page that finds no box runs the simulation
-    /// by itself; a box that answered and went away keeps its view.
-    #[test]
-    fn a_page_no_box_ever_answered_falls_back_to_the_simulation_by_itself() {
+    /// All the text the last frames drew.
+    fn texts(h: &mut Harness) -> String {
+        fn walk(s: &eframe::egui::Shape, out: &mut String) {
+            match s {
+                eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                eframe::egui::Shape::Text(t) => {
+                    out.push_str(t.galley.text());
+                    out.push('\n');
+                }
+                _ => {}
+            }
+        }
+        h.wait(0.1);
+        let mut out = String::new();
+        for c in &h.shapes {
+            walk(&c.shape, &mut out);
+        }
+        out
+    }
+
+    /// The first look failed: the page simulates at once and says so in
+    /// the middle of the screen, then looks once more in the background.
+    fn fell_back() -> Harness {
         let mut h = Harness::new(App::boxed());
         assert_eq!(h.app.source, Source::Box);
         let t = h.time;
         let b = h.app.boxv.as_mut().unwrap();
         assert!(!b.state.ever_connected());
-        for k in 0..3 {
-            b.state.apply(Msg::Failed(Stream::Values), t + f64::from(k));
-        }
-        assert!(matches!(b.state.link(), Link::Unreachable { .. }));
+        // One failure is enough (Nick, 2026-11-13: no waiting twice).
+        b.state.apply(Msg::Failed(Stream::Values), t);
         h.frame(vec![]);
-        assert_eq!(h.app.source, Source::Sim, "the simulation, unasked");
+        assert_eq!(
+            h.app.source,
+            Source::Sim,
+            "the simulation, unasked, on the first failure"
+        );
         h.frame(vec![]);
+        assert!(h.has("popup ok"), "the No box popup is up");
+        let text = texts(&mut h);
+        assert!(text.contains("Simulating in this browser"), "{text}");
+        assert!(text.contains("Looking once more in the background."), "{text}");
+        assert!(
+            h.app.sim.as_ref().is_some_and(|s| s.session.build.is_some()),
+            "the simulation runs meanwhile"
+        );
+        h
+    }
+
+    /// Waits for the second look to go out.
+    fn asked(h: &mut Harness) {
+        assert!(matches!(
+            h.app.boxv.as_ref().unwrap().state.probe(),
+            Probe::Due(_)
+        ));
+        h.wait(PROBE_AFTER + 0.1);
+        assert_eq!(
+            h.app.boxv.as_ref().unwrap().state.probe(),
+            Probe::Asked,
+            "the second look went"
+        );
+    }
+
+    /// Nick, 2026-11-01: a page that finds no box runs the simulation
+    /// by itself; a box that answered and went away keeps its view.
+    #[test]
+    fn a_page_no_box_ever_answered_falls_back_to_the_simulation_by_itself() {
+        let mut h = fell_back();
         let s = h.app.sim.as_ref().expect("running");
         assert!(
             s.notice.as_deref().is_some_and(|n| n.contains("No box answered")),
             "{:?}",
             s.notice
         );
+        h.press("popup ok");
+        h.frame(vec![]);
+        assert!(!h.has("popup ok"), "closed");
         // Back to the box from View stays: the fallback happens once.
         h.press("bar view");
         h.press("view box");
         assert_eq!(h.app.source, Source::Box);
         h.wait(0.2);
         assert_eq!(h.app.source, Source::Box, "not yanked back to the simulation");
+    }
+
+    /// Nick, 2026-11-13: the second look runs in the background once the
+    /// simulation is up; a box found then is offered in a popup.
+    #[test]
+    fn a_box_found_on_the_second_look_is_offered_and_connected_on_a_click() {
+        let mut h = fell_back();
+        asked(&mut h);
+        let t = h.time;
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .state
+            .apply(Msg::Got(Fetch::Modules, Ok(r#"[{"name":"main"}]"#.into())), t);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert!(h.has("popup connect") && h.has("popup keep"), "the Found popup");
+        assert!(!h.has("popup ok"), "it replaces the No box popup");
+        assert!(texts(&mut h).contains("Box found"));
+        assert_eq!(h.app.source, Source::Sim, "nothing moves until asked");
+        h.press("popup connect");
+        assert_eq!(h.app.source, Source::Box);
+        h.frame(vec![]);
+        assert!(
+            !h.app.boxv.as_ref().unwrap().state.paused(),
+            "the box's streams open again"
+        );
+        assert!(!h.has("popup connect"));
+    }
+
+    #[test]
+    fn keep_simulating_closes_the_found_popup_for_good() {
+        let mut h = fell_back();
+        asked(&mut h);
+        let t = h.time;
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .state
+            .apply(Msg::Got(Fetch::Modules, Ok(r#"[{"name":"main"}]"#.into())), t);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h.press("popup keep");
+        h.wait(PROBE_AFTER * 2.0);
+        assert_eq!(h.app.source, Source::Sim);
+        assert!(!h.has("popup connect"), "asked once");
+    }
+
+    /// A slow first look says so in the middle of the screen; a lost box
+    /// says it is reconnecting until it is back, or hidden.
+    #[test]
+    fn connecting_and_a_lost_box_are_said_in_the_middle_of_the_screen() {
+        let mut h = Harness::new(App::boxed());
+        h.frame(vec![]);
+        assert!(!texts(&mut h).contains("Connecting to the box"), "no flash");
+        h.wait(crate::box_popup::CONNECTING_AFTER);
+        assert!(texts(&mut h).contains("Connecting to the box"));
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.state
+            .apply(Msg::Got(Fetch::Modules, Ok(r#"[{"name":"main"}]"#.into())), t);
+        b.state.apply(Msg::Opened(Stream::Values), t);
+        assert!(
+            !texts(&mut h).contains("Connecting to the box"),
+            "gone once the box answers"
+        );
+        // The box goes away: a stream that was delivering is reopened
+        // quietly once, then it is a failure.
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.state.apply(Msg::Failed(Stream::Values), t);
+        b.state.apply(Msg::Failed(Stream::Values), t);
+        let text = texts(&mut h);
+        assert!(text.contains("Reconnecting to the box"), "{text}");
+        assert!(text.contains("keep running on the box"), "{text}");
+        assert_eq!(h.app.source, Source::Box, "a box that answered stays the box");
+        h.press("popup hide");
+        assert!(!texts(&mut h).contains("Reconnecting to the box"), "hidden");
+        // Back on the next retry, then lost again: said again.
+        h.wait(crate::remote::RETRY_SECS);
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.state.apply(Msg::Opened(Stream::Values), t);
+        b.state.apply(
+            Msg::Event(Stream::Values, "values".into(), r#"{"seq":9}"#.into()),
+            t,
+        );
+        h.frame(vec![]);
+        assert_eq!(
+            h.app.boxv.as_ref().unwrap().state.link(),
+            crate::remote::Link::Connected
+        );
+        assert!(!h.app.lost_hidden, "a box that is back resets Hide");
+        let b = h.app.boxv.as_mut().unwrap();
+        // It was delivering: the first end is reopened quietly.
+        b.state.apply(Msg::Failed(Stream::Values), t + 0.2);
+        b.state.apply(Msg::Failed(Stream::Values), t + 0.2);
+        assert!(texts(&mut h).contains("Reconnecting to the box"), "said again");
+    }
+
+    /// The second look finds nothing: the popup says so, and no third look
+    /// goes (the page stays quiet until View › Back to this box).
+    #[test]
+    fn a_second_look_that_finds_nothing_is_said_and_not_repeated() {
+        let mut h = fell_back();
+        asked(&mut h);
+        let t = h.time;
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .state
+            .apply(Msg::Got(Fetch::Modules, Err("HTTP 404".into())), t);
+        h.frame(vec![]);
+        assert_eq!(h.app.boxv.as_ref().unwrap().state.probe(), Probe::Missed);
+        assert!(texts(&mut h).contains("found no box either"));
+        h.wait(PROBE_AFTER * 3.0);
+        assert_eq!(
+            h.app.boxv.as_ref().unwrap().state.probe(),
+            Probe::Missed,
+            "no third look"
+        );
+        assert!(!h.has("popup connect"));
     }
 }
 

@@ -513,6 +513,19 @@ impl BoxView {
         self.run(ctx, cmds);
     }
 
+    /// While the page simulates: takes in the answer to the second look
+    /// for the box ([`crate::remote::BoxState::probe_at`]) and sends it
+    /// when due. Nothing else of the box moves.
+    pub fn probe_tick(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let (msgs, _) = self.inbox();
+        for m in msgs {
+            self.state.apply(m, now);
+        }
+        let cmds = self.state.poll(now);
+        self.run(ctx, cmds);
+    }
+
     /// Takes in what arrived and carries out what is due, with nothing
     /// drawn (the Monitor draws from the same state).
     pub fn tick(&mut self, ctx: &egui::Context) {
