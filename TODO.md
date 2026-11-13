@@ -4,30 +4,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **Close the ESP32 node cards now that the P4 is the embedded board?** — Three cards are about the two ESP32 boards (the POE2 and the POE-ISO): `node-resume`, `node-modbus` and `poe-iso-modbus-rerun`. Between them they ask one thing: can a board that cheap scan a real program in time? On the ESP32 a 4,000-statement test program took 28 ms a scan against a 10 ms target. The P4 answered it on 2026-11-10 with the same firmware: the traffic-light chase in 51 to 72 microseconds a scan, a 431-line machine cell in about 1 ms, no late scans at 10 ms (docs/EDGE.md Phase 3). You named the P4 the runtime and embedded board on 2026-11-13. Two goals docs/EDGE.md set for any node were never run on any board: under 1 % late scans over 10 minutes against the E1213, and the block's outputs going safe when the node's cable is pulled.
-  needs: your call
-  result: closed: the three cards leave the board and the two goals become P4 runs on `node-p4-followups`; kept: they stay parked
-  options: close all three, the two goals to the P4 — the ESP32 slowness, the POE2's memory bug and the POE-ISO rerun are dropped; they matter only if a product ships on an ESP32 (recommended) | keep them parked — nothing changes, three cards stay blocked | resume the ESP32 work — about a week on the scan speed and the memory bug before any P4 work
-  recommend: close all three — the P4 is the embedded board and already meets the scan targets the ESP32 missed
-  stakes: low
-  est: 5m
-  difficulty: low
-  id: node-esp32-close
-  asked: 2026-11-13
-  by: claude-session
-
-- [ ] **Who opens the library pull request when the agent publishes a device profile?** — When the agent has built a profile for a device the public library (github.com/JimothyJohn/helmsman-devices) does not know, and the user has checked its channel names, the last step sends it to the library as a pull request, so the next user of that device gets it in one click. Whatever opens that pull request holds a GitHub credential that can write to the library. Building the profile itself needs no credential: that half is done on the relay (agent helmsman/v10, agent-relay #20, merged 2026-11-13) and its box half is card `device-profile-propose-box`.
-  needs: your call
-  result: the publish tool's shape, and the token it needs (you create it; a hand-off script names its scopes)
-  options: the relay's own fine-grained token — one secret in Secrets Manager, limited to pull requests on helmsman-devices; no customer box holds a GitHub credential (recommended) | each box's own token — every box that publishes needs a GitHub token configured by its owner | no publish tool — the user downloads the profile and opens the pull request by hand
-  recommend: the relay's own fine-grained token — one secret you control, scoped to one repository, and nothing to configure on a customer's box
-  stakes: high
-  est: 5m
-  difficulty: low
-  id: device-profile-publish-path
-  asked: 2026-11-13
-  by: claude-session
-
 ## Needs your hands
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — Why it matters: a node in a cabinet is powered by its Ethernet cable alone, and today no run has proven that. The PoE module turns the cable's 48 V into the board's supply; if its output is not isolated from the cable side, a USB cable plugged in at the same time ties the laptop's ground to the PoE supply's return, and current can flow through the laptop's USB port. Nobody knows yet which it is, so `scripts/node-flash.sh` makes you pull Ethernet before every USB flash. One measurement settles it: the prompt goes away, or becomes a hard rule. the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
@@ -38,16 +14,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: p4-poe-isolation
   asked: 2026-11-10
   by: claude-session
-
-- [ ] **Put the POE-ISO back on the network for one run** — Why it matters: only if the ESP32 boards stay in the plan (question `node-esp32-close`). #337 fixed the node's Modbus link coming up late after boot and was run on the P4; the POE-ISO uses a different Ethernet driver, so the same fix there is compiled and unproven. the P4 took its switch port on 2026-11-10; poe-iso-rack-03 is still on USB (/dev/cu.usbserial-1130). #337 changed its Modbus client and I/O task as it did the P4's (wait for the link, quick retries before the back-off) and that crate was built and linted, not run. Also not tried: a flash of it with espflash 4.7.0 (only `board-info` was).
-  needs: a second switch port (or the P4's cable for ten minutes); tell a session when it is in
-  result: the POE-ISO flashed at the dev tip with espflash 4.7, its block up at link-up, and the line in docs/EDGE.md that says "not run" gone
-  est: 15m
-  difficulty: low
-  id: poe-iso-modbus-rerun
-  asked: 2026-11-10
-  by: claude-session
-  depends: node-esp32-close
 
 - [ ] **Rebuild the try box at the dev tip** — it came back when you logged in at the Studio (pid 86028 on 2026-11-13, :8081 answers, the E1213 up), but on the build of 2026-11-08 (e7f1ae2, #300), about 90 merges behind dev: no device profiles, no device configuration, no glyphs. Best done after `studio-box-no-io` lands, so the rebuilt box can be switched off the devices for P4 work.
   needs: `~/github/helmsman-try/scratch/16-rebuild.sh` from your terminal at the Studio (it builds at the dev tip, signs, and restarts the LaunchAgent)
@@ -187,17 +153,17 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-12
   by: claude-session
 
-- [ ] **Publish a checked device profile to the library** — the second tool: a pull request into helmsman-devices' `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`, opened from what the user checked on the Devices tab.
-  needs: the answer to `device-profile-publish-path`
+- [ ] **Publish a checked device profile to the library** — the second tool, on the relay (it holds the only token that can push): a pull request into helmsman-devices' `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`, opened from what the user checked on the Devices tab.
+  needs: a fine-grained GitHub token held by the relay alone (Nick, 2026-11-13: only the relay can push), limited to pull requests on helmsman-devices and kept in Secrets Manager; you create it from a hand-off script that names the scopes. No box ever holds a GitHub credential
   result: the library grows by a pull request each time a user maps a new device
-  depends: device-profile-publish-path, device-profile-propose-box
+  depends: device-profile-propose-box
   est: 1d
   difficulty: med
   id: device-profile-publish
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **PROFINET from the node: a real device, then the node image** — Why it matters: only once a device has to be reached over PROFINET. Parked with `profinet-raw-access` (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first; PROFINET when a customer or a device needs it). the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block; (3) the same on the POE-ISO (Xtensa: its EMAC driver is ph-esp32-mac, a different wrapper).
+- [ ] **PROFINET from the node: a real device, then the node image** — Why it matters: only once a device has to be reached over PROFINET. Parked with `profinet-raw-access` (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first; PROFINET when a customer or a device needs it). the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block.
   needs: a device that has to be reached over PROFINET
   result: a node masters a PROFINET device at an 8 ms cycle with its late frames counted, from a map deployed over its API
   est: 3d
@@ -340,10 +306,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — Why it matters: today a node's firmware changes only over a USB cable from a laptop, so a node in a cabinet has to be opened to update it. This lets it take a new image over the network and fall back to the old one by itself if the new one does not come up, so a bad build cannot leave a machine without its controller. #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. Same code on the POE-ISO and the P4 (helmsman-node-p4). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
-  needs: the P4 is not required; the POE-ISO on the bench (poe-iso-rack-03, /dev/cu.usbserial-1130, 192.168.3.55) is enough
+- [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — Why it matters: today a node's firmware changes only over a USB cable from a laptop, so a node in a cabinet has to be opened to update it. This lets it take a new image over the network and fall back to the old one by itself if the new one does not come up, so a bad build cannot leave a machine without its controller. #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. On the P4 (helmsman-node-p4); the ESP32 boards are closed (Nick, 2026-11-13). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
+  needs: the P4 on the bench (192.168.3.56, /dev/cu.usbmodem5C930154551): the node board since 2026-11-13, the ESP32 boards closed
   result: a node on the plant network takes a new firmware from a laptop without a USB cable, and a bad image cannot brick it
-  notes: sized 2026-11-09 (not started, needs the bench): (1) a new partition table, nvs / otadata / phy_init / ota_0 / ota_1 on supervictor/edge/partitions.csv's model, one USB flash per board (espflash --partition-table, --erase-parts otadata; it moves the nvs region the settings and program live in, so the node is commissioned again); (2) port supervictor/edge/src/ota/{install,policy,http,manifest}.rs into nodecore (Slot trait installer with sector buffering, digest and read-back; the checksummed RTC record with MAX_PENDING_BOOTS; the strict response-head parser; 2.4k lines with their proptests, tied to supervictor_common::firmware types to replace); (3) the fetch task on embassy-net (Range + If-Match) writing through esp-bootloader-esp-idf 0.5's OtaUpdater (next_partition, activate_next_partition, set_current_ota_state), the boot policy at start, GET /api/firmware, POST /api/firmware {url, sha256}, POST /api/firmware/confirm; (4) on the POE-ISO: a push, a confirm, a forced rollback.
+  notes: sized 2026-11-09 (not started, needs the bench): (1) a new partition table, nvs / otadata / phy_init / ota_0 / ota_1 on supervictor/edge/partitions.csv's model, one USB flash per board (espflash --partition-table, --erase-parts otadata; it moves the nvs region the settings and program live in, so the node is commissioned again); (2) port supervictor/edge/src/ota/{install,policy,http,manifest}.rs into nodecore (Slot trait installer with sector buffering, digest and read-back; the checksummed RTC record with MAX_PENDING_BOOTS; the strict response-head parser; 2.4k lines with their proptests, tied to supervictor_common::firmware types to replace); (3) the fetch task on embassy-net (Range + If-Match) writing through esp-bootloader-esp-idf 0.5's OtaUpdater (next_partition, activate_next_partition, set_current_ota_state), the boot policy at start, GET /api/firmware, POST /api/firmware {url, sha256}, POST /api/firmware/confirm; (4) on the P4: a push, a confirm, a forced rollback.
   est: 2d
   difficulty: high
   id: node-ota
@@ -377,7 +343,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **P4 node, after the bring-up: PoE alone, two connections on the E1213, G4 and G5** — Why it matters: the P4 is the runtime board (Nick, 2026-11-13), and these are the runs between "it scans on the bench" and "it can be left in a cabinet": powered by its cable only, sharing a device with a Studio box, and measured against the two goals docs/EDGE.md set for a node (G4: under 1 % late scans over 10 minutes; G5: the block's outputs go safe when the node's cable is pulled). Done already (2026-11-10, docs/EDGE.md Phase 3 "On the board"): the node image at 192.168.3.56 (press-5, token bench-token-2026), the chase at 10 ms with 51 to 72 us of work, a 431-line cell at 1 ms, the `enip` image against the E1213 both ways, the panic restart, PSRAM in `/api/node`, the late Modbus link at boot fixed. Left: (1) a run on PoE alone, after `p4-poe-isolation`; (2) after `e1213-firmware-update`: Input Only from the P4 beside the Studio box's connection (`scratch/enip-fo-probe.py`); (3) G4 and G5 on the P4, 10 minutes against the E1213 and a pulled cable with the unit's watchdog and safe values set (the Devices tab's Configuration can set both now); (4) drop `ethernet::CutThroughTx` when an esp-hal release ties transmit store-and-forward to checksum offload. TLS is not on it any more: you want it for publishing data from a second Ethernet port, kept apart from control (card `node-data-tls`).
+- [ ] **P4 node, after the bring-up: PoE alone, two connections on the E1213, G4 and G5** — Why it matters: the P4 is the runtime board (Nick, 2026-11-13), and these are the runs between "it scans on the bench" and "it can be left in a cabinet": powered by its cable only, sharing a device with a Studio box, and measured against the two goals docs/EDGE.md set for a node (G4: under 1 % late scans over 10 minutes; G5: the block's outputs go safe when the node's cable is pulled). Done already (2026-11-10, docs/EDGE.md Phase 3 "On the board"): the node image at 192.168.3.56 (press-5, token bench-token-2026), the chase at 10 ms with 51 to 72 us of work, a 431-line cell at 1 ms, the `enip` image against the E1213 both ways, the panic restart, PSRAM in `/api/node`, the late Modbus link at boot fixed. G4 and G5 were never run on any board; the ESP32 cards that held them are closed (Nick, 2026-11-13), so they are the P4's. Left: (1) a run on PoE alone, after `p4-poe-isolation`; (2) after `e1213-firmware-update`: Input Only from the P4 beside the Studio box's connection (`scratch/enip-fo-probe.py`); (3) G4 and G5 on the P4, 10 minutes against the E1213 and a pulled cable with the unit's watchdog and safe values set (the Devices tab's Configuration can set both now); (4) drop `ethernet::CutThroughTx` when an esp-hal release ties transmit store-and-forward to checksum offload. TLS is not on it any more: you want it for publishing data from a second Ethernet port, kept apart from control (card `node-data-tls`).
   needs: `p4-poe-isolation` for (1), `e1213-firmware-update` for (2); (3) needs nothing but the bench; (4) waits for an esp-hal release
   result: the P4 node runs on PoE alone, shares the E1213, and has its G4 and G5 numbers in docs/EDGE.md
   est: 1d
@@ -736,18 +702,6 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **Resume the edge node: faster scans and the POE2's PSRAM** — parked by Nick 2026-11-03 after the first runs on the boards (docs/EDGE.md Phase 1 and 2). Thread 1 (the network) is SOLVED in #312 (2026-11-08): the POE-ISO got no lease because helmsman-node enabled esp-hal's `psram` feature on the WROOM, whose PSRAM pins are the POE-ISO's RMII clock (now `--no-default-features --features poe-iso`); the Studio reached 10.0.0.x only over Wi-Fi (dual-homed, scratch/23 and 26 add the en0 aliases); and a dead unit's connect-every-scan starved smoltcp's neighbour cache (2 s back-off after a failed connect). Two threads stay: (2) scan speed: 28 ms for the 4k-statement bench against < 5 ms, and 30 ms with two synchronous Modbus round trips before the I/O task; measure flash at 80 MHz QIO (it boots at 40 MHz DIO), the interpreter's i128 `Value::Int` on a 32-bit core, the no_std BTreeMap lookups, esp-alloc heap-stats, before any rewrite (a compact compiled form or compile-on-laptop is the bigger lever); (3) the PSRAM corruption on the POE2: compiling the batch-mixer starter with PSRAM asks for 0x3F40D781 bytes (a rodata address read as a length); the POE2 at 10.0.0.50 still runs November's firmware.
-  needs: Nick's call to resume (2026-11-06: stays parked); the P4 ran on 2026-11-10 (docs/EDGE.md Phase 3 "On the board": the chase in 70 us a scan, a 431-line cell in 1 ms), which may make both threads moot
-  result: a node that scans a realistic program inside its period, or a firm no with numbers for each thread
-  notes: the Studio's en0 has 10.0.0.241 and 192.168.127.10 (sudo ifconfig en0 -alias X undoes). Builds: scripts/node-build.sh [bench|modbus|node], NODE_BOARD=poe-iso|p4-eth; flash: scripts/node-flash.sh (the POE-ISO flashes from a session without a prompt).
-  est: 1w
-  difficulty: high
-  id: node-resume
-  asked: 2026-11-03
-  by: claude-session
-  status: blocked
-  depends: node-esp32-close
-
 - [ ] **Vision sources** — deferred per interview; card kept so the signal model leaves room for camera-derived signals.
   est: 2w
   difficulty: high
@@ -772,19 +726,6 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   needs: the walking skeleton only, for now
   notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a reproducible Pi image build script (pi-gen or rpi-image-gen, the box binary and the canvas preinstalled, the systemd unit, first boot pairs with the relay from a one-time code) checked by booting it in QEMU in CI; no enclosure or BOM yet. Est for the skeleton: 2d.
   status: ready
-
-- [ ] **Modbus TCP from the node** — an async twin of helmsman-io's `Transport` over embassy-net's TCP socket behind a feature, `driver::Error` without std::io::Error, DI read and DO write batched to two round trips per scan; 10 ms scan against the E1213 (or the simulator) with DO0-3 looped to DI0-3; comms-loss safe state on yank.
-  needs: flash on USB with Ethernet unplugged, THEN unplug USB, THEN PoE; the E1213's comms-loss safe state configured; a UDP log sink on the Studio
-  notes: Nick 2026-11-02 (board): do it now with my own judgement. After `node-scan-bench`; then the node's own API and site beacon (`fleet-console`'s node half).
-  result: G4 (overruns < 1 % of scans over 10 min) and G5 (the block goes safe within its timeout on Ethernet loss)
-  notes: docs/EDGE.md §Sync scan, async network, Phase 2
-  est: 1d
-  difficulty: med
-  notes: firmware done 2026-11-02 night, PRs #197 (helmsman-modbus no_std codec; helmsman-io frames through it) and #199: 10 ms scan, FC2 read + FC15 write, chase program, UDP report.
-  notes: run 2026-11-03, then PARKED by Nick: the Modbus loop works on the POE2 (lease, chase program on the E1213's DO-00..02); the UDP reports never arrive (the node never takes the Studio's ARP replies); the POE-ISO build (#211) links at 100 Mbit but gets no lease. Findings in docs/EDGE.md Phase 2; picked up again by `node-resume`. G4/G5 not measured (G4 fails anyway at 28 ms scans).
-  status: blocked
-  id: node-modbus
-  depends: node-esp32-close
 
 - [ ] **EtherCAT master via ethercrab** — ethercrab (MIT/Apache-2.0, pure Rust) as the driver; EtherCAT slaves' PDOs mapped into the runtime's %I/%Q. Master only: a Pi cannot be an EtherCAT slave (needs an ESC chip).
   needs: a USB 3 gigabit NIC for the Pi (its one port is the Studio link) and one EtherCAT I/O slave to test against (e.g. a bus coupler + digital I/O terminal)
