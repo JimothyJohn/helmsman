@@ -89,7 +89,23 @@ this; change it here first when a decision changes.
   `device NAME device:PROFILE IDENTITY` with the identity the scan saw,
   and one `ch:` signal per channel named `NAME_channel`. No protocol,
   address, byte order or cycle time is asked. A device the library does
-  not know says so and offers Advanced. **Advanced** (a tick box beside
+  not know says so and offers Advanced. **Device configuration**
+  (2026-11-13, `devconf-canvas`, `device_config.rs`): under an open
+  device whose profile has `configure moxa-e1200`, a Configuration section
+  reads first, in words: the firmware, what the outputs do if the box stops
+  (the device's watchdog), which outputs switch on at power-up, whether
+  EtherNet/IP and the RESTful interface are on, and how many settings differ
+  from the project's saved `ID.devconf` (the lines on demand). One Actions
+  control holds the engineer's work: Save a snapshot; Change a setting (the
+  watchdog and its time, each output's safe value, EtherNet/IP, RESTful),
+  staged on the device and marked "Staged, not applied yet" until Apply;
+  Apply (restart), which says first that the device is offline for about
+  21 s and, when the box answers 409, names the modules it would interrupt
+  and asks again; Restore from snapshot (the IP address stays as it is);
+  the stored console password (write-only, the field never shows a value)
+  and Change the console's password. Everyone else sees the controls
+  disabled with the reason as the tooltip. Errors are the box's own words.
+  **Advanced** (a tick box beside
   Scan, off by default, remembered in the browser) is the older way: a
   right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address

@@ -5285,4 +5285,384 @@ mod glyph_library {
     }
 }
 
+/// A device's own configuration on the Devices tab (`device_config.rs`).
+mod devconf {
+    use super::Harness;
+    use crate::app::App;
+    use crate::box_projects::{Buf, OpenProject, PCall, PReq};
+    use crate::box_tests::{Bench, watch};
+    use crate::device_config::ConfigOp;
+    use crate::review::{Answer, Session};
+
+    const MAP: &str = "device rio device:moxa-e1213 mac=00-90-e8-7e-af-be\nin part bool rio ch:DI-04\n\
+                       device plain device:other-box mac=00-90-e8-7e-af-bf\nin other bool plain ch:DI-00\n";
+    const SECRET: &str = "hunter2-secret";
+
+    fn buf(text: &str) -> Buf {
+        Buf {
+            text: text.into(),
+            base: text.into(),
+            loaded: true,
+            ..Buf::default()
+        }
+    }
+
+    fn facts() -> String {
+        r#"{"device":"rio","facts":{"firmware":"V3.1",
+            "watchdog":{"enabled":false,"value":"0","label":"Disabled"},
+            "outputs":[
+              {"channel":"DO-00","safe":{"value":"0"},"power_on":{"value":"1"}},
+              {"channel":"DO-01","safe":{"value":"0"},"power_on":{"value":"1"}},
+              {"channel":"DO-02","safe":{"value":"0"},"power_on":{"value":"0"}}],
+            "eip_enabled":false,"rest_enabled":true},
+            "snapshot":{"file":"rio.devconf","version":"v","bytes":9},
+            "drift":{"changed":[{"before":"A=1","after":"A=2"}],"added":["B=2"],"removed":["C=3"]},
+            "password_stored":true}"#
+            .into()
+    }
+
+    /// A signed-in box view with a project whose map has a configurable
+    /// device (`rio`) and one that is not (`plain`), the Devices tab open.
+    fn open(role: &str) -> Harness {
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        let v = h.app.boxv.as_mut().unwrap();
+        v.state = state;
+        v.projects.available = Some(true);
+        // The app hands the box view the review view's session each frame.
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("alice".into()),
+            role: role.into(),
+        });
+        let v = h.app.boxv.as_mut().unwrap();
+        let mut o = OpenProject {
+            name: "demo".into(),
+            ..OpenProject::default()
+        };
+        o.bufs.insert("io.map".into(), buf(MAP));
+        o.bufs.insert(
+            "moxa-e1213.device".into(),
+            buf("helmsman-device 1\nvendor Moxa\nconfigure moxa-e1200\n"),
+        );
+        o.bufs.insert(
+            "other-box.device".into(),
+            buf("helmsman-device 1\nvendor Other\n"),
+        );
+        v.projects.open = Some(o);
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.3);
+        h
+    }
+
+    fn sent(h: &mut Harness) -> Vec<PReq> {
+        h.frame(vec![]);
+        std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
+    }
+
+    fn answer(h: &mut Harness, op: ConfigOp, status: u16, body: &str) {
+        let ctx = h.ctx.clone();
+        let a = Answer {
+            status,
+            retry_after: None,
+            body: body.into(),
+        };
+        let t = h.time;
+        h.app.boxv.as_mut().unwrap().step_all(
+            &ctx,
+            Vec::new(),
+            vec![(PCall::Config("rio".into(), op), a)],
+            t,
+        );
+        h.wait(0.2);
+    }
+
+    /// All the text the last frame drew.
+    fn texts(h: &mut Harness) -> String {
+        fn walk(s: &eframe::egui::Shape, out: &mut String) {
+            match s {
+                eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                eframe::egui::Shape::Text(t) => {
+                    out.push_str(t.galley.text());
+                    out.push('\n');
+                }
+                _ => {}
+            }
+        }
+        // An opening window draws nothing on its first frame.
+        h.wait(0.1);
+        let mut out = String::new();
+        for c in &h.shapes {
+            walk(&c.shape, &mut out);
+        }
+        out
+    }
+
+    fn config_calls(reqs: &[PReq]) -> Vec<(&'static str, String, String)> {
+        reqs.iter()
+            .filter(|r| matches!(r.call, PCall::Config(..)))
+            .map(|r| {
+                (
+                    r.method,
+                    r.url.clone(),
+                    r.body
+                        .as_ref()
+                        .map(|b| String::from_utf8_lossy(b).into_owned())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    /// Reads the configuration of `rio` only: its profile names a configurator,
+    /// the other's does not.
+    fn ready(role: &str) -> Harness {
+        let mut h = open(role);
+        let first = sent(&mut h);
+        assert_eq!(
+            config_calls(&first),
+            [("GET", "/api/devices/rio/config".to_string(), String::new())],
+            "one read, for the device whose profile has a configuration"
+        );
+        answer(&mut h, ConfigOp::Read, 200, &facts());
+        let _ = sent(&mut h);
+        h
+    }
+
+    #[test]
+    fn the_section_is_for_a_device_with_configuration_and_reads_first_in_plain_words() {
+        let mut h = ready("engineer");
+        assert!(h.has("config actions rio"));
+        assert!(
+            !h.has("config actions plain"),
+            "a device without configuration has no section"
+        );
+        let t = texts(&mut h);
+        for want in [
+            "Outputs hold their state if this box stops: the device's watchdog is off.",
+            "DO-00 and DO-01 switch on at power-up.",
+            "EtherNet/IP is off on the device.",
+            "firmware V3.1",
+        ] {
+            assert!(t.contains(want), "{want:?} not in:\n{t}");
+        }
+        assert!(!t.contains("HTTP"), "no protocol talk");
+        // The box says there is nothing to configure: the section goes.
+        let mut h = open("engineer");
+        answer(
+            &mut h,
+            ConfigOp::Read,
+            404,
+            r#"{"error":"x","code":"not_configurable"}"#,
+        );
+        assert!(!h.has("config actions rio"));
+    }
+
+    #[test]
+    fn drift_counts_in_words_and_shows_its_lines_on_demand() {
+        let mut h = ready("engineer");
+        assert!(texts(&mut h).contains("3 settings differ from the project's saved configuration"));
+        assert!(!texts(&mut h).contains("A=2"));
+        h.press("config drift rio");
+        h.wait(0.2);
+        let t = texts(&mut h);
+        assert!(t.contains("A=2") && t.contains("B=2") && t.contains("C=3"), "{t}");
+    }
+
+    #[test]
+    fn the_panel_keeps_its_width_with_the_section_and_its_lines_open() {
+        let mut h = open("engineer");
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        answer(&mut h, ConfigOp::Read, 200, &facts());
+        h.press("config drift rio");
+        h.press("config actions rio");
+        h.wait(0.3);
+        assert!(
+            (0.0..=8.0).contains(&(h.rect("left").right() - left.right())),
+            "the left pane grew"
+        );
+        assert!(
+            (0.0..=8.0).contains(&(right.left() - h.rect("right").left())),
+            "the right panel grew"
+        );
+    }
+
+    #[test]
+    fn an_operator_cannot_act_and_is_told_why() {
+        let mut h = ready("operator");
+        assert!(h.has("config locked rio"));
+        h.press("config actions rio");
+        h.press("config item snapshot");
+        h.press("config item apply");
+        assert!(config_calls(&sent(&mut h)).is_empty(), "nothing was sent");
+        assert!(!h.has("config form"), "no question opened");
+    }
+
+    #[test]
+    fn an_engineer_saves_a_snapshot() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item snapshot");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            (calls[0].0, calls[0].1.as_str()),
+            ("POST", "/api/devices/rio/config/snapshot")
+        );
+    }
+
+    #[test]
+    fn a_restart_says_the_outage_first_and_asks_again_when_modules_are_interrupted() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item apply");
+        assert!(texts(&mut h).contains("offline for about 21 seconds"));
+        assert!(
+            config_calls(&sent(&mut h)).is_empty(),
+            "nothing before the confirmation"
+        );
+        h.press("config confirm");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(
+            (calls[0].0, calls[0].1.as_str(), calls[0].2.as_str()),
+            ("POST", "/api/devices/rio/config/restart", "{}")
+        );
+        assert!(
+            texts(&mut h).contains("restarting"),
+            "the device is shown restarting"
+        );
+        answer(
+            &mut h,
+            ConfigOp::Restart,
+            409,
+            r#"{"error":"the project reads it","code":"interrupts","modules":["fill","mix"]}"#,
+        );
+        let t = texts(&mut h);
+        assert!(t.contains("fill, mix"), "names the modules: {t}");
+        assert!(!t.contains("409"), "no raw status");
+        assert!(
+            config_calls(&sent(&mut h)).is_empty(),
+            "asks again before resending"
+        );
+        h.press("config confirm");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(calls[0].2, r#"{"interrupts":true}"#);
+        answer(
+            &mut h,
+            ConfigOp::Restart,
+            200,
+            r#"{"restarted":true,"took_ms":21000}"#,
+        );
+        assert!(texts(&mut h).contains("Applied."));
+    }
+
+    #[test]
+    fn a_refusal_is_shown_in_the_boxs_words() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item snapshot");
+        let _ = sent(&mut h);
+        answer(
+            &mut h,
+            ConfigOp::Snapshot,
+            409,
+            r#"{"error":"No project is running.","code":"no_project"}"#,
+        );
+        let t = texts(&mut h);
+        assert!(t.contains("No project is running."), "{t}");
+        assert!(!t.contains("409"));
+    }
+
+    #[test]
+    fn a_change_is_staged_and_says_so_until_a_restart() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item settings");
+        h.press("config safe DO-02");
+        h.press("config stage");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(calls[0].1, "/api/devices/rio/config/set");
+        assert!(
+            calls[0].2.contains("11_safeM.htm") && calls[0].2.contains(r#""SetSM02":"1""#),
+            "{}",
+            calls[0].2
+        );
+        assert!(!texts(&mut h).contains("Staged, not applied yet"));
+        answer(&mut h, ConfigOp::Set, 200, r#"{"staged":true,"diff":{}}"#);
+        assert!(texts(&mut h).contains("Staged, not applied yet"));
+        assert!(h.has("config staged rio"));
+        // The read after it, then a restart clears the note.
+        let _ = sent(&mut h);
+        answer(&mut h, ConfigOp::Restart, 200, r#"{"restarted":true}"#);
+        assert!(!texts(&mut h).contains("Staged, not applied yet"));
+    }
+
+    #[test]
+    fn a_restore_keeps_the_ip_and_asks_before_it_runs() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item restore");
+        assert!(texts(&mut h).contains("IP address stays as it is"));
+        assert_eq!(config_calls(&sent(&mut h)).len(), 0);
+        h.press("config confirm");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(calls[0].1, "/api/devices/rio/config/import");
+        assert_eq!(
+            calls[0].2, r#"{"from":"snapshot"}"#,
+            "the network overwrite is never sent"
+        );
+    }
+
+    #[test]
+    fn the_password_field_never_shows_a_stored_value_or_what_was_typed_afterwards() {
+        let mut h = ready("engineer");
+        h.press("config actions rio");
+        h.press("config item password");
+        assert!(texts(&mut h).contains("A password is stored."));
+        h.press("config password field");
+        h.frame(vec![eframe::egui::Event::Text(SECRET.into())]);
+        h.frame(vec![]);
+        assert!(!texts(&mut h).contains(SECRET), "typed text is masked");
+        h.press("config password go");
+        let calls = config_calls(&sent(&mut h));
+        assert_eq!(
+            (calls[0].0, calls[0].1.as_str()),
+            ("PUT", "/api/devices/rio/config/password")
+        );
+        assert!(calls[0].2.contains(SECRET), "the box gets it");
+        answer(&mut h, ConfigOp::SetPassword, 200, r#"{"password_stored":true}"#);
+        assert!(!texts(&mut h).contains(SECRET));
+        assert!(!format!("{:?}", h.app.boxv.as_ref().unwrap().devices_ui.config).contains(SECRET));
+        // Opened again, the field is empty.
+        h.press("config actions rio");
+        h.press("config item password");
+        assert!(!texts(&mut h).contains(SECRET));
+        let _ = sent(&mut h);
+        let mut sent_again = false;
+        h.press("config password field");
+        h.frame(vec![]);
+        if h.has("config password go") {
+            h.press("config password go");
+            sent_again = !config_calls(&sent(&mut h)).is_empty();
+        }
+        assert!(!sent_again, "an empty field sends nothing");
+    }
+
+    #[test]
+    fn a_failed_read_says_why_and_can_be_asked_again() {
+        let mut h = open("engineer");
+        let _ = sent(&mut h);
+        answer(
+            &mut h,
+            ConfigOp::Read,
+            502,
+            r#"{"error":"The device did not answer.","code":"unreachable"}"#,
+        );
+        assert!(texts(&mut h).contains("The device did not answer."));
+        h.press("config again rio");
+        assert_eq!(config_calls(&sent(&mut h)).len(), 1);
+    }
+}
+
 mod shell;

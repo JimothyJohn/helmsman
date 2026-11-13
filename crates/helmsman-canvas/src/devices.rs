@@ -862,6 +862,8 @@ pub struct DevicesUi {
     /// Where the box's EtherNet/IP adapter listens, while it is on (the
     /// box view fills it in each frame; the playground has none).
     pub adapter: Option<String>,
+    /// A device's own configuration (`device_config.rs`), on a box.
+    pub config: crate::device_config::ConfigUi,
 }
 
 impl DevicesUi {
@@ -1138,6 +1140,7 @@ impl DevicesUi {
             if folded {
                 continue;
             }
+            self.config.section(ui, chrome, &n.name);
             for p in &n.points {
                 let value = p.value.map_or(String::new(), |v| format!(" = {}", show(Some(v))));
                 let text = format!("{:<3} {}  {}{value}", p.dir, p.signal, p.point);

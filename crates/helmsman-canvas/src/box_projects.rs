@@ -130,6 +130,9 @@ pub enum PCall {
     /// `GET /api/devices/library?vendor=&product=`: a found device's
     /// profile for the quick form (answered by the view, not here).
     Library,
+    /// A device's own configuration (`/api/devices/{id}/config...`),
+    /// answered by the Devices tab (`device_config.rs`).
+    Config(String, crate::device_config::ConfigOp),
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -452,6 +455,11 @@ impl BoxProjects {
         let mut s = Self::default();
         s.relist();
         s
+    }
+
+    /// Queues a call made elsewhere (the Devices tab's configuration).
+    pub fn enqueue(&mut self, r: PReq) {
+        self.queue.push(r);
     }
 
     /// What to send now.
@@ -1772,6 +1780,7 @@ impl BoxProjects {
             | PCall::Trend
             | PCall::Discover
             | PCall::Library
+            | PCall::Config(..)
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {
