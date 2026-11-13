@@ -446,7 +446,7 @@ fn reads_with_a_session_describe_the_box() {
 
     assert_eq!(
         get(b.addr, "/api/devices").json(),
-        json!([{"name": "box", "state": "unknown"}])
+        json!([{"name": "box", "state": "unknown", "configurator": null}])
     );
     assert_eq!(get(b.addr, "/api/proposals").json(), json!([]));
     assert_eq!(get(b.addr, "/api/audit").json(), json!([]));

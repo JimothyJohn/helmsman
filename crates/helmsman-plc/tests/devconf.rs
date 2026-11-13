@@ -221,7 +221,7 @@ impl Bench {
         let shared = Shared {
             catalog,
             live: Arc::new(Live::default()),
-            devices: Arc::new(Devices::new(["box".to_string(), "moxa".to_string()])),
+            devices: Arc::new(Devices::new(["box", "moxa", "plain", "bad"].map(String::from))),
             audit: Box::new(MemAudit::new(100_000)),
             proposals: Box::new(MemProposals::new(1000)),
             running: Some(running),
@@ -1284,4 +1284,22 @@ fn every_write_is_audited_with_the_person_and_reads_are_not() {
         "{}",
         entries[0]
     );
+}
+
+#[test]
+fn the_device_list_names_each_configurator_without_touching_a_unit() {
+    let b = Bench::new(Use::Free);
+    let before = b.sim.requests().len();
+    let list = b.read("/api/devices").json();
+    let by = |n: &str| list.as_array().unwrap().iter().find(|d| d["name"] == n).cloned();
+    assert_eq!(by("moxa").unwrap()["configurator"], "moxa-e1200");
+    for none in ["box", "plain", "bad"] {
+        assert!(by(none).unwrap()["configurator"].is_null(), "{none}");
+    }
+    assert_eq!(
+        b.sim.requests().len(),
+        before,
+        "the list made no request to the unit"
+    );
+    assert_eq!(b.sim.requests().len(), before);
 }
