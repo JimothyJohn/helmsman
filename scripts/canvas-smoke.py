@@ -78,6 +78,7 @@ MESSAGES = (330, 640, 700, 200)
 # The tabs are glyphs (2026-11-11): the left pane's Code, the right
 # panel's I/O and Agent, the bottom panel's Trend and Messages.
 TAB_CODE = (106, 71)
+TAB_HISTORY = (148, 71)
 # The fold arrow of the Code tab's second line, in the gutter.
 FOLD_LINE_2 = (14, 172)
 TAB_IO = (1230, 71)
@@ -149,6 +150,8 @@ def playground(ctx, base, out):
     r.wait(3000)
     r.shot("editor")
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT)
+    # The History tab (2026-11-13): a built-in example has no versions.
+    r.click(*TAB_HISTORY); r.wait(600); r.shot("history-tab")
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT)
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.

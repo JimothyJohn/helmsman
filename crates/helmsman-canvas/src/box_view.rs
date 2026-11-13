@@ -1901,7 +1901,6 @@ impl Body for BoxView {
                 running: open
                     .as_ref()
                     .is_some_and(|o| self.projects.running.as_deref() == Some(o.name.as_str())),
-                history: &self.projects.history,
                 deploy: self.writable().and_then(|()| {
                     if self.busy() {
                         Err("A save or deploy is under way.".into())
@@ -1956,6 +1955,24 @@ impl Body for BoxView {
             if let Some(a) = self.files_ui.blank_menu(ui, chrome, &write, can_paste) {
                 self.project_act(a);
             }
+        }
+    }
+
+    fn history(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if self.projects.open.is_none() {
+            ui.label(
+                RichText::new("Open a project to see its versions.").color(crate::theme::theme(ui).muted),
+            )
+            .tip("Each project keeps every saved version on the box.");
+            return;
+        }
+        // On a box a version runs only once deployed: a pick opens its
+        // details, with Restore for an engineer.
+        let rows = self.projects.history.clone();
+        if let Some(crate::history_ui::Pick::Show(n) | crate::history_ui::Pick::Details(n)) =
+            crate::history_ui::tab_ui(ui, chrome, &rows, None)
+        {
+            self.project_act(crate::projects::Act::ShowRevision(n));
         }
     }
 

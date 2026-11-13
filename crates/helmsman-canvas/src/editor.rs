@@ -131,11 +131,13 @@ pub enum Pane {
     Devices,
     /// The Structured Text editor.
     Code,
+    /// The open project's revisions, to step through (Nick, 2026-11-13).
+    History,
 }
 
 impl Pane {
     /// Every tab, left to right.
-    pub const ALL: [Self; 3] = [Self::Files, Self::Devices, Self::Code];
+    pub const ALL: [Self; 4] = [Self::Files, Self::Devices, Self::Code, Self::History];
 
     /// The tab button's tooltip.
     #[must_use]
@@ -146,6 +148,9 @@ impl Pane {
                 "Devices: the I/O map, the remote modules and their points (Alt+Shift+4 opens or shuts it)."
             }
             Self::Code => "Code: the Structured Text of the open file (Alt+Shift+1 opens or shuts it).",
+            Self::History => {
+                "History: every saved version of the open project, newest at the top. Click one, or step with the arrows, to run it."
+            }
         }
     }
 
@@ -155,6 +160,7 @@ impl Pane {
             Self::Files => Icon::Files,
             Self::Devices => Icon::Devices,
             Self::Code => Icon::Code,
+            Self::History => Icon::History,
         }
     }
 
@@ -163,6 +169,7 @@ impl Pane {
             Self::Files => "files",
             Self::Devices => "devices",
             Self::Code => "code",
+            Self::History => "history",
         }
     }
 }
@@ -303,6 +310,7 @@ impl Chrome {
                 Some(("pane", "code") | ("st", "1")) => c.pane = Pane::Code,
                 Some(("pane", "files")) => c.pane = Pane::Files,
                 Some(("pane", "devices")) => c.pane = Pane::Devices,
+                Some(("pane", "history")) => c.pane = Pane::History,
                 Some(("scan", v)) => c.scan = v == "1",
                 Some(("trend", v)) => c.trend = v == "1",
                 Some(("light", v)) => c.light = v == "1",
@@ -640,14 +648,17 @@ pub trait Body {
     /// Whether one of them is an error that still stands (a fault, a
     /// refused save or deploy): the Messages tab stays red while it does.
     fn alarm(&self) -> bool;
-    /// The left pane's Files tab: the projects, the open one's files and
-    /// the program tree.
+    /// The left pane's Files tab: the projects, the open one's files under
+    /// it.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The left pane's Devices tab: the I/O map's devices and their
     /// points, live (`crate::devices`).
     fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The left pane's Code tab: the ST editor (read-only on a box).
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// The left pane's History tab: the open project's revisions, newest
+    /// first, each a short description of its change.
+    fn history(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Trend along the bottom: pins and the plot.
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Messages tab beside it: the view's log (`messages::Log`).
@@ -793,6 +804,11 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                             .show(ui, |ui| body.devices(ui, chrome));
                     }
                     Pane::Code => body.st(ui, chrome),
+                    Pane::History => {
+                        egui::ScrollArea::vertical()
+                            .id_salt("ed-history-scroll")
+                            .show(ui, |ui| body.history(ui, chrome));
+                    }
                 }
                 t
             } else {
