@@ -33,6 +33,16 @@ thread_local! {
     static TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
+/// The box this page watches, in words: the `?box=` origin, else this
+/// page's own host and port.
+#[must_use]
+pub fn box_address() -> String {
+    BASE.with(|b| b.borrow().clone())
+        .or_else(|| web_sys::window().and_then(|w| w.location().host().ok()))
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "this address".into())
+}
+
 /// Sends `token` as `Authorization: Bearer` on every call to the base
 /// origin from now on (`None`: none). The node answers a preflight for
 /// it; a box does not, so this is for a node today.

@@ -1589,6 +1589,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-dhcp"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "helmsman-diagram"
 version = "0.1.0"
 dependencies = [
@@ -1650,9 +1657,11 @@ dependencies = [
  "helmsman-adapter",
  "helmsman-agent",
  "helmsman-devconf",
+ "helmsman-dhcp",
  "helmsman-diagram",
  "helmsman-iec",
  "helmsman-io",
+ "helmsman-l2",
  "helmsman-project",
  "helmsman-proto",
  "miniz_oxide 0.9.1",

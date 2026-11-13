@@ -513,6 +513,19 @@ impl BoxView {
         self.run(ctx, cmds);
     }
 
+    /// While the page simulates: takes in the answer to the second look
+    /// for the box ([`crate::remote::BoxState::probe_at`]) and sends it
+    /// when due. Nothing else of the box moves.
+    pub fn probe_tick(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let (msgs, _) = self.inbox();
+        for m in msgs {
+            self.state.apply(m, now);
+        }
+        let cmds = self.state.poll(now);
+        self.run(ctx, cmds);
+    }
+
     /// Takes in what arrived and carries out what is due, with nothing
     /// drawn (the Monitor draws from the same state).
     pub fn tick(&mut self, ctx: &egui::Context) {
@@ -830,7 +843,7 @@ impl BoxView {
         let at = self.agent_at;
         match o.kind {
             Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
-            Kind::Refused | Kind::Failed => self.log.warning(at, line),
+            Kind::Refused | Kind::Failed => self.log.error(at, line),
         }
     }
 
@@ -922,6 +935,8 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
             decided: self.decided.clone(),
+            swap: None,
+            room_below: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
@@ -967,7 +982,8 @@ impl BoxView {
             }
             Some(Act::Undo) => self.undo_change(),
             Some(Act::Review(id)) => self.wants_review = Some(id),
-            None => {}
+            // A box's change goes through a deploy: no Before / After here.
+            Some(Act::Show(_)) | None => {}
         }
     }
 

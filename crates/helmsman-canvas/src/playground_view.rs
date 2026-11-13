@@ -1069,13 +1069,19 @@ impl PlaygroundView {
         let Some(o) = &self.instruct.outcome else { return };
         let at = self.session.now_ms as f64 / 1000.0;
         let mut line = o.status.clone();
+        if let Some(w) = &o.why {
+            line.push_str(" Why: ");
+            line.push_str(w);
+        }
         for p in &o.problems {
             line.push(' ');
             line.push_str(p);
         }
+        // A refusal is an error: the Messages count it in red and open
+        // (Nick, 2026-11-13: errors go there, not in the Agent tab).
         match o.kind {
             Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
-            Kind::Refused | Kind::Failed => self.log.warning(at, line),
+            Kind::Refused | Kind::Failed => self.log.error(at, line),
         }
     }
 
@@ -1100,8 +1106,44 @@ impl PlaygroundView {
             .filter(|c| c.file == self.proj.current)
             .map(|c| c.lines().clone());
         if let Some(v) = &mut self.viewer {
-            v.baseline = c.and_then(|c| c.baseline.clone());
+            v.baseline = c.and_then(crate::agent_marks::AgentChange::against);
         }
+    }
+
+    /// Shows `side` of the Agent's last change in its file, compiled and
+    /// running, marked against the other side; nothing is saved (Save
+    /// keeps the version shown).
+    pub fn show_side(&mut self, side: crate::agent_marks::Side) {
+        let Some(c) = self.agent_change.as_mut() else {
+            return;
+        };
+        if c.project != self.proj.open || c.side == side {
+            return;
+        }
+        c.side = side;
+        let text = c.text(side).to_string();
+        let file = c.file.clone();
+        self.proj.files.insert(file.clone(), text);
+        self.proj.current = file;
+        self.reload_running();
+    }
+
+    /// [`Self::reload`], then running if it builds: a change is seen
+    /// working on the canvas at once.
+    fn reload_running(&mut self) {
+        self.reload();
+        if self.session.build.as_ref().is_some_and(|b| b.module.is_some()) {
+            self.session.set_running(true);
+        }
+    }
+
+    /// The Before / After toggle's state: the side shown while the Agent's
+    /// change is the open project's and its file still shows one side.
+    fn swap(&self) -> Option<crate::agent_marks::Side> {
+        let c = self.agent_change.as_ref()?;
+        (c.project == self.proj.open
+            && c.holds(&self.proj.open, self.proj.files.get(&c.file).map(String::as_str)))
+        .then_some(c.side)
     }
 
     /// A checked answer into the open project: unsaved edits are saved
@@ -1155,7 +1197,10 @@ impl PlaygroundView {
             .take(120)
             .collect();
         self.proj.save_as(&what, Some(&apply.record));
-        self.reload();
+        self.reload_running();
+        if let Some(c) = &mut self.agent_change {
+            c.after_module = self.viewer.as_ref().map(|v| std::rc::Rc::new(v.module.clone()));
+        }
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),
@@ -2083,11 +2128,14 @@ impl PlaygroundView {
                 blocked: self.chat.route().err().map(str::to_string),
                 undo_blocked: self.undo_blocked(),
                 decided: std::collections::BTreeMap::new(),
+                swap: self.swap(),
+                room_below: Some(if free { 60.0 } else { 0.0 }),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
                 Some(crate::instruct::Act::Stop) => self.stop_answer(),
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
+                Some(crate::instruct::Act::Show(side)) => self.show_side(side),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
             if free {

@@ -1101,13 +1101,14 @@ END_PROGRAM",
         assert!(!h.has("dirty"), "saved from the File menu");
     }
 
-    /// Nick, 2026-11-05: no chat. The Agent tab is the instruction box,
-    /// Send, and after an answer a status line with the reason and Undo;
-    /// an instruction typed and sent updates the file, and Undo from the
-    /// tab puts it back. The hit stays "tab claude" (the stored key).
+    /// Nick, 2026-11-05: no chat; 2026-11-13: the box takes the tab's
+    /// height, a change that lands is seen on the canvas (running, marked)
+    /// and not described in the tab, one that fails is an error in the
+    /// Messages with the box outlined red, and Before / After swaps the
+    /// file at once, marked each way. The hit stays "tab claude".
     #[test]
-    fn the_agent_tab_is_an_instruction_box_a_status_line_and_undo() {
-        use crate::instruct::Kind;
+    fn the_agent_tab_is_a_tall_box_and_before_and_after_swap_at_once() {
+        use crate::agent_marks::Side;
         use crate::instruct_tests::{LAMP, follows};
         let mut h = Harness::new(App::sim());
         h.press("tab claude");
@@ -1121,11 +1122,24 @@ END_PROGRAM",
             v.open_project("mine");
         }
         h.wait(0.2);
-        for gone in ["page prev", "use code", "agent new", "agent result", "agent undo"] {
+        for gone in [
+            "page prev",
+            "use code",
+            "agent new",
+            "agent result",
+            "agent undo",
+            "agent before",
+        ] {
             assert!(!h.has(gone), "{gone}");
         }
         assert!(h.has("agent instruction") && h.has("agent send"));
-        h.click(h.rect("agent instruction").center());
+        let field = h.rect("agent instruction");
+        assert!(
+            field.height() > 0.5 * h.rect("right").height(),
+            "the box takes the tab's height: {field:?} in {:?}",
+            h.rect("right")
+        );
+        h.click(field.center());
         h.frame(vec![Event::Text("comment it".into())]);
         h.press("agent send");
         h.frame(vec![]);
@@ -1140,21 +1154,119 @@ END_PROGRAM",
         );
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
-        assert!(h.has("agent result") && h.has("agent why") && h.has("agent undo"));
         {
             let v = h.app.sim.as_ref().unwrap();
             assert_eq!(v.proj.files["main.st"], new);
-            assert_eq!(
-                v.instruct.outcome.as_ref().map(|o| o.status.as_str()),
-                Some("Updated main.st: 1 scenario passed, kept as a test.")
-            );
+            assert!(v.session.running, "the change runs at once");
+            let logged = v
+                .log
+                .iter()
+                .map(|e| e.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(logged.contains("Why: it says why the lamp is on."), "{logged}");
         }
-        h.press("agent undo");
+        assert!(
+            !h.has("agent result"),
+            "a change that landed is not described in the tab"
+        );
+        assert!(h.has("agent before") && h.has("agent after"));
+        assert!(
+            h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
+            "After is marked"
+        );
+        // Before: the old file, running, marked against the new.
+        h.press("agent before");
+        h.wait(0.2);
+        {
+            let v = h.app.sim.as_ref().unwrap();
+            assert_eq!(v.proj.files["main.st"], LAMP);
+            assert_eq!(v.agent_change.as_ref().map(|c| c.side), Some(Side::Before));
+            assert!(v.session.running);
+        }
+        assert!(
+            h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(LAMP)),
+            "Before is marked"
+        );
+        // And back, as often as wanted.
+        h.press("agent after");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.files["main.st"], new);
+        h.press("agent before");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.files["main.st"], LAMP);
+        h.press("agent after");
+        h.wait(0.2);
+        // An edit ends the swap: the file is the engineer's again.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .proj
+            .files
+            .insert("main.st".into(), format!("{new}\n"));
+        h.wait(0.2);
+        assert!(!h.has("agent before"), "an edit ends Before / After");
+    }
+
+    /// A refused answer: an error in the Messages (red count, opened), the
+    /// box outlined, and one line in the tab that opens the Messages.
+    #[test]
+    fn a_refused_answer_is_an_error_in_the_messages_and_one_red_line() {
+        use crate::instruct_tests::LAMP;
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(crate::claude::Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.2);
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("break it".into())]);
+        h.press("agent send");
+        h.frame(vec![]);
+        let broken = "Why: no.\n\n```st\nPROGRAM lamp\nlamp := ;\nEND_PROGRAM\n```\n";
+        for _ in 0..3 {
+            crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), broken);
+            h.frame(vec![]);
+        }
         h.wait(0.2);
         let v = h.app.sim.as_ref().unwrap();
-        assert_eq!(v.proj.files["main.st"], LAMP);
-        assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
-        assert!(!h.has("agent undo"));
+        assert_eq!(v.proj.files["main.st"], LAMP, "nothing written");
+        assert!(v.log.errors() >= 1, "an error, so the Messages count it red");
+        assert!(h.has("agent result"));
+        h.app.chrome.trend = false;
+        h.press("agent result");
+        assert!(h.app.chrome.trend, "the line opens the Messages");
+        assert_eq!(h.app.chrome.bottom, crate::editor::Bottom::Messages);
+    }
+
+    /// Shift+Enter goes on with a list, and ends it on an empty item.
+    #[test]
+    fn a_list_goes_on_and_ends_on_an_empty_item() {
+        use crate::instruct::continue_list;
+        assert_eq!(continue_list("- latch the lamp"), ("\n- ".into(), 0));
+        assert_eq!(continue_list("  * start wins"), ("\n  * ".into(), 0));
+        assert_eq!(continue_list("3. then stop"), ("\n4. ".into(), 0));
+        assert_eq!(continue_list("9) last"), ("\n10) ".into(), 0));
+        assert_eq!(continue_list("plain words"), ("\n".into(), 0));
+        assert_eq!(continue_list("    indented"), ("\n    ".into(), 0));
+        assert_eq!(
+            continue_list("- "),
+            (String::new(), 2),
+            "an empty item ends the list"
+        );
+        assert_eq!(continue_list("  12. "), (String::new(), 6));
+        assert_eq!(
+            continue_list("2024 was a year"),
+            ("\n".into(), 0),
+            "a number is not a list"
+        );
     }
 
     /// Nick, 2026-11-08: Enter in the chat box sends; Shift+Enter and
@@ -1225,7 +1337,7 @@ END_PROGRAM",
         let states = [
             (
                 outcome(Kind::Applied, &format!("Updated {word}.st: 2 scenarios passed")),
-                "agent why",
+                "agent undo",
             ),
             (outcome(Kind::Refused, &long), "agent result"),
             (outcome(Kind::Said, &long), "agent review"),
@@ -4554,7 +4666,7 @@ mod boxed {
         assert!(
             b.status(t, &Theme::dark())
                 .0
-                .starts_with("● reconnecting (retry in 5s)"),
+                .starts_with("● reconnecting (retry in 2s)"),
             "{:?}",
             b.status(t, &Theme::dark())
         );
@@ -4586,36 +4698,216 @@ mod boxed {
 mod fallback {
     use super::Harness;
     use crate::app::{App, Source};
-    use crate::remote::{Link, Msg, Stream};
+    use crate::box_popup::PROBE_AFTER;
+    use crate::remote::{Fetch, Msg, Probe, Stream};
 
-    /// Nick, 2026-11-01: a page that finds no box runs the simulation
-    /// by itself; a box that answered and went away keeps its view.
-    #[test]
-    fn a_page_no_box_ever_answered_falls_back_to_the_simulation_by_itself() {
+    /// All the text the last frames drew.
+    fn texts(h: &mut Harness) -> String {
+        fn walk(s: &eframe::egui::Shape, out: &mut String) {
+            match s {
+                eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                eframe::egui::Shape::Text(t) => {
+                    out.push_str(t.galley.text());
+                    out.push('\n');
+                }
+                _ => {}
+            }
+        }
+        h.wait(0.1);
+        let mut out = String::new();
+        for c in &h.shapes {
+            walk(&c.shape, &mut out);
+        }
+        out
+    }
+
+    /// The first look failed: the page simulates at once and says so in
+    /// the middle of the screen, then looks once more in the background.
+    fn fell_back() -> Harness {
         let mut h = Harness::new(App::boxed());
         assert_eq!(h.app.source, Source::Box);
         let t = h.time;
         let b = h.app.boxv.as_mut().unwrap();
         assert!(!b.state.ever_connected());
-        for k in 0..3 {
-            b.state.apply(Msg::Failed(Stream::Values), t + f64::from(k));
-        }
-        assert!(matches!(b.state.link(), Link::Unreachable { .. }));
+        // One failure is enough (Nick, 2026-11-13: no waiting twice).
+        b.state.apply(Msg::Failed(Stream::Values), t);
         h.frame(vec![]);
-        assert_eq!(h.app.source, Source::Sim, "the simulation, unasked");
+        assert_eq!(
+            h.app.source,
+            Source::Sim,
+            "the simulation, unasked, on the first failure"
+        );
         h.frame(vec![]);
+        assert!(h.has("popup ok"), "the No box popup is up");
+        let text = texts(&mut h);
+        assert!(text.contains("Simulating in this browser"), "{text}");
+        assert!(text.contains("Looking once more in the background."), "{text}");
+        assert!(
+            h.app.sim.as_ref().is_some_and(|s| s.session.build.is_some()),
+            "the simulation runs meanwhile"
+        );
+        h
+    }
+
+    /// Waits for the second look to go out.
+    fn asked(h: &mut Harness) {
+        assert!(matches!(
+            h.app.boxv.as_ref().unwrap().state.probe(),
+            Probe::Due(_)
+        ));
+        h.wait(PROBE_AFTER + 0.1);
+        assert_eq!(
+            h.app.boxv.as_ref().unwrap().state.probe(),
+            Probe::Asked,
+            "the second look went"
+        );
+    }
+
+    /// Nick, 2026-11-01: a page that finds no box runs the simulation
+    /// by itself; a box that answered and went away keeps its view.
+    #[test]
+    fn a_page_no_box_ever_answered_falls_back_to_the_simulation_by_itself() {
+        let mut h = fell_back();
         let s = h.app.sim.as_ref().expect("running");
         assert!(
             s.notice.as_deref().is_some_and(|n| n.contains("No box answered")),
             "{:?}",
             s.notice
         );
+        h.press("popup ok");
+        h.frame(vec![]);
+        assert!(!h.has("popup ok"), "closed");
         // Back to the box from View stays: the fallback happens once.
         h.press("bar view");
         h.press("view box");
         assert_eq!(h.app.source, Source::Box);
         h.wait(0.2);
         assert_eq!(h.app.source, Source::Box, "not yanked back to the simulation");
+    }
+
+    /// Nick, 2026-11-13: the second look runs in the background once the
+    /// simulation is up; a box found then is offered in a popup.
+    #[test]
+    fn a_box_found_on_the_second_look_is_offered_and_connected_on_a_click() {
+        let mut h = fell_back();
+        asked(&mut h);
+        let t = h.time;
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .state
+            .apply(Msg::Got(Fetch::Modules, Ok(r#"[{"name":"main"}]"#.into())), t);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert!(h.has("popup connect") && h.has("popup keep"), "the Found popup");
+        assert!(!h.has("popup ok"), "it replaces the No box popup");
+        assert!(texts(&mut h).contains("Box found"));
+        assert_eq!(h.app.source, Source::Sim, "nothing moves until asked");
+        h.press("popup connect");
+        assert_eq!(h.app.source, Source::Box);
+        h.frame(vec![]);
+        assert!(
+            !h.app.boxv.as_ref().unwrap().state.paused(),
+            "the box's streams open again"
+        );
+        assert!(!h.has("popup connect"));
+    }
+
+    #[test]
+    fn keep_simulating_closes_the_found_popup_for_good() {
+        let mut h = fell_back();
+        asked(&mut h);
+        let t = h.time;
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .state
+            .apply(Msg::Got(Fetch::Modules, Ok(r#"[{"name":"main"}]"#.into())), t);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h.press("popup keep");
+        h.wait(PROBE_AFTER * 2.0);
+        assert_eq!(h.app.source, Source::Sim);
+        assert!(!h.has("popup connect"), "asked once");
+    }
+
+    /// A slow first look says so in the middle of the screen; a lost box
+    /// says it is reconnecting until it is back, or hidden.
+    #[test]
+    fn connecting_and_a_lost_box_are_said_in_the_middle_of_the_screen() {
+        let mut h = Harness::new(App::boxed());
+        h.frame(vec![]);
+        assert!(!texts(&mut h).contains("Connecting to the box"), "no flash");
+        h.wait(crate::box_popup::CONNECTING_AFTER);
+        assert!(texts(&mut h).contains("Connecting to the box"));
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.state
+            .apply(Msg::Got(Fetch::Modules, Ok(r#"[{"name":"main"}]"#.into())), t);
+        b.state.apply(Msg::Opened(Stream::Values), t);
+        assert!(
+            !texts(&mut h).contains("Connecting to the box"),
+            "gone once the box answers"
+        );
+        // The box goes away: a stream that was delivering is reopened
+        // quietly once, then it is a failure.
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.state.apply(Msg::Failed(Stream::Values), t);
+        b.state.apply(Msg::Failed(Stream::Values), t);
+        let text = texts(&mut h);
+        assert!(text.contains("Reconnecting to the box"), "{text}");
+        assert!(text.contains("keep running on the box"), "{text}");
+        assert_eq!(h.app.source, Source::Box, "a box that answered stays the box");
+        h.press("popup hide");
+        assert!(!texts(&mut h).contains("Reconnecting to the box"), "hidden");
+        // Back on the next retry, then lost again: said again.
+        h.wait(crate::remote::RETRY_SECS);
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.state.apply(Msg::Opened(Stream::Values), t);
+        b.state.apply(
+            Msg::Event(Stream::Values, "values".into(), r#"{"seq":9}"#.into()),
+            t,
+        );
+        h.frame(vec![]);
+        assert_eq!(
+            h.app.boxv.as_ref().unwrap().state.link(),
+            crate::remote::Link::Connected
+        );
+        assert!(!h.app.lost_hidden, "a box that is back resets Hide");
+        let b = h.app.boxv.as_mut().unwrap();
+        // It was delivering: the first end is reopened quietly.
+        b.state.apply(Msg::Failed(Stream::Values), t + 0.2);
+        b.state.apply(Msg::Failed(Stream::Values), t + 0.2);
+        assert!(texts(&mut h).contains("Reconnecting to the box"), "said again");
+    }
+
+    /// The second look finds nothing: the popup says so, and no third look
+    /// goes (the page stays quiet until View › Back to this box).
+    #[test]
+    fn a_second_look_that_finds_nothing_is_said_and_not_repeated() {
+        let mut h = fell_back();
+        asked(&mut h);
+        let t = h.time;
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .state
+            .apply(Msg::Got(Fetch::Modules, Err("HTTP 404".into())), t);
+        h.frame(vec![]);
+        assert_eq!(h.app.boxv.as_ref().unwrap().state.probe(), Probe::Missed);
+        assert!(texts(&mut h).contains("found no box either"));
+        h.wait(PROBE_AFTER * 3.0);
+        assert_eq!(
+            h.app.boxv.as_ref().unwrap().state.probe(),
+            Probe::Missed,
+            "no third look"
+        );
+        assert!(!h.has("popup connect"));
     }
 }
 

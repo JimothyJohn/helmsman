@@ -54,6 +54,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-11
   by: claude-session
 
+- [ ] **Devices tab buttons as glyphs too?** — the glyph sweep (#378, merged 2026-11-13) made the Agent and Help action buttons (Send, Stop, Undo, Ask for help) and the Editor | Monitor switch into glyphs. Words stayed on menus, form labels, dialog confirmations (OK, Cancel, Restore this revision, Use this code), Release on forced inputs, Sign in, Refresh, and the Devices tab's Scan / Edit / Delete / Use this device; the last group only because #375 (device configuration on the Devices tab) had devices.rs open.
+  needs: your call, and #375 landed for the Devices part
+  result: the Devices buttons become glyphs with tooltips (glyphs::action), or the words stay as they are
+  options: Devices buttons as glyphs once #375 lands (recommended) | keep their words | also drop words on dialog confirmations
+  est: 1h
+  difficulty: low
+  id: glyphs-devices-buttons
+  asked: 2026-11-13
+  by: claude-session
+
 ## Needs your hands
 
 - [ ] **Promote the free playground chat: helmsman dev → master** — the playground's Agent tab on the relay's demo function instead of a visitor's key (interview 2026-11-11). Everything else is done: the relay is deployed on OpenRouter with the demo function for https://helmsman.advin.io (agent-relay main, stack updated 2026-11-12 UTC), one real turn through the live demo answered and was counted, and docs/playground is built with the demo's address. The published site still serves the old page until master moves.
@@ -239,6 +249,18 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 1d
   difficulty: low
   id: devconf-agent-tools
+  asked: 2026-11-13
+  by: claude-session
+
+- [ ] **A DHCP server on the box's device port: a block out of the box needs no vendor tool** — Nick, 2026-11-13: users won't preconfigure devices themselves, and PROFINET-first is out (EtherNet/IP and Modbus TCP are what plants run). Turck TBEN blocks ship at rotary position 600 (PGM-DHCP, a DHCP client until given an address) and Murrelektronik IMPACT67 E at 000 (DHCP/BOOTP, helmsman-devices `devices/murrelektronik/impact67-e-series.md`), so a box that answers DHCP on its own I/O network gets them addressed with nobody touching the device. Shape: a DHCPv4 server (RFC 2131 subset: DISCOVER/OFFER/REQUEST/ACK/NAK/RELEASE, plus BOOTP replies for blocks that only send BOOTP), std only like the other protocol crates, a pure state machine with the socket outside it (the `helmsman-profinet` pattern), a fixed lease per MAC kept in the state dir, addresses from a pool the project settings name. A new device's lease shows up as `found` in the Scan (ListIdentity from that address, matched to the library by `cip=`), and the map line the box suggests is `mac=` (`helmsman_io::resolve`), so the lease can move without the project changing. Off by default and per interface: decision (4) of `device-profiles` says the I/O network may be IT's, and a second DHCP server on a plant network is an outage. Before it answers anything it listens for another server's OFFER (sends one DISCOVER of its own) and refuses to start if one exists, says so on the Devices tab, and stops if one appears later. Tests: hostile packets (truncated, option overflow, wrong magic cookie, a flood of DISCOVERs with random MACs against pool exhaustion), the rogue-server check, lease persistence across restarts, and one bench script that gives a TBEN out of the box its address (auto mode refuses LAN listeners: the bench run is Nick's).
+  notes: 2026-11-13: the server itself is crate `helmsman-dhcp` (feat/dhcp-server): the message, the server state machine, the lease file and `guard` (the probe and the other-server check), with property tests; the property test found the pool's take-back handing out another client's reservation, fixed with its regression. Left: the box half (UDP 67 on the named interface, the probe before serving, the lease file in the state dir, the settings and the Devices tab's word for a refused start), then the Scan's `found` from a lease and the `mac=` suggestion.
+  notes: 2026-11-13: Nick: a box setting, not a project's ("a personal preference that will be global to all devices"). The box half is `--dhcp IFACE` (`--dhcp-pool A-B`, default .100-.199 of a /24; `--dhcp-lease S`, default a day): helmsman-plc `dhcp`, both sockets tied to IFACE (helmsman-l2 `bind_to_interface`), a 4 s probe before serving, a stop when another server is heard later, leases in `<state-dir>/dhcp/leases`, `GET /api/dhcp`; tested on loopback. Left: (1) deploy/helmsman-plc.service has `CapabilityBoundingSet=` empty and says every port is above 1024, so `--dhcp` on the Pi needs `CAP_NET_BIND_SERVICE` granted there (Nick's deploy line); (2) the bench run against a TBEN out of the box (Nick: auto mode refuses LAN listeners); (3) the Devices tab's word for a refused or failed server, and leases in the Scan's `found` with a `mac=` line suggested; (4) reservations from the running project's `mac=` device lines.
+  needs: nothing to start; the bench test needs a TBEN-S2-8DXP (helmsman-devices: the first Turck entry)
+  result: a Turck block wired to the box's device port gets its address, shows up in the Scan and is added by click, with no vendor tool, no laptop and no rotary switch touched
+  depends: device-profiles
+  est: 3d
+  difficulty: med
+  id: box-dhcp-server
   asked: 2026-11-13
   by: claude-session
 

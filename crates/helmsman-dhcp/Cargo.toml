@@ -1,0 +1,21 @@
+[package]
+name = "helmsman-dhcp"
+version = "0.1.0"
+description = "A DHCP (IPv4) and BOOTP server for the box's device network, as bytes and a state machine without I/O, no_std"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `no_std + alloc`, no dependencies, no features: the BOOTP/DHCP message,
+# a server that leases a fixed address per Ethernet address, the lease
+# file, and the check for another server on the wire. Every call takes
+# `now`; nothing here opens a socket (the box moves the datagrams on UDP
+# 67/68), so the server is tested once, on the host.
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true

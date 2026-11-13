@@ -154,7 +154,20 @@ this; change it here first when a decision changes.
   the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
-  and the Agent's one-sentence reason. Send updates the open file: one
+  and the Agent's one-sentence reason. In the simulation (Nick,
+  2026-11-13) the box takes the tab's height and scrolls past it; Shift
+  or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
+  empty item) and Tab indents; while the Agent works the box shows the
+  instruction sent, a palette piece's too, greyed. A change that lands
+  runs at once and is seen on the canvas, marked, with nothing written in
+  the tab (its reason goes to the Messages). One that does not is an
+  error in the Messages (their red count, and they open), the box is
+  outlined red, and one red line opens the Messages. Undo is Before /
+  After there: the file swaps at once between the version before the
+  change and the change, compiled and running, each marked green and red
+  against the other; nothing is saved (Save keeps the version shown), and
+  an edit ends the swap. On a box the tab keeps Undo and the three-row
+  box: a box's change goes through a deploy. Send updates the open file: one
   request carries the whole file in its scope, the program and its
   errors, and the last 5 instructions carried out on that file, read back
   from its History revisions. `verify::check` runs the answer on a copy
@@ -198,8 +211,21 @@ this; change it here first when a decision changes.
   diagram too big for the view at that zoom shows its left part and you
   pan, instead of shrinking to one-letter labels. Controls on blocks cut
   their text instead of wrapping it.
-- **The box link's status counts down:** "reconnecting (retry in 5s)",
-  ticking each second; every retry waits 5 s.
+- **The box link's status counts down:** "reconnecting (retry in 2s)",
+  ticking each second; every retry waits 2 s (it was 5 s, too slow:
+  Nick, 2026-11-13).
+- **What happens to the box is said in the middle of the screen**
+  (`box_popup`, Nick, 2026-11-13). A first look that takes over 0.4 s
+  shows "Connecting to the box"; a box that answered and went away shows
+  "Reconnecting to the box" with the countdown (Hide, and Simulate in this
+  browser once it is unreachable). Both are a window that leaves the page
+  usable, so the last diagram can still be read. A page no box answers
+  falls back to the simulation on the first failed look, not the third,
+  and says so in a modal; once the simulation is up a second look goes
+  in the background, one module list read, and a box that answers then
+  is offered in a modal: Connect to the box, or Keep simulating. Nothing
+  answers the second look: the modal says so, and no third look goes
+  until View › Back to this box.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
