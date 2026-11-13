@@ -3068,6 +3068,13 @@ signal bound to the device, the call is 409 `interrupts` naming the modules,
 unless the request says `interrupts: true`. (Writes with `set` stage only and
 are not gated.)
 
+**Which devices have configuration.** Each entry of `GET /api/devices` carries
+`configurator`: the `configure` name of the device's loaded profile
+(`"moxa-e1200"`) or `null`. It comes from the profile the box loaded with the
+running map alone, with no contact with the unit and no device lock, so a
+client learns what can be configured with one cheap read and then calls
+`GET .../config` for the devices that name one.
+
 **While a restart or an import runs**, `GET /api/devices` lists that device as
 `{state: "down", health: "lost", restarting: true, error: "restarting for its
 configuration"}`, whatever its link reports meanwhile: a planned outage, not a
