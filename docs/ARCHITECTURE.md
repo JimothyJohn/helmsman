@@ -1929,7 +1929,21 @@ in `relay_usage`; the box treats it as a label.
   `check_module` (`POST /api/proposals/check`), `simulate_module`
   (`POST /api/proposals/replay`), `propose_change` (`POST /api/proposals`,
   only for a draft that checks clean and has been simulated; param changes
-  as param proposals). A draft reaches the proposal list only when
+  as param proposals), and two reads of a device's own configuration
+  (`GET /api/devices/config`, `GET /api/devices/{id}/config`):
+  `list_device_configs` (which devices have configuration, and their
+  configurator) and `read_device_config` (the facts: firmware,
+  communication watchdog, each output's safe value and power-on state,
+  EtherNet/IP and RESTful on or off; whether a snapshot exists and the
+  drift from it; whether a console password is stored, as a yes or no). A
+  device without configuration is answered "this device has no
+  configuration", an unknown id with a refusal. The result carries an
+  allow-list of keys and drops any key that looks like a secret, a second
+  lock behind the box view, which has no password field; the password
+  reaches no result, description, context or log. The tools say plainly
+  that changes are the engineer's, in the Devices tab; the agent has no
+  set, restart, import, snapshot or password tool, and explain mode runs
+  both. A draft reaches the proposal list only when
   proposed, so the agent iterates on checker and simulator results before
   a human sees anything. Every input is parsed strictly and validated
   (unknown fields refused); a bad one is answered `INVALID_JSON` unrun.
@@ -1986,12 +2000,14 @@ HTTP from another host is refused (Box API, HTTPS). Sources:
   is refused (403). Every message is one audit entry with source `mcp`,
   and every box API call a tool makes is audited as that route always is,
   also `mcp` (audit entries now carry `source`: `api` or `mcp`).
-- **Tools.** The agent's eleven (`helmsman_agent::tools::NAMES`), by the
+- **Tools.** The agent's seventeen (`helmsman_agent::tools::NAMES`), by the
   same executor, which reaches the box through `tools::Caller`: the chat
   agent's goes over loopback HTTP, MCP's calls the API's handler in
   process and may reach only the reads (the devices and the library
   among them), the read-only network scan (`list_devices`, allowed by
-  Nick 2026-11-05) and the four draft routes (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
+  Nick 2026-11-05), `GET` of a device's configuration
+  (`list_device_configs`, `read_device_config`; no other verb or path
+  under `/api/devices/{id}/config` is reachable) and the four draft routes (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
   stays a person on the canvas. Results are text inside the agent's
   `<box-data>` envelope, never `structuredContent`.
 - **Drafts.** The protocol has no sessions, so drafts are server-minted
