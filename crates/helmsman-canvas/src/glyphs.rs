@@ -63,6 +63,8 @@ pub enum Icon {
     Undo,
     /// A screen on a stand: the Monitor.
     Monitor,
+    /// A clock face: the History tab (Nick, 2026-11-13).
+    History,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -323,6 +325,12 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 color,
                 Stroke::NONE,
             ));
+        }
+        Icon::History => {
+            let radius = b.width().min(b.height()) * 0.45;
+            p.circle_stroke(c, radius, stroke);
+            p.line_segment([c, Pos2::new(c.x, c.y - radius * 0.62)], stroke);
+            p.line_segment([c, Pos2::new(c.x + radius * 0.5, c.y + radius * 0.18)], stroke);
         }
         Icon::Monitor => {
             let screen = Rect::from_min_max(Pos2::new(l, t), Pos2::new(r, bt - b.height() * 0.28));

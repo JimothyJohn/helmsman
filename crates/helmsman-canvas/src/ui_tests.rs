@@ -235,6 +235,26 @@ impl Harness {
     }
 }
 
+/// All the text the last frames drew.
+fn all_text(h: &mut Harness) -> String {
+    fn walk(s: &egui::Shape, out: &mut String) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Text(t) => {
+                out.push_str(t.galley.text());
+                out.push('\n');
+            }
+            _ => {}
+        }
+    }
+    h.wait(0.1);
+    let mut out = String::new();
+    for c in &h.shapes {
+        walk(&c.shape, &mut out);
+    }
+    out
+}
+
 /// The simulation's diagram.
 fn sim_view(h: &Harness) -> &Viewer {
     h.app.sim.as_ref().unwrap().viewer.as_ref().expect("a diagram")
@@ -2732,58 +2752,122 @@ mod chrome {
         assert!(!h.has("file v1.st"));
     }
 
-    /// The Files tab's History row folds the revisions; a revision opens
-    /// in the centre with its diff and Restore, and Close shuts it.
+    /// Nick, 2026-11-13: the open project shows its files under it, with
+    /// no files section and no Program section below.
     #[test]
-    fn the_files_tab_lists_revisions_and_opens_one_in_the_centre() {
+    fn the_files_tab_lists_the_open_projects_files_under_it() {
         let mut h = Harness::new(App::sim());
         {
             let sim = h.app.sim.as_mut().unwrap();
             sim.proj.create("mine", None);
             sim.open_project("mine");
-            sim.proj.current_text_mut().unwrap().push_str("\n(* one *)");
-            sim.proj.save();
-            sim.proj.current_text_mut().unwrap().push_str("\n(* two *)");
-            sim.proj.save();
         }
         h.press("pane files");
         h.wait(0.3);
-        assert!(h.has("history"), "the fold row");
-        assert!(!h.has("revision 1"), "folded by default");
-        h.press("history");
-        h.wait(0.2);
-        assert!(h.has("revision 1") && h.has("revision 2"));
-        let r2 = h.rect("revision 2");
-        let r1 = h.rect("revision 1");
-        assert!(r2.top() < r1.top(), "newest first");
-        h.press("revision 1");
+        let project = h.rect("project mine");
+        let file = h.rect("file main.st");
+        assert!(file.top() >= project.bottom() - 1.0, "under its project");
+        assert!(file.left() > project.left() + 4.0, "indented under it");
+        assert!(!h.has("history"), "no History row: it is a tab");
+        let text = crate::ui_tests::all_text(&mut h);
+        assert!(!text.contains("mine: files"), "no files heading");
+        assert!(!text.lines().any(|l| l.trim() == "Program"), "no Program section");
+    }
+
+    /// Nick, 2026-11-13: History is a tab of its own, newest at the top,
+    /// one line per change; Newer and Older (and a click) run that
+    /// version marked against the one before; a double click opens its
+    /// details with Restore.
+    #[test]
+    fn the_history_tab_steps_through_versions_and_runs_each() {
+        let mut h = Harness::new(App::sim());
+        let (one, two);
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+            sim.proj.current_text_mut().unwrap().push_str("\n(* zero *)");
+            sim.proj.save();
+            sim.proj.current_text_mut().unwrap().push_str("\n(* one *)");
+            sim.proj.save();
+            one = sim.proj.files["main.st"].clone();
+            sim.proj.current_text_mut().unwrap().push_str("\n(* two *)");
+            sim.proj.save();
+            two = sim.proj.files["main.st"].clone();
+        }
+        h.press("pane history");
+        h.wait(0.3);
+        let newest = h.app.sim.as_ref().unwrap().proj.revisions().last().unwrap().n;
+        let older = newest - 1;
+        assert!(h.has(&format!("revision {newest}")) && h.has(&format!("revision {older}")));
+        assert!(
+            h.rect(&format!("revision {newest}")).top() < h.rect(&format!("revision {older}")).top(),
+            "newest first"
+        );
+        // Older: the version before, running, its change marked.
+        h.press("history older");
+        h.wait(0.3);
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert_eq!(sim.proj.files["main.st"], one);
+            assert_eq!(sim.history_at, Some(older));
+            assert!(sim.session.running, "it runs");
+        }
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            let c = sim.agent_change.as_ref().expect("the change is marked");
+            assert!(
+                c.lines().applies(&one),
+                "marked against the version before it: {:?}",
+                c.lines()
+            );
+            assert!(
+                c.lines()
+                    .added
+                    .iter()
+                    .any(|&l| one.lines().nth(l as usize - 1) == Some("(* one *)"))
+            );
+        }
+        // Newer: back to the newest, nothing left unsaved.
+        h.press("history newer");
+        h.wait(0.3);
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert_eq!(sim.proj.files["main.st"], two);
+            assert_eq!(sim.history_at, None);
+            assert!(!sim.proj.dirty());
+        }
+        // A click runs a row; the keyboard steps too.
+        h.press(&format!("revision {older}"));
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.files["main.st"], one);
+        h.frame(vec![eframe::egui::Event::Key {
+            key: eframe::egui::Key::ArrowUp,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: eframe::egui::Modifiers::NONE,
+        }]);
+        h.wait(0.3);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().proj.files["main.st"],
+            two,
+            "Up steps newer"
+        );
+        // A double click: the details in the centre, with Restore.
+        let at = h.rect(&format!("revision {older}")).center();
+        h.click(at);
+        h.click(at);
         h.wait(0.3);
         assert!(h.has("revision form") && h.has("revision restore") && h.has("revision close"));
-        assert!(
-            h.app
-                .sim
-                .as_ref()
-                .unwrap()
-                .revision
-                .as_ref()
-                .is_some_and(|v| v.row.n == 1)
-        );
         h.press("revision restore");
         h.wait(0.3);
-        assert!(!h.has("revision form"), "restored and shut");
         let sim = h.app.sim.as_ref().unwrap();
-        assert!(
-            sim.proj.files["main.st"].ends_with("(* one *)\n"),
-            "revision 1's text is back, as the save kept it in the one layout (Nick, 2026-11-11)"
+        assert_eq!(sim.proj.files["main.st"], one, "restored");
+        assert_eq!(
+            sim.proj.revisions().last().unwrap().what,
+            format!("restored revision {older}")
         );
-        assert_eq!(sim.proj.revisions().len(), 3);
-        assert_eq!(sim.proj.revisions()[2].what, "restored revision 1");
-        h.press("revision 2");
-        h.wait(0.3);
-        assert!(h.has("revision form"));
-        h.press("revision close");
-        h.wait(0.2);
-        assert!(!h.has("revision form"));
     }
 
     /// Requirement tests in the simulation (TODO.md spec-tests): the
