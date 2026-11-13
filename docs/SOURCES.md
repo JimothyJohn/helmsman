@@ -924,8 +924,13 @@ into the code.
   become running across the reboot, and the password change's three fields
   (`ChallID`, `OldPwd`, `NewPwd` from MD5 and an XOR with the `ChallID`
   cookie's MD5), whose six test vectors were computed by running Moxa's own
-  `md5.js` and `Xor()` under node. A password-protected console's login was
-  not seen.
+  `md5.js` and `Xor()` under node.
+  Measured on the same unit with a password set (2026-11-12, helmsman-devices
+  #15): the login page and its `MD5(password + Token)` post to `home.htm`,
+  the session cookie, "Change Password OK!" and "Change Password Fail!",
+  the change applying at once, and the export being unchanged by the
+  password. A change from a set password failed on the unit and is not
+  understood.
 - **Where:** the helmsman-devices repository; the facts are first-hand from
   one E1213, not a vendor document. Moxa's HTML and scripts are not copied
   into this repository.

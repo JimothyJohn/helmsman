@@ -7,15 +7,21 @@
 //!
 //! What this does not do, because it is not known how:
 //!
-//! - **Log in to a console that has a password.** No unit with a password
-//!   has been seen, so how it asks for one is unmapped. Only a console
-//!   without a password is supported (firmware 3.1 ships without one; 3.3
-//!   and later default to "moxa"), plus the password-change request below.
-//! - **Confirm a password change on a real unit.** The reply to the change
-//!   has not been seen; success here is "the console said Configuration
-//!   Complete", which is an assumption (see [`Console::change_password`]).
+//! - **Change a password that is already set.** On the real unit a change
+//!   from no password was accepted, but moxa -> empty and moxa -> moxa both
+//!   answered "Change Password Fail!" with exactly the fields `07.htm`'s
+//!   script builds. Not understood; under investigation. The simulator
+//!   accepts such a change, which is not known behaviour.
 //! - **Firmware update, Load Factory Default.** `08.htm` is an action and
 //!   nothing here fetches it.
+//!
+//! **A console with a password** answers every page with a login page until
+//! a session logs in (mapped on a real E1213, 2026-11-12). Give
+//! [`Config::password`] and a read that meets the login page logs in once
+//! and repeats the read; a write that meets it logs in and is *not*
+//! repeated ([`Error::LoginBeforeWrite`]: nothing was written). Without a
+//! password the read fails with [`Error::PasswordRequired`]. A wrong
+//! password is tried once per session ([`Error::LoginRefused`]).
 //!
 //! A write changes the *staged* settings. The export shows the staged
 //! settings, and the unit runs them only after [`Console::restart`].
@@ -80,6 +86,19 @@ pub enum Error {
     /// A password change that the console did not confirm. The reply to it
     /// is unmapped on a real unit: the password may or may not have changed.
     PasswordUnconfirmed,
+    /// The console answered "Change Password Fail!". On the real unit this
+    /// also happens when changing a password that is already set, which is
+    /// not understood.
+    PasswordFailed,
+    /// The console wants a password (it answered with its login page) and
+    /// none is configured.
+    PasswordRequired,
+    /// The console refused the configured password. It is not tried again
+    /// in this session.
+    LoginRefused,
+    /// A write met the login page: the session was logged in again, and
+    /// **nothing was written**. Run the operation again.
+    LoginBeforeWrite,
     /// After a restart request the console never stopped answering.
     RestartNotObserved,
     /// After a restart the console did not answer again in time.
@@ -113,6 +132,14 @@ impl fmt::Display for Error {
             Self::NotAccepted => f.write_str(
                 "the console did not answer Configuration Complete (a stale token is one cause)",
             ),
+            Self::PasswordFailed => f.write_str("the console answered Change Password Fail!"),
+            Self::PasswordRequired => f.write_str(
+                "the console asks for a password (it answered with its login page) and none is configured",
+            ),
+            Self::LoginRefused => f.write_str("the console refused the password"),
+            Self::LoginBeforeWrite => f.write_str(
+                "the console asked for a login before the write; logged in again, nothing was written: run it again",
+            ),
             Self::PasswordUnconfirmed => f.write_str(
                 "the console did not confirm the password change; its reply is unmapped, so the password may or may not have changed",
             ),
@@ -130,6 +157,8 @@ impl std::error::Error for Error {}
 /// between requests, a read retried once) with bounds on everything.
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// The console's password, if it has one (printable ASCII, at most 24).
+    pub password: Option<Secret>,
     /// Longest wait to connect.
     pub connect: Duration,
     /// One whole request, connect to last byte.
@@ -153,9 +182,36 @@ pub struct Config {
     pub modbus_port: u16,
 }
 
+/// A password. Its `Debug` shows nothing.
+#[derive(Clone)]
+pub struct Secret(String);
+
+impl Secret {
+    #[must_use]
+    pub fn new(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Secret(<redacted>)")
+    }
+}
+
+impl Config {
+    /// The same with the console's password set.
+    #[must_use]
+    pub fn with_password(mut self, password: &str) -> Self {
+        self.password = Some(Secret::new(password));
+        self
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
+            password: None,
             connect: Duration::from_secs(5),
             request: Duration::from_secs(10),
             gap: Duration::from_millis(300),
@@ -173,6 +229,8 @@ impl Default for Config {
 /// A session with one console.
 pub struct Console {
     http: Http,
+    password: Option<Secret>,
+    login_refused: bool,
 }
 
 /// `[0-9A-Za-z_]{1,32}.htm`.
@@ -203,19 +261,87 @@ impl Console {
     /// [`Error::Refused`] for a bad address, otherwise the transport's.
     pub fn connect(addr: &str, cfg: Config) -> Result<Self, Error> {
         let (host, port) = http::parse_addr(addr)?;
+        if let Some(p) = &cfg.password {
+            password::check_max(&p.0, password::MAX_LOGIN)?;
+        }
         let mut c = Self {
+            password: cfg.password.clone(),
             http: Http::new(host, port, cfg),
+            login_refused: false,
         };
         c.fetch("/")?;
         Ok(c)
     }
 
-    fn fetch(&mut self, path: &str) -> Result<String, Error> {
+    fn fetch_raw(&mut self, path: &str) -> Result<String, Error> {
         let r = self.http.get(path)?;
         if r.status != 200 {
             return Err(Error::Status(r.status));
         }
         Ok(latin1(&r.body))
+    }
+
+    /// A read. The login page is what a console with a password serves
+    /// instead of any page until the session logs in: log in once and read
+    /// again.
+    fn fetch(&mut self, path: &str) -> Result<String, Error> {
+        let body = self.fetch_raw(path)?;
+        if !is_login_page(&body) {
+            return Ok(body);
+        }
+        self.login(&body)?;
+        let body = self.fetch_raw(path)?;
+        if is_login_page(&body) {
+            return Err(Error::LoginRefused);
+        }
+        Ok(body)
+    }
+
+    /// Posts the login page's form the way its script does: `Password` is
+    /// the hex MD5 of the password followed by the page's `Token`. Never
+    /// retried, and a refused password is not sent again.
+    fn login(&mut self, page: &str) -> Result<(), Error> {
+        let Some(pw) = self.password.clone() else {
+            return Err(Error::PasswordRequired);
+        };
+        if self.login_refused {
+            return Err(Error::LoginRefused);
+        }
+        let token = form::parse(page)?
+            .iter()
+            .find_map(|f| f.value("Token").map(str::to_string))
+            .ok_or(Error::Page("the login page carries no Token"))?;
+        let pairs = [
+            ("Password".to_string(), password::login_hash(&pw.0, &token)),
+            ("Token".to_string(), token),
+            ("Submit".to_string(), "Submit".to_string()),
+        ];
+        let body = query(&pairs);
+        let reply = self.http.once(
+            "POST",
+            "/home.htm",
+            Some(("application/x-www-form-urlencoded", body.as_bytes())),
+            None,
+        )?;
+        if reply.status != 200 {
+            return Err(Error::Status(reply.status));
+        }
+        if is_login_page(&latin1(&reply.body)) {
+            self.login_refused = true;
+            return Err(Error::LoginRefused);
+        }
+        Ok(())
+    }
+
+    /// A write's reply was the login page: the write did not happen. Log
+    /// in again (when a password is configured) and say so.
+    fn write_met_login(&mut self, body: &[u8]) -> Result<(), Error> {
+        let text = latin1(body);
+        if !is_login_page(&text) {
+            return Ok(());
+        }
+        self.login(&text)?;
+        Err(Error::LoginBeforeWrite)
     }
 
     /// The configuration export (`ik12NN.txt`, named by `06_6.htm`). It
@@ -289,6 +415,7 @@ impl Console {
         if reply.status != 200 {
             return Err(Error::Status(reply.status));
         }
+        self.write_met_login(&reply.body)?;
         if !String::from_utf8_lossy(&reply.body).contains("Configuration Complete") {
             return Err(Error::NotAccepted);
         }
@@ -308,8 +435,9 @@ impl Console {
     pub fn restart(&mut self) -> Result<(), Error> {
         match self.http.once("GET", "/set_ok.htm?token=", None, None) {
             Ok(r) if r.status != 200 => return Err(Error::Status(r.status)),
+            Ok(r) => self.write_met_login(&r.body)?,
             // A unit that goes down mid-reply is the expected case.
-            Ok(_) | Err(Error::NoResponse | Error::Io(_) | Error::Timeout | Error::Protocol(_)) => {}
+            Err(Error::NoResponse | Error::Io(_) | Error::Timeout | Error::Protocol(_)) => {}
             Err(e) => return Err(e),
         }
         self.wait_back()
@@ -411,6 +539,7 @@ impl Console {
         if reply.status != 200 {
             return Err(Error::Status(reply.status));
         }
+        self.write_met_login(&reply.body)?;
         // The import reboots the unit by itself (its reply says "System
         // configuration file imported and restart successfully."): wait
         // as a restart does, then read the export.
@@ -425,16 +554,22 @@ impl Console {
     /// password. A password is printable ASCII, at most 16 characters; an
     /// empty new password is refused.
     ///
-    /// ASSUMPTION: the console answers a successful change with the same
-    /// "Configuration Complete" page `set.htm` does. No reply to a password
-    /// change has been seen on a real unit; if it differs this reports
-    /// [`Error::PasswordUnconfirmed`] after a change that worked.
+    /// The reply says "Change Password OK!" or "Change Password Fail!"
+    /// (mapped 2026-11-12). The change applies **at once**, whatever the
+    /// reply's restart warning says: the session is logged out, and this
+    /// logs in again with `new` on the next read. The old password may be
+    /// up to 24 characters, the new one 16.
+    ///
+    /// **Changing a password that is already set failed on the real unit**
+    /// (moxa -> empty and moxa -> moxa, "Change Password Fail!", with the
+    /// fields `07.htm`'s script builds). Not understood; under
+    /// investigation. Do not rely on it.
     ///
     /// # Errors
-    /// [`Error::Refused`] (nothing sent), [`Error::PasswordUnconfirmed`],
-    /// the transport's.
+    /// [`Error::Refused`] (nothing sent), [`Error::PasswordFailed`],
+    /// [`Error::PasswordUnconfirmed`] (neither wording), the transport's.
     pub fn change_password(&mut self, old: &str, new: &str) -> Result<(), Error> {
-        password::check(old)?;
+        password::check_max(old, password::MAX_LOGIN)?;
         password::check(new)?;
         if new.is_empty() {
             return Err(Error::Refused("an empty new password is not supported".into()));
@@ -478,12 +613,26 @@ impl Console {
         if reply.status != 200 {
             return Err(Error::Status(reply.status));
         }
-        if String::from_utf8_lossy(&reply.body).contains("Configuration Complete") {
+        self.write_met_login(&reply.body)?;
+        let text = String::from_utf8_lossy(&reply.body);
+        if text.contains("Change Password OK!") {
+            // Applied at once; the session is gone. Read again with the new one.
+            self.password = Some(Secret::new(new));
+            self.login_refused = false;
             Ok(())
+        } else if text.contains("Change Password Fail!") {
+            Err(Error::PasswordFailed)
         } else {
             Err(Error::PasswordUnconfirmed)
         }
     }
+}
+
+/// What a console with a password serves instead of any page until a
+/// session logs in: the form `InputPassword`, posting to `home.htm`.
+fn is_login_page(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("inputpassword") && lower.contains("home.htm")
 }
 
 /// `ik12NN.txt` from the quoted link in `06_6.htm`.

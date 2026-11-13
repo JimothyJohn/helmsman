@@ -19,19 +19,36 @@
 //!   file's network settings overwrite the unit's, without it they do not.
 //! - A password change (`07.htm`, code 7) is decoded the way the page's
 //!   script encodes it: `NewPwd` is unmasked with the stored challenge.
+//! - A password change answers "Change Password OK!" or "Change Password
+//!   Fail!" (a wrong `OldPwd` or `ChallID`) and applies at once: every
+//!   session ends.
+//! - **Locked mode** (a password is set): every page but the login post
+//!   answers 200 with a login page (`<FORM name=InputPassword method=post
+//!   action=home.htm>`, a `Password` field, a hidden 39-character `Token`,
+//!   fresh per login page) unless the request carries a session's
+//!   `MoxaPass`. `POST /home.htm` with `Password` = MD5(password + Token),
+//!   `Token` and `Submit` answers the frameset with `ChallID` and a new
+//!   39-character `MoxaPass` (not the Token); a wrong one gets the login
+//!   page and no cookie. The export is the same locked or not: the
+//!   password is not in it.
 //! - A fault: [`Sim::drop_next`] closes the next connections without a
 //!   reply (the console's known quirk).
 //!
-//! What it only assumes (nothing real was seen):
+//! What it only assumes:
 //!
 //! - **The token rule.** ASSUMPTION about the real unit: `set.htm` answers
 //!   a request whose token is not the latest one issued for its `code`
 //!   with a page that lacks "Configuration Complete". What the real unit
 //!   does with a stale or missing token is not known.
-//! - The reply to a successful password change is the same "Configuration
-//!   Complete" page; a wrong `OldPwd` or `ChallID` gets a page without it.
-//!   `OldPwd` for a console without a password is the MD5 of the empty
-//!   string. None of this was seen on a unit.
+//! - `OldPwd` for a console without a password is the MD5 of the empty
+//!   string. Not seen on a unit.
+//! - A reboot ends every session (the real unit's behaviour is not known).
+//! - A login token is accepted only if it is the latest one issued.
+//! - **Changing a password that is already set.** The real unit refused it
+//!   twice (moxa -> empty, moxa -> moxa: "Change Password Fail!", with the
+//!   fields `07.htm`'s script builds); why is not understood and under
+//!   investigation. The simulator accepts it when `OldPwd` is right. That is
+//!   NOT known behaviour of the unit.
 //! - Pages show the staged settings.
 //! - The export's key names are synthetic except `CONNECTION_WATCHDOG`,
 //!   `AUTOCLEAR_SAFEMODE`, `DOnn_SAFE`, `REST_ENABLE` and `EIP_ENABLE`
@@ -260,6 +277,9 @@ struct State {
     password: Option<String>,
     challenge: u32,
     tokens: HashMap<String, String>,
+    /// The latest login token issued, and the sessions logged in.
+    login_token: Option<String>,
+    sessions: Vec<String>,
     counter: u64,
     drop_next: u32,
     /// Phases of the reboot still to go: (down1, up1, down2) remaining.
@@ -315,6 +335,8 @@ impl Sim {
                 password: o.password,
                 challenge: o.challenge,
                 tokens: HashMap::new(),
+                login_token: None,
+                sessions: Vec::new(),
                 counter: 0,
                 drop_next: 0,
                 phase: (0, 0, 0),
@@ -450,6 +472,7 @@ fn begin_reboot(st: &mut State) {
     st.running = st.staged.clone();
     st.challenge += 1;
     st.tokens.clear();
+    st.sessions.clear();
     st.reboots += 1;
     st.modbus = None;
     let r = st.restart;
@@ -656,16 +679,26 @@ const COMPLETE: &str = "<H1>Configuration Complete</H1><P>The changes will not t
 #[allow(clippy::too_many_lines)]
 fn route(st: &mut State, req: &Request) -> Response {
     let (path, query) = req.target.split_once('?').unwrap_or((&req.target, ""));
+    if st.password.is_some() {
+        if req.method == "POST" && path == "/home.htm" {
+            return login(st, req);
+        }
+        if !has_session(st, req) {
+            return login_page(st);
+        }
+    }
     match (req.method.as_str(), path) {
         ("GET", "/") => {
             let mut r = html("<FRAMESET></FRAMESET>");
-            r.set_cookies = vec![
-                format!("ChallID={}; path=/", st.challenge),
-                format!(
-                    "MoxaPass={:08x}; path=/",
-                    st.challenge.wrapping_mul(2_654_435_761)
-                ),
-            ];
+            if st.password.is_none() {
+                r.set_cookies = vec![
+                    format!("ChallID={}; path=/", st.challenge),
+                    format!(
+                        "MoxaPass={:08x}; path=/",
+                        st.challenge.wrapping_mul(2_654_435_761)
+                    ),
+                ];
+            }
             r
         }
         ("GET", "/06_6.htm") => html("<A href=\"ik1213.txt\">Export</A>"),
@@ -830,20 +863,70 @@ fn set(st: &mut State, q: &[(String, String)]) -> Response {
     html(COMPLETE)
 }
 
+fn login_page(st: &mut State) -> Response {
+    st.counter += 1;
+    let t = format!("70c3{:035x}", st.counter);
+    st.login_token = Some(t.clone());
+    html(&format!(
+        "<FORM name=InputPassword method=\"post\" action=home.htm>\
+         <input type=password name=Password maxlength=24>\
+         <input type=hidden name=\"Token\" value=\"{t}\">\
+         <input type=submit name=Submit value=Submit></FORM>"
+    ))
+}
+
+fn has_session(st: &State, req: &Request) -> bool {
+    req.cookie.as_deref().is_some_and(|c| {
+        c.split(';')
+            .filter_map(|p| p.trim().strip_prefix("MoxaPass="))
+            .any(|v| st.sessions.iter().any(|s| s == v))
+    })
+}
+
+fn login(st: &mut State, req: &Request) -> Response {
+    let body: String = req.body.iter().map(|&b| char::from(b)).collect();
+    let q = decode_query(&body);
+    let get = |n: &str| q.iter().find(|(k, _)| k == n).map(|(_, v)| v.as_str());
+    let pw = st.password.clone().unwrap_or_default();
+    let ok = match (get("Token"), get("Password"), st.login_token.as_deref()) {
+        (Some(t), Some(h), Some(latest)) => t == latest && h == hex(&md5(format!("{pw}{t}").as_bytes())),
+        _ => false,
+    };
+    if !ok {
+        return login_page(st);
+    }
+    st.counter += 1;
+    let session = format!("5e55{:035x}", st.counter);
+    st.sessions.push(session.clone());
+    st.login_token = None;
+    let mut r = html("<FRAMESET></FRAMESET>");
+    r.set_cookies = vec![
+        format!("ChallID={}; path=/", st.challenge),
+        format!("MoxaPass={session}; path=/"),
+    ];
+    r
+}
+
 fn change_password(st: &mut State, old: Option<&str>, new: Option<&str>, chall: Option<&str>) -> Response {
     let c = st.challenge.to_string();
     if chall != Some(hex(&md5(c.as_bytes())).as_str()) {
-        return refuse("ChallID");
+        return html("<H1>Change Password Fail!</H1>");
     }
     let current = st.password.clone().unwrap_or_default();
     if old != Some(hex(&md5(current.as_bytes())).as_str()) {
-        return refuse("old password");
+        return html("<H1>Change Password Fail!</H1>");
     }
     let Some(pw) = new.and_then(|n| password::unmask(&c, n)) else {
-        return refuse("new password");
+        return html("<H1>Change Password Fail!</H1>");
     };
+    // Applied at once, whatever the reply's restart warning says: the old
+    // sessions are gone. (From a password that is set, the real unit
+    // refused this; the simulator does not. See the module docs.)
     st.password = (!pw.is_empty()).then_some(pw);
-    html(COMPLETE)
+    st.sessions.clear();
+    html(
+        "<H1>Change Password OK!</H1><P>The changes will not take effect until you Save/Restart the I/O Server.</P>",
+    )
 }
 
 fn import(st: &mut State, req: &Request) -> Response {

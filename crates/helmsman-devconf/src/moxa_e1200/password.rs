@@ -14,15 +14,26 @@ use crate::md5::{hex, md5};
 /// Longest password the page's `Xor()` can carry.
 pub const MAX_PASSWORD: usize = 16;
 
-/// Printable ASCII (0x20..=0x7e), at most [`MAX_PASSWORD`] bytes.
+/// Longest password the login page and the old-password field take
+/// (`maxlength="24"`).
+pub const MAX_LOGIN: usize = 24;
+
+/// Printable ASCII (0x20..=0x7e), at most [`MAX_PASSWORD`] bytes: a new
+/// password.
 ///
 /// # Errors
 /// [`Error::Refused`], without echoing the password.
 pub fn check(password: &str) -> Result<(), Error> {
-    if password.len() > MAX_PASSWORD {
-        return Err(Error::Refused(format!(
-            "a password is at most {MAX_PASSWORD} characters"
-        )));
+    check_max(password, MAX_PASSWORD)
+}
+
+/// Printable ASCII, at most `max` bytes.
+///
+/// # Errors
+/// [`Error::Refused`], without echoing the password.
+pub fn check_max(password: &str, max: usize) -> Result<(), Error> {
+    if password.len() > max {
+        return Err(Error::Refused(format!("a password is at most {max} characters")));
     }
     if !password.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
         return Err(Error::Refused(
@@ -30,6 +41,13 @@ pub fn check(password: &str) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+/// The login page's `Password` field: hex MD5 of the password followed by
+/// the page's `Token`.
+#[must_use]
+pub fn login_hash(password: &str, token: &str) -> String {
+    hex(&md5(format!("{password}{token}").as_bytes()))
 }
 
 /// `ChallID` field: hex MD5 of the cookie string.
@@ -145,6 +163,21 @@ mod tests {
         for (chall, pw, _, _, new) in VENDOR {
             assert_eq!(unmask(chall, new).as_deref(), Some(pw), "({chall:?}, {pw:?})");
         }
+    }
+
+    #[test]
+    fn login_hash_is_md5_of_password_then_token() {
+        // md5("moxa" + "abc") by hashlib.
+        assert_eq!(login_hash("moxa", "abc"), hex(&md5(b"moxaabc")),);
+        assert_eq!(login_hash("", ""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_ne!(login_hash("a", "bc"), login_hash("ab", "cd"));
+    }
+
+    #[test]
+    fn old_and_login_passwords_may_be_24() {
+        assert!(check_max(&"a".repeat(24), MAX_LOGIN).is_ok());
+        assert!(check_max(&"a".repeat(25), MAX_LOGIN).is_err());
+        assert!(check(&"a".repeat(17)).is_err());
     }
 
     #[test]
