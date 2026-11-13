@@ -813,10 +813,10 @@ fn set(st: &mut State, q: &[(String, String)]) -> Response {
             n.safe_autoclear = has("EnableSafeModeAutoClear");
         }
         "116" => {
-            for i in 0..8 {
+            for (i, slot) in n.safe_mode.iter_mut().enumerate() {
                 match get(&format!("SetSM{i:02}")) {
-                    Some("0") => n.safe_mode[i] = false,
-                    Some("1") => n.safe_mode[i] = true,
+                    Some("0") => *slot = false,
+                    Some("1") => *slot = true,
                     _ => return refuse("SetSM"),
                 }
             }
