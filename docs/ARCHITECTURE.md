@@ -2896,7 +2896,7 @@ reference. The operations:
 | `set(page, changes)` | `GET /set.htm?<fields>`, then the export lines that changed. Staged until a restart. |
 | `restart()` | `GET /set_ok.htm?token=`, then waits for the whole return (below). |
 | `import(file, overwrite_network)` | multipart `POST /06_5_1.htm`. The unit reboots by itself, so it waits like `restart()`. The IP in the file is applied only with `overwrite_network`, which defaults to off in every caller. |
-| `change_password(old, new)` | `07.htm`: `OldPwd`, `NewPwd` and `ChallID` computed from the cookie with a hand-written MD5, as the page's script does. |
+| `change_password(old, new)` | `07.htm`: `OldPwd`, `NewPwd` and `ChallID` computed from the cookie with a hand-written MD5, as the page's script does. The reply says "Change Password OK!" or "Change Password Fail!"; the change applies at once, so the next request has no session. |
 
 What it refuses before sending anything: a page outside
 `[0-9A-Za-z_]{1,32}\.htm`, the pages that act when fetched (`08.htm` Load
@@ -2931,21 +2931,43 @@ shapes as the real ones (General Settings code 41, DO Safe Mode 116, RESTful
 131, EtherNet/IP 141, password 07.htm code 7), none of Moxa's markup. Its
 assumptions are written next to them in `sim.rs`: `set.htm` accepts only the
 latest token issued for a page's code (what the real unit does with a stale
-token is not known); a successful password change answers "Configuration
-Complete"; `OldPwd` for a console without a password is the MD5 of the empty
-string; the export's key names are synthetic except the ones the write-up
-cites.
+token is not known); `OldPwd` for a console without a password is the MD5 of
+the empty string; the export's key names are synthetic except the ones the
+write-up cites. It also has a locked mode (a password set): the login page,
+the `MD5(password + Token)` post and the session cookie as mapped below, and a
+password change that answers "Change Password OK!" or "Change Password Fail!"
+and ends every session.
+
+**A console with a password** (mapped on the bench E1213 with a password set,
+2026-11-12). Every page, the export included, answers 200 with a login page
+until the session logs in: `<FORM name=InputPassword method="post"
+action=home.htm>`, a `Password` field (24 characters at most) and a hidden
+`Token` (39 characters, fresh per login page). The page's script posts
+`Password` = hex MD5 of the password followed by the `Token`, with `Token` and
+`Submit=Submit`. A right password gets the frameset back with `ChallID` and a
+new 39-character `MoxaPass`, which is the session; a wrong one gets the login
+page and no cookie. The password is not in the export: the export through the
+login is identical to the one taken before the password was set.
+`Config::password` holds it (its `Debug` is redacted). A read that meets the
+login page logs in once and repeats; a write that meets it logs in and does
+**not** repeat, and says nothing was written (`LoginBeforeWrite`); with no
+password configured the error is `PasswordRequired`. A refused password is
+tried once per session and then not again, so a stale password cannot lock a
+console out by repetition. After `change_password` succeeds the client keeps
+the new password for its next login.
 
 **Not known, so not done:**
 
-- **A console with a password.** How it asks for a login has not been seen
-  (no unit with a password has been on the bench; 3.3 and later default to
-  "moxa"). Only a console without a password is supported, plus the
-  password-change request.
-- **What a password change answers.** Success is taken to be the
-  "Configuration Complete" page `set.htm` gives; on a real unit that is a
-  guess, and a change that worked but answered otherwise is reported as
-  `PasswordUnconfirmed`.
+- **Changing a password that is already set.** On the real unit it failed
+  twice, moxa -> empty and moxa -> moxa, "Change Password Fail!", with exactly
+  the fields `07.htm`'s script builds; the first change, from no password,
+  was accepted. Not understood and under investigation. The simulator
+  accepts such a change when `OldPwd` is right, which is **not** known
+  behaviour of the unit; do not rely on `change_password` from a set
+  password.
+- **How the real unit ages sessions.** The simulator ends every session at a
+  reboot and at a password change; a login token is valid only while it is
+  the latest issued. Neither is known for the unit.
 - **The wording of an import's reply.** The reply is not parsed; the export
   read afterwards is the check.
 - A static `disabled` attribute on a field is ignored (a page's script is

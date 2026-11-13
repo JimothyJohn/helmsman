@@ -296,8 +296,8 @@ fn a_wrong_old_password_changes_nothing_and_is_reported() {
         password: Some("moxa".into()),
         ..Options::default()
     });
-    let mut c = connect(&sim);
-    assert_eq!(c.change_password("nope", "new"), Err(Error::PasswordUnconfirmed));
+    let mut c = Console::connect(&sim.addr(), cfg_for(&sim).with_password("moxa")).unwrap();
+    assert_eq!(c.change_password("nope", "new"), Err(Error::PasswordFailed));
     assert_eq!(sim.password().as_deref(), Some("moxa"));
     c.change_password("moxa", "new").unwrap();
     assert_eq!(sim.password().as_deref(), Some("new"));
@@ -313,12 +313,12 @@ fn bad_passwords_are_refused_before_anything_is_sent() {
         ("", "caf\u{e9}"),
         ("", "tab\t"),
         ("", ""),
-        ("seventeen-chars-x", "ok"),
+        (&"a".repeat(25), "ok"),
     ] {
         let e = c.change_password(old, new).unwrap_err();
         assert!(matches!(e, Error::Refused(_)), "{old:?} {new:?}: {e}");
         assert!(
-            !e.to_string().contains("seventeen"),
+            !e.to_string().contains("seventeen") && !e.to_string().contains("aaaaaaaa"),
             "the error echoed a password"
         );
     }
@@ -444,8 +444,8 @@ fn no_action_page_is_fetched_except_by_its_operation() {
     c.form("13_1.htm").unwrap();
     c.import(&Settings::default().export().into_bytes(), false)
         .unwrap();
-    c.change_password("", "pw").unwrap();
     c.restart().unwrap();
+    c.change_password("", "pw").unwrap();
     assert_eq!(sim.count("/08.htm"), 0, "Load Factory Default");
     assert_eq!(sim.count("/09.htm"), 0);
     assert_eq!(sim.count("/set_ok.htm"), 1);
@@ -526,4 +526,170 @@ fn import_reboots_the_unit_and_waits() {
     let d = c.import(own.to_text().as_bytes(), false).unwrap();
     assert!(d.is_empty(), "{d:?}");
     assert_eq!(sim.reboots(), 2);
+}
+
+// ---- a console with a password
+
+const LOCKED: &str = "moxa";
+
+fn locked() -> Sim {
+    Sim::start_with(Options {
+        password: Some(LOCKED.into()),
+        ..Options::default()
+    })
+}
+
+fn logged_in(sim: &Sim) -> Console {
+    Console::connect(&sim.addr(), cfg_for(sim).with_password(LOCKED)).unwrap()
+}
+
+#[test]
+fn the_right_password_logs_in_once_and_reads() {
+    let sim = locked();
+    let mut c = logged_in(&sim);
+    assert_eq!(
+        sim.count("/home.htm"),
+        1,
+        "the front page asked, the client answered once"
+    );
+    let e = c.export().unwrap();
+    c.form("04_1.htm").unwrap();
+    assert_eq!(sim.count("/home.htm"), 1, "the session carries on");
+    // The password is not in the export: it is what an unlocked unit gives.
+    assert_eq!(e.to_text(), Settings::default().export());
+    assert!(!e.to_text().contains(LOCKED));
+}
+
+#[test]
+fn the_login_posts_md5_of_password_and_token_never_the_password() {
+    let sim = locked();
+    let _c = logged_in(&sim);
+    let log = sim.requests();
+    let post = log.iter().find(|l| l.method == "POST").unwrap();
+    assert_eq!(post.path(), "/home.htm");
+    assert!(!post.target.contains(LOCKED));
+}
+
+#[test]
+fn a_wrong_password_is_refused_once_and_not_tried_again() {
+    let sim = locked();
+    let wrong = Console::connect(&sim.addr(), cfg_for(&sim).with_password("nope"));
+    assert_eq!(wrong.err(), Some(Error::LoginRefused));
+    assert_eq!(sim.count("/home.htm"), 1);
+    assert!(
+        sim.requests()
+            .iter()
+            .all(|l| l.method != "POST" || l.path() == "/home.htm")
+    );
+}
+
+#[test]
+fn a_session_does_not_hammer_a_console_with_a_refused_password() {
+    // Open against an unlocked console, which then gets a password
+    // from elsewhere: the client's stale password is refused once.
+    let sim = Sim::start();
+    let mut c = Console::connect(&sim.addr(), cfg_for(&sim).with_password("old")).unwrap();
+    let mut other = connect(&sim);
+    other.change_password("", LOCKED).unwrap();
+    assert_eq!(c.export().unwrap_err(), Error::LoginRefused);
+    assert_eq!(c.export().unwrap_err(), Error::LoginRefused);
+    assert_eq!(c.form("04_1.htm").unwrap_err(), Error::LoginRefused);
+    assert_eq!(sim.count("/home.htm"), 1, "one try, then none");
+}
+
+#[test]
+fn no_password_gets_a_typed_error_not_a_login_page() {
+    let sim = locked();
+    assert_eq!(
+        Console::connect(&sim.addr(), cfg_for(&sim)).err(),
+        Some(Error::PasswordRequired)
+    );
+    assert_eq!(sim.count("/home.htm"), 0, "nothing posted without a password");
+}
+
+#[test]
+fn a_password_that_cannot_be_the_consoles_is_refused_before_connecting() {
+    let sim = locked();
+    for bad in [&"a".repeat(25)[..], "caf\u{e9}", "tab\t"] {
+        let r = Console::connect(&sim.addr(), cfg_for(&sim).with_password(bad));
+        assert!(matches!(r, Err(Error::Refused(_))), "{bad:?}");
+    }
+    assert_eq!(sim.requests().len(), 0);
+    let shown = format!("{:?}", cfg_for(&sim).with_password(LOCKED));
+    assert!(!shown.contains(LOCKED), "{shown}");
+}
+
+#[test]
+fn a_write_that_meets_the_login_is_not_repeated() {
+    let sim = Sim::start();
+    // A session that opened before the password was set.
+    let mut c = Console::connect(&sim.addr(), cfg_for(&sim).with_password(LOCKED)).unwrap();
+    let mut f = c.form("04_1.htm").unwrap();
+    f.apply(&[("MOD_LOC", "should not land")]).unwrap();
+    // Someone sets the password: that ends every session.
+    let mut other = connect(&sim);
+    other.change_password("", LOCKED).unwrap();
+    assert_eq!(c.submit(&f), Err(Error::LoginBeforeWrite));
+    assert_eq!(sim.staged().mod_loc, "", "nothing was written");
+    // It logged in, so the caller can run it again.
+    let mut f = c.form("04_1.htm").unwrap();
+    f.apply(&[("MOD_LOC", "now")]).unwrap();
+    c.submit(&f).unwrap();
+    assert_eq!(sim.staged().mod_loc, "now");
+}
+
+#[test]
+fn a_restart_or_import_that_meets_the_login_does_not_happen() {
+    let sim = Sim::start();
+    let mut c = Console::connect(&sim.addr(), cfg_for(&sim).with_password(LOCKED)).unwrap();
+    let mut other = connect(&sim);
+    other.change_password("", LOCKED).unwrap();
+    assert_eq!(c.restart(), Err(Error::LoginBeforeWrite));
+    assert_eq!(sim.reboots(), 0);
+    // Logged in again: a read works, and the import's own token page is fine.
+    let mut other2 = Console::connect(&sim.addr(), cfg_for(&sim).with_password(LOCKED)).unwrap();
+    other2.export().unwrap();
+    assert_eq!(sim.count("/set_ok.htm"), 1, "asked once, not repeated");
+}
+
+#[test]
+fn a_write_without_a_password_says_the_console_wants_one() {
+    let sim = Sim::start();
+    let mut c = connect(&sim);
+    let mut f = c.form("04_1.htm").unwrap();
+    f.apply(&[("MOD_LOC", "x")]).unwrap();
+    let mut other = connect(&sim);
+    other.change_password("", LOCKED).unwrap();
+    assert_eq!(c.submit(&f), Err(Error::PasswordRequired));
+    assert_eq!(sim.staged().mod_loc, "");
+}
+
+#[test]
+fn set_restart_and_import_work_through_the_login() {
+    let sim = locked();
+    let mut c = logged_in(&sim);
+    c.set("04_1.htm", &[("MOD_LOC", "locked bench")]).unwrap();
+    c.restart().unwrap();
+    assert_eq!(sim.running().mod_loc, "locked bench");
+    // The reboot ended the session; the next read logs in again.
+    let e = c.export().unwrap();
+    assert_eq!(e.find("MOD_LOC").unwrap().value, "locked bench");
+    c.import(&sim.staged().export().into_bytes(), false).unwrap();
+    assert_eq!(sim.reboots(), 2);
+}
+
+#[test]
+fn the_reply_of_a_password_change_is_ok_or_fail_and_applies_at_once() {
+    let sim = Sim::start();
+    let mut c = connect(&sim);
+    c.change_password("", "moxa").unwrap();
+    assert_eq!(sim.password().as_deref(), Some("moxa"));
+    // At once, no restart: the old session is gone and the client logs in
+    // again with the new password.
+    let before = sim.count("/home.htm");
+    c.export().unwrap();
+    assert_eq!(sim.count("/home.htm"), before + 1);
+    assert_eq!(sim.reboots(), 0);
+    assert_eq!(c.change_password("wrong", "other"), Err(Error::PasswordFailed));
+    assert_eq!(sim.password().as_deref(), Some("moxa"));
 }
