@@ -13,6 +13,9 @@ helmsman-iec = { path = "../helmsman-iec" }
 # A project's rules and its .zip, the box's own (the simulation's
 # Upload and Download).
 helmsman-project = { path = "../helmsman-project" }
+# The simulated plant (plant.sim): devices that answer the outputs and
+# the normal, abnormal and absent inputs. No dependencies, wasm-safe.
+helmsman-sim = { path = "../helmsman-sim" }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 # The box API's JSON (already in the workspace through helmsman-plc).
 serde_json = "1.0"
