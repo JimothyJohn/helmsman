@@ -98,6 +98,9 @@ mod st_hints;
 mod st_syntax;
 mod st_view;
 mod stamp;
+mod steps;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod steps_tests;
 #[cfg(test)]
 mod test_programs;
 mod theme;
