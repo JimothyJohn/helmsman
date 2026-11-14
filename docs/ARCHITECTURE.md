@@ -65,6 +65,7 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
+| `helmsman-sim` | The simulated plant of a project's `plant.sim`, no I/O and no dependencies: devices that answer the program's outputs (heater, tank, motor, valve or cylinder, photo-eye), hand-set ones (button, switch, selector), free-running sources (ramp, exponential, geometric, pulse, step, sine, seeded random walk) and transmitters (4-20 mA, 0-10 V, counts); each input normal, abnormal (stuck, drift, noise, over, under, slow, chatter) or absent. The canvas's `Session` steps it before each scan (`run_plant`). See "Simulated plant". | built: in the page's simulation |
 | `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10, 43/14 Read Device Identification), reply checks (exact lengths, exceptions, echoes, identification objects), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
 | `helmsman-profinet` | PROFINET IO, RT class 1, as bytes and as two state machines without I/O (every call takes `now`): DCP (Identify, Set), the DCE/RPC envelope, the Connect / Write / PrmEnd / application-ready / Release blocks, cyclic frames and their layout, alarms; `controller` (an IO controller for one device) and `device` (a simulated IO device for tests and benches). `no_std + alloc`, no dependencies. | built: against its own simulated device and scapy's dissector; no real device yet (`mdrive-bringup`) |
 | `helmsman-dhcp` | A DHCP (IPv4) and BOOTP server for the box's own device network, as bytes and a state machine without I/O (every call takes `now`): the message (RFC 2131, options per RFC 2132 and RFC 3396, BOOTP's 300-octet minimum per RFC 1542), a server that keeps one address per Ethernet address (reservations, the address held before, the one asked for, the pool; a running lease is never taken away), the lease file, and `guard` (a probe DISCOVER, and whether a reply came from another server). `no_std + alloc`, no dependencies. The box runs it with `--dhcp IFACE` (helmsman-plc `dhcp`: the sockets tied to that interface, the probe before serving, the lease file in `<state-dir>/dhcp/leases`, `GET /api/dhcp`). | built: against its own tests and property tests, and the box service on loopback; no device yet |
@@ -886,6 +887,41 @@ conversation per instruction (a retry continues it); the change is saved
 through `PUT .../files/{f}` with `page`, and Undo is the box's restore.
 A proposal the box's agent stores instead is offered for review and
 nothing is written.
+
+## Simulated plant (`helmsman-sim`, built in the page)
+
+A project's `plant.sim` (`helmsman_project::PLANT`, never built or
+deployed) lists the machine's devices, one a line, `KIND NAME key=value`
+(`text.rs`; each kind's keys, roles and defaults in `Kind::keys`, which
+the popup reads too), and a `mode INPUT WORD [VALUE]` line for each input
+that is not normal. `Plant::step(dt_ms, read)` runs once a scan before
+the program reads its inputs (`Session::run_plant`, ahead of `feed`):
+`read` gives the outputs the last scan left and the panel's values of
+hand-set inputs, every device moves on by the scan on its own millisecond
+clock (a `slow` input's device by a fraction of it), sensors read the
+devices after them, and each input it drives comes back through its mode
+as a `Feed`. `Session` puts the value into the input as its type holds it
+(rounded, held inside an integer's range; TIME in seconds) and the `ok`
+into `NAME_ok` when the program has that input.
+
+- **Physics.** A heater is a first-order lag solved exactly per step
+  (the step size does not move where it gets); a tank integrates its net
+  rate inside 0..max; a motor and a valve slew linearly at their ramp and
+  travel; an eye counts belt time. Sources are functions of their clock,
+  but the walk, which steps at its interval with the seeded generator.
+- **Modes.** Stuck holds the value given or the one it had; drift adds
+  rate × time since it began; noise adds a seeded uniform ± size; over
+  and under go a tenth of the span past the input's range
+  (`Plant::range`); chatter randomises a BOOL for its time after each
+  change; absent gives no value (the input keeps its last, as a box's
+  `SignalTable` keeps the last good read of a lost link) and `ok` FALSE.
+- **Seeded.** `seed N` (1 by default) fixes the noise, chatter and walk:
+  a run is the same run every time, so a requirement test of a fault is
+  deterministic.
+- **Edits** carry: a device of the same name and kind keeps its state,
+  the clock runs on (`Plant::carried`); a cold restart starts the plant
+  over. A line it cannot take, and a port the program has no variable
+  for, are warnings on `plant.sim` in the page's diagnostics.
 
 ## Sim replay (`sim-replay`, built)
 

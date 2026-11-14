@@ -98,6 +98,68 @@ inputs without the mouse.
 A project can carry a plant model, a block that stands in for the tank,
 the belt or the compressors, so that it moves with nothing wired.
 
+## Devices
+
+A project's `plant.sim` file stands in for the machine's devices, so the
+program can be checked against something that answers it. One device a
+line, the kind, a name, then what it is wired to and its settings:
+
+```text
+# The oven: heat_on drives temp_c toward 250 with a minute's lag.
+heater oven heat=heat_on temp=temp_c ambient=20 max=250 tau=60s
+sensor pt1 of=oven.temp raw=temp_ma range=0..300 signal=4-20mA
+motor m1 run=motor_run speed=motor_rpm running=motor_running rated=1450 ramp=3s
+valve v1 open=fill_valve opened=valve_open closed=valve_closed travel=2s
+tank t1 fill=fill_valve drain=drain_pump level=level_m high=tank_high max=2
+eye pe1 belt=belt_run seen=part_seen every=4s length=500ms
+button b1 input=start_pb
+source s1 value=line_pressure shape=sine from=4 to=6 period=30s
+```
+
+- **heater**: the temperature rises toward `max` while the output heats
+  (a BOOL, or 0 to 100 %) and falls back to `ambient`; `tau` is the time
+  to 63 % of a change.
+- **tank**: the level rises at `fill_rate` while filling, falls at
+  `drain_rate` while draining, with `high` and `low` switches.
+- **motor**: the speed ramps to the command and back to a stop in
+  `ramp`; `running` is on above 5 % of `rated`.
+- **valve** (or **cylinder**): travels open in `travel`, with `opened`
+  and `closed` limit switches; without a `close` output it springs
+  closed.
+- **eye**: a part blocks it for `length` every `every` of belt time.
+- **button**, **switch**, **selector**: set by hand as before; listing
+  them gives them the behaviours below.
+- **source**: a signal that runs by itself: `ramp`, `exp`, `geometric`,
+  `pulse`, `step`, `sine` or a random `walk`.
+- **sensor**: a transmitter: what it measures (`of=oven.temp`, or an
+  output) scaled from `range` to 4-20 mA, 0-10 V or counts.
+
+Times take `ms`, `s`, `m` or `h`. A line the page cannot read, or one
+that names a variable the program does not have, is a warning on
+`plant.sim` under the editor; the rest still runs.
+
+### Normal, abnormal and absent
+
+Each input a device drives behaves normally unless a `mode` line says
+otherwise:
+
+```text
+mode temp_c stuck 80      # frozen at 80 (no value: where it was)
+mode temp_c drift 0.5     # 0.5 a second off, and growing
+mode temp_c noise 2       # up to 2 either way
+mode temp_c over          # past the top of its range (under: below)
+mode motor_rpm slow 4     # the motor answers 4 times slower
+mode part_seen chatter 50ms   # bounces for 50 ms on each change
+mode temp_c absent        # the device is lost
+```
+
+An absent input holds its last value, as on a box whose link to the
+device is down. A program that declares a BOOL input `NAME_ok`
+(`temp_c_ok`) reads it TRUE while the input is there and FALSE while it
+is absent, so the program can be written to handle a lost device. Noise,
+chatter and the random walk come from `seed N` (1 unless the file says),
+so a run is the same run every time.
+
 ## The trend
 
 The Trend tab along the bottom plots the signals you pin, up to six,

@@ -1572,6 +1572,7 @@ dependencies = [
  "helmsman-nodecore",
  "helmsman-plc",
  "helmsman-project",
+ "helmsman-sim",
  "proptest",
  "resvg",
  "serde",

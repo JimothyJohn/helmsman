@@ -412,7 +412,21 @@ impl PlaygroundView {
             let (f, l, c, m) = at(d);
             Diag::warning(f, l, c, m)
         });
-        errors.chain(warnings).collect()
+        let plant = self
+            .session
+            .plant_problems
+            .iter()
+            .map(|p| (p.line, p.msg.clone()))
+            .chain(self.session.plant_unbound())
+            .map(|(line, msg)| {
+                Diag::warning(
+                    helmsman_project::PLANT,
+                    u32::try_from(line).unwrap_or(u32::MAX),
+                    1,
+                    msg,
+                )
+            });
+        errors.chain(warnings).chain(plant).collect()
     }
 
     /// Opens `file` at `line` in the ST editor.
@@ -689,6 +703,12 @@ impl PlaygroundView {
     /// (`Session::sensors`): a state whose map `in` signal is one of the
     /// program's inputs runs from that input instead of the model.
     pub fn bind_sensors(&mut self) {
+        self.session.set_plant(
+            self.proj
+                .files
+                .get(helmsman_project::PLANT)
+                .map_or("", String::as_str),
+        );
         let src = self.session.build.as_ref().map_or("", |b| b.src.as_str());
         if self.sensors_from.as_ref().is_some_and(|(s, f)| {
             s == src
