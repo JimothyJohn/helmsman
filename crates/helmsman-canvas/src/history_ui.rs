@@ -55,6 +55,9 @@ impl RevisionRow {
     }
 }
 
+/// Rows of a version's description in the History tab.
+pub const DESCRIPTION_ROWS: usize = 2;
+
 /// What the History tab asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pick {
@@ -114,13 +117,22 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
     ui.add_space(4.0);
     for (k, row) in newest.iter().enumerate() {
         let on = k == here;
-        let label = RichText::new(row.short()).color(if on { t.accent } else { t.fg });
-        let r = ui
-            .scope(|ui| {
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                ui.selectable_label(on, label) // tip: exempt, added below
-            })
-            .inner;
+        // Two lines of the description (Nick, 2026-11-13), the second
+        // ending in "…" when there is more: wrapped at the pane's width,
+        // so a long one never widens it.
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let width = ui.available_width() - 2.0 * ui.spacing().button_padding.x - 12.0;
+        let mut job = egui::text::LayoutJob::simple(
+            row.short(),
+            font,
+            if on { t.accent } else { t.fg },
+            width.max(40.0),
+        );
+        job.wrap.max_rows = DESCRIPTION_ROWS;
+        job.wrap.overflow_character = Some('…');
+        // Laid out here: a button given the job would wrap it again.
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let r = ui.selectable_label(on, galley); // tip: exempt, added below
         chrome.hit(format!("revision {}", row.n), r.rect);
         let r = r.tip(format!(
             "{}\n{} · {} · version {}{}. Click to run it; double-click for its details.",
