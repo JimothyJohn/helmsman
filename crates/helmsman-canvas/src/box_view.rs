@@ -937,6 +937,7 @@ impl BoxView {
             decided: self.decided.clone(),
             swap: None,
             room_below: None,
+            progress: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),

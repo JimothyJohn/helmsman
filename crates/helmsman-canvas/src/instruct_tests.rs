@@ -680,3 +680,88 @@ fn opening_another_project_ends_the_run_and_sends_no_retry() {
         "other is untouched by it"
     );
 }
+
+// ---- progress while the answer streams (2026-11-13) ----
+
+#[test]
+fn the_code_written_so_far_is_the_files_block_and_never_a_scenario() {
+    use crate::instruct::partial_code;
+    assert_eq!(partial_code("Why: x.\n\n"), None, "nothing written yet");
+    assert_eq!(partial_code("Why: x.\n\n```s"), None);
+    assert_eq!(
+        partial_code("Why: x.\n\n```st"),
+        None,
+        "the fence line is not finished"
+    );
+    assert_eq!(partial_code("Why: x.\n\n```st\n"), Some(""));
+    assert_eq!(
+        partial_code("```st\nPROGRAM p\nEND_PRO"),
+        Some("PROGRAM p\nEND_PRO")
+    );
+    assert_eq!(
+        partial_code("```st\nPROGRAM p\n`"),
+        Some("PROGRAM p\n"),
+        "a closing fence half there"
+    );
+    assert_eq!(
+        partial_code("```st\nPROGRAM p\n```\n\n```st scenario\nPROGRAM t\n"),
+        Some("PROGRAM p\n")
+    );
+    assert_eq!(
+        partial_code("```st scenario\nPROGRAM t\n"),
+        None,
+        "a scenario is not the file"
+    );
+    assert_eq!(
+        partial_code("```st scenario\nPROGRAM t\n```\n```st\nPROGRAM p\n"),
+        Some("PROGRAM p\n")
+    );
+    assert_eq!(
+        partial_code(&st(LAMP)),
+        Some(LAMP),
+        "a whole answer: the whole file"
+    );
+}
+
+#[test]
+fn the_last_thought_is_one_line_cut_at_a_word() {
+    use crate::instruct::last_thought;
+    assert_eq!(last_thought(""), None);
+    assert_eq!(last_thought("  \n \n"), None);
+    assert_eq!(
+        last_thought("First the lamp.\nThen the horn\n\n").as_deref(),
+        Some("Then the horn")
+    );
+    let long = format!("start {}", "word ".repeat(80));
+    let t = last_thought(&long).unwrap();
+    assert!(t.starts_with('…') && t.chars().count() <= 141, "{t}");
+    assert!(!t.contains("  "), "{t:?}");
+}
+
+proptest::proptest! {
+    /// What the tab shows only ever grows as the answer streams in, and
+    /// ends as the whole file: a draft never jumps back or flickers.
+    #[test]
+    fn the_draft_only_grows_as_the_answer_streams(
+        code in "([A-Za-z0-9 :=;()*]{0,20}\n){0,12}",
+        cuts in proptest::collection::vec(0usize..400, 0..30),
+    ) {
+        use crate::instruct::partial_code;
+        let answer = st(&code);
+        let mut ends: Vec<usize> = cuts.into_iter().filter(|&c| c <= answer.len()).collect();
+        ends.push(answer.len());
+        ends.sort_unstable();
+        let mut before: Option<String> = None;
+        for end in ends {
+            let now = partial_code(&answer[..end]).map(str::to_string);
+            if let Some(b) = &before {
+                let n = now.clone().unwrap_or_default();
+                proptest::prop_assert!(n.starts_with(b.as_str()), "{b:?} then {n:?}");
+            }
+            if now.is_some() {
+                before = now;
+            }
+        }
+        proptest::prop_assert_eq!(before.as_deref(), Some(code.as_str()));
+    }
+}

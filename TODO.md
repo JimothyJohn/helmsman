@@ -364,6 +364,43 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
+- [ ] **Agent speed: less thinking on small asks** — Nick, 2026-11-13: the Agent is slow; approved lever. Measured on the free chat: on a simple instruction the model thinks for 5 to 10 s and writes the whole file in 1 to 2 s, so thinking is most of the wait. A new relay profile (a served profile never changes): thinking off or at its lowest for one-line changes (a rename, a time, a constant) and kept for new logic, chosen by the page from the instruction and the scope, or by the relay from the request. Kept only if the agent ladder still passes 14 of 14 (`cargo test -p helmsman-canvas agent_ladder -- --ignored`, against a relay serving the profile); the ladder's seconds before and after go in the PR.
+  needs: a session in ../agent-relay for the profile, your deploy
+  result: small instructions answer in a few seconds instead of 8 to 20
+  est: 1d
+  difficulty: med
+  id: agent-less-thinking
+  asked: 2026-11-13
+  by: claude-session
+
+- [ ] **Agent speed: edits instead of the whole file** — Nick, 2026-11-13: approved lever. The model rewrites the whole file every time; for a long program that is most of the output. A new relay profile whose answer is anchored edits (the lines replaced and the text they become, refused when the anchor no longer matches), applied by the page and checked as today; the draft then shows the edit in place. Also the first step of `agent-acceptance-signal` (edits anchored to a base hash). Ladder before and after, as above, plus a long-program rung.
+  needs: a session in ../agent-relay for the profile, your deploy
+  result: an instruction on a 300-line program answers about as fast as one on 20 lines
+  depends: agent-less-thinking
+  est: 2d
+  difficulty: high
+  id: agent-edits-not-files
+  asked: 2026-11-13
+  by: claude-session
+
+- [ ] **Agent speed: compare faster models on the ladder** — Nick, 2026-11-13: approved lever. Two or three candidates through OpenRouter, each on the ladder for seconds, pass rate and cost, the table in the PR; the one picked is the relay's `RELAY_MODEL`, a deployment setting you change.
+  needs: a relay serving each candidate (a local relay, or a test stage); your deploy for the one picked
+  result: a model choice backed by the ladder's numbers
+  est: 4h
+  difficulty: low
+  id: agent-faster-model
+  asked: 2026-11-13
+  by: claude-session
+
+- [ ] **The box's Agent tab shows its progress too** — the page shows the time, the latest thought and the draft as it streams (feat/agent-progress); the box's Agent tab goes through `POST /api/chat` and still shows only a spinner (`instruct::View::progress` is `None` there). Needs the thinking and text deltas through the box's chat stream to the canvas, then the same `Progress`.
+  needs: nothing
+  result: an engineer on a box sees the Agent think and write, as in the playground
+  est: 1d
+  difficulty: med
+  id: agent-progress-box
+  asked: 2026-11-13
+  by: claude-session
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
