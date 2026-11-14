@@ -103,6 +103,13 @@ footer a{color:var(--yellow)}
 header.top .gh{display:flex;color:var(--header-fg);flex:none;padding:6px}
 header.top .gh:hover{color:var(--yellow)}
 .early{margin:22px 0 0;font-size:15px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.lib-tools{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;margin:24px 0 0}
+.lib-tools input{font:14px var(--mono);padding:10px 12px;min-width:min(100%,280px);background:var(--bg);color:var(--fg);border:2px solid var(--rule-strong)}
+.lib-tools input:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+.lib-tools .muted{font:13px var(--mono)}
+#lib-rows .chip{margin-top:6px}
+.lib-vendor{font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+#lib-rows td:first-child{min-width:150px}
 .steps{counter-reset:s}
 .steps li{counter-increment:s}
 .steps li b::before{content:counter(s) ". "}
@@ -117,6 +124,7 @@ header.top .gh:hover{color:var(--yellow)}
       <a href="#agentic">How it works</a>
       <a href="#connect">Connects to</a>
       <a href="#status">Status</a>
+      <a href="#library">Devices</a>
       <a href="#why">Why?</a>
       <a href="#field">From the field</a>
       <a href="help/">Help</a>
@@ -215,6 +223,26 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
   </div>
 </section>
 
+<section id="library">
+  <div class="wrap">
+    <h2>Device library</h2>
+    <h3>Devices it already knows</h3>
+    <p>When the controller finds a device on the network, it looks it up in a public library: by identity first (an EtherNet/IP vendor id and product code), then by vendor and model. An entry gives the protocols, the I/O and the vendor's files by checksum, so the device goes into a project with one click.</p>
+    <p class="muted">An entry marked <i>from documents</i> was read from the vendor's EDS file and manual, page by page, and has not yet been run on a unit. A checked entry names the date it was.</p>
+    <div class="lib-tools">
+      <input id="lib-q" type="search" placeholder="Filter: vendor, model, protocol" aria-label="Filter the device library" hidden>
+      <span id="lib-count" class="muted" aria-live="polite">Loading the library…</span>
+    </div>
+    <div class="table-scroll">
+    <table id="lib-table" hidden>
+      <thead><tr><th>Device</th><th>Protocols</th><th>I/O</th></tr></thead>
+      <tbody id="lib-rows"></tbody>
+    </table>
+    </div>
+    <p class="muted">The library is open: <a href="https://github.com/JimothyJohn/helmsman-devices">github.com/JimothyJohn/helmsman-devices</a>. A pull request with one folder adds a device.</p>
+  </div>
+</section>
+
 <section id="why" class="on-black">
   <div class="wrap">
     <h2>Why?</h2>
@@ -266,6 +294,48 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
 </footer>
 <script>
 (function(){var h=document.documentElement,b=document.querySelector('header.top .theme');if(!b){return}function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();
+</script>
+<script>
+(function(){
+  var URL_INDEX='https://raw.githubusercontent.com/JimothyJohn/helmsman-devices/main/index.json';
+  var REPO='https://github.com/JimothyJohn/helmsman-devices/tree/main/';
+  var FOLDER=/^devices\/[a-z0-9][a-z0-9_.-]{0,63}\/[a-z0-9][a-z0-9_.-]{0,63}$/;
+  var PROTO={enip:'EtherNet/IP',modbus:'Modbus TCP'};
+  var q=document.getElementById('lib-q'),count=document.getElementById('lib-count'),
+      table=document.getElementById('lib-table'),body=document.getElementById('lib-rows');
+  if(!q||!body){return}
+  function str(v,max){return typeof v==='string'&&v.length<=max?v:''}
+  function cell(tr,text){var td=document.createElement('td');td.textContent=text;tr.appendChild(td);return td}
+  function failed(){count.textContent='The library could not be loaded here; it is on GitHub.'}
+  var rows=[];
+  function show(){
+    var words=q.value.toLowerCase().split(/\s+/).filter(Boolean),n=0;
+    rows.forEach(function(r){var on=words.every(function(w){return r.key.indexOf(w)>=0});r.tr.hidden=!on;if(on){n++}});
+    count.textContent=n===rows.length?rows.length+' devices':n+' of '+rows.length+' devices';
+  }
+  fetch(URL_INDEX,{credentials:'omit',referrerPolicy:'no-referrer'}).then(function(r){
+    if(!r.ok){throw new Error('HTTP '+r.status)}return r.json()
+  }).then(function(ix){
+    if(!ix||ix.format!=='helmsman-devices-index 1'||!Array.isArray(ix.devices)){throw new Error('format')}
+    var list=ix.devices.slice(0,2000).filter(function(d){return d&&str(d.vendor,120)&&str(d.model,120)});
+    list.sort(function(a,b){return (a.vendor+' '+a.model).localeCompare(b.vendor+' '+b.model,undefined,{numeric:true})});
+    list.forEach(function(d){
+      var tr=document.createElement('tr');
+      var m=cell(tr,''),folder=str(d.folder,160),v=document.createElement('span');
+      v.className='lib-vendor';v.textContent=d.vendor;m.appendChild(v);m.appendChild(document.createElement('br'));
+      if(FOLDER.test(folder)){var a=document.createElement('a');a.href=REPO+folder;a.textContent=d.model;m.appendChild(a)}else{m.appendChild(document.createTextNode(d.model))}
+      var ps=d.protocols&&typeof d.protocols==='object'?Object.keys(d.protocols).map(function(k){return PROTO[k]}).filter(Boolean):[];
+      cell(tr,ps.join(', ')||'–');
+      cell(tr,str(d.channels,120)||'–');
+      var chip=document.createElement('span'),checked=str(d.checked_on,10);
+      if(/^\d{4}-\d{2}-\d{2}$/.test(checked)){chip.className='chip ok';chip.textContent='checked '+checked}else{chip.className='chip pending';chip.textContent='from documents'}
+      m.appendChild(document.createElement('br'));m.appendChild(chip);
+      body.appendChild(tr);
+      rows.push({tr:tr,key:[d.vendor,d.model,ps.join(' '),str(d.channels,120),str(d.kind,40)].join(' ').toLowerCase()});
+    });
+    table.hidden=false;q.hidden=false;q.addEventListener('input',show);show();
+  }).catch(failed);
+})();
 </script>
 </body>
 </html>
