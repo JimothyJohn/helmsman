@@ -222,13 +222,16 @@ mode temp_c over          # past the top of its range (under: below)
 mode motor_rpm slow 4     # the motor answers 4 times slower
 mode part_seen chatter 50ms   # bounces for 50 ms on each change
 mode temp_c absent        # the device is lost</code></pre>
-<p>An absent input holds its last value, as on a box whose link to the
-device is down. A program that declares a BOOL input
-<code>NAME_ok</code> (<code>temp_c_ok</code>) reads it TRUE while the
-input is there and FALSE while it is absent, so the program can be
-written to handle a lost device. Noise, chatter and the random walk come
-from <code>seed N</code> (1 unless the file says), so a run is the same
-run every time.</p>
+<p>An absent input does what it does on a box whose link to the device
+is down: the program is <strong>held</strong>, its outputs at their safe
+(off, zero) values, until the input is back. A program that declares a
+BOOL input <code>NAME_ok</code> (<code>temp_c_ok</code>) handles the
+loss itself instead: it keeps running, the input keeps its last value,
+and <code>NAME_ok</code> reads TRUE while the input is there and FALSE
+while it is absent. The box does the same for a program with
+<code>NAME_ok</code>: it needs no signal of that name in the I/O map.
+Noise, chatter and the random walk come from <code>seed N</code> (1
+unless the file says), so a run is the same run every time.</p>
 <h2 id="the-trend">The trend</h2>
 <p>The Trend tab along the bottom plots the signals you pin, up to six,
 each in its own lane with its last value. The Window slider sets how

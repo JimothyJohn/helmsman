@@ -845,6 +845,10 @@ pub struct Session {
     plant_text: String,
     /// The lines of `plant.sim` it could not take.
     pub plant_problems: Vec<helmsman_sim::Problem>,
+    /// The plant holds the program this scan, as a box holds a module: an
+    /// input is absent and the program has no `NAME_ok` to handle it. Held,
+    /// it does not run and its outputs read zero.
+    pub held: bool,
     /// What the panel last set each input to (upper case): the value a
     /// button, switch or selector of the plant reads before its mode.
     panel: BTreeMap<String, Value>,
@@ -882,6 +886,7 @@ impl Session {
             plant: None,
             plant_text: String::new(),
             plant_problems: Vec::new(),
+            held: false,
             panel: BTreeMap::new(),
             breaks: Vec::new(),
             paused: None,
@@ -1429,6 +1434,7 @@ impl Session {
     /// Moves the plant on by a scan (none before the first) and puts what
     /// it drives into the inputs, with each `NAME_ok` it has.
     fn run_plant(&mut self) {
+        self.held = false;
         let (Some(plant), Some(b)) = (&mut self.plant, &mut self.build) else {
             return;
         };
@@ -1449,7 +1455,16 @@ impl Session {
             if let Some(v) = f.value {
                 drive(b, &f.name, v);
             }
-            drive(b, &format!("{}_OK", f.name), helmsman_sim::Val::Bool(f.ok));
+            let ok = format!("{}_OK", f.name);
+            let is_in = |n: &str| {
+                b.points
+                    .iter()
+                    .any(|p| p.dir == Dir::In && p.name.eq_ignore_ascii_case(n))
+            };
+            if f.value.is_none() && is_in(&f.name) && !is_in(&ok) {
+                self.held = true;
+            }
+            drive(b, &ok, helmsman_sim::Val::Bool(f.ok));
         }
     }
 
@@ -1459,6 +1474,19 @@ impl Session {
         self.feed();
         self.paused = None;
         let Some(b) = &mut self.build else { return };
+        if self.held {
+            b.image.q.fill(0);
+            for p in b.points.iter_mut().filter(|p| p.dir == Dir::Out) {
+                p.value = Value::zero(p.ty);
+                if p.place == Place::Port {
+                    let _ = b.program.set(&p.name, p.value);
+                }
+            }
+            self.scans += 1;
+            self.trend.record(self.now_ms, &b.points);
+            self.now_ms += self.period_ms;
+            return;
+        }
         let now = Duration::from_millis(self.now_ms);
         let r = if traced {
             let (r, trace) = b.program.scan_traced(&mut b.image, now);

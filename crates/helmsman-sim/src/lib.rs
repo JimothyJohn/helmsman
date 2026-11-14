@@ -11,8 +11,10 @@
 //!
 //! Each input a device drives behaves normally, abnormally (stuck,
 //! drifting, noisy, over or under its range, slow, chattering) or is
-//! absent: its device is lost, the input holds its last value as a box's
-//! does while a link is down, and its `NAME_ok` input reads FALSE. A
+//! absent: its device is lost, as when a box's link is down. A box then
+//! holds the program, outputs safe; a program that declares the BOOL
+//! input `NAME_ok` runs on instead, the input at its last value and
+//! `NAME_ok` FALSE. The page and the tests do the same. A
 //! `mode` line of the file says which; a requirement test or the popup
 //! can change it while running ([`Plant::set_mode`]).
 //!

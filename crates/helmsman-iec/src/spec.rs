@@ -493,13 +493,24 @@ pub trait Machine {
     /// One scan of `dt` (zero before the first): `test` reads the test's
     /// variables (what it says of the machine), `program` the program's
     /// variables (its outputs as the last scan left them, its inputs as
-    /// the test just drove them). The inputs to set, by name.
+    /// the test just drove them).
     fn scan(
         &mut self,
         dt: Duration,
         test: &dyn Fn(&str) -> Option<Value>,
         program: &dyn Fn(&str) -> Option<Value>,
-    ) -> Vec<(String, Value)>;
+    ) -> Scanned;
+}
+
+/// What a [`Machine`] says of one scan.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Scanned {
+    /// The inputs to set, by name.
+    pub set: Vec<(String, Value)>,
+    /// The program is held this scan, as a box holds a module with an
+    /// input that has no value: it does not run and its outputs read
+    /// their zero (safe) values.
+    pub hold: bool,
 }
 
 /// Runs one test against `main` (the program under test's source).
@@ -610,13 +621,20 @@ pub fn run_with(
                 let _ = m.set_input(name, v);
             }
         }
+        let mut hold = false;
         if let Some(mach) = machine.as_mut() {
             let dt = if scans == 0 { zero } else { period };
-            for (name, v) in mach.scan(dt, &|n| t.get(n), &|n| m.get(n)) {
+            let s = mach.scan(dt, &|n| t.get(n), &|n| m.get(n));
+            for (name, v) in s.set {
                 let _ = m.set_input(&name, v);
             }
+            hold = s.hold;
         }
-        if let Err(f) = m.scan_at(&mut mi, now) {
+        if hold {
+            for p in program_ports.iter().filter(|p| p.dir == PortDir::Output) {
+                let _ = m.set(&p.name, Value::zero(p.ty));
+            }
+        } else if let Err(f) = m.scan_at(&mut mi, now) {
             let fault = f.to_string();
             return verdict(Outcome::Faulted { test: false, fault }, scans, now);
         }

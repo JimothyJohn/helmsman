@@ -166,10 +166,14 @@ mode part_seen chatter 50ms   # bounces for 50 ms on each change
 mode temp_c absent        # the device is lost
 ```
 
-An absent input holds its last value, as on a box whose link to the
-device is down. A program that declares a BOOL input `NAME_ok`
-(`temp_c_ok`) reads it TRUE while the input is there and FALSE while it
-is absent, so the program can be written to handle a lost device. Noise,
+An absent input does what it does on a box whose link to the device is
+down: the program is **held**, its outputs at their safe (off, zero)
+values, until the input is back. A program that declares a BOOL input
+`NAME_ok` (`temp_c_ok`) handles the loss itself instead: it keeps
+running, the input keeps its last value, and `NAME_ok` reads TRUE while
+the input is there and FALSE while it is absent. The box does the same
+for a program with `NAME_ok`: it needs no signal of that name in the
+I/O map. Noise,
 chatter and the random walk come from `seed N` (1 unless the file says),
 so a run is the same run every time.
 

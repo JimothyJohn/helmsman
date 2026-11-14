@@ -327,12 +327,12 @@ impl Popup {
                 let ok = format!("{}_ok", self.input);
                 if self.has_ok {
                     format!(
-                        "The device is lost: {} holds its last value and {ok} reads FALSE.",
+                        "The device is lost: the program runs on with {} at its last value, and {ok} reads FALSE.",
                         self.input
                     )
                 } else {
                     format!(
-                        "The device is lost: {} holds its last value. Declare {ok} : BOOL as an input for the program to tell.",
+                        "The device is lost: the program is held, its outputs off, as on a box. Declare {ok} : BOOL as an input to handle the loss of {} in the program.",
                         self.input
                     )
                 }

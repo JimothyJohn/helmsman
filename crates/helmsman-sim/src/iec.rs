@@ -25,12 +25,14 @@
 //!
 //! An input the test drives itself stays the test's while it behaves
 //! normally; once the test makes it misbehave, the plant takes it, from
-//! the test's own value. `X_ok` reads FALSE while `X` is absent, unless the
-//! test drives it.
+//! the test's own value. While `X` is absent the program is held, outputs
+//! zero, as a box holds a module with a missing input; a program that
+//! declares the BOOL input `X_ok` runs on instead, `X` at its last value
+//! and `X_ok` FALSE (unless the test drives `X_ok`).
 
 use std::time::Duration;
 
-use helmsman_iec::spec::{self, Machine, Plan, Settings, TestSrc, Verdict};
+use helmsman_iec::spec::{self, Machine, Plan, Scanned, Settings, TestSrc, Verdict};
 use helmsman_iec::{Port, PortDir, Ty, Value};
 
 use crate::{Mode, Plant, Spec, Val};
@@ -134,7 +136,7 @@ impl Machine for TestPlant {
         dt: Duration,
         test: &dyn Fn(&str) -> Option<Value>,
         program: &dyn Fn(&str) -> Option<Value>,
-    ) -> Vec<(String, Value)> {
+    ) -> Scanned {
         let faulted = self.faulted.get_or_insert_with(|| {
             self.inputs
                 .iter()
@@ -152,6 +154,7 @@ impl Machine for TestPlant {
         };
         let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
         let mut out = Vec::new();
+        let mut hold = false;
         for f in self.plant.step(ms, &read) {
             let name = f.name.to_ascii_uppercase();
             let normal = self.plant.mode(&name) == Mode::Normal;
@@ -161,11 +164,15 @@ impl Machine for TestPlant {
                 out.push((name.clone(), to_value(p.ty, v)));
             }
             let ok = format!("{name}_OK");
-            if self.inputs.iter().any(|p| p.name == ok && p.ty == Ty::Bool) && test(&ok).is_none() {
+            let watched = self.inputs.iter().any(|p| p.name == ok && p.ty == Ty::Bool);
+            if watched && test(&ok).is_none() {
                 out.push((ok, Value::Bool(f.ok)));
             }
+            // As on a box: an input of the program gone missing holds it,
+            // unless the program watches it with `X_ok`.
+            hold |= f.value.is_none() && !watched && self.inputs.iter().any(|p| p.name == name);
         }
-        out
+        Scanned { set: out, hold }
     }
 }
 
