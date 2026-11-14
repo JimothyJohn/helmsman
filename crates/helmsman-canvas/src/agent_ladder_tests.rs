@@ -856,10 +856,7 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
         let mut cost = 0.0;
         let mut applied = None;
         // As the page does: a big ask is planned in steps first.
-        let lines = scope
-            .file()
-            .and_then(|f| files.get(f))
-            .map(|t| t.lines().count());
+        let lines = scope.file().and_then(|f| files.get(f)).map(|t| t.lines().count());
         let plan = crate::steps::big_ask(ask.instruction, lines);
         let mut next = match ins.start_with(&env, &earlier, plan) {
             Ok(a) => Some(a),
