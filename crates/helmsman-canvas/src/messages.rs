@@ -5,7 +5,9 @@
 
 use std::collections::VecDeque;
 
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+
+use crate::glyphs::Icon;
 
 use crate::st_view::brand::{GREEN, RED, WARN};
 use crate::theme::theme;
@@ -193,22 +195,27 @@ impl Log {
         self.unseen = 0;
         let counts = self.counts();
         ui.horizontal_wrapped(|ui| {
-            for (k, (name, color)) in [
-                ("info", crate::theme::theme(ui).ink(GREEN)),
-                ("warnings", crate::theme::theme(ui).ink(WARN)),
-                ("errors", crate::theme::theme(ui).ink(RED)),
+            for (k, (name, icon, color)) in [
+                ("info", Icon::Info, crate::theme::theme(ui).ink(GREEN)),
+                ("warnings", Icon::Warning, crate::theme::theme(ui).ink(WARN)),
+                ("errors", Icon::Error, crate::theme::theme(ui).ink(RED)),
             ]
             .into_iter()
             .enumerate()
             {
-                // A tick box (Nick, 2026-11-11: what a toggle does must be
-                // plain): ticked and in its colour while the level shows,
-                // empty and grey while it is hidden.
+                // Its icon and count (Nick, 2026-11-13: icons, not words),
+                // in its colour while the level is listed, grey while it
+                // is left out; a click switches it.
                 let ink = if self.show[k] { color } else { theme(ui).muted };
-                let text = RichText::new(format!("{name} {}", counts[k])).color(ink);
-                let r = ui.checkbox(&mut self.show[k], text).tip(format!(
-                    "Ticked: the {name} are listed. Unticked: they are left out."
+                let r = level_toggle(ui, icon, counts[k], ink, self.show[k]).tip(format!(
+                    "{}: {} of them. Click to {} them.",
+                    capital(name),
+                    counts[k],
+                    if self.show[k] { "leave out" } else { "list" }
                 ));
+                if r.clicked() {
+                    self.show[k] = !self.show[k];
+                }
                 chrome.hit(format!("messages {name}"), r.rect);
             }
             if !self.items.is_empty() {
@@ -236,10 +243,10 @@ impl Log {
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 for m in self.shown() {
-                    let (tag, color) = match m.level {
-                        Level::Info => ("info", crate::theme::theme(ui).ink(GREEN)),
-                        Level::Warning => ("warning", crate::theme::theme(ui).ink(WARN)),
-                        Level::Error => ("error", crate::theme::theme(ui).ink(RED)),
+                    let (tag, icon, color) = match m.level {
+                        Level::Info => ("Info", Icon::Info, crate::theme::theme(ui).ink(GREEN)),
+                        Level::Warning => ("Warning", Icon::Warning, crate::theme::theme(ui).ink(WARN)),
+                        Level::Error => ("Error", Icon::Error, crate::theme::theme(ui).ink(RED)),
                     };
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
@@ -247,12 +254,9 @@ impl Log {
                                 .monospace()
                                 .color(t.muted),
                         );
-                        ui.label(
-                            RichText::new(format!("{tag:<7}"))
-                                .monospace()
-                                .strong()
-                                .color(color),
-                        );
+                        let (rect, r) = ui.allocate_exact_size(Vec2::splat(ROW_ICON), Sense::hover());
+                        crate::glyphs::paint(ui.painter(), rect.shrink(1.0), icon, color);
+                        r.tip(tag);
                         ui.add(egui::Label::new(RichText::new(&m.text).color(t.fg)).selectable(true));
                     });
                 }
@@ -284,6 +288,49 @@ pub fn copyable(
         r
     })
     .inner
+}
+
+/// The level icon's side in a message row, points.
+const ROW_ICON: f32 = 20.0;
+/// The level icon's side in the filter row, points.
+const FILTER_ICON: f32 = 24.0;
+
+/// A level's filter: its icon and its count side by side, one click
+/// target, tinted under the pointer, underlined while the level shows.
+fn level_toggle(ui: &mut egui::Ui, icon: Icon, count: usize, ink: Color32, on: bool) -> egui::Response {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(count.to_string(), font, ink));
+    let pad = 4.0;
+    let size = Vec2::new(
+        pad + FILTER_ICON + 4.0 + galley.size().x + pad,
+        FILTER_ICON.max(galley.size().y) + 2.0 * pad,
+    );
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    if r.hovered() {
+        let tint = ui.style().interact(&r).bg_fill;
+        ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
+    }
+    let icon_rect = Rect::from_min_size(
+        Pos2::new(rect.left() + pad, rect.center().y - FILTER_ICON / 2.0),
+        Vec2::splat(FILTER_ICON),
+    );
+    crate::glyphs::paint(ui.painter(), icon_rect, icon, ink);
+    let text_at = Pos2::new(icon_rect.right() + 4.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(text_at, galley, ink);
+    if on {
+        ui.painter().hline(
+            (rect.left() + pad)..=(rect.right() - pad),
+            rect.bottom() - 1.0,
+            Stroke::new(2.0, ink),
+        );
+    }
+    r
+}
+
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
 #[cfg(test)]

@@ -423,6 +423,41 @@ mod glyphs_and_help {
         assert!(!h.has("st"), "no Files header row either");
     }
 
+    /// Nick, 2026-11-13: "info, warning, and error should be icons, not
+    /// words on the messaging screen." The filters are each level's icon
+    /// and count, a click switching it; each row's level is its icon; no
+    /// level word is drawn; Copy all keeps the words for a bug report.
+    #[test]
+    fn message_levels_are_icons_not_words() {
+        let mut h = Harness::new(App::sim());
+        {
+            let log = &mut h.app.sim.as_mut().unwrap().log;
+            log.info(1.0, "a deploy ran");
+            log.warning(2.0, "a value is never read");
+            log.error(3.0, "deploy refused: no engineer session");
+        }
+        h.press("bottom messages");
+        h.wait(0.2);
+        for word in ["info", "warning", "error"] {
+            assert!(!h.drew(&format!("{word} ")), "the word {word:?} is drawn");
+        }
+        assert!(h.drew("deploy refused"), "the message itself is");
+        let r = h.rect("messages errors");
+        assert!(r.width() >= 24.0 && r.height() >= 24.0, "a target: {r:?}");
+        h.press("messages errors");
+        h.wait(0.1);
+        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [true, true, false]);
+        assert!(!h.drew("deploy refused"), "errors left out");
+        h.press("messages errors");
+        h.wait(0.1);
+        assert!(h.drew("deploy refused"), "and listed again");
+        h.press("messages copy");
+        assert!(
+            h.copied.last().unwrap().contains("error   deploy refused"),
+            "words in the copy"
+        );
+    }
+
     /// Nick, 2026-11-07: "I really need to be able to copy and paste
     /// errors". An error line under the header has a Copy button, the
     /// Messages tab a Copy all, and both put the whole text on the

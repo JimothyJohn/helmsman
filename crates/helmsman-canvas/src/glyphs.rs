@@ -65,6 +65,12 @@ pub enum Icon {
     Monitor,
     /// A clock face: the History tab (Nick, 2026-11-13).
     History,
+    /// i in a ring: an info message (Nick, 2026-11-13: levels as icons).
+    Info,
+    /// ! in a triangle: a warning.
+    Warning,
+    /// × in a ring: an error.
+    Error,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -538,6 +544,42 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 ],
                 stroke,
             ));
+        }
+        Icon::Info => {
+            p.circle_stroke(c, b.width() * 0.5 - w * 0.5, stroke);
+            p.circle_filled(Pos2::new(c.x, t + b.height() * 0.28), w * 0.75, color);
+            p.line_segment(
+                [
+                    Pos2::new(c.x, t + b.height() * 0.45),
+                    Pos2::new(c.x, bt - b.height() * 0.22),
+                ],
+                stroke,
+            );
+        }
+        Icon::Warning => {
+            let inset = w * 0.6;
+            p.add(egui::Shape::closed_line(
+                vec![
+                    Pos2::new(c.x, t + inset),
+                    Pos2::new(r - inset, bt - inset),
+                    Pos2::new(l + inset, bt - inset),
+                ],
+                stroke,
+            ));
+            p.line_segment(
+                [
+                    Pos2::new(c.x, t + b.height() * 0.38),
+                    Pos2::new(c.x, t + b.height() * 0.66),
+                ],
+                stroke,
+            );
+            p.circle_filled(Pos2::new(c.x, t + b.height() * 0.8), w * 0.7, color);
+        }
+        Icon::Error => {
+            p.circle_stroke(c, b.width() * 0.5 - w * 0.5, stroke);
+            let k = b.width() * 0.2;
+            p.line_segment([c + Vec2::new(-k, -k), c + Vec2::new(k, k)], stroke);
+            p.line_segment([c + Vec2::new(-k, k), c + Vec2::new(k, -k)], stroke);
         }
         Icon::Help => {
             p.circle_stroke(c, b.width() * 0.5, stroke);
