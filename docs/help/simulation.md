@@ -138,6 +138,19 @@ Times take `ms`, `s`, `m` or `h`. A line the page cannot read, or one
 that names a variable the program does not have, is a warning on
 `plant.sim` under the editor; the rest still runs.
 
+### Double-click an input
+
+A double-click on an input, on its block in the diagram or on its row in
+the I/O panel, opens **Simulate this input**: which device stands behind
+it, guessed from its name (`temp_c` a heater, `start_pb` a button,
+`valve_open` a valve's limit switch, `part_seen` a photo-eye) with its
+outputs wired to the likeliest of the program's, the device's settings,
+and how the input behaves: **Normal**, **Abnormal** (and which way) or
+**Absent**. **Apply** writes it into `plant.sim` (a built-in example is
+copied into a project of your own first) and the simulation runs it from
+the next scan. An input that is not behaving normally is outlined, yellow
+while abnormal and red while absent.
+
 ### Normal, abnormal and absent
 
 Each input a device drives behaves normally unless a `mode` line says

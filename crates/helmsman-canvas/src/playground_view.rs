@@ -165,6 +165,12 @@ pub struct PlaygroundView {
     /// The question "what is this program called?", asked before the
     /// first program the Agent writes from a built-in example lands.
     pub program_name: Option<ProgramName>,
+    /// The simulate-this-input popup a double-click on an input opened
+    /// (`crate::sim_popup`).
+    pub sim_popup: Option<crate::sim_popup::Popup>,
+    /// Where each input's control was drawn last frame, by name (the
+    /// diagram's blocks, then the I/O panel's rows): what a test clicks.
+    input_rects: Vec<(String, Rect)>,
     /// The project the Agent's new programs land in, once named.
     pub new_program: Option<String>,
     /// The Agent tab (`crate::instruct`).
@@ -245,6 +251,8 @@ impl PlaygroundView {
             devices_ui: crate::devices::DevicesUi::default(),
             sensors_from: None,
             program_name: None,
+            sim_popup: None,
+            input_rects: Vec::new(),
             new_program: None,
             instruct: crate::instruct::Instruct::default(),
             answered_seq: 0,
@@ -1566,6 +1574,95 @@ impl PlaygroundView {
         // on its backdrop and shuts itself.
         self.program_name_ui(&ui.ctx().clone(), chrome);
         self.revision_ui(&ui.ctx().clone(), chrome);
+        for (name, r) in std::mem::take(&mut self.input_rects) {
+            chrome.hit(format!("input {name}"), r);
+        }
+        self.sim_popup_ui(&ui.ctx().clone(), chrome);
+    }
+
+    /// The program's outputs as (name, is BOOL), lower case.
+    fn output_list(&self) -> Vec<(String, bool)> {
+        self.session
+            .outputs()
+            .map(|p| (p.name.to_ascii_lowercase(), p.ty == Ty::Bool))
+            .collect()
+    }
+
+    /// Opens the simulate-this-input popup on input `name`.
+    pub fn open_sim_popup(&mut self, name: &str) {
+        let Some(p) = self.session.inputs().find(|p| p.name.eq_ignore_ascii_case(name)) else {
+            return;
+        };
+        let is_bool = p.ty == Ty::Bool;
+        let text = self
+            .proj
+            .files
+            .get(helmsman_project::PLANT)
+            .cloned()
+            .unwrap_or_default();
+        let (spec, _) = helmsman_sim::parse(&text);
+        let mode = self
+            .session
+            .plant
+            .as_ref()
+            .map_or_else(|| spec.mode(name), |pl| pl.mode(name));
+        let inputs: Vec<String> = self
+            .session
+            .inputs()
+            .map(|p| p.name.to_ascii_lowercase())
+            .collect();
+        self.sim_popup = Some(crate::sim_popup::Popup::open(
+            name,
+            is_bool,
+            &spec,
+            mode,
+            &self.output_list(),
+            &inputs,
+        ));
+    }
+
+    /// The popup, and its Apply: the project's `plant.sim` rewritten (a
+    /// read-only example copied first), run from the next scan.
+    fn sim_popup_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        let Some(mut popup) = self.sim_popup.take() else {
+            return;
+        };
+        let text = self
+            .proj
+            .files
+            .get(helmsman_project::PLANT)
+            .cloned()
+            .unwrap_or_default();
+        let (spec, _) = helmsman_sim::parse(&text);
+        let outputs = self.output_list();
+        match popup.show(ctx, chrome, &spec, &outputs) {
+            None => self.sim_popup = Some(popup),
+            Some(crate::sim_popup::Act::Close) => {}
+            Some(crate::sim_popup::Act::Apply) => match popup.apply(&text) {
+                Err(why) => {
+                    popup.error = Some(why);
+                    self.sim_popup = Some(popup);
+                }
+                Ok(new) => {
+                    if !self.own_project() {
+                        popup.error = Some("The example could not be copied to write plant.sim into.".into());
+                        self.sim_popup = Some(popup);
+                        return;
+                    }
+                    match self.proj.files.get_mut(helmsman_project::PLANT) {
+                        Some(t) => *t = new,
+                        None => self.proj.add_file(helmsman_project::PLANT, new),
+                    }
+                    self.session.set_plant(
+                        self.proj
+                            .files
+                            .get(helmsman_project::PLANT)
+                            .map_or("", String::as_str),
+                    );
+                    self.proj.note(format!("plant.sim: {}", popup.explain()), false);
+                }
+            },
+        }
     }
 
     /// Runs the program (and Claude's answer) on with nothing drawn: the
@@ -2197,13 +2294,28 @@ impl PlaygroundView {
             // or the row overflows and the resizable panel grows to fit.
             let (cols, col) = columns(ui);
             let mut set = Vec::new();
+            let mut open_row = None;
             egui::Grid::new("pg-io-in").num_columns(cols).show(ui, |ui| {
                 for pair in off_map.chunks(cols) {
                     for p in pair {
                         ui.scope(|ui| {
                             ui.set_max_width(col);
-                            if let Some(v) = input_ui(ui, p) {
+                            let r = ui.scope(|ui| input_ui(ui, p));
+                            if let Some(v) = r.inner {
                                 set.push((p.name.clone(), v));
+                            }
+                            self.input_rects
+                                .push((p.name.to_ascii_lowercase(), r.response.rect));
+                            mark_mode(
+                                ui,
+                                r.response.rect,
+                                self.session
+                                    .plant
+                                    .as_ref()
+                                    .map_or(helmsman_sim::Mode::Normal, |pl| pl.mode(&p.name)),
+                            );
+                            if double_clicked(ui, r.response.rect) {
+                                open_row = Some(p.name.clone());
                             }
                         });
                     }
@@ -2214,6 +2326,9 @@ impl PlaygroundView {
                 if let Err(why) = self.session.try_input(&name, v) {
                     self.notice = Some(why);
                 }
+            }
+            if let Some(name) = open_row {
+                self.open_sim_popup(&name);
             }
             ui.add_space(8.0);
             let outputs_tip = if outputs.is_empty() {
@@ -2927,6 +3042,7 @@ impl PlaygroundView {
         ui.set_clip_rect(area);
         // A push button read in two places is held if either is.
         let mut held: Vec<(String, bool)> = Vec::new();
+        let mut open = None;
         let mut set = Vec::new();
         for (k, (path, rect)) in reads.iter().enumerate() {
             let Some(p) = inputs.iter().find(|p| p.name.eq_ignore_ascii_case(path)) else {
@@ -2934,6 +3050,18 @@ impl PlaygroundView {
             };
             if !area.intersects(*rect) {
                 continue;
+            }
+            self.input_rects.push((p.name.to_ascii_lowercase(), *rect));
+            mark_mode(
+                ui,
+                *rect,
+                self.session
+                    .plant
+                    .as_ref()
+                    .map_or(helmsman_sim::Mode::Normal, |pl| pl.mode(&p.name)),
+            );
+            if double_clicked(ui, *rect) {
+                open = Some(p.name.clone());
             }
             match map_input_ui(ui, *rect, p, k) {
                 MapInput::Held(on) => match held.iter_mut().find(|(n, _)| *n == p.name) {
@@ -2946,6 +3074,9 @@ impl PlaygroundView {
         }
         for (name, on) in held {
             self.session.set_input(&name, Value::Bool(on));
+        }
+        if let Some(name) = open {
+            self.open_sim_popup(&name);
         }
         for (name, v) in set {
             self.session.set_input(&name, v);
@@ -3104,6 +3235,31 @@ impl PlaygroundView {
     }
 }
 
+/// Whether the pointer's primary button was double-clicked inside `rect`
+/// this frame.
+fn double_clicked(ui: &egui::Ui, rect: Rect) -> bool {
+    ui.input(|i| {
+        i.pointer.button_double_clicked(egui::PointerButton::Primary)
+            && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
+    })
+}
+
+/// An input not behaving normally is outlined: yellow while abnormal, red
+/// while absent.
+fn mark_mode(ui: &egui::Ui, rect: Rect, mode: helmsman_sim::Mode) {
+    let color = match mode {
+        helmsman_sim::Mode::Normal => return,
+        helmsman_sim::Mode::Absent => RED,
+        _ => YELLOW,
+    };
+    ui.painter().rect_stroke(
+        rect.expand(2.0),
+        3.0,
+        Stroke::new(2.0, color),
+        egui::StrokeKind::Outside,
+    );
+}
+
 /// What an input's control on the diagram did this frame.
 enum MapInput {
     Nothing,
@@ -3168,7 +3324,7 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
             .sense(Sense::click_and_drag());
             let r = ui
                 .add_sized(rect.size(), b)
-                .on_hover_text("push button: on while held");
+                .on_hover_text("push button: on while held · double-click: simulate it");
             MapInput::Held(r.is_pointer_button_down_on())
         }
         Some(Widget::Toggle) => {
@@ -3183,7 +3339,7 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
             .wrap_mode(egui::TextWrapMode::Truncate);
             if ui
                 .add_sized(rect.size(), b)
-                .on_hover_text("switch: click to flip")
+                .on_hover_text("switch: click to flip · double-click: simulate it")
                 .clicked()
             {
                 MapInput::Set(Value::Bool(!on))
@@ -3231,7 +3387,8 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
     .inner
 }
 
-const TYPE_HINT: &str = "type a value, then Enter (Esc puts it back)";
+const TYPE_HINT: &str =
+    "type a value, then Enter (Esc puts it back); double-click to simulate it as a device";
 
 impl Workspace for PlaygroundView {
     fn dirty(&self) -> bool {
@@ -3482,7 +3639,9 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                     .sense(Sense::click_and_drag())
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-                let r = ui.add(b).tip("Push button: on while held.");
+                let r = ui
+                    .add(b)
+                    .tip("Push button: on while held. Double-click to simulate it as a device.");
                 out = Some(Value::Bool(r.is_pointer_button_down_on()));
             }
             Some(Widget::Toggle) => {
@@ -3495,7 +3654,11 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 .fill(if on { YELLOW } else { t.rule })
                 .wrap_mode(egui::TextWrapMode::Truncate)
                 .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-                if ui.add(b).tip("Switch: click to flip.").clicked() {
+                if ui
+                    .add(b)
+                    .tip("Switch: click to flip. Double-click to simulate it as a device.")
+                    .clicked()
+                {
                     out = Some(Value::Bool(!on));
                 }
             }
