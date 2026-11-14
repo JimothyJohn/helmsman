@@ -728,14 +728,19 @@ pub struct View {
 /// to see progressive changes being made rather than waiting a long time
 /// assuming something is happening"). Most of the wait is the model
 /// thinking before it writes a word (measured on the free chat: 5.3 of
-/// 7.6 s), so the tab shows the time and the last line of the thinking,
-/// then the code as it is written, marked as a draft until it is checked.
+/// 7.6 s). The tab shows the time and which [`Stage`] the answer is at,
+/// the answer's one-line reason once it is in, then the code as it is
+/// written, marked as a draft until it is checked. The thinking itself is
+/// not shown (Nick, 2026-11-14: "the flickering through the current
+/// thoughts is too glitchy and not helpful ... only show major updates").
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Progress {
     /// Since the request went, s.
     pub secs: f64,
-    /// The last line of the thinking so far, cut to one row.
-    pub thought: Option<String>,
+    /// Where the answer is.
+    pub stage: Stage,
+    /// The answer's `Why: ` sentence, once its line is complete.
+    pub why: Option<String>,
     /// The file's code written so far ([`partial_code`]).
     pub code: Option<String>,
     /// The answer is in and checked; the program waits for its name (a
@@ -771,8 +776,44 @@ pub fn clock(secs: u64, estimate: Option<u64>) -> String {
     }
 }
 
-/// How many characters of the thinking's last line are shown.
-const THOUGHT_CHARS: usize = 140;
+/// The major steps of an answer, in the order they come; the status line
+/// changes only when the answer moves from one to the next (and as lines
+/// of code are counted).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Stage {
+    /// Sent; nothing back yet.
+    #[default]
+    Waiting,
+    /// The model is thinking, or giving its reason, before any code.
+    Planning,
+    /// The file's code, this many lines so far.
+    Writing(usize),
+    /// The code is written; the scenarios that check it, this many begun.
+    Checks(usize),
+}
+
+/// The [`Stage`] of an answer whose text so far is `text`, `thinking`
+/// when the model has begun to think. The answer's order is the reason,
+/// the code, then its scenarios (`claude::SYSTEM`, [`BOX_RULES`]), so the
+/// stage only moves forward as the text grows (a property test holds it).
+#[must_use]
+pub fn stage(thinking: bool, text: &str) -> Stage {
+    let checks = text.matches("```st scenario").count();
+    match partial_code(text) {
+        Some(_) if checks > 0 => Stage::Checks(checks),
+        Some(code) => Stage::Writing(code.lines().count()),
+        None if thinking || !text.trim().is_empty() => Stage::Planning,
+        None => Stage::Waiting,
+    }
+}
+
+/// The sentence of the answer's `Why: ` line, once that line has ended.
+#[must_use]
+pub fn why_line(text: &str) -> Option<String> {
+    let (line, _) = text.trim_start().split_once('\n')?;
+    let why = line.strip_prefix("Why:")?.trim();
+    (!why.is_empty()).then(|| why.to_string())
+}
 /// How many of the code's last lines the tab shows while it is written.
 pub const DRAFT_LINES: usize = 12;
 
@@ -811,27 +852,6 @@ pub fn partial_code(answer: &str) -> Option<&str> {
         at = body;
     }
     None
-}
-
-/// The last non-empty line of `thinking`, cut to [`THOUGHT_CHARS`] at a
-/// word (about three rows of the pane, wrapped). A line still being
-/// written is the one shown.
-#[must_use]
-pub fn last_thought(thinking: &str) -> Option<String> {
-    let line = thinking.lines().map(str::trim).rfind(|l| !l.is_empty())?;
-    if line.chars().count() <= THOUGHT_CHARS {
-        return Some(line.to_string());
-    }
-    let cut: String = line
-        .chars()
-        .rev()
-        .take(THOUGHT_CHARS)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    let cut = cut.split_once(' ').map_or(cut.as_str(), |(_, rest)| rest);
-    Some(format!("…{cut}"))
 }
 
 /// A chat box where Enter sends and Shift+Enter or Ctrl+Enter starts a new
@@ -971,9 +991,9 @@ pub fn continue_list(line: &str) -> (String, usize) {
 }
 
 /// The answer under way: a spinner, what it is doing and for how long,
-/// the try when it is a retry; while it thinks, the thinking's last line
-/// in faint italics; once it writes, the last [`DRAFT_LINES`] of the code
-/// as they arrive, under a word that they are a draft not yet checked.
+/// the try when it is a retry; the answer's reason once it is in; once it
+/// writes, the last [`DRAFT_LINES`] of the code as they arrive, under a
+/// word that they are a draft not yet checked.
 fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run, p: &Progress) {
     use egui::RichText;
     let t = crate::theme::theme(ui);
@@ -990,15 +1010,14 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let secs = p.secs.max(0.0) as u64;
     let file = run.target();
-    let lines = p.code.as_deref().map(|c| c.lines().count());
     let clock = clock(secs, p.estimate);
-    let doing = match lines {
-        Some(n) if n > 0 => format!(
-            "Writing {file} · {n} line{} · {clock}",
-            if n == 1 { "" } else { "s" }
-        ),
-        Some(_) => format!("Writing {file} · {clock}"),
-        None => format!("Thinking · {clock}"),
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let doing = match p.stage {
+        Stage::Waiting => format!("Sending to the Agent · {clock}"),
+        Stage::Planning => format!("Planning the change · {clock}"),
+        Stage::Writing(0) => format!("Writing {file} · {clock}"),
+        Stage::Writing(n) => format!("Writing {file} · {n} line{} · {clock}", plural(n)),
+        Stage::Checks(n) => format!("Writing {n} check{} · {clock}", plural(n)),
     };
     let doing = if run.retries == 0 {
         doing
@@ -1023,46 +1042,43 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
         let r = ui.label(RichText::new(doing).color(t.muted)).tip(tip);
         chrome.hit("agent working", r.rect);
     });
-    match (&p.code, &p.thought) {
-        (Some(code), _) => {
-            let r = ui
-                .label(RichText::new("Draft, checked before it is written:").color(t.muted).italics())
-                .tip("What the Agent is writing, as it arrives. It goes into the file only if it compiles and every check passes; otherwise the file stays as it is.");
-            chrome.hit("agent draft note", r.rect);
-            let all: Vec<&str> = code.lines().collect();
-            let from = all.len().saturating_sub(DRAFT_LINES);
-            // The editor's ground and ink: a draft reads like code.
-            let frame = egui::Frame::new()
-                .fill(ui.visuals().extreme_bg_color)
-                .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
-                .corner_radius(4.0)
-                .inner_margin(6.0);
-            let r = frame
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    for line in &all[from..] {
-                        // Truncated, never wrapped or widened: a long line
-                        // would grow the pane every frame.
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(if line.is_empty() { " " } else { line })
-                                    .monospace()
-                                    .color(t.fg),
-                            )
-                            .truncate(),
-                        );
-                    }
-                })
-                .response;
-            chrome.hit("agent draft", r.rect);
-        }
-        (None, Some(thought)) => {
-            let r = ui
-                .add(egui::Label::new(RichText::new(thought).color(t.muted).italics()).wrap())
-                .tip("The Agent's latest thought. Nothing is written until it is checked.");
-            chrome.hit("agent thought", r.rect);
-        }
-        (None, None) => {}
+    if let Some(why) = &p.why {
+        let r = ui
+            .add(egui::Label::new(RichText::new(why).color(t.muted)).wrap())
+            .tip("What the Agent says the change does. Nothing is written until it is checked.");
+        chrome.hit("agent plan", r.rect);
+    }
+    if let Some(code) = &p.code {
+        let r = ui
+            .label(RichText::new("Draft, checked before it is written:").color(t.muted).italics())
+            .tip("What the Agent is writing, as it arrives. It goes into the file only if it compiles and every check passes; otherwise the file stays as it is.");
+        chrome.hit("agent draft note", r.rect);
+        let all: Vec<&str> = code.lines().collect();
+        let from = all.len().saturating_sub(DRAFT_LINES);
+        // The editor's ground and ink: a draft reads like code.
+        let frame = egui::Frame::new()
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
+            .corner_radius(4.0)
+            .inner_margin(6.0);
+        let r = frame
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                for line in &all[from..] {
+                    // Truncated, never wrapped or widened: a long line
+                    // would grow the pane every frame.
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(if line.is_empty() { " " } else { line })
+                                .monospace()
+                                .color(t.fg),
+                        )
+                        .truncate(),
+                    );
+                }
+            })
+            .response;
+        chrome.hit("agent draft", r.rect);
     }
 }
 

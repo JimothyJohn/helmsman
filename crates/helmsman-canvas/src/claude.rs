@@ -539,14 +539,11 @@ pub struct Answer {
     text_blocks: Vec<u64>,
     /// Bytes past [`MAX_ANSWER`] were dropped.
     pub cut: bool,
-    /// The end of what the model has thought so far, at most
-    /// [`MAX_THOUGHT`] bytes: the Agent tab shows its last line while
-    /// nothing is written yet (Nick, 2026-11-13: progress, not a wait).
-    pub thinking: String,
+    /// The model has begun thinking: the Agent tab says it is planning
+    /// (Nick, 2026-11-14: the thoughts themselves flickered past too fast
+    /// to read, so only the stage shows).
+    pub thinking: bool,
 }
-
-/// The most thinking an [`Answer`] keeps, bytes (its end).
-pub const MAX_THOUGHT: usize = 2048;
 
 impl Default for Answer {
     fn default() -> Self {
@@ -557,7 +554,7 @@ impl Default for Answer {
             model: None,
             text_blocks: Vec::new(),
             cut: false,
-            thinking: String::new(),
+            thinking: false,
         }
     }
 }
@@ -569,8 +566,8 @@ impl Answer {
     }
 
     /// Applies one event. Unknown events and fields are ignored (the API
-    /// adds them over time); `ping` shows nothing, and thinking deltas
-    /// only keep [`Self::thinking`]'s end.
+    /// adds them over time); `ping` shows nothing, and a thinking delta
+    /// only sets [`Self::thinking`].
     pub fn apply(&mut self, e: &Event) {
         if !self.running() {
             return;
@@ -599,10 +596,8 @@ impl Answer {
                     && let Some(t) = data["delta"]["text"].as_str()
                 {
                     self.push_text(t);
-                } else if data["delta"]["type"] == "thinking_delta"
-                    && let Some(t) = data["delta"]["thinking"].as_str()
-                {
-                    self.push_thought(t);
+                } else if data["delta"]["type"] == "thinking_delta" {
+                    self.thinking = true;
                 }
             }
             "message_delta" => {
@@ -629,17 +624,6 @@ impl Answer {
                 ));
             }
             _ => {}
-        }
-    }
-
-    fn push_thought(&mut self, t: &str) {
-        self.thinking.push_str(t);
-        if self.thinking.len() > MAX_THOUGHT {
-            let mut k = self.thinking.len() - MAX_THOUGHT;
-            while !self.thinking.is_char_boundary(k) {
-                k += 1;
-            }
-            self.thinking.drain(..k);
         }
     }
 

@@ -24,9 +24,6 @@ use crate::tips::Tip;
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
-/// Under the Agent's box while the free chat answers it.
-const FREE_NOTICE: &str = "Free to try during the early release. What you type is sent to a hosted \
-     model through our relay, so leave out anything confidential.";
 /// Trend line colours, in signal order (the last, white, is the page's ink
 /// in light mode).
 pub const TREND: [Color32; TREND_SIGNALS] = [
@@ -1050,7 +1047,10 @@ impl PlaygroundView {
         Some(crate::instruct::Progress {
             estimate: Some(crate::instruct::estimate_secs(lines)),
             secs: now - self.asked_at,
-            thought: a.and_then(|a| crate::instruct::last_thought(&a.thinking)),
+            stage: a.map_or(crate::instruct::Stage::Waiting, |a| {
+                crate::instruct::stage(a.thinking, &a.text)
+            }),
+            why: a.and_then(|a| crate::instruct::why_line(&a.text)),
             code: a
                 .and_then(|a| crate::instruct::partial_code(&a.text))
                 .map(str::to_string),
@@ -2268,7 +2268,7 @@ impl PlaygroundView {
                 undo_blocked: self.undo_blocked(),
                 decided: std::collections::BTreeMap::new(),
                 swap: self.swap(),
-                room_below: Some(if free { 60.0 } else { 0.0 }),
+                room_below: Some(0.0),
                 progress: self.progress(ctx.input(|i| i.time)),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
@@ -2277,13 +2277,6 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
                 Some(crate::instruct::Act::Show(side)) => self.show_side(side),
                 Some(crate::instruct::Act::Review(_)) | None => {}
-            }
-            if free {
-                ui.add_space(6.0);
-                let r = ui
-                    .label(RichText::new(FREE_NOTICE).color(t.muted))
-                    .tip("Nothing you type is kept by the relay. It counts requests so that misuse can be stopped.");
-                chrome.hit("agent free notice", r.rect);
             }
         });
     }
