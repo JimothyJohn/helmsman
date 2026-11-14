@@ -719,6 +719,91 @@ pub struct View {
     /// Height the owner draws under the tab, kept free of the box, pt;
     /// `None`: the box is three rows (a tab that scrolls, on a box).
     pub room_below: Option<f32>,
+    /// How the answer under way is coming along, when the owner can see
+    /// it stream (the page); `None`: only the spinner and the words.
+    pub progress: Option<Progress>,
+}
+
+/// The answer under way, as it streams (Nick, 2026-11-13: "I would love
+/// to see progressive changes being made rather than waiting a long time
+/// assuming something is happening"). Most of the wait is the model
+/// thinking before it writes a word (measured on the free chat: 5.3 of
+/// 7.6 s), so the tab shows the time and the last line of the thinking,
+/// then the code as it is written, marked as a draft until it is checked.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Progress {
+    /// Since the request went, s.
+    pub secs: f64,
+    /// The last line of the thinking so far, cut to one row.
+    pub thought: Option<String>,
+    /// The file's code written so far ([`partial_code`]).
+    pub code: Option<String>,
+    /// The answer is in and checked; the program waits for its name (a
+    /// change to a built-in example becomes a project of its own).
+    pub naming: bool,
+}
+
+/// How many characters of the thinking's last line are shown.
+const THOUGHT_CHARS: usize = 140;
+/// How many of the code's last lines the tab shows while it is written.
+pub const DRAFT_LINES: usize = 12;
+
+/// The code of the file's block written so far in an answer that is
+/// still streaming: what follows the first ` ```st ` fence that is not a
+/// scenario, up to its closing fence or the end. A fence line not yet
+/// finished (its newline has not come) gives nothing yet, so a block that
+/// turns out to be a scenario never shows. As the answer grows, what this
+/// returns only grows (a property test holds it).
+#[must_use]
+pub fn partial_code(answer: &str) -> Option<&str> {
+    let mut at = 0;
+    while let Some(k) = answer[at..].find("```st") {
+        let start = at + k;
+        let nl = answer[start..].find('\n')?;
+        let fence = answer[start + 3..start + nl].trim();
+        let body = start + nl + 1;
+        if fence == "st" {
+            let rest = &answer[body..];
+            // The closing fence at the start of a line (the block's first
+            // line too: an empty file), or a part of one at the very end.
+            let end = if rest.starts_with("```") {
+                0
+            } else if let Some(e) = rest.find("\n```") {
+                e + 1
+            } else {
+                let tail = rest.trim_end_matches('`');
+                if tail.len() < rest.len() && (tail.is_empty() || tail.ends_with('\n')) {
+                    tail.len()
+                } else {
+                    rest.len()
+                }
+            };
+            return Some(&rest[..end]);
+        }
+        at = body;
+    }
+    None
+}
+
+/// The last non-empty line of `thinking`, cut to [`THOUGHT_CHARS`] at a
+/// word (about three rows of the pane, wrapped). A line still being
+/// written is the one shown.
+#[must_use]
+pub fn last_thought(thinking: &str) -> Option<String> {
+    let line = thinking.lines().map(str::trim).rfind(|l| !l.is_empty())?;
+    if line.chars().count() <= THOUGHT_CHARS {
+        return Some(line.to_string());
+    }
+    let cut: String = line
+        .chars()
+        .rev()
+        .take(THOUGHT_CHARS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let cut = cut.split_once(' ').map_or(cut.as_str(), |(_, rest)| rest);
+    Some(format!("…{cut}"))
 }
 
 /// A chat box where Enter sends and Shift+Enter or Ctrl+Enter starts a new
@@ -857,6 +942,101 @@ pub fn continue_list(line: &str) -> (String, usize) {
     }
 }
 
+/// The answer under way: a spinner, what it is doing and for how long,
+/// the try when it is a retry; while it thinks, the thinking's last line
+/// in faint italics; once it writes, the last [`DRAFT_LINES`] of the code
+/// as they arrive, under a word that they are a draft not yet checked.
+fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run, p: &Progress) {
+    use egui::RichText;
+    let t = crate::theme::theme(ui);
+    if p.naming {
+        let r = ui
+            .label(RichText::new("Checked. Name the program to keep it.").color(t.muted))
+            .tip("Every check passed. A change to a built-in example becomes a program of its own: name it, or Cancel to drop it.");
+        chrome.hit("agent naming", r.rect);
+        return;
+    }
+    // The clock moves while nothing else does.
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(250));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let secs = p.secs.max(0.0) as u64;
+    let file = run.target();
+    let lines = p.code.as_deref().map(|c| c.lines().count());
+    let doing = match lines {
+        Some(n) if n > 0 => format!(
+            "Writing {file} · {n} line{} · {secs} s",
+            if n == 1 { "" } else { "s" }
+        ),
+        Some(_) => format!("Writing {file} · {secs} s"),
+        None => format!("Thinking · {secs} s"),
+    };
+    let doing = if run.retries == 0 {
+        doing
+    } else {
+        format!(
+            "Try {} of {}: fixing what failed · {doing}",
+            run.retries + 1,
+            verify::RETRIES + 1
+        )
+    };
+    let tip = if run.retries == 0 {
+        "The Agent is working on the change. It is checked before anything is written into the file."
+            .to_string()
+    } else {
+        run.attempts
+            .last()
+            .map(|a| a.problems.join(" "))
+            .unwrap_or_default()
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spinner();
+        let r = ui.label(RichText::new(doing).color(t.muted)).tip(tip);
+        chrome.hit("agent working", r.rect);
+    });
+    match (&p.code, &p.thought) {
+        (Some(code), _) => {
+            let r = ui
+                .label(RichText::new("Draft, checked before it is written:").color(t.muted).italics())
+                .tip("What the Agent is writing, as it arrives. It goes into the file only if it compiles and every check passes; otherwise the file stays as it is.");
+            chrome.hit("agent draft note", r.rect);
+            let all: Vec<&str> = code.lines().collect();
+            let from = all.len().saturating_sub(DRAFT_LINES);
+            // The editor's ground and ink: a draft reads like code.
+            let frame = egui::Frame::new()
+                .fill(ui.visuals().extreme_bg_color)
+                .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
+                .corner_radius(4.0)
+                .inner_margin(6.0);
+            let r = frame
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    for line in &all[from..] {
+                        // Truncated, never wrapped or widened: a long line
+                        // would grow the pane every frame.
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(if line.is_empty() { " " } else { line })
+                                    .monospace()
+                                    .color(t.fg),
+                            )
+                            .truncate(),
+                        );
+                    }
+                })
+                .response;
+            chrome.hit("agent draft", r.rect);
+        }
+        (None, Some(thought)) => {
+            let r = ui
+                .add(egui::Label::new(RichText::new(thought).color(t.muted).italics()).wrap())
+                .tip("The Agent's latest thought. Nothing is written until it is checked.");
+            chrome.hit("agent thought", r.rect);
+        }
+        (None, None) => {}
+    }
+}
+
 /// The instruction box, as tall as the tab leaves it, then one row: Send
 /// or Stop, Before / After (or Undo), and what is happening. A change that
 /// landed shows on the canvas and in the code, marked; one that did not
@@ -879,9 +1059,14 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     // The box takes the tab's height, less one row of buttons, one of
     // status and what the owner draws under it.
     let row = ui.spacing().interact_size.y;
-    let height = v
-        .room_below
-        .map(|below| (ui.available_height() - 2.0 * row - 24.0 - below).max(4.0 * row));
+    let height = if s.run.is_some() && v.progress.is_some() {
+        // While an answer streams the box only shows what was sent: a few
+        // rows, and the room under it goes to the thinking and the draft.
+        Some(3.0 * row)
+    } else {
+        v.room_below
+            .map(|below| (ui.available_height() - 2.0 * row - 24.0 - below).max(4.0 * row))
+    };
     let tip = format!(
         "Tell the Agent what {target} should do. It changes the file, checks the change with \
          scenarios and the requirement tests, and writes it only if every check passes. \
@@ -967,7 +1152,9 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             }
         }
     });
-    if let Some(run) = &s.run {
+    if let (Some(run), Some(p)) = (&s.run, &v.progress) {
+        progress_ui(ui, chrome, run, p);
+    } else if let Some(run) = &s.run {
         ui.horizontal_wrapped(|ui| {
             ui.spinner();
             let (words, tip) = if run.retries == 0 {

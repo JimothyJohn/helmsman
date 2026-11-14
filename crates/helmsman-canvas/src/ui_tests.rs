@@ -1153,6 +1153,159 @@ END_PROGRAM",
     /// and not described in the tab, one that fails is an error in the
     /// Messages with the box outlined red, and Before / After swaps the
     /// file at once, marked each way. The hit stays "tab claude".
+    /// Nick, 2026-11-13: "I would love to see progressive changes being
+    /// made rather than waiting a long time assuming something is
+    /// happening." While the Agent thinks: the time and its latest
+    /// thought; once it writes: the code as it arrives, in the Agent tab
+    /// and in the Code tab, marked a draft; the file itself unchanged
+    /// until the checks pass; both panes keep their widths throughout.
+    #[test]
+    fn the_agent_shows_its_thinking_then_the_code_as_it_is_written() {
+        use crate::claude::Incoming;
+        use crate::instruct_tests::{LAMP, follows};
+        let ev = |name: &str, data: serde_json::Value| format!("event: {name}\ndata: {data}\n\n");
+        let mut h = Harness::new(App::sim());
+        // The Code tab beside the Agent, docked right at its narrowest.
+        h.app.chrome.dock(Pane::Code, true);
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.3);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        let field = h.rect("agent instruction");
+        h.click(field.center());
+        h.frame(vec![Event::Text("comment it".into())]);
+        h.press("agent send");
+        h.frame(vec![]);
+        let seq = h.app.sim.as_ref().unwrap().link.sent.last().unwrap().0;
+        let chunk = |h: &mut Harness, text: String| {
+            h.app
+                .sim
+                .as_mut()
+                .unwrap()
+                .link
+                .inbox
+                .push(Incoming::Chunk { seq, text });
+            h.wait(0.3);
+        };
+        assert!(h.drew("Thinking · "), "the clock from the start");
+        // Thinking: its last line, faint.
+        chunk(
+            &mut h,
+            [
+                ev("message_start", serde_json::json!({"type":"message_start","message":{"model":"m","id":"m","type":"message","role":"assistant","content":[],"stop_reason":null}})),
+                ev("content_block_start", serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})),
+                ev("content_block_delta", serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"The lamp follows start.\nA comment after the assignment says why"}})),
+            ]
+            .concat(),
+        );
+        let thought = h.rect("agent thought");
+        assert!(
+            thought.bottom() <= h.size.y,
+            "the thought is on screen: {thought:?}"
+        );
+        assert!(h.has("agent thought") && h.drew("A comment after the assignment says why"));
+        assert!(!h.has("agent draft") && !h.has("st draft"), "no code yet");
+        // Writing: the code so far, in both tabs, the file untouched.
+        let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
+        let (head, tail) = new.split_at(new.find("lamp :=").unwrap());
+        chunk(
+            &mut h,
+            [
+                ev("content_block_stop", serde_json::json!({"type":"content_block_stop","index":0})),
+                ev("content_block_start", serde_json::json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}})),
+                ev("content_block_delta", serde_json::json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":format!("Why: it says why the lamp is on.\n\n```st\n{head}")}})),
+            ]
+            .concat(),
+        );
+        let lines = head.lines().count();
+        assert!(
+            h.drew(&format!("Writing main.st · {lines} lines")),
+            "the lines so far"
+        );
+        assert!(h.has("agent draft") && !h.has("agent thought"));
+        let draft = h.rect("agent draft");
+        assert!(draft.bottom() <= h.size.y, "the draft is on screen: {draft:?}");
+        assert!(h.has("st draft"), "the Code tab shows the draft");
+        assert!(h.drew("END_VAR"), "the code written so far is drawn");
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().proj.files["main.st"],
+            LAMP,
+            "the file is untouched"
+        );
+        let (l, r) = (
+            h.rect("left").right() - left.right(),
+            right.left() - h.rect("right").left(),
+        );
+        assert!(
+            (0.0..=8.0).contains(&l) && (0.0..=8.0).contains(&r),
+            "the panes grew: {l} {r}"
+        );
+        // The rest: checked, written, the draft gone.
+        chunk(
+            &mut h,
+            [
+                ev("content_block_delta", serde_json::json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":format!("{tail}```\n\n{}", follows())}})),
+                ev("content_block_stop", serde_json::json!({"type":"content_block_stop","index":1})),
+                ev("message_delta", serde_json::json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}})),
+                ev("message_stop", serde_json::json!({"type":"message_stop"})),
+            ]
+            .concat(),
+        );
+        h.app.sim.as_mut().unwrap().link.inbox.push(Incoming::End { seq });
+        h.wait(0.3);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().proj.files["main.st"],
+            new,
+            "written once checked"
+        );
+        assert!(!h.has("agent draft") && !h.has("st draft") && !h.has("agent working"));
+    }
+
+    /// Stopped while it writes: the draft goes and the file is as it was.
+    #[test]
+    fn a_draft_stopped_half_written_leaves_the_file_as_it_was() {
+        use crate::claude::Incoming;
+        use crate::instruct_tests::LAMP;
+        let ev = |name: &str, data: serde_json::Value| format!("event: {name}\ndata: {data}\n\n");
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.dock(Pane::Code, true);
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.3);
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("rewrite it".into())]);
+        h.press("agent send");
+        h.frame(vec![]);
+        let seq = h.app.sim.as_ref().unwrap().link.sent.last().unwrap().0;
+        h.app.sim.as_mut().unwrap().link.inbox.push(Incoming::Chunk {
+            seq,
+            text: [
+                ev("content_block_start", serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})),
+                ev("content_block_delta", serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Why: x.\n\n```st\nPROGRAM gone\nVAR\n"}})),
+            ]
+            .concat(),
+        });
+        h.wait(0.3);
+        assert!(h.has("st draft") && h.drew("PROGRAM gone"));
+        h.press("agent stop");
+        h.wait(0.3);
+        assert!(!h.has("st draft") && !h.has("agent draft"));
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.files["main.st"], LAMP);
+        assert!(!h.drew("PROGRAM gone"), "nothing of the draft is left on screen");
+    }
+
     #[test]
     fn the_agent_tab_is_a_tall_box_and_before_and_after_swap_at_once() {
         use crate::agent_marks::Side;

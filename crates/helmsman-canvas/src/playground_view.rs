@@ -174,6 +174,8 @@ pub struct PlaygroundView {
     pub instruct: crate::instruct::Instruct,
     /// The Agent's answer [`Self::settle`] last took.
     answered_seq: u64,
+    /// When the request in flight went (page time, s): the Agent tab's clock.
+    asked_at: f64,
     /// A checked new program waiting for its project's name.
     to_name: Option<crate::instruct::Apply>,
     /// The revision on view (the History modal).
@@ -249,6 +251,7 @@ impl PlaygroundView {
             new_program: None,
             instruct: crate::instruct::Instruct::default(),
             answered_seq: 0,
+            asked_at: 0.0,
             to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
@@ -760,6 +763,7 @@ impl PlaygroundView {
 
     /// One request of the instruction under way, to the Agent.
     fn send_ask(&mut self, ask: &crate::instruct::Ask, ctx: &egui::Context) {
+        self.asked_at = ctx.input(|i| i.time);
         match self.chat.send(&ask.message, &ask.context) {
             Ok((seq, req)) => self.link.send(seq, req, ctx),
             Err(why) => self.instruct.failed(&why),
@@ -1021,6 +1025,41 @@ impl PlaygroundView {
             self.stop_answer_with("the open project changed while the Agent was answering");
             self.log_outcome();
         }
+    }
+
+    /// How the answer to the instruction under way is coming along, at page
+    /// time `now`; `None` while no instruction is under way.
+    fn progress(&self, now: f64) -> Option<crate::instruct::Progress> {
+        if !self.instruct.busy() {
+            return None;
+        }
+        if self.to_name.is_some() {
+            return Some(crate::instruct::Progress {
+                naming: true,
+                ..Default::default()
+            });
+        }
+        let a = self.chat.answer.as_ref();
+        Some(crate::instruct::Progress {
+            secs: now - self.asked_at,
+            thought: a.and_then(|a| crate::instruct::last_thought(&a.thinking)),
+            code: a
+                .and_then(|a| crate::instruct::partial_code(&a.text))
+                .map(str::to_string),
+            naming: false,
+        })
+    }
+
+    /// The code the Agent is writing into the open file, while it streams:
+    /// the Code tab shows it in place of the file, read-only, until the
+    /// answer is checked (written) or not (the file comes back as it was).
+    fn agent_draft(&self) -> Option<String> {
+        let run = self.instruct.run.as_ref()?;
+        if run.scope.file() != Some(self.proj.current.as_str()) {
+            return None;
+        }
+        let a = self.chat.answer.as_ref().filter(|a| a.running())?;
+        crate::instruct::partial_code(&a.text).map(str::to_string)
     }
 
     /// A finished answer to the instruction under way goes through
@@ -1790,6 +1829,34 @@ impl Body for PlaygroundView {
         let list_h = if all.is_empty() { 0.0 } else { 110.0 };
         let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
         let id = self.source_id();
+        if let Some(draft) = self.agent_draft() {
+            let r = ui
+                .label(
+                    RichText::new(
+                        "The Agent's draft, as it is written. It is checked before it goes into the file.",
+                    )
+                    .color(t.muted)
+                    .italics(),
+                )
+                .tip("The file itself is unchanged until the checks pass. Stop in the Agent tab ends it.");
+            chrome.hit("st draft note", r.rect);
+            let mut shown: &str = &draft;
+            let r = ui
+                .allocate_ui(size, |ui| {
+                    editor::st_editor(
+                        ui,
+                        id.with("agent-draft"),
+                        &mut shown,
+                        &[],
+                        &[],
+                        MAX_SOURCE,
+                        chrome,
+                    )
+                })
+                .inner;
+            chrome.hit("st draft", r.rect);
+            return;
+        }
         let Some(text) = self.proj.current_text_mut() else {
             ui.label(RichText::new("No file open.").color(t.muted))
                 .tip("Open or make one in Files.");
@@ -2194,6 +2261,7 @@ impl PlaygroundView {
                 decided: std::collections::BTreeMap::new(),
                 swap: self.swap(),
                 room_below: Some(if free { 60.0 } else { 0.0 }),
+                progress: self.progress(ctx.input(|i| i.time)),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
