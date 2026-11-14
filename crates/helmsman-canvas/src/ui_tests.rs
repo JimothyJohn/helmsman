@@ -3079,6 +3079,42 @@ mod chrome {
     /// one line per change; Newer and Older (and a click) run that
     /// version marked against the one before; a double click opens its
     /// details with Restore.
+    /// Nick, 2026-11-13: a version's description shows on two lines, the
+    /// second ending in "…" when there is more, at the pane's width.
+    #[test]
+    fn a_versions_description_shows_on_two_lines() {
+        let mut h = Harness::new(App::sim());
+        let long = "Agent: the lamp now latches when start is pressed and stays on until stop is pressed, \
+                    with a two second run-on timer before the belt stops and a horn while it runs on";
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+            sim.proj.current_text_mut().unwrap().push_str("\n(* short *)");
+            sim.proj.save_as("Agent: a comment", None);
+            sim.proj.current_text_mut().unwrap().push_str("\n(* long *)");
+            sim.proj.save_as(long, None);
+        }
+        let left = h.rect("left");
+        h.press("pane history");
+        h.wait(0.3);
+        let newest = h.app.sim.as_ref().unwrap().proj.revisions().last().unwrap().n;
+        let (two, one) = (
+            h.rect(&format!("revision {newest}")),
+            h.rect(&format!("revision {}", newest - 1)),
+        );
+        assert!(
+            two.height() > 1.6 * one.height() && two.height() < 2.6 * one.height(),
+            "two rows for the long one, one for the short: {two:?} {one:?}"
+        );
+        // The whole text is about five rows at this width: two rows means
+        // the rest is cut (egui adds the "…" to the rows it draws, not to
+        // the text this test can read).
+        assert!(h.drew("The lamp now latches"), "it starts at the start");
+        let grown = h.rect("left").right() - left.right();
+        assert!((0.0..=8.0).contains(&grown), "the pane grew {grown} pt");
+    }
+
     #[test]
     fn the_history_tab_steps_through_versions_and_runs_each() {
         let mut h = Harness::new(App::sim());
