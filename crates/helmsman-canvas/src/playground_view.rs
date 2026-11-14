@@ -1040,7 +1040,15 @@ impl PlaygroundView {
             });
         }
         let a = self.chat.answer.as_ref();
+        let lines = self
+            .instruct
+            .run
+            .as_ref()
+            .and_then(|r| r.scope.file())
+            .and_then(|f| self.proj.files.get(f))
+            .map(|t| t.lines().count());
         Some(crate::instruct::Progress {
+            estimate: Some(crate::instruct::estimate_secs(lines)),
             secs: now - self.asked_at,
             thought: a.and_then(|a| crate::instruct::last_thought(&a.thinking)),
             code: a

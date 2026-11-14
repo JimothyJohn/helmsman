@@ -1256,7 +1256,7 @@ fn an_answer_that_hit_the_token_limit_is_cut_off() {
         );
         let a = feed(&limit, &[]);
         assert!(
-            matches!(&a.phase, Phase::Failed(w) if w.contains("cut off")),
+            matches!(&a.phase, Phase::Failed(w) if w.contains("ran out of room") && w.contains("smaller step")),
             "{stop}: {:?}",
             a.phase
         );

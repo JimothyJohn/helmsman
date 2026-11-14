@@ -765,3 +765,20 @@ proptest::proptest! {
         proptest::prop_assert_eq!(before.as_deref(), Some(code.as_str()));
     }
 }
+
+/// Nick, 2026-11-13: "give it a quick idea of how long it might take in
+/// seconds". About 6 s and a quarter second a line, rounded up to 5.
+#[test]
+fn the_estimate_grows_with_the_file_and_the_clock_says_when_it_is_over() {
+    use crate::instruct::{clock, estimate_secs};
+    assert_eq!(estimate_secs(Some(0)), 10);
+    assert_eq!(estimate_secs(Some(9)), 10, "LAMP");
+    assert_eq!(estimate_secs(Some(22)), 15, "traffic");
+    assert_eq!(estimate_secs(Some(200)), 60);
+    assert_eq!(estimate_secs(Some(100_000)), 120, "never more than 2 minutes");
+    assert_eq!(estimate_secs(None), 15, "a new project");
+    assert_eq!(clock(4, Some(10)), "4 s of about 10 s");
+    assert_eq!(clock(10, Some(10)), "10 s of about 10 s");
+    assert_eq!(clock(14, Some(10)), "14 s, longer than usual");
+    assert_eq!(clock(3, None), "3 s");
+}

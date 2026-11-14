@@ -8,8 +8,9 @@ no conversation to read through.
 
 <img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
 
-While it works, the tab shows how long it has been and the Agent's
-latest thought, then the code as it is written, under the words "Draft,
+While it works, the tab shows how long it has been against about how
+long an answer of that size takes (a few seconds for a short file, a
+minute or more for a long one), the Agent's latest thought, then the code as it is written, under the words "Draft,
 checked before it is written". The Code tab shows the same draft in place
 of the file. The file itself changes only once the draft compiles and its
 checks pass; Stop, or a draft that fails, leaves it as it was.

@@ -741,6 +741,34 @@ pub struct Progress {
     /// The answer is in and checked; the program waits for its name (a
     /// change to a built-in example becomes a project of its own).
     pub naming: bool,
+    /// About how long this answer takes, s ([`estimate_secs`]).
+    pub estimate: Option<u64>,
+}
+
+/// About how long an answer takes, s, rounded up to 5 (Nick, 2026-11-13:
+/// "you can at least give it a quick idea of how long it might take in
+/// seconds"): 6 s and a quarter second a line of the file it changes, 15 s
+/// for a new project; at most 2 minutes. From the free chat's timings on
+/// 2026-11-13: 6 to 9 s for files of 10 to 25 lines, 12 to 16 s for the
+/// 22-line traffic example, 19 s for a new project.
+#[must_use]
+pub fn estimate_secs(lines: Option<usize>) -> u64 {
+    #[allow(clippy::cast_precision_loss)]
+    let raw = lines.map_or(15.0, |n| 6.0 + 0.25 * n as f64);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let five = ((raw / 5.0).ceil() as u64 * 5).clamp(5, 120);
+    five
+}
+
+/// The clock in the status line: `4 s of about 10 s`, and once past it
+/// `14 s, longer than usual`; just `4 s` with no estimate.
+#[must_use]
+pub fn clock(secs: u64, estimate: Option<u64>) -> String {
+    match estimate {
+        Some(e) if secs <= e => format!("{secs} s of about {e} s"),
+        Some(_) => format!("{secs} s, longer than usual"),
+        None => format!("{secs} s"),
+    }
 }
 
 /// How many characters of the thinking's last line are shown.
@@ -963,13 +991,14 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
     let secs = p.secs.max(0.0) as u64;
     let file = run.target();
     let lines = p.code.as_deref().map(|c| c.lines().count());
+    let clock = clock(secs, p.estimate);
     let doing = match lines {
         Some(n) if n > 0 => format!(
-            "Writing {file} · {n} line{} · {secs} s",
+            "Writing {file} · {n} line{} · {clock}",
             if n == 1 { "" } else { "s" }
         ),
-        Some(_) => format!("Writing {file} · {secs} s"),
-        None => format!("Thinking · {secs} s"),
+        Some(_) => format!("Writing {file} · {clock}"),
+        None => format!("Thinking · {clock}"),
     };
     let doing = if run.retries == 0 {
         doing

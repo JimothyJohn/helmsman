@@ -1194,6 +1194,7 @@ END_PROGRAM",
             h.wait(0.3);
         };
         assert!(h.drew("Thinking · "), "the clock from the start");
+        assert!(h.drew("of about 10 s"), "and how long it usually takes (9 lines)");
         // Thinking: its last line, faint.
         chunk(
             &mut h,
