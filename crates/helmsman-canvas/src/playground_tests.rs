@@ -501,23 +501,21 @@ fn the_trend_axis_is_a_nice_range_that_holds_between_steps() {
     assert_eq!(tick_label(-5.0, 5.0), "-5");
 }
 
-/// Nick, 2026-11-07: the lanes reorder. Each signal's history moves with
-/// it (the samples hold values in lane order), and recording goes on in
-/// the new order.
+/// Nick, 2026-11-07: the lanes reorder. History is kept by signal, so a
+/// moved lane draws the same line, and recording goes on.
 #[test]
 fn moving_a_trend_signal_carries_its_history() {
     let mut s = Session::new(example("traffic"));
     scans(&mut s, 300);
-    let col = |s: &Session, k: usize| -> Vec<f64> {
-        (0..s.trend.samples.len())
-            .map(|i| s.trend.samples.value(i, k).unwrap())
-            .collect()
-    };
-    let before: Vec<Vec<f64>> = (0..4).map(|k| col(&s, k)).collect();
+    let line = |s: &Session, n: &str| s.trend.history.lane(n, 0).collect::<Vec<_>>();
+    let before: Vec<Vec<(u64, f64)>> = ["RED", "YELLOW", "GREEN", "RUN"]
+        .iter()
+        .map(|n| line(&s, n))
+        .collect();
     s.trend.move_signal(0, 2);
     assert_eq!(s.trend.signals, ["YELLOW", "GREEN", "RED", "RUN"]);
-    for (k, from) in [(0, 1), (1, 2), (2, 0), (3, 3)] {
-        assert_eq!(col(&s, k), before[from], "lane {k}");
+    for (k, n) in ["RED", "YELLOW", "GREEN", "RUN"].iter().enumerate() {
+        assert_eq!(line(&s, n), before[k], "{n}");
     }
     for (from, to) in [(4, 0), (0, 4), (1, 1), (usize::MAX, 0)] {
         s.trend.move_signal(from, to);
@@ -527,38 +525,141 @@ fn moving_a_trend_signal_carries_its_history() {
             "{from} -> {to}"
         );
     }
-    let n = s.trend.samples.len();
+    let end = s.trend.history.last_t().unwrap();
     scans(&mut s, 10);
-    assert_eq!(s.trend.samples.len(), n + 10, "the history stays and grows");
-    let red = s.trend.samples.last_value(2).unwrap();
+    assert_eq!(s.trend.history.last_t(), Some(end + 100), "recording goes on");
+    let red = s.trend.history.last_value("RED").unwrap();
     let point = s.outputs().find(|p| p.name == "RED").unwrap().number();
     // RED is a BOOL: 0 or 1, exact.
-    assert_eq!(red.to_bits(), point.to_bits(), "lane 2 records RED");
+    assert_eq!(red.to_bits(), point.to_bits(), "RED's lane records RED");
+}
+
+/// Nick, 2026-11-13: "When adding new trend lines you shouldn't reset
+/// both, just start scrolling in the new data on its trend line. You
+/// should ideally be able to capture everything all of the time." Every
+/// signal is recorded from the first scan, pinned or not; a pin added
+/// later comes with its past, and the lanes already there are untouched.
+#[test]
+fn a_signal_pinned_later_comes_with_its_past_and_the_others_keep_theirs() {
+    let mut s = Session::new(example("traffic"));
+    s.trend.toggle("RUN");
+    assert_eq!(s.trend.signals, ["RED", "YELLOW", "GREEN"], "RUN unpinned");
+    scans(&mut s, 800);
+    let red = s.trend.history.lane("RED", 0).collect::<Vec<_>>();
+    assert!(red.len() > 2, "RED changed: {red:?}");
+    s.trend.toggle("RUN");
+    assert_eq!(s.trend.signals, ["RED", "YELLOW", "GREEN", "RUN"]);
+    assert_eq!(
+        s.trend.history.lane("RED", 0).collect::<Vec<_>>(),
+        red,
+        "nothing reset"
+    );
+    let run = s.trend.history.lane("RUN", 0).collect::<Vec<_>>();
+    assert_eq!(
+        run.first().map(|p| p.0),
+        Some(0),
+        "RUN's line starts at the first scan, not at the pin"
+    );
+    assert_eq!(
+        run.last().map(|p| p.0),
+        s.trend.history.last_t(),
+        "and runs to now"
+    );
+    // Unpinning drops a lane, not its history.
+    s.trend.toggle("RED");
+    assert_eq!(s.trend.history.lane("RED", 0).count(), red.len());
+}
+
+proptest::proptest! {
+    /// The change-only history loses nothing: the step line read back
+    /// from any window start gives every scan's value exactly, starts at
+    /// the window's left edge and ends at the newest scan.
+    #[test]
+    fn the_history_reads_back_every_scans_value(
+        values in proptest::collection::vec(0i64..4, 1..300),
+        from_scan in 0usize..300,
+    ) {
+        use crate::playground::History;
+        let s = Session::new(example("traffic"));
+        let mut p = s.outputs().next().unwrap().clone();
+        p.ty = helmsman_iec::Ty::Int;
+        let mut h = History::default();
+        let t = |i: usize| 10 * (i as u64 + 1);
+        for (i, v) in values.iter().enumerate() {
+            p.value = Value::Int((*v).into());
+            h.record_for_test(t(i), std::slice::from_ref(&p));
+        }
+        let from = t(from_scan.min(values.len() - 1));
+        let line: Vec<(u64, f64)> = h.lane(&p.name, from).collect();
+        proptest::prop_assert_eq!(line.first().map(|q| q.0), Some(from.max(t(0))));
+        proptest::prop_assert_eq!(line.last().map(|q| q.0), Some(t(values.len() - 1)));
+        for (i, v) in values.iter().enumerate().filter(|(i, _)| t(*i) >= from) {
+            let at = line.iter().rev().find(|q| q.0 <= t(i)).map(|q| q.1);
+            #[allow(clippy::cast_precision_loss)]
+            let want = *v as f64;
+            proptest::prop_assert_eq!(at, Some(want), "scan {}", i);
+        }
+    }
+}
+
+/// Many signals that change every scan stay within the history's
+/// budget, the longest lanes trimmed first, every lane still current.
+#[test]
+fn the_history_keeps_to_its_budget_when_everything_moves() {
+    use crate::playground::{History, TREND_BUDGET};
+    let s = Session::new(example("traffic"));
+    let template = s.outputs().next().unwrap().clone();
+    let mut points: Vec<_> = (0..40)
+        .map(|k| {
+            let mut p = template.clone();
+            p.name = format!("S{k}");
+            p.ty = helmsman_iec::Ty::Int;
+            p
+        })
+        .collect();
+    let mut h = History::default();
+    for i in 0..20_000u64 {
+        for (k, p) in points.iter_mut().enumerate() {
+            p.value = Value::Int(i128::from(i) * 100 + k as i128);
+        }
+        h.record_for_test(i * 10, &points);
+        assert!(h.total() <= TREND_BUDGET, "scan {i}: {}", h.total());
+    }
+    for (k, p) in points.iter().enumerate() {
+        let want = (19_999 * 100 + k) as f64;
+        assert_eq!(h.last_value(&p.name), Some(want), "{} is current", p.name);
+    }
+    assert!(
+        h.total() > TREND_BUDGET * 9 / 10,
+        "the budget is used: {}",
+        h.total()
+    );
 }
 
 #[test]
-fn the_trend_records_chosen_signals_in_a_bounded_window() {
+fn the_trend_records_every_signal_in_a_bounded_window() {
     let mut s = Session::new(example("traffic"));
     assert_eq!(s.trend.signals, ["RED", "YELLOW", "GREEN", "RUN"]);
     scans(&mut s, 50);
-    assert_eq!(s.trend.samples.len(), 50);
-    assert!(s.trend.samples.value(0, 3).is_some() && s.trend.samples.value(0, 4).is_none());
-    s.trend.toggle("RUN");
-    assert_eq!(s.trend.signals.len(), 3);
-    assert_eq!(s.trend.samples.len(), 0, "history restarts on a change");
+    assert_eq!(s.trend.history.last_t(), Some(490), "scan 1 is at 0 ms");
     for n in ["GREEN_TIME", "RUN", "A", "B", "C", "D"] {
         s.trend.toggle(n);
     }
     assert_eq!(s.trend.signals.len(), TREND_SIGNALS);
-    // 150 s at 10 ms: the history keeps the widest window, 100 s, at most.
+    // 150 s at 10 ms: the history keeps the widest window, 10 min, at
+    // most; a signal costs its changes, not its scans.
     let mut s = Session::new(example("traffic"));
     scans(&mut s, 15_000);
-    let (first, last) = (
-        s.trend.samples.first_t().unwrap(),
-        s.trend.samples.last_t().unwrap(),
-    );
+    let last = s.trend.history.last_t().unwrap();
+    let first = s.trend.history.lane("RED", 0).next().unwrap().0;
     assert!(last - first <= crate::playground::TREND_KEEP_MS);
     assert!(last - first > 90_000, "{first}..{last}");
+    assert_eq!(s.trend.history.changes("RUN"), 1, "a constant is one point");
+    let red = s.trend.history.changes("RED");
+    assert!(
+        (10..200).contains(&red),
+        "RED flips every few seconds: {red} points, not 15 000"
+    );
     assert_eq!(s.trend.window_ms, 30_000, "opens on 30 s");
     // The buttons read in seconds unless the width is whole minutes
     // (100 s read as "1 min" on 2026-11-01).
@@ -2406,7 +2507,7 @@ fn a_pause_holds_the_state_and_a_stop_resets_it() {
     assert_eq!(s.build.as_ref().unwrap().image.q[0], 0);
     assert_eq!((s.scans, s.now_ms), (0, 0));
     assert!(s.trace.is_none() && s.earlier().is_empty(), "no scan to show");
-    assert!(s.trend.samples.is_empty());
+    assert!(s.trend.history.is_empty(), "a restart starts the history over");
     s.advance(20.0);
     assert_eq!((s.scans, s.now_ms), (0, 0), "and it stays stopped");
     // Run again: from the initial values, so the seal is gone.

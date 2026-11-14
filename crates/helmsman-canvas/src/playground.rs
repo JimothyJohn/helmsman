@@ -92,6 +92,10 @@ pub const TREND_MS: u64 = 30_000;
 pub const TREND_KEEP_MS: u64 = 600_000;
 /// And at most this many samples (10 min at the 10 ms scan).
 pub const TREND_CAP: usize = 60_000;
+/// Points the whole history keeps, every signal together (about 10 MB):
+/// ten signals that change every 10 ms scan for the whole 10 minutes.
+/// Past it, the longest lane gives up its oldest points first.
+pub const TREND_BUDGET: usize = 600_000;
 /// Signals the trend draws at most.
 pub const TREND_SIGNALS: usize = 6;
 /// The editor refuses text past this: a project's total, so a program
@@ -526,106 +530,165 @@ impl Carried {
     }
 }
 
-/// The trend's history: one time per scan and, for each, every trended
-/// signal's value, in two flat buffers (a scan allocates nothing).
+/// The trend's history (Nick, 2026-11-13: "you should ideally be able to
+/// capture everything all of the time"): every signal of the program,
+/// pinned or not, kept from the first scan as its changes, each with its
+/// program time. Pinning a signal only chooses which lanes are drawn, so
+/// a new pin comes with its history and the others go on undisturbed.
+/// Change-only keeps it cheap: a BOOL that flips every few seconds is a
+/// few hundred points over [`TREND_KEEP_MS`], a value that moves every
+/// scan costs what one lane always did ([`TREND_CAP`] points), and a scan
+/// compares one value per signal and allocates only when one changed.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Samples {
-    t_ms: VecDeque<u64>,
-    /// Row after row, `width` values each.
-    values: VecDeque<f64>,
-    width: usize,
+pub struct History {
+    /// One lane per signal, in the order the program's points came.
+    lanes: Vec<Lane>,
+    /// Program time of the newest scan recorded, ms.
+    last_t: Option<u64>,
+    /// Points held, every lane together (at most [`TREND_BUDGET`]).
+    total: usize,
 }
 
-impl Samples {
-    /// How many scans are held.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.t_ms.len()
-    }
+/// One signal's changes, oldest first.
+#[derive(Clone, Debug, PartialEq)]
+struct Lane {
+    name: String,
+    points: VecDeque<(u64, f64)>,
+}
 
+impl History {
+    /// Whether nothing has been recorded.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.t_ms.is_empty()
+        self.last_t.is_none()
     }
 
     pub fn clear(&mut self) {
-        self.t_ms.clear();
-        self.values.clear();
+        self.lanes.clear();
+        self.last_t = None;
+        self.total = 0;
     }
 
-    /// Program time of the oldest scan held, ms.
+    /// Points held, every lane together.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
-    pub fn first_t(&self) -> Option<u64> {
-        self.t_ms.front().copied()
+    pub const fn total(&self) -> usize {
+        self.total
     }
 
-    /// Program time of the newest scan held, ms.
+    /// Program time of the newest scan recorded, ms.
     #[must_use]
-    pub fn last_t(&self) -> Option<u64> {
-        self.t_ms.back().copied()
+    pub const fn last_t(&self) -> Option<u64> {
+        self.last_t
     }
 
-    /// Signal `k`'s value at scan `i`.
+    fn lane_of(&self, name: &str) -> Option<&Lane> {
+        self.lanes.iter().find(|l| l.name == name)
+    }
+
+    /// `name`'s value at the newest scan.
     #[must_use]
-    pub fn value(&self, i: usize, k: usize) -> Option<f64> {
-        (k < self.width).then(|| self.values.get(i * self.width + k).copied())?
+    pub fn last_value(&self, name: &str) -> Option<f64> {
+        self.lane_of(name)?.points.back().map(|&(_, v)| v)
     }
 
-    /// Signal `k`'s newest value.
+    /// How many changes of `name` are kept.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
-    pub fn last_value(&self, k: usize) -> Option<f64> {
-        self.value(self.len().checked_sub(1)?, k)
+    pub fn changes(&self, name: &str) -> usize {
+        self.lane_of(name).map_or(0, |l| l.points.len())
     }
 
-    /// Signal `k`'s history from time `from_ms` on: (time, value).
-    pub fn lane(&self, k: usize, from_ms: u64) -> impl Iterator<Item = (u64, f64)> + '_ {
-        let first = self.t_ms.partition_point(|&t| t < from_ms);
-        (first..self.len()).filter_map(move |i| Some((self.t_ms[i], self.value(i, k)?)))
+    /// `name`'s history from `from_ms` to the newest scan, as a step
+    /// function: the value it held at `from_ms` (dated `from_ms`), every
+    /// change after, and the value it holds now dated the newest scan,
+    /// so the line runs the whole window.
+    pub fn lane(&self, name: &str, from_ms: u64) -> impl Iterator<Item = (u64, f64)> + '_ {
+        let (points, end) = match (self.lane_of(name), self.last_t) {
+            (Some(l), Some(end)) => (&l.points, end),
+            _ => (&EMPTY, 0),
+        };
+        let first = points.partition_point(|&(t, _)| t <= from_ms);
+        let held = first.checked_sub(1).map(|k| points[k]).map(|(_, v)| (from_ms, v));
+        let changes = points.range(first..).copied();
+        let now = points.back().filter(|&&(t, _)| t < end).map(|&(_, v)| (end, v));
+        held.into_iter().chain(changes).chain(now)
     }
 
-    fn push(&mut self, t_ms: u64, values: impl ExactSizeIterator<Item = f64>) {
-        if self.is_empty() {
-            self.width = values.len();
+    /// One scan at program time `t_ms`: each point whose value differs
+    /// from its lane's last is added; history past [`TREND_KEEP_MS`] goes,
+    /// but a lane keeps the change that holds at the window's start.
+    fn record(&mut self, t_ms: u64, points: &[Point]) {
+        // A clock gone back is a new run (a cold deploy, a restart): its
+        // history is not this one's.
+        if self.last_t.is_some_and(|last| t_ms < last) {
+            self.clear();
         }
-        self.t_ms.push_back(t_ms);
-        self.values.extend(values);
-    }
-
-    fn pop_front(&mut self) {
-        if self.t_ms.pop_front().is_some() {
-            self.values.drain(..self.width.min(self.values.len()));
-        }
-    }
-
-    /// Lane `from`'s column moves to `to` in every scan.
-    fn move_lane(&mut self, from: usize, to: usize) {
-        let w = self.width;
-        if from >= w || to >= w {
-            return;
-        }
-        for i in 0..self.len() {
-            let row = i * w;
-            let v = self.values[row + from];
-            if from < to {
-                for j in from..to {
-                    self.values[row + j] = self.values[row + j + 1];
-                }
+        for (k, p) in points.iter().enumerate() {
+            let v = p.number();
+            // The program's order, so this is one comparison a point.
+            let at = if self.lanes.get(k).is_some_and(|l| l.name == p.name) {
+                k
+            } else if let Some(at) = self.lanes.iter().position(|l| l.name == p.name) {
+                at
             } else {
-                for j in (to + 1..=from).rev() {
-                    self.values[row + j] = self.values[row + j - 1];
-                }
+                self.lanes.push(Lane {
+                    name: p.name.clone(),
+                    points: VecDeque::new(),
+                });
+                self.lanes.len() - 1
+            };
+            let lane = &mut self.lanes[at];
+            // NaN equals NaN here: an unreadable value is one state.
+            if lane
+                .points
+                .back()
+                .is_none_or(|&(_, last)| last.to_bits() != v.to_bits())
+            {
+                lane.points.push_back((t_ms, v));
+                self.total += 1;
             }
-            self.values[row + to] = v;
+            let keep_from = t_ms.saturating_sub(TREND_KEEP_MS);
+            while lane.points.len() > TREND_CAP || (lane.points.len() > 1 && lane.points[1].0 <= keep_from) {
+                lane.points.pop_front();
+                self.total -= 1;
+            }
+        }
+        self.last_t = Some(t_ms);
+        // Over budget (rare: many signals that move every scan), the
+        // longest lane gives up a tenth of itself, oldest first, its
+        // newest point always kept.
+        while self.total > TREND_BUDGET {
+            let Some(lane) = self.lanes.iter_mut().max_by_key(|l| l.points.len()) else {
+                break;
+            };
+            let drop = (lane.points.len() / 10).clamp(1, lane.points.len().saturating_sub(1));
+            if lane.points.len() < 2 {
+                break;
+            }
+            lane.points.drain(..drop);
+            self.total -= drop;
         }
     }
 }
 
-/// The trend: which signals, their recent history, and how much of it
-/// the pane shows.
+#[cfg(test)]
+impl History {
+    /// [`Self::record`], for the property test.
+    pub fn record_for_test(&mut self, t_ms: u64, points: &[Point]) {
+        self.record(t_ms, points);
+    }
+}
+
+static EMPTY: VecDeque<(u64, f64)> = VecDeque::new();
+
+/// The trend: which signals are drawn, every signal's history, and how
+/// much of it the pane shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trend {
     pub signals: Vec<String>,
-    pub samples: Samples,
+    pub history: History,
     /// The width of the window drawn, ms (`WINDOW_MIN_MS..=WINDOW_MAX_MS`).
     pub window_ms: u64,
 }
@@ -634,7 +697,7 @@ impl Default for Trend {
     fn default() -> Self {
         Self {
             signals: Vec::new(),
-            samples: Samples::default(),
+            history: History::default(),
             window_ms: TREND_MS,
         }
     }
@@ -642,35 +705,22 @@ impl Default for Trend {
 
 impl Trend {
     fn record(&mut self, t_ms: u64, points: &[Point]) {
-        let values = self.signals.iter().map(|s| {
-            points
-                .iter()
-                .find(|p| &p.name == s)
-                .map_or(f64::NAN, Point::number)
-        });
-        self.samples.push(t_ms, values);
-        while self.samples.len() > TREND_CAP
-            || self
-                .samples
-                .first_t()
-                .is_some_and(|f| t_ms.saturating_sub(f) > TREND_KEEP_MS)
-        {
-            self.samples.pop_front();
-        }
+        self.history.record(t_ms, points);
     }
 
-    /// Adds or removes `name` (at most [`TREND_SIGNALS`]); history restarts.
+    /// Adds or removes `name` (at most [`TREND_SIGNALS`]). The history
+    /// is every signal's and stays: a new lane is drawn with its past,
+    /// the others go on (Nick, 2026-11-13: adding one reset them all).
     pub fn toggle(&mut self, name: &str) {
         if let Some(k) = self.signals.iter().position(|s| s == name) {
             self.signals.remove(k);
         } else if self.signals.len() < TREND_SIGNALS {
             self.signals.push(name.to_string());
         }
-        self.samples.clear();
     }
 
     /// Moves the signal in lane `from` to lane `to`, the others closing
-    /// up; the history moves with it. Out of range does nothing.
+    /// up. Out of range does nothing.
     pub fn move_signal(&mut self, from: usize, to: usize) {
         let n = self.signals.len();
         if from >= n || to >= n || from == to {
@@ -678,7 +728,6 @@ impl Trend {
         }
         let s = self.signals.remove(from);
         self.signals.insert(to, s);
-        self.samples.move_lane(from, to);
     }
 }
 
@@ -909,11 +958,6 @@ impl Session {
                         read_outputs(&mut b);
                     }
                 }
-                let kept = if hot {
-                    self.trend.signals.clone()
-                } else {
-                    Vec::new()
-                };
                 let names: Vec<String> = b.points.iter().map(|p| p.name.clone()).collect();
                 self.trend.signals.retain(|s| names.contains(s));
                 if self.trend.signals.is_empty() {
@@ -921,9 +965,6 @@ impl Session {
                     let outs = b.points.iter().filter(|p| p.dir == Dir::Out);
                     let ins = b.points.iter().filter(|p| p.dir == Dir::In);
                     self.trend.signals = outs.chain(ins).take(4).map(|p| p.name.clone()).collect();
-                }
-                if self.trend.signals != kept {
-                    self.trend.samples.clear();
                 }
                 self.diags.clear();
                 let had = self.build.is_some();
@@ -1126,7 +1167,7 @@ impl Session {
         self.trace = None;
         self.earlier.clear();
         self.paused = None;
-        self.trend.samples.clear();
+        self.trend.history.clear();
     }
 
     /// One scan, traced, whether running or not (Step). It stops at a
