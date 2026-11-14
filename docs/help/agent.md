@@ -18,6 +18,15 @@ before it is written". The Code tab shows the same draft in place
 of the file. The file itself changes only once the draft compiles and its
 checks pass; Stop, or a draft that fails, leaves it as it was.
 
+A change too big for one answer goes in steps. A long instruction, one
+in several parts or one on a long file is planned first, and so is any
+change whose answer ran out of room. The tab lists the steps and waits
+for Run the steps. Each step is checked like any answer, on a copy, and
+builds on the steps before it. The file changes once, when every step
+has passed, as one version in History. A step that fails its checks
+pauses the plan with what went wrong: Try this step again, or Stop to
+leave the file as it was.
+
 An instruction can be a new behaviour ("the lamp latches until stop is
 pressed"), a change ("add a two-second delay before the belt starts") or
 a fix for the errors under the editor. When the Agent is done, the tab

@@ -752,9 +752,35 @@ impl PlaygroundView {
             devices: &devices,
             settings,
         };
-        match self.instruct.start(&env, &earlier) {
+        let lines = env
+            .scope
+            .file()
+            .and_then(|f| env.files.get(f))
+            .map(|t| t.lines().count());
+        let plan = crate::steps::big_ask(&self.instruct.draft, lines);
+        match self.instruct.start_with(&env, &earlier, plan) {
             Ok(ask) => self.send_ask(&ask, ctx),
             Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// Runs the plan waiting for approval, or tries its paused step again.
+    pub fn run_steps(&mut self, ctx: &egui::Context) {
+        let Some(scope) = self.instruct.run.as_ref().map(|r| r.scope.clone()) else {
+            return;
+        };
+        let (diags, devices, settings) = self.agent_env();
+        let env = crate::instruct::Env {
+            project: &self.proj.open,
+            scope,
+            files: &self.proj.files,
+            source: &self.session.src,
+            diagnostics: &diags,
+            devices: &devices,
+            settings,
+        };
+        if let Some(ask) = self.instruct.approve(&env) {
+            self.send_ask(&ask, ctx);
         }
     }
 
@@ -1084,8 +1110,10 @@ impl PlaygroundView {
             return;
         }
         self.answered_seq = self.chat.seq();
+        let ran_out = a.ran_out();
         let text = match &a.phase {
-            Phase::Done => a.text.clone(),
+            Phase::Done => Ok(a.text.clone()),
+            Phase::Failed(why) if ran_out => Err(why.clone()),
             Phase::Failed(why) => {
                 let why = why.clone();
                 self.instruct.failed(&why);
@@ -1106,10 +1134,17 @@ impl PlaygroundView {
             devices: &devices,
             settings,
         };
-        match self.instruct.answered(&text, &env) {
+        // Out of room: split into steps instead of failing (Nick,
+        // 2026-11-14).
+        let step = match text {
+            Ok(text) => self.instruct.answered(&text, &env),
+            Err(why) => self.instruct.cut_off(&env, &why),
+        };
+        match step {
             Step::Ask(ask) => self.send_ask(&ask, ctx),
             Step::Apply(apply) => self.write(apply),
             Step::Done => self.log_outcome(),
+            Step::Wait => {}
         }
     }
 
@@ -2275,6 +2310,7 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
                 Some(crate::instruct::Act::Stop) => self.stop_answer(),
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
+                Some(crate::instruct::Act::RunSteps) => self.run_steps(&ctx),
                 Some(crate::instruct::Act::Show(side)) => self.show_side(side),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }

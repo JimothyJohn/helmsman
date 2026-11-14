@@ -568,6 +568,18 @@ fn rungs() -> Vec<Rung> {
             }],
         },
         Rung {
+            name: "steps",
+            base: example("Blink"),
+            tests: &[],
+            scope: Where::New,
+            asks: &[Ask {
+                instruction: "A traffic light with outputs red, yellow and green.\n- From power-up, red for 5 s.\n- Then green for 5 s.\n- Then yellow for 2 s, and round again to red.",
+                hidden: TRAFFIC,
+                expect: &["red", "yellow", "green"],
+                forbid: &[],
+            }],
+        },
+        Rung {
             name: "chain",
             base: example("Blink"),
             tests: &[],
@@ -843,7 +855,13 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
         let mut calls = 0;
         let mut cost = 0.0;
         let mut applied = None;
-        let mut next = match ins.start(&env, &earlier) {
+        // As the page does: a big ask is planned in steps first.
+        let lines = scope
+            .file()
+            .and_then(|f| files.get(f))
+            .map(|t| t.lines().count());
+        let plan = crate::steps::big_ask(ask.instruction, lines);
+        let mut next = match ins.start_with(&env, &earlier, plan) {
             Ok(a) => Some(a),
             Err(why) => {
                 ins.failed(&why);
@@ -880,6 +898,8 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
                             applied = Some(ap);
                         }
                         Step::Done => {}
+                        // A plan in steps: the ladder approves it.
+                        Step::Wait => next = ins.approve(&env),
                     }
                 }
                 Err(why) => {
@@ -1207,7 +1227,7 @@ motor := start AND NOT stop;
 END_PROGRAM
 "
         }
-        "new" => {
+        "new" | "steps" => {
             "PROGRAM traffic
 VAR_OUTPUT
   red : BOOL;

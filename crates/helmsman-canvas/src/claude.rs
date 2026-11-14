@@ -565,6 +565,16 @@ impl Answer {
         matches!(self.phase, Phase::Waiting | Phase::Streaming)
     }
 
+    /// It ended because it ran out of room (the output cap or the
+    /// context window), not because it was finished.
+    #[must_use]
+    pub fn ran_out(&self) -> bool {
+        matches!(
+            self.stop_reason.as_deref(),
+            Some("max_tokens" | "model_context_window_exceeded")
+        )
+    }
+
     /// Applies one event. Unknown events and fields are ignored (the API
     /// adds them over time); `ping` shows nothing, and a thinking delta
     /// only sets [`Self::thinking`].

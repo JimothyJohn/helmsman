@@ -124,6 +124,56 @@ pub struct Run {
     /// A retry asked for scenarios already.
     pub asked_scenarios: bool,
     pub attempts: Vec<Attempt>,
+    /// In one go, planning, or in steps ([`crate::steps`]).
+    pub mode: Mode,
+}
+
+/// How an instruction is carried out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// One answer, the whole change.
+    #[default]
+    Direct,
+    /// The request in flight asks for a plan; `cut_off` when an answer in
+    /// one go ran out of room.
+    Planning { cut_off: bool },
+    /// A plan in steps.
+    Steps(Box<Plan>),
+}
+
+/// A change in steps ([`crate::steps`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plan {
+    pub steps: Vec<String>,
+    /// Steps checked into [`Self::files`].
+    pub done: usize,
+    pub state: PlanState,
+    /// The working copy: the project as the steps done leave it.
+    pub files: Files,
+    /// The scope the instruction was given in (the steps after the first
+    /// change the file the first wrote).
+    pub scope: Scope,
+    /// The file the steps write, once the first has.
+    pub written: Option<String>,
+    /// The scenarios the steps passed, as test files (name, text).
+    pub tests: Vec<(String, String)>,
+    /// Each step's one-sentence reason.
+    pub whys: Vec<String>,
+    /// How many scenarios the steps passed.
+    pub scenarios: usize,
+    /// The engineer's earlier instructions it went with.
+    pub diagnostics: Vec<String>,
+}
+
+/// Where a plan is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlanState {
+    /// Waiting for the engineer to approve it.
+    Proposed,
+    Running,
+    /// A step failed its checks or ran out of room: what went wrong. The
+    /// engineer tries it again or stops.
+    Paused(Vec<String>),
 }
 
 impl Run {
@@ -183,6 +233,8 @@ pub enum Step {
     Apply(Apply),
     /// Finished; [`Instruct::outcome`] says how.
     Done,
+    /// A plan waits for the engineer ([`Instruct::approve`], or Stop).
+    Wait,
 }
 
 /// How the last instruction came out.
@@ -279,12 +331,26 @@ impl Instruct {
     /// # Errors
     /// [`Self::refusal`].
     pub fn start(&mut self, env: &Env<'_>, earlier: &[String]) -> Result<Ask, String> {
+        self.start_with(env, earlier, false)
+    }
+
+    /// [`Self::start`]; `plan` asks for a plan in steps first
+    /// ([`crate::steps::big_ask`]).
+    ///
+    /// # Errors
+    /// [`Self::refusal`].
+    pub fn start_with(&mut self, env: &Env<'_>, earlier: &[String], plan: bool) -> Result<Ask, String> {
         if let Some(why) = self.refusal() {
             return Err(why);
         }
         let instruction = std::mem::take(&mut self.draft).trim().to_string();
         let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
-        let message = env.message(&instruction, &earlier);
+        let text = if plan {
+            crate::steps::plan_request(&instruction, false)
+        } else {
+            instruction.clone()
+        };
+        let message = env.message(&text, &earlier);
         self.outcome = None;
         self.run = Some(Run {
             instruction: instruction.clone(),
@@ -295,9 +361,14 @@ impl Instruct {
             retries: 0,
             asked_scenarios: false,
             attempts: Vec::new(),
+            mode: if plan {
+                Mode::Planning { cut_off: false }
+            } else {
+                Mode::Direct
+            },
         });
         Ok(Ask {
-            text: instruction,
+            text,
             message,
             context: Vec::new(),
             retry: false,
@@ -309,9 +380,168 @@ impl Instruct {
     /// while it fails and retries are left; else written when green, or
     /// refused with why.
     pub fn answered(&mut self, answer: &str, env: &Env<'_>) -> Step {
-        let Some(mut run) = self.run.take() else {
+        let Some(run) = self.run.take() else {
             return Step::Done;
         };
+        match run.mode {
+            Mode::Direct => self.checked(run, answer, env),
+            Mode::Planning { .. } => self.planned(run, answer, env),
+            Mode::Steps(ref plan) => {
+                let files = plan.files.clone();
+                let source = crate::sim_projects::SimProjects::build_src_of(&files);
+                let diagnostics = if plan.done == 0 {
+                    plan.diagnostics.clone()
+                } else {
+                    Vec::new()
+                };
+                let env = Env {
+                    scope: run.scope.clone(),
+                    files: &files,
+                    source: &source,
+                    diagnostics: &diagnostics,
+                    ..env.clone()
+                };
+                self.checked(run, answer, &env)
+            }
+        }
+    }
+
+    /// A plan came back: one step runs as the instruction itself; more
+    /// wait for the engineer; none (code after all, or words) is read as
+    /// an answer in one go.
+    fn planned(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
+        let steps = crate::steps::parse(answer);
+        if steps.len() < 2 {
+            let cut_off = matches!(run.mode, Mode::Planning { cut_off: true });
+            run.mode = Mode::Direct;
+            if steps.is_empty() || cut_off {
+                if steps.is_empty() {
+                    return self.checked(run, answer, env);
+                }
+                // It ran out of room in one go and the Agent still sees
+                // one step: nothing more to split.
+                self.run = Some(run);
+                self.failed("the change ran out of room in one answer, and the Agent could not split it into steps. Ask for one part first");
+                return Step::Done;
+            }
+            let message = env.message(&run.instruction, &run.earlier);
+            run.asked.clone_from(&message);
+            let text = run.instruction.clone();
+            self.run = Some(run);
+            return Step::Ask(Ask {
+                text,
+                message,
+                context: Vec::new(),
+                retry: false,
+            });
+        }
+        run.mode = Mode::Steps(Box::new(Plan {
+            steps,
+            done: 0,
+            state: PlanState::Proposed,
+            files: env.files.clone(),
+            scope: run.scope.clone(),
+            written: None,
+            tests: Vec::new(),
+            whys: Vec::new(),
+            scenarios: 0,
+            diagnostics: env.diagnostics.to_vec(),
+        }));
+        self.run = Some(run);
+        Step::Wait
+    }
+
+    /// The plan waiting for the engineer, or paused: run its next step.
+    /// `None` when no plan waits.
+    pub fn approve(&mut self, env: &Env<'_>) -> Option<Ask> {
+        let run = self.run.as_mut()?;
+        let Mode::Steps(plan) = &mut run.mode else {
+            return None;
+        };
+        if plan.state == PlanState::Running {
+            return None;
+        }
+        plan.state = PlanState::Running;
+        run.retries = 0;
+        run.asked_scenarios = false;
+        run.attempts.clear();
+        Some(Self::step_ask(run, env))
+    }
+
+    /// The request for the plan's next step, on its working copy.
+    fn step_ask(run: &mut Run, env: &Env<'_>) -> Ask {
+        let Mode::Steps(plan) = &run.mode else {
+            unreachable!("only a plan has steps")
+        };
+        let text = crate::steps::step_request(&run.instruction, &plan.steps, plan.done);
+        let source = crate::sim_projects::SimProjects::build_src_of(&plan.files);
+        let diagnostics = if plan.done == 0 {
+            plan.diagnostics.clone()
+        } else {
+            Vec::new()
+        };
+        let env = Env {
+            scope: run.scope.clone(),
+            files: &plan.files,
+            source: &source,
+            diagnostics: &diagnostics,
+            ..env.clone()
+        };
+        let message = env.message(&text, &run.earlier);
+        run.asked.clone_from(&message);
+        Ask {
+            text,
+            message,
+            context: Vec::new(),
+            retry: false,
+        }
+    }
+
+    /// The answer in flight ran out of room. In one go: ask for a plan
+    /// instead. In a step: the plan pauses for the engineer. Planning:
+    /// the instruction ends.
+    pub fn cut_off(&mut self, env: &Env<'_>, why: &str) -> Step {
+        let Some(run) = self.run.as_mut() else {
+            return Step::Done;
+        };
+        match &mut run.mode {
+            Mode::Direct => {
+                run.mode = Mode::Planning { cut_off: true };
+                run.retries = 0;
+                run.asked_scenarios = false;
+                run.attempts.clear();
+                let text = crate::steps::plan_request(&run.instruction, true);
+                let env = Env {
+                    scope: run.scope.clone(),
+                    ..env.clone()
+                };
+                let message = env.message(&text, &run.earlier);
+                run.asked.clone_from(&message);
+                Step::Ask(Ask {
+                    text,
+                    message,
+                    context: Vec::new(),
+                    retry: false,
+                })
+            }
+            Mode::Steps(plan) => {
+                plan.state = PlanState::Paused(vec![format!(
+                    "Step {} ran out of room before its code was finished.",
+                    plan.done + 1
+                )]);
+                Step::Wait
+            }
+            Mode::Planning { .. } => {
+                self.failed(why);
+                Step::Done
+            }
+        }
+    }
+
+    /// One answer checked against `env`: sent back while it fails and
+    /// retries are left, else shown (in steps: kept in the working copy,
+    /// the next step asked, or the plan paused).
+    fn checked(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
         let check = verify::check(&run.scope, env.files, answer, env.settings);
         match verify::next(&check, run.retries, run.asked_scenarios) {
             Next::Retry(text) => {
@@ -348,8 +578,114 @@ impl Instruct {
                     retry: true,
                 })
             }
+            Next::Show if matches!(run.mode, Mode::Steps(_)) => self.step_done(run, answer, &check, env),
             Next::Show => self.show(run, answer, &check, env.files),
         }
+    }
+
+    /// A step's last answer: green goes into the working copy and the next
+    /// step is asked (after the last, the whole change is written); red
+    /// pauses the plan with what failed.
+    fn step_done(&mut self, mut run: Run, answer: &str, check: &Check, env: &Env<'_>) -> Step {
+        let Mode::Steps(mut plan) = std::mem::take(&mut run.mode) else {
+            unreachable!("only a plan has steps")
+        };
+        let landed = if !check.code {
+            Err(vec![match said(answer) {
+                s if s.is_empty() => "The Agent sent no code for this step.".to_string(),
+                s => format!("The Agent sent no code for this step. It says: {s}"),
+            }])
+        } else if check.red() {
+            Err(check.problems())
+        } else {
+            crate::scope::apply(&run.scope, &plan.files, answer).map_err(|r| vec![r.why])
+        };
+        let landed = match landed {
+            Ok(l) => l,
+            Err(problems) => {
+                plan.state = PlanState::Paused(problems);
+                run.mode = Mode::Steps(plan);
+                self.run = Some(run);
+                return Step::Wait;
+            }
+        };
+        let written = run.scope.file().unwrap_or(helmsman_project::MAIN).to_string();
+        if run.scope == Scope::NewProject {
+            plan.files = landed;
+        } else {
+            plan.files.extend(landed);
+        }
+        for (f, t) in &check.add {
+            plan.files.insert(f.clone(), t.clone());
+            plan.tests.retain(|(g, _)| g != f);
+            plan.tests.push((f.clone(), t.clone()));
+        }
+        plan.scenarios += check.scenarios.len();
+        plan.whys.push(reason(answer).unwrap_or_default());
+        plan.written = Some(written.clone());
+        plan.done += 1;
+        run.scope = Scope::File(written.clone());
+        run.retries = 0;
+        run.asked_scenarios = false;
+        run.attempts.clear();
+        if plan.done < plan.steps.len() {
+            run.mode = Mode::Steps(plan);
+            let ask = Self::step_ask(&mut run, env);
+            self.run = Some(run);
+            return Step::Ask(ask);
+        }
+        let Some(text) = plan.files.get(&written).cloned() else {
+            run.mode = Mode::Steps(plan);
+            self.run = Some(run);
+            self.failed("the steps left no file to write");
+            return Step::Done;
+        };
+        let n = plan.steps.len();
+        let mut status = match plan.scenarios {
+            0 => format!("Updated {written} in {n} steps"),
+            1 => format!("Updated {written} in {n} steps: 1 scenario passed, kept as a test"),
+            k => format!("Updated {written} in {n} steps: {k} scenarios passed, kept as tests"),
+        };
+        status.push('.');
+        let why = plan.whys.last().filter(|w| !w.is_empty()).cloned();
+        let mut record = record(&run, &written, why.as_deref(), &status, check, answer);
+        let mut steps = String::from("\nDone in steps, each checked:\n");
+        for (k, s) in plan.steps.iter().enumerate() {
+            let _ = write!(steps, "{}. {}", k + 1, clean(s, MAX_REASON));
+            match plan.whys.get(k).filter(|w| !w.is_empty()) {
+                Some(w) => {
+                    let _ = writeln!(steps, " Why: {w}");
+                }
+                None => steps.push('\n'),
+            }
+        }
+        // After the first lines, which [`recent`] reads back.
+        let at = record
+            .match_indices('\n')
+            .nth(1)
+            .map_or(record.len(), |(i, _)| i + 1);
+        record.insert_str(at, &steps);
+        if record.len() > MAX_RECORD {
+            let mut k = MAX_RECORD;
+            while !record.is_char_boundary(k) {
+                k -= 1;
+            }
+            record.truncate(k);
+        }
+        let apply = Apply {
+            project: run.project.clone(),
+            scope: plan.scope.clone(),
+            file: written,
+            text,
+            tests: plan.tests.clone(),
+            record,
+            status,
+            why,
+            instruction: run.instruction.clone(),
+        };
+        run.mode = Mode::Steps(plan);
+        self.run = Some(run);
+        Step::Apply(apply)
     }
 
     fn show(&mut self, run: Run, answer: &str, check: &Check, files: &Files) -> Step {
@@ -695,6 +1031,8 @@ pub enum Act {
     Send,
     Stop,
     Undo,
+    /// Run the plan waiting for approval, or try its paused step again.
+    RunSteps,
     /// Show this version of the file the Agent changed.
     Show(crate::agent_marks::Side),
     /// Open this proposal under Proposals (a box).
@@ -1013,6 +1351,9 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
     let clock = clock(secs, p.estimate);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let doing = match p.stage {
+        Stage::Waiting | Stage::Planning if matches!(run.mode, Mode::Planning { .. }) => {
+            format!("Splitting the change into steps · {clock}")
+        }
         Stage::Waiting => format!("Sending to the Agent · {clock}"),
         Stage::Planning => format!("Planning the change · {clock}"),
         Stage::Writing(0) => format!("Writing {file} · {clock}"),
@@ -1080,6 +1421,63 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
             .response;
         chrome.hit("agent draft", r.rect);
     }
+}
+
+/// A plan in steps: why, the steps (done, this one, later), and while it
+/// waits for the engineer, the button that runs it (or tries a paused
+/// step again) beside what went wrong. `true` when that was clicked.
+fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> bool {
+    use egui::RichText;
+
+    use crate::st_view::brand::{GREEN, RED};
+    let t = crate::theme::theme(ui);
+    let n = p.steps.len();
+    let head = match &p.state {
+        PlanState::Proposed => format!(
+            "Too big for one answer, so the Agent planned it in {n} steps. Each is checked; the file changes once, when all of them pass."
+        ),
+        PlanState::Running => format!("Step {} of {n}", (p.done + 1).min(n)),
+        PlanState::Paused(_) => format!("Paused at step {} of {n}", p.done + 1),
+    };
+    let r = ui
+        .add(egui::Label::new(RichText::new(head).color(t.fg)).wrap())
+        .tip("A big change goes in steps. Each step is checked like any answer, on a copy; the file is written once, at the end, as one version in History.");
+    chrome.hit("agent plan steps", r.rect);
+    for (k, step) in p.steps.iter().enumerate() {
+        let (text, ink) = match k.cmp(&p.done) {
+            std::cmp::Ordering::Less => (format!("{}. {step} (passed)", k + 1), t.ink(GREEN)),
+            std::cmp::Ordering::Equal => (format!("{}. {step}", k + 1), t.fg),
+            std::cmp::Ordering::Greater => (format!("{}. {step}", k + 1), t.muted),
+        };
+        let mut rt = RichText::new(text).color(ink);
+        if k == p.done && p.state != PlanState::Proposed {
+            rt = rt.strong();
+        }
+        let r = ui.add(egui::Label::new(rt).wrap());
+        chrome.hit(format!("agent step {}", k + 1), r.rect);
+    }
+    let (label, tip) = match &p.state {
+        PlanState::Running => return false,
+        PlanState::Proposed => (
+            "Run the steps",
+            "Runs the steps one after the other. Stop drops the plan and leaves the file as it is.",
+        ),
+        PlanState::Paused(problems) => {
+            for line in problems {
+                let r = ui.add(egui::Label::new(RichText::new(line).color(t.ink(RED))).wrap());
+                chrome.hit("agent step problem", r.rect);
+            }
+            (
+                "Try this step again",
+                "Asks the Agent for this step again, from the steps that passed. Stop drops the plan and leaves the file as it is.",
+            )
+        }
+    };
+    let r = ui
+        .add(egui::Button::new(RichText::new(label).size(18.0)))
+        .tip(tip);
+    chrome.hit("agent run steps", r.rect);
+    r.clicked()
 }
 
 /// The instruction box, as tall as the tab leaves it, then one row: Send
@@ -1197,7 +1595,18 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             }
         }
     });
-    if let (Some(run), Some(p)) = (&s.run, &v.progress) {
+    let plan = s.run.as_ref().and_then(|r| match &r.mode {
+        Mode::Steps(p) => Some(p),
+        _ => None,
+    });
+    if let Some(p) = plan
+        && plan_ui(ui, chrome, p)
+    {
+        act = Some(Act::RunSteps);
+    }
+    if plan.is_some_and(|p| p.state != PlanState::Running) {
+        // Waiting for the engineer: the plan says what to do.
+    } else if let (Some(run), Some(p)) = (&s.run, &v.progress) {
         progress_ui(ui, chrome, run, p);
     } else if let Some(run) = &s.run {
         ui.horizontal_wrapped(|ui| {

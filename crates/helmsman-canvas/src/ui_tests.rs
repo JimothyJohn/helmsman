@@ -1307,6 +1307,69 @@ END_PROGRAM",
         assert!(!h.has("agent draft") && !h.has("st draft") && !h.has("agent working"));
     }
 
+    /// Nick, 2026-11-14: a change too big for one answer is split; the
+    /// plan waits for approval in the Agent tab, on screen at the panel's
+    /// default width, and Run the steps sends the first step.
+    #[test]
+    fn a_plan_in_steps_waits_in_the_agent_tab_for_approval() {
+        use crate::claude::Incoming;
+        use crate::instruct_tests::{LAMP, reply};
+        use crate::steps_tests::{PLAN, cut_off};
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.dock(Pane::Code, true);
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.3);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("add a horn and latch the lamp".into())]);
+        h.press("agent send");
+        h.frame(vec![]);
+        cut_off(h.app.sim.as_mut().unwrap());
+        h.wait(0.3);
+        assert!(h.drew("Splitting the change into steps · "));
+        reply(h.app.sim.as_mut().unwrap(), PLAN);
+        h.wait(0.3);
+        assert!(h.drew("Too big for one answer, so the Agent planned it in 2 steps."));
+        for key in [
+            "agent plan steps",
+            "agent step 1",
+            "agent step 2",
+            "agent run steps",
+            "agent stop",
+        ] {
+            let r = h.rect(key);
+            assert!(
+                r.bottom() <= h.size.y && r.right() <= left.right() + 8.0,
+                "{key} on screen in the pane: {r:?}"
+            );
+        }
+        assert!(!h.has("agent working"), "no spinner while it waits for you");
+        let sent = h.app.sim.as_ref().unwrap().link.sent.len();
+        h.press("agent run steps");
+        h.frame(vec![]);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().link.sent.len(),
+            sent + 1,
+            "step 1 goes"
+        );
+        assert!(h.drew("Step 1 of 2") && h.has("agent working") && !h.has("agent run steps"));
+        let (l, r) = (
+            h.rect("left").right() - left.right(),
+            right.left() - h.rect("right").left(),
+        );
+        assert!(
+            (0.0..=8.0).contains(&l) && (0.0..=8.0).contains(&r),
+            "the panes grew: {l} {r}"
+        );
+    }
+
     /// Stopped while it writes: the draft goes and the file is as it was.
     #[test]
     fn a_draft_stopped_half_written_leaves_the_file_as_it_was() {
@@ -1605,6 +1668,7 @@ END_PROGRAM",
             asked: String::new(),
             retries: 1,
             asked_scenarios: false,
+            mode: crate::instruct::Mode::Direct,
             attempts: vec![Attempt {
                 asked: String::new(),
                 answer: String::new(),

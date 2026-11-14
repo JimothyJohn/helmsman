@@ -76,11 +76,21 @@ conversation to read through.</p>
 
 <p>While it works, the tab shows how long it has been against about how
 long an answer of that size takes (a few seconds for a short file, a
-minute or more for a long one), the Agent's latest thought, then the
-code as it is written, under the words "Draft, checked before it is
-written". The Code tab shows the same draft in place of the file. The
-file itself changes only once the draft compiles and its checks pass;
-Stop, or a draft that fails, leaves it as it was.</p>
+minute or more for a long one) and which step it is at: sending,
+planning the change, writing the file, then writing the checks. Once the
+Agent has said what the change does, that sentence shows under the step,
+and the code shows as it is written, under the words "Draft, checked
+before it is written". The Code tab shows the same draft in place of the
+file. The file itself changes only once the draft compiles and its
+checks pass; Stop, or a draft that fails, leaves it as it was.</p>
+<p>A change too big for one answer goes in steps. A long instruction,
+one in several parts or one on a long file is planned first, and so is
+any change whose answer ran out of room. The tab lists the steps and
+waits for Run the steps. Each step is checked like any answer, on a
+copy, and builds on the steps before it. The file changes once, when
+every step has passed, as one version in History. A step that fails its
+checks pauses the plan with what went wrong: Try this step again, or
+Stop to leave the file as it was.</p>
 <p>An instruction can be a new behaviour ("the lamp latches until stop
 is pressed"), a change ("add a two-second delay before the belt starts")
 or a fix for the errors under the editor. When the Agent is done, the

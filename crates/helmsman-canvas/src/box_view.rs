@@ -753,7 +753,8 @@ impl BoxView {
         match step {
             Some(Step::Ask(ask)) => self.agent_send(&ask.text, false, ctx),
             Some(Step::Apply(apply)) => self.agent_write(&apply),
-            Some(Step::Done) => {
+            // A box never asks for a plan (`steps` is the page's).
+            Some(Step::Done | Step::Wait) => {
                 self.instruct.proposed(&proposals);
                 self.log_agent();
             }
@@ -984,7 +985,8 @@ impl BoxView {
             Some(Act::Undo) => self.undo_change(),
             Some(Act::Review(id)) => self.wants_review = Some(id),
             // A box's change goes through a deploy: no Before / After here.
-            Some(Act::Show(_)) | None => {}
+            // A box never plans in steps (`steps` is the page's).
+            Some(Act::Show(_) | Act::RunSteps) | None => {}
         }
     }
 
