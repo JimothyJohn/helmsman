@@ -616,7 +616,7 @@ impl Answer {
                         "Claude declined to answer this one. Try rephrasing the question.".into(),
                     ),
                     Some("max_tokens" | "model_context_window_exceeded") => Phase::Failed(
-                        "the answer was cut off: it ran out of room before it was finished".into(),
+                        "the answer ran out of room before the code was finished. A smaller step fits: split the change in two, or ask for one part first".into(),
                     ),
                     _ => Phase::Done,
                 };
