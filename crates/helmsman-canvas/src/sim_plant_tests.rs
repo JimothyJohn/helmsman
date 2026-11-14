@@ -87,6 +87,25 @@ fn an_absent_sensor_holds_its_value_and_clears_its_ok() {
 }
 
 #[test]
+fn an_absent_sensor_holds_a_program_without_its_ok_as_a_box_does() {
+    let src = "PROGRAM oven\nVAR_INPUT temp_c : REAL; END_VAR\nVAR_OUTPUT heat_on : BOOL; END_VAR\nheat_on := temp_c < 180.0;\nEND_PROGRAM\n";
+    let mut s = Session::new(src);
+    s.set_plant(PLANT);
+    steps(&mut s, 100);
+    assert_eq!(s.value("heat_on"), Some(Value::Bool(true)));
+    let scans = s.scans;
+    s.plant.as_mut().expect("plant").set_mode("temp_c", Mode::Absent);
+    steps(&mut s, 10);
+    assert!(s.held, "held");
+    assert_eq!(s.value("heat_on"), Some(Value::Bool(false)), "outputs off");
+    assert_eq!(s.scans, scans + 10, "the clock runs on");
+    s.plant.as_mut().expect("plant").set_mode("temp_c", Mode::Normal);
+    steps(&mut s, 2);
+    assert!(!s.held);
+    assert_eq!(s.value("heat_on"), Some(Value::Bool(true)), "back");
+}
+
+#[test]
 fn a_stuck_sensor_keeps_the_heater_on_past_its_band() {
     let mut s = session(&format!("{PLANT}mode temp_c stuck 100\n"));
     steps(&mut s, 4_000);

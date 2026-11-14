@@ -913,8 +913,15 @@ into `NAME_ok` when the program has that input.
   rate × time since it began; noise adds a seeded uniform ± size; over
   and under go a tenth of the span past the input's range
   (`Plant::range`); chatter randomises a BOOL for its time after each
-  change; absent gives no value (the input keeps its last, as a box's
-  `SignalTable` keeps the last good read of a lost link) and `ok` FALSE.
+  change; absent gives no value and `ok` FALSE. As on a box (`Link::run`
+  marks a lost device's inputs missing, `runtime::set_inputs` then holds
+  the module, outputs safe), an absent input holds the program
+  (`Session::held`, `spec::Scanned::hold`: no scan, outputs zero) unless
+  the program declares the BOOL input `X_ok`; then it runs on, `X` at its
+  last value. On the box `X_OK` binds to no signal of its own
+  (`signals::bind`, `PortBinding::ok`): it reads whether `X` has a value,
+  and a watched `X` gone missing no longer holds the module
+  (`signals::watched`).
 - **Seeded.** `seed N` (1 by default) fixes the noise, chatter and walk:
   a run is the same run every time, so a requirement test of a fault is
   deterministic.

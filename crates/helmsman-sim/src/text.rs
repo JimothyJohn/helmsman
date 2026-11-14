@@ -424,8 +424,8 @@ pub enum Mode {
     Slow(f64),
     /// A BOOL that bounces for this many seconds on each change.
     Chatter(f64),
-    /// The device is lost: the input holds its last value and its `_ok`
-    /// reads FALSE, as on a box whose link is down.
+    /// The device is lost, as when a box's link is down: the program is
+    /// held unless it declares `NAME_ok`, which then reads FALSE.
     Absent,
 }
 

@@ -175,10 +175,11 @@ END_PROGRAM</code></pre>
 <code>X_over</code> and <code>X_under</code> are BOOLs;
 <code>X_drift</code> (a second), <code>X_noise</code> and
 <code>X_slow</code> are numbers, in effect while not 0;
-<code>X_chatter</code> is a TIME. While <code>X</code> is absent it
-holds its last value and the program's <code>X_ok</code> input, if it
-declares one, reads FALSE. An input the test drives itself stays the
-test's until the test makes it misbehave.</p>
+<code>X_chatter</code> is a TIME. While <code>X</code> is absent the
+program is held, its outputs off, as on a box; a program that declares
+an <code>X_ok</code> input runs on instead, with <code>X</code> at its
+last value and <code>X_ok</code> FALSE. An input the test drives itself
+stays the test's until the test makes it misbehave.</p>
 <p>The page runs the tests whenever the project's build changes; a box
 runs them when a project opens, after each save and before every deploy
 (<code>POST /api/projects/{p}/tests</code> runs them on demand).

@@ -243,7 +243,13 @@ fn a_module_that_declares_x_ok_runs_on_through_a_drop_and_reads_it_false() {
     let table = SignalTable::new(&m, &BTreeMap::new()).unwrap();
     let panel = Channels::new();
     let links = links(&m, helmsman_io::open, Box::new(panel.clone())).unwrap();
-    let rt = Runtime::with_signals(0, 0, vec![module("line", GUARDED), module("watch", WATCH)], &table).unwrap();
+    let rt = Runtime::with_signals(
+        0,
+        0,
+        vec![module("line", GUARDED), module("watch", WATCH)],
+        &table,
+    )
+    .unwrap();
     let mut b = Bench {
         sim,
         panel,

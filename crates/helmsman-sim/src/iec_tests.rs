@@ -118,6 +118,38 @@ fn a_test_makes_the_sensor_absent_and_the_program_must_cope() {
 }
 
 #[test]
+fn a_program_without_x_ok_is_held_with_its_outputs_off_as_on_a_box() {
+    // No temp_c_ok: absent holds the program, so the heater reads off
+    // and the alarm, never set by a held program, reads off too.
+    let held = "\
+PROGRAM oven
+VAR_INPUT temp_c : REAL; END_VAR
+VAR_OUTPUT heat_on : BOOL; alarm : BOOL; END_VAR
+heat_on := temp_c < 180.0;
+alarm := TRUE;
+END_PROGRAM
+";
+    let t = "\
+(* With the sensor lost, every output is off. *)
+PROGRAM test_t
+VAR_INPUT heat_on : BOOL; alarm : BOOL; END_VAR
+VAR_OUTPUT temp_c_absent : BOOL; done : BOOL; END_VAR
+VAR n : INT; on_before : ASSERT; off : ASSERT; END_VAR
+n := n + 1;
+IF n = 3 THEN on_before(COND := heat_on AND alarm); END_IF;
+temp_c_absent := n >= 4;
+IF n = 6 THEN off(COND := NOT heat_on AND NOT alarm); done := TRUE; END_IF;
+END_PROGRAM
+";
+    let v = verdict(held, t, PLANT);
+    assert!(v.passed(), "{:?}", v.outcome);
+    // With temp_c_ok it runs on: the alarm it sets stays on.
+    let watched = held.replace("temp_c : REAL;", "temp_c : REAL; temp_c_ok : BOOL;");
+    let v = verdict(&watched, t, PLANT);
+    assert!(matches!(v.outcome, Outcome::Failed { .. }), "{:?}", v.outcome);
+}
+
+#[test]
 fn a_stuck_sensor_holds_the_value_the_test_gives() {
     let t = "\
 (* A sensor stuck at 250 turns the heater off. *)

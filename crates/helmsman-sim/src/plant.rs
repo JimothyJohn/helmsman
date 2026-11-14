@@ -47,8 +47,9 @@ impl Val {
 pub struct Feed {
     /// The program variable, as the file names it.
     pub name: String,
-    /// What it reads; `None` while absent: it holds its last value, as a
-    /// box's input does while its link is down.
+    /// What it reads; `None` while absent, as a box's input of a lost
+    /// link (the caller holds the program, or keeps the last value for a
+    /// program with `NAME_ok`).
     pub value: Option<Val>,
     /// FALSE while absent: what its `NAME_ok` input reads.
     pub ok: bool,

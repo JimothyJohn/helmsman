@@ -113,8 +113,9 @@ END_PROGRAM
 For an input `X`: `X_absent`, `X_stuck` (at `X_stuck_at`, if the test has
 it), `X_over` and `X_under` are BOOLs; `X_drift` (a second), `X_noise` and
 `X_slow` are numbers, in effect while not 0; `X_chatter` is a TIME. While
-`X` is absent it holds its last value and the program's `X_ok` input, if
-it declares one, reads FALSE. An input the test drives itself stays the
+`X` is absent the program is held, its outputs off, as on a box; a
+program that declares an `X_ok` input runs on instead, with `X` at its
+last value and `X_ok` FALSE. An input the test drives itself stays the
 test's until the test makes it misbehave.
 
 The page runs the tests whenever the project's build changes; a box runs
