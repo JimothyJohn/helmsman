@@ -1187,7 +1187,8 @@ END_PROGRAM",
     /// height, a change that lands is seen on the canvas (running, marked)
     /// and not described in the tab, one that fails is an error in the
     /// Messages with the box outlined red, and Before / After swaps the
-    /// file at once, marked each way. The hit stays "tab claude".
+    /// file at once, marked each way (2026-11-14: arrows that step
+    /// through the revisions). The hit stays "tab claude".
     /// Nick, 2026-11-13: "I would love to see progressive changes being
     /// made rather than waiting a long time assuming something is
     /// happening." Nick, 2026-11-14: the thoughts flickered; only major
@@ -1410,8 +1411,7 @@ END_PROGRAM",
     }
 
     #[test]
-    fn the_agent_tab_is_a_tall_box_and_before_and_after_swap_at_once() {
-        use crate::agent_marks::Side;
+    fn the_agent_tab_is_a_tall_box_and_its_arrows_step_through_the_changes() {
         use crate::instruct_tests::{LAMP, follows};
         let mut h = Harness::new(App::sim());
         // Docked right: the Agent at the right pane's default width, its narrowest place.
@@ -1433,7 +1433,7 @@ END_PROGRAM",
             "agent new",
             "agent result",
             "agent undo",
-            "agent before",
+            "agent back",
         ] {
             assert!(!h.has(gone), "{gone}");
         }
@@ -1475,43 +1475,58 @@ END_PROGRAM",
             !h.has("agent result"),
             "a change that landed is not described in the tab"
         );
-        assert!(h.has("agent before") && h.has("agent after"));
+        assert!(h.has("agent back") && h.has("agent forward"));
+        assert!(
+            !h.drew("Before") && !h.drew("After"),
+            "the arrows are glyphs: their words are in the tooltips"
+        );
         assert!(
             h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
-            "After is marked"
+            "the change is marked"
         );
-        // Before: the old file, running, marked against the new.
-        h.press("agent before");
+        // A second instruction: the arrows walk back over both.
+        let newer = new.replace("(* follows start *)", "(* on with start *)");
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("reword it".into())]);
+        h.press("agent send");
+        h.frame(vec![]);
+        let answer = format!("Why: shorter.\n\n```st\n{newer}```\n\n{}", follows());
+        crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
-        {
-            let v = h.app.sim.as_ref().unwrap();
-            assert_eq!(v.proj.files["main.st"], LAMP);
-            assert_eq!(v.agent_change.as_ref().map(|c| c.side), Some(Side::Before));
-            assert!(v.session.running);
-        }
+        let main = |h: &Harness| h.app.sim.as_ref().unwrap().proj.files["main.st"].clone();
+        assert_eq!(main(&h), newer);
+        let enabled = |h: &mut Harness, key: &str| {
+            let before = main(h);
+            h.press(key);
+            h.wait(0.2);
+            main(h) != before
+        };
+        assert!(!enabled(&mut h, "agent forward"), "the newest is the last step");
+        assert!(enabled(&mut h, "agent back"));
+        assert_eq!(main(&h), new, "back one: the first change");
+        assert!(h.app.sim.as_ref().unwrap().session.running);
         assert!(
-            h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(LAMP)),
-            "Before is marked"
+            h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
+            "each step is marked with what it changed"
         );
-        // And back, as often as wanted.
-        h.press("agent after");
-        h.wait(0.2);
-        assert_eq!(h.app.sim.as_ref().unwrap().proj.files["main.st"], new);
-        h.press("agent before");
-        h.wait(0.2);
-        assert_eq!(h.app.sim.as_ref().unwrap().proj.files["main.st"], LAMP);
-        h.press("agent after");
-        h.wait(0.2);
-        // An edit ends the swap: the file is the engineer's again.
+        assert!(enabled(&mut h, "agent back"));
+        assert_eq!(main(&h), LAMP, "back two: before the Agent");
+        // And forward again, as often as wanted.
+        assert!(enabled(&mut h, "agent forward"));
+        assert_eq!(main(&h), new);
+        assert!(enabled(&mut h, "agent forward"));
+        assert_eq!(main(&h), newer);
+        assert!(h.has("agent back"), "the arrows stay at the newest");
+        // An edit ends the steps: the file is the engineer's again.
         h.app
             .sim
             .as_mut()
             .unwrap()
             .proj
             .files
-            .insert("main.st".into(), format!("{new}\n"));
+            .insert("main.st".into(), format!("{newer}\n"));
         h.wait(0.2);
-        assert!(!h.has("agent before"), "an edit ends Before / After");
+        assert!(!h.has("agent back"), "an edit ends the arrows");
     }
 
     /// A refused answer: an error in the Messages (red count, opened), the

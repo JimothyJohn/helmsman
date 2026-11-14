@@ -71,6 +71,11 @@ pub enum Icon {
     Warning,
     /// × in a ring: an error.
     Error,
+    /// ← : back to the revision before the one shown (the Agent tab's
+    /// step through its changes; Nick, 2026-11-14: arrows, not words).
+    Back,
+    /// → , thin: on to the revision after the one shown.
+    Forward,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -449,6 +454,21 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             let dir = if up { -1.0 } else { 1.0 };
             p.line_segment([z, z + Vec2::new(-head, -dir * head)], stroke);
             p.line_segment([z, z + Vec2::new(head, -dir * head)], stroke);
+        }
+        Icon::Back | Icon::Forward => {
+            // A shaft across the middle, an open arrowhead at one end.
+            let (from, to) = if icon == Icon::Back { (r, l) } else { (l, r) };
+            let dir = if icon == Icon::Back { 1.0 } else { -1.0 };
+            p.line_segment([Pos2::new(from, c.y), Pos2::new(to, c.y)], stroke);
+            let head = b.width() * 0.4;
+            p.line_segment(
+                [Pos2::new(to, c.y), Pos2::new(to + dir * head, c.y - head)],
+                stroke,
+            );
+            p.line_segment(
+                [Pos2::new(to, c.y), Pos2::new(to + dir * head, c.y + head)],
+                stroke,
+            );
         }
         Icon::Deploy => {
             // A shaft from the left edge, an arrowhead at the right.
