@@ -2489,7 +2489,7 @@ impl PlaygroundView {
         let n = trend.signals.len();
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / n as f32;
-        let end = trend.samples.last_t().unwrap_or(0);
+        let end = trend.history.last_t().unwrap_or(0);
         let window = trend.window_ms.max(1);
         let start = end.saturating_sub(window);
         // Samples older than the window are kept for a wider one: not drawn.
@@ -2502,14 +2502,14 @@ impl PlaygroundView {
             let top = rect.top() + lane * k as f32;
             let color = lane_color(&t, chrome, name, k);
             let (lo, hi) = trend
-                .samples
-                .lane(k, start)
+                .history
+                .lane(name, start)
                 .map(|(_, v)| v)
                 .filter(|v| v.is_finite())
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let last = trend.samples.last_value(k);
+            let last = trend.history.last_value(name);
             painter.text(
                 Pos2::new(rect.left() + 6.0, top + lane / 2.0),
                 egui::Align2::LEFT_CENTER,
@@ -2535,8 +2535,8 @@ impl PlaygroundView {
             };
             let pts = lane_points(
                 trend
-                    .samples
-                    .lane(k, start)
+                    .history
+                    .lane(name, start)
                     .filter(|(_, v)| v.is_finite())
                     .map(|(t, v)| (x_of(t), y_of(v))),
             );

@@ -106,10 +106,12 @@ much of the past the pane shows, from 100 ms to 10 minutes on a
 logarithmic scale (it opens on 30 s), and the plot follows as you drag;
 history is kept for the widest, so widening shows what already ran. The
 lane's scale is at its right edge: it rounds out to an even step and
-moves only when the values cross one. Pin from the tab's list. History
-restarts when you change the set. To put the lanes in another order,
-drag a lane's name up or down and drop it on the lane it should take;
-its history moves with it. Click a lane's name to pick that signal's
+moves only when the values cross one. Pin from the tab's list. Every
+input and output is recorded from the first scan, pinned or not, so a
+signal you pin later arrives with its past and the lanes already there
+carry on. Deploying again keeps the history; a cold restart starts it
+over. To put the lanes in another order, drag a lane's name up or down
+and drop it on the lane it should take. Click a lane's name to pick that signal's
 colour from the palette; the browser keeps your choice. Until you pick
 one, a signal named after a colour (`red`, `lamp_green`) is drawn in
 that colour, the same as its lamp.

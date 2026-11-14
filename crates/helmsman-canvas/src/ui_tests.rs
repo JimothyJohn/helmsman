@@ -3797,7 +3797,7 @@ mod simulated {
         s.trend.toggle("LAMP");
         h.wait(0.2);
         let s = &h.app.sim.as_ref().unwrap().session;
-        assert!(!s.trend.samples.is_empty(), "it records while shown");
+        assert!(!s.trend.history.is_empty(), "it records while shown");
         h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::Num2);
         assert!(!h.app.chrome.trend, "Alt+Shift+2 folds it");
     }
@@ -3812,7 +3812,6 @@ mod simulated {
         // value, which is all this needs.
         let s = &mut h.app.sim.as_mut().unwrap().session;
         s.trend.signals = vec!["FIRST".into(), "SECOND".into(), "THIRD".into()];
-        s.trend.samples.clear();
         h.wait(0.3);
         let order = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.signals.clone();
         let [a, b, c] = <[String; 3]>::try_from(order(&h)).unwrap();
@@ -3843,7 +3842,6 @@ mod simulated {
         h.wait(0.3);
         let s = &mut h.app.sim.as_mut().unwrap().session;
         s.trend.signals = vec!["FIRST".into(), "SECOND".into()];
-        s.trend.samples.clear();
         h.wait(0.3);
         let t = crate::theme::Theme::dark();
         let color = |h: &Harness, name: &str, k: usize| lane_color(&t, &h.app.chrome, name, k);
@@ -3924,13 +3922,11 @@ mod simulated {
         let slider = h.rect("trend window");
         h.click(Pos2::new(slider.left() + 1.0, slider.center().y));
         assert_eq!(window(&h), WINDOW_MIN_MS, "the left end is 100 ms");
-        let kept = h.app.sim.as_ref().unwrap().session.trend.samples.len();
+        let changes = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.history.changes("RED");
+        let kept = changes(&h);
         h.click(Pos2::new(slider.right() - 1.0, slider.center().y));
         assert_eq!(window(&h), WINDOW_MAX_MS, "the right end is 10 min");
-        assert!(
-            h.app.sim.as_ref().unwrap().session.trend.samples.len() >= kept,
-            "narrowing dropped nothing"
-        );
+        assert!(changes(&h) >= kept, "narrowing dropped nothing");
         // Logarithmic: the middle of the track is near the geometric mean
         // (~7.7 s), not the arithmetic one (5 min).
         h.click(Pos2::new(slider.center().x, slider.center().y));
