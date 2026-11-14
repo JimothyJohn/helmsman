@@ -8,7 +8,7 @@
 //! `%IX` bits are written into the image, and the last scan of every
 //! frame is traced for the diagram and "on because".
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 use std::time::Duration;
 
@@ -491,6 +491,56 @@ fn moved_breaks(old: &Build, new: &Build, breaks: &[StmtId]) -> Vec<StmtId> {
 }
 
 /// The output points as the program and the image hold them now.
+/// A program value as the plant reads it.
+#[allow(clippy::cast_precision_loss)]
+fn sim_val(v: Value) -> helmsman_sim::Val {
+    match v {
+        Value::Bool(b) => helmsman_sim::Val::Bool(b),
+        Value::Int(n) => helmsman_sim::Val::Num(n as f64),
+        Value::Real(x) => helmsman_sim::Val::Num(x),
+    }
+}
+
+/// Sets input `name` (if the program has it) to what the plant says, as
+/// its type holds it: a number is rounded and held in an integer's range,
+/// a TIME is seconds, a BOOL is on from 0.5.
+fn drive(b: &mut Build, name: &str, v: helmsman_sim::Val) {
+    let Some(p) = b
+        .points
+        .iter_mut()
+        .find(|p| p.dir == Dir::In && p.name.eq_ignore_ascii_case(name))
+    else {
+        return;
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let want = match p.ty {
+        Ty::Bool => Value::Bool(v.on()),
+        Ty::Real | Ty::LReal => Value::Real(v.num()),
+        Ty::Time => Value::Int((v.num() * 1e9).clamp(-9.2e18, 9.2e18) as i128),
+        _ => {
+            let n = v.num().round().clamp(-9.2e18, 9.2e18) as i128;
+            Value::Int(match p.widget {
+                Some(Widget::Int { min, max }) => n.clamp(min, max),
+                _ => n,
+            })
+        }
+    };
+    match p.place {
+        Place::Port => {
+            if b.program.set_input(&p.name, want).is_ok()
+                && let Some(stored) = b.program.get(&p.name)
+            {
+                p.value = stored;
+            }
+        }
+        Place::Bit(..) => {
+            if let Value::Bool(_) = want {
+                p.value = want;
+            }
+        }
+    }
+}
+
 fn read_outputs(b: &mut Build) {
     for p in b.points.iter_mut().filter(|p| p.dir == Dir::Out) {
         p.value = match p.place {
@@ -810,6 +860,17 @@ pub struct Session {
     /// scan the variable takes the point's value, so the model runs from
     /// the sensor instead of its own state.
     pub sensors: Vec<(String, String)>,
+    /// The simulated plant (`plant.sim`, helmsman-sim): before each scan
+    /// it moves on by the scan, with the outputs the last one left, and
+    /// sets every input it drives through that input's mode.
+    pub plant: Option<helmsman_sim::Plant>,
+    /// The `plant.sim` text [`Self::plant`] was read from.
+    plant_text: String,
+    /// The lines of `plant.sim` it could not take.
+    pub plant_problems: Vec<helmsman_sim::Problem>,
+    /// What the panel last set each input to (upper case): the value a
+    /// button, switch or selector of the plant reads before its mode.
+    panel: BTreeMap<String, Value>,
     /// Breakpoints (Shift F9): statements of the running build a scan stops
     /// before, sorted. A statement in a function block's body stops in
     /// every instance.
@@ -841,6 +902,10 @@ impl Session {
             earlier: Vec::new(),
             trend: Trend::default(),
             sensors: Vec::new(),
+            plant: None,
+            plant_text: String::new(),
+            plant_problems: Vec::new(),
+            panel: BTreeMap::new(),
             breaks: Vec::new(),
             paused: None,
             last: None,
@@ -976,6 +1041,9 @@ impl Session {
                     self.now_ms = 0;
                     self.scans = 0;
                     self.acc_ms = 0.0;
+                    if let Some(p) = &mut self.plant {
+                        p.reset();
+                    }
                 }
                 Some(carried)
             }
@@ -1034,7 +1102,60 @@ impl Session {
             return Err(format!("{} refused {v}: not a {} value in range", p.name, p.ty));
         };
         p.value = stored;
+        self.panel.insert(p.name.clone(), stored);
         Ok(())
+    }
+
+    /// Reads the project's `plant.sim` (empty: no plant). An edited file
+    /// carries the devices it keeps; the same text again changes nothing.
+    pub fn set_plant(&mut self, text: &str) {
+        if text == self.plant_text {
+            return;
+        }
+        text.clone_into(&mut self.plant_text);
+        let (spec, problems) = helmsman_sim::parse(text);
+        self.plant_problems = problems;
+        self.plant = (!spec.devices.is_empty() || !spec.modes.is_empty()).then(|| match &self.plant {
+            Some(old) => old.carried(spec),
+            None => helmsman_sim::Plant::new(spec),
+        });
+    }
+
+    /// What `plant.sim` names that the running program does not have, as
+    /// (line, message): a device port with no input or output of its
+    /// name.
+    #[must_use]
+    pub fn plant_unbound(&self) -> Vec<(usize, String)> {
+        let (Some(plant), Some(b)) = (&self.plant, &self.build) else {
+            return Vec::new();
+        };
+        let has = |name: &str, dir: Dir| {
+            b.points
+                .iter()
+                .any(|p| p.dir == dir && p.name.eq_ignore_ascii_case(name))
+        };
+        let mut out = Vec::new();
+        for d in &plant.spec().devices {
+            for k in d.kind.keys() {
+                let Some(var) = d.port(k.name) else { continue };
+                let (dir, what) = match k.role {
+                    helmsman_sim::Role::Out => (Dir::Out, "output"),
+                    r if r.is_input() => (Dir::In, "input"),
+                    _ => continue,
+                };
+                if !has(var, dir) {
+                    out.push((
+                        d.line,
+                        format!(
+                            "{} {}: the program has no {what} named {var}",
+                            d.kind.word(),
+                            d.name
+                        ),
+                    ));
+                }
+            }
+        }
+        out
     }
 
     /// The value of a point by name.
@@ -1168,6 +1289,9 @@ impl Session {
         self.earlier.clear();
         self.paused = None;
         self.trend.history.clear();
+        if let Some(p) = &mut self.plant {
+            p.reset();
+        }
     }
 
     /// One scan, traced, whether running or not (Step). It stops at a
@@ -1288,6 +1412,7 @@ impl Session {
     /// Puts the panel's inputs and the measured plant states into the
     /// program and its image, as the coming scan reads them.
     fn feed(&mut self) {
+        self.run_plant();
         let Some(b) = &mut self.build else { return };
         for p in b.points.iter().filter(|p| p.dir == Dir::In) {
             match p.place {
@@ -1321,6 +1446,33 @@ impl Session {
             };
             // A kind or range the variable cannot hold leaves the model's own.
             let _ = b.program.set(path, v);
+        }
+    }
+
+    /// Moves the plant on by a scan (none before the first) and puts what
+    /// it drives into the inputs, with each `NAME_ok` it has.
+    fn run_plant(&mut self) {
+        let (Some(plant), Some(b)) = (&mut self.plant, &mut self.build) else {
+            return;
+        };
+        let dt = if self.scans == 0 { 0 } else { self.period_ms };
+        let feeds = {
+            let (panel, points) = (&self.panel, &b.points);
+            let read = |name: &str| {
+                let p = points.iter().find(|p| p.name.eq_ignore_ascii_case(name))?;
+                let v = match p.dir {
+                    Dir::In => panel.get(&p.name).copied().unwrap_or(p.value),
+                    Dir::Out => p.value,
+                };
+                Some(sim_val(v))
+            };
+            plant.step(dt, &read)
+        };
+        for f in feeds {
+            if let Some(v) = f.value {
+                drive(b, &f.name, v);
+            }
+            drive(b, &format!("{}_OK", f.name), helmsman_sim::Val::Bool(f.ok));
         }
     }
 

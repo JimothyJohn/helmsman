@@ -1,0 +1,18 @@
+[package]
+name = "helmsman-sim"
+version = "0.1.0"
+description = "Simulated plant devices for Helmsman: heaters, tanks, motors, valves, sensors and signal sources that answer a program's outputs, each input with its normal, abnormal and absent behaviour. No I/O, no dependencies: the browser's simulation and the box share it"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+# Property tests of the file's reader and the devices' bounds (already in
+# the workspace).
+proptest = "1.12"
+
+[lints]
+workspace = true

@@ -1572,6 +1572,7 @@ dependencies = [
  "helmsman-nodecore",
  "helmsman-plc",
  "helmsman-project",
+ "helmsman-sim",
  "proptest",
  "resvg",
  "serde",
@@ -1700,6 +1701,13 @@ name = "helmsman-proto"
 version = "0.1.0"
 dependencies = [
  "helmsman-proto",
+ "proptest",
+]
+
+[[package]]
+name = "helmsman-sim"
+version = "0.1.0"
+dependencies = [
  "proptest",
 ]
 

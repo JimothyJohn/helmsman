@@ -48,12 +48,16 @@ pub const ICONS: &str = "icons.map";
 /// The Agent tab's conversation in a project ([`agent`]): pages the
 /// engineer curates and the model gets as context; the build ignores it.
 pub const AGENT: &str = "agent.md";
+/// The simulated plant's file in a project: its devices and how each
+/// input behaves (helmsman-sim's `plant.sim`); the build ignores it, and a
+/// box runs it only with its device links off.
+pub const PLANT: &str = "plant.sim";
 /// The program file the Agent's answers land in ([`FileKind::Iteration`]).
 pub const MAIN: &str = "main.st";
 /// Most earlier iterations (`vN.st`) a project keeps.
 pub const MAX_ITERATIONS: usize = 1000;
 /// What a project file may be named, for messages.
-pub const FILE_NAMES: &str = "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout, icons.map, agent.md NAME.eds (a device's EDS), NAME.device (a device's profile) or ID.devconf (a device's saved configuration), NAME 1 to 48 of a-z 0-9 _ -";
+pub const FILE_NAMES: &str = "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout, icons.map, agent.md, plant.sim, NAME.eds (a device's EDS), NAME.device (a device's profile) or ID.devconf (a device's saved configuration), NAME 1 to 48 of a-z 0-9 _ -";
 /// A device file's extension: a vendor's EDS, carried by the project and
 /// named by its map (`eds=NAME.eds`), so a device goes with the project.
 pub const EDS_EXT: &str = ".eds";
@@ -110,6 +114,8 @@ pub enum FileKind {
     Devconf,
     /// The Agent tab's pages (`agent.md`, [`agent`]).
     Agent,
+    /// The simulated plant ([`PLANT`]).
+    Plant,
     /// An earlier iteration of the program, `vN.st` (N from 1): what
     /// `main.st` was before the Agent's next answer replaced it (Nick,
     /// 2026-11-01). Kept, listed under "earlier", never built.
@@ -141,6 +147,7 @@ pub fn file_name(s: &str) -> Option<FileKind> {
         LAYOUT => return Some(FileKind::Layout),
         ICONS => return Some(FileKind::Icons),
         AGENT => return Some(FileKind::Agent),
+        PLANT => return Some(FileKind::Plant),
         _ => {}
     }
     if let Some(stem) = s.strip_suffix(EDS_EXT) {
@@ -167,12 +174,13 @@ pub fn file_name(s: &str) -> Option<FileKind> {
 /// Names a kept file may never take: the fixed project files in any case
 /// (so `Agent.md` is no second `agent.md`), the files a revision folder
 /// holds besides the project's own, and the driver folder.
-const RESERVED: [&str; 8] = [
+const RESERVED: [&str; 9] = [
     IO_MAP,
     SETTINGS,
     LAYOUT,
     ICONS,
     AGENT,
+    PLANT,
     "revision.json",
     "page.md",
     DRIVERS,
@@ -584,6 +592,7 @@ mod tests {
         assert_eq!(file_name("io.map"), Some(FileKind::IoMap));
         assert_eq!(file_name("project.settings"), Some(FileKind::Settings));
         assert_eq!(file_name("icons.map"), Some(FileKind::Icons));
+        assert_eq!(file_name("plant.sim"), Some(FileKind::Plant));
         assert_eq!(file_name("e1213.eds"), Some(FileKind::Eds));
         assert_eq!(file_name("moxa-e1213_v2.eds"), Some(FileKind::Eds));
         assert_eq!(file_name("moxa-e1213.device"), Some(FileKind::Device));

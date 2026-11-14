@@ -88,6 +88,8 @@ mod review_view;
 mod scope;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod scope_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod sim_plant_tests;
 mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
