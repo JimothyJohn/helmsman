@@ -1033,8 +1033,8 @@ pub enum Act {
     Undo,
     /// Run the plan waiting for approval, or try its paused step again.
     RunSteps,
-    /// Show this version of the file the Agent changed.
-    Show(crate::agent_marks::Side),
+    /// Run this revision of the open project (the arrows).
+    Revision(u32),
     /// Open this proposal under Proposals (a box).
     Review(u64),
 }
@@ -1051,15 +1051,23 @@ pub struct View {
     /// Proposals already decided (a box), with their status: shown as
     /// decided instead of offered for review.
     pub decided: std::collections::BTreeMap<u64, String>,
-    /// The Agent's change can be swapped Before / After (the playground),
-    /// and the side the file shows; `None`: Undo instead.
-    pub swap: Option<crate::agent_marks::Side>,
+    /// The arrows that step through the open project's revisions after
+    /// an Agent change (the playground); `None`: Undo instead.
+    pub steps: Option<Steps>,
     /// Height the owner draws under the tab, kept free of the box, pt;
     /// `None`: the box is three rows (a tab that scrolls, on a box).
     pub room_below: Option<f32>,
     /// How the answer under way is coming along, when the owner can see
     /// it stream (the page); `None`: only the spinner and the words.
     pub progress: Option<Progress>,
+}
+
+/// Where the arrows go: the revision before and after the one shown,
+/// each with its tip; `None` at that end (the arrow is off).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Steps {
+    pub back: Option<(u32, String)>,
+    pub forward: Option<(u32, String)>,
 }
 
 /// The answer under way, as it streams (Nick, 2026-11-13: "I would love
@@ -1481,14 +1489,14 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
 }
 
 /// The instruction box, as tall as the tab leaves it, then one row: Send
-/// or Stop, Before / After (or Undo), and what is happening. A change that
+/// or Stop, the arrows through the revisions (or Undo), and what is
+/// happening. A change that
 /// landed shows on the canvas and in the code, marked; one that did not
 /// goes to the Messages as an error, and the box is outlined red with one
 /// line that opens them (Nick, 2026-11-13).
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruct, v: &View) -> Option<Act> {
     use egui::RichText;
 
-    use crate::agent_marks::Side;
     use crate::st_view::brand::{RED, WARN};
 
     let t = crate::theme::theme(ui);
@@ -1558,27 +1566,28 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
                 act = Some(Act::Send);
             }
         }
-        if let Some(side) = v.swap {
-            for (key, label, this, tip) in [
+        if let Some(steps) = &v.steps {
+            for (key, icon, to, end) in [
                 (
-                    "agent before",
-                    "Before",
-                    Side::Before,
-                    "Shows the file as it was before the Agent's change, running. Green: what the change takes out; a red rule: where it adds. Saving keeps the version shown.",
+                    "agent back",
+                    crate::glyphs::Icon::Back,
+                    &steps.back,
+                    "Back: this is the first revision.",
                 ),
                 (
-                    "agent after",
-                    "After",
-                    Side::After,
-                    "Shows the file with the Agent's change, running. Green: what it added; a red rule: what it took out.",
+                    "agent forward",
+                    crate::glyphs::Icon::Forward,
+                    &steps.forward,
+                    "Forward: this is the newest revision.",
                 ),
             ] {
-                let r = ui
-                    .selectable_label(side == this, RichText::new(label).size(18.0))
-                    .tip(tip);
+                let r = crate::glyphs::action(ui, icon, to.is_some(), false)
+                    .tip(to.as_ref().map_or(end, |(_, tip)| tip.as_str()));
                 chrome.hit(key, r.rect);
-                if r.clicked() && side != this {
-                    act = Some(Act::Show(this));
+                if r.clicked()
+                    && let Some((n, _)) = to
+                {
+                    act = Some(Act::Revision(*n));
                 }
             }
         } else if let Some(u) = s.undo() {

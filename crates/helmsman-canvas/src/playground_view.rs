@@ -1195,24 +1195,6 @@ impl PlaygroundView {
         }
     }
 
-    /// Shows `side` of the Agent's last change in its file, compiled and
-    /// running, marked against the other side; nothing is saved (Save
-    /// keeps the version shown).
-    pub fn show_side(&mut self, side: crate::agent_marks::Side) {
-        let Some(c) = self.agent_change.as_mut() else {
-            return;
-        };
-        if c.project != self.proj.open || c.side == side {
-            return;
-        }
-        c.side = side;
-        let text = c.text(side).to_string();
-        let file = c.file.clone();
-        self.proj.files.insert(file.clone(), text);
-        self.proj.current = file;
-        self.reload_running();
-    }
-
     /// [`Self::reload`], then running if it builds: a change is seen
     /// working on the canvas at once.
     fn reload_running(&mut self) {
@@ -1222,13 +1204,39 @@ impl PlaygroundView {
         }
     }
 
-    /// The Before / After toggle's state: the side shown while the Agent's
-    /// change is the open project's and its file still shows one side.
-    fn swap(&self) -> Option<crate::agent_marks::Side> {
-        let c = self.agent_change.as_ref()?;
-        (c.project == self.proj.open
-            && c.holds(&self.proj.open, self.proj.files.get(&c.file).map(String::as_str)))
-        .then_some(c.side)
+    /// The arrows' steps: while the Agent's change still shows in its
+    /// file, or a revision picked with them (or in History) still shows,
+    /// the revisions either side of the one shown, each tipped with what
+    /// it was.
+    fn steps(&self) -> Option<crate::instruct::Steps> {
+        let at = self.history_at.filter(|n| self.shows_revision(*n));
+        let change = self.agent_change.as_ref().is_some_and(|c| {
+            c.project == self.proj.open
+                && c.holds(&self.proj.open, self.proj.files.get(&c.file).map(String::as_str))
+        });
+        if at.is_none() && !change {
+            return None;
+        }
+        let revs = self.proj.revisions();
+        let k = match at {
+            Some(n) => revs.iter().position(|r| r.n == n)?,
+            None => revs.len().checked_sub(1)?,
+        };
+        let tip = |j: usize, way: &str| {
+            revs.get(j).map(|r| {
+                (
+                    r.n,
+                    format!(
+                        "{way}: runs revision {}, {}, marked green and red with what it changed. Saving keeps the version shown.",
+                        r.n, r.what
+                    ),
+                )
+            })
+        };
+        Some(crate::instruct::Steps {
+            back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
+            forward: tip(k + 1, "Forward"),
+        })
     }
 
     /// A checked answer into the open project: unsaved edits are saved
@@ -1283,9 +1291,6 @@ impl PlaygroundView {
             .collect();
         self.proj.save_as(&what, Some(&apply.record));
         self.reload_running();
-        if let Some(c) = &mut self.agent_change {
-            c.after_module = self.viewer.as_ref().map(|v| std::rc::Rc::new(v.module.clone()));
-        }
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),
@@ -2302,7 +2307,7 @@ impl PlaygroundView {
                 blocked: self.chat.route().err().map(str::to_string),
                 undo_blocked: self.undo_blocked(),
                 decided: std::collections::BTreeMap::new(),
-                swap: self.swap(),
+                steps: self.steps(),
                 room_below: Some(0.0),
                 progress: self.progress(ctx.input(|i| i.time)),
             };
@@ -2311,7 +2316,7 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Stop) => self.stop_answer(),
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
                 Some(crate::instruct::Act::RunSteps) => self.run_steps(&ctx),
-                Some(crate::instruct::Act::Show(side)) => self.show_side(side),
+                Some(crate::instruct::Act::Revision(n)) => self.show_revision(n),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });

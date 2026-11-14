@@ -936,7 +936,7 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
             decided: self.decided.clone(),
-            swap: None,
+            steps: None,
             room_below: None,
             progress: None,
         };
@@ -984,9 +984,9 @@ impl BoxView {
             }
             Some(Act::Undo) => self.undo_change(),
             Some(Act::Review(id)) => self.wants_review = Some(id),
-            // A box's change goes through a deploy: no Before / After here.
+            // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
-            Some(Act::Show(_) | Act::RunSteps) | None => {}
+            Some(Act::Revision(_) | Act::RunSteps) | None => {}
         }
     }
 
