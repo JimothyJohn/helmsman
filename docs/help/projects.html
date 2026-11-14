@@ -150,6 +150,35 @@ END_PROGRAM</code></pre>
 FALSE; <code>done</code> ends the test. A test that never sets
 <code>done</code>, holds no <code>ASSERT</code>, or does not compile is
 red. Test files are never part of what runs.</p>
+<h3 id="tests-against-the-simulated-plant">Tests against the simulated
+plant</h3>
+<p>A project with a <code>plant.sim</code> (see the Simulation page,
+Devices) runs every test against its devices, on the page and on a box
+alike: a heater heats while the program heats it, an eye sees parts
+while the belt runs, so a test can wait for the machine instead of
+driving those inputs itself. Every input starts normal in a test; the
+file's <code>mode</code> lines are for trying things by hand. A test
+makes an input misbehave with outputs named after it, at the moment it
+chooses:</p>
+<pre class="st"><code>(* With the temperature sensor lost, the heater is off. *)
+PROGRAM test_sensor_lost
+VAR_INPUT heat_on : BOOL; END_VAR
+VAR_OUTPUT temp_c_absent : BOOL; done : BOOL; END_VAR
+VAR t : TON; u : TON; heat_off : ASSERT; END_VAR
+t(IN := TRUE, PT := T#5s);
+temp_c_absent := t.Q;              (* lost from 5 s *)
+u(IN := t.Q, PT := T#100ms);
+IF u.Q THEN heat_off(COND := NOT heat_on); done := TRUE; END_IF;
+END_PROGRAM</code></pre>
+<p>For an input <code>X</code>: <code>X_absent</code>,
+<code>X_stuck</code> (at <code>X_stuck_at</code>, if the test has it),
+<code>X_over</code> and <code>X_under</code> are BOOLs;
+<code>X_drift</code> (a second), <code>X_noise</code> and
+<code>X_slow</code> are numbers, in effect while not 0;
+<code>X_chatter</code> is a TIME. While <code>X</code> is absent it
+holds its last value and the program's <code>X_ok</code> input, if it
+declares one, reads FALSE. An input the test drives itself stays the
+test's until the test makes it misbehave.</p>
 <p>The page runs the tests whenever the project's build changes; a box
 runs them when a project opens, after each save and before every deploy
 (<code>POST /api/projects/{p}/tests</code> runs them on demand).

@@ -282,7 +282,12 @@ impl PlaygroundView {
     /// keeps the results (the deploy gate reads them).
     pub fn run_tests(&mut self) {
         let plan = self.proj.test_plan();
-        let v = helmsman_iec::spec::run_all(&plan, self.test_settings());
+        let plant = self
+            .proj
+            .files
+            .get(helmsman_project::PLANT)
+            .map_or("", String::as_str);
+        let v = helmsman_sim::iec::run_all(&plan, self.test_settings(), plant);
         self.tests = crate::requirements::Results::from_verdicts(&v);
     }
 
@@ -313,7 +318,10 @@ impl PlaygroundView {
                         })
                         .map(|(n, t)| (*n, *t)),
                 );
-                crate::requirements::Results::from_verdicts(&helmsman_iec::spec::run_all(&plan, settings))
+                let plant = files.get(helmsman_project::PLANT).copied().unwrap_or("");
+                crate::requirements::Results::from_verdicts(&helmsman_sim::iec::run_all(
+                    &plan, settings, plant,
+                ))
             }
         };
         results.refusal()
@@ -363,7 +371,8 @@ impl PlaygroundView {
                 "Refused: with {name}'s other files the program does not compile: {first}"
             ));
         }
-        let verdicts = helmsman_iec::spec::run_all(&plan, self.test_settings());
+        let plant = files.get(helmsman_project::PLANT).map_or("", String::as_str);
+        let verdicts = helmsman_sim::iec::run_all(&plan, self.test_settings(), plant);
         match crate::requirements::Results::from_verdicts(&verdicts).refusal() {
             Some(why) => Err(format!("{why} (the program would replace main.st of {name})")),
             None => Ok(named),
@@ -674,6 +683,16 @@ impl PlaygroundView {
         }));
         text.push_str(&crate::devices::describe_found(&self.devices_ui.found));
         text.push_str(&crate::plant::describe(&self.plant_states(&map)));
+        if let Some(plant) = self
+            .proj
+            .files
+            .get(helmsman_project::PLANT)
+            .filter(|t| !t.trim().is_empty())
+        {
+            text.push_str("\nSimulated plant (plant.sim): the devices the simulation and the requirement tests run the program against.\n");
+            text.push_str(plant.trim_end());
+            text.push('\n');
+        }
         text
     }
 

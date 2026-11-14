@@ -39,6 +39,9 @@ ring = { version = "0.17.14", optional = true }
 # A project's rules and its .zip (`project`), shared with the canvas's
 # simulation; pure Rust (miniz_oxide for DEFLATE).
 helmsman-project = { path = "../helmsman-project", optional = true }
+# The simulated plant (plant.sim) a project's requirement tests run
+# against, the page's own; no dependencies outside the workspace.
+helmsman-sim = { path = "../helmsman-sim", optional = true }
 # SIGTERM / SIGINT as a flag the scan loop polls, so a planned stop writes the
 # RETAIN values first. std has no signal API and the crate forbids unsafe;
 # without its default features it is signal-hook-registry and libc only.
@@ -85,7 +88,7 @@ workspace = true
 # scripts/lint.sh keeps compiling) refuses a map naming `enip-io` as "not
 # in this build".
 default = ["box", "https", "enip-io"]
-box = ["dep:rusqlite", "dep:helmsman-devconf", "dep:helmsman-dhcp", "dep:helmsman-l2", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
+box = ["dep:rusqlite", "dep:helmsman-devconf", "dep:helmsman-dhcp", "dep:helmsman-l2", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-sim", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
 enip-io = ["box", "helmsman-io/enip"]
 # `profinet-io` on a real interface: PROFINET IO devices the box masters
 # as their controller, over raw Ethernet (helmsman-io's `profinet-raw`,

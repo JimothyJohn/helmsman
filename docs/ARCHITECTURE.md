@@ -918,6 +918,18 @@ into `NAME_ok` when the program has that input.
 - **Seeded.** `seed N` (1 by default) fixes the noise, chatter and walk:
   a run is the same run every time, so a requirement test of a fault is
   deterministic.
+- **Requirement tests** run against it too (`helmsman_sim::iec`): the
+  runner (`spec::run_with`) calls a `spec::Machine` each scan after the
+  test has driven its inputs and before the program runs; `TestPlant`
+  steps the plant and sets the inputs it drives. Every input starts
+  normal; a test sets a mode with outputs named after the input
+  (`X_absent`, `X_stuck` / `X_stuck_at`, `X_over`, `X_under`,
+  `X_drift`, `X_noise`, `X_slow`, `X_chatter`, found on the first
+  scan). A test-driven input stays the test's while normal; faulted, the
+  plant takes it from the test's value. The page (`verify`,
+  `playground_view::run_tests`) and the box (`project::check`, the
+  requirements API) run the same machine, so a test means the same in
+  both.
 - **Edits** carry: a device of the same name and kind keeps its state,
   the clock runs on (`Plant::carried`); a cold restart starts the plant
   over. A line it cannot take, and a port the program has no variable

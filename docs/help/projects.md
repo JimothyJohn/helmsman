@@ -87,6 +87,36 @@ first scan its `COND` is FALSE; `done` ends the test. A test that never
 sets `done`, holds no `ASSERT`, or does not compile is red. Test files are
 never part of what runs.
 
+### Tests against the simulated plant
+
+A project with a `plant.sim` (see the Simulation page, Devices) runs every
+test against its devices, on the page and on a box alike: a heater heats
+while the program heats it, an eye sees parts while the belt runs, so a
+test can wait for the machine instead of driving those inputs itself.
+Every input starts normal in a test; the file's `mode` lines are for
+trying things by hand. A test makes an input misbehave with outputs named
+after it, at the moment it chooses:
+
+```st
+(* With the temperature sensor lost, the heater is off. *)
+PROGRAM test_sensor_lost
+VAR_INPUT heat_on : BOOL; END_VAR
+VAR_OUTPUT temp_c_absent : BOOL; done : BOOL; END_VAR
+VAR t : TON; u : TON; heat_off : ASSERT; END_VAR
+t(IN := TRUE, PT := T#5s);
+temp_c_absent := t.Q;              (* lost from 5 s *)
+u(IN := t.Q, PT := T#100ms);
+IF u.Q THEN heat_off(COND := NOT heat_on); done := TRUE; END_IF;
+END_PROGRAM
+```
+
+For an input `X`: `X_absent`, `X_stuck` (at `X_stuck_at`, if the test has
+it), `X_over` and `X_under` are BOOLs; `X_drift` (a second), `X_noise` and
+`X_slow` are numbers, in effect while not 0; `X_chatter` is a TIME. While
+`X` is absent it holds its last value and the program's `X_ok` input, if
+it declares one, reads FALSE. An input the test drives itself stays the
+test's until the test makes it misbehave.
+
 The page runs the tests whenever the project's build changes; a box runs
 them when a project opens, after each save and before every deploy
 (`POST /api/projects/{p}/tests` runs them on demand). **A red test refuses
