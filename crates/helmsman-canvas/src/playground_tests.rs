@@ -1199,10 +1199,7 @@ fn a_streamed_answer_reads_the_same_however_it_is_chunked() {
     assert_eq!(whole.phase, Phase::Done);
     assert_eq!(whole.text, "Here:\n```st\nPROGRAM p\nEND_PROGRAM\n```\nDone, ü.");
     assert!(!whole.text.contains("secret"), "thinking is not shown");
-    assert_eq!(
-        whole.thinking, "secret plan",
-        "but kept apart, for the progress line"
-    );
+    assert!(whole.thinking, "only marked, for the progress line");
     assert_eq!(whole.model.as_deref(), Some("claude-sonnet-5-5"));
     assert_eq!(whole.stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(whole.program().as_deref(), Some("PROGRAM p\nEND_PROGRAM\n"));
@@ -3023,11 +3020,11 @@ fn the_survey_is_answered_once_and_other_is_short() {
     assert_eq!(claude::SURVEY_CHOICES.map(|(id, _)| id), relay);
 }
 
-/// The thinking kept for the Agent tab's progress line is its end, at most
-/// `MAX_THOUGHT` bytes, cut on a character boundary.
+/// Thinking is not kept, only that it began: the Agent tab says it is
+/// planning, and none of it is text.
 #[test]
-fn only_the_end_of_a_long_thinking_is_kept() {
-    use crate::claude::{Event, MAX_THOUGHT};
+fn thinking_only_marks_the_answer_as_planning() {
+    use crate::claude::Event;
     let mut a = Answer::default();
     let ev = |name: &str, data: serde_json::Value| Event {
         name: name.into(),
@@ -3037,13 +3034,11 @@ fn only_the_end_of_a_long_thinking_is_kept() {
         "content_block_start",
         serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
     ));
-    for k in 0..400 {
-        a.apply(&ev(
-            "content_block_delta",
-            serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":format!("ü step {k}. ")}}),
-        ));
-    }
-    assert!(a.thinking.len() <= MAX_THOUGHT, "{}", a.thinking.len());
-    assert!(a.thinking.ends_with("step 399. "), "the end is kept");
+    assert!(!a.thinking, "a thinking block with nothing in it yet");
+    a.apply(&ev(
+        "content_block_delta",
+        serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"step 1. "}}),
+    ));
+    assert!(a.thinking);
     assert!(a.text.is_empty(), "none of it is text");
 }

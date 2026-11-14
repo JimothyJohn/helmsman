@@ -1190,12 +1190,14 @@ END_PROGRAM",
     /// file at once, marked each way. The hit stays "tab claude".
     /// Nick, 2026-11-13: "I would love to see progressive changes being
     /// made rather than waiting a long time assuming something is
-    /// happening." While the Agent thinks: the time and its latest
-    /// thought; once it writes: the code as it arrives, in the Agent tab
-    /// and in the Code tab, marked a draft; the file itself unchanged
-    /// until the checks pass; both panes keep their widths throughout.
+    /// happening." Nick, 2026-11-14: the thoughts flickered; only major
+    /// updates. While the Agent thinks: the time and "Planning", never the
+    /// thinking; then its reason; once it writes: the code as it arrives,
+    /// in the Agent tab and in the Code tab, marked a draft; the file
+    /// itself unchanged until the checks pass; both panes keep their
+    /// widths throughout.
     #[test]
-    fn the_agent_shows_its_thinking_then_the_code_as_it_is_written() {
+    fn the_agent_shows_its_stage_then_the_code_as_it_is_written() {
         use crate::claude::Incoming;
         use crate::instruct_tests::{LAMP, follows};
         let ev = |name: &str, data: serde_json::Value| format!("event: {name}\ndata: {data}\n\n");
@@ -1228,7 +1230,7 @@ END_PROGRAM",
                 .push(Incoming::Chunk { seq, text });
             h.wait(0.3);
         };
-        assert!(h.drew("Thinking · "), "the clock from the start");
+        assert!(h.drew("Sending to the Agent · "), "the clock from the start");
         assert!(h.drew("of about 10 s"), "and how long it usually takes (9 lines)");
         // Thinking: its last line, faint.
         chunk(
@@ -1240,12 +1242,11 @@ END_PROGRAM",
             ]
             .concat(),
         );
-        let thought = h.rect("agent thought");
+        assert!(h.drew("Planning the change · "));
         assert!(
-            thought.bottom() <= h.size.y,
-            "the thought is on screen: {thought:?}"
+            !h.drew("A comment after the assignment says why"),
+            "the thinking itself is never shown"
         );
-        assert!(h.has("agent thought") && h.drew("A comment after the assignment says why"));
         assert!(!h.has("agent draft") && !h.has("st draft"), "no code yet");
         // Writing: the code so far, in both tabs, the file untouched.
         let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
@@ -1264,7 +1265,10 @@ END_PROGRAM",
             h.drew(&format!("Writing main.st · {lines} lines")),
             "the lines so far"
         );
-        assert!(h.has("agent draft") && !h.has("agent thought"));
+        assert!(h.has("agent draft"));
+        assert!(h.has("agent plan") && h.drew("it says why the lamp is on."));
+        let plan = h.rect("agent plan");
+        assert!(plan.bottom() <= h.size.y, "the reason is on screen: {plan:?}");
         let draft = h.rect("agent draft");
         assert!(draft.bottom() <= h.size.y, "the draft is on screen: {draft:?}");
         assert!(h.has("st draft"), "the Code tab shows the draft");
@@ -4284,7 +4288,7 @@ mod simulated {
             .chat
             .set_free_base("https://relay.example");
         h.wait(0.3);
-        assert!(!h.has("agent key") && h.has("agent instruction") && h.has("agent free notice"));
+        assert!(!h.has("agent key") && h.has("agent instruction"));
         grew(&h, "checking");
         assert_eq!(
             h.app.sim.as_ref().unwrap().link.free_checks,
@@ -4298,7 +4302,7 @@ mod simulated {
             .chat
             .receive(Incoming::Free(Free::Open));
         h.wait(0.3);
-        assert!(!h.has("agent key") && h.has("agent instruction") && h.has("agent free notice"));
+        assert!(!h.has("agent key") && h.has("agent instruction"));
         assert!(!h.has("agent free closed") && !h.has("survey google"));
         grew(&h, "open");
         for state in [
@@ -4309,10 +4313,7 @@ mod simulated {
             h.app.sim.as_mut().unwrap().chat.receive(Incoming::Free(state));
             h.wait(0.3);
             assert!(h.has("agent free closed"), "{state:?}");
-            assert!(
-                !h.has("agent instruction") && !h.has("agent key") && !h.has("agent free notice"),
-                "{state:?}"
-            );
+            assert!(!h.has("agent instruction") && !h.has("agent key"), "{state:?}");
             assert_eq!(
                 h.has("survey google") && h.has("survey other field"),
                 state != Free::Unreachable,
