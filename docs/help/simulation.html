@@ -199,6 +199,19 @@ to 4-20 mA, 0-10 V or counts.</li>
 <code>h</code>. A line the page cannot read, or one that names a
 variable the program does not have, is a warning on
 <code>plant.sim</code> under the editor; the rest still runs.</p>
+<h3 id="double-click-an-input">Double-click an input</h3>
+<p>A double-click on an input, on its block in the diagram or on its row
+in the I/O panel, opens <strong>Simulate this input</strong>: which
+device stands behind it, guessed from its name (<code>temp_c</code> a
+heater, <code>start_pb</code> a button, <code>valve_open</code> a
+valve's limit switch, <code>part_seen</code> a photo-eye) with its
+outputs wired to the likeliest of the program's, the device's settings,
+and how the input behaves: <strong>Normal</strong>,
+<strong>Abnormal</strong> (and which way) or <strong>Absent</strong>.
+<strong>Apply</strong> writes it into <code>plant.sim</code> (a built-in
+example is copied into a project of your own first) and the simulation
+runs it from the next scan. An input that is not behaving normally is
+outlined, yellow while abnormal and red while absent.</p>
 <h3 id="normal-abnormal-and-absent">Normal, abnormal and absent</h3>
 <p>Each input a device drives behaves normally unless a
 <code>mode</code> line says otherwise:</p>

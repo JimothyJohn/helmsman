@@ -90,6 +90,9 @@ mod scope;
 mod scope_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_plant_tests;
+mod sim_popup;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod sim_popup_tests;
 mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;

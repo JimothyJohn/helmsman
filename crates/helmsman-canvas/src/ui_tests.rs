@@ -6568,3 +6568,4 @@ mod devconf {
 }
 
 mod shell;
+mod sim_popup;
