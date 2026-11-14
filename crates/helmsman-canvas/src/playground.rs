@@ -490,20 +490,8 @@ fn moved_breaks(old: &Build, new: &Build, breaks: &[StmtId]) -> Vec<StmtId> {
     out
 }
 
-/// The output points as the program and the image hold them now.
-/// A program value as the plant reads it.
-#[allow(clippy::cast_precision_loss)]
-fn sim_val(v: Value) -> helmsman_sim::Val {
-    match v {
-        Value::Bool(b) => helmsman_sim::Val::Bool(b),
-        Value::Int(n) => helmsman_sim::Val::Num(n as f64),
-        Value::Real(x) => helmsman_sim::Val::Num(x),
-    }
-}
-
 /// Sets input `name` (if the program has it) to what the plant says, as
-/// its type holds it: a number is rounded and held in an integer's range,
-/// a TIME is seconds, a BOOL is on from 0.5.
+/// its type holds it (`helmsman_sim::iec::to_value`, as in the tests).
 fn drive(b: &mut Build, name: &str, v: helmsman_sim::Val) {
     let Some(p) = b
         .points
@@ -512,19 +500,7 @@ fn drive(b: &mut Build, name: &str, v: helmsman_sim::Val) {
     else {
         return;
     };
-    #[allow(clippy::cast_possible_truncation)]
-    let want = match p.ty {
-        Ty::Bool => Value::Bool(v.on()),
-        Ty::Real | Ty::LReal => Value::Real(v.num()),
-        Ty::Time => Value::Int((v.num() * 1e9).clamp(-9.2e18, 9.2e18) as i128),
-        _ => {
-            let n = v.num().round().clamp(-9.2e18, 9.2e18) as i128;
-            Value::Int(match p.widget {
-                Some(Widget::Int { min, max }) => n.clamp(min, max),
-                _ => n,
-            })
-        }
-    };
+    let want = helmsman_sim::iec::to_value(p.ty, v);
     match p.place {
         Place::Port => {
             if b.program.set_input(&p.name, want).is_ok()
@@ -541,6 +517,7 @@ fn drive(b: &mut Build, name: &str, v: helmsman_sim::Val) {
     }
 }
 
+/// The output points as the program and the image hold them now.
 fn read_outputs(b: &mut Build) {
     for p in b.points.iter_mut().filter(|p| p.dir == Dir::Out) {
         p.value = match p.place {
@@ -1464,7 +1441,7 @@ impl Session {
                     Dir::In => panel.get(&p.name).copied().unwrap_or(p.value),
                     Dir::Out => p.value,
                 };
-                Some(sim_val(v))
+                Some(helmsman_sim::iec::to_val(v))
             };
             plant.step(dt, &read)
         };

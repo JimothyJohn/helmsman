@@ -277,6 +277,25 @@ fn the_check_runs_the_scenarios_and_the_projects_tests_on_a_copy() {
 }
 
 #[test]
+fn the_scenarios_run_against_the_projects_simulated_plant() {
+    // A lamp that latches on a part at the eye: only the eye, moving on
+    // its own, ever trips it.
+    let eye = "PROGRAM eye\nVAR_INPUT seen : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := lamp OR seen;\nEND_PROGRAM\n";
+    let scen = "(* A part at the eye lights the lamp within 5 s. *)\nPROGRAM test_part\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT done : BOOL; END_VAR\nVAR t : TON; lit : ASSERT; END_VAR\nt(IN := TRUE, PT := T#5s);\nIF t.Q THEN lit(COND := lamp); done := TRUE; END_IF;\nEND_PROGRAM".to_string();
+    let alone = Files::from([("main.st".to_string(), eye.replace("lamp OR seen", "lamp"))]);
+    let a = answer_with(eye, std::slice::from_ref(&scen));
+    let c = check(&file(), &alone, &a, settings());
+    assert!(c.red(), "nothing drives seen without a plant: {c:?}");
+    let mut with = alone.clone();
+    with.insert(
+        "plant.sim".into(),
+        "eye pe seen=seen every=2s length=200ms\n".into(),
+    );
+    let c = check(&file(), &with, &a, settings());
+    assert!(c.green(), "the eye sees a part at 1.8 s: {c:?}");
+}
+
+#[test]
 fn a_new_projects_program_is_checked_with_its_scenarios() {
     let examples = Files::from([("main.st".into(), "PROGRAM blink\nEND_PROGRAM\n".into())]);
     let a = answer_with(LAMP, &[off("lamp_off", true)]);

@@ -482,10 +482,41 @@ fn empty_body(src: &str) -> bool {
     })
 }
 
+/// A simulated machine a test runs the program against (helmsman-sim's
+/// plant): each scan, after the test has run and driven its inputs and
+/// before the program runs, it moves on and sets the inputs it drives.
+/// What it sets wins: it leaves out an input the test drives unless the
+/// test has made that input misbehave.
+pub trait Machine {
+    /// Once, before the first scan: the program's ports.
+    fn start(&mut self, ports: &[Port]);
+    /// One scan of `dt` (zero before the first): `test` reads the test's
+    /// variables (what it says of the machine), `program` the program's
+    /// variables (its outputs as the last scan left them, its inputs as
+    /// the test just drove them). The inputs to set, by name.
+    fn scan(
+        &mut self,
+        dt: Duration,
+        test: &dyn Fn(&str) -> Option<Value>,
+        program: &dyn Fn(&str) -> Option<Value>,
+    ) -> Vec<(String, Value)>;
+}
+
 /// Runs one test against `main` (the program under test's source).
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
+    run_with(main, test, settings, None)
+}
+
+/// [`run`], the program running against `machine` when there is one.
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn run_with(
+    main: &str,
+    test: &TestSrc,
+    settings: Settings,
+    mut machine: Option<&mut dyn Machine>,
+) -> Verdict {
     let verdict = |outcome, scans, elapsed| Verdict {
         file: test.file.clone(),
         requirement: test.requirement.clone(),
@@ -565,6 +596,9 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
     let mut mi = Image::new(settings.sizes);
     let mut scans = 0u32;
     let mut now = zero;
+    if let Some(m2) = machine.as_mut() {
+        m2.start(&program_ports);
+    }
     while scans <= max {
         now = period * scans;
         if let Err(f) = t.scan_at(&mut ti, now) {
@@ -574,6 +608,12 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
         for name in &drives {
             if let Some(v) = t.get(name) {
                 let _ = m.set_input(name, v);
+            }
+        }
+        if let Some(mach) = machine.as_mut() {
+            let dt = if scans == 0 { zero } else { period };
+            for (name, v) in mach.scan(dt, &|n| t.get(n), &|n| m.get(n)) {
+                let _ = m.set_input(&name, v);
             }
         }
         if let Err(f) = m.scan_at(&mut mi, now) {
@@ -615,6 +655,28 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
 #[must_use]
 pub fn run_all(plan: &Plan, settings: Settings) -> Vec<Verdict> {
     plan.tests.iter().map(|t| run(&plan.main, t, settings)).collect()
+}
+
+/// [`run_all`], each test against a fresh machine from `machine` (none:
+/// the program alone).
+#[must_use]
+pub fn run_all_with(
+    plan: &Plan,
+    settings: Settings,
+    machine: &dyn Fn() -> Option<Box<dyn Machine>>,
+) -> Vec<Verdict> {
+    plan.tests
+        .iter()
+        .map(|t| {
+            let mut m = machine();
+            run_with(
+                &plan.main,
+                t,
+                settings,
+                m.as_deref_mut().map(|m| m as &mut dyn Machine),
+            )
+        })
+        .collect()
 }
 
 /// The red verdicts' one-line reasons, for a refusal: `test_lamp: lamp on
