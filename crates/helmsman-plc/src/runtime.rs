@@ -1084,15 +1084,27 @@ fn find_cycle(edges: &[Vec<usize>]) -> Option<Vec<usize>> {
 /// Sets every `VAR_INPUT` of the module from its signal. False if any
 /// signal has no value or the value does not fit the port; inputs already
 /// set stay set, which is harmless as the module is then not scanned.
+/// An input the module watches with `X_OK` ([`crate::signals::watched`])
+/// does not hold it: missing, it keeps its last value and `X_OK` reads
+/// FALSE.
 fn set_inputs(s: &mut Slot, table: &SignalTable) -> bool {
     for (p, v) in &s.module.params {
         // Checked when the runtime was built.
         let _ = s.module.program.set_input(p, to_st(*v));
     }
     s.ports.iter().filter(|b| b.dir == PortDir::Input).all(|b| {
-        table
-            .value(b.signal)
-            .is_some_and(|v| s.module.program.set_input(&b.port, to_st(v)).is_ok())
+        let v = table.value(b.signal);
+        if b.ok {
+            return s
+                .module
+                .program
+                .set_input(&b.port, helmsman_iec::Value::Bool(v.is_some()))
+                .is_ok();
+        }
+        match v {
+            Some(v) => s.module.program.set_input(&b.port, to_st(v)).is_ok(),
+            None => crate::signals::watched(b, &s.ports),
+        }
     })
 }
 
