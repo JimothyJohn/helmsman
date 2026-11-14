@@ -21,6 +21,7 @@
 //! own and no dependency, so the browser's simulation and the box run the
 //! same plant, and a seeded run is the same run every time.
 
+pub mod iec;
 pub mod plant;
 pub mod text;
 
@@ -30,6 +31,8 @@ pub use text::{Device, Key, Kind, Mode, ModeLine, Problem, Role, Spec, parse, se
 /// The file's name in a project.
 pub const FILE: &str = "plant.sim";
 
+#[cfg(test)]
+mod iec_tests;
 #[cfg(test)]
 mod plant_tests;
 #[cfg(test)]

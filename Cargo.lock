@@ -1665,6 +1665,7 @@ dependencies = [
  "helmsman-l2",
  "helmsman-project",
  "helmsman-proto",
+ "helmsman-sim",
  "miniz_oxide 0.9.1",
  "proptest",
  "ring",
@@ -1708,6 +1709,7 @@ dependencies = [
 name = "helmsman-sim"
 version = "0.1.0"
 dependencies = [
+ "helmsman-iec",
  "proptest",
 ]
 
