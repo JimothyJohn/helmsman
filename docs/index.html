@@ -229,11 +229,12 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
     </ol>
     <div class="doors">
       <a class="door pay" id="door-unit" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=Unit%20offer%3A%20&amp;body=Device%20%28vendor%20and%20model%29%3A%0AFirmware%2C%20if%20known%3A%0AShips%20from%20%28country%29%3A%0APowers%20up%20and%20worked%20when%20last%20used%3A%20yes%20/%20no%0AWant%20it%20back%20after%20testing%3A%20yes%20/%20no%0A%0ANotes%3A%0A%0A%28No%20address%20or%20payment%20details%20here.%20Those%20are%20arranged%20in%20private%20after%20a%20yes.%29%0A"><span>Paid, $50</span><b>Send a unit</b>Offer a device for the bench.</a>
-      <a class="door" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=Unit%20check%3A%20&amp;body=Device%3A%0AFirmware%3A%0ADate%3A%0A%0AFor%20an%20EtherNet/IP%20device%2C%20paste%20what%20scripts/enip-identify.py%20printed%20%28helmsman-devices%2C%20dev%20branch%29%2C%20without%20the%20serial%20line.%20The%20script%20only%20reads.%0A%0A%60%60%60text%0A%0A%60%60%60%0A%0AWhat%20matched%20the%20entry%2C%20and%20what%20did%20not%3A%0A"><span>You have one</span><b>Test it</b>Run a read-only script on your own unit and report what it printed.</a>
-      <a class="door" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=Review%3A%20&amp;body=Device%3A%0A%0AWhat%20the%20entry%20says%3A%0AWhat%20it%20should%20say%3A%0AWhere%20it%20says%20so%20%28document%20and%20page%2C%20or%20a%20unit%29%3A%0A"><span>You know one</span><b>Check it</b>Read an entry below and say what is wrong.</a>
+      <a class="door" href="library/#test"><span>You have one</span><b>Test it</b>Run a read-only script on your own unit and see it compared with the entry.</a>
+      <a class="door" href="library/"><span>You know one</span><b>Check it</b>Read what an entry claims, with the source of each claim, and say what is wrong.</a>
       <a class="door" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=New%20device%3A%20&amp;body=Vendor%3A%0AModel%3A%0AProduct%20page%3A%0AProtocols%20%28EtherNet/IP%2C%20Modbus%20TCP%2C%20other%29%3A%0AI%20have%20a%20unit%20and%20can%20run%20a%20read-only%20test%3A%20yes%20/%20no%0AI%20could%20send%20a%20unit%20to%20the%20bench%3A%20yes%20/%20no%0A"><span>You want one</span><b>Name it</b>Say which device to map next.</a>
     </div>
-    <p class="muted">Each opens a filled-in issue on GitHub. An offer is public, so the shipping address and the payment are arranged in private afterwards.</p>
+    <p class="muted">An offer or a request opens a filled-in issue on GitHub. It is public, so the shipping address and the payment are arranged in private afterwards.</p>
+    <p class="muted">Working with an agent? Point it at <a href="https://github.com/JimothyJohn/helmsman-devices/blob/dev/AGENTS.md"><code>AGENTS.md</code></a> in the library and give it the device's address. It identifies the unit, drafts or looks up the entry, tests it against the unit and sends the pull request.</p>
     <p class="muted">An entry marked <i>from documents</i> was read from the vendor's EDS file and manual, page by page, and has not yet been run on a unit. A checked entry names the date it was.</p>
     <div class="lib-tools">
       <input id="lib-q" type="search" placeholder="Filter: vendor, model, protocol" aria-label="Filter the device library" hidden>
@@ -323,7 +324,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
 <script>
 (function(){
   var URL_INDEX='https://raw.githubusercontent.com/JimothyJohn/helmsman-devices/main/index.json';
-  var REPO='https://github.com/JimothyJohn/helmsman-devices/tree/main/';
+  var CHECK='library/#';
   var FOLDER=/^devices\/[a-z0-9][a-z0-9_.-]{0,63}\/[a-z0-9][a-z0-9_.-]{0,63}$/;
   var PROTO={enip:'EtherNet/IP',modbus:'Modbus TCP'};
   var q=document.getElementById('lib-q'),count=document.getElementById('lib-count'),
@@ -349,7 +350,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
       var tr=document.createElement('tr');
       var m=cell(tr,''),folder=str(d.folder,160),v=document.createElement('span');
       v.className='lib-vendor';v.textContent=d.vendor;m.appendChild(v);m.appendChild(document.createElement('br'));
-      if(FOLDER.test(folder)){var a=document.createElement('a');a.href=REPO+folder;a.textContent=d.model;m.appendChild(a)}else{m.appendChild(document.createTextNode(d.model))}
+      if(FOLDER.test(folder)){var a=document.createElement('a');a.href=CHECK+folder;a.textContent=d.model;m.appendChild(a)}else{m.appendChild(document.createTextNode(d.model))}
       var ps=d.protocols&&typeof d.protocols==='object'?Object.keys(d.protocols).map(function(k){return PROTO[k]}).filter(Boolean):[];
       cell(tr,ps.join(', ')||'–');
       cell(tr,str(d.channels,120)||'–');
