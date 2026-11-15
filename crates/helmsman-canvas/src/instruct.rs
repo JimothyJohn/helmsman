@@ -1587,8 +1587,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     );
     let hint = format!("What should {target} do? e.g. Latch the lamp until stop");
     let (field, enter) = if let Some(run) = &s.run {
-        // While it works the box shows what was sent (a palette drop is
-        // an instruction too), and takes no typing.
+        // While it works the box shows what was sent, and takes no typing.
         let mut sent = run.instruction.clone();
         ui.add_enabled_ui(false, |ui| {
             chat_box_sized(ui, &mut sent, "agent-instruction", hint, tip, height)

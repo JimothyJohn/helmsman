@@ -84,9 +84,11 @@ you cannot draw into it. What you can do:
   the instance work as you move through the levels.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
-  arrangement with the project so everyone opens it that way. Pan with a
-  drag on empty space, zoom with the wheel; the diagram never leaves the
-  view, and a double-click on empty space fits it again.
+  arrangement with the project so everyone opens it that way. Zoom with the
+  wheel, a two-finger scroll or a pinch, about the pointer. Move the view
+  with a drag on empty space, or with the arrow keys or W A S D while the
+  pointer is over the diagram. The diagram never leaves the view, and a
+  double-click on empty space fits it again.
 
 ![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs.](img/diagram-why.png)
 
@@ -201,12 +203,7 @@ redrawn.
   opens the pane on it, or shuts the pane when that tab already shows.
   **I/O**: every input and output with its value and a control for each
   input the diagram does not show. **History**: every saved version of
-  the open project, newest at the top. **Palette**: pictures of the
-  common pieces of a machine and a program (push button, emergency
-  stop, selector, pilot lamp, alarm, interlock, timer, counter, latch,
-  edge, sequence step, operator screen): drag one onto the diagram, or
-  click it, and the Agent is asked to add it to the program, which waits
-  for Deploy like any change.
+  the open project, newest at the top.
   A double click on any tab hides its pane. The tabs are glyphs; hover one for its name. A hidden pane keeps
   its tabs down the strip at the edge, and a click on one opens the pane
   on that tab.
@@ -215,8 +212,6 @@ redrawn.
   saying now, then the last two hundred things the page had to say, with
   the error count beside the tab. Tick or untick info, warnings and
   errors to list or leave out each.
-
-<img src="img/palette-tab.png" alt="The Palette tab: twelve pictures to drag onto the diagram." width="300">
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 
