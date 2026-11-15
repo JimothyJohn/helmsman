@@ -2,6 +2,8 @@
 //! regions for IF/CASE arms and loop bodies, and the statement list that
 //! ties each back to the source.
 
+use std::collections::BTreeMap;
+
 use helmsman_iec::Value;
 use helmsman_iec::ast::Pos;
 use helmsman_iec::trace::StmtId;
@@ -13,6 +15,16 @@ pub struct NodeId(pub u32);
 /// A region: an index into [`Diagram::regions`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionId(pub u32);
+
+/// A range of the source text, in bytes: `start` is the first byte of the
+/// first token, `end` is just past the last (exclusive), so
+/// `&src[start..end]` is the text with no whitespace or comment at either
+/// edge. Always on a character boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
 
 /// An axis-aligned box in diagram units (about a pixel at zoom 1).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -184,6 +196,19 @@ pub struct Diagram {
     pub top: Vec<usize>,
     /// Width and height of the laid-out diagram.
     pub size: (f32, f32),
+    /// The source text of the operand at each input pin, `(node, input
+    /// index)`: the whole of it, so a negation bubble's `NOT` and any
+    /// parentheses are inside. A read wired from an earlier write keeps the
+    /// read's own text in this statement. Pins with no operand text of
+    /// their own (a function block's `=>` output going to a write) have no
+    /// entry.
+    pub pins: BTreeMap<(NodeId, usize), Span>,
+    /// The condition text of each IF, ELSIF, WHILE and REPEAT region's
+    /// gate (what [`Region::negated`] is the bubble of).
+    pub gates: BTreeMap<RegionId, Span>,
+    /// The whole expression of each binary operator block, parentheses
+    /// around it included; [`Node::pos`] is where its operator sits.
+    pub ops: BTreeMap<NodeId, Span>,
 }
 
 impl Diagram {

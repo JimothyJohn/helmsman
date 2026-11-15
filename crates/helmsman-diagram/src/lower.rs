@@ -43,7 +43,7 @@ use helmsman_iec::ast::{
 };
 use helmsman_iec::trace::{StmtId, TraceMap};
 
-use crate::model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Stmt, Wire};
+use crate::model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Span, Stmt, Wire};
 use crate::text;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +222,8 @@ fn lower_by(src: &str, ids_of: impl Fn(&str) -> HashMap<(u32, u32), StmtId>) -> 
             },
             pou: &p.name,
             ids,
+            starts: line_starts(src),
+            src_len: src.len(),
             vars: &vars,
             region: None,
             stmt: StmtId(0),
@@ -292,11 +294,17 @@ type R<T> = Result<T, LowerError>;
 struct Feed {
     port: Port,
     neg: bool,
+    /// The operand's source text, when it came from an expression.
+    span: Option<Span>,
 }
 
 impl From<Port> for Feed {
     fn from(port: Port) -> Self {
-        Self { port, neg: false }
+        Self {
+            port,
+            neg: false,
+            span: None,
+        }
     }
 }
 
@@ -369,6 +377,9 @@ struct Lower<'a> {
     d: Diagram,
     pou: &'a str,
     ids: HashMap<(u32, u32), StmtId>,
+    /// The byte offset each source line starts at.
+    starts: Vec<usize>,
+    src_len: usize,
     vars: &'a HashMap<String, Var>,
     region: Option<RegionId>,
     stmt: StmtId,
@@ -378,6 +389,17 @@ struct Lower<'a> {
     written: Vec<String>,
     /// This statement's reads, so a variable read twice is one node.
     reads: HashMap<String, NodeId>,
+}
+
+fn line_starts(src: &str) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(
+            src.bytes()
+                .enumerate()
+                .filter(|(_, b)| *b == b'\n')
+                .map(|(i, _)| i + 1),
+        )
+        .collect()
 }
 
 /// A place in memory as text: `P.X`, `A[1,2]`, `%QX0.0`; plus the index
@@ -447,6 +469,21 @@ fn within(key: &str, path: &str) -> bool {
 }
 
 impl Lower<'_> {
+    /// The byte offset of a 1-based line and column (the lexer counts
+    /// bytes).
+    fn offset(&self, p: Pos) -> usize {
+        let line = (p.line as usize).saturating_sub(1).min(self.starts.len() - 1);
+        (self.starts[line] + (p.col as usize).saturating_sub(1)).min(self.src_len)
+    }
+
+    /// The source range of `e`, parentheses around it included.
+    fn span(&self, e: &Expr) -> Span {
+        Span {
+            start: self.offset(e.start),
+            end: self.offset(e.end),
+        }
+    }
+
     fn id_of(&self, pos: Pos) -> R<StmtId> {
         self.ids
             .get(&(pos.line, pos.col))
@@ -486,6 +523,9 @@ impl Lower<'_> {
 
     fn wire(&mut self, from: impl Into<Feed>, to: NodeId, inp: usize) {
         let f = from.into();
+        if let Some(span) = f.span {
+            self.d.pins.insert((to, inp), span);
+        }
         self.d.wires.push(Wire {
             from: f.port.0,
             out: f.port.1,
@@ -526,6 +566,14 @@ impl Lower<'_> {
     ) -> RegionId {
         #[allow(clippy::cast_possible_truncation)]
         let id = RegionId(self.d.regions.len() as u32);
+        if let Some(span) = gate.and_then(|g| g.span)
+            && matches!(
+                kind,
+                RegionKind::If | RegionKind::Elsif | RegionKind::While | RegionKind::Repeat
+            )
+        {
+            self.d.gates.insert(id, span);
+        }
         self.d.regions.push(Region {
             id,
             kind,
@@ -861,10 +909,19 @@ impl Lower<'_> {
         Ok(Feed {
             port: f.port,
             neg: !f.neg,
+            span: None,
         })
     }
 
+    /// Lowers `e` to the output feeding whatever consumes it, tagged with
+    /// `e`'s own source text (even when the output is an earlier write's).
     fn expr(&mut self, e: &Expr) -> R<Feed> {
+        let mut f = self.expr_of(e)?;
+        f.span = Some(self.span(e));
+        Ok(f)
+    }
+
+    fn expr_of(&mut self, e: &Expr) -> R<Feed> {
         Ok(match &e.kind {
             ExprKind::Int { value, .. } => self.konst(e, Some(Value::Int(*value))),
             ExprKind::Real { value, .. } => self.konst(e, Some(Value::Real(*value))),
@@ -951,6 +1008,8 @@ impl Lower<'_> {
                 );
                 self.wire(sa, n, 0);
                 self.wire(sb, n, 1);
+                let whole = self.span(e);
+                self.d.ops.insert(n, whole);
                 (n, 0).into()
             }
             ExprKind::Call(..) => {

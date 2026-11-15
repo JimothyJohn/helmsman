@@ -2824,6 +2824,26 @@ file and token in a temporary state directory).
   removed and changed plus the added and the changed ones' new versions
   are exactly the new blocks. Removed blocks are drawn as dashed ghosts in
   their old layout below the proposed diagram.
+- **Edits from the diagram** (`helmsman_diagram::edit`, `diagram-edit-core`;
+  pure, wasm-safe, depends only on `helmsman-iec`). ST stays the source of
+  truth and the parse tree drops comments, so an edit splices text.
+  Lowering records a byte range for every input pin (`Diagram::pins`,
+  `(node, input)` to the operand's text with its `NOT`s and parentheses),
+  every IF/ELSIF/WHILE/REPEAT gate (`gates`) and every binary operator
+  block (`ops`); the ranges are the parser's `Expr::start` and `end`,
+  converted from line and column (bytes, 1-based). A read wired from an
+  earlier write keeps its own text in this statement.
+  `apply(src, &Module, Edit) -> Result<Patch, Refusal>`: `SetConst` (a
+  literal, a TIME preset), `ToggleNegation` (a pin or a gate), `SwapOp`
+  (AND/OR, a comparison, `+ - * /`). A `Patch` is a byte range and the new
+  text, trimmed to what differs; `Patch::inverse(src)` undoes it exactly.
+  Brackets only where the precedence of `text::expr` needs them. The
+  module must be the lowering of `src` (geometry aside), else
+  `StaleDiagram`. Every edit is checked before it is returned: the result
+  is compiled and lowered again and compared block by block with the old
+  diagram (and with `diff::modules`): only the addressed block and the
+  blocks of its statement that hold its text may differ, and only the asked
+  bubble may flip, else the edit is refused in plain words (`Refusal`).
 - **Sim replay chart.** "Run the sim replay" posts `.../replay`; the
   answer now carries, per driven signal, both step tracks
   (`current_track`, `proposed_track`: type and `[at_ms, value]` steps, at

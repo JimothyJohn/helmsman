@@ -614,17 +614,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 2: `helmsman_diagram::edit` with values, NOT and operators** — lowering records a source span per input pin (`(NodeId, inp)` → the operand's range; a read wired from an earlier write keeps the read's own text in this statement). New pure, wasm-safe `edit::apply(src, &Module, Edit) -> Result<Patch, Refusal>` (Patch = byte range + new text), depending only on helmsman-iec. First edits: SetConst (literals, TIME presets), ToggleNegation (the bubble on a pin or region gate), SwapOp (AND/OR, comparisons, + - * /).
-  result: a diagram gesture becomes an exact, checked text edit; nothing outside the patch changes
-  notes: brackets only where precedence needs them (`text::expr`'s levels); names written as declared, taken from the declaration's source text. Each edit is checked: splice, compile, re-lower, and `diff` must show exactly the intended block changed, else refused with the reason. Property tests over props.rs generators with comments mixed in: compiles, bytes outside the patch unchanged, the inverse edit restores the original bytes. `wasm_deps.rs` stays green.
-  est: 1.5d
-  difficulty: high
-  depends: diagram-edit-spans
-  id: diagram-edit-core
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits 3: rewire, FB arguments, delete, rename** — Rewire (a pin to a variable, a constant or an earlier write), SetFbArg (`PT := T#5s`), DeleteStmt (the whole statement by its range), Rename (reuses `rename_ident`).
   result: V1's full set of logic edits from the diagram
   notes: refusals, each in plain words: type mismatch (the compiled program's types, as the NOT bubble uses), a source not yet written at that point, library POUs (`system`), a diagram whose source no longer matches the buffer (hash), a keyword as a name. `rename_ident`'s `ident()` accepts keywords today (`IF` passes), so refuse that up front.

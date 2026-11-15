@@ -132,6 +132,28 @@ fn a_block_as_the_last_statement_with_no_newline() {
 }
 
 #[test]
+fn declaration_initialisers_read_back_from_their_spans() {
+    let src = "TYPE pt : STRUCT x : INT := 1 + 2; y : INT; END_STRUCT; END_TYPE
+PROGRAM t
+VAR
+  a : INT := 1 + 2 * 3;
+  b : INT := (4) (* c *) ;
+  c : INT := - 7;
+  t1 : TIME := T#5s;
+  r : REAL := 1.5E3;
+  arr : ARRAY[0..3] OF INT := [1, 2 (* two *), 3 + 4, 5];
+  rep : ARRAY[0..3] OF INT := [4(7)];
+  p : pt := (x := ( 8 + 9 ), y := 2);
+  k : INT := a;
+END_VAR
+a := 1;
+END_PROGRAM
+";
+    let n = check(src).unwrap_or_else(|e| panic!("{e}"));
+    assert!(n > 12, "initialisers are walked as well as the body: {n}");
+}
+
+#[test]
 fn library_statement_ranges_are_not_empty() {
     for pou in &ast::library().pous {
         // Library POUs use `system` names, which `ast::parse` refuses

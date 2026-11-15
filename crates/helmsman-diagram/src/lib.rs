@@ -14,6 +14,8 @@
 //!   gates open or closed).
 //! - [`explain()`]: "on because …" for any variable, as data;
 //!   [`drivers()`]: the same as the blocks, wires and regions to highlight.
+//! - [`edit`]: a gesture on the diagram (a value, a negation bubble, an
+//!   operator) as an exact, checked splice of the source text.
 //! - [`diff`]: what a proposal changes, line by line in the source and
 //!   block by block in the diagram, for the review screen.
 //!
@@ -46,6 +48,7 @@
 )]
 
 pub mod diff;
+pub mod edit;
 pub mod explain;
 pub mod layout;
 pub mod live;
@@ -57,5 +60,5 @@ pub mod text;
 pub use explain::{Because, Drivers, Why, drivers, explain};
 pub use live::{Gate, Live, Scan, annotate};
 pub use lower::{LowerError, Module, Pou, StmtPos, lower, lower_table};
-pub use model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Stmt, Wire};
+pub use model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Span, Stmt, Wire};
 pub use phrase::{Phrased, Sentence, Words, phrase};
