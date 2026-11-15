@@ -149,17 +149,58 @@ fn crossed_switches_close_the_inlet_and_alarm() {
     assert!(f.alarm());
 }
 
+/// The first run plays back: the request line by line, the program being
+/// written, then the proofs one by one.
 #[test]
-fn the_proofs_appear_one_by_one() {
+fn the_first_run_plays_the_request_the_writing_and_then_the_proofs() {
+    use crate::front::{ASK_EVERY, ASKED, REVEAL, WRITING};
     let mut f = Front::new();
-    assert_eq!(f.shown(5.0), 0, "nothing before the first frame");
+    assert_eq!(
+        (f.asked_shown(5.0), f.shown(5.0)),
+        (0, 0),
+        "nothing before the first frame"
+    );
     f.tick(10.0);
-    assert_eq!(f.shown(10.0), 0);
-    assert_eq!(f.shown(10.0 + crate::front::REVEAL * 2.5), 2);
+    assert_eq!(f.asked_shown(10.0), 1);
+    assert_eq!(f.asked_shown(10.0 + ASK_EVERY * 2.5), 3);
+    assert!(f.writing(10.0 + ASK_EVERY).is_none() && !f.written(10.0 + ASK_EVERY));
+    #[allow(clippy::cast_precision_loss)]
+    let asked = 10.0 + ASKED.len() as f64 * ASK_EVERY;
+    let half = f.writing(asked + WRITING / 2.0).expect("writing");
+    assert!((half - 0.5).abs() < 1e-9);
+    assert_eq!(f.shown(asked + WRITING / 2.0), 0, "no proof before the program");
+    let written = asked + WRITING;
+    assert!(f.written(written) && f.writing(written).is_none());
+    assert_eq!(f.shown(written + REVEAL * 2.5), 2);
     assert_eq!(f.shown(100.0), TESTS.len());
     assert!(
         crate::front::summary(&f).starts_with("All 5 proved: "),
         "{}",
         crate::front::summary(&f)
     );
+}
+
+/// The page says when and how the program was written, from the record
+/// the recording test left, and the request it shows is the one given.
+#[test]
+fn the_record_says_when_the_agent_wrote_it_and_the_request_is_the_one_shown() {
+    use crate::front::{ASKED, IO, instruction, recorded};
+    let on = recorded("on");
+    assert!(
+        on.len() == 10 && on.as_bytes()[4] == b'-' && on.as_bytes()[7] == b'-',
+        "a date: {on:?}"
+    );
+    assert!(recorded("requests").parse::<u32>().is_ok_and(|n| n >= 1));
+    assert!(recorded("seconds").parse::<u32>().is_ok());
+    let asked = instruction();
+    for line in ASKED {
+        assert!(asked.contains(line), "{line}");
+    }
+    for (name, _) in IO {
+        assert!(asked.contains(name), "{name}");
+        assert!(
+            MAIN.to_ascii_lowercase().contains(name),
+            "the program uses the name it was given: {name}"
+        );
+    }
 }

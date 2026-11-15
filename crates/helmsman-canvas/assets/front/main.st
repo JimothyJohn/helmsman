@@ -1,46 +1,53 @@
-(* A tank that keeps itself topped up. The process draws it down all the
-   time; the inlet valve fills it. *)
 PROGRAM tank
 VAR_INPUT
-  level_low  : BOOL;  (* on when the tank is nearly empty *)
-  level_high : BOOL;  (* on when the tank is full *)
-  level      : REAL;  (* the level transmitter, in metres *)
-  reset      : BOOL;  (* the operator's alarm reset *)
+  level_low : BOOL;
+  level_high : BOOL;
+  level : REAL := 1.0;    (* metres, tank is 2 m deep *)
+  reset : BOOL;
 END_VAR
 VAR_OUTPUT
-  fill      : BOOL;  (* opens the inlet valve *)
-  alarm     : BOOL;
-  level_pct : REAL;  (* for the operator's screen *)
+  fill : BOOL;            (* inlet valve *)
+  alarm : BOOL;
+  level_pct : REAL;       (* level for the operator's screen *)
 END_VAR
 VAR
-  too_long : TON;
+  fill_time : TON;        (* how long the inlet has been open *)
+  overrun_trip : BOOL;    (* a fill ran past 7 s: inlet shut, alarm up *)
+  switches_disagree : BOOL; (* low and high both on: inlet shut, alarm up *)
+  alarm_latch : BOOL;     (* alarm held until reset with the switches agreed *)
 END_VAR
 
-(* Nearly empty and full at once cannot be true: a switch or its wiring
-   has failed. *)
-IF level_low AND level_high THEN
-  alarm := TRUE;
+(* Level readout: 0 m -> 0 %, 2 m -> 100 %. *)
+level_pct := LIMIT(0.0, level / 2.0 * 100.0, 100.0);
+
+(* A fill takes under 6 s: one that runs 7 s trips the overrun. *)
+fill_time(IN := fill, PT := T#7s);
+IF fill_time.Q THEN
+  overrun_trip := TRUE;
+END_IF;
+IF reset THEN
+  overrun_trip := FALSE;
 END_IF;
 
-(* A fill takes under 6 s. One that runs 7 s means the high switch never
-   made, so stop before the tank overflows. *)
-too_long(IN := fill, PT := T#7s);
-IF too_long.Q THEN
-  alarm := TRUE;
+(* Both switches on at once: the level cannot be low and full, so
+   close the inlet and alarm. *)
+switches_disagree := level_low AND level_high;
+
+(* Alarm hold: any cause sets the latch; only reset pressed while the
+   switches agree clears it. *)
+IF overrun_trip OR switches_disagree THEN
+  alarm_latch := TRUE;
+END_IF;
+IF reset AND NOT switches_disagree THEN
+  alarm_latch := FALSE;
 END_IF;
 
-IF reset AND NOT (level_low AND level_high) THEN
-  alarm := FALSE;
-END_IF;
+(* Top-up: open the inlet when the tank runs low, close it when full,
+   when a fill has run too long, when the switches disagree, or while
+   the alarm is held. *)
+fill := (level_low OR fill) AND NOT level_high
+        AND NOT overrun_trip AND NOT switches_disagree
+        AND NOT alarm_latch;
 
-(* The tank is 2 m deep. *)
-level_pct := level / 2.0 * 100.0;
-
-IF alarm THEN
-  fill := FALSE;
-ELSIF level_low THEN
-  fill := TRUE;
-ELSIF level_high THEN
-  fill := FALSE;
-END_IF;
+alarm := alarm_latch;
 END_PROGRAM

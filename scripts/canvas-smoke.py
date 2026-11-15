@@ -242,7 +242,8 @@ def playground(ctx, base, out):
     # A first visit (nothing kept): the front door, its proofs in, then a
     # fault thrown and the way on to the editor.
     rf = Run(open_app(ctx, base, "?playground&front", None), out, "pg-front")
-    rf.wait(6000); rf.shot("proved")
+    rf.wait(2800); rf.shot("writing")
+    rf.wait(7000); rf.shot("proved")
     rf.click(*FRONT_FAIL_HIGH); rf.wait(16000); rf.shot("high-switch-failed")
     rf.click(*FRONT_OPEN_EDITOR); rf.wait(1500); rf.shot("editor")
     problems += rf.problems()

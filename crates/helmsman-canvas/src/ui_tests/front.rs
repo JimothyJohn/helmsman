@@ -22,13 +22,17 @@ fn state(h: &Harness) -> &Front {
 fn a_first_visit_sees_the_request_the_machine_and_the_proofs_and_no_editor() {
     let mut h = front();
     assert!(h.drew("A control program that proves itself"));
+    // The first run plays back: the request, the writing, the proofs.
+    assert!(h.has("front asked 1") && !h.has("front asked 4"), "line by line");
+    assert!(h.has("front machine"));
+    assert!(h.drew("The proofs run once the program is written."));
+    h.wait(2.5);
+    assert!(h.drew("The Agent is writing the program"));
+    h.wait(7.0);
     for k in 1..=ASKED.len() {
         assert!(h.has(&format!("front asked {k}")));
     }
-    assert!(h.has("front machine"));
-    assert!(!h.has("front summary"), "the proofs come one by one");
-    assert!(h.drew("Proving 1 of 5"));
-    h.wait(5.0);
+    assert!(h.drew("The Agent wrote the program from this on 20"));
     for k in 1..=TESTS.len() {
         assert!(h.has(&format!("front proof {k}")));
     }
@@ -100,7 +104,7 @@ fn it_fits_a_laptop_a_tablet_and_a_phone() {
     for width in [1400.0, 1024.0, 760.0, 390.0] {
         let mut h = front();
         h.size = Vec2::new(width, 860.0);
-        h.wait(5.0);
+        h.wait(9.0);
         for (key, r) in &h.app.chrome.hits {
             assert!(
                 r.left() >= 0.0 && r.right() <= width + 0.5,
