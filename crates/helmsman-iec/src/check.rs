@@ -6,6 +6,10 @@
 //! function block instance is a contiguous run of slots inside whoever
 //! declares it. Code addresses its own variables relative to the current
 //! frame base, so one compiled FB body serves every instance.
+//!
+//! A module's `VAR_GLOBAL` variables are the first variables of the
+//! program's frame: the program sees them as its own, and every other POU
+//! reaches them at their slot from the start of memory ([`Base::Global`]).
 
 // Operands are `a`/`b`, their typed forms `x`/`t`: the idiom of type
 // checkers, and clearer here than longer names.
@@ -243,6 +247,9 @@ pub enum Base {
     /// at this offset holds the absolute slot of the caller's variable
     /// (stored by [`Move::Ref`] at each call), and `off` counts on from it.
     Ref(usize),
+    /// A module `VAR_GLOBAL` seen from a function or function block: `off`
+    /// is its slot in the program's frame, which starts the memory.
+    Global,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -258,6 +265,16 @@ impl Place {
     const fn frame(off: usize) -> Self {
         Self {
             base: Base::Frame,
+            off,
+            dims: Vec::new(),
+            bit: None,
+        }
+    }
+
+    /// A module global at `off` in the program's frame.
+    const fn global(off: usize) -> Self {
+        Self {
+            base: Base::Global,
             off,
             dims: Vec::new(),
             bit: None,
@@ -511,6 +528,19 @@ struct Ck<'a> {
     dropped: BTreeMap<usize, BTreeSet<String>>,
     /// Initial values of located variables: (where, type, value).
     loc_init: Vec<(Loc, Ty, Value)>,
+    /// The program, or the first of several: the one whose frame holds
+    /// the module's globals.
+    program: Option<usize>,
+    /// The module's `VAR_GLOBAL` declarations.
+    globals_src: &'a [parser::VarDecl],
+    /// The laid-out globals (offsets in the program's frame), once the
+    /// program has laid them out.
+    globals: Vec<VarInfo>,
+    global_ix: BTreeMap<String, usize>,
+    /// The globals' initial values, which start the program's frame.
+    global_init: Vec<Value>,
+    /// Globals whose declaration failed (already reported).
+    global_dropped: BTreeSet<String>,
     diags: Vec<Diagnostic>,
     /// Shown, not blocking: the program still compiles.
     warnings: Vec<Diagnostic>,
@@ -545,6 +575,12 @@ struct Scope {
     pou: usize,
     vars: BTreeMap<String, usize>,
     loops: usize,
+    /// Whether the module's globals are visible beside `vars`: in every
+    /// user POU but the program, whose own variables they already are.
+    globals: bool,
+    /// Globals this POU declares `VAR_EXTERNAL CONSTANT`: it may only read
+    /// them.
+    read_only: BTreeSet<String>,
 }
 
 impl<'a> Ck<'a> {
@@ -558,7 +594,36 @@ impl<'a> Ck<'a> {
 
     /// Whether `name` in POU `pou` failed to declare (and was reported).
     fn was_dropped(&self, pou: usize, name: &str) -> bool {
-        self.dropped.get(&pou).is_some_and(|d| d.contains(name))
+        self.dropped.get(&pou).is_some_and(|d| d.contains(name)) || self.global_dropped.contains(name)
+    }
+
+    /// The variable `name` means in `sc`: the POU's own, else a module
+    /// global. The flag says it is a global reached from outside the
+    /// program's frame.
+    fn find_var(&self, sc: &Scope, name: &str) -> Option<(VarInfo, bool)> {
+        if let Some(&k) = sc.vars.get(name) {
+            return Some((self.pous[sc.pou].vars[k].clone(), false));
+        }
+        if sc.globals
+            && let Some(&g) = self.global_ix.get(name)
+        {
+            return Some((self.globals[g].clone(), true));
+        }
+        None
+    }
+
+    fn has_var(&self, sc: &Scope, name: &str) -> bool {
+        sc.vars.contains_key(name) || (sc.globals && self.global_ix.contains_key(name))
+    }
+
+    /// The value of a CONSTANT that [`Self::find_var`] returned.
+    fn constant_value(&self, sc: &Scope, v: &VarInfo, global: bool) -> Option<Value> {
+        let init = if global {
+            &self.global_init
+        } else {
+            &self.pous[sc.pou].init
+        };
+        init.get(v.off).copied()
     }
 
     fn type_name(&self, t: Type) -> String {
@@ -846,8 +911,29 @@ impl<'a> Ck<'a> {
         let mut temps = Vec::new();
         let mut ok = true;
         let (mut retained, mut too_big) = (0usize, false);
+        // The program's frame starts with the module's globals: they are
+        // declared by the same rules as its own variables, first.
+        let system = self.srcs[p].system;
+        let first_global = if self.program == Some(p) && !system {
+            self.globals_src
+        } else {
+            &[]
+        };
+        let ng = first_global.len();
+        let decls: Vec<&parser::VarDecl> = first_global.iter().chain(src.vars.iter()).collect();
+        let global_names: BTreeSet<&str> = self.globals_src.iter().map(|d| d.name.as_str()).collect();
         // A function's result is slot 0, named after the function.
         if let PouKind::Function(rt) = &src.kind {
+            if !system && global_names.contains(src.name.as_str()) {
+                self.err(
+                    src.pos,
+                    format!(
+                        "{}: a global variable of this module has the name of this function",
+                        src.name
+                    ),
+                );
+                ok = false;
+            }
             match self.resolve(rt) {
                 Some(Type::Elem(ty)) => {
                     self.pous[p].result = Some(ty);
@@ -886,7 +972,26 @@ impl<'a> Ck<'a> {
                 None => ok = false,
             }
         }
-        for d in &src.vars {
+        for (i, d) in decls.iter().copied().enumerate() {
+            if i == ng {
+                self.publish_globals(p, &vars, &init, ng);
+            }
+            if d.section == Section::External {
+                // Checked with the bodies, once every POU has its place.
+                continue;
+            }
+            if i >= ng && !system && global_names.contains(d.name.as_str()) {
+                self.err(
+                    d.pos,
+                    format!(
+                        "{} is a global variable of this module; a variable of the same name here would \
+                         hide it, so give this one another name",
+                        d.name
+                    ),
+                );
+                ok = false;
+                continue;
+            }
             let allowed = matches!(
                 (kind, d.section),
                 (_, Section::Var | Section::Temp | Section::Input | Section::Output)
@@ -1054,6 +1159,8 @@ impl<'a> Ck<'a> {
                                     .map(|(k, v)| (v.name.clone(), k))
                                     .collect(),
                                 loops: 0,
+                                globals: self.program != Some(p) && !system,
+                                read_only: BTreeSet::new(),
                             };
                             self.pous[p].vars.clone_from(&vars);
                             self.pous[p].init.clone_from(&init);
@@ -1099,6 +1206,8 @@ impl<'a> Ck<'a> {
                         .map(|(k, v)| (v.name.clone(), k))
                         .collect(),
                     loops: 0,
+                    globals: self.program != Some(p) && !system,
+                    read_only: BTreeSet::new(),
                 };
                 self.pous[p].vars.clone_from(&vars);
                 self.pous[p].init.clone_from(&init);
@@ -1137,10 +1246,12 @@ impl<'a> Ck<'a> {
                 loc: None,
             });
         }
-        let dropped: BTreeSet<String> = src
-            .vars
+        if ng == decls.len() && ng > 0 {
+            self.publish_globals(p, &vars, &init, ng);
+        }
+        let dropped: BTreeSet<String> = decls[ng..]
             .iter()
-            .filter(|d| !vars.iter().any(|v| v.name == d.name))
+            .filter(|d| d.section != Section::External && !vars.iter().any(|v| v.name == d.name))
             .map(|d| d.name.clone())
             .collect();
         if !dropped.is_empty() {
@@ -1153,6 +1264,29 @@ impl<'a> Ck<'a> {
         pc.temps = temps;
         self.pou_state[p] = 2;
         ok
+    }
+
+    /// Records the program's first `n` variables as the module's globals,
+    /// for the POUs that reach them from outside its frame.
+    fn publish_globals(&mut self, p: usize, vars: &[VarInfo], init: &[Value], n: usize) {
+        if n == 0 || self.program != Some(p) {
+            return;
+        }
+        self.globals = vars.iter().take(n).cloned().collect();
+        self.global_ix = self
+            .globals
+            .iter()
+            .enumerate()
+            .map(|(k, v)| (v.name.clone(), k))
+            .collect();
+        // At this point `init` holds exactly the globals' slots.
+        self.global_init = init.to_vec();
+        self.global_dropped = self
+            .globals_src
+            .iter()
+            .filter(|d| !self.global_ix.contains_key(&d.name))
+            .map(|d| d.name.clone())
+            .collect();
     }
 
     /// Checks one `VAR_IN_OUT` declaration of a function block: its
@@ -1213,6 +1347,8 @@ impl<'a> Ck<'a> {
                     pou: usize::MAX,
                     vars: BTreeMap::new(),
                     loops: 0,
+                    globals: false,
+                    read_only: BTreeSet::new(),
                 };
                 let sc = scope.unwrap_or(&empty);
                 let ex = self.coerced(e, ty, sc)?;
@@ -1297,14 +1433,19 @@ impl<'a> Ck<'a> {
     fn place(&mut self, e: &Expr, sc: &Scope) -> O<(Place, Type, Access)> {
         match &e.kind {
             ExprKind::Var(name) => {
-                let Some(&k) = sc.vars.get(name) else {
+                let Some((v, global)) = self.find_var(sc, name) else {
                     if self.was_dropped(sc.pou, name) {
                         return None;
                     }
                     let hint = if self.pou_index.contains_key(name) {
                         " (a function is called with parentheses)".to_string()
                     } else {
-                        let near = crate::suggest::hint(name, sc.vars.keys().map(String::as_str));
+                        let names = sc
+                            .vars
+                            .keys()
+                            .chain(self.global_ix.keys().filter(|_| sc.globals))
+                            .map(String::as_str);
+                        let near = crate::suggest::hint(name, names);
                         if near.is_empty() {
                             " (declare it in a VAR block)".to_string()
                         } else {
@@ -1314,9 +1455,10 @@ impl<'a> Ck<'a> {
                     self.err(e.pos, format!("undeclared variable {name}{hint}"));
                     return None;
                 };
-                let v = &self.pous[sc.pou].vars[k];
                 let acc = if v.constant {
                     Access::ReadOnly("is a CONSTANT")
+                } else if sc.read_only.contains(name) {
+                    Access::ReadOnly("is declared VAR_EXTERNAL CONSTANT in this POU, which can only read it")
                 } else {
                     Access::ReadWrite
                 };
@@ -1339,6 +1481,7 @@ impl<'a> Ck<'a> {
                         )
                     }
                     None if v.section == Section::InOut => (Place::through(v.off), v.ty, acc),
+                    None if global => (Place::global(v.off), v.ty, acc),
                     None => (Place::frame(v.off), v.ty, acc),
                 })
             }
@@ -1583,7 +1726,7 @@ impl<'a> Ck<'a> {
                 };
                 Some((Ex::Const(Value::Int(*val)), T::Known(Type::Enum(id))))
             }
-            ExprKind::Var(name) if !sc.vars.contains_key(name) => {
+            ExprKind::Var(name) if !self.has_var(sc, name) => {
                 if let Some((id, val)) = self.enum_value(name, e.pos) {
                     return Some((Ex::Const(Value::Int(val)), T::Known(Type::Enum(id))));
                 }
@@ -1605,15 +1748,15 @@ impl<'a> Ck<'a> {
                     return None;
                 };
                 // A constant scalar folds to its value (keeps initialisers constant).
-                if p.base == Base::Frame
+                if matches!(p.base, Base::Frame | Base::Global)
                     && p.dims.is_empty()
                     && p.bit.is_none()
                     && let ExprKind::Var(n) = &e.kind
-                    && let Some(&k) = sc.vars.get(n)
-                    && self.pous[sc.pou].vars[k].constant
-                    && let Some(v) = self.pous[sc.pou].init.get(p.off)
+                    && let Some((v, global)) = self.find_var(sc, n)
+                    && v.constant
+                    && let Some(v) = self.constant_value(sc, &v, global)
                 {
-                    return Some((Ex::Const(*v), T::Known(t)));
+                    return Some((Ex::Const(v), T::Known(t)));
                 }
                 Some((Ex::Load(Box::new(p), rt), T::Known(t)))
             }
@@ -1940,7 +2083,7 @@ impl<'a> Ck<'a> {
             );
             return None;
         };
-        if sc.vars.contains_key(name) {
+        if self.has_var(sc, name) {
             self.err(
                 pos,
                 format!("{name} is a variable; a function block call is a statement"),
@@ -2390,6 +2533,25 @@ impl<'a> Ck<'a> {
                 ok = false;
             }
         }
+        // A function has no instance to read an output from afterwards, so
+        // a call binds every one (slot 0 is the result, which the call is).
+        if kind == PouType::Function {
+            for v in self.pous[p]
+                .vars
+                .clone()
+                .iter()
+                .filter(|v| v.section == Section::Output && v.off != 0 && !seen.contains(&v.name))
+            {
+                self.err(
+                    at,
+                    format!(
+                        "{callee}: output {n} must be bound at every call ({n} => variable)",
+                        n = v.name
+                    ),
+                );
+                ok = false;
+            }
+        }
         ok &= self.no_shared_names(&callee, &given, inst);
         ok.then_some((moves, outs))
     }
@@ -2431,6 +2593,16 @@ impl<'a> Ck<'a> {
         let (src, ty, acc) = self.place(value, sc)?;
         let root = Self::arg_path(value).map(|(r, _)| r);
         let shown = root.clone().unwrap_or_default();
+        if root.as_ref().is_some_and(|r| self.global_ix.contains_key(r)) {
+            self.err(
+                value.pos,
+                format!(
+                    "{head} {shown} is a global of this module, which the callee can also reach by its \
+                     own name; copy it into a variable first"
+                ),
+            );
+            return None;
+        }
         if matches!(src.base, Base::Image(_)) {
             self.err(
                 value.pos,
@@ -2630,7 +2802,7 @@ impl<'a> Ck<'a> {
             unreachable!("parser only builds call statements from calls")
         };
         if let ExprKind::Var(name) = &callee.kind
-            && !sc.vars.contains_key(name)
+            && !self.has_var(sc, name)
         {
             if let Some(&p) = self.pou_index.get(name)
                 && self.pous[p].kind == PouType::Function
@@ -2672,6 +2844,46 @@ impl<'a> Ck<'a> {
         }))
     }
 
+    /// The variable a FOR counts in: where it is, its type, and that type
+    /// as the integer it must be. A POU's own variable or a module global
+    /// it may write.
+    fn for_var(&mut self, pos: Pos, var: &str, sc: &Scope) -> O<(Place, Type, Ty)> {
+        let Some((v, global)) = self.find_var(sc, var) else {
+            if !self.was_dropped(sc.pou, var) {
+                self.err(pos, format!("undeclared variable {var}"));
+            }
+            return None;
+        };
+        let Type::Elem(ty) = v.ty else {
+            return self.for_var_refused(pos, var, v.ty);
+        };
+        if !ty.is_int() || v.constant || v.loc.is_some() {
+            return self.for_var_refused(pos, var, v.ty);
+        }
+        if sc.read_only.contains(var) {
+            self.err(
+                pos,
+                format!("{var} is declared VAR_EXTERNAL CONSTANT in this POU, which can only read it"),
+            );
+            return None;
+        }
+        let place = if global {
+            Place::global(v.off)
+        } else {
+            Place::frame(v.off)
+        };
+        Some((place, v.ty, ty))
+    }
+
+    fn for_var_refused<T>(&mut self, pos: Pos, var: &str, ty: Type) -> O<T> {
+        let n = self.type_name(ty);
+        self.err(
+            pos,
+            format!("FOR variable {var} must be a non-CONSTANT, non-located integer, found {n}"),
+        );
+        None
+    }
+
     fn stmt(&mut self, s: &Stmt, sc: &mut Scope) -> O<St> {
         let kind = match &s.kind {
             StmtKind::Empty => return None,
@@ -2702,37 +2914,18 @@ impl<'a> Ck<'a> {
                 by,
                 body,
             } => {
-                let Some(&k) = sc.vars.get(var) else {
-                    if !self.was_dropped(sc.pou, var) {
-                        self.err(s.pos, format!("undeclared variable {var}"));
-                    }
-                    return None;
-                };
-                let v = self.pous[sc.pou].vars[k].clone();
-                let ty = match v.ty {
-                    Type::Elem(t) if t.is_int() && !v.constant && v.loc.is_none() => t,
-                    _ => {
-                        let n = self.type_name(v.ty);
-                        self.err(
-                            s.pos,
-                            format!(
-                                "FOR variable {var} must be a non-CONSTANT, non-located integer, found {n}"
-                            ),
-                        );
-                        return None;
-                    }
-                };
-                let from = self.coerced(from, v.ty, sc);
-                let to = self.coerced(to, v.ty, sc);
+                let (place, vty, ty) = self.for_var(s.pos, var, sc)?;
+                let from = self.coerced(from, vty, sc);
+                let to = self.coerced(to, vty, sc);
                 let by = match by {
-                    Some(b) => self.coerced(b, v.ty, sc),
+                    Some(b) => self.coerced(b, vty, sc),
                     None => Some(Ex::Const(Value::Int(1))),
                 };
                 sc.loops += 1;
                 let body = self.block(body, sc);
                 sc.loops -= 1;
                 StKind::For {
-                    var: Place::frame(v.off),
+                    var: place,
                     ty,
                     from: from?,
                     to: to?,
@@ -2782,11 +2975,8 @@ impl<'a> Ck<'a> {
             }
             (LabelValue::Name(n), Type::Elem(_)) => {
                 // A CONSTANT integer may label a CASE arm.
-                let k = sc.vars.get(n).copied();
-                let c = k
-                    .map(|k| self.pous[sc.pou].vars[k].clone())
-                    .filter(|v| v.constant);
-                if let Some(Value::Int(x)) = c.and_then(|v| self.pous[sc.pou].init.get(v.off).copied()) {
+                let c = self.find_var(sc, n).filter(|(v, _)| v.constant);
+                if let Some(Value::Int(x)) = c.and_then(|(v, g)| self.constant_value(sc, &v, g)) {
                     Some(x)
                 } else {
                     self.err(pos, format!("CASE label {n} is not an integer CONSTANT"));
@@ -2854,13 +3044,82 @@ impl<'a> Ck<'a> {
             .enumerate()
             .map(|(k, v)| (v.name.clone(), k))
             .collect();
+        let system = self.srcs[p].system;
         let mut sc = Scope {
             pou: p,
             vars,
             loops: 0,
+            globals: self.program != Some(p) && !system,
+            read_only: BTreeSet::new(),
         };
+        self.externals(p, &mut sc);
         let body = self.block(&src.body, &mut sc);
         self.pous[p].body = body;
+    }
+
+    /// Checks the `VAR_EXTERNAL` declarations of POU `p`: each names a
+    /// global of this module, of its own type, and a global that is a
+    /// CONSTANT is declared so. `VAR_EXTERNAL CONSTANT` makes the POU a
+    /// reader of it.
+    fn externals(&mut self, p: usize, sc: &mut Scope) {
+        let src = self.srcs[p].pou;
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for d in src.vars.iter().filter(|d| d.section == Section::External) {
+            let n = &d.name;
+            if !seen.insert(n.as_str()) {
+                self.err(d.pos, format!("{n} is declared twice"));
+                continue;
+            }
+            let Some(&g) = self.global_ix.get(n) else {
+                if !self.global_dropped.contains(n) {
+                    self.err(
+                        d.pos,
+                        format!(
+                            "VAR_EXTERNAL {n}: this module has no VAR_GLOBAL {n}. A global belongs to one \
+                             module; signals are how modules talk"
+                        ),
+                    );
+                }
+                // Said once here, not again at every use in the body.
+                self.dropped.entry(p).or_default().insert(n.clone());
+                continue;
+            };
+            let problem = if d.init.is_some() {
+                Some("takes no initial value: the VAR_GLOBAL gives it")
+            } else if d.retain {
+                Some("cannot be RETAIN: the VAR_GLOBAL decides")
+            } else if d.at.is_some() {
+                Some("cannot be located: the VAR_GLOBAL decides")
+            } else {
+                None
+            };
+            if let Some(m) = problem {
+                self.err(d.pos, format!("{n}: a VAR_EXTERNAL {m}"));
+                continue;
+            }
+            let Some(ty) = self.resolve(&d.ty) else { continue };
+            let global = self.globals[g].clone();
+            if !self.same_type(ty, global.ty) {
+                let (a, b) = (self.type_name(ty), self.type_name(global.ty));
+                self.err(
+                    d.pos,
+                    format!(
+                        "VAR_EXTERNAL {n} is {a} here and {b} in its VAR_GLOBAL; it takes exactly that type"
+                    ),
+                );
+                continue;
+            }
+            if global.constant && !d.constant {
+                self.err(
+                    d.pos,
+                    format!("{n} is a CONSTANT global: declare it VAR_EXTERNAL CONSTANT"),
+                );
+                continue;
+            }
+            if d.constant {
+                sc.read_only.insert(n.clone());
+            }
+        }
     }
 
     /// Reports a cycle among function and FB calls.
@@ -2924,6 +3183,12 @@ pub fn check(
         calls: Vec::new(),
         dropped: BTreeMap::new(),
         loc_init: Vec::new(),
+        program: None,
+        globals_src: &user.globals,
+        globals: Vec::new(),
+        global_ix: BTreeMap::new(),
+        global_init: Vec::new(),
+        global_dropped: BTreeSet::new(),
         diags: Vec::new(),
         warnings: Vec::new(),
     };
@@ -2993,6 +3258,12 @@ pub fn check(
             None
         }
     };
+    // The program first: it lays out the module's globals, which the other
+    // POUs then see.
+    ck.program = program.or_else(|| programs.first().copied());
+    if let Some(p) = ck.program {
+        ck.layout_pou(p);
+    }
     // Layout everything, including types nothing uses (to report their errors).
     for a in 0..ck.aggs.len() {
         ck.layout_agg(a, Pos::default());

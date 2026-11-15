@@ -210,9 +210,16 @@ fn lower_by(src: &str, ids_of: impl Fn(&str) -> HashMap<(u32, u32), StmtId>) -> 
             .map(|p| p.name.clone()),
     );
     let types = Types::of(&[ast::library(), &unit]);
+    let mut globals = vars_of(&unit.globals, &fbs);
+    for g in globals.values_mut() {
+        g.section = Section::External;
+    }
     let mut pous = Vec::new();
     for p in &unit.pous {
-        let vars = vars(p, &fbs);
+        // The module's globals are there in every POU, named VAR_EXTERNAL
+        // or not: as the POU's own declaration says where it has one.
+        let mut vars = globals.clone();
+        vars.extend(vars_of(&p.vars, &fbs));
         let ids = ids_of(&p.name);
         let mut l = Lower {
             types: &types,
@@ -244,8 +251,8 @@ fn lower_by(src: &str, ids_of: impl Fn(&str) -> HashMap<(u32, u32), StmtId>) -> 
     Ok(Module { pous })
 }
 
-fn vars(p: &ast::Pou, fbs: &HashSet<String>) -> HashMap<String, Var> {
-    p.vars
+fn vars_of(decls: &[ast::VarDecl], fbs: &HashSet<String>) -> HashMap<String, Var> {
+    decls
         .iter()
         .map(|v| {
             let mut ty = &v.ty;
@@ -323,9 +330,15 @@ impl Types {
         let mut t = Self::default();
         for u in units {
             for p in &u.pous {
+                // Globals first: a POU's own declaration of one (VAR_EXTERNAL)
+                // has the same type.
                 t.vars.insert(
                     p.name.clone(),
-                    p.vars.iter().map(|v| (v.name.clone(), v.ty.clone())).collect(),
+                    u.globals
+                        .iter()
+                        .chain(&p.vars)
+                        .map(|v| (v.name.clone(), v.ty.clone()))
+                        .collect(),
                 );
                 if let PouKind::Function(r) = &p.kind {
                     t.funcs.insert(p.name.clone(), r.clone());

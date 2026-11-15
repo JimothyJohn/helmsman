@@ -222,6 +222,9 @@ pub enum Section {
     Input,
     Output,
     InOut,
+    /// `VAR_EXTERNAL`: names a module global (see [`Unit::globals`]) for use
+    /// in this POU; it adds no variable of its own.
+    External,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -281,6 +284,10 @@ pub struct TypeDecl {
 pub struct Unit {
     pub types: Vec<TypeDecl>,
     pub pous: Vec<Pou>,
+    /// The module's `VAR_GLOBAL` variables, in source order: those written
+    /// before the first POU and those inside a `CONFIGURATION` or its
+    /// `RESOURCE`, which all go into one namespace.
+    pub globals: Vec<VarDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,7 +312,7 @@ const MISSING_END_VAR: &str = "missing END_VAR: add END_VAR before this line to 
 
 /// Words that start a compilation unit's next POU or TYPE block, so end
 /// whatever is still open before them.
-const POU_START: &[&str] = &["PROGRAM", "FUNCTION", "FUNCTION_BLOCK", "TYPE"];
+const POU_START: &[&str] = &["PROGRAM", "FUNCTION", "FUNCTION_BLOCK", "TYPE", "VAR_GLOBAL"];
 
 /// Words that end a statement list.
 const BLOCK_END: &[&str] = &[
@@ -686,6 +693,7 @@ impl Parser {
 
     fn unit(&mut self) -> R<Unit> {
         let mut u = Unit::default();
+        let mut configured = false;
         loop {
             if *self.tok() == Tok::Eof {
                 return Ok(u);
@@ -694,6 +702,21 @@ impl Parser {
                 while !self.eat_kw("END_TYPE") {
                     u.types.push(self.type_decl()?);
                 }
+                continue;
+            }
+            if self.eat_kw("VAR_GLOBAL") {
+                self.var_block(Section::Var, &mut u.globals)?;
+                continue;
+            }
+            if self.is_kw("CONFIGURATION") && matches!(self.tok_at(1), Tok::Ident(_)) {
+                if configured {
+                    return self.err(
+                        "a module has one CONFIGURATION: this file already has one, so move this \
+                         one's VAR_GLOBAL blocks into it",
+                    );
+                }
+                configured = true;
+                self.configuration(&mut u.globals)?;
                 continue;
             }
             let pos = self.pos();
@@ -705,13 +728,21 @@ impl Parser {
                 (Some(Some(())), "END_FUNCTION")
             } else {
                 let hint = match self.tok() {
-                    Tok::Ident(w) => {
-                        Self::keyword_hint(w, &["PROGRAM", "FUNCTION", "FUNCTION_BLOCK", "TYPE"])
-                    }
+                    Tok::Ident(w) => Self::keyword_hint(
+                        w,
+                        &[
+                            "PROGRAM",
+                            "FUNCTION",
+                            "FUNCTION_BLOCK",
+                            "TYPE",
+                            "VAR_GLOBAL",
+                            "CONFIGURATION",
+                        ],
+                    ),
                     _ => String::new(),
                 };
                 return self.err(format!(
-                    "expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found {}{hint}",
+                    "expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found {}{hint}",
                     self.tok()
                 ));
             };
@@ -743,6 +774,70 @@ impl Parser {
                 body,
             });
         }
+    }
+
+    /// `CONFIGURATION name ... END_CONFIGURATION`: only what a module can
+    /// use is read, which is the `VAR_GLOBAL` blocks of the configuration
+    /// and of its one `RESOURCE`. Tasks and program instances say how a
+    /// controller runs several programs; a module is one program, whose
+    /// scan rate is set where it is deployed, so they are refused.
+    fn configuration(&mut self, globals: &mut Vec<VarDecl>) -> R<()> {
+        self.advance();
+        self.ident()?;
+        let mut resource = false;
+        loop {
+            if self.eat_kw("VAR_GLOBAL") {
+                self.var_block(Section::Var, globals)?;
+            } else if self.is_kw("RESOURCE") && matches!(self.tok_at(1), Tok::Ident(_)) {
+                if resource {
+                    return self.err("a module has one RESOURCE: put every VAR_GLOBAL block in this one");
+                }
+                resource = true;
+                self.resource(globals)?;
+            } else if self.eat_kw("END_CONFIGURATION") {
+                return Ok(());
+            } else {
+                return self.config_refusal("CONFIGURATION");
+            }
+        }
+    }
+
+    fn resource(&mut self, globals: &mut Vec<VarDecl>) -> R<()> {
+        self.advance();
+        self.ident()?;
+        if self.eat_kw("ON") {
+            self.ident()?;
+        }
+        loop {
+            if self.eat_kw("VAR_GLOBAL") {
+                self.var_block(Section::Var, globals)?;
+            } else if self.eat_kw("END_RESOURCE") {
+                return Ok(());
+            } else {
+                return self.config_refusal("RESOURCE");
+            }
+        }
+    }
+
+    /// What stands where only `VAR_GLOBAL` or the end can: said in plain
+    /// words, so an imported configuration shows what a module leaves out.
+    fn config_refusal<T>(&self, within: &str) -> R<T> {
+        let msg = match self.tok() {
+            Tok::Ident(w) if w == "TASK" => "TASK is not supported: a module's scan rate is set where the \
+                 module is deployed, not in its source. Remove the TASK lines"
+                .to_string(),
+            Tok::Ident(w) if w == "PROGRAM" => "a PROGRAM instance in a RESOURCE is not supported: a \
+                 module runs its one PROGRAM, so remove the instance (and the TASK it names)"
+                .to_string(),
+            Tok::Ident(w) if w == "VAR_ACCESS" || w == "VAR_CONFIG" => {
+                format!("{w} is not supported: modules do not share variables, signals are how modules talk")
+            }
+            Tok::Eof => format!("this {within} is never closed: add END_{within}"),
+            t => format!(
+                "expected VAR_GLOBAL or END_{within}, found {t}: only global variables are read from a {within}"
+            ),
+        };
+        self.err(msg)
     }
 
     fn type_decl(&mut self) -> R<TypeDecl> {
@@ -898,8 +993,18 @@ impl Parser {
                     "VAR_INPUT" => Section::Input,
                     "VAR_OUTPUT" => Section::Output,
                     "VAR_IN_OUT" => Section::InOut,
-                    "VAR_GLOBAL" | "VAR_EXTERNAL" | "VAR_ACCESS" | "VAR_CONFIG" => {
-                        return self.err(format!("{s} is not supported yet"));
+                    "VAR_EXTERNAL" => Section::External,
+                    "VAR_GLOBAL" => {
+                        return self.err(
+                            "VAR_GLOBAL goes before the first PROGRAM, or in a CONFIGURATION, not \
+                             inside a POU: move it out so every POU of the module can see it",
+                        );
+                    }
+                    "VAR_ACCESS" | "VAR_CONFIG" => {
+                        return self.err(format!(
+                            "{s} is not supported: modules do not share variables, signals are how \
+                             modules talk"
+                        ));
                     }
                     _ => return Ok(vars),
                 },
@@ -1758,7 +1863,7 @@ mod tests {
         assert!(
             e("PROGRAM p VAR_GLOBAL a : INT; END_VAR END_PROGRAM")
                 .msg
-                .contains("not supported")
+                .contains("before the first PROGRAM")
         );
         assert!(
             e("PROGRAM p VAR a, b AT %IX0.0 : BOOL; END_VAR END_PROGRAM")

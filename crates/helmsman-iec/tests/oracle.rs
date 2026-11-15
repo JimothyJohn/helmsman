@@ -340,8 +340,8 @@ fn corpus() -> Vec<Case> {
         // VAR_OUTPUT on a function, bound with =>. Every call binds both
         // outputs: ruSTy refuses a call that leaves one out, with named
         // inputs or positional ones (E032, "this POU takes 4 arguments but
-        // 2 arguments were supplied"). Helmsman accepts that call and
-        // drops the output; tests/in_out.rs holds it, with no oracle.
+        // 2 arguments were supplied"), and so does Helmsman (Nick,
+        // 2026-11-15; the refusal is in tests/in_out.rs).
         case(
             "FUNCTION oracle_divmod : DINT
                VAR_INPUT a, b : DINT; END_VAR
@@ -364,6 +364,61 @@ fn corpus() -> Vec<Case> {
             ],
             "q1 := oracle_divmod(17, 5, rem => r1, ok => g1); q2 := oracle_divmod(a := 9, b := 0, rem => r2, ok => g2);
              q3 := oracle_divmod(-17, 5, rem => r3, ok => g3);",
+        ),
+        // VAR_GLOBAL, as ruSTy's own tests write it. The names are unique
+        // across the corpus because ruSTy gets every case in one source and
+        // a global is visible to all of it. Three forms, each taken from a
+        // ruSTy lit test (tests/lit/single/ of PLC-lang/rusty, in the
+        // fetched corpus under target/st-corpus/rusty):
+        // type_promotion/bit_string/constants/constant_operands.st: a
+        // CONSTANT global block, and a global initialised from it (ruSTy divides
+        // the DWORD by 2 there; Helmsman has no `/` on bit strings, so AND).
+        case(
+            "VAR_GLOBAL CONSTANT
+                 oracle_mask : DWORD := 16#FFFF_FFFF;
+             END_VAR
+             VAR_GLOBAL
+                 oracle_half : DWORD := oracle_mask AND 16#0FFF_FFFF;
+             END_VAR",
+            vec![var("a", "DWORD"), var("b", "BOOL")],
+            "a := oracle_half; b := oracle_mask > 1;",
+        ),
+        // var_external/var_external.st: a global array, reached by name in
+        // a body with no declaration, and by a function that declares it
+        // `VAR_EXTERNAL CONSTANT` (ruSTy's test writes through that; here
+        // the function only reads, which Helmsman allows).
+        case(
+            "VAR_GLOBAL
+                 oracle_arr : ARRAY [0..10] OF DINT;
+             END_VAR
+             FUNCTION oracle_total : DINT
+             VAR_EXTERNAL CONSTANT
+                 oracle_arr : ARRAY [0..10] OF DINT;
+             END_VAR
+             VAR i : DINT; END_VAR
+                 FOR i := 0 TO 10 DO
+                     oracle_total := oracle_total + oracle_arr[i];
+                 END_FOR;
+             END_FUNCTION",
+            vec![var("i", "DINT"), var("t", "DINT"), var("e3", "DINT")],
+            "FOR i := 0 TO 10 DO oracle_arr[i] := oracle_arr[i] + i; END_FOR; t := oracle_total(); e3 := oracle_arr[3];",
+        ),
+        // var_external/var_external_initializer_has_no_effect.st: a global
+        // with an initial value, and a function that names it VAR_EXTERNAL
+        // (ruSTy's file also gives the VAR_EXTERNAL an initial value, which
+        // Helmsman refuses; this one leaves it out).
+        case(
+            "VAR_GLOBAL
+                 oracle_i : DINT := 42;
+             END_VAR
+             FUNCTION oracle_twice : DINT
+             VAR_EXTERNAL
+                 oracle_i : DINT;
+             END_VAR
+                 oracle_twice := oracle_i * 2;
+             END_FUNCTION",
+            vec![var("a", "DINT"), var("b", "DINT")],
+            "a := oracle_twice(); b := oracle_i + 1;",
         ),
         // Standard functions.
         case(
