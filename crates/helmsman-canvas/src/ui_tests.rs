@@ -5587,6 +5587,22 @@ mod devconf {
     }
 
     #[test]
+    fn a_failed_second_read_keeps_what_was_read() {
+        let mut h = ready("engineer");
+        answer(
+            &mut h,
+            ConfigOp::Read,
+            502,
+            r#"{"error":"The device did not answer.","code":"unreachable"}"#,
+        );
+        let t = texts(&mut h);
+        assert!(t.contains("DO-00 and DO-01 switch on at power-up."), "{t}");
+        assert!(t.contains("Could not read the device again: The device did not answer."));
+        h.press("config again rio");
+        assert_eq!(config_calls(&sent(&mut h)).len(), 1);
+    }
+
+    #[test]
     fn a_failed_read_says_why_and_can_be_asked_again() {
         let mut h = open("engineer");
         let _ = sent(&mut h);

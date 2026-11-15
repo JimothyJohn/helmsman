@@ -218,7 +218,7 @@ pub fn sentences(f: &Facts) -> Vec<String> {
             out.push("Outputs hold their state if this box stops: the device's watchdog is off.".to_string());
         }
         (Some(true), t) => {
-            let time = t.map_or(String::new(), |t| format!(" (time {t})"));
+            let time = t.map_or(String::new(), |t| format!(" ({t} seconds)"));
             out.push(format!(
                 "Outputs fall to their safe values if this box stops: the device's watchdog is on{time}."
             ));
@@ -282,7 +282,7 @@ impl Draft {
     fn of(f: &Facts) -> Self {
         Self {
             watchdog: f.watchdog.unwrap_or(false),
-            time: f.watchdog_time.unwrap_or(0),
+            time: f.watchdog_time.filter(|t| *t > 0).unwrap_or(60),
             safe: f.outputs.iter().map(|o| o.safe.unwrap_or(false)).collect(),
             ethernet_ip: f.ethernet_ip.unwrap_or(false),
             restful: f.restful.unwrap_or(false),
@@ -349,6 +349,8 @@ struct Dev {
     /// The last result: the words, and whether it is an error.
     notice: Option<(String, bool)>,
     drift_open: bool,
+    /// The newest read failed while an older answer is still shown.
+    read_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -499,11 +501,15 @@ impl ConfigUi {
         let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
         let d = self.devs.entry(device.to_string()).or_default();
         if op == ConfigOp::Read {
-            d.load = match (status, Config::parse(&j)) {
-                (200..=299, Some(c)) => Load::Got(Box::new(c)),
-                (404, _) => Load::None,
-                _ => Load::Failed(why(status, body)),
-            };
+            let shown = matches!(d.load, Load::Got(_));
+            d.read_error = None;
+            match (status, Config::parse(&j)) {
+                (200..=299, Some(c)) => d.load = Load::Got(Box::new(c)),
+                (404, _) => d.load = Load::None,
+                // What was read stays on screen beside the new failure.
+                _ if shown => d.read_error = Some(why(status, body)),
+                _ => d.load = Load::Failed(why(status, body)),
+            }
             return;
         }
         d.busy = None;
@@ -596,9 +602,16 @@ impl ConfigUi {
         let t = theme(ui);
         let can = self.can_write;
         let why_not = self.engineer.clone().unwrap_or_default();
-        let (load, staged, busy, notice, drift_open) = {
+        let (load, staged, busy, notice, drift_open, read_error) = {
             let d = &self.devs[device];
-            (d.load.clone(), d.staged, d.busy, d.notice.clone(), d.drift_open)
+            (
+                d.load.clone(),
+                d.staged,
+                d.busy,
+                d.notice.clone(),
+                d.drift_open,
+                d.read_error.clone(),
+            )
         };
         let mut act: Option<Kind> = None;
         let mut snapshot = false;
@@ -613,6 +626,11 @@ impl ConfigUi {
                     ui.label(RichText::new(format!("firmware {}", c.facts.firmware)).color(t.muted))
                         .tip("The firmware the device reports.");
                 }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.add_space(22.0);
+            if let Load::Got(_) = &load {
                 let on = can && busy.is_none();
                 let tip = if can { "Save a snapshot, change a setting, apply, restore, or the console password." } else { why_not.as_str() };
                 let r = ui.menu_button("Actions", |ui| {
@@ -662,17 +680,7 @@ impl ConfigUi {
             Load::Idle | Load::Asking | Load::None => {
                 line(ui, "Reading the device's configuration…".into(), t.muted);
             }
-            Load::Failed(why) => {
-                line(ui, why.clone(), t.ink(RED));
-                ui.horizontal(|ui| {
-                    ui.add_space(22.0);
-                    let b = ui
-                        .link("Read again")
-                        .tip("Asks the box to read the device again.");
-                    chrome.hit(format!("config again {device}"), b.rect);
-                    again = b.clicked();
-                });
-            }
+            Load::Failed(why) => line(ui, why.clone(), t.ink(RED)),
             Load::Got(c) => {
                 for s in sentences(&c.facts) {
                     line(ui, s, t.fg);
@@ -736,6 +744,23 @@ impl ConfigUi {
                     line(ui, "A console password is stored for the box.".into(), t.muted);
                 }
             }
+        }
+        let failed = match &load {
+            Load::Failed(why) => Some(why.clone()),
+            _ => read_error.clone(),
+        };
+        if let Some(why) = failed {
+            if read_error.is_some() {
+                line(ui, format!("Could not read the device again: {why}"), t.ink(RED));
+            }
+            ui.horizontal(|ui| {
+                ui.add_space(22.0);
+                let b = ui
+                    .link("Read again")
+                    .tip("Asks the box to read the device again.");
+                chrome.hit(format!("config again {device}"), b.rect);
+                again = b.clicked();
+            });
         }
         if let Some(b) = busy {
             line(ui, b.into(), AMBER);
@@ -809,9 +834,10 @@ impl ConfigUi {
                     ui.checkbox(&mut d.watchdog, "Watchdog on")
                         .tip("On: the outputs go to their safe values when the device stops hearing from this box. Off: they hold their state.");
                     ui.horizontal_wrapped(|ui| {
-                        ui.label("Watchdog time").tip("How long the device waits for this box before it acts, as the device counts it.");
-                        let r = ui.add_enabled(d.watchdog, egui::DragValue::new(&mut d.time).range(0..=65535))
-                            .tip("How long the device waits for this box before it acts, as the device counts it.");
+                        const TIP: &str = "How many seconds the device waits for this box before it acts: 1 to 65535. Zero means the watchdog is off; untick Watchdog on instead.";
+                        ui.label("Watchdog time, seconds").tip(TIP);
+                        let r = ui.add_enabled(d.watchdog, egui::DragValue::new(&mut d.time).range(1..=65535).suffix(" s"))
+                            .tip(TIP);
                         chrome.hit("config watchdog time", r.rect);
                     });
                     for (o, s) in facts.outputs.iter().zip(&mut d.safe) {
