@@ -22,8 +22,9 @@ checks pass; Stop, or a draft that fails, leaves it as it was.
 
 A change too big for one answer goes in steps. A long instruction, one
 in several parts or one on a long file is planned first, and so is any
-change whose answer ran out of room. The tab lists the steps and waits
-for Run the steps. Each step is checked like any answer, on a copy, and
+change whose answer ran out of room. The tab lists the steps in plain
+words and starts on the first at once; Stop drops them and leaves the
+file as it was. Each step is checked like any answer, on a copy, and
 builds on the steps before it. The file changes once, when every step
 has passed, as one version in History. A step that fails its checks
 pauses the plan with what went wrong: Try this step again, or Stop to

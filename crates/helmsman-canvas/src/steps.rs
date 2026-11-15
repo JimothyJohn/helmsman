@@ -7,8 +7,10 @@
 //!   that ran out of room.
 //! - **The plan**: the Agent is asked for a numbered list of steps
 //!   ([`plan_request`], read back by [`parse`]). A plan of one step is
-//!   just the instruction, sent as usual. A plan of more waits for the
-//!   engineer to approve it.
+//!   just the instruction, sent as usual. A plan of more runs at once,
+//!   its steps listed in the Agent tab with Stop beside them (Nick, later
+//!   the same day: "just go and assume it's fine, this is just a
+//!   simulation"); only a step that fails waits for the engineer.
 //! - **The steps** ([`step_request`]) run one after the other on a
 //!   working copy, each checked and retried like any answer. The file
 //!   changes once, when every step has passed, as one version in History.
@@ -52,7 +54,7 @@ pub fn plan_request(instruction: &str, cut_off: bool) -> String {
         "This instruction is big, so it is planned first."
     };
     format!(
-        "{why} Do not write any code in this answer. Split the instruction into 2 to {MAX_STEPS} steps, in the order to do them. Each step is one change to the file that can be written whole and checked on its own with a scenario, and builds on the steps before it. Answer with the numbered list only, one step per line, each step one plain sentence (`1. Add the start/stop latch for the motor.`). If the instruction fits in one answer after all, answer `1.` and the instruction itself.\n\nThe instruction: {instruction}"
+        "{why} Do not write any code in this answer. Split the instruction into 2 to {MAX_STEPS} steps, in the order to do them. Each step is one change to the file that can be written whole and checked on its own with a scenario, and builds on the steps before it. Answer with the numbered list only, one step per line, each step one short plain sentence of at most 12 words that an operator would understand, with no timings, variable names or code (`1. Add the start/stop latch for the motor.`); the instruction itself goes with every step, so its details need not be repeated. If the instruction fits in one answer after all, answer `1.` and the instruction itself.\n\nThe instruction: {instruction}"
     )
 }
 
@@ -66,7 +68,7 @@ pub const MAX_SPLITS: u8 = 1;
 #[must_use]
 pub fn split_request(instruction: &str, steps: &[String], k: usize) -> String {
     format!(
-        "Step {n} ran out of room before its code was finished, so it is too big for one answer. Do not write any code in this answer. Split step {n} alone into 2 or 3 smaller steps, in the order to do them. Each is one change to the file that can be written whole and checked on its own with a scenario. Answer with the numbered list only, one step per line, each step one plain sentence.\n\nThe whole change: {instruction}\nStep {n}, the step to split: {step}",
+        "Step {n} ran out of room before its code was finished, so it is too big for one answer. Do not write any code in this answer. Split step {n} alone into 2 or 3 smaller steps, in the order to do them. Each is one change to the file that can be written whole and checked on its own with a scenario. Answer with the numbered list only, one step per line, each step one short plain sentence of at most 12 words.\n\nThe whole change: {instruction}\nStep {n}, the step to split: {step}",
         n = k + 1,
         step = steps[k]
     )
