@@ -241,21 +241,85 @@ fn a_step_that_fails_pauses_the_plan_for_the_engineer() {
     );
 }
 
-/// A step that runs out of room pauses too, rather than failing the plan.
+/// A step that runs out of room is split into smaller steps by the Agent
+/// with nobody asked, and the plan carries on from the first of them
+/// (Nick, 2026-11-14, a screenshot of it: a pause whose only way on was
+/// "Try this step again", which ran out of room the same way).
 #[test]
-fn a_step_that_runs_out_of_room_pauses() {
+fn a_step_that_runs_out_of_room_is_split_and_the_plan_carries_on() {
+    let mut v = mine();
+    send(&mut v, "add a horn and latch the lamp");
+    cut_off(&mut v);
+    reply(&mut v, PLAN);
+    v.run_steps(&egui::Context::default());
+    reply(&mut v, &answer(&horn(), &horn_follows()));
+    let sent = v.link.sent.len();
+    cut_off(&mut v);
+    assert!(
+        !matches!(plan_state(&v), Some(PlanState::Paused(_))),
+        "no pause: {:?}",
+        plan_state(&v)
+    );
+    assert_eq!(v.link.sent.len(), sent + 1, "the split is asked for at once");
+    let asked = last_user(&v);
+    assert!(asked.contains("Step 2 ran out of room"), "{asked}");
+    assert!(asked.contains("Do not write any code"), "{asked}");
+    assert!(
+        asked.contains("Latch the lamp until power off"),
+        "the step to split: {asked}"
+    );
+
+    reply(
+        &mut v,
+        "1. Latch the lamp on start.\n2. Drop the latch at power off.\n",
+    );
+    assert_eq!(plan_state(&v), Some(PlanState::Running));
+    let Mode::Steps(p) = &v.instruct.run.as_ref().unwrap().mode else {
+        panic!("a plan")
+    };
+    assert_eq!(
+        p.steps,
+        [
+            "Add a horn that sounds with start.",
+            "Latch the lamp on start.",
+            "Drop the latch at power off."
+        ]
+    );
+    assert_eq!(p.done, 1, "the step that passed is kept");
+    assert!(last_user(&v).contains("Step 2 of 3"), "{}", last_user(&v));
+}
+
+/// A step the Agent cannot split (its split is one step, or runs out of
+/// room too) pauses with what to do next in plain words; trying again
+/// asks for the step once more.
+#[test]
+fn a_step_that_cannot_be_split_pauses_with_a_way_on() {
     let mut v = mine();
     send(&mut v, "add a horn and latch the lamp");
     cut_off(&mut v);
     reply(&mut v, PLAN);
     v.run_steps(&egui::Context::default());
     cut_off(&mut v);
+    reply(&mut v, "1. Add a horn that sounds with start.");
+    let Some(PlanState::Paused(problems)) = plan_state(&v) else {
+        panic!("{:?}", plan_state(&v))
+    };
     assert_eq!(
-        plan_state(&v),
-        Some(PlanState::Paused(vec![
-            "Step 1 ran out of room before its code was finished.".into()
-        ]))
+        problems,
+        [
+            "Step 1 is too big for one answer and the Agent could not split it. Try it again, or stop and ask for this part by itself in a few words."
+        ]
     );
+    let sent = v.link.sent.len();
+    v.run_steps(&egui::Context::default());
+    assert_eq!(v.link.sent.len(), sent + 1);
+    assert!(last_user(&v).contains("Step 1 of 2"), "{}", last_user(&v));
+    // Out of room again: one more split is tried, and that one out of
+    // room pauses rather than looping.
+    cut_off(&mut v);
+    assert!(last_user(&v).contains("Step 1 ran out of room"));
+    cut_off(&mut v);
+    assert!(matches!(plan_state(&v), Some(PlanState::Paused(_))));
 }
 
 /// A big ask is planned before any code is asked for; a plan of one step
