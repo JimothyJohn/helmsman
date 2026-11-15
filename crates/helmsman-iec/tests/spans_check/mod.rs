@@ -205,7 +205,8 @@ impl Walk<'_> {
 }
 
 /// Checks every statement and expression in the bodies of `src`'s POUs, and
-/// every expression in their variable declarations' initialisers (`VAR x :
+/// every expression in their variable declarations' initialisers and in
+/// the module's `VAR_GLOBAL` ones (`VAR x :
 /// INT := 1 + 2;`, array and structure initialisers included). Returns how
 /// many nodes it checked.
 ///
@@ -214,6 +215,11 @@ impl Walk<'_> {
 pub fn check(src: &str) -> Result<usize, String> {
     let unit = ast::parse(src).map_err(|e| format!("{}: {}", e.pos, e.msg))?;
     let mut w = Walk { src, seen: 0 };
+    for v in &unit.globals {
+        if let Some(init) = &v.init {
+            w.init(init)?;
+        }
+    }
     for pou in &unit.pous {
         for v in &pou.vars {
             if let Some(init) = &v.init {

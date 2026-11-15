@@ -3052,6 +3052,8 @@ impl<'a> Ck<'a> {
                         ),
                     );
                 }
+                // Said once here, not again at every use in the body.
+                self.dropped.entry(p).or_default().insert(n.clone());
                 continue;
             };
             let problem = if d.init.is_some() {

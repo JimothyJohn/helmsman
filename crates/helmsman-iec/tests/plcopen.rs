@@ -873,3 +873,70 @@ fn a_long_rung_lowers() {
     p.scan(&mut img).unwrap();
     assert_eq!(img.q[0] & 1, 1);
 }
+
+// ---- global variable lists (a hand-written project: tests/plcopen/globals.xml) ----
+
+/// The configuration's and the resource's `<globalVars>` become the
+/// module's globals; the task and the program instance beside them are
+/// not read.
+#[test]
+fn global_variable_lists_import_into_one_module() {
+    let xml = fixture("globals.xml");
+    let st = plcopen::lower(&xml).unwrap().st().to_string();
+    assert!(st.contains("VAR_GLOBAL CONSTANT"), "{st}");
+    assert!(st.contains("VAR_GLOBAL RETAIN"), "{st}");
+    assert!(st.contains("VAR_EXTERNAL CONSTANT"), "{st}");
+    assert!(!st.contains("task0") && !st.contains("instance0"), "{st}");
+
+    let mut p = build(&xml);
+    let mut img = Image::new(SIZES);
+    p.scan(&mut img).unwrap();
+    // The resource's list starts ResourceGlobal at 2; the block adds 3.
+    assert_eq!(int(&p, "seen"), 5);
+    assert_eq!(int(&p, "ResourceGlobal"), 5);
+    assert_eq!(int(&p, "limit_seen"), 17, "the configuration's constant list");
+    assert_eq!(int(&p, "Hits"), 1, "used without an externalVars entry");
+    p.scan(&mut img).unwrap();
+    assert_eq!(int(&p, "seen"), 8);
+    assert_eq!(int(&p, "Hits"), 2);
+}
+
+/// An `externalVars` entry with no global list behind it is a variable of
+/// some other project: refused, with the way modules do talk.
+#[test]
+fn an_external_variable_without_its_global_list_is_refused() {
+    let xml = fixture("globals.xml").replace(
+        "<variable name=\"ResourceGlobal\">\n              <type><DINT/></type>",
+        "<variable name=\"SomethingElse\">\n              <type><DINT/></type>",
+    );
+    assert!(xml.contains("SomethingElse"), "the fixture changed shape");
+    let e = errors(&xml);
+    assert!(e.contains("VAR_EXTERNAL RESOURCEGLOBAL"), "{e}");
+    assert!(e.contains("signals are how modules talk"), "{e}");
+    // Said where it is declared, and not again at each use in the block.
+    assert_eq!(e.matches("RESOURCEGLOBAL").count(), 3, "{e}");
+}
+
+/// A global list is declared by the rules of any other: a bad entry is an
+/// error at its line of the XML, and the import never panics on one.
+#[test]
+fn a_bad_global_list_is_an_error_at_its_line() {
+    let good = fixture("globals.xml");
+    for (from, to, want) in [
+        // An initial value that is not an expression.
+        ("<simpleValue value=\"17\"/>", "<simpleValue value=\"1 +\"/>", "expected an expression"),
+        // Two lists declare the same name.
+        ("<variable name=\"Hits\">", "<variable name=\"ResourceGlobal\">", "RESOURCEGLOBAL is declared twice"),
+        // A type nothing declares.
+        (
+            "<variable name=\"Hits\"><type><DINT/></type>",
+            "<variable name=\"Hits\"><type><derived name=\"Nowhere\"/></type>",
+            "unknown type NOWHERE",
+        ),
+    ] {
+        let xml = good.replace(from, to);
+        assert_ne!(xml, good, "{from} is not in the fixture");
+        let e = errors(&xml);
+        assert!(e.contains(want), "{to}: {e}");
+    }
+}

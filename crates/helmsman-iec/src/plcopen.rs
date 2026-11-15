@@ -18,9 +18,11 @@
 //! Checked against the editors' own example projects
 //! (`scripts/plcopen-corpus.sh`). Not yet: SFC and IL bodies, actions,
 //! transitions, jumps and labels, `VAR_IN_OUT` block parameters, anonymous
-//! inline types, and feedback through functions alone. `<instances>`
-//! (configurations, tasks, global variables) is ignored: the runtime runs
-//! the project's one PROGRAM, so `VAR_EXTERNAL` is refused.
+//! inline types, and feedback through functions alone. In `<instances>`
+//! the global variable lists of the configuration and of its resources
+//! become the module's `VAR_GLOBAL` blocks (every POU of the module sees
+//! them, and `externalVars` name them); the tasks and program instances
+//! are ignored, since the runtime runs the project's one PROGRAM.
 
 #![allow(clippy::many_single_char_names)]
 
@@ -99,6 +101,20 @@ pub fn lower(src: &str) -> Result<Lowered, Vec<Diagnostic>> {
         .filter_map(|p| p.attr("name"))
         .map(str::to_ascii_uppercase)
         .collect();
+    // Global variable lists of the configuration and of its resources: one
+    // module has one namespace for them. Tasks and program instances are
+    // not read (the runtime runs the project's one PROGRAM).
+    let configs = root
+        .child("instances")
+        .and_then(|i| i.child("configurations"))
+        .into_iter()
+        .flat_map(|c| c.children_named("configuration"));
+    for config in configs {
+        cx.global_vars(config);
+        for resource in config.children_named("resource") {
+            cx.global_vars(resource);
+        }
+    }
     for pou in pous {
         cx.pou(pou, &user);
     }
@@ -314,6 +330,43 @@ impl Cx {
             }
             n => self.err(e.pos, format!("unknown initial value <{n}>")),
         }
+    }
+
+    /// The `<globalVars>` lists directly inside a configuration or a
+    /// resource, as top-level `VAR_GLOBAL` blocks.
+    fn global_vars(&mut self, scope: &Element) {
+        for list in scope.children_named("globalVars") {
+            let _ = self.global_list(list);
+        }
+    }
+
+    fn global_list(&mut self, list: &Element) -> L<()> {
+        let qual = if self.flag(list, "constant")? {
+            " CONSTANT"
+        } else if self.flag(list, "retain")? {
+            " RETAIN"
+        } else if self.flag(list, "nonretain")? {
+            " NON_RETAIN"
+        } else {
+            ""
+        };
+        let mut lines = Vec::new();
+        let mut ok = true;
+        for v in list.children_named("variable") {
+            match self.var_decl(v) {
+                Ok(d) => lines.push((v.pos, format!("  {d}"))),
+                Err(Failed) => ok = false,
+            }
+        }
+        if !ok {
+            return Err(Failed);
+        }
+        self.line(list.pos, &format!("VAR_GLOBAL{qual}"));
+        for (p, d) in lines {
+            self.line(p, &d);
+        }
+        self.line(list.pos, "END_VAR");
+        Ok(())
     }
 
     /// `name [AT addr] : type [:= init];`

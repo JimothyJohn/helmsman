@@ -420,6 +420,10 @@ fn stmt() -> impl Strategy<Value = String> {
         var.clone()
             .prop_map(|v| format!("g(step := 1, buf := arr, cell := {v});")),
         (var.clone(), var.clone()).prop_map(|(v, w)| format!("{v} := halve({w}, rest => c);")),
+        // VAR_GLOBAL: read and written by the program, a block and a function.
+        (var.clone(), -9i32..10).prop_map(|(v, k)| format!("ga := {v} + {k};")),
+        var.clone().prop_map(|v| format!("h(k := {v});")),
+        var.clone().prop_map(|v| format!("{v} := peekg() MOD 50;")),
     ];
     leaf.prop_recursive(3, 24, 4, move |inner| {
         let block = proptest::collection::vec(inner, 1..4).prop_map(|v| v.join("\n"));
@@ -442,7 +446,8 @@ fn stmt() -> impl Strategy<Value = String> {
 
 fn program(body: &[String]) -> String {
     let mut s = String::from(
-        "FUNCTION_BLOCK pulse
+        "VAR_GLOBAL ga, gb : INT; END_VAR
+FUNCTION_BLOCK pulse
 VAR_INPUT in : BOOL; END_VAR
 VAR_OUTPUT q : BOOL; END_VAR
 VAR r : R_TRIG; t : TOF; END_VAR
@@ -457,6 +462,15 @@ VAR k : INT; END_VAR
 FOR k := 0 TO 2 DO buf[k] := buf[k] + step; END_FOR;
 cell := cell + 1;
 END_FUNCTION_BLOCK
+FUNCTION_BLOCK tally
+VAR_INPUT k : INT; END_VAR
+VAR_EXTERNAL ga : INT; END_VAR
+gb := gb + k MOD 10;
+ga := ga + gb MOD 10;
+END_FUNCTION_BLOCK
+FUNCTION peekg : INT
+peekg := ga - gb;
+END_FUNCTION
 FUNCTION halve : INT
 VAR_INPUT v : INT; END_VAR
 VAR_OUTPUT rest : INT; END_VAR
@@ -464,7 +478,7 @@ halve := v / 2;
 rest := v MOD 2;
 END_FUNCTION
 PROGRAM t
-VAR inp AT %IB0 : BYTE; a, b, c, i, n : INT; x, y : BOOL; f : pulse; g : grow;
+VAR inp AT %IB0 : BYTE; a, b, c, i, n : INT; x, y : BOOL; f : pulse; g : grow; h : tally;
 arr, brr : ARRAY[0..2] OF INT; o AT %QW0 : INT; END_VAR
 ",
     );
