@@ -800,11 +800,21 @@ into the code.
   Parameter page 1: Table B.1, the MasterCommands of Table B.2, cycle
   times of Table B.3, the M-sequence capability, Process Data lengths of
   Table B.6, p.258-263).
-- **Not read yet, and so not built:** the physical layer and wake-up
-  (clause 5), the data link state machines (7.3), timing (A.3), ISDUs
-  (A.5), Events (A.6), the interleaved mode (7.3.4.2), legacy devices
-  (Table A.9 and its reference [8]), data storage, the master's port
-  configuration (clause 11).
+- **Read 2026-11-14 for the master and the simulated device:** Table 9
+  (the three rates, p.59), 5.3.3.3 and Table 10 (the wake-up pulse,
+  p.60), 7.3.2 (wake-up procedure and Table 42, the Master and Device
+  DL-mode handlers, Tables 44 and 45, p.80-88), 7.3.3.3 to 7.3.3.5 (the
+  cycle time's tolerance, the Master and Device message handlers, Tables
+  46 and 47, p.90-96), the idle message (7.3.5 NOTE p.101, Table 52
+  p.103), 7.3.7 (the command handlers, Tables 55 to 57, p.106-108),
+  Tables 85 and 86 (the checks at startup, p.138-140), Figure 82 (the
+  startup sequence, p.155), A.3 and A.4 (timing and errors, p.247-250).
+- **Not read yet, and so not built:** the rest of the physical layer
+  (levels, currents), the Process Data handler's interleaved mode
+  (7.3.4.2), the ISDU and Event handlers (7.3.6, 7.3.8, A.5, A.6),
+  legacy devices (Table A.9 and its reference [8]), SIO mode and the
+  fallback, data storage, the master's port configuration (clause 11).
+  The IODD specification (order no. 10.012) is not fetched.
 - **No test vector is taken from it:** the specification prints none for
   the checksum. The octets in the crate's tests were worked by hand from
   Figure A.1 and equations (A.1).
