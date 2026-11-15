@@ -31,6 +31,12 @@
 //! - `unit=U`: the engineering unit (1..=16 printable characters);
 //! - `poll_ms=N` (`in` on a device or `box` only): read this signal every
 //!   N ms (1..=60000) instead of at the device's `poll_ms`;
+//! - `wired=VENDOR/MODEL` (a signal on a device or `box` only): the
+//!   sensor or actuator wired to this point, by its folder in the device
+//!   library (`ifm/if6123` is `devices/ifm/if6123` there). The runtime
+//!   does nothing with it; it is for people and the agent, who read what
+//!   the thing on the point is and what its signal means from the
+//!   library's record;
 //! - `safe=VALUE` (`out` only): what the output is driven to whenever no
 //!   healthy module drives it (default off / zero).
 //!
@@ -55,11 +61,35 @@ pub const MODULE: &str = "module";
 /// The device name for the box's floor screen.
 pub const SCREEN: &str = "screen";
 
-/// A parsed map file: the map and the declared safe values.
+/// A parsed map file: the map, the declared safe values, and what is
+/// wired to which signal.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MapFile {
     pub map: IoMap,
     pub safe: BTreeMap<String, Value>,
+    /// Signal name to the `wired=` library folder (`vendor/model`).
+    pub wired: BTreeMap<String, String>,
+}
+
+/// Longest part of a `wired=` folder, as the device library names them.
+pub const MAX_WIRED_PART: usize = 64;
+
+/// A `wired=` value: `vendor/model`, each part as the device library
+/// names its folders (`a-z 0-9 . _ -`, starting with a letter or digit,
+/// at most [`MAX_WIRED_PART`]), with no `..`.
+#[must_use]
+pub fn wired_ok(v: &str) -> bool {
+    let part = |p: &str| {
+        (1..=MAX_WIRED_PART).contains(&p.len())
+            && p.bytes()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && p.bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'-'))
+            && !p.contains("..")
+    };
+    v.split_once('/')
+        .is_some_and(|(vendor, model)| part(vendor) && part(model))
 }
 
 fn is_ident(s: &str) -> bool {
@@ -146,22 +176,8 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
         [dir @ ("in" | "out"), name, t, device, point, rest @ ..] => {
             let dir = if *dir == "in" { Dir::In } else { Dir::Out };
             let ty = ty(t).ok_or_else(|| format!("type {t:?}: bool, int or real"))?;
-            let binding = match *device {
-                BOX => Binding::Local {
-                    channel: (*point).into(),
-                },
-                MODULE => Binding::Module {
-                    module: (*point).into(),
-                },
-                SCREEN => Binding::Screen {
-                    tile: (*point).into(),
-                },
-                _ => Binding::Device {
-                    device: (*device).into(),
-                    point: (*point).into(),
-                },
-            };
-            let (mut unit, mut poll, mut safe) = (None, None, None);
+            let binding = binding(device, point);
+            let (mut unit, mut poll, mut safe, mut wired) = (None, None, None, None);
             for opt in rest {
                 let (k, v) = opt.split_once('=').unwrap_or((opt, ""));
                 match k {
@@ -190,11 +206,15 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
                             .ok_or_else(|| format!("{opt:?}: expected safe=VALUE of type {t}"))?;
                         once(&mut safe, k, x)?;
                     }
-                    _ => return Err(format!("{opt:?}: expected unit=, poll_ms= or safe=")),
+                    "wired" => once(&mut wired, k, wired_option(device, v)?)?,
+                    _ => return Err(format!("{opt:?}: expected unit=, poll_ms=, safe= or wired=")),
                 }
             }
             if let Some(x) = safe {
                 out.safe.insert((*name).into(), x);
+            }
+            if let Some(w) = wired {
+                out.wired.insert((*name).into(), w);
             }
             out.map.signals.push(Signal {
                 name: (*name).into(),
@@ -210,6 +230,34 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
         [w, ..] => Err(format!("{w:?}: expected device, in or out")),
         [] => Ok(()),
     }
+}
+
+/// What a signal line's device and point words bind it to.
+fn binding(device: &str, point: &str) -> Binding {
+    match device {
+        BOX => Binding::Local {
+            channel: point.into(),
+        },
+        MODULE => Binding::Module { module: point.into() },
+        SCREEN => Binding::Screen { tile: point.into() },
+        _ => Binding::Device {
+            device: device.into(),
+            point: point.into(),
+        },
+    }
+}
+
+/// A `wired=` option's value on a signal of `device`, checked.
+fn wired_option(device: &str, v: &str) -> Result<String, String> {
+    if device == MODULE || device == SCREEN {
+        return Err("wired: only a signal on a device or box has something wired to it".into());
+    }
+    if !wired_ok(v) {
+        return Err(format!(
+            "wired={v}: expected VENDOR/MODEL, a folder of the device library (a-z 0-9 . _ -)"
+        ));
+    }
+    Ok(v.to_string())
 }
 
 fn once<T>(slot: &mut Option<T>, key: &str, v: T) -> Result<(), String> {
@@ -261,6 +309,9 @@ pub fn render(file: &MapFile) -> String {
         }
         if let Some(p) = sig.poll {
             let _ = write!(s, " poll_ms={}", p.as_millis());
+        }
+        if let Some(w) = file.wired.get(&sig.name) {
+            let _ = write!(s, " wired={w}");
         }
         s.push('\n');
     }

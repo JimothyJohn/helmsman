@@ -724,6 +724,9 @@ fn list_devices(api: &dyn Caller) -> Outcome {
         });
         let point = json!({
             "signal": s.name, "dir": s.dir, "type": s.ty, "point": s.point, "unit": s.unit,
+            // The sensor or actuator on the point, by its folder in the
+            // device library (the map line's `wired=VENDOR/MODEL`).
+            "wired": s.wired(),
             "value": live.map_or(Json::Null, |l| l["value"].clone()),
             "quality": live.map_or(Json::Null, |l| l["quality"].clone()),
             "writer": live.map_or(Json::Null, |l| l["writer"].clone()),
@@ -1797,7 +1800,7 @@ END_FUNCTION_BLOCK
             (
                 "GET /api/io_map",
                 200,
-                json!({"text": "in  level_m real box ai:0 unit=m\nin level_in real box ai:1\n"}),
+                json!({"text": "in  level_m real box ai:0 unit=m\nin level_in real box ai:1 wired=ifm/o5d100\n"}),
             ),
             (
                 "GET /api/signals",
@@ -1990,6 +1993,17 @@ END_FUNCTION_BLOCK
                 "{n}"
             );
         }
+    }
+
+    #[test]
+    fn list_devices_says_what_is_wired_to_a_point() {
+        let o = list_devices(&routes(vec![]));
+        assert!(o.ok, "{}", o.data);
+        let points = o.data["devices"][0]["points"].as_array().expect("points");
+        assert_eq!(points[0]["signal"], "level_m");
+        assert!(points[0]["wired"].is_null(), "{}", o.data);
+        assert_eq!(points[1]["signal"], "level_in");
+        assert_eq!(points[1]["wired"], "ifm/o5d100", "{}", o.data);
     }
 
     #[test]
