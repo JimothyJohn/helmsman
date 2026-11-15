@@ -2954,7 +2954,11 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   come from rules, not the model, so watching spends no model turn; only
   the click does. `watch::Watching` holds it back while an edit is
   unchecked or the Agent is at work, and until the problem has stood
-  `watch::QUIET` seconds. Contracts in `watch.rs`'s tests.
+  `watch::QUIET` seconds. Patterns: compile errors of one kind
+  (`watch::rule_of`) in several places are said once, with one Fix it
+  that lists them all; a kind said `watch::HABIT` times in a session is
+  said to be one ("That is 3 times this session"), counted in memory
+  only. Contracts in `watch.rs`'s tests.
 - **The guided tour** (`tour.rs`; `?tour`, Help › Take the tour; Nick,
   2026-11-06): a card beside the control each step is about, the control
   outlined, over everything in the `Tooltip` order so no panel moves. A
