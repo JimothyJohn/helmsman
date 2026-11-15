@@ -398,6 +398,10 @@ scan; the scheduler bounds how often.
   The box serves a record's brief from `GET
   /api/devices/library?wired=VENDOR/MODEL` (and beside a `q=` match), and
   `list_devices` brings it for every wired point as `wired_devices`.
+  `list_library_devices` (a box tool, read-only, over MCP today; the
+  relay's profiles do not list it yet) searches the library by vendor,
+  model or the number on a label and gives each match's `wired` value
+  and brief, which is what an agent needs to write `wired=` on a line.
   On a box the canvas's Devices tab puts a line under a wired point
   with the vendor, the model and the kind, the rest in its tooltip
   (`devices.rs`, `WiredBrief`; one lookup a record). The playground,
