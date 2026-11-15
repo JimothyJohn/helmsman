@@ -409,6 +409,7 @@ fn misdeclared(src: &str, ports: &[Port]) -> Option<Outcome> {
             Section::Input => "VAR_INPUT",
             Section::Output => "VAR_OUTPUT",
             Section::InOut => "VAR_IN_OUT",
+            Section::External => "VAR_EXTERNAL",
         };
         let fix = match p.dir {
             PortDir::Input => format!(

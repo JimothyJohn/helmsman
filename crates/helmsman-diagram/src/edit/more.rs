@@ -125,14 +125,15 @@ fn root(e: &Expr) -> Option<&Expr> {
     }
 }
 
-/// The declaration of variable `name` of the POU `pou`, and its name as
-/// the source spells it.
+/// The declaration of variable `name` of the POU `pou` (its own, else the
+/// module's `VAR_GLOBAL` one), and its name as the source spells it.
 fn spelled(ctx: &Ctx, src: &str, pou: &str, name: &str) -> Option<String> {
     let v = ctx
         .pou(pou)
         .ok()?
         .vars
         .iter()
+        .chain(&ctx.unit.globals)
         .find(|v| v.name.eq_ignore_ascii_case(name))?;
     let at = offset_in(src, v.pos);
     src.get(at..at + v.name.len())
