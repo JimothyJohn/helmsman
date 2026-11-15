@@ -84,9 +84,11 @@ you cannot draw into it. What you can do:
   the instance work as you move through the levels.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
-  arrangement with the project so everyone opens it that way. Pan with a
-  drag on empty space, zoom with the wheel; the diagram never leaves the
-  view, and a double-click on empty space fits it again.
+  arrangement with the project so everyone opens it that way. Zoom with the
+  wheel, a two-finger scroll or a pinch, about the pointer. Move the view
+  with a drag on empty space, or with the arrow keys or W A S D while the
+  pointer is over the diagram. The diagram never leaves the view, and a
+  double-click on empty space fits it again.
 
 ![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs.](img/diagram-why.png)
 
