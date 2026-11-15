@@ -58,7 +58,7 @@ pub(crate) fn st(code: &str) -> String {
 }
 
 /// A Messages API stream whose one text block is `text`.
-fn stream(text: &str) -> String {
+pub(crate) fn stream(text: &str) -> String {
     let ev = |name: &str, data: serde_json::Value| format!("event: {name}\ndata: {data}\n\n");
     [
         ev("message_start", json!({"type":"message_start","message":{"model":"claude-sonnet-5-5","id":"m","type":"message","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}})),
@@ -801,16 +801,36 @@ proptest::proptest! {
 /// Nick, 2026-11-13: "give it a quick idea of how long it might take in
 /// seconds". About 6 s and a quarter second a line, rounded up to 5.
 #[test]
-fn the_estimate_grows_with_the_file_and_the_clock_says_when_it_is_over() {
+fn the_estimate_is_a_range_that_grows_with_the_file_and_the_clock_says_when_it_is_over() {
     use crate::instruct::{clock, estimate_secs};
-    assert_eq!(estimate_secs(Some(0)), 10);
-    assert_eq!(estimate_secs(Some(9)), 10, "LAMP");
-    assert_eq!(estimate_secs(Some(22)), 15, "traffic");
-    assert_eq!(estimate_secs(Some(200)), 60);
-    assert_eq!(estimate_secs(Some(100_000)), 120, "never more than 2 minutes");
-    assert_eq!(estimate_secs(None), 15, "a new project");
-    assert_eq!(clock(4, Some(10)), "4 s of about 10 s");
-    assert_eq!(clock(10, Some(10)), "10 s of about 10 s");
-    assert_eq!(clock(14, Some(10)), "14 s, longer than usual");
+    assert_eq!(estimate_secs(Some(0)), (5, 25));
+    assert_eq!(estimate_secs(Some(9)), (5, 30), "LAMP");
+    assert_eq!(estimate_secs(Some(22)), (5, 45), "traffic");
+    assert_eq!(estimate_secs(Some(200)), (35, 200));
+    assert_eq!(
+        estimate_secs(Some(100_000)),
+        (60, 300),
+        "never more than 5 minutes"
+    );
+    assert_eq!(estimate_secs(None), (10, 55), "a new project");
+    // The free chat's whole instructions on 2026-11-14, by the lines of
+    // the file each changed: every one inside its range.
+    for (lines, took) in [
+        (Some(9), 11),
+        (Some(9), 26),
+        (Some(9), 17),
+        (Some(9), 11),
+        (None, 14),
+        (None, 22),
+    ] {
+        let (least, most) = estimate_secs(lines);
+        assert!(
+            (least..=most).contains(&took),
+            "{took} s outside {least} to {most} s"
+        );
+    }
+    assert_eq!(clock(4, Some((5, 30))), "4 s · takes 5 to 30 s");
+    assert_eq!(clock(30, Some((5, 30))), "30 s · takes 5 to 30 s");
+    assert_eq!(clock(41, Some((5, 30))), "41 s · longer than the usual 30 s");
     assert_eq!(clock(3, None), "3 s");
 }

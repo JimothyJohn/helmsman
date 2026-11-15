@@ -806,7 +806,10 @@ impl PlaygroundView {
             .map(|t| t.lines().count());
         let plan = crate::steps::big_ask(&self.instruct.draft, lines);
         match self.instruct.start_with(&env, &earlier, plan) {
-            Ok(ask) => self.send_ask(&ask, ctx),
+            Ok(ask) => {
+                self.asked_at = ctx.input(|i| i.time);
+                self.send_ask(&ask, ctx);
+            }
             Err(why) => self.instruct.failed(&why),
         }
     }
@@ -827,13 +830,13 @@ impl PlaygroundView {
             settings,
         };
         if let Some(ask) = self.instruct.approve(&env) {
+            self.asked_at = ctx.input(|i| i.time);
             self.send_ask(&ask, ctx);
         }
     }
 
     /// One request of the instruction under way, to the Agent.
     fn send_ask(&mut self, ask: &crate::instruct::Ask, ctx: &egui::Context) {
-        self.asked_at = ctx.input(|i| i.time);
         match self.chat.send(&ask.message, &ask.context) {
             Ok((seq, req)) => self.link.send(seq, req, ctx),
             Err(why) => self.instruct.failed(&why),
@@ -1188,7 +1191,17 @@ impl PlaygroundView {
             Err(why) => self.instruct.cut_off(&env, &why),
         };
         match step {
-            Step::Ask(ask) => self.send_ask(&ask, ctx),
+            Step::Ask(ask) => {
+                // The clock runs through a retry (the range it is read
+                // against covers one); a plan's next step starts it again.
+                let next_step = self.instruct.run.as_ref().is_some_and(|r| {
+                    r.mode != crate::instruct::Mode::Direct && r.retries == 0 && !r.asked_scenarios
+                });
+                if next_step {
+                    self.asked_at = ctx.input(|i| i.time);
+                }
+                self.send_ask(&ask, ctx);
+            }
             Step::Apply(apply) => self.write(apply),
             Step::Done => self.log_outcome(),
             Step::Wait => {}

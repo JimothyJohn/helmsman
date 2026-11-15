@@ -1232,7 +1232,10 @@ END_PROGRAM",
             h.wait(0.3);
         };
         assert!(h.drew("Sending to the Agent · "), "the clock from the start");
-        assert!(h.drew("of about 10 s"), "and how long it usually takes (9 lines)");
+        assert!(
+            h.drew("takes 5 to 30 s"),
+            "and how long it takes, least to most (9 lines)"
+        );
         // Thinking: its last line, faint.
         chunk(
             &mut h,
@@ -1369,6 +1372,52 @@ END_PROGRAM",
             (0.0..=8.0).contains(&l) && (0.0..=8.0).contains(&r),
             "the panes grew: {l} {r}"
         );
+    }
+
+    /// Nick, 2026-11-14: he leaves the page while the Agent works, so the
+    /// clock is the whole wait. It runs on through a retry and is read
+    /// against a least and a usual most, not one figure it passes half
+    /// the time.
+    #[test]
+    fn the_agents_clock_runs_through_a_retry_against_a_range() {
+        use crate::claude::Incoming;
+        use crate::instruct_tests::{LAMP, follows, stream};
+        let mut h = Harness::new(App::sim());
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.3);
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("comment it".into())]);
+        h.press("agent send");
+        h.wait(4.0);
+        assert!(h.drew("Sending to the Agent · 4 s · takes 5 to 30 s"));
+        // Code that does not compile: the Agent is asked again.
+        let v = h.app.sim.as_mut().unwrap();
+        let (seq, _) = v.link.sent.last().cloned().unwrap();
+        let broken = format!(
+            "Why: a comment.\n\n```st\nPROGRAM lamp_p\nlamp := ;\nEND_PROGRAM\n```\n\n{}",
+            follows()
+        );
+        v.link.inbox.push(Incoming::Chunk {
+            seq,
+            text: stream(&broken),
+        });
+        v.link.inbox.push(Incoming::End { seq });
+        h.wait(2.0);
+        assert_eq!(h.app.sim.as_ref().unwrap().link.sent.len(), 2, "a retry");
+        assert!(h.drew("Try 2 of 3"));
+        assert!(
+            h.drew("6 s · takes 5 to 30 s"),
+            "the clock started again at the retry"
+        );
+        h.wait(30.0);
+        assert!(h.drew("36 s · longer than the usual 30 s"));
     }
 
     /// Stopped while it writes: the draft goes and the file is as it was.

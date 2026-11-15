@@ -3086,5 +3086,8 @@ fn a_click_off_the_name_question_keeps_the_agents_answer() {
     s.click(ok);
     assert!(s.view.program_name.is_none());
     assert_eq!(s.view.new_program.as_deref(), Some("latch-2"));
-    assert_eq!(s.view.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
+    assert_eq!(
+        s.view.instruct.outcome.as_ref().map(|o| o.kind),
+        Some(Kind::Applied)
+    );
 }
