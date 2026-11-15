@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all live-state help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
+.PHONY: help install-dev lint fmt test-unit test-integration test-all live-state live-smoke help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -27,6 +27,9 @@ test-all:  ## Everything, locked to Cargo.lock.
 
 live-state:  ## What a visitor can reach against what is on dev: site, relay, device library, try box (exit 1 when behind).
 	./scripts/live-state.sh
+
+live-smoke:  ## Drive the live public page headless as a first visit: drawn, moving, no console errors; screenshots in target/live-smoke (after a promotion).
+	python3 -I scripts/live-smoke.py
 
 # ---- Interop targets --------------------------------------------------------
 

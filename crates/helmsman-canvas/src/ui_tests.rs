@@ -2163,7 +2163,7 @@ mod chrome {
         let xs: Vec<f32> = Pane::ALL.iter().map(|p| h.rect(&p.hit()).left()).collect();
         assert!(
             xs.windows(2).all(|w| w[0] < w[1]),
-            "Agent | Code | I/O | Devices | Files | History | Palette, left to right: {xs:?}"
+            "Agent | Code | I/O | Devices | Files | History, left to right: {xs:?}"
         );
         let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.press("pane files");
@@ -3719,13 +3719,13 @@ mod chrome {
             "the tab under Code"
         );
         assert_eq!(c.rights, [Pane::Io, Pane::Code]);
-        c.pane = Pane::Palette;
+        c.pane = Pane::History;
         c.send_right();
-        assert_eq!(c.pane, Pane::History, "the last one: the one before");
+        assert_eq!(c.pane, Pane::Files, "the last one: the one before");
         c.dock(Pane::Io, false);
         assert_eq!(
             (c.pane, c.side),
-            (Pane::Io, Pane::Palette),
+            (Pane::Io, Pane::History),
             "back on the left, shown; the right keeps its tab"
         );
         assert_eq!(c.lefts.last(), Some(&Pane::Io), "at the end");
@@ -3745,7 +3745,7 @@ mod chrome {
         /// Any run of docks and sends keeps every tab in exactly one pane,
         /// each pane showing one of its own.
         #[test]
-        fn docking_keeps_every_tab_once(moves in proptest::collection::vec((0usize..7, proptest::bool::ANY, proptest::bool::ANY), 0..40)) {
+        fn docking_keeps_every_tab_once(moves in proptest::collection::vec((0usize..Pane::ALL.len(), proptest::bool::ANY, proptest::bool::ANY), 0..40)) {
             let mut c = Chrome::default();
             for (k, right, send) in moves {
                 if send {
@@ -3786,7 +3786,7 @@ mod chrome {
             "=== =1",
             "dock=2 lefts=why,,code rights=code",
         ] {
-            let c = Chrome::restored(junk);
+            let c = crate::editor::Chrome::restored(junk);
             let mut all: Vec<Pane> = c.lefts.iter().chain(&c.rights).copied().collect();
             all.sort_by_key(|p| Pane::ALL.iter().position(|q| q == p));
             assert_eq!(all, Pane::ALL, "every tab once: {junk:?}");
@@ -3794,7 +3794,7 @@ mod chrome {
         for junk in ["", "left", "tab=why", "=== =1"] {
             assert_eq!(Chrome::restored(junk), Chrome::default(), "{junk:?}");
         }
-        let c = Chrome::restored("dock=2 right=yes left=0 pane=code scan=yes \u{0}");
+        let c = crate::editor::Chrome::restored("dock=2 right=yes left=0 pane=code scan=yes \u{0}");
         assert_eq!(
             (c.left, c.right, c.pane, c.scan),
             (false, false, Pane::Code, false)
@@ -3921,26 +3921,71 @@ mod simulated {
     }
 
     #[test]
-    fn scroll_pans_pinch_zooms_and_the_instance_view_switches_diagrams() {
+    fn scroll_and_pinch_zoom_a_drag_and_the_keys_pan_and_the_instance_view_switches_diagrams() {
         let mut h = stations();
         // Inside the diagram, left of its right edge.
         let centre = Pos2::new(h.app.chrome.diagram.right() - 150.0, 450.0);
+        let wheel = |y: f32| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, y),
+            modifiers: Modifiers::NONE,
+            phase: eframe::egui::TouchPhase::Move,
+            source: eframe::egui::MouseWheelSource::Wheel,
+        };
+        // Nick, 2026-11-14: the wheel zooms about the pointer (it moved
+        // the diagram up and down): what is under the pointer stays there.
         let before = sim_view(&h).cams[0];
-        h.frame(vec![
-            Event::PointerMoved(centre),
-            Event::MouseWheel {
-                unit: MouseWheelUnit::Point,
-                delta: Vec2::new(0.0, -120.0),
-                modifiers: Modifiers::NONE,
-                phase: eframe::egui::TouchPhase::Move,
-                source: eframe::egui::MouseWheelSource::Wheel,
-            },
-        ]);
-        h.wait(0.2);
-        let panned = sim_view(&h).cams[0];
-        assert!(panned.offset.y < before.offset.y, "{before:?} -> {panned:?}");
+        let under = before.to_world(centre);
+        h.frame(vec![Event::PointerMoved(centre), wheel(120.0)]);
+        h.wait(0.3);
+        let nearer = sim_view(&h).cams[0];
+        assert!(nearer.zoom > before.zoom, "{before:?} -> {nearer:?}");
+        let now = nearer.to_world(centre);
+        assert!(
+            (now.0 - under.0).abs() < 1.0 && (now.1 - under.1).abs() < 1.0,
+            "the point under the pointer moved: {under:?} -> {now:?}"
+        );
+        h.frame(vec![wheel(-240.0)]);
+        h.wait(0.3);
+        let further = sim_view(&h).cams[0];
+        assert!(further.zoom < nearer.zoom, "scrolling back zooms out");
         h.frame(vec![Event::Zoom(1.5)]);
-        assert!(sim_view(&h).cams[0].zoom > panned.zoom);
+        let pinched = sim_view(&h).cams[0];
+        assert!(pinched.zoom > further.zoom, "a pinch still zooms");
+        // The arrow keys and W A S D move the view; right shows what is
+        // further right.
+        let held = |h: &mut Harness, key: Key| {
+            let ev = |pressed| Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            };
+            let from = sim_view(h).cams[0].offset;
+            h.frame(vec![ev(true)]);
+            h.wait(0.1);
+            h.frame(vec![ev(false)]);
+            let to = sim_view(h).cams[0].offset;
+            assert_eq!(sim_view(h).cams[0].zoom, pinched.zoom, "{key:?} zoomed");
+            to - from
+        };
+        for (key, x, y) in [
+            (Key::ArrowRight, -1.0, 0.0),
+            (Key::D, -1.0, 0.0),
+            (Key::ArrowLeft, 1.0, 0.0),
+            (Key::A, 1.0, 0.0),
+            (Key::ArrowDown, 0.0, -1.0),
+            (Key::S, 0.0, -1.0),
+            (Key::ArrowUp, 0.0, 1.0),
+            (Key::W, 0.0, 1.0),
+        ] {
+            let by = held(&mut h, key);
+            assert!(
+                by.x * x >= 0.0 && by.y * y >= 0.0 && (by.x * x + by.y * y) > 10.0,
+                "{key:?} moved the view by {by:?}"
+            );
+        }
         let v = h.app.sim.as_mut().unwrap().viewer.as_mut().unwrap();
         v.open(1);
         h.frame(vec![]);
@@ -3992,6 +4037,31 @@ mod simulated {
         h.app.sim.as_mut().unwrap().session.set_running(true);
         h.key(Modifiers::ALT, Key::CloseBracket);
         assert_eq!(sim_view(&h).diagram().pou, "STATION");
+    }
+
+    /// Nick, 2026-11-14: the trend "died" when a new program loaded. A
+    /// program that is loaded and not yet run says so in the plot; once it
+    /// runs its lanes draw from the first scan.
+    #[test]
+    fn a_program_not_yet_run_says_so_in_the_trend_and_draws_once_it_runs() {
+        let note = "Nothing recorded yet. Run the program to draw its signals.";
+        let mut h = Harness::new(App::sim());
+        h.wait(0.5);
+        assert!(!h.drew(note), "the example opens running");
+        // Another program in its place, stopped (the Agent's, a project).
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            assert!(v.session.load(crate::playground::example("Start/stop latch").src));
+        }
+        h.wait(0.2);
+        assert!(h.drew(note));
+        h.app.sim.as_mut().unwrap().session.set_running(true);
+        h.wait(0.5);
+        assert!(!h.drew(note));
+        let v = h.app.sim.as_ref().unwrap();
+        for name in &v.session.trend.signals {
+            assert!(v.session.trend.history.changes(name) >= 1, "{name} draws");
+        }
     }
 
     /// Nick, 2026-11-01: the Trend runs along the bottom, where its time
@@ -6136,7 +6206,7 @@ mod lamps {
 
 /// The glyph library beside every point (`glyph_lib`).
 mod glyph_library {
-    use eframe::egui::{self, Rect, Shape, TextureId};
+    use eframe::egui::{Rect, Shape, TextureId};
 
     use super::Harness;
     use crate::app::App;
@@ -6181,51 +6251,30 @@ mod glyph_library {
         );
     }
 
-    /// The Palette tab (`palette`): a piece dragged onto the diagram, or
-    /// clicked, is sent to the Agent as its request, and the panel turns
-    /// to the Agent tab to show the answer coming.
+    /// Nick, 2026-11-14: no Palette tab (pieces to drag onto the diagram
+    /// go against the agent-first design). A layout saved while it was
+    /// there opens without it.
     #[test]
-    fn a_palette_piece_dropped_on_the_diagram_or_clicked_asks_the_agent() {
+    fn there_is_no_palette_tab_and_a_layout_saved_with_one_still_opens() {
         let mut h = Harness::new(App::sim());
-        h.app
-            .sim
-            .as_mut()
-            .unwrap()
-            .chat
-            .key_mut()
-            .push_str("sk-ant-test-key");
-        // The panels' widths show as the diagram's: it keeps its size.
-        let before = h.app.chrome.diagram;
-        let tab = h.rect("tab palette").center();
-        h.click(tab);
-        assert!(h.app.chrome.showing(Pane::Palette));
-        let panel = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(before.left(), h.size.y));
-        assert_eq!(glyphs_in(&h, panel), 12, "the twelve pieces are drawn");
-        assert_eq!(h.app.chrome.diagram, before, "the grid fits the panel");
-        let sent = |h: &Harness| h.app.sim.as_ref().unwrap().link.sent.len();
-        assert_eq!(sent(&h), 0);
-        // Dropped outside the diagram (back on the panel): nothing.
-        let piece = h.rect("palette push-button").center();
-        h.drag(piece, piece + eframe::egui::vec2(0.0, 300.0));
-        assert_eq!(sent(&h), 0, "dropped on the panel");
-        // Dropped on the diagram: asked.
-        let piece = h.rect("palette push-button").center();
-        h.drag(piece, h.app.chrome.diagram.center());
-        assert_eq!(sent(&h), 1);
-        assert!(h.app.chrome.showing(Pane::Claude), "the answer's tab");
-        let body = &h.app.sim.as_ref().unwrap().link.sent[0].1.body;
-        assert!(body.contains("Add a push button"), "{body}");
-        // A click asks too.
-        h.app.sim.as_mut().unwrap().stop_answer();
-        h.click(tab);
-        h.click(h.rect("palette timer").center());
-        assert_eq!(sent(&h), 2);
-        assert!(
-            h.app.sim.as_ref().unwrap().link.sent[1]
-                .1
-                .body
-                .contains("Add a timer (TON)")
+        h.wait(0.2);
+        assert!(!h.has("tab palette") && !h.has("pane palette"));
+        let c = crate::editor::Chrome::restored(
+            "dock=2 left=1 right=1 lefts=claude,code,palette pane=palette rights=io,palette side=palette",
         );
+        // The tabs it named, less the palette; the rest join the left.
+        assert_eq!(
+            c.lefts,
+            [
+                Pane::Claude,
+                Pane::Code,
+                Pane::Devices,
+                Pane::Files,
+                Pane::History
+            ]
+        );
+        assert_eq!(c.rights, [Pane::Io]);
+        assert_eq!((c.pane, c.side), (Pane::Claude, Pane::Io));
     }
 
     #[test]

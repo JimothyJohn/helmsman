@@ -2246,21 +2246,14 @@ impl Body for PlaygroundView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Palette, Tab::Claude]
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
             Tab::Io => self.io(ui, chrome),
-            // The shell draws the palette (`palette::show`).
-            Tab::Palette => {}
             Tab::Claude => self.claude(ui, chrome),
         }
-    }
-
-    fn ask_agent(&mut self, text: &str, ctx: &egui::Context) {
-        text.clone_into(&mut self.instruct.draft);
-        self.send_instruction(ctx);
     }
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -2719,6 +2712,18 @@ impl PlaygroundView {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Pick signals to trend above",
+                FontId::proportional(crate::theme::MIN_TEXT),
+                t.muted,
+            );
+            return rect;
+        }
+        if trend.history.is_empty() && !self.session.running {
+            // Loaded and not run yet: say so, where empty lanes read as
+            // a trend that broke.
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Nothing recorded yet. Run the program to draw its signals.",
                 FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );

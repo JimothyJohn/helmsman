@@ -2,7 +2,7 @@
 
 Done cards were removed on 2026-11-06 (git history has them). Three sections up top: decisions only you can make, things only your hands can do, and what an agent builds next. The roadmap below is the long view.
 
-Freeze (Nick, 2026-11-14): until the front door (`live-smoke` and the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
+Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
 
 ## Open questions for Nick
 
@@ -14,14 +14,6 @@ Freeze (Nick, 2026-11-14): until the front door (`live-smoke` and the promotion 
   by: claude-session (iolink)
 
 ## Needs your hands
-
-- [ ] **Order an IO-Link master transceiver board and one sensor** — Why it matters: the IO-Link master is built and proven against its own simulated device only (helmsman-iolink: wake-up, COM1/2/3 detection, startup, cyclic Process Data, retries, loss). Nothing has been on a wire, and the P4 needs a master transceiver between its pins and the sensor's C/Q line (24 V, the wake-up current pulse). Two candidates, facts from distributor pages on 2026-11-14 (the vendors' own pages timed out, so neither datasheet has been read): (1) Analog Devices MAX14819 / MAX14819A, a dual-channel master transceiver with L+ supply controllers, SPI, "integrated framers" or external UARTs, 9 to 36 V, 48-pin TQFN, evaluation kit MAX14819EVKIT; (2) ST L6360, a single master port (COM1, COM2, COM3), configured over I2C with the data on a USART, 18 to 32.5 V, evaluation board STEVAL-IOM001V1 (Arduino UNO R3 headers). My pick is the MAX14819 kit: two ports on one board and the framer in the chip takes the bit timing off the P4, which runs the scan and the network beside it. Not checked for either part: how the wake-up pulse is made, and the 3.3 V logic levels against the P4. Any IO-Link sensor with a published IODD will do as the first device; one with 16 bits of input or fewer avoids the interleaved mode the master does not have yet.
-  needs: a 24 V supply on the bench; the part ordered; its datasheet read by a session before the driver is written (first step of `iolink-p4-line`)
-  result: a transceiver board and a sensor on the bench, named on this card with the pins they are wired to
-  options: MAX14819EVKIT | STEVAL-IOM001V1 | another part
-  id: iolink-transceiver
-  asked: 2026-11-14
-  by: claude-session (iolink)
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — Why it matters: a node in a cabinet is powered by its Ethernet cable alone, and today no run has proven that. The PoE module turns the cable's 48 V into the board's supply; if its output is not isolated from the cable side, a USB cable plugged in at the same time ties the laptop's ground to the PoE supply's return, and current can flow through the laptop's USB port. Nobody knows yet which it is, so `scripts/node-flash.sh` makes you pull Ethernet before every USB flash. One measurement settles it: the prompt goes away, or becomes a hard rule. the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
   needs: the PoE module on the board, a meter, a PoE port
@@ -128,7 +120,21 @@ Freeze (Nick, 2026-11-14): until the front door (`live-smoke` and the promotion 
 
 ## Next to build
 
-- [ ] **IO-Link on the node: IODD import, the `iolink` device line, then the P4's line driver** — Why it matters: Nick, 2026-11-14: everything should be reachable, IO-Link sensors included, through a master of our own on the edge node. Built so far (docs/ARCHITECTURE.md `helmsman-iolink`): the message codec, one master port and a simulated device as state machines without I/O, with the timing rules and a noisy line as tests. Also built: `iodd` reads a device's IODD file for its vendor and device id and its Process Data layout by name, and `pd` reads a value out of the octets by that layout (all 22 of the community's example IODDs read; no vendor's file tried yet). Left, in order: (1) try the reader on the IODD of the sensor that gets ordered, from IODDfinder; (2) `iolink-node-line`: an `iolink` device line in helmsman-nodecore's I/O map (port, expected vendor and device id, signals over the Process Data bits) driving `Master` against the simulated device on the host; (3) `iolink-p4-line`: the transceiver driver on the P4 behind `Step` (wake-up, exchange with a timeout), after `iolink-transceiver`; (4) the first real sensor, its capture kept as a test, and only then any wording a user reads (`iolink-membership`). Owed before a device with more than 2 octets of Process Data and M-sequence code 0: the interleaved TYPE_1_1 / TYPE_1_2 mode, which a master shall support (Table A.10 NOTE 3). Later cards: ISDUs (parameters, identity strings), Events, data storage, a second port, a box reading a node's ports.
+- [ ] **A sensor's IODD as its metadata: from the library to the point it is wired to** — Why it matters: Nick, 2026-11-14: "ioLink is a core part of this but may fundamentally be different so let's focus on it for digital input and output device metadata more than anything else", and of sensors that day: "Their output? It should be deeply known ahead of time." A prox or a valve sits on a digital channel of a remote I/O block and is never spoken to; its vendor's IODD (every IO-Link device has one) says who makes it, its variants, how each connector is wired, whether it switches without a master, and what its signals and their states are called. Built: helmsman-devices `scripts/iodd-draft.py` drafts a library record from an IODD (`[identity.iolink]`, `[wired]`, `[[signals]]` with `on` / `off` names; helmsman-devices #33), and `helmsman-iolink`'s `iodd` reads the same file in the box's language. Left, in order: (1) real records: fetch a few vendors' IODDs from IODDfinder (https://ioddfinder.io-link.com) for sensors and valves, draft them, and read `wired.switching` (which signal the wire carries, normally open or closed) from each manual with its page, since an IODD does not say; a `collect/<vendor>.toml` entry per file so `docs-fetch.py` holds the hashes; (2) a point knows what is on it: a line or key in the project that ties a signal (`in part_present bool rio di:3`) to a library record, so the I/O list, the Devices tab and the Agent read "Balluff BES, target present" for DI-03, with the `on` / `off` names and the wire; where that lives (the map line, the project file) is to be decided against `agent-names-io`; (3) `agent-names-io` uses it: when the engineer names a sensor from the library, what on means and what the device is are already filled in, and only its function is asked; (4) the simulation's plant takes the sensor's kind and states from the record.
+  needs: nothing for (1); (2) is a design step to settle with `agent-names-io` and `device-profiles`
+  result: a wired sensor is picked from the library by name, and the program, the I/O list and the Agent know what it is and what its signal means without anyone typing it
+  id: iodd-metadata
+  by: claude-session (iolink)
+
+- [ ] **Order an IO-Link master transceiver board and one sensor** — Parked (Nick, 2026-11-14, later the same day: IO-Link is for the metadata of digital input and output devices more than anything else; see `iodd-metadata`). Nothing to order until a device has to be spoken to over IO-Link. Why it would matter then: the IO-Link master is built and proven against its own simulated device only (helmsman-iolink: wake-up, COM1/2/3 detection, startup, cyclic Process Data, retries, loss). Nothing has been on a wire, and the P4 needs a master transceiver between its pins and the sensor's C/Q line (24 V, the wake-up current pulse). Two candidates, facts from distributor pages on 2026-11-14 (the vendors' own pages timed out, so neither datasheet has been read): (1) Analog Devices MAX14819 / MAX14819A, a dual-channel master transceiver with L+ supply controllers, SPI, "integrated framers" or external UARTs, 9 to 36 V, 48-pin TQFN, evaluation kit MAX14819EVKIT; (2) ST L6360, a single master port (COM1, COM2, COM3), configured over I2C with the data on a USART, 18 to 32.5 V, evaluation board STEVAL-IOM001V1 (Arduino UNO R3 headers). My pick is the MAX14819 kit: two ports on one board and the framer in the chip takes the bit timing off the P4, which runs the scan and the network beside it. Not checked for either part: how the wake-up pulse is made, and the 3.3 V logic levels against the P4. Any IO-Link sensor with a published IODD will do as the first device; one with 16 bits of input or fewer avoids the interleaved mode the master does not have yet.
+  needs: a 24 V supply on the bench; the part ordered; its datasheet read by a session before the driver is written (first step of `iolink-p4-line`)
+  result: a transceiver board and a sensor on the bench, named on this card with the pins they are wired to
+  options: MAX14819EVKIT | STEVAL-IOM001V1 | another part
+  id: iolink-transceiver
+  asked: 2026-11-14
+  by: claude-session (iolink)
+
+- [ ] **IO-Link on the node: IODD import, the `iolink` device line, then the P4's line driver** — Parked behind `iodd-metadata` (Nick, 2026-11-14, later the same day: the sensor is wired to a plain digital channel and its IODD is its metadata; speaking IO-Link to it comes after, if at all). What is built stays on dev, tested, with nothing calling it. Why it mattered: Nick, 2026-11-14: everything should be reachable, IO-Link sensors included, through a master of our own on the edge node. Built so far (docs/ARCHITECTURE.md `helmsman-iolink`): the message codec, one master port and a simulated device as state machines without I/O, with the timing rules and a noisy line as tests. Also built: `iodd` reads a device's IODD file for its vendor and device id and its Process Data layout by name, and `pd` reads a value out of the octets by that layout (all 22 of the community's example IODDs read; no vendor's file tried yet). Also built in helmsman-nodecore's `iolink`: the `device NAME iolink port=N ...` line and its `pd:OFFSET[:uN|iN]` points, a `Port` that runs one on the master and gives the inputs by point and takes the outputs, and `Iodd::map_lines`, which writes those lines from an IODD; proven from an IODD to values on the simulated device. No firmware calls it, and the node's own `iomap::parse` still refuses an `iolink` line, since no node has a port. Left, in order: (1) try the reader on the IODD of the sensor that gets ordered, from IODDfinder; (2) `iolink-node-image`: a place for `int` points in the node's program image (today it is 4 bytes of bool bits a direction, for the Modbus block's points, so an IO-Link number has nowhere to land), and a map with no Modbus block (today a node's map needs exactly one); (3) `iolink-p4-line`: the transceiver driver on the P4 behind `Step` (wake-up, exchange with a timeout), `iomap::parse` taking `iolink` lines on a board with ports, the io task polling each `Port`, after `iolink-transceiver`; (4) the first real sensor, its capture kept as a test, and only then any wording a user reads (`iolink-membership`). Owed before a device with more than 2 octets of Process Data and M-sequence code 0: the interleaved TYPE_1_1 / TYPE_1_2 mode, which a master shall support (Table A.10 NOTE 3). Later cards: ISDUs (parameters, identity strings), Events, data storage, a second port, a box reading a node's ports.
   needs: nothing for (2); the sensor chosen for (1); `iolink-transceiver` for (3) and (4)
   result: a node's program reads an IO-Link sensor's Process Data by name from a deployed map
   id: iolink-node
@@ -424,15 +430,6 @@ Freeze (Nick, 2026-11-14): until the front door (`live-smoke` and the promotion 
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **A smoke of the public page after each promotion** — left of `live-state` (interview 2026-11-14). `scripts/live-state.sh` (`make live-state`) now says what a visitor can reach against dev: master, the site's build, the relay's main and its deploy, the device library, the running try box. Not built: driving the live site's page headless after a promotion (the canvas-smoke pattern against the site's address), so a page that is live but broken is caught the same day.
-  needs: nothing
-  result: a promotion ends with screenshots of the live page, or says what broke
-  est: 3h
-  difficulty: low
-  id: live-smoke
-  asked: 2026-11-14
-  by: claude-session
-
 - [ ] **The Agent watches and speaks first** — Nick, 2026-11-14: "the agent should feel like a fundamental part of the environment. It should be watching every time it breaks to point out the stupid thing you did to show how it should be done better." Today the Agent is a box you type into. Wanted: every failure the environment already sees (a check error, a requirement test going red, a module held by a lost input, a device lost, a value out of its limits) reaches the Agent unasked, and it answers in place, beside the failure: what went wrong in one line, the better way, and the change offered as one click. Never a modal, never a wait in the way of typing. Open before building: what it costs per visitor on the free chat (each failure is a model turn), and which failures are answered by rule without the model.
   needs: an interview on the triggers and the cost ceiling
   result: a failure is followed by its explanation and its fix without the engineer asking
@@ -458,6 +455,15 @@ Freeze (Nick, 2026-11-14): until the front door (`live-smoke` and the promotion 
   est: 1w
   difficulty: high
   id: agent-patterns
+  asked: 2026-11-14
+  by: claude-session
+
+- [ ] **Device configuration follow-ups, from a recovered snapshot** — work that sat uncommitted in a worktree since 2026-11-12, now the branch `wip/recovered-devconf-canvas-20261114` (not built or tested, based on a tree from that day). In it: a failed re-read of a device's configuration keeps the last one on screen beside the error instead of replacing it; a new watchdog draft starts at 60 s and the sentence says seconds; a browser smoke of the Configuration section against the simulated E1200 console (`scripts/canvas-smoke-devconf.py`, `helmsman-devconf/examples/sim_console.rs`). Rebase it on dev, finish its tests, and land it, or delete the branch if the Configuration section has moved on.
+  needs: nothing
+  result: the follow-ups landed, or the branch gone
+  est: 4h
+  difficulty: low
+  id: devconf-recovered
   asked: 2026-11-14
   by: claude-session
 

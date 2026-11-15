@@ -80,13 +80,13 @@ fi
 
 promotion "device library" "$devices" main dev
 
-# The running box says which build it is (X-Helmsman-Build: the commit it
+# The try box, when it is up, says which build it is (X-Helmsman-Build: the commit it
 # was built from, `git describe --always --abbrev=9`).
 stamp="$(curl -sk -D - -o /dev/null --max-time 5 https://127.0.0.1:8081/api 2>/dev/null \
   | tr -d '\r' | awk 'tolower($1) == "x-helmsman-build:" { print $2 }')"
 if [ -z "$stamp" ]; then
-  if [ -d "$try" ]; then stale "try box" ":8081 does not answer (launchctl kickstart -k gui/$(id -u)/io.advin.helmsman-try)"
-  else unknown "try box" "no box on :8081 and no checkout at $try"; fi
+  # Off is its normal state (CLAUDE.md, the try box): nothing to be behind.
+  row off "try box" "not running; start it when a task needs a box (CLAUDE.md, Checkouts and services)"
 else
   n="$(git rev-list --count "$stamp..origin/dev" 2>/dev/null)"
   case "$n" in
