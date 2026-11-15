@@ -39,7 +39,11 @@ example:
 > Updated lamp.st: 2 scenarios passed, kept as tests.
 > Why: the lamp now latches until stop is pressed.
 
-Nothing runs until you deploy it, as with any edit of your own.
+On a box nothing runs until you deploy it, as with any edit of your own.
+In the simulation the changed program is loaded stopped, with every
+variable, timer and output back at its start, so Run starts it from
+scratch. To have it run at once, clear "Stop and reset after a change"
+in the Agent tab; the choice is remembered in this browser.
 
 What the change did is marked until your next edit. In the code, lines
 it added are on a green ground and a red rule stands where it removed

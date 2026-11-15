@@ -1499,12 +1499,23 @@ END_PROGRAM",
             "Why: it says why the lamp is on.\n\n```st\n{new}```\n\n{}",
             follows()
         );
+        {
+            let v = h.app.sim.as_ref().unwrap();
+            assert!(
+                v.session.running && v.session.scans > 0,
+                "running before the change"
+            );
+        }
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
         {
             let v = h.app.sim.as_ref().unwrap();
             assert_eq!(v.proj.files["main.st"], new);
-            assert!(v.session.running, "the change runs at once");
+            // Nick, 2026-11-14: a change lands stopped, to run from scratch.
+            assert!(
+                !v.session.running && v.session.scans == 0 && v.session.now_ms == 0,
+                "the change lands stopped and reset"
+            );
             let logged = v
                 .log
                 .iter()
@@ -1526,8 +1537,16 @@ END_PROGRAM",
             h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
             "the change is marked"
         );
-        // A second instruction: the arrows walk back over both.
+        // A second instruction: the arrows walk back over both. With the
+        // switch off (remembered), its change runs at once.
         let newer = new.replace("(* follows start *)", "(* on with start *)");
+        assert!(h.app.chrome.saved().contains("reset=1"));
+        h.press("agent resets");
+        h.frame(vec![]);
+        assert!(
+            !crate::editor::Chrome::restored(&h.app.chrome.saved()).agent_resets,
+            "remembered"
+        );
         h.click(h.rect("agent instruction").center());
         h.frame(vec![Event::Text("reword it".into())]);
         h.press("agent send");
@@ -1537,6 +1556,10 @@ END_PROGRAM",
         h.wait(0.2);
         let main = |h: &Harness| h.app.sim.as_ref().unwrap().proj.files["main.st"].clone();
         assert_eq!(main(&h), newer);
+        assert!(
+            h.app.sim.as_ref().unwrap().session.running,
+            "switched off, the change runs at once"
+        );
         let enabled = |h: &mut Harness, key: &str| {
             let before = main(h);
             h.press(key);

@@ -2,7 +2,7 @@
 
 Done cards were removed on 2026-11-06 (git history has them). Three sections up top: decisions only you can make, things only your hands can do, and what an agent builds next. The roadmap below is the long view.
 
-Freeze (Nick, 2026-11-14): until the front door (`front-door`, `front-door-recorded-run`, `live-state`) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
+Freeze (Nick, 2026-11-14): until the front door (`front-door`, `front-door-recorded-run`, `live-smoke`) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
 
 ## Open questions for Nick
 
@@ -422,12 +422,12 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door`, `front-door-recor
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **Done means live: one command that says what a visitor can reach** — interview 2026-11-14: Nick's suspicion was right (master 71 commits behind dev, the try box on the build of 2026-11-08, the live chat on playground-v2, helmsman-devices dev 50 ahead of main, no tag or release). `scripts/live-state.sh` prints, each from its own CLI: dev against master, the build stamp the public page serves, relay dev against main and the profile the demo answers with, the try box's build against dev, helmsman-devices dev against main. A session's report keeps "on dev" and "live" apart from that output and ends with one batched promote hand-off; the word done is kept for what a visitor can reach. A smoke of the public page (the canvas-smoke pattern against the site's address) runs after each promotion.
+- [ ] **A smoke of the public page after each promotion** — left of `live-state` (interview 2026-11-14). `scripts/live-state.sh` (`make live-state`) now says what a visitor can reach against dev: master, the site's build, the relay's main and its deploy, the device library, the running try box. Not built: driving the live site's page headless after a promotion (the canvas-smoke pattern against the site's address), so a page that is live but broken is caught the same day.
   needs: nothing
-  result: no session reports work as done that nobody can reach
-  est: 4h
+  result: a promotion ends with screenshots of the live page, or says what broke
+  est: 3h
   difficulty: low
-  id: live-state
+  id: live-smoke
   asked: 2026-11-14
   by: claude-session
 
