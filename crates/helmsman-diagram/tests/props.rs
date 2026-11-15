@@ -8,6 +8,8 @@
 //! output reads, `=>` outputs, computed indices, nested FB calls and jumps.
 
 mod common;
+#[path = "../../helmsman-iec/tests/spans_check/mod.rs"]
+mod spans_check;
 
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -102,6 +104,23 @@ arr : ARRAY[0..3] OF INT; o AT %QW0 : INT; bs : ARRAY[0..3] OF BOOL; wd : WORD; 
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
+
+    /// Every statement and expression of a generated program, bare and
+    /// with a comment between every pair of tokens, reads back from the
+    /// text between its start and its end (helmsman-iec's `end` positions).
+    #[test]
+    fn every_statement_and_expression_reads_back_from_its_span(
+        body in proptest::collection::vec(stmt(), 1..6),
+        early_return in any::<bool>(),
+    ) {
+        let bare = program(&body, early_return);
+        let noisy_body: Vec<String> = body.iter().map(|s| s.replace(' ', " (* c *) ")).collect();
+        let noisy = program(&noisy_body, early_return);
+        for src in [bare, noisy] {
+            let n = spans_check::check(&src).map_err(|e| TestCaseError::fail(format!("{e}\n{src}")))?;
+            prop_assert!(n > 0);
+        }
+    }
 
     #[test]
     fn lowering_any_accepted_program_is_total_and_faithful(

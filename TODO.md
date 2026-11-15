@@ -633,15 +633,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 1: end positions in the parse tree** — first step of editing the program from the diagram (interview 2026-11-07: splice edits into the ST, ST stays the source of truth; V1 is rewire and values; sim and box through the normal Save; the ST updates live and the changed span flashes). `Expr` and `Stmt` carry only a start `Pos`; add `end: Pos` to both in helmsman-iec's parser (14 constructions in parser.rs, 1 in ladder/rung.rs; also check lower.rs and model.rs).
-  result: every statement and expression knows its exact source range, so a diagram edit can replace just that text
-  notes: property test: for every statement and expression in generated programs and the corpus, the source between start and end parses back to the same tree (ignoring positions). The tree drops comments and upper-cases names, which is why edits splice text instead of printing the tree.
-  est: 4h
-  difficulty: med
-  id: diagram-edit-spans
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Diagram edits 2: `helmsman_diagram::edit` with values, NOT and operators** — lowering records a source span per input pin (`(NodeId, inp)` → the operand's range; a read wired from an earlier write keeps the read's own text in this statement). New pure, wasm-safe `edit::apply(src, &Module, Edit) -> Result<Patch, Refusal>` (Patch = byte range + new text), depending only on helmsman-iec. First edits: SetConst (literals, TIME presets), ToggleNegation (the bubble on a pin or region gate), SwapOp (AND/OR, comparisons, + - * /).
   result: a diagram gesture becomes an exact, checked text edit; nothing outside the patch changes
   notes: brackets only where precedence needs them (`text::expr`'s levels); names written as declared, taken from the declaration's source text. Each edit is checked: splice, compile, re-lower, and `diff` must show exactly the intended block changed, else refused with the reason. Property tests over props.rs generators with comments mixed in: compiles, bytes outside the patch unchanged, the inverse edit restores the original bytes. `wasm_deps.rs` stays green.
