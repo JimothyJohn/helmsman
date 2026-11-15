@@ -381,7 +381,17 @@ scan; the scheduler bounds how often.
   show the word yet (the canvas is step 3's). Not yet: the canvas's
   add-by-click (step 3), profiles in the device library.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
-  optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
+  optional `unit=`, `poll_ms=` (inputs), `safe=` (outputs) and
+  `wired=VENDOR/MODEL` in any order. `wired=` names the sensor or actuator
+  on a point by its folder in the device library (`in part_present bool
+  rio di:3 wired=ifm/if6123`): the runtime does nothing with it, the
+  map keeps it per signal (`MapFile::wired`), the agent's `list_devices`
+  gives it on the point, and `helmsman_project::devlib` finds the record
+  (`Index::by_wired`; a sensor's record has no protocol, an
+  `identity.iolink` and its order numbers as `products`, and is never the
+  match for a device found on the network). The record is drafted in the
+  library from the device's IODD. Nothing shows it in the canvas yet
+  (TODO.md `iodd-metadata`);
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
   screen TILE` an output no device takes (the retired floor screen's
   tiles, below). Older maps read unchanged;
