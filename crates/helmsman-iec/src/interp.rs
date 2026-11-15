@@ -486,6 +486,10 @@ impl Machine<'_> {
         let mut i = match p.base {
             Base::Image(loc) => return Ok(Target::Image(loc)),
             Base::Frame => self.base + p.off,
+            // The checker only builds a reference over a variable of the
+            // process, and `Move::Ref` stores a slot of `mem`, so the
+            // referent is a valid slot.
+            Base::Ref(slot) => usize::try_from(int(self.mem[self.base + slot])).unwrap_or(0) + p.off,
         };
         for d in &p.dims {
             let v = int(self.eval(&d.idx, line)?);
@@ -612,6 +616,10 @@ impl Machine<'_> {
                 Move::Copy { off, src, len } => {
                     let i = self.mem_index(src, line)?;
                     staged.push((*off, self.mem[i..i + len].to_vec()));
+                }
+                Move::Ref { off, src } => {
+                    let i = self.mem_index(src, line)?;
+                    staged.push((*off, vec![Value::Int(i as i128)]));
                 }
             }
         }

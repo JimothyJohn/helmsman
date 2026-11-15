@@ -34,8 +34,10 @@
 //! MOVE) and function blocks (TON, TOF, TP, CTU, CTD, CTUD, `R_TRIG`,
 //! `F_TRIG`, SR, RS, and `BLINK_PATTERN`, a stack light's patterns that
 //! IEC 61131-3 does not have; see library.st: a blinking MODE with a
-//! PERIOD of 0 or below faults the module, [`BadParam::BlinkPeriod`]). Pragmas (`{...}`) are skipped. Not yet: STRING, DATE,
-//! DT and TOD, `VAR_IN_OUT`, `VAR_GLOBAL`, function outputs, pointers and
+//! PERIOD of 0 or below faults the module, [`BadParam::BlinkPeriod`]). Pragmas (`{...}`) are skipped. `VAR_IN_OUT`
+//! (function blocks only: the caller's own variable, passed by reference
+//! inside one module) and `VAR_OUTPUT` on a function.
+//! Not yet: STRING, DATE, DT and TOD, `VAR_GLOBAL`, pointers and
 //! references, multi-level addresses (`%QW0.1.2`). Nesting is capped at
 //! `MAX_NESTING` levels so hostile input cannot overflow the stack.
 //!
@@ -479,7 +481,10 @@ impl Program {
                     ty = f.ty;
                 }
                 AggKind::Fb(fb) => {
-                    let f = self.code.pous[*fb].vars.iter().find(|v| v.name == m)?;
+                    let f = self.code.pous[*fb]
+                        .vars
+                        .iter()
+                        .find(|v| v.name == m && v.section != parser::Section::InOut)?;
                     slot += f.off;
                     ty = f.ty;
                 }

@@ -239,6 +239,10 @@ pub enum Base {
     Frame,
     /// The process image.
     Image(Loc),
+    /// Through a `VAR_IN_OUT` of the running function block: the frame slot
+    /// at this offset holds the absolute slot of the caller's variable
+    /// (stored by [`Move::Ref`] at each call), and `off` counts on from it.
+    Ref(usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -255,6 +259,17 @@ impl Place {
         Self {
             base: Base::Frame,
             off,
+            dims: Vec::new(),
+            bit: None,
+        }
+    }
+
+    /// The caller's variable behind the in-out parameter held at frame
+    /// slot `slot`.
+    const fn through(slot: usize) -> Self {
+        Self {
+            base: Base::Ref(slot),
+            off: 0,
             dims: Vec::new(),
             bit: None,
         }
@@ -322,6 +337,13 @@ pub enum Move {
         off: usize,
         src: Place,
         len: usize,
+    },
+    /// A `VAR_IN_OUT` argument: the callee's slot at `off` takes the
+    /// absolute slot `src` resolves to, so the callee works on the
+    /// caller's variable itself.
+    Ref {
+        off: usize,
+        src: Place,
     },
 }
 
@@ -492,6 +514,30 @@ struct Ck<'a> {
     diags: Vec<Diagnostic>,
     /// Shown, not blocking: the program still compiles.
     warnings: Vec<Diagnostic>,
+}
+
+/// One step into a variable named by a call argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Step {
+    Field(String),
+    /// One entry per dimension: its value when the index is a literal.
+    Index(Vec<Option<i128>>),
+}
+
+impl Step {
+    /// Whether two ways into the same variable can never reach the same
+    /// slot: some step takes different fields or provably different
+    /// elements. A way that ends where the other goes on is its whole.
+    fn apart(a: &[Self], b: &[Self]) -> bool {
+        a.iter().zip(b).any(|pair| match pair {
+            (Self::Field(x), Self::Field(y)) => x != y,
+            (Self::Index(x), Self::Index(y)) => x
+                .iter()
+                .zip(y)
+                .any(|(i, j)| matches!((i, j), (Some(i), Some(j)) if i != j)),
+            _ => false,
+        })
+    }
 }
 
 /// Per-body context.
@@ -843,12 +889,8 @@ impl<'a> Ck<'a> {
         for d in &src.vars {
             let allowed = matches!(
                 (kind, d.section),
-                (_, Section::Var | Section::Temp)
-                    | (
-                        PouType::FunctionBlock | PouType::Program,
-                        Section::Input | Section::Output
-                    )
-                    | (PouType::Function, Section::Input)
+                (_, Section::Var | Section::Temp | Section::Input | Section::Output)
+                    | (PouType::FunctionBlock, Section::InOut)
             );
             if !allowed {
                 let what = match d.section {
@@ -862,8 +904,32 @@ impl<'a> Ck<'a> {
                     PouType::Function => "a FUNCTION",
                     PouType::FunctionBlock => "a FUNCTION_BLOCK",
                 };
-                self.err(d.pos, format!("{what} is not supported in {pk} yet"));
+                let why = match (kind, d.section) {
+                    (PouType::Program, Section::InOut) => {
+                        ": a program's inputs and outputs are signals that other modules share, \
+                         so nothing of it can be passed by reference. Use VAR_INPUT and VAR_OUTPUT, \
+                         or put the buffer in a FUNCTION_BLOCK"
+                    }
+                    (PouType::Function, Section::InOut) => {
+                        " yet: use a FUNCTION_BLOCK to take a struct or array by reference"
+                    }
+                    _ => " yet",
+                };
+                self.err(d.pos, format!("{what} is not supported in {pk}{why}"));
                 ok = false;
+                continue;
+            }
+            if d.section == Section::InOut {
+                match self.in_out_decl(d, &vars) {
+                    Some(v) => {
+                        // One slot holds the reference; `Move::Ref` fills it
+                        // at every call.
+                        let off = init.len();
+                        init.push(Value::Int(0));
+                        vars.push(VarInfo { off, ..v });
+                    }
+                    None => ok = false,
+                }
                 continue;
             }
             // RETAIN where it is not kept is a warning, not an error: it
@@ -1089,6 +1155,55 @@ impl<'a> Ck<'a> {
         ok
     }
 
+    /// Checks one `VAR_IN_OUT` declaration of a function block: its
+    /// [`VarInfo`] (offset still to place) when it is allowed.
+    fn in_out_decl(&mut self, d: &parser::VarDecl, vars: &[VarInfo]) -> O<VarInfo> {
+        let n = &d.name;
+        if vars.iter().any(|v| &v.name == n) {
+            self.err(d.pos, format!("{n} is declared twice"));
+            return None;
+        }
+        let problem = if d.init.is_some() {
+            Some("takes no initial value: it is the caller's variable")
+        } else if d.constant {
+            Some("cannot be CONSTANT yet")
+        } else if d.retain {
+            Some("cannot be RETAIN: it is the caller's variable")
+        } else if d.at.is_some() {
+            Some("cannot be located: it is the caller's variable")
+        } else {
+            None
+        };
+        if let Some(m) = problem {
+            self.err(d.pos, format!("{n}: a VAR_IN_OUT {m}"));
+            return None;
+        }
+        let ty = self.resolve(&d.ty)?;
+        if !self.layout_type(ty, d.pos) {
+            return None;
+        }
+        if let Type::Agg(a) = ty
+            && matches!(self.aggs[a].kind, AggKind::Fb(_))
+        {
+            self.err(
+                d.pos,
+                format!(
+                    "{n}: a VAR_IN_OUT cannot be a function block instance; pass what it outputs as inputs"
+                ),
+            );
+            return None;
+        }
+        Some(VarInfo {
+            name: n.clone(),
+            ty,
+            off: 0,
+            section: Section::InOut,
+            constant: false,
+            retain: false,
+            loc: None,
+        })
+    }
+
     /// Initial slots for a value of type `ty`. `scope` gives access to the
     /// enclosing POU's constants (initialised so far in its `init`).
     fn init_value(&mut self, i: &Init, ty: Type, scope: Option<&Scope>) -> O<Vec<Value>> {
@@ -1223,6 +1338,7 @@ impl<'a> Ck<'a> {
                             acc,
                         )
                     }
+                    None if v.section == Section::InOut => (Place::through(v.off), v.ty, acc),
                     None => (Place::frame(v.off), v.ty, acc),
                 })
             }
@@ -1839,7 +1955,7 @@ impl<'a> Ck<'a> {
                 );
                 return None;
             }
-            let call = self.fn_call(p, args, sc)?;
+            let call = self.fn_call(p, args, pos, sc)?;
             let rt = self.pous[p].vars[0].ty;
             return Some((Ex::Call(Box::new(call)), T::Known(rt)));
         }
@@ -2158,9 +2274,21 @@ impl<'a> Ck<'a> {
         })
     }
 
-    /// Matches call arguments to the callee's inputs (and, for FBs, outputs).
-    fn bind_args(&mut self, p: usize, args: &[Arg], sc: &Scope) -> O<(Vec<Move>, Vec<Out>)> {
+    /// Matches call arguments to the callee's inputs, in-outs and outputs.
+    /// `inst` is the instance expression of a function block call.
+    #[allow(clippy::too_many_lines)]
+    fn bind_args<'e>(
+        &mut self,
+        p: usize,
+        args: &'e [Arg],
+        inst: Option<&Expr>,
+        at: Pos,
+        sc: &Scope,
+    ) -> O<(Vec<Move>, Vec<Out>)> {
         let callee = self.pous[p].name.clone();
+        let kind = self.pous[p].kind;
+        // The in-out arguments given, to refuse two names for one variable.
+        let mut given: Vec<(String, &'e Expr)> = Vec::new();
         let inputs: Vec<(String, Type, usize)> = self.pous[p]
             .vars
             .iter()
@@ -2207,11 +2335,30 @@ impl<'a> Ck<'a> {
                     Some(m) => moves.push(m),
                     None => ok = false,
                 },
-                (true, Section::Output) if self.pous[p].kind == PouType::FunctionBlock => {
-                    match self.out_binding(&v, &a.value, sc) {
-                        Some(o) => outs.push(o),
-                        None => ok = false,
+                (false, Section::InOut) => match self.in_out_move(&callee, &v, &a.value, sc) {
+                    Some(m) => {
+                        moves.push(m);
+                        given.push((n.clone(), &a.value));
                     }
+                    None => ok = false,
+                },
+                (true, Section::Output) if kind == PouType::Function && v.off == 0 => {
+                    self.err(
+                        a.pos,
+                        format!("{n} is the result of the function: read it from the call, not with =>"),
+                    );
+                    ok = false;
+                }
+                (true, Section::Output) => match self.out_binding(&v, &a.value, sc) {
+                    Some(o) => outs.push(o),
+                    None => ok = false,
+                },
+                (true, Section::InOut) => {
+                    self.err(
+                        a.pos,
+                        format!("{n} is a VAR_IN_OUT of {callee}, not an output: pass it with :="),
+                    );
+                    ok = false;
                 }
                 (false, _) => {
                     self.err(
@@ -2226,7 +2373,186 @@ impl<'a> Ck<'a> {
                 }
             }
         }
+        for v in self.pous[p]
+            .vars
+            .clone()
+            .iter()
+            .filter(|v| v.section == Section::InOut)
+        {
+            if !seen.contains(&v.name) {
+                self.err(
+                    at,
+                    format!(
+                        "{callee}: VAR_IN_OUT {n} needs a variable at every call ({n} := variable)",
+                        n = v.name
+                    ),
+                );
+                ok = false;
+            }
+        }
+        ok &= self.no_shared_names(&callee, &given, inst);
         ok.then_some((moves, outs))
+    }
+
+    /// A `VAR_IN_OUT` argument: the caller's own variable, by reference.
+    /// Anything that would make the callee write somewhere else than the
+    /// calling module's variables is refused: process-image variables and
+    /// a program's inputs are shared with other modules.
+    fn in_out_move(&mut self, callee: &str, v: &VarInfo, value: &Expr, sc: &Scope) -> O<Move> {
+        let n = &v.name;
+        let head = format!("{n} is a VAR_IN_OUT of {callee}:");
+        match &value.kind {
+            ExprKind::Var(_) | ExprKind::Member(..) | ExprKind::Index(..) => {}
+            ExprKind::Direct(addr) => {
+                self.err(
+                    value.pos,
+                    format!(
+                        "{head} %{addr} is in the process image, which other modules share; \
+                         copy it into a variable first"
+                    ),
+                );
+                return None;
+            }
+            ExprKind::Bit(..) => {
+                self.err(
+                    value.pos,
+                    format!("{head} a single bit cannot be passed by reference"),
+                );
+                return None;
+            }
+            _ => {
+                self.err(
+                    value.pos,
+                    format!("{head} pass a variable, not an expression or a constant"),
+                );
+                return None;
+            }
+        }
+        let (src, ty, acc) = self.place(value, sc)?;
+        let root = Self::arg_path(value).map(|(r, _)| r);
+        let shown = root.clone().unwrap_or_default();
+        if matches!(src.base, Base::Image(_)) {
+            self.err(
+                value.pos,
+                format!(
+                    "{head} {shown} is located in the process image, which other modules share; \
+                     copy it into a variable first"
+                ),
+            );
+            return None;
+        }
+        if let Access::ReadOnly(why) = acc {
+            self.err(
+                value.pos,
+                format!("{head} the call may write it, but {shown} {why}"),
+            );
+            return None;
+        }
+        if self.pous[sc.pou].kind == PouType::Program
+            && let Some(&k) = root.as_ref().and_then(|r| sc.vars.get(r))
+            && self.pous[sc.pou].vars[k].section == Section::Input
+        {
+            self.err(
+                value.pos,
+                format!(
+                    "{head} {shown} is an input of the program, a signal another module writes; \
+                     copy it into a variable first"
+                ),
+            );
+            return None;
+        }
+        if !self.same_type(ty, v.ty) {
+            let (a, b) = (self.type_name(v.ty), self.type_name(ty));
+            self.err(
+                value.pos,
+                format!("{head} it is {a} and the argument is {b}; a VAR_IN_OUT takes exactly its own type"),
+            );
+            return None;
+        }
+        Some(Move::Ref { off: v.off, src })
+    }
+
+    /// Whether two types are one: the same type, or arrays of the same
+    /// bounds over one element type (each `ARRAY[..] OF` written out is its
+    /// own entry in the tables).
+    fn same_type(&self, a: Type, b: Type) -> bool {
+        if a == b {
+            return true;
+        }
+        let (Type::Agg(x), Type::Agg(y)) = (a, b) else {
+            return false;
+        };
+        match (&self.aggs[x].kind, &self.aggs[y].kind) {
+            (AggKind::Array { elem: e1, dims: d1 }, AggKind::Array { elem: e2, dims: d2 }) => {
+                d1 == d2 && self.same_type(*e1, *e2)
+            }
+            _ => false,
+        }
+    }
+
+    /// The variable an argument names and the way into it: members and
+    /// indices, an index being its value when it is a literal.
+    fn arg_path(e: &Expr) -> Option<(String, Vec<Step>)> {
+        match &e.kind {
+            ExprKind::Var(n) => Some((n.clone(), Vec::new())),
+            ExprKind::Member(b, m) => {
+                let (r, mut steps) = Self::arg_path(b)?;
+                steps.push(Step::Field(m.clone()));
+                Some((r, steps))
+            }
+            ExprKind::Index(b, idx) => {
+                let (r, mut steps) = Self::arg_path(b)?;
+                steps.push(Step::Index(
+                    idx.iter()
+                        .map(|i| match &i.kind {
+                            ExprKind::Int { value, prefix: None } => Some(*value),
+                            _ => None,
+                        })
+                        .collect(),
+                ));
+                Some((r, steps))
+            }
+            _ => None,
+        }
+    }
+
+    /// Two in-out arguments of one call must be different variables, and
+    /// an instance cannot be given part of itself: either would be two
+    /// names for one value inside the callee.
+    fn no_shared_names(&mut self, callee: &str, given: &[(String, &Expr)], inst: Option<&Expr>) -> bool {
+        let mut ok = true;
+        let paths: Vec<Option<(String, Vec<Step>)>> = given.iter().map(|(_, e)| Self::arg_path(e)).collect();
+        for (i, a) in given.iter().enumerate() {
+            if let (Some(inst), Some((root, _))) = (inst, &paths[i])
+                && Self::arg_path(inst).is_some_and(|(r, _)| &r == root)
+            {
+                self.err(
+                    a.1.pos,
+                    format!(
+                        "{callee}: {} is part of the instance being called; give it a variable of its own",
+                        a.0
+                    ),
+                );
+                ok = false;
+            }
+            for (j, b) in given.iter().enumerate().skip(i + 1) {
+                let (Some((ra, sa)), Some((rb, sb))) = (&paths[i], &paths[j]) else {
+                    continue;
+                };
+                if ra == rb && !Step::apart(sa, sb) {
+                    self.err(
+                        b.1.pos,
+                        format!(
+                            "{callee}: {} and {} would be two names for the same variable {ra}; \
+                             give each VAR_IN_OUT a different variable",
+                            a.0, b.0
+                        ),
+                    );
+                    ok = false;
+                }
+            }
+        }
+        ok
     }
 
     fn out_binding(&mut self, v: &VarInfo, dst: &Expr, sc: &Scope) -> O<Out> {
@@ -2253,9 +2579,9 @@ impl<'a> Ck<'a> {
         })
     }
 
-    fn fn_call(&mut self, p: usize, args: &[Arg], sc: &Scope) -> O<Call> {
+    fn fn_call(&mut self, p: usize, args: &[Arg], at: Pos, sc: &Scope) -> O<Call> {
         self.calls[sc.pou].insert(p);
-        let (moves, outs) = self.bind_args(p, args, sc)?;
+        let (moves, outs) = self.bind_args(p, args, None, at, sc)?;
         Some(Call {
             pou: p,
             inst: None,
@@ -2309,7 +2635,7 @@ impl<'a> Ck<'a> {
             if let Some(&p) = self.pou_index.get(name)
                 && self.pous[p].kind == PouType::Function
             {
-                return self.fn_call(p, args, sc).map(StKind::Call);
+                return self.fn_call(p, args, e.pos, sc).map(StKind::Call);
             }
             if self.pou_index.contains_key(name) {
                 self.err(
@@ -2337,7 +2663,7 @@ impl<'a> Ck<'a> {
             return None;
         };
         self.calls[sc.pou].insert(fb);
-        let (moves, outs) = self.bind_args(fb, args, sc)?;
+        let (moves, outs) = self.bind_args(fb, args, Some(callee), e.pos, sc)?;
         Some(StKind::Call(Call {
             pou: fb,
             inst: Some(inst),
