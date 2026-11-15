@@ -29,8 +29,18 @@
 //! New device form with its protocols and typed points, which, with
 //! Import device… and Use this device, sits behind the **Advanced**
 //! switch (`Chrome::advanced`, off by default, remembered).
+//!
+//! What is wired to a point (TODO.md `iodd-metadata`): a map line's
+//! `wired=VENDOR/MODEL` names the sensor or actuator on the point by its
+//! record in the device library. Under such a point the tab says what it
+//! is (the vendor, the model, the kind), and its tooltip what the
+//! record knows: what its on/off signals and their states are called,
+//! the settings it leaves the factory with, and whether anyone has
+//! checked a unit. On a box the record comes from `GET
+//! /api/devices/library?wired=` ([`DevicesUi::wired_wanted`],
+//! [`DevicesUi::wired_answer`]); without one the line names the folder.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use eframe::egui::{self, Color32, RichText, Sense, Vec2};
@@ -121,6 +131,118 @@ pub struct PointNode {
     pub value: Option<Value>,
     pub quality: Option<String>,
     pub forced: bool,
+    /// The map line's `wired=VENDOR/MODEL`: the sensor or actuator on
+    /// the point, by its folder in the device library.
+    pub wired: Option<String>,
+}
+
+/// What the device library knows of a sensor or actuator a point is
+/// wired to: the brief of its record, as the box serves it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WiredBrief {
+    pub vendor: String,
+    pub model: String,
+    pub kind: String,
+    /// Nobody has checked a unit yet.
+    pub draft: bool,
+    /// Its on/off signals: name, what on is called, what off is called.
+    pub signals: Vec<(String, Option<String>, Option<String>)>,
+    /// The settings it leaves the factory with: name and value.
+    pub settings: Vec<(String, String)>,
+    /// The signal its switching wire carries with no IO-Link master,
+    /// with where the library read that; `None` when the library does
+    /// not know yet.
+    pub carries: Option<(String, String)>,
+}
+
+/// Where the lookup of one `wired=` value stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wired {
+    /// The box was asked.
+    Asked,
+    Known(WiredBrief),
+    /// Why there is no record to show, in words.
+    Unavailable(String),
+}
+
+/// Longest vendor-and-model text the line under a point shows before it
+/// is cut (the whole of it is in the tooltip).
+const WIRED_TITLE: usize = 48;
+
+impl WiredBrief {
+    /// Reads `device` of a library match (`helmsman_project::devrecord`'s
+    /// brief). `None` when it is not one.
+    #[must_use]
+    pub fn of(j: &Json) -> Option<Self> {
+        let cut = |v: &Json| text(v).map(|s| s.chars().take(160).collect::<String>());
+        let list = |key: &str| j[key].as_array().cloned().unwrap_or_default();
+        Some(Self {
+            vendor: cut(&j["vendor"])?,
+            model: cut(&j["model"])?,
+            kind: cut(&j["kind"]).unwrap_or_else(|| "other".into()),
+            draft: j["draft"].as_bool().unwrap_or(true),
+            signals: list("signals")
+                .iter()
+                .take(16)
+                .filter_map(|s| Some((cut(&s["name"])?, cut(&s["on"]), cut(&s["off"]))))
+                .collect(),
+            settings: list("factory_settings")
+                .iter()
+                .take(16)
+                .filter_map(|s| Some((cut(&s["name"])?, cut(&s["value"])?)))
+                .collect(),
+            carries: cut(&j["switching_wire_carries"]["signal"])
+                .zip(cut(&j["switching_wire_carries"]["source"])),
+        })
+    }
+
+    /// The line under the point: vendor and model, cut, then the kind.
+    #[must_use]
+    pub fn title(&self) -> String {
+        let name = format!("{} {}", self.vendor, self.model);
+        let cut: String = name.chars().take(WIRED_TITLE).collect();
+        let dots = if cut.len() < name.len() { "…" } else { "" };
+        format!("{cut}{dots} · {}", self.kind)
+    }
+
+    /// The tooltip: everything the record's brief says.
+    #[must_use]
+    pub fn tip(&self) -> String {
+        let mut out = format!("{} {}\n{}", self.vendor, self.model, self.kind);
+        if self.draft {
+            out.push_str(", from the vendor's description file; no unit has been checked yet");
+        }
+        for (name, on, off) in &self.signals {
+            let _ = write!(out, "\n{name}");
+            match (on, off) {
+                (Some(on), Some(off)) => {
+                    let _ = write!(out, ": on is \"{on}\", off is \"{off}\"");
+                }
+                (Some(on), None) => {
+                    let _ = write!(out, ": on is \"{on}\"");
+                }
+                (None, Some(off)) => {
+                    let _ = write!(out, ": off is \"{off}\"");
+                }
+                (None, None) => {}
+            }
+        }
+        match &self.carries {
+            Some((signal, source)) => {
+                let _ = write!(out, "\nIts switching wire carries {signal} ({source}).");
+            }
+            None => out.push_str(
+                "\nWhich of these its switching wire carries is in its data sheet, not in the library yet.",
+            ),
+        }
+        if !self.settings.is_empty() {
+            out.push_str("\nAs delivered:");
+            for (name, value) in &self.settings {
+                let _ = write!(out, "\n  {name}: {value}");
+            }
+        }
+        out
+    }
 }
 
 /// One device, with its points.
@@ -194,6 +316,7 @@ pub fn tree(
             value: l.value,
             quality: l.quality,
             forced: l.forced,
+            wired: s.wired().map(str::to_string),
         });
     }
     nodes
@@ -255,6 +378,9 @@ pub fn describe(nodes: &[DeviceNode]) -> String {
             }
             if p.forced {
                 out.push_str(" FORCED");
+            }
+            if let Some(w) = &p.wired {
+                let _ = write!(out, " wired={w}");
             }
             out.push('\n');
         }
@@ -864,7 +990,12 @@ pub struct DevicesUi {
     pub adapter: Option<String>,
     /// A device's own configuration (`device_config.rs`), on a box.
     pub config: crate::device_config::ConfigUi,
+    /// What the library knows of each `wired=` value the map names.
+    pub wired: BTreeMap<String, Wired>,
 }
+
+/// Most `wired=` values one tab looks up.
+const MAX_WIRED: usize = 64;
 
 impl DevicesUi {
     /// Takes in the box's answer to `POST /api/devices/discover`.
@@ -903,6 +1034,45 @@ impl DevicesUi {
                 j["error"].as_str().unwrap_or("no answer")
             )),
         });
+    }
+
+    /// The next `wired=` value of the map nobody has asked the library
+    /// about, marked as asked: the view sends `GET
+    /// /api/devices/library?wired=` for it. One a frame, at most
+    /// [`MAX_WIRED`] in all, and only values that are a library folder.
+    pub fn wired_wanted(&mut self) -> Option<String> {
+        if self.wired.len() >= MAX_WIRED {
+            return None;
+        }
+        let next = self
+            .map
+            .signals
+            .iter()
+            .filter_map(|s| s.wired())
+            .find(|w| !self.wired.contains_key(*w) && iomap::wired_ok(w))?
+            .to_string();
+        self.wired.insert(next.clone(), Wired::Asked);
+        Some(next)
+    }
+
+    /// Takes in the box's answer to `GET /api/devices/library?wired=`.
+    pub fn wired_answer(&mut self, wired: &str, status: u16, body: &str) {
+        let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
+        let m = &j["matches"][0];
+        let got = match (status, WiredBrief::of(&m["device"])) {
+            (200..=299, Some(brief)) => Wired::Known(brief),
+            (200..=299, None) => Wired::Unavailable(
+                text(&m["device_unavailable"])
+                    .or_else(|| text(&j["unavailable"]))
+                    .unwrap_or_else(|| "not in the device library".into()),
+            ),
+            (404, _) => Wired::Unavailable("this box does not look up wired devices".into()),
+            (s, _) => Wired::Unavailable(format!(
+                "the box could not read the library ({s}): {}",
+                text(&j["error"]).unwrap_or_else(|| "no answer".into())
+            )),
+        };
+        self.wired.insert(wired.to_string(), got);
     }
 
     /// The simulation's answer for the quick form: its own E1213's
@@ -1186,6 +1356,30 @@ impl DevicesUi {
                 }
                 hover.push_str("\nDouble-click or right-click to rename it.");
                 r.tip(hover);
+                // What is wired to the point, one wrapped line under it.
+                if let Some(w) = &p.wired {
+                    let (line, tip) = match self.wired.get(w) {
+                        Some(Wired::Known(b)) => (b.title(), b.tip()),
+                        Some(Wired::Unavailable(why)) => (
+                            w.clone(),
+                            format!(
+                                "Wired to this point: {w} in the device library.\nNo record to show: {why}."
+                            ),
+                        ),
+                        Some(Wired::Asked) | None => (
+                            w.clone(),
+                            format!("Wired to this point: {w} in the device library."),
+                        ),
+                    };
+                    let r = ui
+                        .horizontal_wrapped(|ui| {
+                            ui.add_space(44.0);
+                            ui.add(egui::Label::new(RichText::new(line).color(t.muted)).wrap())
+                        })
+                        .inner
+                        .tip(tip);
+                    chrome.hit(format!("wired {}", p.signal), r.rect);
+                }
             }
         }
         if let Some(name) = flip
@@ -1572,6 +1766,137 @@ mod tests {
             describe(&nodes),
             "rio  enip-io mac=00-90-e8-7e-af-be rpi_ms=100  [up at 10.0.0.57:44818]\n  in  di0 bool di:0\n"
         );
+    }
+
+    const BRIEF: &str = r#"{"matches": [{"vendor": "ifm", "device": {
+        "wired": "ifm/if6123", "vendor": "ifm",
+        "model": "IF6123, IF6124, IG6615, IG6616, II5973, II5974, IM5172, IM5173", "kind": "sensor",
+        "draft": true, "switches_without_a_master": true,
+        "signals": [{"dir": "in", "name": "SSC1", "on": "active", "off": "inactive"},
+                    {"dir": "in", "name": "SSC2", "on": "active"},
+                    {"dir": "out", "name": "Teach"}],
+        "factory_settings": [{"name": "P-n", "value": "PnP"}],
+        "switching_wire_carries": "not in the library yet: the data sheet says"}}]}"#;
+
+    /// A point's `wired=` rides along from the map to the tree and to the
+    /// text the agent reads.
+    #[test]
+    fn what_is_wired_to_a_point_is_in_the_tree_and_in_the_listing() {
+        let m = iomap::skim(
+            "device rio modbus-tcp 10.0.0.57:502\nin part bool rio di:3 wired=ifm/if6123\nin ready bool rio di:4\n",
+        );
+        let nodes = tree(&m, &|_| None, &|_| LinkState::Unknown);
+        assert_eq!(nodes[0].points[0].wired.as_deref(), Some("ifm/if6123"));
+        assert_eq!(nodes[0].points[1].wired, None);
+        let text = describe(&nodes);
+        assert!(text.contains("  in  part bool di:3 wired=ifm/if6123\n"), "{text}");
+        assert!(
+            !text.lines().any(|l| l.contains("ready") && l.contains("wired")),
+            "{text}"
+        );
+    }
+
+    /// Each `wired=` value is asked about once, only when it is a
+    /// library folder, and the answer is kept as the record's brief or as
+    /// why there is none.
+    #[test]
+    fn a_wired_value_is_looked_up_once_and_its_answer_kept() {
+        let mut ui = DevicesUi {
+            map: iomap::skim(
+                "in a bool box di:0 wired=ifm/if6123\nin b bool box di:1 wired=ifm/if6123\n\
+                 in c bool box di:2 wired=../../etc\nin d bool box di:3 wired=sick/gone\nin e bool box di:4\n",
+            ),
+            ..DevicesUi::default()
+        };
+        assert_eq!(ui.wired_wanted().as_deref(), Some("ifm/if6123"));
+        assert_eq!(ui.wired.get("ifm/if6123"), Some(&Wired::Asked));
+        assert_eq!(ui.wired_wanted().as_deref(), Some("sick/gone"));
+        assert_eq!(
+            ui.wired_wanted(),
+            None,
+            "nothing is asked twice, and not ../../etc"
+        );
+
+        ui.wired_answer("ifm/if6123", 200, BRIEF);
+        let Some(Wired::Known(b)) = ui.wired.get("ifm/if6123") else {
+            panic!("{:?}", ui.wired);
+        };
+        assert_eq!(
+            (b.vendor.as_str(), b.kind.as_str(), b.draft),
+            ("ifm", "sensor", true)
+        );
+        assert_eq!(b.signals.len(), 3);
+        assert_eq!(b.carries, None);
+        // The line is cut; the tooltip has the whole of it.
+        assert_eq!(
+            b.title(),
+            "ifm IF6123, IF6124, IG6615, IG6616, II5973, II59… · sensor"
+        );
+        let tip = b.tip();
+        assert!(tip.starts_with("ifm IF6123, IF6124, IG6615, IG6616, II5973, II5974, IM5172, IM5173\nsensor, from the vendor's description file; no unit has been checked yet"), "{tip}");
+        assert!(
+            tip.contains("\nSSC1: on is \"active\", off is \"inactive\""),
+            "{tip}"
+        );
+        assert!(tip.contains("\nSSC2: on is \"active\"\n"), "{tip}");
+        assert!(tip.contains("\nTeach\n"), "{tip}");
+        assert!(tip.contains("in its data sheet, not in the library yet"), "{tip}");
+        assert!(tip.ends_with("As delivered:\n  P-n: PnP"), "{tip}");
+
+        // The library knows which signal the wire carries: the tooltip says it with its source.
+        let known = BRIEF.replace(
+            r#""not in the library yet: the data sheet says""#,
+            r#"{"signal": "SSC1", "source": "data sheet, p. 2"}"#,
+        );
+        ui.wired_answer("ifm/if6123", 200, &known);
+        let Some(Wired::Known(b)) = ui.wired.get("ifm/if6123") else {
+            panic!()
+        };
+        assert!(
+            b.tip()
+                .contains("Its switching wire carries SSC1 (data sheet, p. 2)."),
+            "{}",
+            b.tip()
+        );
+
+        // No record, an older box, a failure, a hostile body: each says why and shows nothing else.
+        for (status, body, why) in [
+            (200, r#"{"matches": []}"#, "not in the device library"),
+            (
+                200,
+                r#"{"matches": [{"device_unavailable": "the record is for devices/x/y"}]}"#,
+                "the record is for devices/x/y",
+            ),
+            (
+                200,
+                r#"{"matches": [], "unavailable": "no device library"}"#,
+                "no device library",
+            ),
+            (
+                404,
+                r#"{"error": "no such resource"}"#,
+                "this box does not look up wired devices",
+            ),
+            (
+                400,
+                r#"{"error": "give vendor and product"}"#,
+                "the box could not read the library (400): give vendor and product",
+            ),
+            (0, "", "the box could not read the library (0): no answer"),
+            (
+                200,
+                r#"{"matches": [{"device": {"vendor": 7, "model": []}}]}"#,
+                "not in the device library",
+            ),
+            (200, "<html>", "not in the device library"),
+        ] {
+            ui.wired_answer("sick/gone", status, body);
+            assert_eq!(
+                ui.wired.get("sick/gone"),
+                Some(&Wired::Unavailable(why.into())),
+                "{body}"
+            );
+        }
     }
 
     #[test]
