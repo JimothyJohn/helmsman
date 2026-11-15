@@ -53,8 +53,8 @@ this; change it here first when a decision changes.
   deploy is still there to read after the line under the header has gone.
 - **One pane of tabs, on the left, the Agent first** (Nick, 2026-11-13:
   two side panels by default was too many; one keeps the diagram wide and
-  the focus where it is most of the time). All seven tabs start there:
-  Agent (shown), Code, I/O, Devices, Files, History, Palette. A tab's glyph
+  the focus where it is most of the time). All six tabs start there:
+  Agent (shown), Code, I/O, Devices, Files, History. A tab's glyph
   dragged to the window's right edge (96 pt, lit while a tab is dragged)
   docks it in a right pane (236 pt) that exists only while it holds a
   tab; dragged back onto the left pane it returns. Alt Shift 5 sends the
@@ -152,10 +152,10 @@ this; change it here first when a decision changes.
   characters a row); Alt Shift 0, Alt Shift 4 and Alt Shift 1 open the
   pane on its tab, or shut it when that tab shows.
 - **More tabs:** I/O
-  (values; inputs the diagram does not show), Palette (the glyph
-  library's pieces, `palette`: a click, or a drag onto the diagram, sends
-  the piece's request to the Agent as if typed, and its pane turns to
-  the Agent tab; Nick, 2026-11-12) and Agent. (The Requirements
+  (values; inputs the diagram does not show) and Agent. A Palette tab of
+  the glyph library's pieces to drag onto the diagram was there from
+  2026-11-12 to 2026-11-14 (Nick: it goes against the agent-first
+  design; it may come back for fine tuning or a hint to the Agent). (The Requirements
   tab of 2026-11-05, a list of requirements in plain words with the agent
   writing the test behind each, is archived since 2026-11-08 under
   `crates/helmsman-canvas/archive/requirements/`: the scenarios the Agent
@@ -170,7 +170,7 @@ this; change it here first when a decision changes.
   2026-11-13) the box takes the tab's height and scrolls past it; Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
-  instruction sent, a palette piece's too, greyed. A change that lands
+  instruction sent, greyed. A change that lands
   runs at once and is seen on the canvas, marked, with nothing written in
   the tab (its reason goes to the Messages). One that does not is an
   error in the Messages (their red count, and they open), the box is
@@ -311,7 +311,7 @@ this; change it here first when a decision changes.
   module). The standard blocks on the diagram carry theirs in the
   header (timer, counter, latch, edge; `Icons::glyph`), where a rule of
   the project's `icons.map` naming the block or its type still puts its
-  character instead. The Palette tab holds the pieces to drag.
+  character instead.
 - **Lamps** (Nick, 2026-11-12: the first screen should speak without
   words). The program's BOOL outputs are lamps in the diagram's
   bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a

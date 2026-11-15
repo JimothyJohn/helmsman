@@ -2237,21 +2237,12 @@ impl Body for BoxView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Palette, Tab::Claude]
-    }
-
-    fn ask_agent(&mut self, text: &str, ctx: &egui::Context) {
-        text.clone_into(&mut self.instruct.draft);
-        self.send_instruction(ctx);
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         if tab == Tab::Claude {
             self.agent_tab(ui, chrome);
-            return;
-        }
-        // The shell draws the palette (`palette::show`).
-        if tab == Tab::Palette {
             return;
         }
         let t = theme(ui);
