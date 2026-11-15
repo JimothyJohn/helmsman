@@ -137,14 +137,14 @@ impl fmt::Display for Bad {
 
 impl core::error::Error for Bad {}
 
-fn bad(line: usize, why: impl Into<String>) -> Bad {
+pub(crate) fn bad(line: usize, why: impl Into<String>) -> Bad {
     Bad {
         line,
         why: why.into(),
     }
 }
 
-fn is_ident(s: &str) -> bool {
+pub(crate) fn is_ident(s: &str) -> bool {
     let mut b = s.bytes();
     b.next().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
         && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
