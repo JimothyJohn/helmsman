@@ -4,7 +4,7 @@
 
 use helmsman_iec::ast::{BinOp, CaseLabel, Expr, ExprKind, LabelValue, UnOp};
 
-const fn prec(op: BinOp) -> u8 {
+pub(crate) const fn prec(op: BinOp) -> u8 {
     match op {
         BinOp::Or => 1,
         BinOp::Xor => 2,
@@ -17,9 +17,9 @@ const fn prec(op: BinOp) -> u8 {
     }
 }
 
-const UNARY: u8 = 9;
+pub(crate) const UNARY: u8 = 9;
 
-fn level(e: &Expr) -> u8 {
+pub(crate) fn level(e: &Expr) -> u8 {
     match &e.kind {
         ExprKind::Binary(op, ..) => prec(*op),
         ExprKind::Unary(..) => UNARY,
