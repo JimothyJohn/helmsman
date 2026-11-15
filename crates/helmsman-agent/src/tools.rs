@@ -8,7 +8,7 @@
 //! and `.../trace` (the name percent-encoded as one segment, after a name
 //! check), `GET /api/io_map`, `POST /api/proposals/check`,
 //! `POST /api/proposals/replay` and `POST /api/proposals` (a module, a
-//! param or an I/O map draft). No route it can
+//! param or an I/O map draft), and `POST /api/device-profile/proposal`. No route it can
 //! reach applies, rolls back or writes anything but a stored draft; the
 //! box API enforces the token, limits and audit on each of them.
 //!
@@ -31,6 +31,28 @@
 //! module names, stores it as a draft citing the conversation's drop-ins,
 //! and only a person with a role PIN applies it (always
 //! output-affecting). A watch-only conversation proposes no map.
+//!
+//! **Device profiles** (card `device-profile-propose-box`, relay agent
+//! v10): `propose_device_profile` (`POST /api/device-profile/proposal`,
+//! `{name, text, summary}`). The box, not this crate, reads the text with
+//! `helmsman_io::profile::Profile::parse` (the one reader, so the canvas's
+//! wasm build gains no dependency edge from here), refuses it with its
+//! problems and their lines, or holds it as the one pending proposal and
+//! answers the channel list. A proposal is never a file by the model's
+//! action: the user accepts it on the box (an engineer session), which
+//! writes `NAME.device` into a project. The vendor's file the model reads
+//! is a drop-in (`read_dropin`) or a fetched document.
+//!
+//! **Device profiles** (card `device-profile-propose-box`, relay agent
+//! v10): `propose_device_profile` (`POST /api/device-profile/proposal`,
+//! `{name, text, summary}`). The box, not this crate, reads the text with
+//! `helmsman_io::profile::Profile::parse` (the one reader, so the canvas's
+//! wasm build gains no dependency edge from here), refuses it with its
+//! problems and their lines, or holds it as the one pending proposal and
+//! answers the channel list. A proposal is never a file by the model's
+//! action: the user accepts it on the box (an engineer session), which
+//! writes `NAME.device` into a project. The vendor's file the model reads
+//! is a drop-in (`read_dropin`) or a fetched document.
 //!
 //! **The relay runs one tool** (relay agent v6): `fetch_document`. The box
 //! posts the model's input to the relay's
@@ -60,7 +82,7 @@ use crate::http::{self, Timeouts, Url};
 use crate::relay;
 
 /// The tools the box runs, as named in the relay's `tools.json`.
-pub const NAMES: [&str; 18] = [
+pub const NAMES: [&str; 19] = [
     "list_signals",
     "read_signals",
     "list_devices",
@@ -79,6 +101,7 @@ pub const NAMES: [&str; 18] = [
     "fetch_document",
     "read_io_map",
     "propose_io_map",
+    "propose_device_profile",
 ];
 
 /// The one tool the relay runs (`fetch_document`, relay agent v6): the
@@ -445,6 +468,7 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
         "read_plc_program" => parse::<ReadPlc>(input).map(drop),
         "compare_plc_tags" => parse::<ComparePlc>(input).map(drop),
         "propose_io_map" => parse::<ProposeIoMap>(input).map(drop),
+        "propose_device_profile" => parse::<ProposeDeviceProfile>(input).map(drop),
         _ => Err(format!("no tool named {name:?}")),
     }
 }
@@ -560,6 +584,15 @@ struct ProposeIoMap {
     summary: String,
 }
 
+/// `propose_device_profile`'s input, the relay's schema (agent v10).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposeDeviceProfile {
+    name: String,
+    text: String,
+    summary: String,
+}
+
 /// A module name as the box takes it: 1..=64 of `A-Z a-z 0-9 _ -`.
 #[must_use]
 pub fn module_name_ok(n: &str) -> bool {
@@ -604,6 +637,7 @@ pub fn run_with(
         "compare_plc_tags" => parse(input).map(|i| compare_plc_tags(api, drafts, &i)),
         "read_io_map" => parse::<Empty>(input).map(|_| read_io_map(api)),
         "propose_io_map" => parse(input).map(|i| propose_io_map(api, drafts, &i)),
+        "propose_device_profile" => parse(input).map(|i| propose_device_profile(api, &i)),
         _ => {
             return fail(format!(
                 "no tool named {name:?}; the tools are {}",
@@ -1889,6 +1923,59 @@ fn propose_io_map(api: &dyn Caller, drafts: &mut Drafts, i: &ProposeIoMap) -> Ou
     }
 }
 
+/// Most problems of a refused profile that go back to the model.
+const MAX_PROBLEMS: usize = 40;
+
+fn propose_device_profile(api: &dyn Caller, i: &ProposeDeviceProfile) -> Outcome {
+    let summary = clean_summary(&i.summary);
+    if summary.is_empty() {
+        return fail("a profile proposal needs a summary the user can check it against");
+    }
+    if i.text.trim().is_empty() {
+        return fail(
+            "the profile is empty; propose the whole file, starting with the line helmsman-device 1",
+        );
+    }
+    if i.text.len() > MAX_SOURCE {
+        return fail("the profile is larger than a project file may be");
+    }
+    let body = json!({ "name": i.name, "text": i.text, "summary": summary });
+    match api.post("/api/device-profile/proposal", &body) {
+        Ok((201, p)) => {
+            let n = p["channels"].as_array().map_or(0, Vec::len);
+            ok(
+                json!({
+                    "name": p["name"], "vendor": p["vendor"], "model": p["model"], "kind": p["kind"],
+                    "transports": p["transports"], "channels": p["channels"], "held": true,
+                    "next": "the profile reads. The user checks the channel names and addresses on the box, renames them and saves it into the project; nothing is added to a project until they do. Tell them where each address came from and what you could not confirm",
+                }),
+                format!(
+                    "proposed device profile {}: {n} channel(s), held for the user",
+                    clean_summary(&i.name)
+                ),
+            )
+        }
+        Ok((status @ (400 | 413 | 422), b)) => {
+            let problems: Vec<Json> = b["problems"]
+                .as_array()
+                .map(|a| a.iter().take(MAX_PROBLEMS).cloned().collect())
+                .unwrap_or_default();
+            let n = problems.len();
+            Outcome {
+                ok: false,
+                data: json!({
+                    "held": false, "status": status, "error": b["error"], "problems": problems,
+                    "next": "fix the problems (each names its line; line 0 is the whole file) and propose the whole file again",
+                }),
+                summary: format!("the device profile does not check: {} problem(s)", n.max(1)),
+                proposals: Vec::new(),
+            }
+        }
+        Ok((s, b)) => unexpected("proposing the device profile", s, &b),
+        Err(e) => fail(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2113,7 +2200,9 @@ END_FUNCTION_BLOCK
                 !(n.contains("device") || n.contains("config"))
                     || n.starts_with("list_")
                     || n.starts_with("read_")
-                    || n.starts_with("propose_io"),
+                    || n.starts_with("propose_io")
+                    // Holds a profile text for the user; it touches no device.
+                    || n == "propose_device_profile",
                 "{n}"
             );
         }
@@ -2390,5 +2479,46 @@ END_FUNCTION_BLOCK
             "{}",
             o.summary
         );
+    }
+
+    #[test]
+    fn a_device_profile_goes_to_the_box_and_its_problems_come_back_with_lines() {
+        let input = json!({ "name": "acme-io-8", "text": "helmsman-device 1\n", "summary": "from the EDS" });
+        assert!(validate("propose_device_profile", &input).is_ok());
+        // The relay's schema: no other field, none missing.
+        let extra = json!({ "name": "a", "text": "t", "summary": "s", "publish": true });
+        assert!(validate("propose_device_profile", &extra).is_err());
+        assert!(validate("propose_device_profile", &json!({ "name": "a", "text": "t" })).is_err());
+
+        let held = routes(vec![(
+            "POST /api/device-profile/proposal",
+            201,
+            json!({"name": "acme-io-8", "vendor": "Acme", "model": "IO 8", "kind": "remote-io",
+                   "transports": [{"driver": "modbus-tcp"}],
+                   "channels": [{"name": "DI-00", "dir": "in", "type": "bool"}]}),
+        )]);
+        let mut d = Drafts::default();
+        let o = run(&held, &mut d, "propose_device_profile", &input);
+        assert!(o.ok, "{}", o.summary);
+        assert_eq!(o.data["channels"][0]["name"], "DI-00");
+        assert!(o.proposals.is_empty(), "a profile is no proposal id");
+
+        let refused = routes(vec![(
+            "POST /api/device-profile/proposal",
+            422,
+            json!({"error": "the profile does not check",
+                   "problems": [{"line": 3, "error": "type \"word\": bool, int or real"}]}),
+        )]);
+        let o = run(&refused, &mut d, "propose_device_profile", &input);
+        assert!(!o.ok);
+        assert_eq!(o.data["problems"][0]["line"], 3);
+        assert_eq!(o.data["held"], false);
+
+        // Nothing to say, nothing to send: refused before the box is asked.
+        let none = routes(vec![]);
+        let blank = json!({ "name": "a", "text": "helmsman-device 1\n", "summary": "  \n " });
+        assert!(!run(&none, &mut d, "propose_device_profile", &blank).ok);
+        let empty = json!({ "name": "a", "text": " ", "summary": "x" });
+        assert!(!run(&none, &mut d, "propose_device_profile", &empty).ok);
     }
 }
