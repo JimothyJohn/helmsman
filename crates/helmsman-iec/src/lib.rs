@@ -128,7 +128,7 @@ mod suggest;
 pub mod tidy;
 pub mod trace;
 mod types;
-mod xml;
+pub mod xml;
 
 #[cfg(not(feature = "std"))]
 use crate::prelude::*;

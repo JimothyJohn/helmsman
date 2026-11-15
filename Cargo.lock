@@ -1635,6 +1635,8 @@ dependencies = [
 name = "helmsman-iolink"
 version = "0.1.0"
 dependencies = [
+ "helmsman-iec",
+ "helmsman-iolink",
  "proptest",
 ]
 
