@@ -405,6 +405,7 @@ impl BoxView {
                 call @ (PCall::Proposal | PCall::ProposalAccept | PCall::ProposalDiscard) => {
                     self.devices_ui.proposal.answer(&call, a.status, &a.body);
                 }
+                PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
         }
@@ -707,18 +708,79 @@ impl BoxView {
     /// One message of the instruction under way to the box; `fresh` opens
     /// a new conversation there.
     fn agent_send(&mut self, message: &str, fresh: bool, ctx: &egui::Context) {
-        match self.agent.send(message, fresh) {
-            Ok(req) => {
-                #[cfg(target_arch = "wasm32")]
-                self.chat.send(req, ctx);
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let _ = ctx;
-                    self.chat_sent.push(req);
-                }
-            }
-            Err(why) => self.instruct.failed(&why),
+        if let Err(why) = self.agent_send_with(message, &[], fresh, ctx) {
+            self.instruct.failed(&why);
         }
+    }
+
+    /// One message to the box's agent with `dropins` attached; the turn's
+    /// number, or why it could not be sent.
+    fn agent_send_with(
+        &mut self,
+        message: &str,
+        dropins: &[u64],
+        fresh: bool,
+        ctx: &egui::Context,
+    ) -> Result<u64, String> {
+        let req = self.agent.send_with(message, dropins, fresh)?;
+        let seq = req.seq;
+        #[cfg(target_arch = "wasm32")]
+        self.chat.send(req, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = ctx;
+            self.chat_sent.push(req);
+        }
+        Ok(seq)
+    }
+
+    /// The vendor's file for the agent (`device_vendor.rs`): the picker,
+    /// the upload, then the request for a profile carrying the drop-in's id
+    /// once the box has kept the file; the agent's turn reported beside the
+    /// button; a saved profile remembered for its device.
+    fn vendor_file(&mut self, ctx: &egui::Context) {
+        if self.devices_ui.vendor.take_pick() {
+            #[cfg(target_arch = "wasm32")]
+            crate::web::pick_vendor_file(ctx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            for e in crate::web::take_vendor_errors() {
+                self.devices_ui.vendor.pick_failed(&e);
+            }
+            for (name, bytes) in crate::web::take_vendor_picked() {
+                self.devices_ui.vendor.picked(&name, bytes);
+            }
+        }
+        for r in self.devices_ui.vendor.take_requests() {
+            self.projects.enqueue(r);
+            ctx.request_repaint();
+        }
+        if let Some(ask) = self.devices_ui.vendor.take_ask() {
+            let sent = self.agent_send_with(&ask.message, &ask.dropins, true, ctx);
+            self.devices_ui.vendor.asked(sent);
+        }
+        let turn = self.agent.turns.last().map(|t| (t.end.clone(), t.text.clone()));
+        if let Some((end, text)) = turn {
+            self.devices_ui
+                .vendor
+                .agent_turn(self.agent.seq(), end.as_ref(), &text);
+        }
+        if let Some(file) = self.devices_ui.proposal.saved_file().map(str::to_string) {
+            self.devices_ui.vendor.saved(&file);
+        }
+        // The profiles saved for found devices, as the project holds them.
+        let open = self.projects.open.as_ref();
+        self.devices_ui.mine = self
+            .devices_ui
+            .vendor
+            .built
+            .iter()
+            .filter_map(|(addr, file)| {
+                let b = open?.bufs.get(file).filter(|b| b.loaded)?;
+                Some((addr.clone(), (file.clone(), b.text.clone())))
+            })
+            .collect();
     }
 
     /// A turn of the box's agent that ended goes through
@@ -1097,6 +1159,7 @@ impl BoxView {
             self.projects.enqueue(r);
             ui.ctx().request_repaint();
         }
+        self.vendor_file(&ui.ctx().clone());
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
         }
@@ -2143,6 +2206,11 @@ impl Body for BoxView {
             .and_then(|f| open.and_then(|o| o.bufs.get(f)))
             .filter(|b| b.loaded)
             .map(|b| b.text.clone());
+        self.devices_ui.vendor.set_context(crate::device_vendor::Context {
+            on_box: true,
+            engineer: is_engineer(self.session.as_ref()),
+            agent: self.agent.refusal("x").map_or(Ok(()), Err),
+        });
         self.devices_ui
             .proposal
             .set_context(crate::device_proposal::Context {

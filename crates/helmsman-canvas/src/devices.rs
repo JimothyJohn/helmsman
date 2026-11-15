@@ -997,6 +997,13 @@ pub struct DevicesUi {
     pub picking: Option<crate::wired::Pick>,
     /// The device profile the agent proposed (`device_proposal.rs`).
     pub proposal: crate::device_proposal::ProposalUi,
+    /// The vendor's file for the agent, beside a found device the library
+    /// lacks (`device_vendor.rs`).
+    pub vendor: crate::device_vendor::VendorUi,
+    /// A found device's address to the profile the project saved for it
+    /// (file name and text): the view fills it in each frame, and Add
+    /// offers it.
+    pub mine: BTreeMap<String, (String, String)>,
 }
 
 /// Most `wired=` values one tab looks up.
@@ -1485,7 +1492,7 @@ impl DevicesUi {
                     }
                 }
                 None => hover.push_str(
-                    "\nnot in the device library yet: an agent can build its profile from the vendor's file (coming), or add it under Advanced",
+                    "\nnot in the device library yet: the button under it hands the agent the vendor's file (an EDS, an IODD or a manual) to build its profile from, or add it under Advanced",
                 ),
             }
             if let Some(n) = &self.library_note {
@@ -1514,6 +1521,13 @@ impl DevicesUi {
                     "Adds the device to the project by name, with every channel it has. The protocol and the addresses are the device's own.".to_string()
                 }
             };
+            let own = self
+                .mine
+                .get(&f.address)
+                .cloned()
+                .filter(|_| profile_file.is_none());
+            let can_own = f.mapped.is_none() && (write.is_ok() || self.copy_first);
+            let mut own_added = false;
             let mut used = false;
             let mut added = false;
             let mut advanced = false;
@@ -1552,8 +1566,17 @@ impl DevicesUi {
                     chrome.hit(format!("add network {}", f.address), b.rect);
                     added |= b.clicked();
                 } else {
-                    ui.label(RichText::new("not in the device library yet").small().color(t.muted))
-                        .tip("The library has no profile for it, so its channels cannot be named for you. Advanced opens the form where the protocol, the address and the points are typed.");
+                    ui.label(RichText::new("not in the device library yet").color(t.muted))
+                        .tip("The library has no profile for it, so its channels cannot be named for you. Build one from the vendor's file with the button below, or use Advanced, the form where the protocol, the address and the points are typed.");
+                    if let Some((file, _)) = &own {
+                        let b = ui
+                            .add_enabled(can_own, egui::Button::new(RichText::new("Add").strong()))
+                            .tip(format!(
+                                "Adds the device to the project by name, with the channels of {file}: the profile saved from the vendor's file you gave for this device. Check the names in the next window."
+                            ));
+                        chrome.hit(format!("add network {}", f.address), b.rect);
+                        own_added |= b.clicked();
+                    }
                     let b = ui
                         .add_enabled(write.is_ok() || self.copy_first, egui::Button::new("Advanced…"))
                         .tip("Turns Advanced on and opens the New device form for it.");
@@ -1568,7 +1591,36 @@ impl DevicesUi {
                     used |= b.clicked();
                 }
             });
-            if advanced && f.mapped.is_none() && (write.is_ok() || self.copy_first) {
+            if profile_file.is_none() && f.mapped.is_none() {
+                self.vendor.show_row(
+                    ui,
+                    chrome,
+                    &crate::device_vendor::Target::new(&f.address, f.vendor_id, f.product_code, &f.identity),
+                );
+            }
+            if own_added
+                && can_own
+                && let Some((file, text)) = own
+                && let Ok(skim) = helmsman_project::profile_skim::skim(&text)
+            {
+                let (vendor, model) = (skim.vendor.clone(), skim.model.clone());
+                let stem = file
+                    .strip_suffix(helmsman_project::DEVICE_EXT)
+                    .unwrap_or(&file)
+                    .to_string();
+                self.quick = Some(Quick {
+                    address: f.address.clone(),
+                    vendor,
+                    model,
+                    identity: f.identity.clone(),
+                    name: Some(slug(&stem))
+                        .filter(|s| iomap::device_name_ok(s))
+                        .unwrap_or_else(|| "device".into()),
+                    file,
+                    profile: Some(Ok((text, skim))),
+                    error: None,
+                });
+            } else if advanced && f.mapped.is_none() && (write.is_ok() || self.copy_first) {
                 chrome.advanced = true;
                 act = Some(DeviceAct::Use(NewDevice::from_found(f)));
             } else if used && can_use {

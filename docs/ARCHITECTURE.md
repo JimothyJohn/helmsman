@@ -2354,6 +2354,20 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   tell a newer proposal (kept names carried over) from a name already
   taken. A 422's problems are placed by the line they name: the text the
   box returned says which channel is on each line.
+  How the file gets there is `device_vendor.rs` (`VendorUi`, in
+  `DevicesUi.vendor`): the button on a found device the library lacks
+  picks the vendor's file (`web::pick_vendor_file`, its own sink, so no
+  other upload can be taken for it), posts it with `PCall::VendorFile`
+  (`POST /api/dropins?name=SAFE&kind=prose|pdf`, the name cut to
+  `[A-Za-z0-9._-]`), and only from a 201 that names the id builds the
+  chat message the view sends with `BoxAgent::send_with` (`POST
+  /api/chat {message, session, dropins: [id]}`, the route the box already
+  had: no box or relay change). The tool names in the message are the
+  agent's own (`read_dropin`, `propose_device_profile`); the relay's
+  contract (`relay-protocol.md`) already has the box keep a document as a
+  drop-in and the model read it by id. Real box: `box_projects_tests.rs`
+  (`a_vendor_file_becomes_a_dropin_on_a_real_box_...`); the scripted
+  refusals and roles: `ui_tests/vendor.rs`.
 - **Questions, not guesses.** What the document leaves out (a signal the
   box does not have, a shift that is not defined) comes back as questions
   in the chat; the relay's v3 prompt says so, and the module only names
