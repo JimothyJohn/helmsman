@@ -1,0 +1,21 @@
+[package]
+name = "helmsman-iolink"
+version = "0.1.0"
+description = "IO-Link (SDCI) codec: M-sequences, the message checksum and Direct Parameter page 1, no_std"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `no_std`, no allocation, no dependencies, no features: the octets an
+# IO-Link master and a device exchange on the C/Q line, and nothing that
+# drives a transceiver. The master and the simulated device (state
+# machines, every call taking `now`) build on it, so one codec is tested
+# once, on the host.
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true

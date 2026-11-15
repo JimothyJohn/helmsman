@@ -821,7 +821,10 @@ impl PlaygroundView {
             .map(|t| t.lines().count());
         let plan = crate::steps::big_ask(&self.instruct.draft, lines);
         match self.instruct.start_with(&env, &earlier, plan) {
-            Ok(ask) => self.send_ask(&ask, ctx),
+            Ok(ask) => {
+                self.asked_at = ctx.input(|i| i.time);
+                self.send_ask(&ask, ctx);
+            }
             Err(why) => self.instruct.failed(&why),
         }
     }
@@ -842,13 +845,13 @@ impl PlaygroundView {
             settings,
         };
         if let Some(ask) = self.instruct.approve(&env) {
+            self.asked_at = ctx.input(|i| i.time);
             self.send_ask(&ask, ctx);
         }
     }
 
     /// One request of the instruction under way, to the Agent.
     fn send_ask(&mut self, ask: &crate::instruct::Ask, ctx: &egui::Context) {
-        self.asked_at = ctx.input(|i| i.time);
         match self.chat.send(&ask.message, &ask.context) {
             Ok((seq, req)) => self.link.send(seq, req, ctx),
             Err(why) => self.instruct.failed(&why),
@@ -1203,7 +1206,17 @@ impl PlaygroundView {
             Err(why) => self.instruct.cut_off(&env, &why),
         };
         match step {
-            Step::Ask(ask) => self.send_ask(&ask, ctx),
+            Step::Ask(ask) => {
+                // The clock runs through a retry (the range it is read
+                // against covers one); a plan's next step starts it again.
+                let next_step = self.instruct.run.as_ref().is_some_and(|r| {
+                    r.mode != crate::instruct::Mode::Direct && r.retries == 0 && !r.asked_scenarios
+                });
+                if next_step {
+                    self.asked_at = ctx.input(|i| i.time);
+                }
+                self.send_ask(&ask, ctx);
+            }
             Step::Apply(apply) => self.write(apply),
             Step::Done => self.log_outcome(),
             Step::Wait => {}
@@ -1538,12 +1551,13 @@ impl PlaygroundView {
             });
         });
         chrome.hit("program form", m.response.rect);
-        // OK first: the click that pressed it also reads as a click on
-        // the modal's backdrop, which would otherwise shut the question.
+        // Only Cancel drops the answer: a click on the page behind or
+        // Escape leaves the question open, since the checked program
+        // behind it took a minute to get and is gone once this shuts.
         if ok {
             self.program_name = Some(p);
             self.confirm_program_name();
-        } else if done || m.should_close() {
+        } else if done {
             self.program_name = None;
             if let Some(a) = self.to_name.take() {
                 self.instruct
@@ -1610,9 +1624,6 @@ impl PlaygroundView {
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
-        // Drawn after the unsaved-edits question: a modal that appears in
-        // the frame a click is released in reads that release as a click
-        // on its backdrop and shuts itself.
         self.program_name_ui(&ui.ctx().clone(), chrome);
         self.revision_ui(&ui.ctx().clone(), chrome);
         for (name, r) in std::mem::take(&mut self.input_rects) {

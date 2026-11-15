@@ -8,10 +8,12 @@ no conversation to read through.
 
 <img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
 
-While it works, the tab shows how long it has been against about how
-long an answer of that size takes (a few seconds for a short file, a
-minute or more for a long one) and which step it is at: sending,
-planning the change, writing the file, then writing the checks. Once the
+While it works, the tab shows how long the instruction has been running
+and the range it takes for a file of that size, from the least to the
+usual most (5 to 30 seconds for a short file, a few minutes for a long
+one). The time includes any second try, so it is the whole wait. The tab
+also shows which step it is at: sending, planning the change, writing
+the file, then writing the checks. Once the
 Agent has said what the change does, that sentence shows under the step,
 and the code shows as it is written, under the words "Draft, checked
 before it is written". The Code tab shows the same draft in place
