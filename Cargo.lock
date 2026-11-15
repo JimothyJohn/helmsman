@@ -1655,6 +1655,7 @@ version = "0.1.0"
 name = "helmsman-nodecore"
 version = "0.1.0"
 dependencies = [
+ "helmsman-iolink",
  "proptest",
  "serde_json",
 ]
