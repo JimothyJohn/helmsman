@@ -60,10 +60,11 @@ use crate::http::{self, Timeouts, Url};
 use crate::relay;
 
 /// The tools the box runs, as named in the relay's `tools.json`.
-pub const NAMES: [&str; 17] = [
+pub const NAMES: [&str; 18] = [
     "list_signals",
     "read_signals",
     "list_devices",
+    "list_library_devices",
     "list_device_configs",
     "read_device_config",
     "list_modules",
@@ -101,12 +102,13 @@ const FETCH_JSON_MAX: usize = 256 * 1024;
 /// The tools explain mode runs: reads only. Nothing in it drafts,
 /// checks, simulates or proposes, so an explanation can change nothing
 /// on the box, not even the proposal list.
-pub const READ_ONLY: [&str; 7] = [
+pub const READ_ONLY: [&str; 8] = [
     "list_signals",
     "read_signals",
     "list_modules",
     "read_module",
     "list_devices",
+    "list_library_devices",
     "list_device_configs",
     "read_device_config",
 ];
@@ -432,6 +434,7 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
             parse::<Empty>(input).map(drop)
         }
         "read_device_config" => parse::<ReadDeviceConfig>(input).map(drop),
+        "list_library_devices" => parse::<FindDevice>(input).map(drop),
         "fetch_document" => parse::<FetchDocument>(input).map(drop),
         "read_module" => parse::<ReadModule>(input).map(drop),
         "draft_module" => parse::<DraftModule>(input).map(drop),
@@ -466,6 +469,12 @@ struct ReadSignals {
 #[serde(deny_unknown_fields)]
 struct ReadDeviceConfig {
     device: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FindDevice {
+    query: String,
 }
 
 #[derive(Deserialize)]
@@ -582,6 +591,7 @@ pub fn run_with(
         "read_signals" => parse(input).map(|i| read_signals(api, &i)),
         "list_modules" => parse::<Empty>(input).map(|_| list_modules(api)),
         "list_devices" => parse::<Empty>(input).map(|_| list_devices(api)),
+        "list_library_devices" => parse(input).map(|i| find_device(api, &i)),
         "list_device_configs" => parse::<Empty>(input).map(|_| list_device_configs(api)),
         "read_device_config" => parse(input).map(|i| read_device_config(api, &i)),
         "read_module" => parse(input).map(|i| read_module(api, &i)),
@@ -769,6 +779,72 @@ fn list_devices(api: &dyn Caller) -> Outcome {
         }),
         summary,
     )
+}
+
+/// Longest `list_library_devices` query, characters (the box's own limit).
+pub const FIND_QUERY_MAX: usize = 120;
+/// Most matches `list_library_devices` gives back.
+const FIND_MATCHES: usize = 10;
+
+/// The device library's entries for `query`: a vendor, a model, or the
+/// order number on a device's label (`GET /api/devices/library?q=`).
+/// Each match says what a map line needs to name it: for a device on
+/// the network its driver, for a sensor or actuator on a digital channel
+/// its `wired` value (written as `wired=VENDOR/MODEL` on the point's
+/// line) with the record's brief: what it is, what its on/off signals
+/// and their states are called, its factory settings, and whether the
+/// library knows which signal its switching wire carries. The map lines
+/// and the profile text the route also carries are left out: they are
+/// what add-by-click copies, not what an answer needs.
+fn find_device(api: &dyn Caller, i: &FindDevice) -> Outcome {
+    let query = i.query.trim();
+    if query.is_empty() || query.chars().count() > FIND_QUERY_MAX || query.chars().any(char::is_control) {
+        return fail("query: a vendor, a model or an order number, 1 to 120 printable characters");
+    }
+    let path = format!("/api/devices/library?q={}", http::segment(query));
+    match api.get(&path) {
+        Ok((200, j)) => {
+            let all = j["matches"].as_array().cloned().unwrap_or_default();
+            let matches: Vec<Json> = all
+                .iter()
+                .take(FIND_MATCHES)
+                .map(|m| {
+                    let mut out = Map::new();
+                    for k in [
+                        "folder",
+                        "vendor",
+                        "model",
+                        "kind",
+                        "networked",
+                        "driver",
+                        "wired",
+                        "products",
+                        "device",
+                        "device_unavailable",
+                    ] {
+                        if let Some(v) = m.get(k).filter(|v| !v.is_null()) {
+                            out.insert(k.into(), v.clone());
+                        }
+                    }
+                    Json::Object(out)
+                })
+                .collect();
+            let summary = match j["unavailable"].as_str() {
+                Some(why) => format!("the device library is unavailable: {why}"),
+                None => format!("{} match(es) in the device library", all.len()),
+            };
+            ok(
+                json!({
+                    "matches": matches,
+                    "more": all.len().saturating_sub(FIND_MATCHES),
+                    "unavailable": j["unavailable"],
+                }),
+                summary,
+            )
+        }
+        Ok((s, b)) => unexpected("searching the device library", s, &b),
+        Err(e) => fail(e),
+    }
 }
 
 /// Most library records one `list_devices` looks up.
@@ -2058,6 +2134,106 @@ END_FUNCTION_BLOCK
             "{}",
             o.data
         );
+    }
+
+    #[test]
+    fn find_device_searches_the_library_by_what_is_on_the_label() {
+        let brief = json!({"wired": "ifm/if6123", "vendor": "ifm", "kind": "sensor", "draft": true});
+        let api = routes(vec![
+            (
+                "GET /api/devices/library?q=IF6124",
+                200,
+                json!({"matches": [{
+                    "folder": "devices/ifm/if6123", "vendor": "ifm", "model": "IF6123, IF6124", "kind": "sensor",
+                    "wired": "ifm/if6123", "products": ["IF6123", "IF6124"], "networked": false,
+                    "driver": null, "profile": null, "lines": "device x", "profile_text": "helmsman-device 1",
+                    "device": brief,
+                }]}),
+            ),
+            (
+                "GET /api/devices/library?q=moxa%20e1213",
+                200,
+                json!({"matches": [{"folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "kind": "remote-io",
+                    "networked": true, "driver": "enip-io", "wired": "moxa/iologik-e1213", "products": []}]}),
+            ),
+            ("GET /api/devices/library?q=none", 200, json!({"matches": []})),
+            (
+                "GET /api/devices/library?q=off",
+                200,
+                json!({"matches": [], "unavailable": "no device library (started with --devices-index off)"}),
+            ),
+        ]);
+        let o = find_device(
+            &api,
+            &FindDevice {
+                query: " IF6124 ".into(),
+            },
+        );
+        assert!(o.ok, "{}", o.data);
+        let m = &o.data["matches"][0];
+        assert_eq!(m["wired"], "ifm/if6123");
+        assert_eq!(m["networked"], false);
+        assert_eq!(m["device"], brief);
+        assert_eq!(m["products"], json!(["IF6123", "IF6124"]));
+        // What add-by-click copies stays out, and a null is not a key.
+        for gone in ["lines", "profile_text", "driver", "profile"] {
+            assert!(m.get(gone).is_none(), "{gone}: {m}");
+        }
+        assert_eq!(o.summary, "1 match(es) in the device library");
+        // The query goes into the path encoded as one piece.
+        let o = find_device(
+            &api,
+            &FindDevice {
+                query: "moxa e1213".into(),
+            },
+        );
+        assert_eq!(o.data["matches"][0]["driver"], "enip-io", "{}", o.data);
+        assert_eq!(
+            find_device(&api, &FindDevice { query: "none".into() }).summary,
+            "0 match(es) in the device library"
+        );
+        let off = find_device(&api, &FindDevice { query: "off".into() });
+        assert!(
+            off.ok && off.summary.starts_with("the device library is unavailable"),
+            "{}",
+            off.summary
+        );
+        // Refused before anything is asked of the box.
+        for bad in ["", "   ", "a\u{7}b", &"x".repeat(121)] {
+            let o = find_device(&api, &FindDevice { query: bad.into() });
+            assert!(!o.ok, "{bad:?}");
+        }
+        // No such route on an older box: said, not a panic.
+        assert!(
+            !find_device(
+                &api,
+                &FindDevice {
+                    query: "unrouted".into()
+                }
+            )
+            .ok
+        );
+        // More than are given back: counted.
+        let many: Vec<Json> = (0..14)
+            .map(|k| json!({"folder": format!("devices/v/m{k}"), "vendor": "v"}))
+            .collect();
+        let api = routes(vec![(
+            "GET /api/devices/library?q=v",
+            200,
+            json!({"matches": many}),
+        )]);
+        let o = find_device(&api, &FindDevice { query: "v".into() });
+        assert_eq!(
+            (
+                o.data["matches"].as_array().unwrap().len(),
+                o.data["more"].as_u64()
+            ),
+            (10, Some(4))
+        );
+        // The schema: one field, nothing else.
+        assert!(validate("list_library_devices", &json!({"query": "IF6123"})).is_ok());
+        assert!(validate("list_library_devices", &json!({})).is_err());
+        assert!(validate("list_library_devices", &json!({"query": "x", "limit": 5})).is_err());
     }
 
     #[test]

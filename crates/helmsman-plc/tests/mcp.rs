@@ -1024,6 +1024,26 @@ fn list_devices_works_over_mcp() {
     assert!(names.contains(&"box"), "{d}");
 }
 
+/// TODO.md `iodd-metadata`: an engineer's own MCP client looks a device
+/// up in the library by what is on its label, as the Devices tab does.
+/// This box has no library: the tool answers, says so, and a bad query
+/// is the tool's error and not the transport's.
+#[test]
+fn list_library_devices_works_over_mcp() {
+    let b = &*SHARED;
+    let (ok, d) = b.data("list_library_devices", json!({"query": "IF6123"}));
+    assert!(ok, "list_library_devices failed over MCP: {d}");
+    assert_eq!(d["matches"], json!([]), "{d}");
+    assert!(
+        d["unavailable"].is_string(),
+        "a box without a library says so: {d}"
+    );
+    let (ok, d) = b.data("list_library_devices", json!({"query": ""}));
+    assert!(!ok, "an empty query is refused: {d}");
+    let (ok, _) = b.data("list_library_devices", json!({"query": "x", "limit": 1}));
+    assert!(!ok, "an unknown field is refused");
+}
+
 // ------------------------------------------------------------ malformed
 
 fn post(b: &Bench, body: &[u8]) -> Wire {
