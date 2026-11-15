@@ -1169,6 +1169,47 @@ into the code.
   and stack overflows on hostile nesting; see the PR that added the script.
 - **How to cite:** `Beremiz <path>@d7ddfb7` or `OpenPLC Editor <path>@6a8e930`.
 
+### Real Structured Text: libraries and test suites (`.st`)
+
+- **What:** 1009 `.st` files that other tools' authors wrote, to see which of
+  them the parser and checker take and why the rest are refused
+  (`crates/helmsman-iec/tests/st_corpus.rs`, INVESTIGATION.md §3). Licenses
+  are as GitHub's API reports them on 2026-11-15; none of the files carries
+  a header of its own that was checked.
+- **Where, pinned** (every file's SHA-256 is in `scripts/st-corpus.sh`):
+  - https://github.com/WengerAG/structured-text-utilities at
+    `5afc27c7f879e2d1fcd727003aab2a9b34174e40`, the six `UTILITIES*.st`
+    files at the root. License: MIT.
+  - https://github.com/tkucic/UniTest at
+    `7d8bbb1752acd975e944f1219deff2541835ed3a`, all 351 `.st` files
+    (B&R Automation Studio project: the files hold function bodies only,
+    the declarations are in `.fun` / `.var` files that are not fetched).
+    License: MIT.
+  - https://github.com/PLC-lang/rusty (ruSTy) at
+    `11e8107e96749c3d68cc36377af5e32c9abea2b8`, `tests/lit/single/**/*.st`
+    (541 files). License: LGPL-3.0.
+  - https://github.com/beremiz/matiec at
+    `c316fe57e335381cbe91f61c7366857198580ac7`, `tests/**/*.st` (40
+    files). License: GPL-3.0.
+  - https://github.com/jubnzv/iec-checker at
+    `d3e5dae2c9b5096a197e4134d7d0549201f3a953`, `test/st/**/*.st` (53
+    files; the empty `good/user2.st` is left out). License: LGPL-3.0.
+  - https://github.com/klauer/blark at
+    `78349296737ae0cdf6485b202e0a8e4ddea79999`,
+    `blark/tests/source/*.st` (18 files). License: GPL-2.0.
+  - Fetched 2026-11-15.
+- **Not vendored:** the MIT sources could be; they are fetched with the rest
+  so there is one script and one place. The LGPL and GPL test files are data
+  fetched into `target/st-corpus/` and nothing from them is executed or
+  copied into the repository. `scripts/st-corpus.sh` checks each hash and
+  runs the test.
+- **Not used:** OSCAT BASIC (its license and download terms were not looked
+  up; INVESTIGATION.md §3 still lists that as unverified).
+- **Leaned on by:** the dialect cards under "The ST plan" in TODO.md, which
+  are ordered by the refusal ranking this corpus produces.
+- **How to cite:** `<repo> <path>@<first 7 of the commit>`, e.g.
+  `iec-checker test/st/good/literals.st@d3e5dae`.
+
 ## What this means for the project
 
 1. **Role:** build the originator (explicit client + Class 1 scanner), not
