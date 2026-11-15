@@ -33,7 +33,7 @@ app, `TODO.md` the plan. A Rust cargo workspace, crates under
 messaging, the Class 1 scanner), `helmsman-adapter` (CIP target),
 `helmsman-iec` (ST compiler and interpreter, PLCopen XML), `helmsman-io`
 (I/O map, drivers, Modbus TCP), `helmsman-modbus` (the Modbus codec,
-`no_std`), `helmsman-project` (a project's files and archive),
+`no_std`), `helmsman-iolink` (the IO-Link message codec, `no_std`), `helmsman-project` (a project's files and archive),
 `helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live diagram),
 `helmsman-agent` (the box's agent loop behind the Agent tab),
 `helmsman-canvas` (the browser app). Outside the workspace,
