@@ -2844,6 +2844,24 @@ file and token in a temporary state directory).
   diagram (and with `diff::modules`): only the addressed block and the
   blocks of its statement that hold its text may differ, and only the asked
   bubble may flip, else the edit is refused in plain words (`Refusal`).
+  `diagram-edit-rewire` adds four more, through the same entry point:
+  `Rewire { pin, to: Source }` (a pin takes a variable, a literal or an
+  earlier write; a bubble stays except on a literal), `SetFbArg { pou,
+  node, arg, to }` (replace the argument or add `NAME := value` after the
+  last input argument), `DeleteStmt { pou, span }` (the range must be
+  exactly one statement; a statement alone on its line goes with its
+  indentation, trailing comment and line break, otherwise it goes with the
+  blanks that kept it from its neighbour and comments stay) and `Rename {
+  pou, from, to }` (`helmsman_iec::rename_ident` over the POU's text only).
+  Block numbers shift under these, so `edit/graph.rs` checks them as
+  trees: each statement unfolded from its roots, equal to the old one but
+  for the addressed pin and the blocks above it; a deleted statement's
+  readers may now read the variable or an older write. A rename is checked
+  as the same module with both names blanked out everywhere. Types come
+  from the declarations (`Types::type_of`): a pin takes what it takes now,
+  a function block port what it declares. Library POUs are refused
+  (`LibraryPou`), as are names that are reserved words, taken, or not
+  names; a rename that breaks a call by port name fails the compile check.
 - **Sim replay chart.** "Run the sim replay" posts `.../replay`; the
   answer now carries, per driven signal, both step tracks
   (`current_track`, `proposed_track`: type and `[at_ms, value]` steps, at

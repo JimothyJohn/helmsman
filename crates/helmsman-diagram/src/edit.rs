@@ -54,7 +54,7 @@
 //! its text), flipped exactly the bubble asked for, and nothing else.
 //! Otherwise it is refused, with the reason.
 //!
-//! Rewire, SetFbArg and DeleteStmt change what feeds blocks or remove
+//! `Rewire`, `SetFbArg` and `DeleteStmt` change what feeds blocks or remove
 //! some, so block numbers shift and that check does not fit: they are
 //! compared as trees instead (see `graph`): each statement unfolded from
 //! its roots, equal to the old one but for the pin addressed (and the blocks

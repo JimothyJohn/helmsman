@@ -43,6 +43,8 @@ pub(super) enum Tree {
     Var(String, Origin),
     /// The pin the edit addresses.
     Hole,
+    /// Whatever the new text gives: what was here was removed.
+    Any,
 }
 
 /// How the addressed block's inputs change.
@@ -167,7 +169,20 @@ impl Build<'_> {
             if (self.remap)(i).is_none() {
                 continue;
             }
-            let roots = s.roots.iter().map(|&r| self.node(r).0).collect();
+            // A call's condition is the call itself, which its own statement holds.
+            let roots = s
+                .roots
+                .iter()
+                .map(|&r| {
+                    if self.stmt_of(r) == i {
+                        self.node(r).0
+                    } else if (self.remap)(self.stmt_of(r)).is_none() {
+                        Tree::Any
+                    } else {
+                        Tree::Leaf(format!("the block {}", self.d.node(r).label))
+                    }
+                })
+                .collect();
             let regions = s
                 .arms
                 .iter()
@@ -278,6 +293,7 @@ fn lift(old: &Tree, new: &Tree, got: &mut Option<(bool, Tree)>, loose: bool) -> 
             }
             true
         }
+        (Tree::Any, _) => true,
         (Tree::Leaf(a), Tree::Leaf(b)) => a == b,
         (Tree::Var(p1, o1), Tree::Var(p2, o2)) => {
             p1 == p2 && (*o1 == Origin::Any || o1 == o2 || (loose && *o1 == Origin::Memory))

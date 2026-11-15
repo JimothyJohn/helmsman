@@ -1,4 +1,4 @@
-//! Rewire, SetFbArg, DeleteStmt and Rename: planning each as one splice of
+//! `Rewire`, `SetFbArg`, `DeleteStmt` and `Rename`: planning each as one splice of
 //! the source, and the check each result goes through.
 
 use helmsman_iec::ast::{
@@ -380,7 +380,7 @@ fn verify_input(
 
 // ---- SetFbArg -------------------------------------------------------------
 
-fn find_call<'a>(body: &'a [Stmt], pos: ast::Pos) -> Option<&'a Expr> {
+fn find_call(body: &[Stmt], pos: ast::Pos) -> Option<&Expr> {
     for s in body {
         let hit = match &s.kind {
             StmtKind::Call(e) if e.pos == pos => Some(e),
@@ -742,11 +742,40 @@ fn pou_range(src: &str, unit: &Unit, p: &AstPou) -> (usize, usize) {
     (start, end)
 }
 
+/// The elementary types: names a variable could be given, but would hide.
+const ELEMENTARY: &[&str] = &[
+    "BOOL",
+    "SINT",
+    "INT",
+    "DINT",
+    "LINT",
+    "USINT",
+    "UINT",
+    "UDINT",
+    "ULINT",
+    "BYTE",
+    "WORD",
+    "DWORD",
+    "LWORD",
+    "REAL",
+    "LREAL",
+    "TIME",
+    "STRING",
+    "WSTRING",
+    "DATE",
+    "TIME_OF_DAY",
+    "TOD",
+    "DATE_AND_TIME",
+    "DT",
+];
+
 fn taken(ctx: &Ctx, pou: &AstPou, to: &str, own: &str) -> bool {
     let is = |n: &str| n.eq_ignore_ascii_case(to);
-    pou.vars
-        .iter()
-        .any(|v| is(&v.name) && !v.name.eq_ignore_ascii_case(own))
+    ELEMENTARY.iter().any(|n| is(n))
+        || pou
+            .vars
+            .iter()
+            .any(|v| is(&v.name) && !v.name.eq_ignore_ascii_case(own))
         || ctx.unit.pous.iter().any(|q| is(&q.name))
         || ast::library().pous.iter().any(|q| is(&q.name))
         || ctx

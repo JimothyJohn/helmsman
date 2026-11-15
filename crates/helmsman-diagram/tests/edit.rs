@@ -1127,3 +1127,490 @@ fn a_range_that_is_not_one_statement_is_refused() {
             .contains("exactly one statement")
     );
 }
+
+fn rename_in(source: &str, pou: &str, from: &str, to: &str) -> Result<String, Refusal> {
+    run(source, |_| Edit::Rename {
+        pou: pou.into(),
+        from: from.into(),
+        to: to.into(),
+    })
+}
+
+const LATCH: &str = "PROGRAM t\nVAR_INPUT start, stop : BOOL; END_VAR\nVAR_OUTPUT motor : BOOL; END_VAR\nVAR tm : TON; END_VAR\n\
+(* start the motor *) motor := (start OR motor) AND NOT stop; // start again?\ntm(IN := start, PT := T#1s);\nmotor := motor OR tm.Q;\nEND_PROGRAM\n";
+
+#[test]
+fn a_rename_writes_the_new_name_at_every_use_and_nowhere_else() {
+    let out = rename_in(LATCH, "t", "START", "go").unwrap();
+    assert_eq!(
+        out,
+        LATCH
+            .replace("VAR_INPUT start,", "VAR_INPUT go,")
+            .replace("(start OR", "(go OR")
+            .replace("IN := start", "IN := go"),
+        "the comments, `tm.Q` and the other names keep their text"
+    );
+    // The instance of a function block: its members are not renamed.
+    let out = rename_in(LATCH, "t", "tm", "timer").unwrap();
+    assert_eq!(
+        out,
+        LATCH
+            .replace("VAR tm : TON", "VAR timer : TON")
+            .replace("tm(IN", "timer(IN")
+            .replace("tm.Q", "timer.Q")
+    );
+}
+
+#[test]
+fn a_rename_leaves_a_name_inside_a_comment_or_a_longer_name_alone() {
+    let s = "PROGRAM t\nVAR a, ab, ba, a_b, a1 : INT; x : BOOL; END_VAR\n\
+// a := a + 1; \"a\" (* a *)\nab := a + ab + ba + a_b + a1; (* a *) { a }\nEND_PROGRAM\n";
+    let out = rename_in(s, "t", "a", "alpha").unwrap();
+    assert_eq!(
+        out,
+        s.replace("VAR a, ab", "VAR alpha, ab")
+            .replace("ab := a +", "ab := alpha +")
+    );
+}
+
+#[test]
+fn a_rename_in_one_pou_does_not_reach_another_with_the_same_name() {
+    let s = "FUNCTION_BLOCK f\nVAR_INPUT i : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nVAR tmp : BOOL; END_VAR\ntmp := i;\nq := tmp;\nEND_FUNCTION_BLOCK\n\
+PROGRAM t\nVAR tmp, y : BOOL; fb : f; END_VAR\ntmp := y;\nfb(i := tmp);\nEND_PROGRAM\n";
+    let out = rename_in(s, "t", "tmp", "start").unwrap();
+    assert_eq!(
+        out,
+        s.replace("VAR tmp, y : BOOL; fb", "VAR start, y : BOOL; fb")
+            .replace("tmp := y;", "start := y;")
+            .replace("fb(i := tmp);", "fb(i := start);")
+    );
+    // A port of a block called by name is part of the block's interface:
+    // renaming it only inside the block would break the caller.
+    let r = rename_in(s, "f", "i", "start").unwrap_err();
+    assert!(matches!(r, Refusal::WouldNotCompile(_)), "{r:?}");
+    let out = rename_in(s, "f", "tmp", "scratch").unwrap();
+    assert_eq!(
+        out,
+        s.replace(
+            "VAR tmp : BOOL; END_VAR\ntmp := i;\nq := tmp;",
+            "VAR scratch : BOOL; END_VAR\nscratch := i;\nq := scratch;"
+        )
+    );
+}
+
+#[test]
+fn a_rename_that_collides_or_is_not_a_name_is_refused() {
+    let say = |from: &str, to: &str| rename_in(LATCH, "t", from, to).unwrap_err();
+    assert_eq!(say("start", "stop"), Refusal::NameTaken("stop".into()));
+    assert_eq!(
+        say("start", "STOP"),
+        Refusal::NameTaken("STOP".into()),
+        "case does not matter"
+    );
+    assert_eq!(
+        say("start", "t"),
+        Refusal::NameTaken("t".into()),
+        "the program's own name"
+    );
+    assert_eq!(
+        say("start", "TON"),
+        Refusal::NameTaken("TON".into()),
+        "a library block"
+    );
+    assert_eq!(say("start", "BOOL"), Refusal::NameTaken("BOOL".into()), "a type");
+    // Said in words.
+    assert_eq!(
+        say("start", "stop").to_string(),
+        "the name stop is already in use"
+    );
+    // Not names.
+    for bad in [
+        "", " ", "1go", "go go", "go-go", "a__b", "a.b", "é", "go!", "a;b := 1",
+    ] {
+        assert!(
+            matches!(say("start", bad), Refusal::NotAName(_)),
+            "{bad:?}: {:?}",
+            say("start", bad)
+        );
+    }
+    assert!(matches!(say("start", &"x".repeat(65)), Refusal::NotAName(_)));
+    // Nothing called that.
+    assert_eq!(
+        say("nope", "go"),
+        Refusal::NoSuchVariable {
+            name: "nope".into(),
+            pou: "T".into()
+        }
+    );
+    assert_eq!(
+        say("nope", "go").to_string(),
+        "there is no variable called nope in T"
+    );
+    // The same name again.
+    assert_eq!(say("start", "start"), Refusal::NothingToChange);
+}
+
+#[test]
+fn a_reserved_word_is_not_a_name() {
+    for w in [
+        "IF", "if", "End_If", "AND", "NOT", "VAR", "END_VAR", "THEN", "TRUE", "false", "ARRAY",
+    ] {
+        let r = rename_in(LATCH, "t", "start", w).unwrap_err();
+        assert_eq!(r, Refusal::KeywordAsName(w.into()), "{w}");
+    }
+    assert_eq!(
+        Refusal::KeywordAsName("IF".into()).to_string(),
+        "IF is a reserved word of the language, not a name"
+    );
+    // A name that merely starts with one is fine.
+    assert!(rename_in(LATCH, "t", "start", "iffy").is_ok());
+    assert!(rename_in(LATCH, "t", "start", "if_").is_ok());
+}
+
+#[test]
+fn a_rename_can_only_change_the_case_of_a_name() {
+    let out = rename_in(LATCH, "t", "start", "Start").unwrap();
+    assert_eq!(
+        out,
+        LATCH
+            .replace("start,", "Start,")
+            .replace("(start OR", "(Start OR")
+            .replace("IN := start", "IN := Start")
+    );
+    let back = {
+        let (_, m) = build(&out);
+        apply(
+            &out,
+            &m,
+            Edit::Rename {
+                pou: "t".into(),
+                from: "START".into(),
+                to: "start".into(),
+            },
+        )
+        .unwrap()
+        .apply_to(&out)
+    };
+    assert_eq!(back, LATCH);
+}
+
+#[test]
+fn a_rename_survives_noise_between_tokens_crlf_and_non_ascii() {
+    let body =
+        "(* ünï ✓ *) x := (* µ *) y AND NOT (* c *) y; // y ✓ done\r\n(* y *) tm(IN := y, PT := T#1s);\r\n";
+    let s = src(body).replace('\n', "\r\n").replace("\r\r\n", "\r\n");
+    let out = rename_in(&s, "t", "y", "Äußerst").unwrap_err();
+    assert!(
+        matches!(out, Refusal::NotAName(_)),
+        "non-ASCII names are not names: {out:?}"
+    );
+    let out = rename_in(&s, "t", "Y", "yy").unwrap();
+    assert_eq!(
+        out,
+        s.replace(
+            "x := (* µ *) y AND NOT (* c *) y",
+            "x := (* µ *) yy AND NOT (* c *) yy"
+        )
+        .replace("IN := y,", "IN := yy,")
+        .replace("x, y, z : BOOL", "x, yy, z : BOOL")
+    );
+    assert!(out.contains("// y ✓ done") && out.contains("(* y *)"));
+}
+
+#[test]
+fn a_rename_that_would_break_a_call_by_name_is_refused() {
+    // `PT` is both the program's variable and the port named in the call:
+    // renaming the variable renames the port too, which the checker refuses.
+    let s = "PROGRAM t\nVAR PT : TIME; tm : TON; x : BOOL; END_VAR\ntm(IN := x, PT := PT);\nEND_PROGRAM\n";
+    let r = rename_in(s, "t", "PT", "delay").unwrap_err();
+    assert!(matches!(r, Refusal::WouldNotCompile(_)), "{r:?}");
+}
+
+#[test]
+fn the_standard_library_is_not_part_of_the_source() {
+    let s = src("tm(IN := x, PT := T#5s);\nx := y AND z;");
+    let (_, m) = build(&s);
+    let say = |e: Edit| apply(&s, &m, e).unwrap_err();
+    assert_eq!(
+        say(Edit::Rename {
+            pou: "TON".into(),
+            from: "IN".into(),
+            to: "go".into()
+        }),
+        Refusal::LibraryPou("TON".into())
+    );
+    assert_eq!(
+        say(Edit::Rename {
+            pou: "ton".into(),
+            from: "Q".into(),
+            to: "done".into()
+        }),
+        Refusal::LibraryPou("TON".into())
+    );
+    assert_eq!(
+        say(Edit::SetFbArg {
+            pou: "TP".into(),
+            node: NodeId(0),
+            arg: "PT".into(),
+            to: Source::Const(Literal::Time(1))
+        }),
+        Refusal::LibraryPou("TP".into())
+    );
+    assert_eq!(
+        say(Edit::Rewire {
+            pin: Pin {
+                pou: "R_TRIG".into(),
+                node: NodeId(0),
+                input: 0
+            },
+            to: var("x")
+        }),
+        Refusal::LibraryPou("R_TRIG".into())
+    );
+    assert_eq!(
+        say(Edit::DeleteStmt {
+            pou: "TOF".into(),
+            span: Span { start: 0, end: 1 }
+        }),
+        Refusal::LibraryPou("TOF".into())
+    );
+    assert!(
+        Refusal::LibraryPou("TON".into())
+            .to_string()
+            .contains("standard library")
+    );
+    // A member of a library block is not a variable of the program.
+    assert_eq!(
+        say(Edit::Rename {
+            pou: "t".into(),
+            from: "Q".into(),
+            to: "done".into()
+        }),
+        Refusal::NoSuchVariable {
+            name: "Q".into(),
+            pou: "T".into()
+        }
+    );
+    // And a pou that is nowhere is still just not there.
+    assert_eq!(
+        say(Edit::Rename {
+            pou: "nope".into(),
+            from: "x".into(),
+            to: "go".into()
+        }),
+        Refusal::NoSuchPou("nope".into())
+    );
+}
+
+#[test]
+fn a_diagram_from_other_text_is_refused_by_every_new_edit_too() {
+    let a = src("x := y AND z;\ntm(IN := x);");
+    let b = src("x := y AND z; (* a comment moves every byte *)\ntm(IN := x);");
+    let (_, ma) = build(&a);
+    let (_, mb) = build(&b);
+    let and = node_with(&ma, "Y AND Z");
+    let call = node_with(&ma, "TM(IN := X)");
+    let edits = [
+        Edit::Rewire {
+            pin: pin(and, 0),
+            to: var("x"),
+        },
+        Edit::SetFbArg {
+            pou: "t".into(),
+            node: call,
+            arg: "PT".into(),
+            to: Source::Const(Literal::Time(1_000_000_000)),
+        },
+        Edit::DeleteStmt {
+            pou: "t".into(),
+            span: Span { start: 0, end: 1 },
+        },
+        Edit::Rename {
+            pou: "t".into(),
+            from: "y".into(),
+            to: "yy".into(),
+        },
+    ];
+    for e in edits {
+        assert_eq!(
+            apply(&b, &ma, e.clone()).unwrap_err(),
+            Refusal::StaleDiagram,
+            "{e:?}"
+        );
+        assert_eq!(
+            apply(&a, &mb, e.clone()).unwrap_err(),
+            Refusal::StaleDiagram,
+            "{e:?}"
+        );
+    }
+    // Source that does not compile.
+    let bad = src("x := y AND ;");
+    let r = apply(
+        &bad,
+        &ma,
+        Edit::Rename {
+            pou: "t".into(),
+            from: "y".into(),
+            to: "yy".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(r, Refusal::SourceDoesNotCompile(_)), "{r:?}");
+}
+
+/// Everything outside the patch is the original's, the result compiles,
+/// and the inverse restores the bytes.
+fn exact(source: &str, m: &Module, e: Edit) -> Result<String, Refusal> {
+    let patch = apply(source, m, e)?;
+    let out = patch.apply_to(source);
+    assert_eq!(&out[..patch.start], &source[..patch.start]);
+    assert_eq!(&out[patch.start + patch.text.len()..], &source[patch.end..]);
+    assert_eq!(patch.inverse(source).apply_to(&out), source);
+    assert!(source.is_char_boundary(patch.start) && source.is_char_boundary(patch.end));
+    helmsman_iec::compile(&out, common::SIZES).unwrap_or_else(|e| panic!("{e:?}\n{out}"));
+    Ok(out)
+}
+
+#[test]
+fn every_new_edit_survives_a_comment_between_every_token() {
+    let plain = "x := y AND NOT z OR a > 1;\ntm(IN := x, PT := T#5s);\nIF x AND y THEN b := 1; c := 2; END_IF;\nb := a + c;";
+    let noisy = plain.replace(' ', " (* c *) ");
+    let s = src(&noisy);
+    let (_, m) = build(&s);
+    let d = &m.program().unwrap().diagram;
+    let mut made = 0;
+    for n in &d.nodes {
+        for input in 0..n.ins.len() {
+            for to in [
+                var("x"),
+                var("a"),
+                Source::Const(Literal::Int(4)),
+                Source::Const(Literal::Bool(true)),
+            ] {
+                let e = Edit::Rewire {
+                    pin: pin(n.id, input),
+                    to,
+                };
+                if exact(&s, &m, e).is_ok() {
+                    made += 1;
+                }
+            }
+        }
+    }
+    let spans: Vec<(usize, usize)> = {
+        let mut v = Vec::new();
+        for t in [
+            "x (* c *) :=",
+            "tm(IN",
+            "b (* c *) := (* c *) 1;",
+            "c (* c *) := (* c *) 2;",
+            "b (* c *) := (* c *) a",
+        ] {
+            let at = s.find(t).unwrap();
+            let end = at + s[at..].find(';').unwrap() + 1;
+            v.push((at, end));
+        }
+        v
+    };
+    for (start, end) in spans {
+        let e = Edit::DeleteStmt {
+            pou: "t".into(),
+            span: Span { start, end },
+        };
+        let out = exact(&s, &m, e).unwrap();
+        assert!(out.len() < s.len());
+        made += 1;
+    }
+    for (from, to) in [("y", "yy"), ("a", "alpha"), ("tm", "timer")] {
+        let e = Edit::Rename {
+            pou: "t".into(),
+            from: from.into(),
+            to: to.into(),
+        };
+        let out = exact(&s, &m, e).unwrap();
+        assert_eq!(out.matches("(* c *)").count(), s.matches("(* c *)").count());
+        made += 1;
+    }
+    let call = node_with(&m, "TM(IN := X, PT := T#5s)");
+    let e = Edit::SetFbArg {
+        pou: "t".into(),
+        node: call,
+        arg: "PT".into(),
+        to: Source::Const(Literal::Time(2_000_000_000)),
+    };
+    assert!(exact(&s, &m, e).unwrap().contains("T#2s"));
+    assert!(made > 20, "{made} edits made");
+}
+
+#[test]
+fn new_edits_do_not_move_on_crlf_mixed_case_and_non_ascii_comments() {
+    let body = "(* ünïcödé ✓ *) X := Y AnD (* µ *) NOT Z; // ✓ done\r\nIF Y THEN (* ✓ *) b := 5; // ✓\r\n c := 6; END_IF;\r\nTM(IN := Y, PT := t#5S);\r\n";
+    let s = src(body).replace('\n', "\r\n").replace("\r\r\n", "\r\n");
+    let (_, m) = build(&s);
+    let d = &m.program().unwrap().diagram;
+    let and = d.nodes.iter().find(|n| n.label == "AND").unwrap().id;
+    // The declared spelling of y is `y`, not the Y the statement uses.
+    let out = exact(
+        &s,
+        &m,
+        Edit::Rewire {
+            pin: pin(and, 0),
+            to: var("Z"),
+        },
+    )
+    .unwrap();
+    assert_eq!(out, s.replacen("Y AnD", "z AnD", 1));
+    // Added argument: the declared spelling of the port.
+    let s2 = s.replace("TM(IN := Y, PT := t#5S);", "TM(IN := Y);");
+    let (_, m2) = build(&s2);
+    let call = m2
+        .program()
+        .unwrap()
+        .diagram
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, NodeKind::Fb { .. }))
+        .unwrap()
+        .id;
+    let out = exact(
+        &s2,
+        &m2,
+        Edit::SetFbArg {
+            pou: "t".into(),
+            node: call,
+            arg: "pt".into(),
+            to: Source::Const(Literal::Time(5_000_000_000)),
+        },
+    )
+    .unwrap();
+    assert_eq!(out, s2.replace("TM(IN := Y);", "TM(IN := Y, PT := T#5s);"));
+    // Delete one statement of two on the line after a non-ASCII comment.
+    let at = s.find("c := 6;").unwrap();
+    let out = exact(
+        &s,
+        &m,
+        Edit::DeleteStmt {
+            pou: "t".into(),
+            span: Span {
+                start: at,
+                end: at + "c := 6;".len(),
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(out, s.replace(" c := 6;", ""));
+    let at = s.find("b := 5;").unwrap();
+    let out = exact(
+        &s,
+        &m,
+        Edit::DeleteStmt {
+            pou: "t".into(),
+            span: Span {
+                start: at,
+                end: at + "b := 5;".len(),
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(out, s.replace("b := 5; // ✓\r\n c := 6;", "// ✓\r\n c := 6;"));
+}

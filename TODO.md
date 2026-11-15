@@ -624,17 +624,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 3: rewire, FB arguments, delete, rename** — Rewire (a pin to a variable, a constant or an earlier write), SetFbArg (`PT := T#5s`), DeleteStmt (the whole statement by its range), Rename (reuses `rename_ident`).
-  result: V1's full set of logic edits from the diagram
-  notes: refusals, each in plain words: type mismatch (the compiled program's types, as the NOT bubble uses), a source not yet written at that point, library POUs (`system`), a diagram whose source no longer matches the buffer (hash), a keyword as a name. `rename_ident`'s `ident()` accepts keywords today (`IF` passes), so refuse that up front.
-  est: 1d
-  difficulty: med
-  depends: diagram-edit-core
-  id: diagram-edit-rewire
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits 4: editing on the canvas, simulation** — st_view.rs gestures: right-click a block or pin for Change operator ▸, Negate input, Connect to… (a searchable variable list, works on touch), Edit value…, Rename…, Delete statement; double-click a constant to edit it in place. Commit: push the old text into the same `TextEditState` undoer the editor uses (`add_undo`, its own entry), so Ctrl+Z undoes a diagram edit like typing; mark dirty; scroll the ST to the patch and highlight it about 1.5 s; rebuild the `Viewer` keeping the camera and the picked block.
   result: in the playground and browser projects an engineer changes logic on the diagram and the code follows
   notes: the edited block keeps its dragged position: the patch returns old key → new key for arrange.rs (blocks match by POU, label, text, ordinal, and the text changes). Tooltips on everything, 18 pt text, popups capped to the column; `every_tab_leaves_the_panels_their_width` stays green. Headless tests: gesture → buffer text, Undo restores it, the position carries over.
