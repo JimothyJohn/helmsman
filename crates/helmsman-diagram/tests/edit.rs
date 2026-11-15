@@ -7,8 +7,8 @@
 mod common;
 
 use common::{build, prog};
-use helmsman_diagram::edit::{Bubble, Edit, Literal, Pin, Refusal, apply};
-use helmsman_diagram::{Module, NodeId, NodeKind, RegionId};
+use helmsman_diagram::edit::{Bubble, Edit, Literal, Pin, Refusal, Source, apply};
+use helmsman_diagram::{Module, NodeId, NodeKind, RegionId, Span};
 use helmsman_iec::ast::BinOp;
 
 const VARS: &str = "a, b, c : INT; x, y, z : BOOL; tm : TON; t1, t2, t3 : TIME; r : REAL; wd : WORD;";
@@ -576,5 +576,554 @@ PROGRAM t\nVAR x, y : BOOL; END_VAR\nx := y AND y;\nEND_PROGRAM\n";
     assert_eq!(
         patch.apply_to(s),
         s.replace("q := i AND NOT i", "q := i OR NOT i")
+    );
+}
+
+// ---- rewire, SetFbArg, DeleteStmt, Rename ---------------------------------
+
+fn write_of(m: &Module, label: &str) -> NodeId {
+    m.program()
+        .unwrap()
+        .diagram
+        .nodes
+        .iter()
+        .find(|n| n.label == label && matches!(n.kind, NodeKind::Write { .. }))
+        .unwrap_or_else(|| panic!("no write {label}"))
+        .id
+}
+
+fn rewire(source: &str, consumer: &str, input: usize, to: Source) -> Result<String, Refusal> {
+    run(source, |m| Edit::Rewire {
+        pin: pin(node_with(m, consumer), input),
+        to,
+    })
+}
+
+fn var(s: &str) -> Source {
+    Source::Var(s.into())
+}
+
+fn mismatch(e: &Refusal) -> bool {
+    matches!(e, Refusal::TypeMismatch { .. })
+}
+
+#[test]
+fn a_pin_is_wired_to_a_variable_or_a_literal_in_place() {
+    let s = src("x := y AND z;");
+    assert_eq!(rewire(&s, "Y AND Z", 1, var("x")).unwrap(), src("x := y AND x;"));
+    assert_eq!(
+        rewire(&s, "Y AND Z", 0, Source::Const(Literal::Bool(true))).unwrap(),
+        src("x := TRUE AND z;")
+    );
+    let s = src("a := b + 5;");
+    assert_eq!(rewire(&s, "B + 5", 1, var("c")).unwrap(), src("a := b + c;"));
+    assert_eq!(
+        rewire(&s, "B + 5", 0, Source::Const(Literal::Int(-3))).unwrap(),
+        src("a := -3 + 5;")
+    );
+    // The same variable already read in the statement: one block, then two.
+    let s = src("a := b + b;");
+    assert_eq!(rewire(&s, "B + B", 1, var("c")).unwrap(), src("a := b + c;"));
+    let s = src("a := b + c;");
+    assert_eq!(rewire(&s, "B + C", 1, var("b")).unwrap(), src("a := b + b;"));
+    // A member of a function block.
+    let s = src("x := y AND z;");
+    assert_eq!(
+        rewire(&s, "Y AND Z", 1, var("tm.Q")).unwrap(),
+        src("x := y AND tm.Q;")
+    );
+    assert!(mismatch(
+        &rewire(&src("a := b + 1;"), "B + 1", 0, var("t1")).unwrap_err()
+    ));
+}
+
+#[test]
+fn a_bubble_stays_on_the_pin_and_does_not_go_with_a_literal() {
+    let s = src("x := y AND NOT z;");
+    assert_eq!(
+        rewire(&s, "Y AND NOT Z", 1, var("x")).unwrap(),
+        src("x := y AND NOT x;")
+    );
+    assert_eq!(
+        rewire(&s, "Y AND NOT Z", 1, Source::Const(Literal::Bool(false))).unwrap(),
+        src("x := y AND FALSE;")
+    );
+    let s = src("x := y AND NOT (z);");
+    assert_eq!(
+        rewire(&s, "Y AND NOT Z", 1, var("x")).unwrap(),
+        src("x := y AND NOT x;")
+    );
+}
+
+#[test]
+fn a_negative_literal_does_not_fuse_with_a_minus() {
+    let s = src("a := b -c;");
+    assert_eq!(
+        rewire(&s, "B - C", 1, Source::Const(Literal::Int(-2))).unwrap(),
+        src("a := b - -2;")
+    );
+}
+
+#[test]
+fn a_variable_is_written_as_it_is_declared_whatever_case_is_given() {
+    let s = "PROGRAM t\nVAR Start, StopBtn, Run : BOOL; END_VAR\nRun := Start AND StopBtn;\nEND_PROGRAM\n";
+    let (_, m) = build(s);
+    let and = m
+        .program()
+        .unwrap()
+        .diagram
+        .nodes
+        .iter()
+        .find(|n| n.label == "AND")
+        .unwrap()
+        .id;
+    for given in ["start", "START", "sTaRt"] {
+        let patch = apply(
+            s,
+            &m,
+            Edit::Rewire {
+                pin: pin(and, 1),
+                to: var(given),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            patch.apply_to(s),
+            s.replace("Start AND StopBtn", "Start AND Start")
+        );
+    }
+    let patch = apply(
+        s,
+        &m,
+        Edit::Rewire {
+            pin: pin(and, 0),
+            to: var("RUN"),
+        },
+    )
+    .unwrap();
+    assert_eq!(patch.apply_to(s), s.replace("Run := Start", "Run := Run"));
+}
+
+#[test]
+fn a_variable_of_a_later_section_is_there_one_of_another_pou_or_nowhere_is_not() {
+    // The declarations come before the statements, so "later" is a later
+    // section of the POU.
+    let s = "FUNCTION_BLOCK f\nVAR_INPUT i : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nVAR hidden : BOOL; END_VAR\nq := i;\nEND_FUNCTION_BLOCK\n\
+PROGRAM t\nVAR x, y : BOOL; END_VAR\nVAR_TEMP late : BOOL; END_VAR\nx := y AND y;\nEND_PROGRAM\n";
+    let (_, m) = build(s);
+    let and = m
+        .program()
+        .unwrap()
+        .diagram
+        .nodes
+        .iter()
+        .find(|n| n.label == "AND")
+        .unwrap()
+        .id;
+    let go = |name: &str| {
+        apply(
+            s,
+            &m,
+            Edit::Rewire {
+                pin: pin(and, 1),
+                to: var(name),
+            },
+        )
+        .map(|p| p.apply_to(s))
+    };
+    assert_eq!(go("late").unwrap(), s.replace("y AND y", "y AND late"));
+    assert_eq!(
+        go("hidden").unwrap_err(),
+        Refusal::NoSuchVariable {
+            name: "HIDDEN".into(),
+            pou: "T".into()
+        }
+    );
+    assert_eq!(
+        go("nowhere").unwrap_err().to_string(),
+        "there is no variable called NOWHERE in T"
+    );
+    // Text that is not a variable at all.
+    for bad in ["", "y AND z", "1", "(y)", " y", "y ", "NOT y", "y (* c *)"] {
+        assert!(
+            matches!(go(bad).unwrap_err(), Refusal::NotAVariable(_)),
+            "{bad:?}: {:?}",
+            go(bad)
+        );
+    }
+}
+
+#[test]
+fn a_source_whose_type_does_not_fit_is_refused_by_the_programs_types() {
+    let s = src("x := y AND z;\na := b + c;\ntm(IN := x, PT := T#5s);");
+    let say = |consumer: &str, input: usize, to: Source| rewire(&s, consumer, input, to).unwrap_err();
+    assert!(mismatch(&say("Y AND Z", 0, var("a"))), "an INT into a BOOL input");
+    assert!(mismatch(&say("B + C", 0, var("x"))), "a BOOL into an INT operand");
+    assert!(
+        mismatch(&say("B + C", 0, var("t1"))),
+        "a TIME into an INT operand"
+    );
+    assert!(mismatch(&say("B + C", 0, Source::Const(Literal::Bool(true)))));
+    assert!(mismatch(&say("Y AND Z", 0, Source::Const(Literal::Int(1)))));
+    let call = "TM(IN := X, PT := T#5s)";
+    assert!(
+        mismatch(&say(call, 1, Source::Const(Literal::Int(5)))),
+        "5 is no TIME"
+    );
+    assert!(mismatch(&say(call, 1, var("a"))));
+    assert!(mismatch(&say(call, 0, var("a"))));
+    assert_eq!(
+        rewire(&s, call, 1, var("t2")).unwrap(),
+        s.replace("PT := T#5s", "PT := t2")
+    );
+    // A pin with a bubble takes only a BOOL.
+    let s = src("x := y AND NOT z;");
+    assert!(mismatch(&rewire(&s, "Y AND NOT Z", 1, var("a")).unwrap_err()));
+    assert_eq!(
+        Refusal::TypeMismatch {
+            expected: "BOOL".into(),
+            found: "INT".into(),
+        }
+        .to_string(),
+        "the types do not fit: that input takes BOOL and the new source is INT"
+    );
+}
+
+#[test]
+fn only_a_pin_fed_by_a_variable_a_value_or_a_write_is_rewired() {
+    let s = src("x := y AND (z OR x);\na := ABS(b) + 1;\nx := tm.Q AND y;");
+    let (_, m) = build(&s);
+    let and = node_with(&m, "Y AND (Z OR X)");
+    let r = apply(
+        &s,
+        &m,
+        Edit::Rewire {
+            pin: pin(and, 1),
+            to: var("x"),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(r, Refusal::NotALeaf("the operator OR".into()));
+    assert!(r.to_string().contains("change the inputs of that block"));
+    let plus = node_with(&m, "ABS(B) + 1");
+    let r = apply(
+        &s,
+        &m,
+        Edit::Rewire {
+            pin: pin(plus, 0),
+            to: var("a"),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(r, Refusal::NotALeaf("the call of ABS".into()));
+    // An FB output is a source like any other.
+    let and2 = node_with(&m, "TM.Q AND Y");
+    assert!(
+        apply(
+            &s,
+            &m,
+            Edit::Rewire {
+                pin: pin(and2, 0),
+                to: var("z")
+            }
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn an_earlier_write_is_a_source_only_where_it_is_still_the_last_one() {
+    let to_write = |s: &str, m: &Module, text: &str, w: NodeId| {
+        apply(
+            s,
+            m,
+            Edit::Rewire {
+                pin: pin(node_with(m, text), 0),
+                to: Source::Write(w),
+            },
+        )
+        .map(|p| p.apply_to(s))
+    };
+    let s = src("a := b + 1;\nc := b * 2;");
+    let (_, m) = build(&s);
+    assert_eq!(
+        to_write(&s, &m, "B * 2", write_of(&m, "A :=")).unwrap(),
+        src("a := b + 1;\nc := a * 2;"),
+        "the pin is now wired from the write"
+    );
+    // After the pin: the write is not there yet.
+    let s2 = src("c := b * 2;\na := b + 1;");
+    let (_, m2) = build(&s2);
+    let r = to_write(&s2, &m2, "B * 2", write_of(&m2, "A :=")).unwrap_err();
+    assert_eq!(r, Refusal::NotWrittenYet("A".into()));
+    assert!(r.to_string().contains("not written at that point of the scan"));
+    // Written again in between: the pin would read the second write.
+    let s3 = src("a := b + 1;\na := 7;\nc := b * 2;");
+    let (_, m3) = build(&s3);
+    assert_eq!(
+        to_write(&s3, &m3, "B * 2", write_of(&m3, "A :=")).unwrap_err(),
+        Refusal::NotWrittenYet("A".into())
+    );
+    // In a branch the pin is not in.
+    let s4 = src("IF x THEN\na := b + 1;\nELSE\nc := b * 2;\nEND_IF;");
+    let (_, m4) = build(&s4);
+    assert_eq!(
+        to_write(&s4, &m4, "B * 2", write_of(&m4, "A :=")).unwrap_err(),
+        Refusal::NotWrittenYet("A".into())
+    );
+    // In an enclosing region it is.
+    let s5 = src("a := b + 1;\nIF x THEN\nc := b * 2;\nEND_IF;");
+    let (_, m5) = build(&s5);
+    assert_eq!(
+        to_write(&s5, &m5, "B * 2", write_of(&m5, "A :=")).unwrap(),
+        src("a := b + 1;\nIF x THEN\nc := a * 2;\nEND_IF;")
+    );
+    // A block that is not a write, and one that is not there.
+    let times = node_with(&m, "B * 2");
+    assert_eq!(to_write(&s, &m, "B * 2", times).unwrap_err(), Refusal::NotAWrite);
+    assert_eq!(
+        to_write(&s, &m, "B * 2", NodeId(999)).unwrap_err(),
+        Refusal::NoSuchBlock
+    );
+}
+
+fn fb_arg(source: &str, arg: &str, to: Source) -> Result<String, Refusal> {
+    run(source, |m| {
+        let node = m
+            .program()
+            .unwrap()
+            .diagram
+            .nodes
+            .iter()
+            .find(|n| matches!(n.kind, NodeKind::Fb { .. }))
+            .unwrap()
+            .id;
+        Edit::SetFbArg {
+            pou: "t".into(),
+            node,
+            arg: arg.into(),
+            to,
+        }
+    })
+}
+
+#[test]
+fn a_function_block_argument_is_replaced_or_added() {
+    let time = |ns| Source::Const(Literal::Time(ns));
+    let s = src("tm(IN := x, PT := T#5s);");
+    assert_eq!(
+        fb_arg(&s, "PT", time(7_000_000_000)).unwrap(),
+        src("tm(IN := x, PT := T#7s);")
+    );
+    assert_eq!(
+        fb_arg(&s, "pt", var("t2")).unwrap(),
+        src("tm(IN := x, PT := t2);")
+    );
+    // Added after the last argument, as the declaration spells it.
+    let s = src("tm(IN := x);");
+    assert_eq!(
+        fb_arg(&s, "pt", time(5_000_000_000)).unwrap(),
+        src("tm(IN := x, PT := T#5s);")
+    );
+    let s = src("tm(PT := T#5s);");
+    assert_eq!(
+        fb_arg(&s, "in", var("y")).unwrap(),
+        src("tm(PT := T#5s, IN := y);")
+    );
+    let s = src("tm();");
+    assert_eq!(fb_arg(&s, "IN", var("y")).unwrap(), src("tm(IN := y);"));
+    let s = src("tm ( (* none *) );");
+    assert_eq!(
+        fb_arg(&s, "IN", var("y")).unwrap(),
+        src("tm (IN := y (* none *) );")
+    );
+    // A comment or a break after the last argument stays where it was.
+    let s = src("tm(IN := x // note\n);");
+    assert_eq!(
+        fb_arg(&s, "PT", time(5_000_000_000)).unwrap(),
+        src("tm(IN := x, PT := T#5s // note\n);")
+    );
+    let s = src("tm(IN := x (* c *) , ET => t1 );");
+    assert_eq!(
+        fb_arg(&s, "PT", time(5_000_000_000)).unwrap(),
+        src("tm(IN := x, PT := T#5s (* c *) , ET => t1 );")
+    );
+    // Inside a branch, with CRLF.
+    let s = src("IF y THEN\n  tm(IN := x);\nEND_IF;").replace('\n', "\r\n");
+    assert_eq!(
+        fb_arg(&s, "PT", time(1_000_000_000)).unwrap(),
+        src("IF y THEN\n  tm(IN := x, PT := T#1s);\nEND_IF;").replace('\n', "\r\n")
+    );
+}
+
+#[test]
+fn function_block_argument_refusals_say_why() {
+    let s = src("tm(IN := x);\na := b + 1;");
+    let say = |arg: &str, to: Source| fb_arg(&s, arg, to).unwrap_err();
+    assert_eq!(
+        say("NOPE", var("y")),
+        Refusal::NotAnInput {
+            fb: "TON".into(),
+            arg: "NOPE".into()
+        }
+    );
+    // An output is no input.
+    assert!(matches!(say("Q", var("y")), Refusal::NotAnInput { .. }));
+    assert!(mismatch(&say("PT", Source::Const(Literal::Int(5)))));
+    assert!(matches!(say("PT", var("zzz")), Refusal::NoSuchVariable { .. }));
+    assert!(mismatch(&say("PT", var("b"))));
+    assert_eq!(
+        Refusal::NotAnInput {
+            fb: "TON".into(),
+            arg: "Q".into()
+        }
+        .to_string(),
+        "TON has no input called Q"
+    );
+    // Not a call at all.
+    let (_, m) = build(&s);
+    let plus = node_with(&m, "B + 1");
+    assert_eq!(
+        apply(
+            &s,
+            &m,
+            Edit::SetFbArg {
+                pou: "t".into(),
+                node: plus,
+                arg: "IN".into(),
+                to: var("x")
+            }
+        )
+        .unwrap_err(),
+        Refusal::NotAFunctionBlock
+    );
+}
+
+fn delete(source: &str, text: &str) -> Result<String, Refusal> {
+    let start = source.find(text).unwrap_or_else(|| panic!("no {text:?}"));
+    run(source, |_| Edit::DeleteStmt {
+        pou: "t".into(),
+        span: Span {
+            start,
+            end: start + text.len(),
+        },
+    })
+}
+
+#[test]
+fn a_statement_on_its_own_line_goes_with_the_line() {
+    let s = src("a := 1;\n  b := 2; // two\nc := 3;");
+    assert_eq!(delete(&s, "b := 2;").unwrap(), src("a := 1;\nc := 3;"));
+    assert_eq!(delete(&s, "a := 1;").unwrap(), src("  b := 2; // two\nc := 3;"));
+    assert_eq!(delete(&s, "c := 3;").unwrap(), src("a := 1;\n  b := 2; // two"));
+    let s = src("a := 1;\n\tb := 2; (* two *)  \nc := 3;");
+    assert_eq!(delete(&s, "b := 2;").unwrap(), src("a := 1;\nc := 3;"));
+    // CRLF.
+    let s = src("a := 1;\n  b := 2;\nc := 3;").replace('\n', "\r\n");
+    assert_eq!(
+        delete(&s, "b := 2;").unwrap(),
+        src("a := 1;\nc := 3;").replace('\n', "\r\n")
+    );
+    // A comment of its own above the statement stays.
+    let s = src("a := 1;\n// about b\nb := 2;");
+    assert_eq!(delete(&s, "b := 2;").unwrap(), src("a := 1;\n// about b"));
+}
+
+#[test]
+fn two_statements_on_a_line_lose_one_and_the_blanks_between() {
+    let s = src("a := 1; b := 2;");
+    assert_eq!(delete(&s, "a := 1;").unwrap(), src("b := 2;"));
+    assert_eq!(delete(&s, "b := 2;").unwrap(), src("a := 1;"));
+    let s = src("  a := 1;   b := 2; c := 3; // end");
+    assert_eq!(delete(&s, "b := 2;").unwrap(), src("  a := 1;   c := 3; // end"));
+    assert_eq!(delete(&s, "c := 3;").unwrap(), src("  a := 1;   b := 2; // end"));
+    assert_eq!(delete(&s, "a := 1;").unwrap(), src("  b := 2; c := 3; // end"));
+    let s = src("a := 1; (* about b *) b := 2;");
+    assert_eq!(delete(&s, "a := 1;").unwrap(), src("(* about b *) b := 2;"));
+}
+
+#[test]
+fn deleting_the_only_statement_of_a_branch_or_of_a_pou_leaves_valid_source() {
+    let s = src("IF x THEN\n  a := 1;\nEND_IF;\nb := 2;");
+    assert_eq!(delete(&s, "a := 1;").unwrap(), src("IF x THEN\nEND_IF;\nb := 2;"));
+    let s = src("IF x THEN\n  a := 1;\nELSE\n  a := 2;\nEND_IF;");
+    assert_eq!(
+        delete(&s, "a := 2;").unwrap(),
+        src("IF x THEN\n  a := 1;\nELSE\nEND_IF;")
+    );
+    let s = src("IF x THEN a := 1; END_IF;");
+    assert_eq!(delete(&s, "a := 1;").unwrap(), src("IF x THEN END_IF;"));
+    // The whole compound statement, with everything in it.
+    let s = src("a := 0;\nIF x THEN\n  a := 1; (* in *)\n  b := 2;\nEND_IF;\nc := 3;");
+    assert_eq!(
+        delete(&s, "IF x THEN\n  a := 1; (* in *)\n  b := 2;\nEND_IF;").unwrap(),
+        src("a := 0;\nc := 3;")
+    );
+    // The last statement of the POU, and its only one.
+    let s = "PROGRAM t\nVAR a : INT; END_VAR\na := 1;\nEND_PROGRAM";
+    assert_eq!(
+        delete(s, "a := 1;").unwrap(),
+        "PROGRAM t\nVAR a : INT; END_VAR\nEND_PROGRAM"
+    );
+    // A loop.
+    let s = src("FOR b := 0 TO 3 DO\n  a := a + 1;\nEND_FOR;");
+    assert_eq!(
+        delete(&s, "a := a + 1;").unwrap(),
+        src("FOR b := 0 TO 3 DO\nEND_FOR;")
+    );
+}
+
+#[test]
+fn a_delete_leaves_the_rest_reading_what_it_can_and_says_so_otherwise() {
+    // The later statement read the deleted write; now it reads the variable.
+    let s = src("a := b + 1;\nc := a * 2;");
+    assert_eq!(delete(&s, "a := b + 1;").unwrap(), src("c := a * 2;"));
+    // ...or an older write of it.
+    let s = src("a := 5;\na := b + 1;\nc := a * 2;");
+    assert_eq!(delete(&s, "a := b + 1;").unwrap(), src("a := 5;\nc := a * 2;"));
+    // A function block call whose output is read afterwards.
+    let s = src("tm(IN := x, PT := T#5s);\ny := tm.Q;");
+    assert_eq!(delete(&s, "tm(IN := x, PT := T#5s);").unwrap(), src("y := tm.Q;"));
+}
+
+#[test]
+fn a_range_that_is_not_one_statement_is_refused() {
+    let s = src("a := 1;\nb := 2;\nIF x THEN c := 3; END_IF;");
+    let here = |from: usize, to: usize| {
+        let (_, m) = build(&s);
+        apply(
+            &s,
+            &m,
+            Edit::DeleteStmt {
+                pou: "t".into(),
+                span: Span { start: from, end: to },
+            },
+        )
+        .unwrap_err()
+    };
+    let at = s.find("a := 1;").unwrap();
+    assert_eq!(here(at, at + 6), Refusal::NotAStatement, "missing the semicolon");
+    assert_eq!(here(at, at + 8), Refusal::NotAStatement, "one byte too far");
+    assert_eq!(here(at + 1, at + 7), Refusal::NotAStatement, "starts inside");
+    assert_eq!(
+        here(at, at + "a := 1;\nb := 2;".len()),
+        Refusal::NotAStatement,
+        "two statements"
+    );
+    assert_eq!(here(at, at), Refusal::NotAStatement, "empty");
+    let c = s.find("c := 3").unwrap();
+    assert_eq!(here(c, c + "c := 3; END_IF;".len()), Refusal::NotAStatement);
+    assert_eq!(here(0, s.len()), Refusal::NotAStatement, "the whole file");
+    assert_eq!(
+        here(s.len() + 5, s.len() + 9),
+        Refusal::NotAStatement,
+        "past the end"
+    );
+    let x = s.find("x THEN").unwrap();
+    assert_eq!(here(x, x + 1), Refusal::NotAStatement, "an expression");
+    assert!(
+        Refusal::NotAStatement
+            .to_string()
+            .contains("exactly one statement")
     );
 }

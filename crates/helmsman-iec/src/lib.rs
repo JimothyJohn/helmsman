@@ -142,7 +142,7 @@ use once::Once;
 pub use check::{Area, Diagnostic, ImageSizes};
 pub use interp::{BadParam, Fault, FaultKind, Image};
 pub use lexer::Pos;
-pub use rename::rename_ident;
+pub use rename::{is_reserved_word, rename_ident};
 pub use state::{Carry, DecodeError, MAX_DEPTH, State};
 pub use types::{Ty, Value};
 
