@@ -117,6 +117,17 @@ impl Link {
     }
 }
 
+/// What the simulation does once a change of the Agent's lands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AfterChange {
+    /// Stopped, every variable at its initial value: Run starts it from
+    /// scratch (Nick, 2026-11-14).
+    #[default]
+    Reset,
+    /// Running at once.
+    Run,
+}
+
 pub struct PlaygroundView {
     pub session: Session,
     /// The Messages tab's log.
@@ -179,6 +190,9 @@ pub struct PlaygroundView {
     answered_seq: u64,
     /// When the request in flight went (page time, s): the Agent tab's clock.
     asked_at: f64,
+    /// What the program does once a change of the Agent's lands
+    /// (`Chrome::agent_resets`, followed each frame the Agent tab draws).
+    pub after_change: AfterChange,
     /// A checked new program waiting for its project's name.
     to_name: Option<crate::instruct::Apply>,
     /// The revision on view (the History modal).
@@ -257,6 +271,7 @@ impl PlaygroundView {
             instruct: crate::instruct::Instruct::default(),
             answered_seq: 0,
             asked_at: 0.0,
+            after_change: AfterChange::default(),
             to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
@@ -1337,7 +1352,14 @@ impl PlaygroundView {
             .take(120)
             .collect();
         self.proj.save_as(&what, Some(&apply.record));
-        self.reload_running();
+        if self.after_change == AfterChange::Reset {
+            // Stopped, as the Stop button leaves it: nothing of the old
+            // program's run is carried into the new one.
+            self.reload();
+            self.session.stop();
+        } else {
+            self.reload_running();
+        }
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),
@@ -2456,6 +2478,15 @@ impl PlaygroundView {
             }
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
+            let r = ui
+                .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
+                .tip("On: when the Agent's change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
+            chrome.hit("agent resets", r.rect);
+            self.after_change = if chrome.agent_resets {
+                AfterChange::Reset
+            } else {
+                AfterChange::Run
+            };
             let view = crate::instruct::View {
                 target: self.scope().label().replacen("Editing: ", "", 1),
                 blocked: self.chat.route().err().map(str::to_string),

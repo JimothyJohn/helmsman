@@ -287,6 +287,11 @@ pub struct Chrome {
     /// protocols, addresses and typed points. Off, a device is added by
     /// a click on what the scan found. Remembered per browser.
     pub advanced: bool,
+    /// The Agent tab's "Stop and reset after a change" switch in the
+    /// simulation (Nick, 2026-11-14): on, a change the Agent lands leaves
+    /// the program stopped with every variable at its initial value, to
+    /// be run from scratch; off, it runs at once. Remembered per browser.
+    pub agent_resets: bool,
 }
 
 impl Default for Chrome {
@@ -313,6 +318,7 @@ impl Default for Chrome {
             hints: crate::st_hints::Hints::default(),
             folds: crate::st_fold::Folds::default(),
             advanced: false,
+            agent_resets: true,
         }
     }
 }
@@ -336,7 +342,7 @@ impl Chrome {
             format!(" rights={} side={}", list(&self.rights), self.side.key())
         };
         format!(
-            "dock=2 left={} right={} lefts={} pane={}{rights} scan={} trend={} bottom={} light={} wrap={} advanced={}{colors}",
+            "dock=2 left={} right={} lefts={} pane={}{rights} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             list(&self.lefts),
@@ -346,7 +352,8 @@ impl Chrome {
             self.bottom.key(),
             u8::from(self.light),
             u8::from(self.wrap),
-            u8::from(self.advanced)
+            u8::from(self.advanced),
+            u8::from(self.agent_resets)
         )
     }
 
@@ -369,6 +376,7 @@ impl Chrome {
                 Some(("light", v)) => c.light = v == "1",
                 Some(("wrap", v)) => c.wrap = v == "1",
                 Some(("advanced", v)) => c.advanced = v == "1",
+                Some(("reset", v)) => c.agent_resets = v == "1",
                 Some(("colors", v)) => {
                     c.colors = v
                         .split(',')
