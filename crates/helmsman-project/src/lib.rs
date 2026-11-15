@@ -26,6 +26,7 @@
 
 pub mod agent;
 pub mod devlib;
+pub mod devrecord;
 pub mod iomap;
 pub mod layout;
 pub mod plant;

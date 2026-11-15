@@ -20,7 +20,7 @@ use helmsman_plc::api::{
     Api, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, More, Shared,
 };
 use helmsman_plc::store::ChangeSet;
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -256,6 +256,103 @@ fn the_library_route_serves_the_devices_profile_checked() {
         "{m}"
     );
     assert!(m["lines"].as_str().is_some(), "the map lines still come: {m}");
+}
+
+const SENSOR_INDEX: &str = r#"{ "format": "helmsman-devices-index 1", "devices": [
+  { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io",
+    "identity": { "enip": { "vendor_id": 991, "product_code": 515 } },
+    "protocols": { "enip": { "driver": "enip-io", "map": "enip.map", "profile": "moxa-e1213" } } },
+  { "folder": "devices/ifm/if6123", "vendor": "ifm", "model": "IF6123, IF6124", "kind": "sensor",
+    "identity": { "iolink": { "vendor_id": 310, "device_id": 791 } },
+    "products": ["IF6123", "IF6124"], "record": "record.json" },
+  { "folder": "devices/ifm/gone", "vendor": "ifm", "model": "Gone", "kind": "sensor", "record": "record.json" },
+  { "folder": "devices/ifm/other", "vendor": "ifm", "model": "Other", "kind": "sensor", "record": "record.json" } ] }"#;
+const SENSOR_RECORD: &str = r#"{ "format": "helmsman-device-record 1", "folder": "devices/ifm/if6123",
+  "vendor": "ifm", "model": "IF6123, IF6124", "kind": "sensor", "draft": true,
+  "variants": [ { "product_id": "IF6123" }, { "product_id": "IF6124" } ],
+  "wired": { "sio": true, "connections": [] },
+  "signals": [ { "dir": "in", "name": "SSC1", "type": "bool", "on": "active", "off": "inactive" },
+               { "dir": "in", "name": "PDV1", "type": "int" } ],
+  "settings": [ { "name": "P-n", "index": 500, "default": "0", "default_name": "PnP" } ] }"#;
+
+/// What is wired to a point (`wired=VENDOR/MODEL` on a map line): the
+/// library route gives the record's brief for it, a search by the number
+/// on the label finds it, and a record the library serves broken, missing
+/// or for another folder is said to be unavailable, in words.
+#[test]
+fn the_library_route_says_what_a_wired_sensor_is() {
+    let sim = E1213Sim::start().unwrap();
+    let lib = Files::serve(BTreeMap::from([
+        ("/index.json", SENSOR_INDEX.to_string()),
+        ("/devices/ifm/if6123/record.json", SENSOR_RECORD.to_string()),
+        ("/devices/ifm/other/record.json", SENSOR_RECORD.to_string()),
+    ]));
+    let api = box_with(&sim, Some(lib.url("/index.json")), "");
+    let r = request(api.addr(), "GET", "/api/devices/library?wired=ifm/if6123", true);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let answer = r.json();
+    assert_eq!(answer["matches"].as_array().unwrap().len(), 1, "{answer}");
+    let m = &answer["matches"][0];
+    assert_eq!(
+        (m["vendor"].as_str(), m["kind"].as_str()),
+        (Some("ifm"), Some("sensor"))
+    );
+    assert_eq!(m["wired"], "ifm/if6123");
+    assert_eq!(m["networked"], false);
+    assert_eq!(m["products"], json!(["IF6123", "IF6124"]));
+    let device = &m["device"];
+    assert_eq!(device["draft"], true, "{m}");
+    assert_eq!(device["switches_without_a_master"], true);
+    assert_eq!(
+        device["signals"],
+        json!([{"dir": "in", "name": "SSC1", "on": "active", "off": "inactive", "description": null}])
+    );
+    assert_eq!(
+        device["factory_settings"],
+        json!([{"name": "P-n", "value": "PnP"}])
+    );
+    assert!(
+        device["switching_wire_carries"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("not in the library yet")),
+        "{device}"
+    );
+    // By the number on the label; the I/O block is still what a network
+    // lookup finds, and says it is networked.
+    let by_label = request(api.addr(), "GET", "/api/devices/library?q=IF6124", true).json();
+    assert_eq!(by_label["matches"][0]["wired"], "ifm/if6123", "{by_label}");
+    assert_eq!(by_label["matches"][0]["device"]["model"], "IF6123, IF6124");
+    let block = request(
+        api.addr(),
+        "GET",
+        "/api/devices/library?vendor=991&product=515",
+        true,
+    )
+    .json();
+    assert_eq!(block["matches"][0]["networked"], true, "{block}");
+    assert!(block["matches"][0].get("device").is_none());
+    // No such record; a record the library does not serve; one that is
+    // another folder's.
+    let none = request(api.addr(), "GET", "/api/devices/library?wired=ifm/if9999", true).json();
+    assert_eq!(none["matches"].as_array().unwrap().len(), 0, "{none}");
+    let gone = request(api.addr(), "GET", "/api/devices/library?wired=ifm/gone", true).json();
+    assert!(gone["matches"][0]["device_unavailable"].is_string(), "{gone}");
+    assert!(gone["matches"][0].get("device").is_none());
+    let other = request(api.addr(), "GET", "/api/devices/library?wired=ifm/other", true).json();
+    assert_eq!(
+        other["matches"][0]["device_unavailable"], "the record is for devices/ifm/if6123",
+        "{other}"
+    );
+    // Not a folder of the library: refused before anything is fetched.
+    for bad in ["ifm", "..%2F..%2Fetc", "IFM/IF6123", "ifm/if6123/x", ""] {
+        let r = request(
+            api.addr(),
+            "GET",
+            &format!("/api/devices/library?wired={bad}"),
+            true,
+        );
+        assert_eq!(r.status, 400, "{bad}: {}", r.body);
+    }
 }
 
 #[test]
