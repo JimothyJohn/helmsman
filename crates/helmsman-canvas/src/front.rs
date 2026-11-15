@@ -52,20 +52,58 @@ pub const TESTS: [(&str, &str); 5] = [
     ),
 ];
 
-/// What was asked for, as the visitor reads it: the instruction an
-/// engineer would give, one line each.
+/// The I/O, named before anything was asked: what each point is.
+pub const IO: [(&str, &str); 7] = [
+    ("level_low", "input, on when the tank is nearly empty"),
+    ("level_high", "input, on when the tank is full"),
+    ("level", "input, the level in metres (the tank is 2 m deep)"),
+    ("reset", "input, the operator's alarm reset"),
+    ("fill", "output, opens the inlet valve"),
+    ("alarm", "output"),
+    (
+        "level_pct",
+        "output, the level in percent for the operator's screen",
+    ),
+];
+
+/// What was asked for, as the visitor reads it: the instruction the
+/// Agent was given, one line each ([`instruction`] is the whole of it).
 pub const ASKED: [&str; 4] = [
     "Keep the tank topped up: open the inlet when it runs low, close it when it is full.",
-    "Never overflow it, even if the high switch fails.",
-    "If the level switches are lost or disagree, close the inlet and raise the alarm.",
-    "An alarm stays until someone presses reset.",
+    "Never overflow it, even if the high switch fails: a fill takes under 6 s, so one that runs 7 s closes the inlet and raises the alarm.",
+    "If the low and high switches are both on, close the inlet and raise the alarm.",
+    "An alarm stays, with the inlet closed, until reset is pressed and the switches no longer disagree.",
 ];
+
+/// The instruction the recorded answer was given (`recorded.txt`): the
+/// I/O by name, then [`ASKED`].
+#[cfg(test)]
+#[must_use]
+pub fn instruction() -> String {
+    use std::fmt::Write as _;
+    let mut s = String::from("A tank that keeps itself topped up. Its I/O, with these names:\n");
+    for (name, what) in IO {
+        let _ = writeln!(s, "- {name}: {what}");
+    }
+    s.push_str("What it must do:\n");
+    for line in ASKED {
+        let _ = writeln!(s, "- {line}");
+    }
+    s
+}
 
 /// The tank's depth, m (`max=` of the plant).
 pub const DEPTH: f64 = 2.0;
 /// Where its switches make, m (`low_at=`, `high_at=`).
 pub const LOW_AT: f64 = 0.2;
 pub const HIGH_AT: f64 = 1.6;
+/// When and how the program was written (`recorded.txt`, written by the
+/// ignored test `front_door_recording`, which asks the live Agent).
+pub const RECORDED: &str = include_str!("../assets/front/recorded.txt");
+/// Seconds between one line of the request appearing and the next.
+pub const ASK_EVERY: f64 = 0.5;
+/// Seconds the page shows the program being written.
+pub const WRITING: f64 = 2.0;
 /// Seconds between one proof appearing and the next.
 pub const REVEAL: f64 = 0.7;
 /// Seconds the reset button stays pressed after a click.
@@ -129,6 +167,15 @@ impl Fault {
             }
         }
     }
+}
+
+/// A value of [`RECORDED`] (`on`, `requests`, `seconds`), or `?`.
+#[must_use]
+pub fn recorded(key: &str) -> &'static str {
+    RECORDED
+        .lines()
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix(": "))
+        .map_or("?", str::trim)
 }
 
 /// The front door's state.
@@ -198,12 +245,53 @@ impl Front {
         self.peak = self.peak.max(self.level());
     }
 
-    /// How many proofs are on the screen at page time `t`.
+    /// Seconds since the page first drew it.
+    fn elapsed(&self, t: f64) -> f64 {
+        self.since.map_or(0.0, |since| (t - since).max(0.0))
+    }
+
+    /// How many lines of the request are on the screen at page time `t`:
+    /// they come one by one, as the first run is played back.
+    #[must_use]
+    pub fn asked_shown(&self, t: f64) -> usize {
+        if self.since.is_none() {
+            return 0;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = (self.elapsed(t) / ASK_EVERY) as usize + 1;
+        n.min(ASKED.len())
+    }
+
+    /// While the page shows the program being written: how much of it is
+    /// (0 to 1). `None` before the whole request is up and once it is
+    /// written.
+    #[must_use]
+    pub fn writing(&self, t: f64) -> Option<f64> {
+        #[allow(clippy::cast_precision_loss)]
+        let from = ASKED.len() as f64 * ASK_EVERY;
+        let e = self.elapsed(t);
+        (self.since.is_some() && e >= from && e < from + WRITING).then(|| (e - from) / WRITING)
+    }
+
+    /// Whether the program is on the screen as written.
+    #[must_use]
+    pub fn written(&self, t: f64) -> bool {
+        #[allow(clippy::cast_precision_loss)]
+        let lead = ASKED.len() as f64 * ASK_EVERY + WRITING;
+        self.since.is_some() && self.elapsed(t) >= lead
+    }
+
+    /// How many proofs are on the screen at page time `t`: none until
+    /// the program is written, then one by one.
     #[must_use]
     pub fn shown(&self, t: f64) -> usize {
-        let Some(since) = self.since else { return 0 };
+        if !self.written(t) {
+            return 0;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let lead = ASKED.len() as f64 * ASK_EVERY + WRITING;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n = ((t - since).max(0.0) / REVEAL) as usize;
+        let n = ((self.elapsed(t) - lead) / REVEAL) as usize;
         n.min(self.proofs.len())
     }
 
@@ -335,7 +423,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, f: &mut Front) -> Option<Act> 
                     ui.add_space(18.0);
                     if ui.available_width() >= STACK_BELOW {
                         ui.columns(3, |c| {
-                            card(&mut c[0], &t, |ui| asked(ui, chrome, &t));
+                            card(&mut c[0], &t, |ui| asked(ui, chrome, &t, f, now));
                             card(&mut c[1], &t, |ui| machine(ui, chrome, &t, f, now));
                             card(&mut c[2], &t, |ui| proofs(ui, chrome, &t, f, now));
                         });
@@ -345,7 +433,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, f: &mut Front) -> Option<Act> 
                         ui.add_space(14.0);
                         card(ui, &t, |ui| proofs(ui, chrome, &t, f, now));
                         ui.add_space(14.0);
-                        card(ui, &t, |ui| asked(ui, chrome, &t));
+                        card(ui, &t, |ui| asked(ui, chrome, &t, f, now));
                     }
                     ui.add_space(22.0);
                     if foot(ui, chrome, &t) {
@@ -405,7 +493,7 @@ fn head(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) -> bool
     ui.add(
         egui::Label::new(
             RichText::new(
-                "This tank's program answers the four requirements below. Each proof is a test that breaks something on the machine and checks the program keeps it safe. Break it yourself with the buttons under the tank.",
+                "The Agent wrote this tank's program from the request below. Each proof is a test that breaks something on the machine and checks the program keeps it safe. Break it yourself with the buttons under the tank.",
             )
             .color(t.muted)
             .size(BODY),
@@ -421,10 +509,31 @@ fn heading(ui: &mut egui::Ui, t: &crate::theme::Theme, text: &str) {
     ui.add_space(8.0);
 }
 
-/// What was asked, in the engineer's words, and the program behind a fold.
-fn asked(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) {
-    heading(ui, t, "What was asked");
-    for (k, line) in ASKED.iter().enumerate() {
+/// What the Agent was asked, in the engineer's words: the I/O by name,
+/// then the request, its lines coming one by one on the first run; then
+/// the program being written, and once it is, who wrote it and when, with
+/// the program behind a fold.
+fn asked(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &Front, now: f64) {
+    heading(ui, t, "What the Agent was asked");
+    let names: Vec<&str> = IO.iter().map(|(n, _)| *n).collect();
+    let r = ui
+        .add(
+            egui::Label::new(
+                RichText::new(format!("The I/O, named first: {}.", names.join(", ")))
+                    .color(t.muted)
+                    .size(SMALL),
+            )
+            .wrap(),
+        )
+        .tip(
+            IO.iter()
+                .map(|(n, what)| format!("{n}: {what}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    chrome.hit("front io", r.rect);
+    ui.add_space(8.0);
+    for (k, line) in ASKED.iter().enumerate().take(f.asked_shown(now)) {
         ui.horizontal_top(|ui| {
             ui.label(RichText::new(format!("{}.", k + 1)).color(t.muted).size(BODY));
             let r = ui.add(egui::Label::new(RichText::new(*line).color(t.fg).size(BODY)).wrap());
@@ -433,16 +542,51 @@ fn asked(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) {
         ui.add_space(6.0);
     }
     ui.add_space(8.0);
+    let lines = MAIN.lines().count();
+    if let Some(part) = f.writing(now) {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let so_far = (part * lines as f64) as usize;
+            ui.label(
+                RichText::new(format!(
+                    "The Agent is writing the program: line {so_far} of {lines}"
+                ))
+                .color(t.muted)
+                .size(BODY),
+            );
+        });
+        return;
+    }
+    if !f.written(now) {
+        return;
+    }
+    let r = ui.add(
+        egui::Label::new(
+            RichText::new(format!(
+                "The Agent wrote the program from this on {}, in {} requests and {} seconds. It is shown as written.",
+                recorded("on"),
+                recorded("requests"),
+                recorded("seconds")
+            ))
+            .color(t.muted)
+            .size(SMALL),
+        )
+        .wrap(),
+    );
+    chrome.hit("front recorded", r.rect);
+    ui.add_space(4.0);
     let fold = egui::CollapsingHeader::new(RichText::new("The program").color(t.fg).size(BODY))
         .id_salt("front program")
         .show(ui, |ui| {
             ui.label(
-                RichText::new(format!(
-                    "{} lines of Structured Text (IEC 61131-3).",
-                    MAIN.lines().count()
-                ))
-                .color(t.muted)
-                .size(SMALL),
+                RichText::new(format!("{lines} lines of Structured Text (IEC 61131-3)."))
+                    .color(t.muted)
+                    .size(SMALL),
             );
             egui::ScrollArea::both()
                 .id_salt("front program text")
@@ -670,6 +814,17 @@ fn paint_tank(p: &egui::Painter, area: Rect, t: &crate::theme::Theme, f: &Front,
 /// The proofs, appearing one by one, then what they add up to.
 fn proofs(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &Front, now: f64) {
     heading(ui, t, "The proofs");
+    if !f.written(now) {
+        ui.add(
+            egui::Label::new(
+                RichText::new("The proofs run once the program is written.")
+                    .color(t.muted)
+                    .size(BODY),
+            )
+            .wrap(),
+        );
+        return;
+    }
     let shown = f.shown(now);
     for (k, row) in f.proofs.iter().take(shown).enumerate() {
         let passed = row.state == State::Passed;
