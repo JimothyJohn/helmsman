@@ -338,7 +338,11 @@ fn corpus() -> Vec<Case> {
              a0 := a[0]; a3 := a[3]; b0 := b[0]; f := p.first;",
         ),
         // VAR_OUTPUT on a function, bound with =>; an unbound output is
-        // dropped, the result is still the call's value.
+        // dropped, the result is still the call's value. The call that
+        // leaves them out names its inputs: ruSTy counts a positional
+        // call's arguments against every parameter and refuses
+        // `oracle_divmod(-17, 5)` (E032), which Helmsman accepts
+        // (tests/in_out.rs holds that form).
         case(
             "FUNCTION oracle_divmod : DINT
                VAR_INPUT a, b : DINT; END_VAR
@@ -358,7 +362,7 @@ fn corpus() -> Vec<Case> {
                 var("q3", "DINT"),
             ],
             "q1 := oracle_divmod(17, 5, rem => r1, ok => g1); q2 := oracle_divmod(a := 9, b := 0, rem => r2, ok => g2);
-             q3 := oracle_divmod(-17, 5);",
+             q3 := oracle_divmod(a := -17, b := 5);",
         ),
         // Standard functions.
         case(
