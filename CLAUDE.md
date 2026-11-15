@@ -120,7 +120,17 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   worktree is kept. Remove yours when its PR merges anyway.
 - **Services run from a locked, dedicated checkout, never from an agent's
   worktree.** Today there is one:
-  - Try box, `../helmsman-try` (locked), https :8081, state
+  - Try box, `../helmsman-try` (locked). **Off unless a task needs it**
+    (Nick, 2026-11-14: "I only want to try it when it's necessary, shut
+    it down if it's not"): while up it holds the E1213's one
+    EtherNet/IP connection and listens on :8081 on every interface.
+    Start: `launchctl enable gui/501/io.advin.helmsman-try`, then
+    `launchctl bootstrap gui/501
+    ~/Library/LaunchAgents/io.advin.helmsman-try.plist`. Stop when done:
+    `launchctl bootout gui/501/io.advin.helmsman-try`, then `launchctl
+    disable gui/501/io.advin.helmsman-try` (or it starts at the next
+    login). Don't rebuild or restart it to make a build "live".
+    https :8081, state
     `scratch/try-state` and the relay token in that checkout's scratch/
     (sign-in in .claude/handoff.md). Rebuild at the dev tip and restart
     with one command: `~/github/helmsman-try/scratch/16-rebuild.sh`
@@ -154,7 +164,7 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   board card: keep (merge it somewhere) or drop.
 - **The soft PLC runs on the Studio, not the Pi** (Nick, 2026-11-07).
   Every box you start, test against hardware or demo runs on this Mac
-  Studio (the try box is the standing one). The bench Pi
+  Studio (the try box, when it is up). The bench Pi
   (`nick@192.168.3.20`, `codesys-pi`) is out of the loop, its
   `helmsman-plc` service stopped and disabled, so no two platforms claim
   the same devices. Don't deploy to it, start it or point a device at it
