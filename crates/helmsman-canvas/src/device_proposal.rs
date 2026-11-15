@@ -53,7 +53,7 @@ const SUMMARY_H: f32 = 150.0;
 
 /// Text from the box for people to read: control and bidirectional
 /// characters (line breaks kept when `lines`) dropped, cut at `max`.
-fn clean(s: &str, max: usize, lines: bool) -> String {
+pub(crate) fn clean(s: &str, max: usize, lines: bool) -> String {
     s.chars()
         .filter(|c| {
             let bidi =

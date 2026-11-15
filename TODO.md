@@ -173,16 +173,6 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **The box half of the agent's device profile: propose, check, rename, save** — PROTOCOLS.md step 5. The relay half is merged (agent-relay #20, 2026-11-13, by the helmsman-devices-8d session): agent helmsman/v10 has the client tool `propose_device_profile {name, text, summary}`, and on the real Murrelektronik 55086 EDS and handbook every bit address it proposed matched the hand-made `.device` (it chose true lengths of 3 and 1 bytes against the hand-made 4 and 2, and said so). Left here: helmsman-agent executes `propose_device_profile` by running the text through `Profile::parse` and returns the parse errors or the channel list to the model; a box opts into v10 (`--relay-agent v10`); the Devices tab shows the proposed channels for the user to rename and saves `NAME.device` into the project; an upload route holds the EDS or manual the agent reads.
-  needs: nothing
-  notes: 2026-11-15: the box side and the Devices tab's half are in: the tab shows the proposal, renames and saves it into the open project (`device_proposal.rs`), with every refusal beside its cause. Left: the canvas has no way to hand the agent the vendor's file. Nothing in it calls `POST /api/dropins` (`chat` sends `{message, session}` only, without `dropins`), and the Agent tab's flow edits the program file, so "not in the device library yet" on a found device still offers only Advanced. Needs a decision: (a) a button on that row that picks the file (`web::pick_file`), posts it as a drop-in, and sends the agent a chat message with `dropins: [id]`; or (b) the same button giving the agent a link to the vendor's page for the relay's `fetch_document`. Then the saved profile has no way to become a device line from the tab (Scan's Add finds only library profiles).
-  result: a device the library does not know gets a profile the user checked, from its vendor's file, without a hand-written map
-  est: 2d
-  difficulty: med
-  id: device-profile-propose-box
-  asked: 2026-11-12
-  by: claude-session
-
 - [ ] **Publish a checked device profile to the library** — the second tool, on the relay (it holds the only token that can push): a pull request into helmsman-devices' `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`, opened from what the user checked on the Devices tab.
   needs: a fine-grained GitHub token held by the relay alone (Nick, 2026-11-13: only the relay can push), limited to pull requests on helmsman-devices and kept in Secrets Manager; you create it from a hand-off script that names the scopes. No box ever holds a GitHub credential
   result: the library grows by a pull request each time a user maps a new device

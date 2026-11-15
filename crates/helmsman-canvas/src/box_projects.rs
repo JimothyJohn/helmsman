@@ -147,6 +147,9 @@ pub enum PCall {
     ProposalAccept,
     /// `DELETE /api/device-profile/proposal`: throw it away.
     ProposalDiscard,
+    /// `POST /api/dropins`: the vendor's file for the agent
+    /// (answered by the Devices tab, `device_vendor.rs`).
+    VendorFile,
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -1828,6 +1831,7 @@ impl BoxProjects {
             | PCall::Proposal
             | PCall::ProposalAccept
             | PCall::ProposalDiscard
+            | PCall::VendorFile
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {

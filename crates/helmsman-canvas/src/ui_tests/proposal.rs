@@ -12,11 +12,11 @@ use crate::box_projects::{Buf, OpenProject, PCall, PReq};
 use crate::box_tests::{Bench, watch};
 use crate::review::{Answer, Session};
 
-const PROFILE: &str = "helmsman-device 1\nvendor Acme\nmodel Rio 8\nkind remote-io\n\
+pub(super) const PROFILE: &str = "helmsman-device 1\nvendor Acme\nmodel Rio 8\nkind remote-io\n\
 transport modbus-tcp unit=1\nin DI-00 bool modbus-tcp=di:0\nin TEMP-1 real unit=C modbus-tcp=ir:0:f32\n\
 out DO-00 bool safe=false modbus-tcp=coil:0\n";
 
-fn proposal(id: u64, name: &str, summary: &str) -> String {
+pub(super) fn proposal(id: u64, name: &str, summary: &str) -> String {
     json!({
         "id": id, "name": name, "summary": summary, "text": PROFILE, "at": 1, "by": "agent",
         "vendor": "Acme", "model": "Rio 8", "kind": "remote-io",
@@ -32,7 +32,7 @@ fn proposal(id: u64, name: &str, summary: &str) -> String {
     .to_string()
 }
 
-fn buf(text: &str) -> Buf {
+pub(super) fn buf(text: &str) -> Buf {
     Buf {
         text: text.into(),
         base: text.into(),
@@ -43,7 +43,7 @@ fn buf(text: &str) -> Buf {
 
 /// A box view signed in as `role`, a project open, the Devices tab shown;
 /// the box's first read of the proposal is on its way (not answered).
-fn open(role: &str) -> Harness {
+pub(super) fn open(role: &str) -> Harness {
     let bench = Bench::new();
     let (state, _) = watch(&bench);
     let mut h = Harness::new(App::boxed());
@@ -67,12 +67,12 @@ fn open(role: &str) -> Harness {
     h
 }
 
-fn sent(h: &mut Harness) -> Vec<PReq> {
+pub(super) fn sent(h: &mut Harness) -> Vec<PReq> {
     h.frame(vec![]);
     std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
 }
 
-fn answer(h: &mut Harness, call: PCall, status: u16, body: &str) {
+pub(super) fn answer(h: &mut Harness, call: PCall, status: u16, body: &str) {
     let ctx = h.ctx.clone();
     let a = Answer {
         status,

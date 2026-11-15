@@ -4034,3 +4034,146 @@ fn a_proposed_profile_is_shown_renamed_and_saved_into_the_open_project_on_a_real
         "kept, to save under another name"
     );
 }
+
+// ---- the vendor's file for the agent, on the Devices tab ----
+
+/// A found device the library lacks, on the tab of a real box.
+fn unknown_found() -> crate::devices::Found {
+    let mut f = crate::devices::Found::simulated_e1213(&helmsman_project::iomap::MapText::default());
+    f.address = "192.168.3.77".into();
+    f.library = None;
+    f.mapped = None;
+    f.simulated = false;
+    f
+}
+
+#[test]
+fn a_vendor_file_becomes_a_dropin_on_a_real_box_and_the_chat_carries_its_id() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line3", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.press("pane devices");
+    h.wait(0.3);
+    h.bv().devices_ui.found = vec![unknown_found()];
+    h.bv().devices_ui.scan = crate::devices::Scan::Done;
+    h.frame(vec![]);
+    assert_eq!(
+        b.json("/api/dropins"),
+        serde_json::json!([]),
+        "the box holds none"
+    );
+
+    // The button opens the picker; the file arrives as the browser reads it.
+    h.press("vendor file 192.168.3.77");
+    assert!(h.bv().devices_ui.vendor.is_picking());
+    let eds = "$ EZ-EDS\n[File]\n  DescText = \"Acme Rio\";\n[Device]\n  ProdName = \"Rio\";\n";
+    h.bv()
+        .devices_ui
+        .vendor
+        .picked("../Acme Rio\n.eds", eds.as_bytes().to_vec());
+    // Nothing goes to the agent until the box has kept the file.
+    assert!(h.bv().chat_sent.is_empty(), "the agent was not asked");
+    pump_until(&b, &jar, &mut h, "the chat request", |h| {
+        !h.bv().chat_sent.is_empty()
+    });
+
+    // The box holds the file, read as prose, under the safe name.
+    let list: Json = b.json("/api/dropins");
+    assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+    let id = list[0]["id"].as_u64().unwrap();
+    assert_eq!(list[0]["name"], "Acme_Rio_.eds");
+    assert_eq!(list[0]["kind"], "prose");
+    let chunk: Json = b.json(&format!("/api/dropins/{id}?chunk=0"));
+    assert!(chunk.to_string().contains("Acme Rio"), "{chunk}");
+
+    // The request to the agent is what the box's chat route reads, and
+    // names that drop-in.
+    let reqs = std::mem::take(&mut h.bv().chat_sent);
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert_eq!(reqs[0].url, "/api/chat");
+    let ask: helmsman_plc::api::chat::Ask = serde_json::from_str(&reqs[0].body).expect("the box reads it");
+    assert_eq!(ask.dropins, Some(vec![id]));
+    assert_eq!(ask.session, None);
+    assert!(
+        ask.message.contains(&format!("drop-in {id} (a text file)"))
+            && ask.message.contains("propose_device_profile"),
+        "{}",
+        ask.message
+    );
+    assert!(
+        !ask.message.contains("Acme"),
+        "the file's name stays out of the message"
+    );
+    assert!(
+        h.app.chrome.rect("vendor note 192.168.3.77").is_some(),
+        "the note beside the button"
+    );
+}
+
+#[test]
+fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line3", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.press("pane devices");
+    h.wait(0.3);
+    h.bv().devices_ui.found = vec![unknown_found()];
+    h.bv().devices_ui.scan = crate::devices::Scan::Done;
+    h.frame(vec![]);
+    // Bytes that are not UTF-8: the box says so (422).
+    h.press("vendor file 192.168.3.77");
+    h.bv()
+        .devices_ui
+        .vendor
+        .picked("latin1.eds", vec![b'a', 0xE9, b'b']);
+    pump_until(&b, &jar, &mut h, "the refusal", |h| {
+        h.bv()
+            .devices_ui
+            .vendor
+            .note
+            .as_ref()
+            .is_some_and(|n| n.text.contains("could not read"))
+    });
+    let note = h.bv().devices_ui.vendor.note.clone().unwrap().text;
+    assert_eq!(
+        note,
+        "The box could not read latin1.eds: the document is not UTF-8 text. Nothing was sent to the agent."
+    );
+    // Control characters inside: 422 as well.
+    h.press("vendor file 192.168.3.77");
+    h.bv().devices_ui.vendor.picked("ctl.eds", b"a\x07b".to_vec());
+    pump_until(&b, &jar, &mut h, "the second refusal", |h| {
+        h.bv()
+            .devices_ui
+            .vendor
+            .note
+            .as_ref()
+            .is_some_and(|n| n.text.contains("ctl.eds"))
+            && h.bv().devices_ui.vendor.offer().is_ok()
+    });
+    assert!(h.bv().chat_sent.is_empty(), "nothing was sent to the agent");
+    assert_eq!(
+        b.json("/api/dropins"),
+        serde_json::json!([]),
+        "the box kept neither"
+    );
+    // A signed-out page: the box answers 401, in words.
+    jar.set(None);
+    h.press("vendor file 192.168.3.77");
+    h.bv().devices_ui.vendor.picked("ok.eds", b"fine".to_vec());
+    pump_until(&b, &jar, &mut h, "the 401", |h| {
+        h.bv()
+            .devices_ui
+            .vendor
+            .note
+            .as_ref()
+            .is_some_and(|n| n.text.contains("no longer knows this page's session"))
+    });
+    assert!(h.bv().chat_sent.is_empty(), "the agent was not asked");
+}

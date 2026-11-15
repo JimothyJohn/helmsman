@@ -6769,4 +6769,5 @@ mod io_names;
 mod proposal;
 mod shell;
 mod sim_popup;
+mod vendor;
 mod wired;

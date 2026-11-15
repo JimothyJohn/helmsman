@@ -102,7 +102,27 @@ this; change it here first when a decision changes.
   `device NAME device:PROFILE IDENTITY` with the identity the scan saw,
   and one `ch:` signal per channel named `NAME_channel`. No protocol,
   address, byte order or cycle time is asked. A device the library does
-  not know says so and offers Advanced. **A profile the agent proposed**
+  not know says so and offers Advanced, and, on a box with an agent, a
+  button **Build from vendor file…** (`device_vendor.rs`, Nick,
+  2026-11-15). It picks the vendor's file (an EDS, an IODD, a PDF manual
+  or a text file: text up to 1 MB, a PDF up to 2 MB), posts it to the box
+  as a drop-in (`POST /api/dropins`, the file name cut to `A-Z a-z 0-9 . _ -`
+  and 100 characters, read as prose or as a PDF) and, once the box has
+  answered 201 with the drop-in's id, sends the agent one chat message
+  asking for a device profile with `dropins: [id]` (`POST /api/chat`, a
+  new conversation). The message names the drop-in by its id and kind and
+  the device by its numbers and address, never by the file's name or the
+  name the device sent. Every refusal is said in words beside the button
+  (too large, wrong type, not UTF-8, 401, 403, no answer) and says that
+  nothing was sent to the agent; the button is offered to an engineer or
+  integrator on a box whose agent can be asked, and everyone else reads
+  why it is not. While the agent works the note says so, and when its turn
+  ends the note carries what it said or why it failed. The profile it
+  proposes appears in the section below. After that profile is saved, the
+  found device's row offers **Add** with it (the project's own file, its
+  channels listed in the same form as a library device's); the match is
+  the device the file was sent for, kept for the page's session.
+  **A profile the agent proposed**
   (`device_proposal.rs`): while the box holds one (`GET
   /api/device-profile/proposal`, read every 3 s while someone is signed in
   and the tab is open), a section at the top of the tab shows the device's

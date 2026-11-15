@@ -342,7 +342,18 @@ impl BoxAgent {
     ///
     /// # Errors
     /// [`Self::refusal`].
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn send(&mut self, message: &str, fresh: bool) -> Result<Request, String> {
+        self.send_with(message, &[], fresh)
+    }
+
+    /// [`Self::send`] with the box's drop-ins `dropins` attached
+    /// (`POST /api/chat` `dropins`): the key is in the body only when
+    /// there are some.
+    ///
+    /// # Errors
+    /// [`Self::refusal`].
+    pub fn send_with(&mut self, message: &str, dropins: &[u64], fresh: bool) -> Result<Request, String> {
         if let Some(why) = self.refusal(message) {
             return Err(why);
         }
@@ -356,10 +367,14 @@ impl BoxAgent {
             self.turns.remove(0);
         }
         self.turns.push(Turn::new(message.clone()));
+        let mut body = json!({ "message": message, "session": self.session });
+        if !dropins.is_empty() {
+            body["dropins"] = json!(dropins);
+        }
         Ok(Request {
             seq: self.seq,
             url: CHAT_URL.to_string(),
-            body: json!({ "message": message, "session": self.session }).to_string(),
+            body: body.to_string(),
         })
     }
 
