@@ -130,6 +130,10 @@ pub enum PCall {
     /// `GET /api/devices/library?vendor=&product=`: a found device's
     /// profile for the quick form (answered by the view, not here).
     Library,
+    /// `GET /api/devices/library?wired=VENDOR/MODEL`: what the library
+    /// knows of the sensor or actuator a point is wired to (answered by
+    /// the view, not here).
+    Wired(String),
     /// A device's own configuration (`/api/devices/{id}/config...`),
     /// answered by the Devices tab (`device_config.rs`).
     Config(String, crate::device_config::ConfigOp),
@@ -484,6 +488,16 @@ impl BoxProjects {
         self.queue.push(PReq::get(
             PCall::Library,
             format!("/api/devices/library?vendor={vendor}&product={product}"),
+        ));
+    }
+
+    /// Asks the box what the library knows of the sensor or actuator a
+    /// map line names with `wired=` (the Devices tab's line under a
+    /// point). The caller has held `wired` to a library folder.
+    pub fn wired(&mut self, wired: &str) {
+        self.queue.push(PReq::get(
+            PCall::Wired(wired.to_string()),
+            format!("/api/devices/library?wired={wired}"),
         ));
     }
 
@@ -1781,6 +1795,7 @@ impl BoxProjects {
             | PCall::Trend
             | PCall::Discover
             | PCall::Library
+            | PCall::Wired(_)
             | PCall::Config(..)
             | PCall::Desk
             | PCall::SaveDesk => {}

@@ -5205,6 +5205,89 @@ mod boxed {
         assert!(!h.has("devices adapter"), "a 404: no line");
     }
 
+    /// TODO.md `iodd-metadata`: a point whose map line says `wired=` gets
+    /// a line under it with what the device library knows the sensor to
+    /// be. The box is asked once a record; before the answer the line
+    /// names the folder; the line wraps inside the pane at its default
+    /// width and neither panel grows.
+    #[test]
+    fn the_devices_tab_says_what_is_wired_to_a_point_inside_the_default_width() {
+        use crate::box_projects::PCall;
+        let bench = Bench::new();
+        let (mut state, _) = watch(&bench);
+        state.io_map = Some(
+            "device rio modbus-tcp 10.0.0.57:502 unit=1\nin part bool rio di:4 wired=ifm/if6123\n\
+             in near bool rio di:5 wired=ifm/if6123\nin ready bool box di:0\n"
+                .into(),
+        );
+        let mut h = Harness::new(App::boxed());
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(
+            h.has("wired part") && h.has("wired near"),
+            "a line under each wired point"
+        );
+        assert!(!h.has("wired ready"), "nothing under a point with nothing wired");
+        // One lookup for the one record, although two points name it.
+        let asked: Vec<String> = std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
+            .into_iter()
+            .filter_map(|r| match r.call {
+                PCall::Wired(w) => Some(format!("{w} {}", r.url)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, ["ifm/if6123 /api/devices/library?wired=ifm/if6123"]);
+        let before = h.rect("wired part");
+        // The answer: the longest model text the library has today.
+        h.app.boxv.as_mut().unwrap().devices_ui.wired_answer(
+            "ifm/if6123",
+            200,
+            r#"{"matches": [{"device": {"vendor": "ifm electronic gmbh",
+                "model": "IF6123, IF6124, IG6615, IG6616, II5973, II5974, IM5172, IM5173", "kind": "sensor",
+                "draft": true, "signals": [{"dir": "in", "name": "SSC1", "on": "active", "off": "inactive"}],
+                "factory_settings": [{"name": "P-n", "value": "PnP"}]}}]}"#,
+        );
+        h.wait(0.2);
+        let line = h.rect("wired part");
+        let pane = h.rect("left");
+        assert!(
+            line.right() <= crate::editor::LEFT_W,
+            "the line {line:?} stays inside the pane's {} pt default width",
+            crate::editor::LEFT_W
+        );
+        assert!(
+            line.height() > before.height(),
+            "the long name wraps: {before:?} -> {line:?}"
+        );
+        assert!(
+            (0.0..=8.0).contains(&(pane.right() - left.right())),
+            "the left pane grew {} pt",
+            pane.right() - left.right()
+        );
+        assert!(
+            (0.0..=8.0).contains(&(right.left() - h.rect("right").left())),
+            "the right panel grew"
+        );
+        // Nothing more is asked once the answer is in.
+        h.wait(0.2);
+        assert!(
+            !h.app
+                .boxv
+                .as_ref()
+                .unwrap()
+                .psent
+                .iter()
+                .any(|r| matches!(r.call, PCall::Wired(_))),
+            "asked again"
+        );
+    }
+
     /// On a box, Scan posts to `/api/devices/discover` and the answer's
     /// devices show with what the box said: mapped or not, the library's
     /// match; a refusal shows as text, and a hostile body lists nothing.

@@ -398,7 +398,11 @@ scan; the scheduler bounds how often.
   The box serves a record's brief from `GET
   /api/devices/library?wired=VENDOR/MODEL` (and beside a `q=` match), and
   `list_devices` brings it for every wired point as `wired_devices`.
-  Nothing shows it in the canvas yet (TODO.md `iodd-metadata`);
+  On a box the canvas's Devices tab puts a line under a wired point
+  with the vendor, the model and the kind, the rest in its tooltip
+  (`devices.rs`, `WiredBrief`; one lookup a record). The playground,
+  which has no box, names the folder. A picker that writes `wired=` is
+  not built (TODO.md `iodd-metadata`);
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
   screen TILE` an output no device takes (the retired floor screen's
   tiles, below). Older maps read unchanged;
