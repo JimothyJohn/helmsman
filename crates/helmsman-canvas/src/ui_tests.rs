@@ -6764,6 +6764,7 @@ mod devconf {
     }
 }
 
+mod diagram_edit;
 mod front;
 mod io_names;
 mod proposal;

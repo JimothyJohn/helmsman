@@ -2626,9 +2626,11 @@ tokio ever reach the box build.
 
 ## The live ST view (`st-graph-view`, built)
 
-The operator's read-only view of what a module's code is doing
-(`canvas-edit-scope`: ST is the source of truth, changes go through the
-agent as ST; nothing here writes ST back).
+The operator's view of what a module's code is doing
+(`canvas-edit-scope`: ST is the source of truth). The view itself only
+reads. In the simulation the diagram also writes ST back through checked
+splices (`helmsman_diagram::edit`, below the lowering): see "Editing on the
+canvas" at the end of this section.
 
 - **Lowering** (`helmsman_diagram::lower`, from `helmsman_iec::ast`, the
   parser's tree exposed read-only). Per statement: reads and literals on the
@@ -2732,6 +2734,32 @@ agent as ST; nothing here writes ST back).
   (contract in `slow_link_tests.rs`: the Monitor against the real API
   through an in-process proxy with a site VPN's 300 ms round trip,
   1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
+
+- **Editing on the canvas** (`diagram-edit-canvas`, the simulation only;
+  `diagram_edit.rs`, tests in `ui_tests/diagram_edit.rs`). `Viewer::canvas`
+  only notices a right click (`hit_at`: a pin within reach of an input
+  port, else the nearest block) or a double click on a constant, and
+  hands it up as a `Gesture`; with `Viewer::edit_gate` off it leaves a
+  note of why instead (a viewer starts off with `BOX_REASON`: a box never
+  turns it on until `diagram-edit-box`). `PlaygroundView` sets the gate
+  each frame (`edit_gate`: the viewer's source equals the build source,
+  and the project builds from exactly one `.st` file, so the engine's byte
+  offsets are the buffer's) and draws `EditUi`, whose menu lists only
+  what `edit::apply` accepts (each entry is dry-run when the menu opens).
+  A choice is an `Edit`; `PlaygroundView::diagram_edit` runs it through
+  `edit::apply` against the viewer's own source and module, pushes the old
+  text into the file's `TextEditState` undoer (`editor::push_undo`, its
+  own entry), writes the patched text to the file, and runs the Deploy
+  path without the formatter (`deploy_as(false)`, so the file holds the
+  splice and nothing else; the same requirement-test and compile checks
+  refuse it as for a typed edit, leaving the edit in the code). The
+  rebuilt `Viewer` keeps the old one's cameras, scope and pick, and
+  `Layers::carry` re-keys the dragged positions of the blocks whose text
+  changed (`Viewer::edited_blocks`: same shape pairs blocks by place,
+  otherwise by `diff::modules`). `Chrome::flash` highlights the patch and
+  sends the editor to its line for 1.5 s. Undo and Redo of a gesture
+  redeploy while the diagram was in sync before them (`Follow::deployed`,
+  cleared by any typing or Deploy).
 
 ## Explain mode (`explain-mode`, built)
 

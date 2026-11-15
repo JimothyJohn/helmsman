@@ -52,6 +52,7 @@ mod device_form_ui;
 mod device_proposal;
 mod device_vendor;
 mod devices;
+mod diagram_edit;
 mod diff_ui;
 mod editor;
 mod find;

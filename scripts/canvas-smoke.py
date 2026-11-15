@@ -87,6 +87,11 @@ BOTTOM_TABS = (330, 575, 300, 50)
 # The Messages tab's rows, under its filters (what a deploy says is there
 # since 2026-11-11, not in a line under the header).
 MESSAGES = (330, 640, 700, 200)
+# The diagram, and the rows of the menu a right click at (501, 400) opens:
+# the first entry, and the first operator under "Back".
+DIAGRAM = (330, 60, 1000, 500)
+DIAGRAM_MENU_FIRST = (600, 422)
+DIAGRAM_OP_FIRST = (600, 470)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt), and the bottom panel's Trend and
 # Messages.
@@ -201,6 +206,11 @@ def playground(ctx, base, out):
     r.step("deployed", lambda: r.key(f"Shift+{MOD}+Enter"), MESSAGES, 1200)
     r.click(*TAB_TREND); r.wait(400)
     r.click(989, 268); r.wait(1000); r.shot("diagram-why")
+    # A diagram edit (diagram-edit-canvas): right-click the GREEN row's AND
+    # block, open Change operator, make it an OR. The code follows.
+    r.step("diagram-menu", lambda: r.click(501, 400, "right"), DIAGRAM)
+    r.step("diagram-operators", lambda: r.click(*DIAGRAM_MENU_FIRST), DIAGRAM)
+    r.step("diagram-edited", lambda: r.click(*DIAGRAM_OP_FIRST), DIAGRAM, 1500)
     r.step("trend-hidden", lambda: r.key("Alt+Shift+Digit2"), BOTTOM_TABS)
     r.key("Alt+Shift+Digit2"); r.wait(400)
     # Alt+Shift+5 docks the Code tab on the right, the I/O shown on the

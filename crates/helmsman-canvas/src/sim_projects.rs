@@ -492,6 +492,15 @@ impl SimProjects {
             .filter(|(n, _)| file_name(n) == Some(FileKind::St) && !helmsman_iec::spec::is_test(n))
     }
 
+    /// The open project's one program file, when the build is exactly one
+    /// file (its text is then the build's source byte for byte).
+    #[must_use]
+    pub fn sole_built_file(&self) -> Option<String> {
+        let mut it = self.built_files();
+        let one = it.next()?;
+        it.next().is_none().then(|| one.0.clone())
+    }
+
     /// The open project's build: its `.st` files (tests aside), one as it
     /// is, several each under a `(* file NAME *)` line.
     #[must_use]
