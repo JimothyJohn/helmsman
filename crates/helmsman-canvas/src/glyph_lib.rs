@@ -1,7 +1,7 @@
 //! The glyph library (Nick, 2026-11-12: the app should speak the way
 //! people do, in pictures before words): a picture for each common thing
 //! in a plant and a program, drawn beside every point in the I/O tab and
-//! the Devices list, and later on the diagram and in a palette.
+//! the Devices list, and later on the diagram.
 //!
 //! Each glyph is an SVG in `assets/glyphs/` that the build step rasterizes
 //! into an alpha mask (`build.rs`; `GLYPHS` below is its list), so the

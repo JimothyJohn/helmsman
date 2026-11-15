@@ -33,8 +33,6 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
-    /// The glyph library's pieces to drag onto the diagram (`palette`).
-    Palette,
     Claude,
 }
 
@@ -43,7 +41,6 @@ impl Tab {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Palette => "Palette",
             Self::Claude => "Agent",
         }
     }
@@ -53,9 +50,6 @@ impl Tab {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Io => "I/O: the program's inputs and outputs with their live values.",
-            Self::Palette => {
-                "Palette: controls and program pieces. Drag one onto the diagram and the Agent adds it."
-            }
             Self::Claude => "Agent: ask the agent about the program, or have it propose a change.",
         }
     }
@@ -107,7 +101,9 @@ impl Bottom {
 /// it in a right pane (and back), and Alt Shift 5 sends the left pane's
 /// tab there and shows the next one on the left. Earlier: Code | Files
 /// (2026-11-01), Devices (2026-11-02), History (2026-11-13) on the left,
-/// I/O | Palette | Agent on the right.
+/// I/O | Agent on the right; a Palette of pieces to drag onto the
+/// diagram from 2026-11-12 to 2026-11-14 (Nick: it goes against the
+/// agent-first design; it may come back for fine tuning).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Pane {
     #[default]
@@ -121,30 +117,26 @@ pub enum Pane {
     Files,
     /// The open project's revisions, to step through (Nick, 2026-11-13).
     History,
-    /// The glyph library's pieces to drag onto the diagram (`palette`).
-    Palette,
 }
 
 impl Pane {
     /// Every tab, in the left pane's first order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 6] = [
         Self::Claude,
         Self::Code,
         Self::Io,
         Self::Devices,
         Self::Files,
         Self::History,
-        Self::Palette,
     ];
 
-    /// The view's own tab this is, for the three a view draws through
+    /// The view's own tab this is, for the two a view draws through
     /// [`Body::tab`].
     #[must_use]
     pub const fn tab(self) -> Option<Tab> {
         match self {
             Self::Claude => Some(Tab::Claude),
             Self::Io => Some(Tab::Io),
-            Self::Palette => Some(Tab::Palette),
             Self::Code | Self::Devices | Self::Files | Self::History => None,
         }
     }
@@ -161,7 +153,7 @@ impl Pane {
             Self::History => {
                 "History: every saved version of the open project, newest at the top. Click one, or step with the arrows, to run it."
             }
-            Self::Claude | Self::Io | Self::Palette => match self.tab() {
+            Self::Claude | Self::Io => match self.tab() {
                 Some(t) => t.tip(),
                 None => "",
             },
@@ -177,7 +169,6 @@ impl Pane {
             Self::History => Icon::History,
             Self::Claude => Icon::Agent,
             Self::Io => Icon::Io,
-            Self::Palette => Icon::Palette,
         }
     }
 
@@ -190,7 +181,6 @@ impl Pane {
             Self::History => "history",
             Self::Claude => "claude",
             Self::Io => "io",
-            Self::Palette => "palette",
         }
     }
 
@@ -809,9 +799,6 @@ pub trait Body {
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome);
-    /// Asks the Agent `text` as if it had been typed in the Agent tab
-    /// and sent (a palette piece clicked or dropped).
-    fn ask_agent(&mut self, text: &str, ctx: &egui::Context);
     /// The diagram with its breadcrumbs; a block click calls
     /// [`Chrome::goto`].
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
@@ -896,14 +883,7 @@ fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
 pub const DOCK_ZONE: f32 = 96.0;
 
 /// A tab's content in whichever pane it is docked.
-fn pane_body(
-    ui: &mut egui::Ui,
-    p: Pane,
-    body: &mut dyn Body,
-    chrome: &mut Chrome,
-    hits: &mut Vec<(String, Rect)>,
-    asked: &mut Option<crate::palette::Item>,
-) {
+fn pane_body(ui: &mut egui::Ui, p: Pane, body: &mut dyn Body, chrome: &mut Chrome) {
     let scroll = |salt: &str| egui::ScrollArea::vertical().id_salt(salt);
     match p {
         Pane::Files => {
@@ -916,7 +896,6 @@ fn pane_body(
         Pane::History => {
             scroll("ed-history-scroll").show(ui, |ui| body.history(ui, chrome));
         }
-        Pane::Palette => *asked = crate::palette::show(ui, hits),
         Pane::Claude => body.tab(ui, Tab::Claude, chrome),
         Pane::Io => body.tab(ui, Tab::Io, chrome),
     }
@@ -932,7 +911,6 @@ fn side_pane(
     body: &mut dyn Body,
     chrome: &mut Chrome,
     hits: &mut Vec<(String, Rect)>,
-    asked: &mut Option<crate::palette::Item>,
 ) -> Rect {
     let (mut open, mut on) = if right {
         (chrome.right, chrome.side)
@@ -1015,7 +993,7 @@ fn side_pane(
                 }
             });
             ui.separator();
-            pane_body(ui, on, body, chrome, hits, asked);
+            pane_body(ui, on, body, chrome);
             t
         } else {
             let strip_tabs: Vec<StripTab> = tabs
@@ -1120,8 +1098,6 @@ fn dock_drop(ui: &egui::Ui, chrome: &mut Chrome, left: Option<Rect>, right: Opti
 /// One frame of the Editor.
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut hits = Vec::new();
-    // A palette piece clicked or dropped on the diagram: the Agent's.
-    let mut asked: Option<crate::palette::Item> = None;
     let have = body.tabs();
     let has = |p: &Pane| p.tab().is_none_or(|t| have.contains(&t));
     let lefts: Vec<Pane> = chrome.lefts.iter().copied().filter(has).collect();
@@ -1136,9 +1112,8 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     {
         chrome.side = p;
     }
-    let left = (!lefts.is_empty()).then(|| side_pane(ui, false, &lefts, body, chrome, &mut hits, &mut asked));
-    let right =
-        (!rights.is_empty()).then(|| side_pane(ui, true, &rights, body, chrome, &mut hits, &mut asked));
+    let left = (!lefts.is_empty()).then(|| side_pane(ui, false, &lefts, body, chrome, &mut hits));
+    let right = (!rights.is_empty()).then(|| side_pane(ui, true, &rights, body, chrome, &mut hits));
     chrome.hits.extend(hits);
     dock_drop(ui, chrome, left, right);
 
@@ -1207,10 +1182,6 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         chrome.diagram = ui.available_rect_before_wrap();
         body.diagram(ui, chrome);
     });
-    if let Some(item) = asked.or_else(|| crate::palette::dropped(ui.ctx(), chrome.diagram)) {
-        chrome.show(Pane::Claude);
-        body.ask_agent(item.ask, ui.ctx());
-    }
 }
 
 /// The ST, with line numbers, errors marked (`(line, column)`), warnings
