@@ -482,16 +482,6 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **VAR_IN_OUT and VAR_OUTPUT on FUNCTION** — the two cheap "yes" rows of the §4 table. VAR_IN_OUT on a FUNCTION_BLOCK passes a struct or array by reference inside one module (the standard way every library takes a buffer); a FUNCTION gets VAR_OUTPUT beside its return value. Oracle cases in tests/oracle.rs (ruSTy accepts both), property tests, the no_std build, the playground SYSTEM prompt and a new relay profile id listing them. Refuse anything that would alias across modules (the isolation claim).
-  result: imported FB libraries and agent-written helpers stop failing on the most common refusal
-  est: 2d
-  difficulty: med
-  depends: st-corpus
-  id: st-var-in-out
-  asked: 2026-11-08
-  by: claude-session
-  status: ready
-
 - [ ] **VAR_GLOBAL inside one module** — decided (Nick, 2026-11-08: `st-dialect-line`): VAR_GLOBAL is accepted at CONFIGURATION / RESOURCE scope inside one module and refused across modules, with a message that says signals are how modules talk. Imported CODESYS and Beremiz code uses it everywhere; the corpus will show how often. Oracle cases, property tests, the PLCopen importer's lowering of global variable lists, a relay profile id.
   result: a CODESYS or Beremiz project with globals imports into one module unchanged
   est: 1d
@@ -617,17 +607,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: scl-import
   asked: 2026-11-08
   by: claude-session
-
-- [ ] **Diagram edits 3: rewire, FB arguments, delete, rename** — Rewire (a pin to a variable, a constant or an earlier write), SetFbArg (`PT := T#5s`), DeleteStmt (the whole statement by its range), Rename (reuses `rename_ident`).
-  result: V1's full set of logic edits from the diagram
-  notes: refusals, each in plain words: type mismatch (the compiled program's types, as the NOT bubble uses), a source not yet written at that point, library POUs (`system`), a diagram whose source no longer matches the buffer (hash), a keyword as a name. `rename_ident`'s `ident()` accepts keywords today (`IF` passes), so refuse that up front.
-  est: 1d
-  difficulty: med
-  depends: diagram-edit-core
-  id: diagram-edit-rewire
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
 
 - [ ] **Diagram edits 4: editing on the canvas, simulation** — st_view.rs gestures: right-click a block or pin for Change operator ▸, Negate input, Connect to… (a searchable variable list, works on touch), Edit value…, Rename…, Delete statement; double-click a constant to edit it in place. Commit: push the old text into the same `TextEditState` undoer the editor uses (`add_undo`, its own entry), so Ctrl+Z undoes a diagram edit like typing; mark dirty; scroll the ST to the patch and highlight it about 1.5 s; rebuild the `Viewer` keeping the camera and the picked block.
   result: in the playground and browser projects an engineer changes logic on the diagram and the code follows
