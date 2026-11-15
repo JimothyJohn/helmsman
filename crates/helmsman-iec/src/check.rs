@@ -2825,6 +2825,46 @@ impl<'a> Ck<'a> {
         }))
     }
 
+    /// The variable a FOR counts in: where it is, its type, and that type
+    /// as the integer it must be. A POU's own variable or a module global
+    /// it may write.
+    fn for_var(&mut self, pos: Pos, var: &str, sc: &Scope) -> O<(Place, Type, Ty)> {
+        let Some((v, global)) = self.find_var(sc, var) else {
+            if !self.was_dropped(sc.pou, var) {
+                self.err(pos, format!("undeclared variable {var}"));
+            }
+            return None;
+        };
+        let Type::Elem(ty) = v.ty else {
+            return self.for_var_refused(pos, var, v.ty);
+        };
+        if !ty.is_int() || v.constant || v.loc.is_some() {
+            return self.for_var_refused(pos, var, v.ty);
+        }
+        if sc.read_only.contains(var) {
+            self.err(
+                pos,
+                format!("{var} is declared VAR_EXTERNAL CONSTANT in this POU, which can only read it"),
+            );
+            return None;
+        }
+        let place = if global {
+            Place::global(v.off)
+        } else {
+            Place::frame(v.off)
+        };
+        Some((place, v.ty, ty))
+    }
+
+    fn for_var_refused<T>(&mut self, pos: Pos, var: &str, ty: Type) -> O<T> {
+        let n = self.type_name(ty);
+        self.err(
+            pos,
+            format!("FOR variable {var} must be a non-CONSTANT, non-located integer, found {n}"),
+        );
+        None
+    }
+
     fn stmt(&mut self, s: &Stmt, sc: &mut Scope) -> O<St> {
         let kind = match &s.kind {
             StmtKind::Empty => return None,
@@ -2855,49 +2895,18 @@ impl<'a> Ck<'a> {
                 by,
                 body,
             } => {
-                let Some((v, global)) = self.find_var(sc, var) else {
-                    if !self.was_dropped(sc.pou, var) {
-                        self.err(s.pos, format!("undeclared variable {var}"));
-                    }
-                    return None;
-                };
-                let ty = match v.ty {
-                    Type::Elem(t) if t.is_int() && !v.constant && v.loc.is_none() => t,
-                    _ => {
-                        let n = self.type_name(v.ty);
-                        self.err(
-                            s.pos,
-                            format!(
-                                "FOR variable {var} must be a non-CONSTANT, non-located integer, found {n}"
-                            ),
-                        );
-                        return None;
-                    }
-                };
-                let from = self.coerced(from, v.ty, sc);
-                let to = self.coerced(to, v.ty, sc);
+                let (place, vty, ty) = self.for_var(s.pos, var, sc)?;
+                let from = self.coerced(from, vty, sc);
+                let to = self.coerced(to, vty, sc);
                 let by = match by {
-                    Some(b) => self.coerced(b, v.ty, sc),
+                    Some(b) => self.coerced(b, vty, sc),
                     None => Some(Ex::Const(Value::Int(1))),
                 };
-                if sc.read_only.contains(var) {
-                    self.err(
-                        s.pos,
-                        format!(
-                            "{var} is declared VAR_EXTERNAL CONSTANT in this POU, which can only read it"
-                        ),
-                    );
-                    return None;
-                }
                 sc.loops += 1;
                 let body = self.block(body, sc);
                 sc.loops -= 1;
                 StKind::For {
-                    var: if global {
-                        Place::global(v.off)
-                    } else {
-                        Place::frame(v.off)
-                    },
+                    var: place,
                     ty,
                     from: from?,
                     to: to?,

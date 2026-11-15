@@ -924,9 +924,17 @@ fn a_bad_global_list_is_an_error_at_its_line() {
     let good = fixture("globals.xml");
     for (from, to, want) in [
         // An initial value that is not an expression.
-        ("<simpleValue value=\"17\"/>", "<simpleValue value=\"1 +\"/>", "expected an expression"),
+        (
+            "<simpleValue value=\"17\"/>",
+            "<simpleValue value=\"1 +\"/>",
+            "expected an expression",
+        ),
         // Two lists declare the same name.
-        ("<variable name=\"Hits\">", "<variable name=\"ResourceGlobal\">", "RESOURCEGLOBAL is declared twice"),
+        (
+            "<variable name=\"Hits\">",
+            "<variable name=\"ResourceGlobal\">",
+            "RESOURCEGLOBAL is declared twice",
+        ),
         // A type nothing declares.
         (
             "<variable name=\"Hits\"><type><DINT/></type>",

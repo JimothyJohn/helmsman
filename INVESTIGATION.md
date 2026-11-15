@@ -62,11 +62,12 @@ Read this first, so we don't propose things that are already built.
   FUNCTION_BLOCK, VAR / VAR_TEMP / VAR_INPUT / VAR_OUTPUT / VAR CONSTANT,
   STRUCT / enum / alias, ARRAY, the elementary types up to LREAL and TIME,
   located variables, the full statement set, the standard functions.
-- **Language not covered**: STRING / WSTRING, DATE / DT / TOD,
-  VAR_GLOBAL / VAR_EXTERNAL (the parser refuses them), pointers and
+- **Language not covered**: STRING / WSTRING, DATE / DT / TOD, pointers and
   references, and OOP (METHOD, INTERFACE, EXTENDS). VAR_IN_OUT (on a
   function block) and function outputs are covered since the
-  `st-var-in-out` card.
+  `st-var-in-out` card, and VAR_GLOBAL / VAR_EXTERNAL inside one module
+  since `st-var-global`; the rest of a CONFIGURATION (TASK, program
+  instances, VAR_ACCESS, VAR_CONFIG) is refused.
 - **Feedback loop**: the checker's errors, the requirement tests
   (`test_NAME.st` with `ASSERT`, run in lockstep by `helmsman_iec::spec`),
   and the ruSTy differential oracle (tests/oracle.rs, run through docker,
@@ -192,36 +193,44 @@ stand on it.
   is the run after it. Only the totals and the "no PROGRAM found" line
   changed: no file had VAR_IN_OUT as its first refusal, because a parse
   error or the missing PROGRAM is reported before it.
+  After `st-var-global` (2026-11-15) the same 16 files compile and one
+  more parses; the ranking below is the run after it. The 25 files that
+  stopped at CONFIGURATION now stop inside it at TASK, which a module
+  refuses (its scan rate is set where it is deployed), so no
+  configuration file of the corpus compiles yet. The 3 files that
+  stopped at VAR_EXTERNAL and the ruSTy one at a top-level VAR_GLOBAL
+  moved on to their next refusal (a missing `;`, a call form, no
+  PROGRAM), and iec-checker's one VAR_GLOBAL inside a PROGRAM is told
+  where a global goes.
 
 ```
 per source (files, parse, compile, refused, refused as expected):
   blark: 18 files, 1 parse, 0 compile, 18 refused, 0 refused as expected
-  iec-checker: 53 files, 28 parse, 12 compile, 39 refused, 2 refused as expected
+  iec-checker: 53 files, 29 parse, 12 compile, 39 refused, 2 refused as expected
   matiec: 40 files, 0 parse, 0 compile, 26 refused, 14 refused as expected
   rusty: 541 files, 8 parse, 4 compile, 537 refused, 0 refused as expected
   unitest: 351 files, 1 parse, 0 compile, 351 refused, 0 refused as expected
   wenger: 6 files, 0 parse, 0 compile, 6 refused, 0 refused as expected
-total: 1009 files, 38 parse, 16 compile, 977 refused, 16 refused as expected (named bad_* or bad/, left out of the ranking)
+total: 1009 files, 39 parse, 16 compile, 977 refused, 16 refused as expected (named bad_* or bad/, left out of the ranking)
 
 refusals by cause (first diagnostic of each file):
    726 files  parse: STRING literals are not supported yet  (blark 2, iec-checker 7, matiec 6, rusty 477, unitest 232, wenger 2)
    117 files  parse: expected :, found X  (blark 1, unitest 116)
-    25 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found CONFIGURATION  (iec-checker 5, matiec 20)
+    25 files  parse: TASK is not supported: a module  (iec-checker 5, matiec 20)
     23 files  parse: unexpected character ^  (blark 1, rusty 22)
-     9 files  compile: no PROGRAM found  (iec-checker 5, rusty 4)
-     5 files  parse: expected ;, found (  (blark 1, rusty 4)
-     5 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found INTERFACE  (rusty 5)
-     5 files  parse: missing ; after END_IF  (blark 1, iec-checker 1, rusty 1, unitest 2)
+    10 files  compile: no PROGRAM found  (iec-checker 6, rusty 4)
+     6 files  parse: expected ;, found (  (blark 1, rusty 5)
+     6 files  parse: missing ; after END_IF  (blark 1, iec-checker 2, rusty 1, unitest 2)
+     5 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found INTERFACE  (rusty 5)
      4 files  parse: DT literals are not supported yet  (rusty 4)
      4 files  parse: X:  is not allowed in names  (rusty 4)
-     4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found METHOD  (blark 4)
-     4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found UNIT  (wenger 4)
-     3 files  parse: VAR_EXTERNAL is not supported yet  (iec-checker 3)
+     4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found METHOD  (blark 4)
+     4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found UNIT  (wenger 4)
      3 files  parse: expected ;, found END_TYPE  (iec-checker 1, rusty 2)
      2 files  compile: only one PROGRAM is supported  (iec-checker 2)
      2 files  parse: LDT literals are not supported yet  (rusty 2)
      2 files  parse: TOD literals are not supported yet  (rusty 2)
-     2 files  parse: VAR_ACCESS is not supported yet  (iec-checker 2)
+     2 files  parse: VAR_ACCESS is not supported: modules do not share variables, signals are how modules talk  (iec-checker 2)
      2 files  parse: expected := or a call, found X  (rusty 2)
      2 files  parse: expected an integer, found X  (blark 2)
      1 files  compile: %X: address must start with X, X or X  (iec-checker 1)
@@ -238,7 +247,7 @@ refusals by cause (first diagnostic of each file):
      1 files  parse: DATE literals are not supported yet  (rusty 1)
      1 files  parse: LDATE literals are not supported yet  (rusty 1)
      1 files  parse: LTOD literals are not supported yet  (rusty 1)
-     1 files  parse: VAR_GLOBAL is not supported yet  (iec-checker 1)
+     1 files  parse: VAR_GLOBAL goes before the first PROGRAM, or in a CONFIGURATION, not inside a X: move it out so every X of the module can see it  (iec-checker 1)
      1 files  parse: bad TIME literal: expected a number  (rusty 1)
      1 files  parse: bad TIME literal: only the last part may have a fraction  (iec-checker 1)
      1 files  parse: expected :, found *  (iec-checker 1)
@@ -246,8 +255,8 @@ refusals by cause (first diagnostic of each file):
      1 files  parse: expected :, found VAR  (rusty 1)
      1 files  parse: expected := or a call, found VAR_OUTPUT  (blark 1)
      1 files  parse: expected ;, found TO  (blark 1)
-     1 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found ;  (blark 1)
-     1 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found VAR_GLOBAL  (rusty 1)
+     1 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found ;  (blark 1)
+     1 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found X  (iec-checker 1)
      1 files  parse: expected a CASE label, found N  (blark 1)
      1 files  parse: expected a number after WSTRING#  (rusty 1)
      1 files  parse: missing ; after END_CASE  (rusty 1)
@@ -266,7 +275,7 @@ staying analysable. So each feature gets a position, not a blanket "yes":
 | function outputs (VAR_OUTPUT on FUNCTION) | yes | cheap, common in libraries |
 | STRING (fixed-length, `STRING[n]`) | yes | messages, recipe names, OPC UA and webhook payloads, device IDs. Fixed length keeps the scan bounded and fits no_std. WSTRING later. |
 | TOD / DATE / DT | yes | the shift calendar already exists; logic like "after 22:00" is natural to write and today can't be. Needs a clock source in `scan_at` (it has one). |
-| VAR_GLOBAL inside one module (CONFIGURATION / RESOURCE scope) | maybe | common in imported code. Across modules it must stay refused; signals and `Binding::Module` are the way modules talk. |
+| VAR_GLOBAL inside one module (CONFIGURATION / RESOURCE scope) | yes (built 2026-11-15) | common in imported code. Across modules it must stay refused; signals and `Binding::Module` are the way modules talk. |
 | METHOD / PROPERTY on FUNCTION_BLOCK | later | TwinCAT and CODESYS code (TcOpen, Henneken's blog, Pratt's OOIP talk) is written this way, and models have read a lot of it. The diagram needs a story for methods first. |
 | INTERFACE / EXTENDS / polymorphism | no, for now | dynamic dispatch defeats "on because ..." explanations and per-statement tracing. Revisit only if the corpus says imports fail mostly on this. |
 | POINTER / REFERENCE | no | it breaks the memory-safety and isolation claims the voice rules lean on |

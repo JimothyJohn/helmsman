@@ -36,8 +36,14 @@
 //! IEC 61131-3 does not have; see library.st: a blinking MODE with a
 //! PERIOD of 0 or below faults the module, [`BadParam::BlinkPeriod`]). Pragmas (`{...}`) are skipped. `VAR_IN_OUT`
 //! (function blocks only: the caller's own variable, passed by reference
-//! inside one module) and `VAR_OUTPUT` on a function.
-//! Not yet: STRING, DATE, DT and TOD, `VAR_GLOBAL`, pointers and
+//! inside one module) and `VAR_OUTPUT` on a function. `VAR_GLOBAL`, written
+//! before the POUs or in a `CONFIGURATION` and its one `RESOURCE`: the
+//! globals belong to the module, every POU of it sees them (`VAR_EXTERNAL`
+//! may name one, and `VAR_EXTERNAL CONSTANT` reads it only), and nothing
+//! outside the module can, since signals are how modules talk. The rest of
+//! a `CONFIGURATION` (`TASK`, program instances, `VAR_ACCESS`,
+//! `VAR_CONFIG`) is refused.
+//! Not yet: STRING, DATE, DT and TOD, pointers and
 //! references, multi-level addresses (`%QW0.1.2`). Nesting is capped at
 //! `MAX_NESTING` levels so hostile input cannot overflow the stack.
 //!
