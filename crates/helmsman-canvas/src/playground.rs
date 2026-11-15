@@ -585,7 +585,6 @@ struct Lane {
 
 impl History {
     /// Whether nothing has been recorded.
-    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.last_t.is_none()
@@ -1023,6 +1022,11 @@ impl Session {
                     self.now_ms = 0;
                     self.scans = 0;
                     self.acc_ms = 0.0;
+                    // The clock starts over, and the trend with it: the
+                    // old program's lines are not this one's, and a
+                    // program that loads stopped has no scan to clear
+                    // them (2026-11-14).
+                    self.trend.history.clear();
                     if let Some(p) = &mut self.plant {
                         p.reset();
                     }

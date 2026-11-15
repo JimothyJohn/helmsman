@@ -3091,3 +3091,43 @@ fn a_click_off_the_name_question_keeps_the_agents_answer() {
         Some(Kind::Applied)
     );
 }
+
+/// Nick, 2026-11-14: "My trend also somehow died when a new program
+/// loaded." A program that replaces another from a cold start starts the
+/// clock at zero, and the trend's history with it: until its first scan
+/// the old program's lines stood frozen under the new program's signals
+/// (and one that loads stopped never scanned).
+#[test]
+fn a_new_program_starts_the_trend_over_at_once() {
+    let mut s = Session::new(example("traffic"));
+    scans(&mut s, 1000);
+    assert!(s.trend.history.changes("RED") > 1, "the old run's history");
+    // The Agent's program, or another project: loaded stopped.
+    assert!(s.load(example("latch")));
+    assert!(
+        s.trend.history.is_empty(),
+        "the old program's history under the new one: last scan {:?}",
+        s.trend.history.last_t()
+    );
+    assert_eq!(s.trend.history.lane("RED", 0).count(), 0);
+    // Run: the new program's signals from its first scan.
+    scans(&mut s, 5);
+    assert_eq!(s.trend.history.last_t(), Some(40));
+    for name in s.trend.signals.clone() {
+        assert!(s.trend.history.changes(&name) >= 1, "{name} is recorded");
+    }
+    assert_eq!(s.trend.history.changes("RED"), 0, "nothing of the old program");
+}
+
+/// The same when the old program had scanned only once: its history is
+/// dated 0 ms, which the new run's first scan does not read as a clock
+/// gone back.
+#[test]
+fn a_new_program_after_a_single_scan_leaves_no_lane_of_the_old_one() {
+    let mut s = Session::new(example("traffic"));
+    scans(&mut s, 1);
+    assert_eq!(s.trend.history.last_t(), Some(0));
+    assert!(s.set_source(example("latch")));
+    scans(&mut s, 3);
+    assert_eq!(s.trend.history.changes("RED"), 0, "the traffic light's lane");
+}

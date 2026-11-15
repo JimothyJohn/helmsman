@@ -1043,6 +1043,103 @@ fn agent_ladder() {
     assert_eq!(passed, all.len(), "see {}", setup.out.display());
 }
 
+/// Records the front door's first run (`crate::front`, TODO.md
+/// `front-door-recorded-run`): gives the Agent the front door's instruction
+/// for a new project beside the tank's `plant.sim`, as the page would, and
+/// keeps the program it lands only if every proof of the front door is
+/// green on it. Writes `assets/front/main.st` and `assets/front/recorded.txt`.
+///
+/// ```text
+/// HELMSMAN_LADDER_URL=<the free chat's address> \
+///   cargo test -p helmsman-canvas front_door_recording -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "spends tokens against a relay and rewrites assets/front/: HELMSMAN_LADDER_URL=... cargo test -p helmsman-canvas front_door_recording -- --ignored --nocapture"]
+fn front_door_recording() {
+    let setup = Setup::from_env();
+    std::fs::create_dir_all(&setup.out).expect("target/agent-ladder");
+    let instruction = crate::front::instruction();
+    let mut files = Files::default();
+    files.insert(helmsman_project::PLANT.into(), crate::front::PLANT.to_string());
+    let mut chat = Chat::new(Box::new(NoStore));
+    chat.receive(Incoming::Proxy(false));
+    chat.set_free_base(&setup.url);
+    chat.receive(Incoming::Free(Free::Open));
+    let env = Env {
+        project: "tank",
+        scope: Scope::NewProject,
+        files: &files,
+        source: "",
+        diagnostics: &[],
+        devices: "",
+        settings: Settings::new(SIZES),
+    };
+    let mut ins = Instruct {
+        draft: instruction.clone(),
+        ..Instruct::default()
+    };
+    let started = Instant::now();
+    let mut log = format!("# front door recording\n\n{instruction}\n");
+    let (mut calls, mut applied) = (0, None);
+    let plan = crate::steps::big_ask(&instruction, None);
+    let mut next = ins.start_with(&env, &[], plan).ok();
+    while let Some(a) = next.take() {
+        calls += 1;
+        let _ = writeln!(log, "### request {calls}\n\n```text\n{}\n```\n", a.message);
+        match turn(&setup, &mut chat, &a.message, &a.context) {
+            Ok((answer, _)) => {
+                let _ = writeln!(log, "### answer {calls}\n\n{answer}\n");
+                match ins.answered(&answer, &env) {
+                    Step::Ask(again) => next = Some(again),
+                    Step::Apply(ap) => applied = Some(ap),
+                    Step::Done => {}
+                    Step::Wait => next = ins.approve(&env),
+                }
+            }
+            Err(why) => {
+                let _ = writeln!(log, "### transport failed {calls}\n\n{why}\n");
+                ins.failed(&why);
+            }
+        }
+    }
+    let path = setup.out.join("front-door.md");
+    let outcome = ins
+        .outcome
+        .as_ref()
+        .map(|o| (o.status.clone(), o.problems.clone()));
+    let text = applied.map(|ap| ap.text);
+    if let Some(t) = &text {
+        let _ = writeln!(log, "### landed\n\n```st\n{t}```\n");
+    }
+    let rows = text.as_deref().map(crate::front::prove).unwrap_or_default();
+    for r in &rows {
+        let _ = writeln!(log, "- {}: {:?} {}", r.file, r.state, r.why);
+    }
+    std::fs::write(&path, &log).expect("write the log");
+    let text = text.unwrap_or_else(|| panic!("nothing landed: {outcome:?}; see {}", path.display()));
+    assert!(
+        rows.len() == crate::front::TESTS.len()
+            && rows.iter().all(|r| r.state == crate::requirements::State::Passed),
+        "the answer does not pass every proof; see {}",
+        path.display()
+    );
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/front");
+    std::fs::write(dir.join("main.st"), &text).expect("write main.st");
+    let day = std::env::var("HELMSMAN_RECORDED_ON").expect("HELMSMAN_RECORDED_ON: today's date, 2026-11-15");
+    std::fs::write(
+        dir.join("recorded.txt"),
+        format!(
+            "on: {day}\nrequests: {calls}\nseconds: {:.0}\n",
+            started.elapsed().as_secs_f64()
+        ),
+    )
+    .expect("write recorded.txt");
+    println!(
+        "recorded in {calls} requests, {:.0} s",
+        started.elapsed().as_secs_f64()
+    );
+}
+
 /// A right answer to each rung's last step, by hand: what the hidden test
 /// must accept.
 fn reference(rung: &str) -> &'static str {
