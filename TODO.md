@@ -445,20 +445,19 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **Name the sensors first; the device's side is already known** — Nick, 2026-11-14: "Those sensors? It should guide you to name them and their function. Their output? It should be deeply known ahead of time." A new project starts from the I/O: the Agent walks the engineer through each point (what is on it, what it means when on, what is safe when it is lost) and those names and meanings are what the program, the requirements and the fault tests are written in. What a device gives (its channels, types, units, limits, safe values) comes from its profile in the library (`device-profiles`), never asked of the engineer. The plant in the simulation is built from the same answers, so the faults thrown at the program are the named sensors' own.
+- [ ] **Name the sensors first: the device's side, the safe state, the plant** — Nick, 2026-11-14: "Those sensors? It should guide you to name them and their function. Their output? It should be deeply known ahead of time." Built for a new program in the simulation (`crates/helmsman-canvas/src/io_names.rs`): a fold in the Agent tab where each point gets a name, input or output, its type and what it is; the list goes to the Agent ahead of the instruction and the program is written in those names. Left: a device added from the library fills the list from its profile's channels (names, types, units, limits), so nothing about the device is typed (`device-profiles`); each output's safe state when its device is lost, asked once and carried into the map; the simulated plant (`plant.sim`) drafted from the same answers, so the faults thrown at the program are the named sensors' own; the same list for an existing program (its ports and their comments), and on a box.
   needs: nothing
   result: an engineer states what each sensor is once; nothing else about the I/O is asked
-  est: 4d
+  est: 3d
   difficulty: med
   id: agent-names-io
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **The Agent sees your patterns and fixes them** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." The same mistake made twice, the same edit repeated across rungs of a program, a requirement always written without its fault case: the Agent notices across the session and the project's history and offers the change for all of them at once. Not shaped yet: what is kept about an engineer, where, and for how long.
-  needs: an interview after `agent-watches` is in use
-  result: a repeated mistake is pointed out once and fixed everywhere
-  depends: agent-watches
-  est: 1w
+- [ ] **The Agent sees your patterns: across sessions, and beyond compile errors** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." Built in the simulation (`crates/helmsman-canvas/src/watch.rs`): the same kind of compile error in several places is said once with one Fix it for all of them, and a kind that comes up three times in a session is said to be a habit; the count lives in the page's memory only. Left: habits that last past a reload (what is kept about an engineer, where and for how long is yours to decide: this browser only, the project, or their account on a box); patterns beyond compile errors (the same edit repeated across a program, a requirement always written without its fault case); a habit turned into a standing fix the Agent applies by itself.
+  needs: your decision on what may be kept about an engineer, and where
+  result: a repeated mistake is pointed out once and fixed everywhere, and stays learned
+  est: 4d
   difficulty: high
   id: agent-patterns
   asked: 2026-11-14
