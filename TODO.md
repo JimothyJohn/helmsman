@@ -6,13 +6,6 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Open questions for Nick
 
-- [ ] **Is the box half of the agent's device profile still needed?** — Your note on `device-profile-propose-box` (2026-11-15): "The ioLogik has already done this, are we sure this is needed?" What is true today: the E1213's profile (docs/devices/moxa-iologik-e1213.device) was written by hand on 2026-11-11 (6666e3c), from its manual and a capture, and it ships in the library, so a user who plugs in an E1213 gets Add with no agent. No box executes `propose_device_profile`: the tool exists on the relay only (helmsman/v10), and a device the library does not know still falls to the Advanced form. So the card is needed only for a device nobody has mapped yet (decision 2 of the 2026-11-11 interview). My position: park it until the MDrive is on the bench (`mdrive-bringup`), which is the first device without a profile and the honest test; until then the library covers every device anyone has.
-  options: park until the MDrive | build it now | drop it, profiles are written for the library only
-  result: `device-profile-propose-box` and `device-profile-publish` are built, parked or removed
-  id: device-profile-box-needed
-  asked: 2026-11-15
-  by: claude-session (board run)
-
 ## Needs your hands
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — Why it matters: a node in a cabinet is powered by its Ethernet cable alone, and today no run has proven that. The PoE module turns the cable's 48 V into the board's supply; if its output is not isolated from the cable side, a USB cable plugged in at the same time ties the laptop's ground to the PoE supply's return, and current can flow through the laptop's USB port. Nobody knows yet which it is, so `scripts/node-flash.sh` makes you pull Ethernet before every USB flash. One measurement settles it: the prompt goes away, or becomes a hard rule. the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
@@ -181,7 +174,8 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **The box half of the agent's device profile: propose, check, rename, save** — PROTOCOLS.md step 5. The relay half is merged (agent-relay #20, 2026-11-13, by the helmsman-devices-8d session): agent helmsman/v10 has the client tool `propose_device_profile {name, text, summary}`, and on the real Murrelektronik 55086 EDS and handbook every bit address it proposed matched the hand-made `.device` (it chose true lengths of 3 and 1 bytes against the hand-made 4 and 2, and said so). Left here: helmsman-agent executes `propose_device_profile` by running the text through `Profile::parse` and returns the parse errors or the channel list to the model; a box opts into v10 (`--relay-agent v10`); the Devices tab shows the proposed channels for the user to rename and saves `NAME.device` into the project; an upload route holds the EDS or manual the agent reads.
-  needs: the answer to `device-profile-box-needed`
+  needs: nothing
+  notes: 2026-11-15: the box side is in (Nick: build it now). The tool `propose_device_profile` (agent v10, `--relay-agent v10`) holds a profile read by `Profile::parse`; routes `GET|POST|DELETE /api/device-profile/proposal` and `POST /api/device-profile/proposal/accept` (an engineer saves `NAME.device` into a project, channels renamed); the vendor's file goes up as a drop-in (`POST /api/dropins`) and the agent reads it with `read_dropin`. Left: the Devices tab shows the proposed channels, renames them and saves.
   result: a device the library does not know gets a profile the user checked, from its vendor's file, without a hand-written map
   est: 2d
   difficulty: med
