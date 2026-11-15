@@ -1,0 +1,138 @@
+{
+ "format": "helmsman-devices-index 1",
+ "devices": [
+  {
+   "folder": "devices/ifm/if6123",
+   "vendor": "ifm",
+   "model": "IF6123, IF6124, IG6615, IG6616, II5973, II5974, IM5172, IM5173",
+   "kind": "sensor",
+   "identity": {
+    "iolink": {
+     "vendor_id": 310,
+     "device_id": 791
+    }
+   },
+   "products": [
+    "IF6123",
+    "IF6124",
+    "IG6615",
+    "IG6616",
+    "II5973",
+    "II5974",
+    "IM5172",
+    "IM5173"
+   ],
+   "record": "record.json"
+  },
+  {
+   "folder": "devices/ifm/kq6005",
+   "vendor": "ifm",
+   "model": "KQxxxx",
+   "kind": "sensor",
+   "identity": {
+    "iolink": {
+     "vendor_id": 310,
+     "device_id": 371
+    }
+   },
+   "products": [
+    "KQ6001",
+    "KQ6002",
+    "KQ6003",
+    "KQ6004",
+    "KQ6005",
+    "KQ6006",
+    "KQ6007",
+    "KQ6008",
+    "KQ6010",
+    "KQ6015",
+    "KQ6016",
+    "KQ5100",
+    "KQ5101",
+    "KQ5102",
+    "KQ5105",
+    "KQ5108",
+    "KQ5109",
+    "KQ5110",
+    "KQ5111",
+    "KQ5112",
+    "KQ5113",
+    "KQ5114",
+    "KQ5115"
+   ],
+   "record": "record.json"
+  },
+  {
+   "folder": "devices/ifm/o5d100",
+   "vendor": "ifm",
+   "model": "O5D100/O5D102/O5D150/O5D152/O5D159",
+   "kind": "sensor",
+   "identity": {
+    "iolink": {
+     "vendor_id": 310,
+     "device_id": 372
+    }
+   },
+   "products": [
+    "O5D100",
+    "O5D102",
+    "O5D150",
+    "O5D152",
+    "O5D159"
+   ],
+   "record": "record.json"
+  },
+  {
+   "folder": "devices/moxa/iologik-e1213",
+   "vendor": "Moxa",
+   "model": "ioLogik E1213",
+   "kind": "remote-io",
+   "channels": "8 DI, 4 DO, 4 DIO (source type)",
+   "firmware": "V3.1 Build19110615",
+   "checked_on": "2026-11-02",
+   "profile": "moxa-iologik-e1213.device",
+   "identity": {
+    "enip": {
+     "vendor_id": 991,
+     "product_code": 515
+    }
+   },
+   "protocols": {
+    "enip": {
+     "driver": "enip-io",
+     "map": "enip.map",
+     "profile": "moxa-e1213",
+     "eds": {
+      "name": "moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds",
+      "size": 42906,
+      "sha256": "3895fbca8bb036c1b31a9d6b68dea69eca6892fe0a6bce7409ab76311cfd470d"
+     }
+    },
+    "modbus": {
+     "driver": "modbus-tcp",
+     "map": "modbus.map"
+    }
+   }
+  },
+  {
+   "folder": "devices/sick/wtb4f-did8389194",
+   "vendor": "SICK",
+   "model": "WTB4F_DID8389194",
+   "kind": "sensor",
+   "identity": {
+    "iolink": {
+     "vendor_id": 26,
+     "device_id": 8389194
+    }
+   },
+   "products": [
+    "1222998",
+    "1223017",
+    "1105505",
+    "1123751",
+    "1123757"
+   ],
+   "record": "record.json"
+  }
+ ]
+}

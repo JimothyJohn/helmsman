@@ -992,6 +992,9 @@ pub struct DevicesUi {
     pub config: crate::device_config::ConfigUi,
     /// What the library knows of each `wired=` value the map names.
     pub wired: BTreeMap<String, Wired>,
+    /// The picker on a point: what is wired to it, by its label number
+    /// (`wired.rs`).
+    pub picking: Option<crate::wired::Pick>,
 }
 
 /// Most `wired=` values one tab looks up.
@@ -1327,7 +1330,7 @@ impl DevicesUi {
                 if write.is_ok() && r.double_clicked() {
                     self.renaming = Some((p.signal.clone(), p.signal.clone()));
                 }
-                let mut renamed = false;
+                let (mut renamed, mut pick) = (false, false);
                 r.context_menu(|ui| {
                     renamed = menu_item(
                         ui,
@@ -1340,9 +1343,23 @@ impl DevicesUi {
                             String::as_str,
                         ),
                     );
+                    pick = menu_item(
+                        ui,
+                        chrome,
+                        "menu wired point",
+                        "What is wired here…",
+                        write.is_ok(),
+                        write.as_ref().err().map_or(
+                            "Finds the sensor or actuator on this point in the device library by the number on its label, and records it in io.map.",
+                            String::as_str,
+                        ),
+                    );
                 });
                 if renamed {
                     self.renaming = Some((p.signal.clone(), p.signal.clone()));
+                }
+                if pick {
+                    self.picking = Some(crate::wired::Pick::new(&p.signal, p.wired.as_deref()));
                 }
                 let mut hover = format!("{} {}", p.ty, p.point);
                 if let Some(u) = &p.unit {
@@ -1354,31 +1371,13 @@ impl DevicesUi {
                 if p.forced {
                     hover.push_str("\nforced by an engineer");
                 }
-                hover.push_str("\nDouble-click or right-click to rename it.");
+                hover.push_str(
+                    "\nDouble-click to rename it; right-click to rename it or say what is wired to it.",
+                );
                 r.tip(hover);
                 // What is wired to the point, one wrapped line under it.
                 if let Some(w) = &p.wired {
-                    let (line, tip) = match self.wired.get(w) {
-                        Some(Wired::Known(b)) => (b.title(), b.tip()),
-                        Some(Wired::Unavailable(why)) => (
-                            w.clone(),
-                            format!(
-                                "Wired to this point: {w} in the device library.\nNo record to show: {why}."
-                            ),
-                        ),
-                        Some(Wired::Asked) | None => (
-                            w.clone(),
-                            format!("Wired to this point: {w} in the device library."),
-                        ),
-                    };
-                    let r = ui
-                        .horizontal_wrapped(|ui| {
-                            ui.add_space(44.0);
-                            ui.add(egui::Label::new(RichText::new(line).color(t.muted)).wrap())
-                        })
-                        .inner
-                        .tip(tip);
-                    chrome.hit(format!("wired {}", p.signal), r.rect);
+                    crate::wired::show_line(ui, chrome, &p.signal, w, self.wired.get(w), 44.0);
                 }
             }
         }
