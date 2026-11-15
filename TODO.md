@@ -6,14 +6,12 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Open questions for Nick
 
-- [ ] **IO-Link: join the community, or ship as "based on the specification"?** — Why it matters: it decides what the product may say and whether a master of ours can carry a vendor id. The specification's notice (V1.1.5, "USE OF TRADEMARKS", quoted in docs/SOURCES.md) restricts the IO-Link mark to members of the IO-Link Community, lets only certified products claim compliance, and lets an uncertified one say it "was based on a PNO specification". Vendor ids are assigned by the community. Nothing a user reads says IO-Link today; the crate (helmsman-iolink) and the docs for developers do. My position: stay "based on" until a real sensor has run on our master, then decide on membership with a product in hand; fees and the test specification (order no. 10.032) are not read yet.
-  options: based-on for now | join now | drop the name from the docs too
-  result: the wording the site, the datasheet and the Devices tab may use for this protocol
-  id: iolink-membership
-  asked: 2026-11-14
-  by: claude-session (iolink)
-  answer: based-on for now
-  answered: 2026-11-15
+- [ ] **Is the box half of the agent's device profile still needed?** — Your note on `device-profile-propose-box` (2026-11-15): "The ioLogik has already done this, are we sure this is needed?" What is true today: the E1213's profile (docs/devices/moxa-iologik-e1213.device) was written by hand on 2026-11-11 (6666e3c), from its manual and a capture, and it ships in the library, so a user who plugs in an E1213 gets Add with no agent. No box executes `propose_device_profile`: the tool exists on the relay only (helmsman/v10), and a device the library does not know still falls to the Advanced form. So the card is needed only for a device nobody has mapped yet (decision 2 of the 2026-11-11 interview). My position: park it until the MDrive is on the bench (`mdrive-bringup`), which is the first device without a profile and the honest test; until then the library covers every device anyone has.
+  options: park until the MDrive | build it now | drop it, profiles are written for the library only
+  result: `device-profile-propose-box` and `device-profile-publish` are built, parked or removed
+  id: device-profile-box-needed
+  asked: 2026-11-15
+  by: claude-session (board run)
 
 ## Needs your hands
 
@@ -182,7 +180,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **The box half of the agent's device profile: propose, check, rename, save** — PROTOCOLS.md step 5. The relay half is merged (agent-relay #20, 2026-11-13, by the helmsman-devices-8d session): agent helmsman/v10 has the client tool `propose_device_profile {name, text, summary}`, and on the real Murrelektronik 55086 EDS and handbook every bit address it proposed matched the hand-made `.device` (it chose true lengths of 3 and 1 bytes against the hand-made 4 and 2, and said so). Left here: helmsman-agent executes `propose_device_profile` by running the text through `Profile::parse` and returns the parse errors or the channel list to the model; a box opts into v10 (`--relay-agent v10`); the Devices tab shows the proposed channels for the user to rename and saves `NAME.device` into the project; an upload route holds the EDS or manual the agent reads.
-  needs: The ioLogik has already done this, are we sure this is needed?
+  needs: the answer to `device-profile-box-needed`
   result: a device the library does not know gets a profile the user checked, from its vendor's file, without a hand-written map
   est: 2d
   difficulty: med
