@@ -53,6 +53,10 @@
 //! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
 //! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
 //! POST /api/devices/{name}/browse         token: an observed controller's tag list, read-only
+//! GET  /api/device-profile/proposal       the device profile the agent proposed for a device the library lacks: channels, text, summary (404 when none; see [`device_profile`])
+//! POST /api/device-profile/proposal       token or session: {name, text, summary}, read by the profile checker; held for a person, or 422 with the problems and their lines
+//! POST /api/device-profile/proposal/accept engineer session: {id, project, name?, channels?}: the channels renamed, checked again, `NAME.device` saved into the project
+//! DELETE /api/device-profile/proposal     engineer session: drop the proposal
 //! GET  /api/projects ...                  the editor's projects; PUT, DELETE, deploy and uploads need an engineer session (see [`projects`])
 //! POST /api/projects/{p}/requirements    engineer session: one requirement in words; the agent writes its test (see [`requirements`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
@@ -122,6 +126,7 @@ mod control;
 pub mod desk;
 #[cfg(feature = "box")]
 pub mod devconf;
+mod device_profile;
 pub mod discover;
 pub mod drivers;
 pub mod dropin;
@@ -362,6 +367,8 @@ struct Ctx {
     adapter: Option<SocketAddr>,
     /// Drop-in documents (see [`dropin`]).
     dropins: Mutex<dropin::Store>,
+    /// The device profile the agent proposed, for a person to check (see [`device_profile`]).
+    device_profile: Mutex<device_profile::Held>,
     /// Held while a device browse runs (one at a time).
     browsing: Mutex<()>,
     /// The network scan and the device library (see [`discover`]).
@@ -406,6 +413,10 @@ impl Ctx {
 
     fn desks(&self) -> MutexGuard<'_, desk::Desks> {
         self.desks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn device_profile(&self) -> MutexGuard<'_, device_profile::Held> {
+        self.device_profile.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn dropins(&self) -> MutexGuard<'_, dropin::Store> {
@@ -689,6 +700,7 @@ impl Api {
             market_local,
             adapter,
             dropins: Mutex::new(dropin::Store::default()),
+            device_profile: Mutex::new(device_profile::Held::default()),
             browsing: Mutex::new(()),
             discovery: discover::State::new(discovery),
             site,
@@ -1406,6 +1418,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         (_, ["api", "forces", ..]) => return forces::mutate(req, ctx, &segs[1..]),
         ("POST", ["api", "modules", name, op]) if *op != "trace" => return control::post(req, ctx, name, op),
         (_, ["api", "drivers", ..]) => return drivers::mutate(req, ctx, &segs[1..]),
+        (_, ["api", "device-profile", ..]) => return device_profile::mutate(req, ctx, &segs[2..]),
         ("PUT", ["api", "trends", "pins"]) => return trend::put_pins(req, ctx),
         ("PUT", ["api", "desk"]) => return desk::put(req, ctx),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
@@ -1827,6 +1840,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "devices", id, "config"] => devconf::get(ctx, id),
         ["api", "adapter"] => Response::json(200, &adapter_json(ctx.adapter)),
         ["api", "io_map"] => io_map(ctx),
+        ["api", "device-profile", "proposal"] => device_profile::get(ctx),
         ["api", "proposals"] => Response::json(
             200,
             &Json::Array(ctx.box_.proposals.list().into_iter().map(|p| p.json).collect()),
@@ -1979,6 +1993,10 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/devices/{id}/config/snapshot", true, "engineer session: {version?}: save the unit's export as ID.devconf in the running project"),
             e("GET", "/api/adapter", true, "the EtherNet/IP adapter: {protocol, bind, on}"),
             e("GET", "/api/io_map", true, "the running I/O map file and its snapshot id"),
+            e("GET", "/api/device-profile/proposal", true, "the device profile the agent proposed: id, name, summary, text, vendor, model, transports, channels (name, dir, type, unit, safe, points); 404 when none"),
+            e("POST", "/api/device-profile/proposal", true, "token or session: {name, text, summary}: the text is read by the profile checker; 201 holds it and lists its channels, 422 lists problems with lines"),
+            e("POST", "/api/device-profile/proposal/accept", true, "engineer session: {id, project, name?, channels?: {FROM: TO}}: rename, check again and save NAME.device into the project as a new file"),
+            e("DELETE", "/api/device-profile/proposal", true, "engineer session: drop the proposal"),
             e("GET", "/api/proposals", true, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", true, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),

@@ -2329,6 +2329,23 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   the tool refuses, and the box refuses an io_map citing a PLC drop-in.
   The tools reach a real model with relay agent v4 (card `relay-images`
   notes: the tool schemas and the drawing paragraph); MCP serves them now.
+- **A device profile from a vendor's file** (`device-profile-propose-box`;
+  contract in `tests/device_profile.rs`, `tests/dropins.rs`). A device the
+  library does not know: the user attaches its EDS or manual as a drop-in
+  (`POST /api/dropins`, read with `read_dropin`), and a box on relay agent
+  v10 (`--relay-agent v10`) runs `propose_device_profile {name, text,
+  summary}`. The box reads the text with `Profile::parse` (the one
+  reader; helmsman-agent only posts it) and answers its problems with
+  their lines, or holds it as the one pending proposal and lists the
+  channels. Routes (`api/device_profile.rs`): `GET
+  /api/device-profile/proposal` (id, name, summary, text, transports,
+  channels), `POST` the same path (token or session: the tool's call),
+  `POST .../proposal/accept {id, project, name?, channels?: {FROM: TO}}`
+  and `DELETE` the same path (engineer sessions only; the box token alone
+  accepts nothing). Accepting renames the channels in the text, reads the
+  whole file again, and saves `NAME.device` into the project as a new
+  file (never over one), with a project revision and an audit entry; a
+  rename that does not read, or an older `id`, writes nothing.
 - **Questions, not guesses.** What the document leaves out (a signal the
   box does not have, a shift that is not defined) comes back as questions
   in the chat; the relay's v3 prompt says so, and the module only names
