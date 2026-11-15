@@ -98,7 +98,9 @@ watchdog). The headline is agentic programming: you write specs and
 validate results, you don't write code. Proven IEC 61131-3 Structured Text,
 no ladder and proud of it. EtherNet/IP (CIP) and Modbus TCP, Ethernet only;
 a pure soft PLC with I/O in remote modules (e.g. Moxa ioLogik). Say "early
-release". Never mention Rust, crates, the Raspberry Pi or the model vendor
+release". IO-Link is named only as "based on the IO-Link specification"
+(Nick, 2026-11-15; docs/SOURCES.md has the notice): no compliance or
+conformance claim and no logo. Never mention Rust, crates, the Raspberry Pi or the model vendor
 by name. Claims must be true of what is built. Write like an engineer, with
 no AI tells: no "you don't X, you Y", "X, not Y" contrasts used as flourish,
 staccato fragments ("On purpose."), triplets or semicolon-chained slogans.

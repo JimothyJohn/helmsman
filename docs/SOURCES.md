@@ -829,8 +829,10 @@ into the code.
   requirements "may claim only that the product was based on a PNO
   specification and must not claim compliance or conformance". Vendor
   ids are assigned by the community (Table B.1 NOTE 2). So nothing a
-  user reads carries the mark or a compliance claim until Nick has
-  settled membership; a master of ours is "based on" the specification.
+  user reads carries the mark or a compliance claim. Decided (Nick,
+  2026-11-15): "based on" for now; a master of ours is "based on the
+  IO-Link specification", and membership is looked at again once a real
+  sensor has run on it.
 - **How to cite:** `IOL §A.1.6 p.240` (clause and page of V1.1.5).
 
 ### IO-Link Community, IO Device Description Specification V1.1.5 (October 2025, order no. 10.012, 98 pp) and its guideline's examples
