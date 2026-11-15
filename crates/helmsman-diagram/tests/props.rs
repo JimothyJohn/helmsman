@@ -15,7 +15,9 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use common::{SIZES, check};
-use helmsman_diagram::{Diagram, NodeId, NodeKind, Why, annotate, diff, drivers, explain, lower};
+use helmsman_diagram::edit::{self, Bubble, Edit, Literal, Pin, Refusal};
+use helmsman_diagram::{Diagram, Module, NodeId, NodeKind, Why, annotate, diff, drivers, explain, lower};
+use helmsman_iec::ast::BinOp;
 use helmsman_iec::{Image, Program, Ty, Value, compile};
 use proptest::prelude::*;
 
@@ -263,6 +265,100 @@ fn feeds_bool(p: &Program, prefix: &str, d: &Diagram, n: NodeId, out: usize) -> 
     }
 }
 
+/// Every edit the diagram offers: a bubble on every pin and gate, a new
+/// value for every literal, every operator swapped for each of its kin.
+fn offered(m: &Module) -> Vec<Edit> {
+    let mut out = Vec::new();
+    for p in &m.pous {
+        let d = &p.diagram;
+        for n in &d.nodes {
+            for input in 0..n.ins.len() {
+                let pin = Pin {
+                    pou: p.name.clone(),
+                    node: n.id,
+                    input,
+                };
+                out.push(Edit::ToggleNegation(Bubble::Pin(pin.clone())));
+                let Some(w) = d.wires.iter().find(|w| w.to == n.id && w.inp == input) else {
+                    continue;
+                };
+                let src = d.node(w.from);
+                let value = match &src.kind {
+                    NodeKind::Const {
+                        value: Some(Value::Bool(b)),
+                    } => Literal::Bool(!b),
+                    NodeKind::Const {
+                        value: Some(Value::Real(r)),
+                    } => Literal::Real(r + 1.5),
+                    NodeKind::Const {
+                        value: Some(Value::Int(i)),
+                    } if src.text.starts_with("T#") => Literal::Time(i + 1_000_000_000),
+                    NodeKind::Const {
+                        value: Some(Value::Int(i)),
+                    } => Literal::Int(i + 1),
+                    _ => continue,
+                };
+                out.push(Edit::SetConst { pin, value });
+            }
+            if let NodeKind::Op { op } = &n.kind {
+                let family: &[BinOp] = match op.as_str() {
+                    "AND" | "OR" => &[BinOp::And, BinOp::Or],
+                    "=" | "<>" | "<" | "<=" | ">" | ">=" => {
+                        &[BinOp::Eq, BinOp::Ne, BinOp::Lt, BinOp::Le, BinOp::Gt, BinOp::Ge]
+                    }
+                    "+" | "-" | "*" | "/" => &[BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div],
+                    _ => &[],
+                };
+                for &to in family.iter().filter(|b| b.symbol() != op) {
+                    out.push(Edit::SwapOp {
+                        pou: p.name.clone(),
+                        node: n.id,
+                        to,
+                    });
+                }
+            }
+        }
+        for r in &d.regions {
+            out.push(Edit::ToggleNegation(Bubble::Gate {
+                pou: p.name.clone(),
+                region: r.id,
+            }));
+        }
+    }
+    out
+}
+
+/// Whether refusing `e` with `r` is an honest answer for a program that
+/// compiles: the diagram offers every bubble and every operator, so a
+/// refusal must be about the thing (no bubble on a constant, a number is
+/// not a condition, the types do not fit), never about the edit's own
+/// bookkeeping.
+fn honest(e: &Edit, r: &Refusal) -> bool {
+    match r {
+        Refusal::NoBubble | Refusal::NotBoolean | Refusal::NoText | Refusal::NoCondition => {
+            matches!(e, Edit::ToggleNegation(_))
+        }
+        // `NOT TRUE` is a literal folded from an expression.
+        Refusal::NotAValue(_) => matches!(e, Edit::SetConst { .. }),
+        // A NOT on a number, or an operator the types do not take.
+        Refusal::WouldNotCompile(_) => true,
+        _ => false,
+    }
+}
+
+/// The source of the block changed: ids whose signature differs.
+fn changed_ids(a: &Module, b: &Module, pou: &str) -> Vec<NodeId> {
+    let (pa, pb) = (a.pou(pou).unwrap(), b.pou(pou).unwrap());
+    let (sa, sb) = (
+        diff::signatures(&pa.name, &pa.diagram),
+        diff::signatures(&pb.name, &pb.diagram),
+    );
+    (0..sa.len())
+        .filter(|&i| sa[i] != sb[i])
+        .map(|i| NodeId(u32::try_from(i).unwrap()))
+        .collect()
+}
+
 /// Every signature of every POU of `m`, sorted: a multiset.
 fn sigs(m: &helmsman_diagram::Module) -> Vec<diff::Sig> {
     let mut v: Vec<diff::Sig> = m
@@ -386,6 +482,83 @@ proptest! {
         if sa == sb {
             prop_assert!(d.is_empty());
         }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(30))]
+
+    /// Every edit the diagram offers, on a program bare and with a
+    /// comment between every pair of tokens: it is made or refused for a
+    /// reason about the thing edited; when made, the bytes outside the
+    /// patch are the original's, the result compiles, the inverse patch
+    /// restores the original bytes exactly, no comment is lost, and the
+    /// diagram differs in the addressed block (and the blocks holding its
+    /// text) alone.
+    #[test]
+    fn every_offered_edit_is_exact_checked_and_undoable(
+        body in proptest::collection::vec(stmt(), 1..4),
+        early_return in any::<bool>(),
+        noisy in any::<bool>(),
+    ) {
+        let body: Vec<String> = if noisy {
+            body.iter().map(|s| s.replace(' ', " (* c *) ")).collect()
+        } else {
+            body
+        };
+        let src = program(&body, early_return);
+        let m = lowered(&src)?;
+        let comments = src.matches("(* c *)").count();
+        let mut made = 0;
+        for e in offered(&m) {
+            match edit::apply(&src, &m, e.clone()) {
+                Err(r) => prop_assert!(honest(&e, &r), "{e:?} refused: {r}\n{src}"),
+                Ok(patch) => {
+                    made += 1;
+                    prop_assert!(
+                        patch.start <= patch.end && patch.end <= src.len()
+                            && src.is_char_boundary(patch.start) && src.is_char_boundary(patch.end),
+                        "{patch:?}"
+                    );
+                    let out = patch.apply_to(&src);
+                    prop_assert_eq!(&out[..patch.start], &src[..patch.start]);
+                    prop_assert_eq!(&out[patch.start + patch.text.len()..], &src[patch.end..]);
+                    prop_assert_eq!(out.matches("(* c *)").count(), comments, "{:?}\n{}", patch, out);
+                    prop_assert_eq!(&patch.inverse(&src).apply_to(&out), &src);
+                    let m2 = lowered(&out)?;
+                    let (pou, target, swapped) = match &e {
+                        Edit::SetConst { pin, .. } | Edit::ToggleNegation(Bubble::Pin(pin)) => {
+                            (pin.pou.clone(), Some(pin.node), matches!(e, Edit::SetConst { .. }))
+                        }
+                        Edit::SwapOp { pou, node, .. } => (pou.clone(), Some(*node), true),
+                        Edit::ToggleNegation(Bubble::Gate { pou, .. }) => (pou.clone(), None, false),
+                    };
+                    let stmt_of = |id: NodeId| m.pou(&pou).unwrap().diagram.node(id).stmt;
+                    let changed = changed_ids(&m, &m2, &pou);
+                    for id in &changed {
+                        prop_assert_eq!(Some(stmt_of(*id)), target.map(stmt_of), "{:?} changed {:?}\n{}", e, id, out);
+                    }
+                    prop_assert_eq!(target.is_some(), !changed.is_empty());
+                    let d = diff::modules(&m, &m2);
+                    let (added, removed, _) = d.counts();
+                    prop_assert_eq!(added, removed, "{:?}", d);
+                    prop_assert!(!swapped || added >= 1, "{:?}", d);
+                    prop_assert!(d.pous_added.is_empty() && d.pous_removed.is_empty());
+                    // The same toggle again puts the bubble back (`NOT NOT x`
+                    // loses a NOT each time, so the bytes may differ).
+                    if let Edit::ToggleNegation(_) = &e {
+                        let again = edit::apply(&out, &m2, e.clone()).map_err(|r| TestCaseError::fail(format!("{r}\n{out}")))?;
+                        let m3 = lowered(&again.apply_to(&out))?;
+                        let bubbles = |m: &Module| -> Vec<bool> {
+                            m.pous.iter().flat_map(|p| p.diagram.wires.iter().map(|w| w.negated)
+                                .chain(p.diagram.regions.iter().map(|r| r.negated))).collect()
+                        };
+                        prop_assert_eq!(bubbles(&m3), bubbles(&m), "{:?}\n{}", e, out);
+                    }
+                }
+            }
+        }
+        prop_assert!(made > 0, "something is always editable\n{src}");
     }
 }
 

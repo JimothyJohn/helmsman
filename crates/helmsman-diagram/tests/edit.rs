@@ -387,7 +387,17 @@ fn refusals_say_why() {
         matches!(r, Refusal::NotBoolean | Refusal::WouldNotCompile(_)),
         "{r:?}"
     );
-    // Operators.
+}
+
+#[test]
+fn refusals_for_operators_regions_and_values_say_why() {
+    let s = src(
+        "x := y AND z;\na := b + 1;\nwd := NOT wd AND 16#FF;\nt3 := t1 + t2;\nIF x THEN b := 2; ELSE b := 3; END_IF;",
+    );
+    let (_, m) = build(&s);
+    let and = node_with(&m, "Y AND Z");
+    let say = |e: Edit| apply(&s, &m, e).unwrap_err();
+    let plus = node_with(&m, "B + 1");
     assert_eq!(
         say(Edit::SwapOp {
             pou: "T".into(),

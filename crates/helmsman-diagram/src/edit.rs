@@ -242,6 +242,7 @@ const SIZES: ImageSizes = ImageSizes {
 /// A [`Refusal`]: the edit does not apply to what it is addressed to, the
 /// diagram is not of this source, or the checked result would not compile
 /// or would differ from the diagram in more than the edit.
+#[allow(clippy::needless_pass_by_value)] // a gesture is a value its caller is done with
 pub fn apply(src: &str, module: &Module, edit: Edit) -> Result<Patch, Refusal> {
     let fresh = lowered(src).map_err(Refusal::SourceDoesNotCompile)?;
     if plain(&fresh) != plain(module) {
@@ -985,7 +986,9 @@ fn verify(old: &Module, new_src: &str, ex: &Expect) -> Result<(), Refusal> {
     }
     let (so, sn) = (diff::signatures(&po.name, od), diff::signatures(&pn.name, nd));
     for (i, (a, b)) in od.nodes.iter().zip(&nd.nodes).enumerate() {
-        if a.ins != b.ins || a.outs != b.outs || a.region != b.region {
+        // An element's port names are its index expressions' text.
+        let ports = a.ins.len() == b.ins.len() && (a.ins == b.ins || hit.contains(&a.id));
+        if !ports || a.outs != b.outs || a.region != b.region {
             return Err(shape());
         }
         let is_target = ex.target.node() == Some(a.id);
@@ -1002,6 +1005,8 @@ fn verify(old: &Module, new_src: &str, ex: &Expect) -> Result<(), Refusal> {
                         value: Some(value_of(*value)),
                     }
             }
+            // An element's path holds its index expressions' text.
+            _ if hit.contains(&a.id) => std::mem::discriminant(&a.kind) == std::mem::discriminant(&b.kind),
             _ => a.kind == b.kind,
         };
         if !kind_ok {
@@ -1023,15 +1028,18 @@ fn verify(old: &Module, new_src: &str, ex: &Expect) -> Result<(), Refusal> {
     // The review screen's own view: no blocks or regions appear or go,
     // except the one a swapped operator or a changed literal replaces.
     let df = diff::modules(old, &new);
-    let counts = (df.counts().0, df.counts().1);
-    let expect = if matches!(ex.target, Target::Op { .. } | Target::Const { .. }) {
-        (1, 1)
-    } else {
-        (0, 0)
-    };
+    let (added, removed, _) = df.counts();
+    // A block is known across versions by its kind and header; those that
+    // spell an expression out (a literal, an element `A[I + 1]`) are
+    // replaced when the expression changes.
+    let renamed = so.iter().zip(&sn).filter(|(a, b)| a.key != b.key).count();
+    let replaced = matches!(ex.target, Target::Op { .. } | Target::Const { .. });
     if !df.pous_added.is_empty()
         || !df.pous_removed.is_empty()
-        || counts != expect
+        || added > renamed
+        || removed > renamed
+        || (replaced && (added == 0 || removed == 0))
+        || (!replaced && renamed == 0 && (added, removed) != (0, 0))
         || df.regions.iter().any(|r| r.change != diff::Change::Changed)
     {
         return Err(more("the diagram as the review screen would show it"));
