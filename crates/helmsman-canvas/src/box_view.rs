@@ -158,6 +158,26 @@ pub fn is_engineer(s: Option<&Session>) -> Result<(), String> {
 }
 
 impl BoxView {
+    /// The map the Devices and I/O tabs show, and where it is from: the
+    /// open project's own when it has one (what Add edits), else the map
+    /// the box runs.
+    fn map_text(&self) -> (String, String) {
+        let open = self.projects.open.as_ref();
+        let draft = open
+            .and_then(|o| o.bufs.get(helmsman_project::IO_MAP))
+            .filter(|b| b.loaded)
+            .map(|b| b.text.clone());
+        match (draft, &self.state.io_map) {
+            (Some(t), _) => (t, format!("io.map of {}", open.map_or("", |o| o.name.as_str()))),
+            (None, Some(t)) if self.state.io_map_stale() => (
+                t.clone(),
+                "the map this box runs, as last read (the box did not answer the newest read)".to_string(),
+            ),
+            (None, Some(t)) => (t.clone(), "the map this box runs".to_string()),
+            (None, None) => (String::new(), String::new()),
+        }
+    }
+
     #[must_use]
     pub fn new() -> Self {
         #[cfg(target_arch = "wasm32")]
@@ -376,6 +396,11 @@ impl BoxView {
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
+                PCall::FindWired => {
+                    if let Some(p) = &mut self.devices_ui.picking {
+                        p.answer(a.status, &a.body);
+                    }
+                }
                 PCall::Config(device, op) => self.devices_ui.config.answer(&device, op, a.status, &a.body),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
@@ -1093,6 +1118,30 @@ impl BoxView {
                     b.text = text;
                 }
             }
+        }
+        match self.devices_ui.pick_ui(&ui.ctx().clone(), chrome) {
+            Some(crate::wired::PickAct::Search(q)) => {
+                self.projects.find_wired(&q);
+                ui.ctx().request_repaint();
+            }
+            Some(crate::wired::PickAct::Set { signal, wired }) => {
+                let buf = self
+                    .projects
+                    .open
+                    .as_mut()
+                    .and_then(|o| o.bufs.get_mut(helmsman_project::IO_MAP))
+                    .filter(|b| b.loaded);
+                match buf
+                    .and_then(|b| Some((crate::wired::set_wired(&b.text, &signal, wired.as_deref())?, b)))
+                {
+                    Some((text, b)) => b.text = text,
+                    None => self.projects.note(
+                        format!("{signal} has no line in the open project's io.map to record it on."),
+                        true,
+                    ),
+                }
+            }
+            None => {}
         }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
@@ -1982,22 +2031,8 @@ impl Body for BoxView {
 
     fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::devices::{LinkState, Live, tree};
-        // The open project's own map when it has one (what Add edits),
-        // else the map the box runs.
+        let (text, source) = self.map_text();
         let open = self.projects.open.as_ref();
-        let draft = open
-            .and_then(|o| o.bufs.get(helmsman_project::IO_MAP))
-            .filter(|b| b.loaded)
-            .map(|b| b.text.clone());
-        let (text, source) = match (draft, &self.state.io_map) {
-            (Some(t), _) => (t, format!("io.map of {}", open.map_or("", |o| o.name.as_str()))),
-            (None, Some(t)) if self.state.io_map_stale() => (
-                t.clone(),
-                "the map this box runs, as last read (the box did not answer the newest read)".to_string(),
-            ),
-            (None, Some(t)) => (t.clone(), "the map this box runs".to_string()),
-            (None, None) => (String::new(), String::new()),
-        };
         let map = helmsman_project::iomap::skim(&text);
         let signals = &self.state.signals;
         let live = |name: &str| {
@@ -2254,6 +2289,13 @@ impl Body for BoxView {
         }
         let t = theme(ui);
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
+        // What is wired to each signal, from the map and the library.
+        self.devices_ui.map = helmsman_project::iomap::skim(&self.map_text().0);
+        if let Some(w) = self.devices_ui.wired_wanted() {
+            self.projects.wired(&w);
+        }
+        let wired = crate::wired::by_signal(&self.devices_ui.map);
+        let known = &self.devices_ui.wired;
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
             if let Some(v) = &mut self.view {
                 v.outputs_ui(ui, scan);
@@ -2288,17 +2330,22 @@ impl Body for BoxView {
                                 };
                                 let bool_ty = matches!(s.value, Some(helmsman_iec::Value::Bool(_)));
                                 let glyph = crate::glyph_lib::for_point(&s.name, dir == "in", bool_ty);
-                                ui.horizontal(|ui| {
-                                    crate::glyph_lib::show(
-                                        ui,
-                                        glyph,
-                                        crate::glyphs::ROW,
-                                        color,
-                                        crate::glyph_lib::tip(glyph),
-                                    );
-                                    let l = ui.label(RichText::new(text).monospace().color(color));
-                                    if let Some(e) = &s.point_error {
-                                        l.on_hover_text(e);
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        crate::glyph_lib::show(
+                                            ui,
+                                            glyph,
+                                            crate::glyphs::ROW,
+                                            color,
+                                            crate::glyph_lib::tip(glyph),
+                                        );
+                                        let l = ui.label(RichText::new(text).monospace().color(color));
+                                        if let Some(e) = &s.point_error {
+                                            l.on_hover_text(e);
+                                        }
+                                    });
+                                    if let Some(w) = wired.get(&s.name.to_ascii_lowercase()) {
+                                        crate::wired::show_line(ui, chrome, &s.name, w, known.get(w), 0.0);
                                     }
                                 });
                             }
