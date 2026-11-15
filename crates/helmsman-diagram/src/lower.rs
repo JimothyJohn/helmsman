@@ -312,14 +312,14 @@ impl From<Port> for Feed {
 /// bitwise one: every POU's variables (user and library, so a block's
 /// ports), functions' results, and named types.
 #[derive(Default)]
-struct Types {
+pub(crate) struct Types {
     vars: HashMap<String, HashMap<String, TypeRef>>,
     funcs: HashMap<String, TypeRef>,
     defs: HashMap<String, TypeDef>,
 }
 
 impl Types {
-    fn of(units: &[&ast::Unit]) -> Self {
+    pub(crate) fn of(units: &[&ast::Unit]) -> Self {
         let mut t = Self::default();
         for u in units {
             for p in &u.pous {
@@ -339,7 +339,7 @@ impl Types {
     }
 
     /// `t` with aliases followed.
-    fn resolve<'t>(&'t self, mut t: &'t TypeRef) -> &'t TypeRef {
+    pub(crate) fn resolve<'t>(&'t self, mut t: &'t TypeRef) -> &'t TypeRef {
         for _ in 0..16 {
             match t {
                 TypeRef::Named(n, _) => match self.defs.get(n) {
@@ -354,7 +354,7 @@ impl Types {
 
     /// The type of member `m` of a value of type `t`: a block's port or
     /// a struct's field.
-    fn member(&self, t: &TypeRef, m: &str) -> Option<TypeRef> {
+    pub(crate) fn member(&self, t: &TypeRef, m: &str) -> Option<TypeRef> {
         let TypeRef::Named(n, _) = self.resolve(t) else {
             return None;
         };
@@ -369,6 +369,45 @@ impl Types {
 
     fn is_bool(&self, t: &TypeRef) -> bool {
         matches!(self.resolve(t), TypeRef::Named(n, _) if n == "BOOL")
+    }
+
+    /// The declared type of port or variable `name` of the POU `pou`.
+    pub(crate) fn declared(&self, pou: &str, name: &str) -> Option<&TypeRef> {
+        self.vars
+            .get(&pou.to_ascii_uppercase())?
+            .get(&name.to_ascii_uppercase())
+    }
+
+    /// The declared type of `e` read in the POU `pou`, when the
+    /// declarations give it.
+    pub(crate) fn type_of(&self, pou: &str, e: &Expr) -> Option<TypeRef> {
+        let named = |n: &str| Some(TypeRef::Named(n.to_string(), e.pos));
+        match &e.kind {
+            ExprKind::Bool(_) | ExprKind::Bit(..) => named("BOOL"),
+            ExprKind::Var(n) => self.vars.get(pou)?.get(n).cloned(),
+            ExprKind::Member(b, m) => self.member(&self.type_of(pou, b)?, m),
+            ExprKind::Index(b, ix) => match self.resolve(&self.type_of(pou, b)?) {
+                TypeRef::Array { dims, elem, .. } if dims.len() == ix.len() => Some((**elem).clone()),
+                _ => None,
+            },
+            // `%IX0.0`, `%Q0.1`: a bit; any other size is not BOOL.
+            ExprKind::Direct(d) => match d.as_bytes().get(1) {
+                Some(b'X') => named("BOOL"),
+                Some(c) if c.is_ascii_digit() => named("BOOL"),
+                _ => None,
+            },
+            ExprKind::Unary(_, a) => self.type_of(pou, a),
+            ExprKind::Binary(op, a, b) => match op {
+                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => named("BOOL"),
+                _ => self.type_of(pou, a).or_else(|| self.type_of(pou, b)),
+            },
+            ExprKind::Call(f, _) => match &f.kind {
+                ExprKind::Var(n) if n.ends_with("_TO_BOOL") => named("BOOL"),
+                ExprKind::Var(n) => self.funcs.get(n).cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 }
 
@@ -856,33 +895,7 @@ impl Lower<'_> {
 
     /// The declared type of `e`, when the declarations give it.
     fn ty(&self, e: &Expr) -> Option<TypeRef> {
-        let named = |n: &str| Some(TypeRef::Named(n.to_string(), e.pos));
-        match &e.kind {
-            ExprKind::Bool(_) | ExprKind::Bit(..) => named("BOOL"),
-            ExprKind::Var(n) => self.types.vars.get(self.pou)?.get(n).cloned(),
-            ExprKind::Member(b, m) => self.types.member(&self.ty(b)?, m),
-            ExprKind::Index(b, ix) => match self.types.resolve(&self.ty(b)?) {
-                TypeRef::Array { dims, elem, .. } if dims.len() == ix.len() => Some((**elem).clone()),
-                _ => None,
-            },
-            // `%IX0.0`, `%Q0.1`: a bit; any other size is not BOOL.
-            ExprKind::Direct(d) => match d.as_bytes().get(1) {
-                Some(b'X') => named("BOOL"),
-                Some(c) if c.is_ascii_digit() => named("BOOL"),
-                _ => None,
-            },
-            ExprKind::Unary(_, a) => self.ty(a),
-            ExprKind::Binary(op, a, b) => match op {
-                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => named("BOOL"),
-                _ => self.ty(a).or_else(|| self.ty(b)),
-            },
-            ExprKind::Call(f, _) => match &f.kind {
-                ExprKind::Var(n) if n.ends_with("_TO_BOOL") => named("BOOL"),
-                ExprKind::Var(n) => self.types.funcs.get(n).cloned(),
-                _ => None,
-            },
-            _ => None,
-        }
+        self.types.type_of(self.pou, e)
     }
 
     fn is_bool(&self, e: &Expr) -> bool {

@@ -140,6 +140,13 @@ pub enum PCall {
     /// A device's own configuration (`/api/devices/{id}/config...`),
     /// answered by the Devices tab (`device_config.rs`).
     Config(String, crate::device_config::ConfigOp),
+    /// `GET /api/device-profile/proposal`: the profile the agent proposed
+    /// (answered by the Devices tab, `device_proposal.rs`).
+    Proposal,
+    /// `POST /api/device-profile/proposal/accept`: save it into a project.
+    ProposalAccept,
+    /// `DELETE /api/device-profile/proposal`: throw it away.
+    ProposalDiscard,
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -202,7 +209,7 @@ impl PReq {
         }
     }
 
-    fn delete(call: PCall, url: String) -> Self {
+    pub(crate) fn delete(call: PCall, url: String) -> Self {
         Self {
             call,
             method: "DELETE",
@@ -473,6 +480,15 @@ impl BoxProjects {
     /// What to send now.
     pub fn poll(&mut self) -> Vec<PReq> {
         std::mem::take(&mut self.queue)
+    }
+
+    /// Reads the open project's files again (a file the box made, such as
+    /// a saved device profile, joins it; edits not saved are kept).
+    pub fn reread(&mut self, project: &str) {
+        if self.open.as_ref().is_some_and(|o| o.name == project) {
+            self.queue
+                .push(PReq::get(PCall::Project(project.into()), project_url(project)));
+        }
     }
 
     /// Asks the box for a fresh network scan (the Devices tab's Scan).
@@ -1809,6 +1825,9 @@ impl BoxProjects {
             | PCall::Wired(_)
             | PCall::FindWired
             | PCall::Config(..)
+            | PCall::Proposal
+            | PCall::ProposalAccept
+            | PCall::ProposalDiscard
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {

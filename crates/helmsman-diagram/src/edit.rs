@@ -9,7 +9,7 @@
 //! pure (no I/O, no clock) and depends only on helmsman-iec, so the canvas
 //! calls it in the browser as well as natively.
 //!
-//! The first edits:
+//! The edits:
 //!
 //! - [`Edit::SetConst`]: the value of a literal (a number, `TRUE`, a TIME
 //!   preset such as `PT := T#5s`).
@@ -18,6 +18,13 @@
 //!   taken off it.
 //! - [`Edit::SwapOp`]: AND for OR, one comparison for another, `+ - * /`
 //!   for each other.
+//! - [`Edit::Rewire`]: a pin takes another source, a variable, a literal or
+//!   an earlier write.
+//! - [`Edit::SetFbArg`]: an argument of a function block call is set, or
+//!   added (`PT := T#5s`).
+//! - [`Edit::DeleteStmt`]: a whole statement goes, by its source range.
+//! - [`Edit::Rename`]: a variable gets another name, in every use in its
+//!   POU.
 //!
 //! # Where the text is
 //!
@@ -46,9 +53,25 @@
 //! it was addressed to (and the blocks of the same statement that contain
 //! its text), flipped exactly the bubble asked for, and nothing else.
 //! Otherwise it is refused, with the reason.
+//!
+//! `Rewire`, `SetFbArg` and `DeleteStmt` change what feeds blocks or remove
+//! some, so block numbers shift and that check does not fit: they are
+//! compared as trees instead (see `graph`): each statement unfolded from
+//! its roots, equal to the old one but for the pin addressed (and the blocks
+//! above it, whose text changes with it). Rename changes every use, so its
+//! check is that the two diagrams are the same once both names are blanked
+//! out of every block, label and variable name.
+//!
+//! A diagram is "from this text" when lowering the source again gives the
+//! same diagram (geometry and statement numbers aside): that is the
+//! staleness check, and it compares every block, wire and position, which
+//! is stricter than a hash of the text would be.
 
 use std::collections::BTreeSet;
 use std::fmt;
+
+mod graph;
+mod more;
 
 use helmsman_iec::ast::{self, BinOp, Expr, ExprKind, Pos, StmtKind, UnOp};
 use helmsman_iec::trace::StmtId;
@@ -78,6 +101,22 @@ pub enum Literal {
     Time(i128),
 }
 
+/// What a pin is wired from after a [`Edit::Rewire`] or [`Edit::SetFbArg`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    /// A variable, member or element as written (`start`, `t.Q`, `a[2]`).
+    /// Its first name is written as the declaration spells it, whatever
+    /// case is given.
+    Var(String),
+    /// A literal.
+    Const(Literal),
+    /// What an earlier write of this POU stores: the Write block of the
+    /// diagram. The text read is that write's variable, so it is wired from
+    /// that write only if nothing in between writes it again and it is on
+    /// the same path (not in a sibling arm, not after the pin).
+    Write(NodeId),
+}
+
 /// A negation bubble: on an input pin, or on a region's gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bubble {
@@ -98,6 +137,23 @@ pub enum Edit {
     ToggleNegation(Bubble),
     /// The binary operator block `node` becomes `to`.
     SwapOp { pou: String, node: NodeId, to: BinOp },
+    /// The input `pin` is wired from `to`. A negation bubble on the pin
+    /// stays (not on a literal, which has none); only a pin fed by a
+    /// variable, a literal or an earlier write can be rewired.
+    Rewire { pin: Pin, to: Source },
+    /// Argument `arg` of the function block call `node` is `to`: replaced
+    /// where the call has it, added after the last argument where not.
+    SetFbArg {
+        pou: String,
+        node: NodeId,
+        arg: String,
+        to: Source,
+    },
+    /// The statement written exactly at `span` is removed, with its line
+    /// when it has the line to itself (see [`Refusal::NotAStatement`]).
+    DeleteStmt { pou: String, span: Span },
+    /// Every use of variable `from` in the POU `pou` is written `to`.
+    Rename { pou: String, from: String, to: String },
 }
 
 /// Replace the bytes `start..end` of the source with `text`.
@@ -169,6 +225,43 @@ pub enum Refusal {
     WouldNotCompile(String),
     /// The result would differ from the diagram by more than the edit.
     WouldChangeMore(String),
+    /// A POU of the standard library: not part of the source.
+    LibraryPou(String),
+    /// No variable of that name in the POU.
+    NoSuchVariable {
+        name: String,
+        pou: String,
+    },
+    /// What feeds the input is a block, not a variable or a value (what).
+    NotALeaf(String),
+    /// The source's type is not the input's.
+    TypeMismatch {
+        expected: String,
+        found: String,
+    },
+    /// The write is not before the pin on its path (the variable).
+    NotWrittenYet(String),
+    /// The text given for a variable is not one.
+    NotAVariable(String),
+    /// The block given as a write is not one.
+    NotAWrite,
+    /// The block is not a function block call.
+    NotAFunctionBlock,
+    /// The function block has no such input.
+    NotAnInput {
+        fb: String,
+        arg: String,
+    },
+    /// The call has unnamed arguments, so a named one cannot follow.
+    UnnamedArguments,
+    /// The range is not exactly one statement.
+    NotAStatement,
+    /// A reserved word of the language.
+    KeywordAsName(String),
+    /// Not a name (the reason).
+    NotAName(String),
+    /// A variable, block, type or value of that name exists.
+    NameTaken(String),
 }
 
 impl fmt::Display for Refusal {
@@ -222,6 +315,38 @@ impl fmt::Display for Refusal {
                 write!(f, "the edit would leave a program that does not compile ({m})")
             }
             Self::WouldChangeMore(m) => write!(f, "the edit would change more than asked ({m})"),
+            Self::LibraryPou(p) => write!(
+                f,
+                "{p} is part of the standard library, not of this source, so it cannot be edited"
+            ),
+            Self::NoSuchVariable { name, pou } => {
+                write!(f, "there is no variable called {name} in {pou}")
+            }
+            Self::NotALeaf(what) => write!(
+                f,
+                "that input is fed by {what}, not by a variable or a value: change the inputs of that block instead"
+            ),
+            Self::TypeMismatch { expected, found } => write!(
+                f,
+                "the types do not fit: that input takes {expected} and the new source is {found}"
+            ),
+            Self::NotWrittenYet(v) => write!(
+                f,
+                "{v} is not written at that point of the scan (the write is after it, in another branch, \
+                 or {v} is written again in between), so the input would read the variable instead"
+            ),
+            Self::NotAVariable(t) => write!(f, "{t:?} is not a variable, member or element"),
+            Self::NotAWrite => write!(f, "that block is not a write"),
+            Self::NotAFunctionBlock => write!(f, "that block is not a function block call"),
+            Self::NotAnInput { fb, arg } => write!(f, "{fb} has no input called {arg}"),
+            Self::UnnamedArguments => write!(
+                f,
+                "that call passes its arguments by position, so a named one cannot be added to it"
+            ),
+            Self::NotAStatement => write!(f, "that range of the source is not exactly one statement"),
+            Self::KeywordAsName(w) => write!(f, "{w} is a reserved word of the language, not a name"),
+            Self::NotAName(m) => write!(f, "that is not a name: {m}"),
+            Self::NameTaken(n) => write!(f, "the name {n} is already in use"),
         }
     }
 }
@@ -249,6 +374,10 @@ pub fn apply(src: &str, module: &Module, edit: Edit) -> Result<Patch, Refusal> {
         return Err(Refusal::StaleDiagram);
     }
     let plan = match &edit {
+        Edit::Rewire { pin, to } => return more::rewire(src, module, pin, to),
+        Edit::SetFbArg { pou, node, arg, to } => return more::set_fb_arg(src, module, pou, *node, arg, to),
+        Edit::DeleteStmt { pou, span } => return more::delete_stmt(src, module, pou, *span),
+        Edit::Rename { pou, from, to } => return more::rename(src, module, pou, from, to),
         Edit::SetConst { pin, value } => set_const(src, module, pin, *value)?,
         Edit::ToggleNegation(Bubble::Pin(pin)) => toggle_pin(src, module, pin)?,
         Edit::ToggleNegation(Bubble::Gate { pou, region }) => toggle_gate(src, module, pou, *region)?,
@@ -531,9 +660,14 @@ fn context(d: &Diagram, node: NodeId, input: usize) -> u8 {
 }
 
 fn pou_of<'m>(module: &'m Module, name: &str) -> Result<&'m Pou, Refusal> {
-    module
-        .pou(name)
-        .ok_or_else(|| Refusal::NoSuchPou(name.to_string()))
+    module.pou(name).ok_or_else(|| {
+        let up = name.to_ascii_uppercase();
+        if ast::library().pous.iter().any(|p| p.name == up) {
+            Refusal::LibraryPou(up)
+        } else {
+            Refusal::NoSuchPou(name.to_string())
+        }
+    })
 }
 
 fn check_node(d: &Diagram, node: NodeId) -> Result<(), Refusal> {

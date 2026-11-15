@@ -15,9 +15,11 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use common::{SIZES, check};
-use helmsman_diagram::edit::{self, Bubble, Edit, Literal, Pin, Refusal};
-use helmsman_diagram::{Diagram, Module, NodeId, NodeKind, Why, annotate, diff, drivers, explain, lower};
-use helmsman_iec::ast::BinOp;
+use helmsman_diagram::edit::{self, Bubble, Edit, Literal, Pin, Refusal, Source};
+use helmsman_diagram::{
+    Diagram, Module, NodeId, NodeKind, Span, Why, annotate, diff, drivers, explain, lower,
+};
+use helmsman_iec::ast::{BinOp, Pos, Stmt, StmtKind};
 use helmsman_iec::{Image, Program, Ty, Value, compile};
 use proptest::prelude::*;
 
@@ -328,6 +330,129 @@ fn offered(m: &Module) -> Vec<Edit> {
     out
 }
 
+/// The statements of the source's POUs as source ranges.
+fn walk_stmts(body: &[Stmt], pou: &str, off: &dyn Fn(Pos) -> usize, out: &mut Vec<(String, Span)>) {
+    for s in body {
+        out.push((
+            pou.to_string(),
+            Span {
+                start: off(s.pos),
+                end: off(s.end),
+            },
+        ));
+        match &s.kind {
+            StmtKind::If(conds, other) => {
+                for (_, b) in conds {
+                    walk_stmts(b, pou, off, out);
+                }
+                walk_stmts(other, pou, off, out);
+            }
+            StmtKind::Case(_, arms, other) => {
+                for (_, b) in arms {
+                    walk_stmts(b, pou, off, out);
+                }
+                walk_stmts(other, pou, off, out);
+            }
+            StmtKind::For { body, .. } | StmtKind::While(_, body) | StmtKind::Repeat(body, _) => {
+                walk_stmts(body, pou, off, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn stmt_spans(src: &str) -> Vec<(String, Span)> {
+    let mut starts = vec![0usize];
+    starts.extend(
+        src.bytes()
+            .enumerate()
+            .filter(|(_, b)| *b == b'\n')
+            .map(|(i, _)| i + 1),
+    );
+    let off = |p: Pos| starts[p.line as usize - 1] + p.col as usize - 1;
+    let unit = helmsman_iec::ast::parse(src).unwrap();
+    let mut out = Vec::new();
+    for p in &unit.pous {
+        walk_stmts(&p.body, &p.name, &off, &mut out);
+    }
+    out
+}
+
+/// The edits that change what feeds a block, remove a statement or rename
+/// a variable: every pin tried against a few sources, every function block
+/// call against its inputs, every statement deleted, every variable renamed.
+fn offered_more(src: &str, m: &Module) -> Vec<Edit> {
+    let mut out = Vec::new();
+    for p in &m.pous {
+        let d = &p.diagram;
+        let writes: Vec<NodeId> = d
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Write { .. }))
+            .map(|n| n.id)
+            .collect();
+        for n in &d.nodes {
+            for input in 0..n.ins.len() {
+                let pin = Pin {
+                    pou: p.name.clone(),
+                    node: n.id,
+                    input,
+                };
+                let mut sources = vec![
+                    Source::Var("x".into()),
+                    Source::Var("a".into()),
+                    Source::Const(Literal::Bool(true)),
+                    Source::Const(Literal::Int(3)),
+                    Source::Const(Literal::Time(2_000_000_000)),
+                ];
+                sources.extend(writes.iter().take(2).map(|w| Source::Write(*w)));
+                sources.extend(writes.iter().rev().take(1).map(|w| Source::Write(*w)));
+                for to in sources {
+                    out.push(Edit::Rewire { pin: pin.clone(), to });
+                }
+            }
+            if let NodeKind::Fb { .. } = &n.kind {
+                for (arg, to) in [
+                    ("PT", Source::Const(Literal::Time(7_000_000_000))),
+                    ("IN", Source::Var("y".into())),
+                    ("in", Source::Var("x".into())),
+                    ("NOPE", Source::Var("x".into())),
+                ] {
+                    out.push(Edit::SetFbArg {
+                        pou: p.name.clone(),
+                        node: n.id,
+                        arg: arg.into(),
+                        to,
+                    });
+                }
+            }
+        }
+        let mut names: Vec<&String> = p.vars.keys().collect();
+        names.sort();
+        for v in names {
+            for to in ["renamed_var", "x", "IF"] {
+                out.push(Edit::Rename {
+                    pou: p.name.clone(),
+                    from: v.clone(),
+                    to: to.into(),
+                });
+            }
+        }
+    }
+    for (pou, span) in stmt_spans(src) {
+        out.push(Edit::DeleteStmt { pou, span });
+    }
+    // A range that is not a statement.
+    out.push(Edit::DeleteStmt {
+        pou: "T".into(),
+        span: Span {
+            start: 3,
+            end: src.len() - 3,
+        },
+    });
+    out
+}
+
 /// Whether refusing `e` with `r` is an honest answer for a program that
 /// compiles: the diagram offers every bubble and every operator, so a
 /// refusal must be about the thing (no bubble on a constant, a number is
@@ -335,13 +460,32 @@ fn offered(m: &Module) -> Vec<Edit> {
 /// bookkeeping.
 fn honest(e: &Edit, r: &Refusal) -> bool {
     match r {
-        Refusal::NoBubble | Refusal::NotBoolean | Refusal::NoText | Refusal::NoCondition => {
-            matches!(e, Edit::ToggleNegation(_))
-        }
+        Refusal::NoBubble | Refusal::NotBoolean | Refusal::NoText | Refusal::NoCondition => matches!(
+            e,
+            Edit::ToggleNegation(_) | Edit::Rewire { .. } | Edit::SetFbArg { .. }
+        ),
         // `NOT TRUE` is a literal folded from an expression.
         Refusal::NotAValue(_) => matches!(e, Edit::SetConst { .. }),
         // A NOT on a number, or an operator the types do not take.
         Refusal::WouldNotCompile(_) => true,
+        // Pins fed by blocks, sources of another type, writes not yet made,
+        // a port that is not there: each about the thing asked for.
+        Refusal::NotALeaf(_)
+        | Refusal::TypeMismatch { .. }
+        | Refusal::NotWrittenYet(_)
+        | Refusal::NoSuchVariable { .. }
+        | Refusal::NotAnInput { .. }
+        | Refusal::NothingToChange => matches!(
+            e,
+            Edit::Rewire { .. }
+                | Edit::SetFbArg { .. }
+                | Edit::Rename { .. }
+                | Edit::ToggleNegation(_)
+                | Edit::SetConst { .. }
+        ),
+        Refusal::NameTaken(_) | Refusal::KeywordAsName(_) => matches!(e, Edit::Rename { .. }),
+        // The range offered that is not one statement.
+        Refusal::NotAStatement => matches!(e, Edit::DeleteStmt { .. }),
         _ => false,
     }
 }
@@ -532,6 +676,9 @@ proptest! {
                         }
                         Edit::SwapOp { pou, node, .. } => (pou.clone(), Some(*node), true),
                         Edit::ToggleNegation(Bubble::Gate { pou, .. }) => (pou.clone(), None, false),
+                        Edit::Rewire { .. } | Edit::SetFbArg { .. } | Edit::DeleteStmt { .. } | Edit::Rename { .. } => {
+                            unreachable!("offered by offered_more")
+                        }
                     };
                     let stmt_of = |id: NodeId| m.pou(&pou).unwrap().diagram.node(id).stmt;
                     let changed = changed_ids(&m, &m2, &pou);
@@ -559,6 +706,76 @@ proptest! {
             }
         }
         prop_assert!(made > 0, "something is always editable\n{src}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(12))]
+
+    /// The edits that rewire, set an argument, delete or rename, offered
+    /// on every pin, call, statement and variable of generated programs
+    /// (bare and with a comment between every pair of tokens): when one is
+    /// made, the bytes outside its patch are the original's, the result
+    /// compiles and lowers, the inverse restores the original exactly, and
+    /// the shape is what the edit says (a rename keeps every block and
+    /// wire, a delete takes only statements, a rewire keeps the statement
+    /// list); when it is refused, the reason is about the thing asked for.
+    #[test]
+    fn every_offered_rewire_argument_delete_and_rename_is_exact_checked_and_undoable(
+        body in proptest::collection::vec(stmt(), 1..4),
+        early_return in any::<bool>(),
+        noisy in any::<bool>(),
+    ) {
+        let body: Vec<String> = if noisy {
+            body.iter().map(|s| s.replace(' ', " (* c *) ")).collect()
+        } else {
+            body
+        };
+        let src = program(&body, early_return);
+        let m = lowered(&src)?;
+        let mut made = [0usize; 4];
+        for e in offered_more(&src, &m) {
+            match edit::apply(&src, &m, e.clone()) {
+                Err(r) => prop_assert!(honest(&e, &r), "{e:?} refused: {r}\n{src}"),
+                Ok(patch) => {
+                    prop_assert!(
+                        patch.start <= patch.end && patch.end <= src.len()
+                            && src.is_char_boundary(patch.start) && src.is_char_boundary(patch.end),
+                        "{patch:?}"
+                    );
+                    let out = patch.apply_to(&src);
+                    prop_assert_eq!(&out[..patch.start], &src[..patch.start]);
+                    prop_assert_eq!(&out[patch.start + patch.text.len()..], &src[patch.end..]);
+                    prop_assert_eq!(&patch.inverse(&src).apply_to(&out), &src);
+                    let m2 = lowered(&out)?;
+                    prop_assert_eq!(m.pous.len(), m2.pous.len());
+                    let (a, b) = (&m.program().unwrap().diagram, &m2.program().unwrap().diagram);
+                    match &e {
+                        Edit::Rename { .. } => {
+                            made[0] += 1;
+                            prop_assert_eq!(a.nodes.len(), b.nodes.len());
+                            prop_assert_eq!(a.wires.len(), b.wires.len());
+                            prop_assert_eq!(a.regions.len(), b.regions.len());
+                            prop_assert_eq!(a.stmts.len(), b.stmts.len());
+                        }
+                        Edit::DeleteStmt { .. } => {
+                            made[1] += 1;
+                            prop_assert!(out.len() < src.len());
+                        }
+                        Edit::Rewire { .. } => {
+                            made[2] += 1;
+                            prop_assert_eq!(a.stmts.len(), b.stmts.len());
+                            prop_assert_eq!(a.regions.len(), b.regions.len());
+                        }
+                        _ => {
+                            made[3] += 1;
+                            prop_assert_eq!(a.stmts.len(), b.stmts.len());
+                        }
+                    }
+                }
+            }
+        }
+        prop_assert!(made.iter().all(|&n| n > 0), "each kind is made at least once: {made:?}\n{src}");
     }
 }
 

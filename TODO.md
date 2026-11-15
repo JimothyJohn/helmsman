@@ -175,7 +175,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 - [ ] **The box half of the agent's device profile: propose, check, rename, save** — PROTOCOLS.md step 5. The relay half is merged (agent-relay #20, 2026-11-13, by the helmsman-devices-8d session): agent helmsman/v10 has the client tool `propose_device_profile {name, text, summary}`, and on the real Murrelektronik 55086 EDS and handbook every bit address it proposed matched the hand-made `.device` (it chose true lengths of 3 and 1 bytes against the hand-made 4 and 2, and said so). Left here: helmsman-agent executes `propose_device_profile` by running the text through `Profile::parse` and returns the parse errors or the channel list to the model; a box opts into v10 (`--relay-agent v10`); the Devices tab shows the proposed channels for the user to rename and saves `NAME.device` into the project; an upload route holds the EDS or manual the agent reads.
   needs: nothing
-  notes: 2026-11-15: the box side is in (Nick: build it now). The tool `propose_device_profile` (agent v10, `--relay-agent v10`) holds a profile read by `Profile::parse`; routes `GET|POST|DELETE /api/device-profile/proposal` and `POST /api/device-profile/proposal/accept` (an engineer saves `NAME.device` into a project, channels renamed); the vendor's file goes up as a drop-in (`POST /api/dropins`) and the agent reads it with `read_dropin`. Left: the Devices tab shows the proposed channels, renames them and saves.
+  notes: 2026-11-15: the box side and the Devices tab's half are in: the tab shows the proposal, renames and saves it into the open project (`device_proposal.rs`), with every refusal beside its cause. Left: the canvas has no way to hand the agent the vendor's file. Nothing in it calls `POST /api/dropins` (`chat` sends `{message, session}` only, without `dropins`), and the Agent tab's flow edits the program file, so "not in the device library yet" on a found device still offers only Advanced. Needs a decision: (a) a button on that row that picks the file (`web::pick_file`), posts it as a drop-in, and sends the agent a chat message with `dropins: [id]`; or (b) the same button giving the agent a link to the vendor's page for the relay's `fetch_document`. Then the saved profile has no way to become a device line from the tab (Scan's Add finds only library profiles).
   result: a device the library does not know gets a profile the user checked, from its vendor's file, without a hand-written map
   est: 2d
   difficulty: med
@@ -607,17 +607,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: scl-import
   asked: 2026-11-08
   by: claude-session
-
-- [ ] **Diagram edits 3: rewire, FB arguments, delete, rename** — Rewire (a pin to a variable, a constant or an earlier write), SetFbArg (`PT := T#5s`), DeleteStmt (the whole statement by its range), Rename (reuses `rename_ident`).
-  result: V1's full set of logic edits from the diagram
-  notes: refusals, each in plain words: type mismatch (the compiled program's types, as the NOT bubble uses), a source not yet written at that point, library POUs (`system`), a diagram whose source no longer matches the buffer (hash), a keyword as a name. `rename_ident`'s `ident()` accepts keywords today (`IF` passes), so refuse that up front.
-  est: 1d
-  difficulty: med
-  depends: diagram-edit-core
-  id: diagram-edit-rewire
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
 
 - [ ] **Diagram edits 4: editing on the canvas, simulation** — st_view.rs gestures: right-click a block or pin for Change operator ▸, Negate input, Connect to… (a searchable variable list, works on touch), Edit value…, Rename…, Delete statement; double-click a constant to edit it in place. Commit: push the old text into the same `TextEditState` undoer the editor uses (`add_undo`, its own entry), so Ctrl+Z undoes a diagram edit like typing; mark dirty; scroll the ST to the patch and highlight it about 1.5 s; rebuild the `Viewer` keeping the camera and the picked block.
   result: in the playground and browser projects an engineer changes logic on the diagram and the code follows
