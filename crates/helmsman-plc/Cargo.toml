@@ -122,6 +122,10 @@ name = "devconf_agent"
 required-features = ["box"]
 
 [[test]]
+name = "device_profile"
+required-features = ["box"]
+
+[[test]]
 name = "dhcp"
 required-features = ["box"]
 
