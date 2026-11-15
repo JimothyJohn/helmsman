@@ -2918,6 +2918,16 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   safeguards fails them; each fault does what its words say) and
   `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
   laptop's, a tablet's and a phone's width).
+- **Name the I/O first** (`io_names.rs`; Nick, 2026-11-14): while an
+  instruction makes a new project (`Scope::NewProject`), the Agent tab
+  carries a fold where the engineer lists the program's points: a name,
+  input or output, BOOL / INT / REAL, and what it is in a few words
+  (`PlaygroundView::new_io`). `send_instruction` puts the list ahead of
+  what was typed (`IoList::instruction`: the names to use exactly, no
+  other input or output), and a name that cannot be a variable's, or one
+  used twice, stops the send and says why. The front door's tank was
+  written from such a list. Contracts in `io_names.rs`'s tests and
+  `ui_tests/io_names.rs` (the pane keeps its width with long names).
 - **The guided tour** (`tour.rs`; `?tour`, Help › Take the tour; Nick,
   2026-11-06): a card beside the control each step is about, the control
   outlined, over everything in the `Tooltip` order so no panel moves. A

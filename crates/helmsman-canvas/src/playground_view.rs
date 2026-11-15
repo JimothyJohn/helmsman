@@ -201,6 +201,8 @@ pub struct PlaygroundView {
     /// (`crate::requirements`): after every build change, before Deploy
     /// and "Use this code".
     pub tests: crate::requirements::Results,
+    /// The points named ahead of a new program (`crate::io_names`).
+    pub new_io: crate::io_names::IoList,
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
@@ -275,6 +277,7 @@ impl PlaygroundView {
             to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
+            new_io: crate::io_names::IoList::default(),
             selection: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
@@ -799,6 +802,15 @@ impl PlaygroundView {
             return;
         }
         let scope = self.scope();
+        // A new program: the points the engineer named go ahead of what
+        // was typed, and a bad name stops it here.
+        if scope == crate::scope::Scope::NewProject {
+            if let Some(problem) = self.new_io.problems().first() {
+                self.instruct.failed(&format!("the I/O list: {problem}"));
+                return;
+            }
+            self.instruct.draft = self.new_io.instruction(&self.instruct.draft);
+        }
         let file = crate::instruct::target(&scope);
         let earlier = crate::instruct::recent(
             self.proj.revisions().iter().filter_map(|r| r.page.as_deref()),
@@ -2482,6 +2494,10 @@ impl PlaygroundView {
             }
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
+            // A new program starts from its I/O, named by the engineer.
+            if self.scope() == crate::scope::Scope::NewProject {
+                crate::io_names::ui(ui, chrome, &mut self.new_io);
+            }
             let r = ui
                 .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
                 .tip("On: when the Agent's change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
