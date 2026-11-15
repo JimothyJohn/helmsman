@@ -284,12 +284,19 @@ fn an_empty_port_retries_as_table_42_allows() {
     assert_eq!(bench.master.inputs(), None);
     let wakes = bench.wake_ups();
     assert!(wakes.len() >= 9, "{} wake-ups in 5 s", wakes.len());
-    for (index, pair) in wakes.windows(2).enumerate() {
-        let gap = pair[1] - pair[0];
+    // Each gap runs from the moment the COM1 test message timed out.
+    let given_up: Vec<u64> = bench
+        .sent()
+        .iter()
+        .filter(|s| s.1 == Rate::Com1)
+        .map(|s| s.0 + Rate::Com1.micros(58))
+        .collect();
+    for (index, (end, wake)) in given_up.iter().zip(&wakes[1..]).enumerate() {
+        let gap = wake - end;
         if index % 3 == 2 {
-            assert!((500_000..=1_100_000).contains(&gap), "sequence gap {gap}");
+            assert!((500_000..=1_000_000).contains(&gap), "sequence gap {gap}");
         } else {
-            assert!((30_000..=70_000).contains(&gap), "retry gap {gap}");
+            assert!((30_000..=50_000).contains(&gap), "retry gap {gap}");
         }
     }
     // Three test messages for every wake-up, and nothing else.
@@ -308,6 +315,8 @@ fn recovery_and_cycle_times_are_kept() {
         (Rate::Com2, sensor()),
         (Rate::Com3, valve()),
         (Rate::Com1, wide()),
+        // A Device far slower than its line: 4,0 ms at COM3.
+        (Rate::Com3, page(0x28, 0x11, 0x10, 0x00)),
     ] {
         let mut bench = Bench::new(rate, page, Config::default());
         assert!(bench.operate_within(3_000_000));
