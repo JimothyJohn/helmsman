@@ -592,6 +592,27 @@ impl<'a> Ck<'a> {
         self.warnings.push(Diagnostic { pos, msg: msg.into() });
     }
 
+    /// A `TASK` or a program instance of the `CONFIGURATION` was read and
+    /// nothing runs from it. Every one is told, whatever it names: its type
+    /// is not looked up, and two tasks of one name are two warnings.
+    fn warn_configured(&mut self, items: &[parser::Configured]) {
+        for item in items {
+            let msg = match &item.kind {
+                parser::ConfiguredKind::Task { name, interval_ns } => {
+                    let at =
+                        interval_ns.map_or_else(String::new, |ns| format!(" (interval {})", time_words(ns)));
+                    format!(
+                        "TASK {name}{at} was not taken from this file: a module's scan rate is set where the module is deployed"
+                    )
+                }
+                parser::ConfiguredKind::Instance { name, ty } => format!(
+                    "program instance {name} of {ty} was not taken from this file: a module runs its one PROGRAM"
+                ),
+            };
+            self.warn(item.pos, msg);
+        }
+    }
+
     /// Whether `name` in POU `pou` failed to declare (and was reported).
     fn was_dropped(&self, pou: usize, name: &str) -> bool {
         self.dropped.get(&pou).is_some_and(|d| d.contains(name)) || self.global_dropped.contains(name)
@@ -3286,6 +3307,7 @@ pub fn check(
         ck.check_body(p);
     }
     ck.check_recursion();
+    ck.warn_configured(&user.configured);
     ck.warnings.sort_by_key(|d| d.pos);
     ck.warnings.dedup();
     let warnings = ck.warnings.clone();
@@ -3307,6 +3329,35 @@ pub fn check(
         }
     };
     (result, warnings)
+}
+
+/// A duration in the words an engineer writes it: `T#1s`, `T#20ms`,
+/// `T#1h30m`.
+pub(crate) fn time_words(ns: i128) -> String {
+    let mut out = String::from("T#");
+    if ns < 0 {
+        out.push('-');
+    }
+    let mut rest = ns.unsigned_abs();
+    for (unit, size) in [
+        ("d", 86_400_000_000_000u128),
+        ("h", 3_600_000_000_000),
+        ("m", 60_000_000_000),
+        ("s", 1_000_000_000),
+        ("ms", 1_000_000),
+        ("us", 1_000),
+        ("ns", 1),
+    ] {
+        if rest >= size {
+            out.push_str(&(rest / size).to_string());
+            out.push_str(unit);
+            rest %= size;
+        }
+    }
+    if out.ends_with('#') || out.ends_with('-') {
+        out.push_str("0s");
+    }
+    out
 }
 
 #[cfg(test)]

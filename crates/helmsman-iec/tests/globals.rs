@@ -294,17 +294,19 @@ fn a_bare_top_level_block_and_a_configuration_can_both_declare_globals() {
 
 #[test]
 fn the_rest_of_a_configuration_is_refused_in_plain_words() {
+    // TASK lines and program instances used to be refused here; they are
+    // read past with a warning now (tests/config_tasks.rs).
     let task = "TASK t(INTERVAL := T#20ms, PRIORITY := 0);";
-    refused(
-        &format!(
-            "CONFIGURATION c RESOURCE r ON PLC {task} END_RESOURCE END_CONFIGURATION PROGRAM p END_PROGRAM"
-        ),
-        "TASK is not supported: a module's scan rate is set where the module is deployed, not in its source",
-    );
-    refused(
-        "CONFIGURATION c RESOURCE r ON PLC PROGRAM i : p; END_RESOURCE END_CONFIGURATION PROGRAM p END_PROGRAM",
-        "a PROGRAM instance in a RESOURCE is not supported: a module runs its one PROGRAM",
-    );
+    for item in [task, "PROGRAM i : p;"] {
+        let (compiled, warnings) = helmsman_iec::compile_warned(
+            &format!(
+                "CONFIGURATION c RESOURCE r ON PLC {item} END_RESOURCE END_CONFIGURATION PROGRAM p END_PROGRAM"
+            ),
+            SIZES,
+        );
+        assert!(compiled.is_ok(), "{item}");
+        assert_eq!(warnings.len(), 1, "{item}");
+    }
     refused(
         "CONFIGURATION c VAR_ACCESS x : p.a : INT READ_ONLY; END_VAR END_CONFIGURATION PROGRAM p END_PROGRAM",
         "VAR_ACCESS is not supported: modules do not share variables, signals are how modules talk",
@@ -315,7 +317,7 @@ fn the_rest_of_a_configuration_is_refused_in_plain_words() {
     );
     refused(
         "CONFIGURATION c RESOURCE r ON PLC x := 1; END_RESOURCE END_CONFIGURATION PROGRAM p END_PROGRAM",
-        "only global variables are read from a RESOURCE",
+        "only global variables are used from a RESOURCE",
     );
     refused(
         "CONFIGURATION c VAR_GLOBAL a : INT; END_VAR",

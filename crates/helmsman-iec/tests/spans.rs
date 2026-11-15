@@ -167,8 +167,11 @@ VAR_GLOBAL
 END_VAR
 CONFIGURATION cfg
   VAR_GLOBAL c : INT := - 7; END_VAR
+  TASK slow(INTERVAL := T#1s + T#2s, PRIORITY := ( 1 ));
   RESOURCE r ON plc
     VAR_GLOBAL RETAIN d : REAL := 1.5E3; e : INT := k; END_VAR
+    TASK fast(INTERVAL := T#10ms, PRIORITY := 0);
+    PROGRAM i WITH fast : t(x := g + ( 2 ), y => d);
   END_RESOURCE
 END_CONFIGURATION
 PROGRAM t

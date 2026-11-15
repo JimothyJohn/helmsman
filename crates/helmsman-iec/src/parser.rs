@@ -288,6 +288,26 @@ pub struct Unit {
     /// before the first POU and those inside a `CONFIGURATION` or its
     /// `RESOURCE`, which all go into one namespace.
     pub globals: Vec<VarDecl>,
+    /// The `TASK` lines and program instances of the `CONFIGURATION` and its
+    /// `RESOURCE`, in source order. They are read past: the checker reports
+    /// each as a warning and nothing runs from them.
+    pub configured: Vec<Configured>,
+}
+
+/// A `TASK` or a program instance standing in a `CONFIGURATION`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Configured {
+    pub pos: Pos,
+    pub kind: ConfiguredKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfiguredKind {
+    /// `TASK name (...)`, with its `INTERVAL` when that is a time literal,
+    /// in nanoseconds.
+    Task { name: String, interval_ns: Option<i128> },
+    /// `PROGRAM name [WITH task] : type [(connections)]`.
+    Instance { name: String, ty: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -716,7 +736,7 @@ impl Parser {
                     );
                 }
                 configured = true;
-                self.configuration(&mut u.globals)?;
+                self.configuration(&mut u)?;
                 continue;
             }
             let pos = self.pos();
@@ -776,65 +796,135 @@ impl Parser {
         }
     }
 
-    /// `CONFIGURATION name ... END_CONFIGURATION`: only what a module can
-    /// use is read, which is the `VAR_GLOBAL` blocks of the configuration
-    /// and of its one `RESOURCE`. Tasks and program instances say how a
-    /// controller runs several programs; a module is one program, whose
-    /// scan rate is set where it is deployed, so they are refused.
-    fn configuration(&mut self, globals: &mut Vec<VarDecl>) -> R<()> {
+    /// `CONFIGURATION name ... END_CONFIGURATION`: the `VAR_GLOBAL` blocks of
+    /// the configuration and of its one `RESOURCE` are read and used. Tasks
+    /// and program instances say how a controller runs several programs; a
+    /// module is one program, whose scan rate is set where it is deployed,
+    /// so they are read past and the checker warns about each.
+    fn configuration(&mut self, u: &mut Unit) -> R<()> {
         self.advance();
         self.ident()?;
         let mut resource = false;
         loop {
-            if self.eat_kw("VAR_GLOBAL") {
-                self.var_block(Section::Var, globals)?;
-            } else if self.is_kw("RESOURCE") && matches!(self.tok_at(1), Tok::Ident(_)) {
+            if self.is_kw("RESOURCE") && matches!(self.tok_at(1), Tok::Ident(_)) {
                 if resource {
                     return self.err("a module has one RESOURCE: put every VAR_GLOBAL block in this one");
                 }
                 resource = true;
-                self.resource(globals)?;
+                self.resource(u)?;
             } else if self.eat_kw("END_CONFIGURATION") {
                 return Ok(());
-            } else {
+            } else if !self.config_item(u)? {
                 return self.config_refusal("CONFIGURATION");
             }
         }
     }
 
-    fn resource(&mut self, globals: &mut Vec<VarDecl>) -> R<()> {
+    fn resource(&mut self, u: &mut Unit) -> R<()> {
         self.advance();
         self.ident()?;
         if self.eat_kw("ON") {
             self.ident()?;
         }
         loop {
-            if self.eat_kw("VAR_GLOBAL") {
-                self.var_block(Section::Var, globals)?;
-            } else if self.eat_kw("END_RESOURCE") {
+            if self.eat_kw("END_RESOURCE") {
                 return Ok(());
-            } else {
+            }
+            if !self.config_item(u)? {
                 return self.config_refusal("RESOURCE");
             }
         }
     }
 
-    /// What stands where only `VAR_GLOBAL` or the end can: said in plain
+    /// One `VAR_GLOBAL` block, `TASK` or program instance where a
+    /// `CONFIGURATION` or `RESOURCE` takes them; false when the token is
+    /// none of them.
+    fn config_item(&mut self, u: &mut Unit) -> R<bool> {
+        if self.eat_kw("VAR_GLOBAL") {
+            self.var_block(Section::Var, &mut u.globals)?;
+        } else if self.is_kw("TASK") {
+            let item = self.task()?;
+            u.configured.push(item);
+        } else if self.is_kw("PROGRAM") {
+            let item = self.instance()?;
+            u.configured.push(item);
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// `TASK name [(INTERVAL := t, PRIORITY := n, SINGLE := x)];`
+    fn task(&mut self) -> R<Configured> {
+        let pos = self.pos();
+        self.advance();
+        let (name, _) = self.ident()?;
+        let mut interval_ns = None;
+        if self.eat(&Tok::LParen) && !self.eat(&Tok::RParen) {
+            loop {
+                let word = match self.tok().clone() {
+                    Tok::Ident(w) if matches!(w.as_str(), "INTERVAL" | "PRIORITY" | "SINGLE") => w,
+                    t => {
+                        return self.err(format!(
+                            "expected INTERVAL, PRIORITY or SINGLE in a TASK, found {t}"
+                        ));
+                    }
+                };
+                self.advance();
+                self.expect(&Tok::Assign)?;
+                let value = self.expr()?;
+                if word == "INTERVAL"
+                    && let ExprKind::Time(ns) = value.kind
+                {
+                    interval_ns = Some(ns);
+                }
+                if self.eat(&Tok::RParen) {
+                    break;
+                }
+                self.expect(&Tok::Comma)?;
+            }
+        }
+        self.expect(&Tok::Semi)?;
+        Ok(Configured {
+            pos,
+            kind: ConfiguredKind::Task { name, interval_ns },
+        })
+    }
+
+    /// `PROGRAM name [WITH task] : type [(connections)];` The type is not
+    /// looked up: nothing is run from an instance.
+    fn instance(&mut self) -> R<Configured> {
+        let pos = self.pos();
+        self.advance();
+        if !self.eat_kw("RETAIN") {
+            self.eat_kw("NON_RETAIN");
+        }
+        let (name, _) = self.ident()?;
+        if self.eat_kw("WITH") {
+            self.ident()?;
+        }
+        self.expect(&Tok::Colon)?;
+        let (ty, _) = self.ident()?;
+        if self.eat(&Tok::LParen) {
+            self.args()?;
+        }
+        self.expect(&Tok::Semi)?;
+        Ok(Configured {
+            pos,
+            kind: ConfiguredKind::Instance { name, ty },
+        })
+    }
+
+    /// What stands where only the items above or the end can: said in plain
     /// words, so an imported configuration shows what a module leaves out.
     fn config_refusal<T>(&self, within: &str) -> R<T> {
         let msg = match self.tok() {
-            Tok::Ident(w) if w == "TASK" => "TASK is not supported: a module's scan rate is set where the \
-                 module is deployed, not in its source. Remove the TASK lines"
-                .to_string(),
-            Tok::Ident(w) if w == "PROGRAM" => "a PROGRAM instance in a RESOURCE is not supported: a \
-                 module runs its one PROGRAM, so remove the instance (and the TASK it names)"
-                .to_string(),
             Tok::Ident(w) if w == "VAR_ACCESS" || w == "VAR_CONFIG" => {
                 format!("{w} is not supported: modules do not share variables, signals are how modules talk")
             }
             Tok::Eof => format!("this {within} is never closed: add END_{within}"),
             t => format!(
-                "expected VAR_GLOBAL or END_{within}, found {t}: only global variables are read from a {within}"
+                "expected VAR_GLOBAL, TASK, PROGRAM or END_{within}, found {t}: only global variables are used from a {within}; its tasks and program instances are read past"
             ),
         };
         self.err(msg)
