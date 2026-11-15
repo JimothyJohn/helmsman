@@ -204,8 +204,10 @@ impl Walk<'_> {
     }
 }
 
-/// Checks every statement and expression in the bodies of `src`'s POUs.
-/// Returns how many nodes it checked.
+/// Checks every statement and expression in the bodies of `src`'s POUs, and
+/// every expression in their variable declarations' initialisers (`VAR x :
+/// INT := 1 + 2;`, array and structure initialisers included). Returns how
+/// many nodes it checked.
 ///
 /// # Errors
 /// The first node whose range does not read back, or `src` not parsing.
@@ -213,6 +215,11 @@ pub fn check(src: &str) -> Result<usize, String> {
     let unit = ast::parse(src).map_err(|e| format!("{}: {}", e.pos, e.msg))?;
     let mut w = Walk { src, seen: 0 };
     for pou in &unit.pous {
+        for v in &pou.vars {
+            if let Some(init) = &v.init {
+                w.init(init)?;
+            }
+        }
         w.block(&pou.body)?;
     }
     Ok(w.seen)
