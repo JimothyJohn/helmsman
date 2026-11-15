@@ -12,6 +12,8 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   id: iolink-membership
   asked: 2026-11-14
   by: claude-session (iolink)
+  answer: based-on for now
+  answered: 2026-11-15
 
 ## Needs your hands
 
@@ -69,15 +71,15 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   difficulty: low
   id: canvas-try
 
-- [ ] **Open raw Ethernet to your user on the Studio (one sudo script)** — Why it matters: only once a device has to be reached over PROFINET, and that is no longer first (Nick, 2026-11-13: EtherNet/IP and Modbus TCP are what plants run). PROFINET's cyclic data is raw Ethernet frames, not IP, and on macOS a program sends those through `/dev/bpf*`, which only root can open. Parked with the PROFINET cards. PROFINET's cyclic data, alarms and station discovery are Ethernet frames, not IP, and on macOS a program sends them through `/dev/bpf*`, which is root-only here (`/dev/bpf0` is root:wheel 0600; you are already in `access_bpf`, so Wireshark's helper was installed once and is gone). Until this runs, everything PROFINET is proven against the simulated device only: the BPF code has compiled and parsed synthetic buffers and has never carried a frame.
+- [x] **Open raw Ethernet to your user on the Studio (one sudo script)** — Why it matters: only once a device has to be reached over PROFINET, and that is no longer first (Nick, 2026-11-13: EtherNet/IP and Modbus TCP are what plants run). PROFINET's cyclic data is raw Ethernet frames, not IP, and on macOS a program sends those through `/dev/bpf*`, which only root can open. Parked with the PROFINET cards. PROFINET's cyclic data, alarms and station discovery are Ethernet frames, not IP, and on macOS a program sends them through `/dev/bpf*`, which is root-only here (`/dev/bpf0` is root:wheel 0600; you are already in `access_bpf`, so Wireshark's helper was installed once and is gone). Until this runs, everything PROFINET is proven against the simulated device only: the BPF code has compiled and parsed synthetic buffers and has never carried a frame.
   needs: a device that has to be reached over PROFINET; then `~/github/helmsman/scratch/27-bpf-access.sh` in the native terminal (sudo; again after each reboot), then `! ~/github/helmsman/scratch/28-profinet-scan.sh` here
   result: the scan lists the PROFINET stations on en0 (none is a fine answer with nothing plugged in: it proves frames go out and the listen works); a session can then run a box against a real device without sudo
+  done: 2026-11-15: /dev/bpf* are root:access_bpf 0660 (Wireshark's ChmodBPF LaunchDaemon is installed, so it holds across reboots; no sudo step needed). `scratch/28-profinet-scan.sh en0` from a session, no sudo: raw Ethernet 0x8892 opens, DCP Identify sent, 0 stations (nothing PROFINET on the wire).
   est: 5m
   difficulty: low
   id: profinet-raw-access
   asked: 2026-11-10
   by: claude-session
-  status: blocked
 
 - [ ] **Bring up the Novanta IMS Liberty MDrive over EtherNet/IP or Modbus TCP** — Why it matters: the first device on the bench that is not discrete I/O. A motor drive is where the device profile's "kinds" get decided (step (g) of `device-profiles`: a drive's enable, speed, position and fault as the same four channels whatever the vendor), and where a comms loss has to stop something that moves. PROFINET first is out (Nick, 2026-11-13), so this starts on the protocols plants run. What its files say (docs/devices/novanta-mdrive.md, read 2026-11-10): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1; its EDS is in the firmware zip. Steps: Modbus TCP as it ships (no vendor tool needed), read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested; then EtherNet/IP from its EDS, so one device compares two drivers; PROFINET later, if ever. Motion asks "cell clear?" once per session (hardware-guard).
   needs: the MDrive on 192.168.3.x with its DC supply and a free shaft (it was due the week of 2026-11-10: is it here?); its part number and firmware version (2.4.0.7 or later); the Modbus register map from Novanta's manual
@@ -180,7 +182,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **The box half of the agent's device profile: propose, check, rename, save** — PROTOCOLS.md step 5. The relay half is merged (agent-relay #20, 2026-11-13, by the helmsman-devices-8d session): agent helmsman/v10 has the client tool `propose_device_profile {name, text, summary}`, and on the real Murrelektronik 55086 EDS and handbook every bit address it proposed matched the hand-made `.device` (it chose true lengths of 3 and 1 bytes against the hand-made 4 and 2, and said so). Left here: helmsman-agent executes `propose_device_profile` by running the text through `Profile::parse` and returns the parse errors or the channel list to the model; a box opts into v10 (`--relay-agent v10`); the Devices tab shows the proposed channels for the user to rename and saves `NAME.device` into the project; an upload route holds the EDS or manual the agent reads.
-  needs: nothing
+  needs: The ioLogik has already done this, are we sure this is needed?
   result: a device the library does not know gets a profile the user checked, from its vendor's file, without a hand-written map
   est: 2d
   difficulty: med
@@ -197,6 +199,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   id: device-profile-publish
   asked: 2026-11-13
   by: claude-session
+  status: ready
 
 - [ ] **PROFINET from the node: a real device, then the node image** — Why it matters: only once a device has to be reached over PROFINET. Parked with `profinet-raw-access` (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first; PROFINET when a customer or a device needs it). the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block.
   needs: a device that has to be reached over PROFINET
@@ -305,6 +308,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-05
   by: claude-session
   notes: agent-relay PR #7 merged on 2026-11-07. Checked 2026-11-13: the relay's agents/helmsman has v1..v7 and explain-v1/v2, no v8, so nothing serves it yet (relay card relay-deploy-v2).
+  status: ready
 
 - [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.
   needs: a Modbus device that answers FC 43/14 to test on (does the E1213? check on the bench; the simulator answers it either way)
@@ -417,6 +421,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   id: agent-edits-not-files
   asked: 2026-11-13
   by: claude-session
+  status: ready
 
 - [ ] **Agent speed: compare faster models on the ladder** — Nick, 2026-11-13: approved lever. Two or three candidates through OpenRouter, each on the ladder for seconds, pass rate and cost, the table in the PR; the one picked is the relay's `RELAY_MODEL`, a deployment setting you change.
   needs: a relay serving each candidate (a local relay, or a test stage); your deploy for the one picked
@@ -500,6 +505,7 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   id: st-var-in-out
   asked: 2026-11-08
   by: claude-session
+  status: ready
 
 - [ ] **VAR_GLOBAL inside one module** — decided (Nick, 2026-11-08: `st-dialect-line`): VAR_GLOBAL is accepted at CONFIGURATION / RESOURCE scope inside one module and refused across modules, with a message that says signals are how modules talk. Imported CODESYS and Beremiz code uses it everywhere; the corpus will show how often. Oracle cases, property tests, the PLCopen importer's lowering of global variable lists, a relay profile id.
   result: a CODESYS or Beremiz project with globals imports into one module unchanged
@@ -509,6 +515,7 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   id: st-var-global
   asked: 2026-11-08
   by: claude-session
+  status: ready
 
 - [ ] **STRING[n], then typed asserts** — fixed-length `STRING[n]` (default 80 as the standard), with concatenation, LEN, LEFT/RIGHT/MID, CONCAT, FIND, comparisons and the conversions, bounded so the scan stays bounded and the edge node still builds (no_std: no heap). WSTRING later. Then the TcUnit idea from §5: `ASSERT_EQ_<TYPE>(Expected, Actual, Message)` (one block per type, no generics) so a red requirement test reads "speed was 40, expected 50 at 3.2 s" in the Requirements tab and in the agent's retry message. Oracle cases, property tests (every length boundary, invalid UTF-8 refused at the lexer), relay profile id.
   result: messages, recipe names, device IDs and OPC UA / webhook payloads can be written in ST; a failed test says what it saw
@@ -518,6 +525,7 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   id: st-string
   asked: 2026-11-08
   by: claude-session
+  status: ready
 
 - [ ] **Process-control library: 10-15 blocks with tests** — in `crates/helmsman-iec/src/library.st`, written here (OSCAT's license is unverified and it leans on pointers): `PID` with anti-windup and bumpless manual/auto transfer, `RAMP`, `HYST`, `SCALE` (raw to engineering units, using the signal's `unit`), `LIMIT_ALARM`, `FILTER_PT1`, `DEBOUNCE`, `PULSE_COUNT` and a rate, sequence helpers. Decided (Nick, 2026-11-08: `st-library-names`): OSCAT's pin and block names where they exist, the standard's otherwise, no aliases; the plain-words explanation of every block and pin goes in its tooltip and its help page, the way the UI rule "tooltips on everything" already works. Each block gets requirement tests of its own, the non-IEC ones are marked in the docs as `BLINK_PATTERN` is, and the agent's profile gets the list (a new id).
   result: an analog loop the agent writes calls a tested PID instead of a hand-rolled PI with its own windup bug
@@ -594,6 +602,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: st-tod-date
   asked: 2026-11-08
   by: claude-session
+  status: ready
 
 - [ ] **TwinCAT .TcPOU / .TcDUT / .TcGVL import** — INVESTIGATION.md §8: XML wrapping ST in CDATA, so the ST parser does the work and the importer is small; the L5X pattern (convert, refuse what does not map, list every problem). Beckhoff code leans on METHOD / PROPERTY and VAR_GLOBAL, so wait for `st-corpus` to say how much of it would import before spending the day.
   result: a TwinCAT project's POUs open in the editor with every refusal listed
@@ -612,6 +621,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: st-lsp-formatter
   asked: 2026-11-08
   by: claude-session
+  status: ready
 
 - [ ] **Siemens SCL import** — decided (Nick, 2026-11-08: `st-scl-import`): not for the early release. SCL (TIA Portal) is an ST dialect (`#local`, `"DB".member`, REGION, IEC_TIMER instances, its own instructions); a source-level converter would follow the L5X pattern. Carded here so it is not lost: pick it up when a customer brings TIA code, and estimate then (likely 1-2 weeks).
   needs: a customer with TIA Portal code to import
@@ -641,6 +651,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: diagram-edit-core
   asked: 2026-11-07
   by: claude-session
+  status: ready
 
 - [ ] **Diagram edits 3: rewire, FB arguments, delete, rename** — Rewire (a pin to a variable, a constant or an earlier write), SetFbArg (`PT := T#5s`), DeleteStmt (the whole statement by its range), Rename (reuses `rename_ident`).
   result: V1's full set of logic edits from the diagram
@@ -651,6 +662,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: diagram-edit-rewire
   asked: 2026-11-07
   by: claude-session
+  status: ready
 
 - [ ] **Diagram edits 4: editing on the canvas, simulation** — st_view.rs gestures: right-click a block or pin for Change operator ▸, Negate input, Connect to… (a searchable variable list, works on touch), Edit value…, Rename…, Delete statement; double-click a constant to edit it in place. Commit: push the old text into the same `TextEditState` undoer the editor uses (`add_undo`, its own entry), so Ctrl+Z undoes a diagram edit like typing; mark dirty; scroll the ST to the patch and highlight it about 1.5 s; rebuild the `Viewer` keeping the camera and the picked block.
   result: in the playground and browser projects an engineer changes logic on the diagram and the code follows
@@ -661,6 +673,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: diagram-edit-canvas
   asked: 2026-11-07
   by: claude-session
+  status: ready
 
 - [ ] **Diagram edits 5: on a box** — the same gestures on a box, on only for an engineer (`writable()`) and only while the diagram shows the open buffer, not the running module; otherwise off with a tooltip saying why. Nothing new on the box: Save and Deploy go through the existing policy, which sets the tier from the diff.
   result: diagram edits on a Pi land like typed edits, approval and audit unchanged
@@ -671,6 +684,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: diagram-edit-box
   asked: 2026-11-07
   by: claude-session
+  status: ready
 
 - [ ] **Diagram edits 6: docs** — amend `canvas-edit-scope` in docs/ARCHITECTURE.md (the live ST view section: the diagram now writes ST through checked splices), docs/UI.md, and a help page in the floor-engineer voice.
   result: the docs say what the diagram can change and how it reaches the code
@@ -680,6 +694,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: diagram-edit-docs
   asked: 2026-11-07
   by: claude-session
+  status: ready
 
 - [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
   result: building new logic from the diagram, not only changing it
@@ -690,6 +705,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: diagram-edit-v2-v3
   asked: 2026-11-07
   by: claude-session
+  status: ready
 
 ## Product vision (interview 2026-10-29)
 
@@ -790,6 +806,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: machine-template
   asked: 2026-11-01
   by: claude-session
+  status: ready
 
 - [ ] **Fleet console + OTA** — the relay grows into the fleet backbone: box registry, snapshot sync, signed updates of the core.
   est: 3w
