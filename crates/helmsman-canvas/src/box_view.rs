@@ -402,8 +402,14 @@ impl BoxView {
                     }
                 }
                 PCall::Config(device, op) => self.devices_ui.config.answer(&device, op, a.status, &a.body),
+                call @ (PCall::Proposal | PCall::ProposalAccept | PCall::ProposalDiscard) => {
+                    self.devices_ui.proposal.answer(&call, a.status, &a.body);
+                }
                 call => self.projects.answer_for(call, &a, signed_in),
             }
+        }
+        if let Some(project) = self.devices_ui.proposal.take_saved() {
+            self.projects.reread(&project);
         }
         if std::mem::take(&mut self.projects.deployed) {
             self.state.relist();
@@ -1084,6 +1090,10 @@ impl BoxView {
         }
         self.devices_ui.config.modal_ui(&ui.ctx().clone(), chrome);
         for r in self.devices_ui.config.take_requests() {
+            self.projects.enqueue(r);
+            ui.ctx().request_repaint();
+        }
+        for r in self.devices_ui.proposal.take_requests() {
             self.projects.enqueue(r);
             ui.ctx().request_repaint();
         }
@@ -2126,6 +2136,21 @@ impl Body for BoxView {
         // What is wired to the map's points: one library lookup a frame
         // for each `wired=` value not asked about yet.
         let wanted = self.devices_ui.wired_wanted();
+        let saved_text = self
+            .devices_ui
+            .proposal
+            .saved_file()
+            .and_then(|f| open.and_then(|o| o.bufs.get(f)))
+            .filter(|b| b.loaded)
+            .map(|b| b.text.clone());
+        self.devices_ui
+            .proposal
+            .set_context(crate::device_proposal::Context {
+                signed_in: self.session.is_some(),
+                engineer: is_engineer(self.session.as_ref()),
+                project: open.map(|o| o.name.clone()),
+                saved_text,
+            });
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.scan = crate::devices::Scan::Running;

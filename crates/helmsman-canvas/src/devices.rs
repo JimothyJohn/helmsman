@@ -995,6 +995,8 @@ pub struct DevicesUi {
     /// The picker on a point: what is wired to it, by its label number
     /// (`wired.rs`).
     pub picking: Option<crate::wired::Pick>,
+    /// The device profile the agent proposed (`device_proposal.rs`).
+    pub proposal: crate::device_proposal::ProposalUi,
 }
 
 /// Most `wired=` values one tab looks up.
@@ -1192,6 +1194,7 @@ impl DevicesUi {
                 }
             }
         });
+        self.proposal.show(ui, chrome);
         if nodes.is_empty() {
             ui.add(egui::Label::new(RichText::new("No devices wired yet.").color(t.muted)).wrap())
                 .tip("Scan the network below and pick Use this device, or right-click the empty space to add one by hand.");

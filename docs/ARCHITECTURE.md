@@ -2346,6 +2346,14 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   whole file again, and saves `NAME.device` into the project as a new
   file (never over one), with a project revision and an audit entry; a
   rename that does not read, or an older `id`, writes nothing.
+  The canvas side is `device_proposal.rs` (`ProposalUi`, held in
+  `DevicesUi.proposal`): the Devices tab reads the proposal every 3 s while
+  a person is signed in (`PCall::Proposal`), edits the name and the
+  channel names in place, sends `PCall::ProposalAccept` with the id it
+  read and only the renames that changed, and on a 409 reads again to
+  tell a newer proposal (kept names carried over) from a name already
+  taken. A 422's problems are placed by the line they name: the text the
+  box returned says which channel is on each line.
 - **Questions, not guesses.** What the document leaves out (a signal the
   box does not have, a shift that is not defined) comes back as questions
   in the chat; the relay's v3 prompt says so, and the module only names

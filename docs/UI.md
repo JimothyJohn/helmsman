@@ -102,7 +102,23 @@ this; change it here first when a decision changes.
   `device NAME device:PROFILE IDENTITY` with the identity the scan saw,
   and one `ch:` signal per channel named `NAME_channel`. No protocol,
   address, byte order or cycle time is asked. A device the library does
-  not know says so and offers Advanced. **Device configuration**
+  not know says so and offers Advanced. **A profile the agent proposed**
+  (`device_proposal.rs`): while the box holds one (`GET
+  /api/device-profile/proposal`, read every 3 s while someone is signed in
+  and the tab is open), a section at the top of the tab shows the device's
+  maker and model, its name, Save profile and Discard, the agent's summary
+  and the channels (name, direction, type, unit, safe value; each point on
+  each protocol in the hover). The device's name and every channel's name
+  are edited in place. Save sends the id it read, the open project, the
+  name when changed and the renames (`POST .../accept`); the box reads the
+  renamed text again and writes `NAME.device` as a new file, never over
+  one that exists. The tab then reads the project again and lists the
+  saved file's channels as the project holds them. A refusal is shown
+  where it belongs: a problem at a line beside the channel on that line, a
+  bad or taken name beside the name, the rest above the buttons; a newer
+  proposal (409, or a different id on a read) replaces the one shown and
+  keeps the names typed where the channel remains. Only an engineer is
+  offered Save and Discard. **Device configuration**
   (2026-11-13, `devconf-canvas`, `device_config.rs`): under an open
   device whose profile has `configure moxa-e1200`, a Configuration section
   reads first, in words: the firmware, what the outputs do if the box stops
