@@ -433,15 +433,6 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door-recorded-run`, `liv
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **A smoke of the public page after each promotion** — left of `live-state` (interview 2026-11-14). `scripts/live-state.sh` (`make live-state`) now says what a visitor can reach against dev: master, the site's build, the relay's main and its deploy, the device library, the running try box. Not built: driving the live site's page headless after a promotion (the canvas-smoke pattern against the site's address), so a page that is live but broken is caught the same day.
-  needs: nothing
-  result: a promotion ends with screenshots of the live page, or says what broke
-  est: 3h
-  difficulty: low
-  id: live-smoke
-  asked: 2026-11-14
-  by: claude-session
-
 - [ ] **The Agent watches and speaks first** — Nick, 2026-11-14: "the agent should feel like a fundamental part of the environment. It should be watching every time it breaks to point out the stupid thing you did to show how it should be done better." Today the Agent is a box you type into. Wanted: every failure the environment already sees (a check error, a requirement test going red, a module held by a lost input, a device lost, a value out of its limits) reaches the Agent unasked, and it answers in place, beside the failure: what went wrong in one line, the better way, and the change offered as one click. Never a modal, never a wait in the way of typing. Open before building: what it costs per visitor on the free chat (each failure is a model turn), and which failures are answered by rule without the model.
   needs: an interview on the triggers and the cost ceiling
   result: a failure is followed by its explanation and its fix without the engineer asking
