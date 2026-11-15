@@ -386,3 +386,103 @@ pub fn parse(src: &str) -> Result<Iodd, IoddError> {
         process_data,
     })
 }
+
+/// Longest signal name a map line gets (helmsman-nodecore's `NAME_MAX`).
+const NAME_MAX: usize = 32;
+
+/// `name` as an identifier under `device`: lower case, everything but
+/// letters and digits a single `_`, cut to [`NAME_MAX`], and numbered
+/// when `taken` already has it.
+fn ident(device: &str, name: &str, taken: &mut Vec<String>) -> String {
+    let mut out = String::from(device);
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            if out.len() == device.len() {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let base: String = out.trim_end_matches('_').chars().take(NAME_MAX - 3).collect();
+    let mut unique = base.clone();
+    let mut n = 2;
+    while taken.iter().any(|t| t.eq_ignore_ascii_case(&unique)) {
+        unique = format!("{base}_{n}");
+        n += 1;
+    }
+    taken.push(unique.clone());
+    unique
+}
+
+/// A comment's worth of a text from the file: one line, no `#`.
+fn remark(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() && *c != '#')
+        .take(60)
+        .collect()
+}
+
+impl Iodd {
+    /// The lines of an I/O map for this Device on Master port `port`,
+    /// in the grammar of helmsman-nodecore's `iolink`: the `device`
+    /// line with the identity and the Process Data lengths, then one
+    /// `in` or `out` line per value of the `which`-th `ProcessData`
+    /// (0 unless the Device has conditional layouts). `BooleanT` becomes
+    /// a `bool` point, integers up to 63 bits (64 when signed) an `int`
+    /// point; the other types are listed in a comment, not mapped.
+    /// `device` is taken as given: an identifier of a few characters.
+    ///
+    /// `None` when there is no `which`-th layout.
+    #[must_use]
+    pub fn map_lines(&self, which: usize, device: &str, port: u8) -> Option<String> {
+        use fmt::Write as _;
+        let layout = self.process_data.get(which)?;
+        let mut text = format!(
+            "# {} ({}), from its IODD\ndevice {device} iolink port={port} vendor={} device={}",
+            remark(&self.device_name),
+            remark(&self.vendor_name),
+            self.vendor_id,
+            self.device_id
+        );
+        if let Some(input) = &layout.input {
+            let _ = write!(text, " in_bits={}", input.bit_length);
+        }
+        if let Some(output) = &layout.output {
+            let _ = write!(text, " out_bits={}", output.bit_length);
+        }
+        text.push('\n');
+        let mut taken = Vec::new();
+        for (dir, item) in [("in ", &layout.input), ("out", &layout.output)] {
+            for field in item.iter().flat_map(|item| &item.fields) {
+                let format = match field.kind {
+                    Kind::Boolean => Some(("bool", String::new())),
+                    Kind::UInteger if field.bit_length <= 63 => {
+                        Some(("int ", format!(":u{}", field.bit_length)))
+                    }
+                    Kind::Integer => Some(("int ", format!(":i{}", field.bit_length))),
+                    _ => None,
+                };
+                let _ = match format {
+                    Some((ty, format)) => writeln!(
+                        text,
+                        "{dir} {} {ty} {device} pd:{}{format}  # {}",
+                        ident(device, &field.name, &mut taken),
+                        field.bit_offset,
+                        remark(&field.name)
+                    ),
+                    None => writeln!(
+                        text,
+                        "# not mapped: {} ({:?}, {} bits at {})",
+                        remark(&field.name),
+                        field.kind,
+                        field.bit_length,
+                        field.bit_offset
+                    ),
+                };
+            }
+        }
+        Some(text)
+    }
+}
