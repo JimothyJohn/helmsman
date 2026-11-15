@@ -1632,6 +1632,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-iolink"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "helmsman-l2"
 version = "0.1.0"
 dependencies = [

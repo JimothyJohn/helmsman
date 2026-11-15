@@ -783,6 +783,42 @@ into the code.
 - **How to cite:** `p-net <file> <function>`, `Wireshark <file>`,
   `C706 ch. "RPC PDU Encodings"`; never a `§` of IEC 61158.
 
+### IO-Link Community, IO-Link Interface and System Specification V1.1.5 (October 2025, order no. 10.002, 321 pp)
+
+- **Where:** https://io-link.com/fileadmin/user_upload/Downloads/Package_2025/IOL-Interface-Spec_10002_V1.1.5_Oct2025.zip
+  (linked from https://io-link.com/downloads, Package 2025, no
+  registration asked), fetched 2026-11-14. The archive's SHA-256 is
+  `23d1309bcfeea37e545c1f3d03c34045eb5f81f673a956e1fe22ad50e2cdc457`; the
+  PDF in it, `IOL-Interface-Spec_10002_V1.1.5_Oct2025.pdf`, is
+  `a46805876ba07f2045aa55c2d3c375a85a2268fdec751a6e486ac88e414d3c03`.
+  Not committed. The same text is IEC 61131-9 (SDCI), which is not held.
+- **Read so far (2026-11-14), for `helmsman-iolink`:** Annex A.1 (the
+  M-sequence control octet, check/type and check/status octets, the
+  checksum with its seed 0x52 and equations (A.1), p.238-241), A.2 (the
+  M-sequence types, Figures A.5 to A.14, and Tables A.7, A.8 and A.10
+  for STARTUP, PREOPERATE and OPERATE, p.241-247) and B.1 (Direct
+  Parameter page 1: Table B.1, the MasterCommands of Table B.2, cycle
+  times of Table B.3, the M-sequence capability, Process Data lengths of
+  Table B.6, p.258-263).
+- **Not read yet, and so not built:** the physical layer and wake-up
+  (clause 5), the data link state machines (7.3), timing (A.3), ISDUs
+  (A.5), Events (A.6), the interleaved mode (7.3.4.2), legacy devices
+  (Table A.9 and its reference [8]), data storage, the master's port
+  configuration (clause 11).
+- **No test vector is taken from it:** the specification prints none for
+  the checksum. The octets in the crate's tests were worked by hand from
+  Figure A.1 and equations (A.1).
+- **Trademark and claims** (the notice pages before the contents, "USE
+  OF TRADEMARKS"): PNO (PROFIBUS Nutzerorganisation) owns the registered
+  mark IO-Link; the mark's "use is restricted for members of the IO-Link
+  Community". A product that has not met PNO's certification
+  requirements "may claim only that the product was based on a PNO
+  specification and must not claim compliance or conformance". Vendor
+  ids are assigned by the community (Table B.1 NOTE 2). So nothing a
+  user reads carries the mark or a compliance claim until Nick has
+  settled membership; a master of ours is "based on" the specification.
+- **How to cite:** `IOL §A.1.6 p.240` (clause and page of V1.1.5).
+
 ### macOS BPF and Linux packet sockets (raw Ethernet, `helmsman-l2`)
 
 - `bpf(4)` and the SDK's `net/bpf.h` (MacOSX.sdk on the Studio,
