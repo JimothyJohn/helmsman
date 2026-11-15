@@ -110,6 +110,16 @@ header.top .gh:hover{color:var(--yellow)}
 #lib-rows .chip{margin-top:6px}
 .lib-vendor{font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 #lib-rows td:first-child{min-width:150px}
+.doors{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));margin:32px 0 12px}
+.door{display:block;padding:16px;border:2px solid var(--rule-strong);text-decoration:none;font-size:14.5px}
+.door span{display:block;font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.door b{display:block;font:28px/1.1 var(--stencil);letter-spacing:.03em;text-transform:uppercase;margin:8px 0 6px}
+.door.pay{background:var(--yellow);border-color:var(--yellow);color:var(--black)}
+.door.pay span{color:var(--black)}
+.door:hover,.door:focus-visible{outline:2px solid var(--yellow);outline-offset:3px}
+.door.pay:hover,.door.pay:focus-visible{outline-color:var(--rule-strong)}
+#lib-rows td:last-child{white-space:nowrap}
+.steps.four{grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))}
 .steps{counter-reset:s}
 .steps li{counter-increment:s}
 .steps li b::before{content:counter(s) ". "}
@@ -123,8 +133,8 @@ header.top .gh:hover{color:var(--yellow)}
     <nav aria-label="Sections">
       <a href="#agentic">How it works</a>
       <a href="#connect">Connects to</a>
-      <a href="#status">Status</a>
       <a href="#library">Devices</a>
+      <a href="#status">Status</a>
       <a href="#why">Why?</a>
       <a href="#field">From the field</a>
       <a href="help/">Help</a>
@@ -147,6 +157,7 @@ header.top .gh:hover{color:var(--yellow)}
     <div class="cta">
       <a class="btn primary" href="playground/">Try it in your browser</a>
       <a class="btn" href="#agentic">How it works</a>
+      <a class="btn" href="#library">Send a device, get $50</a>
     </div>
     <p class="early"><span class="chip pending">Early release</span> Running on the bench today. The source is open.</p>
   </div>
@@ -194,13 +205,47 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
   <div class="wrap">
     <h2>Standards and interoperability</h2>
     <h3>A pure soft PLC on your network.</h3>
-    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols. It scans the network for devices and looks each one up in a public device library, or reads the vendor's EDS file.</p>
+    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols. It scans the network for devices and looks each one up in a <a href="#library">public device library</a> of devices proven on a bench, or reads the vendor's EDS file.</p>
     <ul class="rules">
       <li><b>IEC 61131-3</b>Structured Text, the proven standard, plus PLCopen XML import from other tools.</li>
       <li><b>EtherNet/IP (CIP)</b>Drives remote I/O over cyclic Class 1 connections. Your existing PLCs see it as a standard adapter, and it reads their tags without ever writing to them.</li>
       <li><b>Modbus TCP</b>Drives remote I/O blocks and devices directly, through a named I/O map.</li>
     </ul>
     <p class="muted" style="margin-top:24px">Ethernet protocols today; others as customers need them.</p>
+  </div>
+</section>
+
+<section id="library">
+  <div class="wrap">
+    <h2>Device library</h2>
+    <h3>Every device, proven once</h3>
+    <p>Working out how a device talks is the slow part of a controls project. Helmsman does it once for each device and publishes the result. The agent reads the vendor's EDS file and manual and drafts an entry: the identity the device reports, its protocols and what each byte of its I/O means, with the manual's page beside every claim. The device is then run on a bench until the entry is right. From then on the controller recognises that device on any network and adds it to a project with one click.</p>
+    <p>The library grows with the devices people send in. Testing costs you nothing, and a device that is verified earns you $50.</p>
+    <ol class="rules steps four">
+      <li><b>You send it</b>Free. Offer the unit first, so that two people do not post the same one.</li>
+      <li><b>We test it</b>Free. It is wired up on the bench and run until the entry is right.</li>
+      <li><b>We verify it</b>You get $50 when the entry matches what the unit does.</li>
+      <li><b>We add it</b>The entry goes into the public library with the date and firmware it was proven on, and the unit comes back to you.</li>
+    </ol>
+    <div class="doors">
+      <a class="door pay" id="door-unit" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=Unit%20offer%3A%20&amp;body=Device%20%28vendor%20and%20model%29%3A%0AFirmware%2C%20if%20known%3A%0AShips%20from%20%28country%29%3A%0APowers%20up%20and%20worked%20when%20last%20used%3A%20yes%20/%20no%0AWant%20it%20back%20after%20testing%3A%20yes%20/%20no%0A%0ANotes%3A%0A%0A%28No%20address%20or%20payment%20details%20here.%20Those%20are%20arranged%20in%20private%20after%20a%20yes.%29%0A"><span>Paid, $50</span><b>Send a unit</b>Offer a device for the bench.</a>
+      <a class="door" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=Unit%20check%3A%20&amp;body=Device%3A%0AFirmware%3A%0ADate%3A%0A%0AFor%20an%20EtherNet/IP%20device%2C%20paste%20what%20scripts/enip-identify.py%20printed%20%28helmsman-devices%2C%20dev%20branch%29%2C%20without%20the%20serial%20line.%20The%20script%20only%20reads.%0A%0A%60%60%60text%0A%0A%60%60%60%0A%0AWhat%20matched%20the%20entry%2C%20and%20what%20did%20not%3A%0A"><span>You have one</span><b>Test it</b>Run a read-only script on your own unit and report what it printed.</a>
+      <a class="door" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=Review%3A%20&amp;body=Device%3A%0A%0AWhat%20the%20entry%20says%3A%0AWhat%20it%20should%20say%3A%0AWhere%20it%20says%20so%20%28document%20and%20page%2C%20or%20a%20unit%29%3A%0A"><span>You know one</span><b>Check it</b>Read an entry below and say what is wrong.</a>
+      <a class="door" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=New%20device%3A%20&amp;body=Vendor%3A%0AModel%3A%0AProduct%20page%3A%0AProtocols%20%28EtherNet/IP%2C%20Modbus%20TCP%2C%20other%29%3A%0AI%20have%20a%20unit%20and%20can%20run%20a%20read-only%20test%3A%20yes%20/%20no%0AI%20could%20send%20a%20unit%20to%20the%20bench%3A%20yes%20/%20no%0A"><span>You want one</span><b>Name it</b>Say which device to map next.</a>
+    </div>
+    <p class="muted">Each opens a filled-in issue on GitHub. An offer is public, so the shipping address and the payment are arranged in private afterwards.</p>
+    <p class="muted">An entry marked <i>from documents</i> was read from the vendor's EDS file and manual, page by page, and has not yet been run on a unit. A checked entry names the date it was.</p>
+    <div class="lib-tools">
+      <input id="lib-q" type="search" placeholder="Filter: vendor, model, protocol" aria-label="Filter the device library" hidden>
+      <span id="lib-count" class="muted" aria-live="polite">Loading the library…</span>
+    </div>
+    <div class="table-scroll">
+    <table id="lib-table" hidden>
+      <thead><tr><th>Device</th><th>Protocols</th><th>I/O</th><th>Bounty</th></tr></thead>
+      <tbody id="lib-rows"></tbody>
+    </table>
+    </div>
+    <p class="muted">The library is open: <a href="https://github.com/JimothyJohn/helmsman-devices">github.com/JimothyJohn/helmsman-devices</a>. A pull request with one folder adds a device.</p>
   </div>
 </section>
 
@@ -223,26 +268,6 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
   </div>
 </section>
 
-<section id="library">
-  <div class="wrap">
-    <h2>Device library</h2>
-    <h3>Devices it already knows</h3>
-    <p>When the controller finds a device on the network, it looks it up in a public library: by identity first (an EtherNet/IP vendor id and product code), then by vendor and model. An entry gives the protocols, the I/O and the vendor's files by checksum, so the device goes into a project with one click.</p>
-    <p class="muted">An entry marked <i>from documents</i> was read from the vendor's EDS file and manual, page by page, and has not yet been run on a unit. A checked entry names the date it was.</p>
-    <div class="lib-tools">
-      <input id="lib-q" type="search" placeholder="Filter: vendor, model, protocol" aria-label="Filter the device library" hidden>
-      <span id="lib-count" class="muted" aria-live="polite">Loading the library…</span>
-    </div>
-    <div class="table-scroll">
-    <table id="lib-table" hidden>
-      <thead><tr><th>Device</th><th>Protocols</th><th>I/O</th></tr></thead>
-      <tbody id="lib-rows"></tbody>
-    </table>
-    </div>
-    <p class="muted">The library is open: <a href="https://github.com/JimothyJohn/helmsman-devices">github.com/JimothyJohn/helmsman-devices</a>. A pull request with one folder adds a device.</p>
-  </div>
-</section>
-
 <section id="why" class="on-black">
   <div class="wrap">
     <h2>Why?</h2>
@@ -251,7 +276,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
       <div>
         <p>Most industrial programming suites are stacked on the suites before them and keep their habits. You draw on a canvas and the tool saves a file only it can read, so a program is hard to review, hard to compare with last week's and hard to hand to the next person.</p>
         <p>Language models read and write text well. People on the floor want to see what the machine is doing. Helmsman gives each side what it works best with: underneath, the program is plain Structured Text; on screen, it is a live diagram with values on the wires.</p>
-        <p>The same models are good at the part of controls work nobody enjoys: finding how a device talks, bringing the link up, mapping the I/O and keeping it mapped. That used to take most of a project's hours before the first line of the sequence was written. With the agent doing it, the engineer's hours go to the spec and to checking the result.</p>
+        <p>The same models are good at the part of controls work nobody enjoys: finding how a device talks, bringing the link up, mapping the I/O and keeping it mapped. That used to take most of a project's hours before the first line of the sequence was written. With the agent doing it, the engineer's hours go to the spec and to checking the result. Each device it works out is tested on a real unit and published in the <a href="#library">device library</a>, so the next plant starts with that device already done.</p>
       </div>
       <div>
         <p>Earlier suites were proprietary, tied to one operating system and heavy on the workstation. Helmsman runs as one service on the controller and serves its own editor to a browser, so there is nothing to install and nothing to license per seat.</p>
@@ -307,11 +332,11 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
   function str(v,max){return typeof v==='string'&&v.length<=max?v:''}
   function cell(tr,text){var td=document.createElement('td');td.textContent=text;tr.appendChild(td);return td}
   function failed(){count.textContent='The library could not be loaded here; it is on GitHub.'}
-  var rows=[];
+  var rows=[],proven=0;
   function show(){
     var words=q.value.toLowerCase().split(/\s+/).filter(Boolean),n=0;
     rows.forEach(function(r){var on=words.every(function(w){return r.key.indexOf(w)>=0});r.tr.hidden=!on;if(on){n++}});
-    count.textContent=n===rows.length?rows.length+' devices':n+' of '+rows.length+' devices';
+    count.textContent=n===rows.length?rows.length+' devices, '+proven+' proven on a unit':n+' of '+rows.length+' devices';
   }
   fetch(URL_INDEX,{credentials:'omit',referrerPolicy:'no-referrer'}).then(function(r){
     if(!r.ok){throw new Error('HTTP '+r.status)}return r.json()
@@ -319,6 +344,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
     if(!ix||ix.format!=='helmsman-devices-index 1'||!Array.isArray(ix.devices)){throw new Error('format')}
     var list=ix.devices.slice(0,2000).filter(function(d){return d&&str(d.vendor,120)&&str(d.model,120)});
     list.sort(function(a,b){return (a.vendor+' '+a.model).localeCompare(b.vendor+' '+b.model,undefined,{numeric:true})});
+    proven=list.length;
     list.forEach(function(d){
       var tr=document.createElement('tr');
       var m=cell(tr,''),folder=str(d.folder,160),v=document.createElement('span');
@@ -330,6 +356,8 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
       var chip=document.createElement('span'),checked=str(d.checked_on,10);
       if(/^\d{4}-\d{2}-\d{2}$/.test(checked)){chip.className='chip ok';chip.textContent='checked '+checked}else{chip.className='chip pending';chip.textContent='from documents'}
       m.appendChild(document.createElement('br'));m.appendChild(chip);
+      var b=cell(tr,''),du=document.getElementById('door-unit');
+      if(chip.className==='chip ok'){b.textContent='–'}else{proven--;if(du){var s=document.createElement('a');s.href=du.href.replace(/title=[^&]*/,'title='+encodeURIComponent('Unit offer: '+d.vendor+' '+d.model));s.textContent='Send one, $50';b.appendChild(s)}else{b.textContent='$50'}}
       body.appendChild(tr);
       rows.push({tr:tr,key:[d.vendor,d.model,ps.join(' '),str(d.channels,120),str(d.kind,40)].join(' ').toLowerCase()});
     });
