@@ -12,6 +12,12 @@
 //! no model turn, and only a click spends one (the cost question the card
 //! left open, decided 2026-11-14).
 //!
+//! Patterns (TODO.md `agent-patterns`; Nick: "It should be seeing your
+//! patterns and fixing them"): the same kind of slip in several places is
+//! said once, with one Fix it for all of them, and a kind that keeps
+//! coming up in a session is counted and said to be a habit. The count
+//! lives in memory only; nothing about the engineer is stored.
+//!
 //! [`noticed`] picks the one thing to say, most urgent first. [`Watching`]
 //! decides when: not while the engineer is still typing ([`QUIET`]), not
 //! again once they said "Not now" to that same thing.
@@ -34,6 +40,9 @@ pub struct Noticed {
     pub better: Option<String>,
     /// What Fix it asks the Agent.
     pub ask: String,
+    /// The kind of slip, when a rule knows it: what [`Watching`] counts
+    /// to see a habit.
+    pub rule: Option<&'static str>,
 }
 
 /// What the page sees of the open project.
@@ -52,16 +61,70 @@ pub struct Seen<'a> {
 /// stops the build, a fault, a held program, a red requirement.
 #[must_use]
 pub fn noticed(seen: &Seen<'_>) -> Option<Noticed> {
-    if let Some(d) = seen.diags.iter().find(|d| d.severity == Severity::Error) {
+    let errors: Vec<&Diag> = seen
+        .diags
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    if let Some(d) = errors.first() {
+        let rule = rule_of(&d.message);
+        // The same slip in several places is one thing to say, and one
+        // fix (TODO.md `agent-patterns`).
+        let same: Vec<&Diag> = match rule {
+            Some((key, _)) => errors
+                .iter()
+                .copied()
+                .filter(|e| rule_of(&e.message).is_some_and(|(k, _)| k == key))
+                .collect(),
+            None => vec![d],
+        };
+        let better = rule.map(|(_, text)| text.to_string());
+        let rule = rule.map(|(key, _)| key);
+        if same.len() > 1 {
+            use std::fmt::Write as _;
+            let mut ask = format!(
+                "Fix these {} errors of the same kind. Change only what the fixes need.\n",
+                same.len()
+            );
+            let mut key = String::from("errors");
+            for e in &same {
+                let _ = writeln!(ask, "- {}, line {}: {}", e.file, e.line, e.message);
+                let _ = write!(key, " {}:{} {}", e.file, e.line, e.message);
+            }
+            let lines: Vec<String> = same
+                .iter()
+                .map(|e| {
+                    if e.file == d.file {
+                        e.line.to_string()
+                    } else {
+                        format!("{} {}", e.file, e.line)
+                    }
+                })
+                .collect();
+            return Some(Noticed {
+                key,
+                what: format!(
+                    "The same slip {} times in {}, lines {}. The first: {}.",
+                    same.len(),
+                    d.file,
+                    list(&lines),
+                    d.message.trim_end_matches('.')
+                ),
+                better,
+                ask,
+                rule,
+            });
+        }
         let at = format!("{} line {}", d.file, d.line);
         return Some(Noticed {
             key: format!("error {at} {}", d.message),
             what: format!("{at} does not compile: {}.", d.message.trim_end_matches('.')),
-            better: better_for_error(&d.message),
+            better,
             ask: format!(
                 "Fix this error in {}, line {}: {}. Change only what the fix needs.",
                 d.file, d.line, d.message
             ),
+            rule,
         });
     }
     if let Some(f) = seen.fault {
@@ -72,6 +135,7 @@ pub fn noticed(seen: &Seen<'_>) -> Option<Noticed> {
             ask: format!(
                 "The program stops at run time with this fault: {f}. Change it so that cannot happen, and add a scenario that drives the inputs that caused it."
             ),
+            rule: None,
         });
     }
     if let Some(first) = seen.held_by.first() {
@@ -88,6 +152,7 @@ pub fn noticed(seen: &Seen<'_>) -> Option<Noticed> {
             ask: format!(
                 "The device behind {names} can be lost. For each of these inputs declare a BOOL input NAME_ok, make the outputs safe while it is FALSE, and add a scenario that loses the input (NAME_absent) and checks the outputs."
             ),
+            rule: None,
         });
     }
     let red = seen.tests.rows.iter().find(|r| r.state == State::Failed)?;
@@ -101,32 +166,60 @@ pub fn noticed(seen: &Seen<'_>) -> Option<Noticed> {
             red.why,
             red.requirement
         ),
+        rule: None,
     })
 }
 
-/// The better way for a compile error, from the checker's own words.
-fn better_for_error(message: &str) -> Option<String> {
+/// `a`, `a and b`, `a, b and c`.
+fn list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [head @ .., last] => format!("{} and {last}", head.join(", ")),
+    }
+}
+
+/// The kind of slip a compile error is and the better way, from the
+/// checker's own words: `(kind, the better way)`.
+fn rule_of(message: &str) -> Option<(&'static str, &'static str)> {
     let m = message.to_ascii_lowercase();
-    let rule = if m.starts_with("undeclared variable") {
-        "Declare it in a VAR block with its type before using it, or correct the name if it is a slip."
+    Some(if m.starts_with("undeclared variable") {
+        (
+            "undeclared",
+            "Declare it in a VAR block with its type before using it, or correct the name if it is a slip.",
+        )
     } else if m.starts_with("unknown function") || m.starts_with("unknown type") {
-        "Use a name the standard library or this project defines; a function block needs an instance declared in VAR."
+        (
+            "unknown",
+            "Use a name the standard library or this project defines; a function block needs an instance declared in VAR.",
+        )
     } else if m.contains("convert explicitly") || m.contains("does not convert implicitly") {
-        "Structured Text never converts types silently. Write the conversion the message names, so the rounding is yours to see."
+        (
+            "convert",
+            "Structured Text never converts types silently. Write the conversion the message names, so the rounding is yours to see.",
+        )
     } else if m.contains("is a function block type") || m.contains("call an instance") {
-        "A function block keeps state: declare an instance in VAR and call the instance as a statement."
+        (
+            "instance",
+            "A function block keeps state: declare an instance in VAR and call the instance as a statement.",
+        )
     } else if m.starts_with("expected") && m.contains(":=") {
-        "Assignment is := in Structured Text; = compares."
+        ("assign", "Assignment is := in Structured Text; = compares.")
     } else if m.starts_with("expected") && m.contains(';') {
-        "Every statement ends with a semicolon."
+        ("semicolon", "Every statement ends with a semicolon.")
     } else if m.contains("is already defined") {
-        "Each name is declared once: rename one of them, or remove the second declaration."
+        (
+            "redefined",
+            "Each name is declared once: rename one of them, or remove the second declaration.",
+        )
     } else if m.contains("has no input or output") {
-        "Name the block's own inputs and outputs in the call; its internal variables are not visible."
+        (
+            "port",
+            "Name the block's own inputs and outputs in the call; its internal variables are not visible.",
+        )
     } else {
         return None;
-    };
-    Some(rule.to_string())
+    })
 }
 
 /// The better way for a run-time fault.
@@ -151,7 +244,15 @@ pub struct Watching {
     standing: Option<(String, f64)>,
     /// The problem the engineer said "Not now" to.
     dismissed: Option<String>,
+    /// How often each kind of slip has been said this session (kept in
+    /// memory only: it goes with the page).
+    habits: std::collections::BTreeMap<&'static str, u32>,
+    /// The problem last said, and how often its kind had come up by then.
+    said: Option<(String, u32)>,
 }
+
+/// A kind of slip said this many times in a session is called a habit.
+pub const HABIT: u32 = 3;
 
 impl Watching {
     /// What to say at page time `t`, given what is `noticed` now and
@@ -162,6 +263,8 @@ impl Watching {
         let Some(n) = noticed else {
             self.standing = None;
             self.dismissed = None;
+            // Fixed: the same slip made again is a new one to count.
+            self.said = None;
             return None;
         };
         if self.dismissed.as_ref().is_some_and(|d| *d != n.key) {
@@ -179,7 +282,32 @@ impl Watching {
             self.standing = Some((n.key.clone(), t));
             return None;
         }
-        (t - since >= QUIET && self.dismissed.as_ref() != Some(&n.key)).then_some(n)
+        if t - since < QUIET || self.dismissed.as_ref() == Some(&n.key) {
+            return None;
+        }
+        // Newly said: its kind is counted once. A kind that keeps coming
+        // up is said to be a habit.
+        let times = match &self.said {
+            Some((key, times)) if *key == n.key => *times,
+            _ => {
+                let times = n.rule.map_or(0, |rule| {
+                    let c = self.habits.entry(rule).or_insert(0);
+                    *c += 1;
+                    *c
+                });
+                self.said = Some((n.key.clone(), times));
+                times
+            }
+        };
+        let mut n = n;
+        if times >= HABIT {
+            let note = format!("That is {times} times this session.");
+            n.better = Some(match n.better.take() {
+                Some(b) => format!("{b} {note}"),
+                None => note,
+            });
+        }
+        Some(n)
     }
 
     /// "Not now": `key` is not said again until something else is wrong.
@@ -314,6 +442,100 @@ mod tests {
         assert_eq!(w.say(None, false, 110.0), None);
         assert_eq!(w.say(n(), false, 111.0), None);
         assert!(w.say(n(), false, 111.0 + QUIET).is_some());
+    }
+
+    #[test]
+    fn the_same_slip_in_several_places_is_said_once_with_one_fix_for_all() {
+        let ok = Results::default();
+        let mut d = vec![
+            error("undeclared variable lmap; did you mean lamp?"),
+            error("expected ;, found END_IF"),
+            error("undeclared variable strat"),
+            error("undeclared variable hron"),
+        ];
+        d[1].line = 9;
+        d[2].line = 12;
+        d[3].line = 15;
+        let n = noticed(&seen(&d, None, &[], &ok)).unwrap();
+        assert_eq!(
+            n.what,
+            "The same slip 3 times in main.st, lines 7, 12 and 15. The first: undeclared variable lmap; did you mean lamp?."
+        );
+        assert_eq!(n.rule, Some("undeclared"));
+        assert!(
+            n.better
+                .as_deref()
+                .unwrap()
+                .starts_with("Declare it in a VAR block")
+        );
+        assert!(
+            n.ask.starts_with("Fix these 3 errors of the same kind."),
+            "{}",
+            n.ask
+        );
+        for want in [
+            "line 7: undeclared variable lmap",
+            "line 12: undeclared variable strat",
+            "line 15: undeclared variable hron",
+        ] {
+            assert!(n.ask.contains(want), "{want}: {}", n.ask);
+        }
+        assert!(
+            !n.ask.contains("expected ;"),
+            "the other kind is the next thing to say"
+        );
+        // An error no rule knows stands alone, however many there are.
+        let odd = [error("field x appears twice"), error("field y appears twice")];
+        let n = noticed(&seen(&odd, None, &[], &ok)).unwrap();
+        assert!(
+            n.what.starts_with("main.st line 7 does not compile"),
+            "{}",
+            n.what
+        );
+        assert_eq!(n.rule, None);
+    }
+
+    #[test]
+    fn a_kind_of_slip_that_keeps_coming_up_is_called_a_habit() {
+        let ok = Results::default();
+        let mut w = Watching::default();
+        let mut t = 0.0;
+        let mut say = |w: &mut Watching, message: &str| {
+            let d = [error(message)];
+            let n = noticed(&seen(&d, None, &[], &ok));
+            t += 10.0;
+            assert_eq!(w.say(n.clone(), false, t), None);
+            let said = w.say(n.clone(), false, t + QUIET).expect("said");
+            // The same thing again next frame: counted once.
+            assert_eq!(w.say(n, false, t + QUIET + 0.1), Some(said.clone()));
+            // Fixed.
+            assert_eq!(w.say(None, false, t + QUIET + 1.0), None);
+            said
+        };
+        let first = say(&mut w, "undeclared variable a");
+        assert!(!first.better.unwrap().contains("this session"));
+        let second = say(&mut w, "undeclared variable b");
+        assert!(!second.better.unwrap().contains("this session"));
+        // Another kind in between does not count towards it.
+        let other = say(&mut w, "expected ;, found END_IF");
+        assert_eq!(
+            other.better.as_deref(),
+            Some("Every statement ends with a semicolon.")
+        );
+        let third = say(&mut w, "undeclared variable a");
+        assert!(
+            third
+                .better
+                .as_deref()
+                .unwrap()
+                .ends_with("That is 3 times this session."),
+            "{:?}",
+            third.better
+        );
+        // A problem no rule knows is never a habit.
+        for _ in 0..4 {
+            assert_eq!(say(&mut w, "field x appears twice").better, None);
+        }
     }
 
     // ---- on the page ----
