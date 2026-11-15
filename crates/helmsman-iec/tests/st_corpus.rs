@@ -34,6 +34,7 @@ const SIZES: ImageSizes = ImageSizes {
 /// written, and a change that loses one is a regression.
 const COMPILES: &[&str] = &[
     "iec-checker/test/st/good/empty-body.st",
+    "iec-checker/test/st/good/function-blocks.st",
     "iec-checker/test/st/good/time-literals.st",
     "iec-checker/test/st/plcopen-cp8.st",
     "iec-checker/test/st/plcopen-l17.st",

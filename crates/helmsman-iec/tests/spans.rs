@@ -77,6 +77,26 @@ fn calls_with_argument_lists() {
     check(src).unwrap();
 }
 
+/// An in-out argument is a `NAME := variable` argument and a function
+/// output a `NAME => variable` one, in a call statement or a call
+/// expression; comments and odd spacing between the tokens.
+#[test]
+fn in_out_arguments_and_function_outputs_have_exact_ranges() {
+    let src = "PROGRAM t VAR a, b : ARRAY[0..3] OF INT; r, k, l, m : INT; w : bump; END_VAR\n\
+w ( buf := a , n := b [ 2 ] ) ;\n\
+w(buf := (* c *) a, n := r); // end\n\
+k := split ( 7 , lo => l , hi => b[ k ] ) ;\n\
+split(1, lo => m);\n\
+END_PROGRAM\n\
+FUNCTION_BLOCK bump VAR_IN_OUT buf : ARRAY[0..3] OF INT; n : INT; END_VAR n := buf[0]; END_FUNCTION_BLOCK\n\
+FUNCTION split : INT VAR_INPUT v : INT; END_VAR VAR_OUTPUT lo, hi : INT; END_VAR split := v; END_FUNCTION\n";
+    assert_eq!(stmt_text(src, 0), "w ( buf := a , n := b [ 2 ] ) ;");
+    assert_eq!(stmt_text(src, 1), "w(buf := (* c *) a, n := r);");
+    assert_eq!(stmt_text(src, 2), "k := split ( 7 , lo => l , hi => b[ k ] ) ;");
+    assert_eq!(stmt_text(src, 3), "split(1, lo => m);");
+    check(src).unwrap();
+}
+
 #[test]
 fn the_last_statement_with_no_trailing_newline() {
     let src = "PROGRAM t VAR a : INT; END_VAR a := 1; a := 2;END_PROGRAM";

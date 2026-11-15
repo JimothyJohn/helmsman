@@ -310,6 +310,56 @@ fn corpus() -> Vec<Case> {
             ],
             "FOR j := 1 TO 5 DO s := s + a[j]; END_FOR; a[5] := s; p.y := p.y + p.x; px := p.y;",
         ),
+        // VAR_IN_OUT on a function block: an array and a scalar by
+        // reference, the block's writes seen by the caller, state per
+        // instance. The expected values come from ruSTy, as for every case.
+        case(
+            "FUNCTION_BLOCK oracle_bump
+               VAR_INPUT add : DINT; END_VAR
+               VAR_IN_OUT buf : ARRAY[0..3] OF DINT; n : DINT; END_VAR
+               VAR_OUTPUT first : DINT; END_VAR
+               VAR j : DINT; END_VAR
+               FOR j := 0 TO 3 DO buf[j] := buf[j] + add; END_FOR;
+               n := n * 2 + 1;
+               first := buf[0];
+             END_FUNCTION_BLOCK",
+            vec![
+                var_init("a", "ARRAY[0..3] OF DINT", "[1, 2, 3, 4]"),
+                var("b", "ARRAY[0..3] OF DINT"),
+                var_init("k", "DINT", "5"),
+                var("p", "oracle_bump"),
+                var("q", "oracle_bump"),
+                var("a0", "DINT"),
+                var("a3", "DINT"),
+                var("b0", "DINT"),
+                var("f", "DINT"),
+            ],
+            "p(add := 10, buf := a, n := k); q(add := 1, buf := b, n := k); p(add := 10, buf := a, n := k);
+             a0 := a[0]; a3 := a[3]; b0 := b[0]; f := p.first;",
+        ),
+        // VAR_OUTPUT on a function, bound with =>; an unbound output is
+        // dropped, the result is still the call's value.
+        case(
+            "FUNCTION oracle_divmod : DINT
+               VAR_INPUT a, b : DINT; END_VAR
+               VAR_OUTPUT rem : DINT; ok : BOOL; END_VAR
+               IF b = 0 THEN oracle_divmod := 0; rem := a; ok := FALSE; RETURN; END_IF;
+               oracle_divmod := a / b;
+               rem := a MOD b;
+               ok := TRUE;
+             END_FUNCTION",
+            vec![
+                var("q1", "DINT"),
+                var("r1", "DINT"),
+                var("g1", "BOOL"),
+                var("q2", "DINT"),
+                var("r2", "DINT"),
+                var("g2", "BOOL"),
+                var("q3", "DINT"),
+            ],
+            "q1 := oracle_divmod(17, 5, rem => r1, ok => g1); q2 := oracle_divmod(a := 9, b := 0, rem => r2, ok => g2);
+             q3 := oracle_divmod(-17, 5);",
+        ),
         // Standard functions.
         case(
             "",
@@ -407,6 +457,33 @@ fn small_int_negation_is_dint_wide_on_both_sides() {
         want,
         "ruSTy negates SINT/INT in their own width again"
     );
+}
+
+/// Without ruSTy at hand the corpus still has to compile and run here, so a
+/// case that only the oracle run would reject shows up in every `cargo test`.
+#[test]
+fn corpus_compiles_and_runs_here() {
+    for (k, c) in corpus().iter().enumerate() {
+        ours(c).unwrap_or_else(|e| panic!("corpus case {k}: {e}\n{}", c.program("case")));
+    }
+}
+
+/// The in-out and function-output cases, by value: what ruSTy is expected
+/// to print for them is what these definitions give (a block adds to the
+/// caller's array through the reference, `n` doubles and gains one).
+#[test]
+fn by_reference_cases_have_the_values_their_definitions_give() {
+    let corpus = corpus();
+    let get = |decl: &str| corpus.iter().find(|c| c.decls.contains(decl)).unwrap();
+    let bump = ours(get("oracle_bump")).unwrap();
+    // Three scans of: p adds 10 twice, q adds 1 to b. a = [1,2,3,4] + 60,
+    // so a0 = 61, a3 = 64; b0 = 3; p.first = a[0] after its last call.
+    assert_eq!(bump[5..], ["61", "64", "3", "61"]);
+    // k is doubled and increased by one at each of the 9 calls:
+    // (5 + 1) * 2^9 - 1.
+    assert_eq!(bump[2], "3071");
+    let divmod = ours(get("oracle_divmod")).unwrap();
+    assert_eq!(divmod, ["3", "2", "1", "0", "9", "0", "-3"]);
 }
 
 #[test]

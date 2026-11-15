@@ -889,12 +889,7 @@ impl<'a> Ck<'a> {
         for d in &src.vars {
             let allowed = matches!(
                 (kind, d.section),
-                (_, Section::Var | Section::Temp)
-                    | (
-                        PouType::FunctionBlock | PouType::Program,
-                        Section::Input | Section::Output
-                    )
-                    | (PouType::Function, Section::Input | Section::Output)
+                (_, Section::Var | Section::Temp | Section::Input | Section::Output)
                     | (PouType::FunctionBlock, Section::InOut)
             );
             if !allowed {

@@ -62,11 +62,11 @@ Read this first, so we don't propose things that are already built.
   FUNCTION_BLOCK, VAR / VAR_TEMP / VAR_INPUT / VAR_OUTPUT / VAR CONSTANT,
   STRUCT / enum / alias, ARRAY, the elementary types up to LREAL and TIME,
   located variables, the full statement set, the standard functions.
-- **Language not covered**: STRING / WSTRING, DATE / DT / TOD, VAR_IN_OUT
-  (it parses as `Section::InOut`, but nothing downstream supports it),
-  VAR_GLOBAL / VAR_EXTERNAL (the parser refuses them), function outputs
-  other than the return value, pointers and references, and OOP (METHOD,
-  INTERFACE, EXTENDS).
+- **Language not covered**: STRING / WSTRING, DATE / DT / TOD,
+  VAR_GLOBAL / VAR_EXTERNAL (the parser refuses them), pointers and
+  references, and OOP (METHOD, INTERFACE, EXTENDS). VAR_IN_OUT (on a
+  function block) and function outputs are covered since the
+  `st-var-in-out` card.
 - **Feedback loop**: the checker's errors, the requirement tests
   (`test_NAME.st` with `ASSERT`, run in lockstep by `helmsman_iec::spec`),
   and the ruSTy differential oracle (tests/oracle.rs, run through docker,
@@ -187,23 +187,28 @@ stand on it.
   UniTest's 351 files are B&R function bodies without their declarations,
   so its 116 "expected :, found X" are the fragment format, not a dialect
   gap. matiec's `bad_*` and iec-checker's `bad/` files are listed apart.
+  After `st-var-in-out` one more file compiles (iec-checker's
+  `good/function-blocks.st`, which declares a VAR_IN_OUT); the ranking below
+  is the run after it. Only the totals and the "no PROGRAM found" line
+  changed: no file had VAR_IN_OUT as its first refusal, because a parse
+  error or the missing PROGRAM is reported before it.
 
 ```
 per source (files, parse, compile, refused, refused as expected):
   blark: 18 files, 1 parse, 0 compile, 18 refused, 0 refused as expected
-  iec-checker: 53 files, 28 parse, 11 compile, 40 refused, 2 refused as expected
+  iec-checker: 53 files, 28 parse, 12 compile, 39 refused, 2 refused as expected
   matiec: 40 files, 0 parse, 0 compile, 26 refused, 14 refused as expected
   rusty: 541 files, 8 parse, 4 compile, 537 refused, 0 refused as expected
   unitest: 351 files, 1 parse, 0 compile, 351 refused, 0 refused as expected
   wenger: 6 files, 0 parse, 0 compile, 6 refused, 0 refused as expected
-total: 1009 files, 38 parse, 15 compile, 978 refused, 16 refused as expected (named bad_* or bad/, left out of the ranking)
+total: 1009 files, 38 parse, 16 compile, 977 refused, 16 refused as expected (named bad_* or bad/, left out of the ranking)
 
 refusals by cause (first diagnostic of each file):
    726 files  parse: STRING literals are not supported yet  (blark 2, iec-checker 7, matiec 6, rusty 477, unitest 232, wenger 2)
    117 files  parse: expected :, found X  (blark 1, unitest 116)
     25 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found CONFIGURATION  (iec-checker 5, matiec 20)
     23 files  parse: unexpected character ^  (blark 1, rusty 22)
-    10 files  compile: no PROGRAM found  (iec-checker 6, rusty 4)
+     9 files  compile: no PROGRAM found  (iec-checker 5, rusty 4)
      5 files  parse: expected ;, found (  (blark 1, rusty 4)
      5 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found INTERFACE  (rusty 5)
      5 files  parse: missing ; after END_IF  (blark 1, iec-checker 1, rusty 1, unitest 2)

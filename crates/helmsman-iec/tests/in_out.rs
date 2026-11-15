@@ -5,11 +5,11 @@
 //! image, a program's signals) or make two names for one value is refused,
 //! with a message in plain words; each refusal is pinned below.
 //!
-//! ruSTy agrees with the run-time behaviour on the cases in
-//! `tests/oracle.rs`. The semantics of reference passing (a name for the
-//! caller's variable, writes seen at once) are those the PLCopen and
-//! CODESYS references describe for `VAR_IN_OUT`; docs/SOURCES.md lists them.
+//! The run-time behaviour (a name for the caller's variable, writes seen at
+//! once) is pinned here and cross-checked against ruSTy by the cases in
+//! `tests/oracle.rs` when `HELMSMAN_RUSTY` is set.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use helmsman_iec::{FaultKind, Image, ImageSizes, Program, Value, compile};
@@ -567,7 +567,10 @@ fn in_out_declarations_have_no_initial_value_and_no_qualifiers() {
     let e = errors(
         "FUNCTION_BLOCK f VAR_IN_OUT RETAIN n : INT; END_VAR END_FUNCTION_BLOCK PROGRAM p END_PROGRAM",
     );
-    assert!(!e.is_empty());
+    assert!(
+        e.contains("N: a VAR_IN_OUT cannot be RETAIN: it is the caller's variable"),
+        "{e}"
+    );
     let e = errors(
         "FUNCTION_BLOCK f VAR_IN_OUT n : INT; n : INT; END_VAR END_FUNCTION_BLOCK PROGRAM p END_PROGRAM",
     );
@@ -665,7 +668,7 @@ proptest! {
         let mut body = String::new();
         let mut want = [[0i32; 3]; 3];
         for (arr, inst, by) in &plan {
-            body.push_str(&format!("blk[{inst}](step := {by}, buf := a{arr});\n"));
+            writeln!(body, "blk[{inst}](step := {by}, buf := a{arr});").unwrap();
         }
         for _ in 0..scans {
             for (arr, _, by) in &plan {
