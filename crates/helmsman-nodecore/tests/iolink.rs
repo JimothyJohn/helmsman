@@ -375,6 +375,36 @@ fn a_device_of_another_length_gives_no_values() {
     assert_eq!(port.input(0), None);
 }
 
+/// A signed output is two's complement in its own bits, and a number
+/// outside them is not sent.
+#[test]
+fn a_signed_output_keeps_to_its_bits() {
+    let map = "device d iolink port=1\nout trim int d pd:2:i6\nout on bool d pd:0\n";
+    let mut port = Port::new(parse(map, 1).unwrap().remove(0));
+    // 8 bits each way, OPERATE code 0.
+    let page = Page1([0, 0, 0, 0x11, 0x11, 0x08, 0x08, 0x01, 0x36, 0, 0, 1, 0, 0, 0, 0]);
+    let mut device = Device::new(Rate::Com3, page).unwrap();
+    let mut now = 0;
+    run(&mut port, &mut device, &mut now, 300_000);
+    assert!(port.running(), "{:?}", port.problem());
+    for (trim, octet) in [(-32, 0x81), (-1, 0xFD), (0, 0x01), (31, 0x7D)] {
+        assert!(
+            port.set_outputs(Some(&[Value::Int(trim), Value::Bool(true)])),
+            "{trim}"
+        );
+        run(&mut port, &mut device, &mut now, 30_000);
+        assert_eq!(device.outputs(), Some(&[octet][..]), "{trim}");
+    }
+    for trim in [-33, 32, i64::MIN, i64::MAX] {
+        assert!(
+            !port.set_outputs(Some(&[Value::Int(trim), Value::Bool(true)])),
+            "{trim}"
+        );
+        run(&mut port, &mut device, &mut now, 30_000);
+        assert_eq!(device.outputs(), None, "{trim}");
+    }
+}
+
 #[test]
 fn another_device_than_the_map_names_is_refused() {
     let mut port = port_from_iodd();
