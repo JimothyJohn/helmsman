@@ -337,12 +337,11 @@ fn corpus() -> Vec<Case> {
             "p(add := 10, buf := a, n := k); q(add := 1, buf := b, n := k); p(add := 10, buf := a, n := k);
              a0 := a[0]; a3 := a[3]; b0 := b[0]; f := p.first;",
         ),
-        // VAR_OUTPUT on a function, bound with =>; an unbound output is
-        // dropped, the result is still the call's value. The call that
-        // leaves them out names its inputs: ruSTy counts a positional
-        // call's arguments against every parameter and refuses
-        // `oracle_divmod(-17, 5)` (E032), which Helmsman accepts
-        // (tests/in_out.rs holds that form).
+        // VAR_OUTPUT on a function, bound with =>. Every call binds both
+        // outputs: ruSTy refuses a call that leaves one out, with named
+        // inputs or positional ones (E032, "this POU takes 4 arguments but
+        // 2 arguments were supplied"). Helmsman accepts that call and
+        // drops the output; tests/in_out.rs holds it, with no oracle.
         case(
             "FUNCTION oracle_divmod : DINT
                VAR_INPUT a, b : DINT; END_VAR
@@ -360,9 +359,11 @@ fn corpus() -> Vec<Case> {
                 var("r2", "DINT"),
                 var("g2", "BOOL"),
                 var("q3", "DINT"),
+                var("r3", "DINT"),
+                var("g3", "BOOL"),
             ],
             "q1 := oracle_divmod(17, 5, rem => r1, ok => g1); q2 := oracle_divmod(a := 9, b := 0, rem => r2, ok => g2);
-             q3 := oracle_divmod(a := -17, b := 5);",
+             q3 := oracle_divmod(-17, 5, rem => r3, ok => g3);",
         ),
         // Standard functions.
         case(
@@ -487,7 +488,7 @@ fn by_reference_cases_have_the_values_their_definitions_give() {
     // (5 + 1) * 2^9 - 1.
     assert_eq!(bump[2], "3071");
     let divmod = ours(get("oracle_divmod")).unwrap();
-    assert_eq!(divmod, ["3", "2", "1", "0", "9", "0", "-3"]);
+    assert_eq!(divmod, ["3", "2", "1", "0", "9", "0", "-3", "-2", "1"]);
 }
 
 #[test]
