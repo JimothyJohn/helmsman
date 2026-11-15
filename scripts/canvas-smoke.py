@@ -226,6 +226,14 @@ def playground(ctx, base, out):
         "VAR l : Latch; END_VAR\nl(set := go);\nlamp := l.q;\nEND_PROGRAM\n"
     )
     r.wait(1500); r.shot("warned")
+    # A slip that does not compile: once the typing stops, the Agent says
+    # what went wrong under the top bar, with Fix it (crate::watch).
+    r.key("Control+a")
+    r.page.keyboard.type(
+        "PROGRAM main\nVAR_INPUT go : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\n"
+        "lmap := go;\nEND_PROGRAM\n"
+    )
+    r.wait(3500); r.shot("agent-noticed")
     problems = r.problems()
     r.page.close()
     # No layout kept: the page opens on the Agent, every tab on the left.

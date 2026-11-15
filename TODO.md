@@ -442,11 +442,11 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door-recorded-run`, `liv
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **The Agent watches and speaks first** — Nick, 2026-11-14: "the agent should feel like a fundamental part of the environment. It should be watching every time it breaks to point out the stupid thing you did to show how it should be done better." Today the Agent is a box you type into. Wanted: every failure the environment already sees (a check error, a requirement test going red, a module held by a lost input, a device lost, a value out of its limits) reaches the Agent unasked, and it answers in place, beside the failure: what went wrong in one line, the better way, and the change offered as one click. Never a modal, never a wait in the way of typing. Open before building: what it costs per visitor on the free chat (each failure is a model turn), and which failures are answered by rule without the model.
-  needs: an interview on the triggers and the cost ceiling
-  result: a failure is followed by its explanation and its fix without the engineer asking
-  est: 1w
-  difficulty: high
+- [ ] **The Agent watches: on a box, and beside the failure** — Nick, 2026-11-14: "the agent should feel like a fundamental part of the environment. It should be watching every time it breaks to point out the stupid thing you did to show how it should be done better." Built for the simulation (`crates/helmsman-canvas/src/watch.rs`): a compile error, a fault, a program held by a lost input and a red requirement test are each said unasked in a card over the diagram with the better way and a Fix it button that hands the failure to the Agent. The words come from rules, so watching costs no model turn (decided 2026-11-14: only the click spends one). Left: the same on a box's page (`box_view`: its diagnostics, the modules' held and faulted states, a lost device); the line drawn beside the failure itself (the editor's line, the test's row) as well as over the diagram; more rules as real mistakes show which are missing; a value out of its limits.
+  needs: nothing
+  result: on a box too, a failure is followed by its explanation and its fix without the engineer asking
+  est: 3d
+  difficulty: med
   id: agent-watches
   asked: 2026-11-14
   by: claude-session
