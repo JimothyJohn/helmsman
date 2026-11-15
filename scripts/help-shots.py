@@ -34,7 +34,7 @@ S = 2
 # Every tab in the left pane, in its first order (2026-11-13). The shots
 # dock I/O on the right by default: the diagram then sits where it did
 # with two side panels, and the coordinates below hold.
-PANES = ("claude", "code", "io", "devices", "files", "history", "palette")
+PANES = ("claude", "code", "io", "devices", "files", "history")
 
 
 def layout(left=1, pane="code", rights="io", scan=0, trend=1, bottom="trend", light=0):
@@ -64,7 +64,6 @@ SHOTS = {
     "context-menu": ("?playground&editor", layout(pane="files"), [("wait", 1500), ("rclick", 55, 373), ("wait", 800)], clip(0, 52, 360, 560)),
     "io-tab": ("?playground&editor", layout(pane="io", rights=""), [("wait", 1500)], clip(0, 52, 320, 423)),
     "agent-tab": ("?playground&editor", layout(pane="claude", rights=""), [("wait", 1500)], clip(0, 52, 320, 393)),
-    "palette-tab": ("?playground&editor", layout(pane="palette", rights=""), [("wait", 1500)], clip(0, 52, 320, 393)),
     "trend": ("?playground&editor", layout(bottom="trend"), [("wait", 8000)], clip(320, 580, 836, 280)),
     "monitor": ("?playground&monitor", layout(), [("wait", 3000)], None),
     "monitor-stopped": ("?playground&monitor", layout(), [("wait", 2000), ("key", "Control+Enter"), ("wait", 1200)], clip(0, 52, 1400, 260)),
