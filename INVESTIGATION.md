@@ -177,6 +177,77 @@ stand on it.
   ranking is the roadmap for §4. It is measured instead of guessed.
 - **Stand**: **do it second.** It costs little and makes the ordering in
   §4 a data question.
+- **Result** (`scripts/st-corpus.sh`, 2026-11-15, 1009 files from the six
+  sources in docs/SOURCES.md; OSCAT BASIC skipped, license and download
+  terms not looked up). The stages are "parses" (lex and parse together:
+  the public API does not separate them) and "compiles" (check and compile
+  together). A file counts under the first diagnostic only, and the lexer
+  stops at the first string literal, so STRING hides whatever else is in
+  those 726 files: the next run after STRING lands will move the order.
+  UniTest's 351 files are B&R function bodies without their declarations,
+  so its 116 "expected :, found X" are the fragment format, not a dialect
+  gap. matiec's `bad_*` and iec-checker's `bad/` files are listed apart.
+
+```
+per source (files, parse, compile, refused, refused as expected):
+  blark: 18 files, 1 parse, 0 compile, 18 refused, 0 refused as expected
+  iec-checker: 53 files, 28 parse, 11 compile, 40 refused, 2 refused as expected
+  matiec: 40 files, 0 parse, 0 compile, 26 refused, 14 refused as expected
+  rusty: 541 files, 8 parse, 4 compile, 537 refused, 0 refused as expected
+  unitest: 351 files, 1 parse, 0 compile, 351 refused, 0 refused as expected
+  wenger: 6 files, 0 parse, 0 compile, 6 refused, 0 refused as expected
+total: 1009 files, 38 parse, 15 compile, 978 refused, 16 refused as expected (named bad_* or bad/, left out of the ranking)
+
+refusals by cause (first diagnostic of each file):
+   726 files  parse: STRING literals are not supported yet  (blark 2, iec-checker 7, matiec 6, rusty 477, unitest 232, wenger 2)
+   117 files  parse: expected :, found X  (blark 1, unitest 116)
+    25 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found CONFIGURATION  (iec-checker 5, matiec 20)
+    23 files  parse: unexpected character ^  (blark 1, rusty 22)
+    10 files  compile: no PROGRAM found  (iec-checker 6, rusty 4)
+     5 files  parse: expected ;, found (  (blark 1, rusty 4)
+     5 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found INTERFACE  (rusty 5)
+     5 files  parse: missing ; after END_IF  (blark 1, iec-checker 1, rusty 1, unitest 2)
+     4 files  parse: DT literals are not supported yet  (rusty 4)
+     4 files  parse: X:  is not allowed in names  (rusty 4)
+     4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found METHOD  (blark 4)
+     4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found UNIT  (wenger 4)
+     3 files  parse: VAR_EXTERNAL is not supported yet  (iec-checker 3)
+     3 files  parse: expected ;, found END_TYPE  (iec-checker 1, rusty 2)
+     2 files  compile: only one PROGRAM is supported  (iec-checker 2)
+     2 files  parse: LDT literals are not supported yet  (rusty 2)
+     2 files  parse: TOD literals are not supported yet  (rusty 2)
+     2 files  parse: VAR_ACCESS is not supported yet  (iec-checker 2)
+     2 files  parse: expected := or a call, found X  (rusty 2)
+     2 files  parse: expected an integer, found X  (blark 2)
+     1 files  compile: %X: address must start with X, X or X  (iec-checker 1)
+     1 files  compile: %X: multi-level addresses (as X extensions assign) are not supported; this runtime takes %X<byte>N<bit> or %X<n>  (iec-checker 1)
+     1 files  compile: CONSTANT X needs an initial value  (blark 1)
+     1 files  compile: X: an input (%X) cannot take an initial value  (iec-checker 1)
+     1 files  compile: expected BOOL, found INT; convert explicitly with X  (iec-checker 1)
+     1 files  compile: expected INT, found LREAL; convert explicitly with X  (iec-checker 1)
+     1 files  compile: expected INT, found REAL; convert explicitly with X  (iec-checker 1)
+     1 files  compile: integer literal N cannot be a TIME  (iec-checker 1)
+     1 files  compile: undeclared variable X (declare it in a VAR block)  (iec-checker 1)
+     1 files  compile: unknown function X  (unitest 1)
+     1 files  compile: unknown type X  (iec-checker 1)
+     1 files  parse: DATE literals are not supported yet  (rusty 1)
+     1 files  parse: LDATE literals are not supported yet  (rusty 1)
+     1 files  parse: LTOD literals are not supported yet  (rusty 1)
+     1 files  parse: VAR_GLOBAL is not supported yet  (iec-checker 1)
+     1 files  parse: bad TIME literal: expected a number  (rusty 1)
+     1 files  parse: bad TIME literal: only the last part may have a fraction  (iec-checker 1)
+     1 files  parse: expected :, found *  (iec-checker 1)
+     1 files  parse: expected :, found ,  (blark 1)
+     1 files  parse: expected :, found VAR  (rusty 1)
+     1 files  parse: expected := or a call, found VAR_OUTPUT  (blark 1)
+     1 files  parse: expected ;, found TO  (blark 1)
+     1 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found ;  (blark 1)
+     1 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found VAR_GLOBAL  (rusty 1)
+     1 files  parse: expected a CASE label, found N  (blark 1)
+     1 files  parse: expected a number after WSTRING#  (rusty 1)
+     1 files  parse: missing ; after END_CASE  (rusty 1)
+     1 files  parse: unexpected character ?  (iec-checker 1)
+```
 
 ### 4. Lifting the dialect
 

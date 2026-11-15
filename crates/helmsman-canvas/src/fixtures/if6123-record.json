@@ -1,0 +1,216 @@
+{
+ "format": "helmsman-device-record 1",
+ "folder": "devices/ifm/if6123",
+ "vendor": "ifm",
+ "model": "IF6123, IF6124, IG6615, IG6616, II5973, II5974, IM5172, IM5173",
+ "kind": "sensor",
+ "draft": true,
+ "family": "I",
+ "vendor_url": "www.ifm.com/ifmgb/web/io-link-download.htm",
+ "iolink": {
+  "vendor_id": 310,
+  "device_id": 791
+ },
+ "variants": [
+  {
+   "product_id": "IF6123",
+   "name": "IF6123",
+   "description": "Inductive sensor"
+  },
+  {
+   "product_id": "IF6124",
+   "name": "IF6124",
+   "description": "Inductive sensor"
+  },
+  {
+   "product_id": "IG6615",
+   "name": "IG6615",
+   "description": "Inductive sensor"
+  },
+  {
+   "product_id": "IG6616",
+   "name": "IG6616",
+   "description": "Inductive sensor"
+  },
+  {
+   "product_id": "II5973",
+   "name": "II5973",
+   "description": "Inductive sensor"
+  },
+  {
+   "product_id": "II5974",
+   "name": "II5974",
+   "description": "Inductive sensor"
+  },
+  {
+   "product_id": "IM5172",
+   "name": "IM5172",
+   "description": "Inductive sensor"
+  },
+  {
+   "product_id": "IM5173",
+   "name": "IM5173",
+   "description": "Inductive sensor"
+  }
+ ],
+ "wired": {
+  "sio": true,
+  "connections": [
+   {
+    "type": "Other",
+    "products": [
+     "IF6123"
+    ],
+    "wires": []
+   },
+   {
+    "type": "Other",
+    "products": [
+     "IF6124"
+    ],
+    "wires": []
+   },
+   {
+    "type": "Other",
+    "products": [
+     "IG6615"
+    ],
+    "wires": []
+   },
+   {
+    "type": "Other",
+    "products": [
+     "IG6616"
+    ],
+    "wires": []
+   },
+   {
+    "type": "Other",
+    "products": [
+     "II5973"
+    ],
+    "wires": []
+   },
+   {
+    "type": "Other",
+    "products": [
+     "II5974"
+    ],
+    "wires": []
+   },
+   {
+    "type": "Other",
+    "products": [
+     "IM5172"
+    ],
+    "wires": []
+   },
+   {
+    "type": "Other",
+    "products": [
+     "IM5173"
+    ],
+    "wires": []
+   }
+  ]
+ },
+ "signals": [
+  {
+   "dir": "in",
+   "name": "PDV1",
+   "type": "int",
+   "bits": "2..15",
+   "description": "Current process data 1",
+   "values": {
+    "-8184": "UL",
+    "8184": "OL"
+   }
+  },
+  {
+   "dir": "in",
+   "name": "SSC2",
+   "type": "bool",
+   "bits": "1",
+   "on": "active",
+   "off": "inactive",
+   "description": "Status depends on SSC2-Config.Logic and SSC2-Config.Mode"
+  },
+  {
+   "dir": "in",
+   "name": "SSC1",
+   "type": "bool",
+   "bits": "0",
+   "on": "active",
+   "off": "inactive",
+   "description": "Status depends on SSC1-Config.Logic and SSC1-Config.Mode"
+  }
+ ],
+ "settings": [
+  {
+   "name": "TI Select",
+   "index": 58,
+   "default": "1",
+   "default_name": "SSC1",
+   "values": {
+    "1": "SSC1",
+    "2": "SSC2"
+   }
+  },
+  {
+   "name": "SSC1 Config: Logic",
+   "index": 61,
+   "subindex": 1,
+   "default": "0",
+   "default_name": "High active",
+   "values": {
+    "0": "High active",
+    "1": "Low active"
+   }
+  },
+  {
+   "name": "SSC1 Config: Mode",
+   "index": 61,
+   "subindex": 2,
+   "default": "1",
+   "default_name": "Single point",
+   "values": {
+    "1": "Single point",
+    "2": "Window",
+    "3": "Two point"
+   }
+  },
+  {
+   "name": "SSC2 Config: Logic",
+   "index": 63,
+   "subindex": 1,
+   "default": "0",
+   "default_name": "High active",
+   "values": {
+    "0": "High active",
+    "1": "Low active"
+   }
+  },
+  {
+   "name": "SSC2 Config: Mode",
+   "index": 63,
+   "subindex": 2,
+   "default": "1",
+   "default_name": "Single point",
+   "values": {
+    "1": "Single point",
+    "2": "Window",
+    "3": "Two point"
+   }
+  },
+  {
+   "name": "P-n",
+   "index": 500,
+   "default": "0",
+   "default_name": "PnP",
+   "values": {
+    "0": "PnP",
+    "1": "nPn"
+   }
+  }
+ ]
+}

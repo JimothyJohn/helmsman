@@ -126,6 +126,7 @@ mod verify_tests;
 mod watch;
 #[cfg(target_arch = "wasm32")]
 mod web;
+mod wired;
 
 /// `helmsman-canvas --help-tables keyboard|starters`: the help site's
 /// generated pages, as Markdown on stdout (scripts/build-help.sh).
