@@ -121,10 +121,11 @@ pub fn lower(src: &str) -> Result<Lowered, Vec<Diagnostic>> {
             task_lines(resource, &mut configured);
         }
     }
-    cx.configuration(&configured);
     for pou in pous {
         cx.pou(pou, &user);
     }
+    // After the POUs, so the lowered text still opens with the program.
+    cx.configuration(&configured);
     if cx.diags.is_empty() {
         Ok(Lowered {
             st: cx.st,
