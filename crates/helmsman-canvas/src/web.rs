@@ -845,11 +845,53 @@ thread_local! {
     static PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// Why a picked file was not read, told in Messages.
     static PICK_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The vendor's file picked for the agent (`device_vendor.rs`).
+    static VENDOR_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why that file was not read, said beside its button.
+    static VENDOR_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
+
+type Sink = &'static std::thread::LocalKey<RefCell<Vec<(String, Vec<u8>)>>>;
+type Errors = &'static std::thread::LocalKey<RefCell<Vec<String>>>;
 
 /// Opens the browser's file picker (`accept`: `.zip,.st,.xml,.l5x`); the
 /// file chosen arrives through [`take_picked`].
 pub fn pick_file(accept: &str, ctx: &egui::Context) {
+    pick_into(accept, ctx, crate::app::pick_refusal, &PICKED, &PICK_ERRORS);
+}
+
+/// Opens the picker for the vendor's file the agent reads (EDS, IODD,
+/// manual); the file arrives through [`take_vendor_picked`], its refusal
+/// through [`take_vendor_errors`].
+pub fn pick_vendor_file(ctx: &egui::Context) {
+    pick_into(
+        crate::device_vendor::ACCEPT,
+        ctx,
+        crate::device_vendor::pick_refusal,
+        &VENDOR_PICKED,
+        &VENDOR_ERRORS,
+    );
+}
+
+/// The vendor's files picked since the last call: name and bytes.
+#[must_use]
+pub fn take_vendor_picked() -> Vec<(String, Vec<u8>)> {
+    VENDOR_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Why the vendor's files picked since the last call were not read.
+#[must_use]
+pub fn take_vendor_errors() -> Vec<String> {
+    VENDOR_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+fn pick_into(
+    accept: &str,
+    ctx: &egui::Context,
+    refusal: fn(&str, f64) -> Option<String>,
+    picked: Sink,
+    errors: Errors,
+) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
@@ -870,8 +912,8 @@ pub fn pick_file(accept: &str, ctx: &egui::Context) {
         };
         let name = file.name();
         // Before the whole file is read into the page.
-        if let Some(why) = crate::app::pick_refusal(&name, file.size()) {
-            PICK_ERRORS.with(|p| p.borrow_mut().push(why));
+        if let Some(why) = refusal(&name, file.size()) {
+            errors.with(|p| p.borrow_mut().push(why));
             ctx.request_repaint();
             return;
         }
@@ -879,9 +921,9 @@ pub fn pick_file(accept: &str, ctx: &egui::Context) {
             match JsFuture::from(file.array_buffer()).await {
                 Ok(buf) => {
                     let bytes = web_sys::js_sys::Uint8Array::new(&buf).to_vec();
-                    PICKED.with(|p| p.borrow_mut().push((name, bytes)));
+                    picked.with(|p| p.borrow_mut().push((name, bytes)));
                 }
-                Err(e) => PICK_ERRORS.with(|p| {
+                Err(e) => errors.with(|p| {
                     p.borrow_mut()
                         .push(format!("{name} could not be read: {}", text(&e)));
                 }),

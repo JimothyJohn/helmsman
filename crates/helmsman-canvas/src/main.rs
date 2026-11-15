@@ -50,6 +50,7 @@ mod device_config;
 mod device_form;
 mod device_form_ui;
 mod device_proposal;
+mod device_vendor;
 mod devices;
 mod diff_ui;
 mod editor;
