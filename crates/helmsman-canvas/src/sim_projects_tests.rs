@@ -133,7 +133,11 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
     assert!(v.session.running, "running, as the playground always opened");
     let rows = v.proj.rows();
     assert!(rows.iter().all(ProjectRow::example), "{rows:?}");
-    assert_eq!(rows.len(), crate::playground::EXAMPLES.len());
+    assert_eq!(
+        rows.len(),
+        crate::playground::EXAMPLES.len() + 1,
+        "the textbook examples and the front door's tank"
+    );
     assert!(rows.iter().any(|r| r.name == "traffic" && r.running));
     // Edited and saved: a copy under a free name, opened; the example
     // itself is unchanged.

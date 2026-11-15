@@ -6632,5 +6632,6 @@ mod devconf {
     }
 }
 
+mod front;
 mod shell;
 mod sim_popup;

@@ -218,13 +218,27 @@ pub fn example_io_map(src: &str) -> String {
 }
 
 fn examples() -> BTreeMap<String, Files> {
-    EXAMPLES
+    let mut all: BTreeMap<String, Files> = EXAMPLES
         .iter()
         .map(|e| {
             let (name, file) = example_project(e.src);
             (name, Files(BTreeMap::from([(file, e.src.to_string())])))
         })
-        .collect()
+        .collect();
+    // The front door's tank (`crate::front`): the program, the plant it
+    // runs against and its requirement tests, so the editor opens on
+    // exactly what the front door showed.
+    let front = crate::front::TESTS
+        .iter()
+        .copied()
+        .chain([
+            (helmsman_project::MAIN, crate::front::MAIN),
+            (helmsman_project::PLANT, crate::front::PLANT),
+        ])
+        .map(|(f, t)| (f.to_string(), t.to_string()))
+        .collect();
+    all.insert(crate::front::PROJECT.into(), Files(front));
+    all
 }
 
 /// The list a built-in project is under.
