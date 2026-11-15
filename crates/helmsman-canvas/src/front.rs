@@ -341,16 +341,17 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, f: &mut Front) -> Option<Act> 
                     ui.add_space(18.0);
                     if ui.available_width() >= STACK_BELOW {
                         ui.columns(3, |c| {
-                            asked(&mut c[0], chrome, &t);
-                            machine(&mut c[1], chrome, &t, f, now);
-                            proofs(&mut c[2], chrome, &t, f, now);
+                            card(&mut c[0], &t, |ui| asked(ui, chrome, &t));
+                            card(&mut c[1], &t, |ui| machine(ui, chrome, &t, f, now));
+                            card(&mut c[2], &t, |ui| proofs(ui, chrome, &t, f, now));
                         });
                     } else {
-                        asked(ui, chrome, &t);
-                        ui.add_space(18.0);
-                        machine(ui, chrome, &t, f, now);
-                        ui.add_space(18.0);
-                        proofs(ui, chrome, &t, f, now);
+                        // Stacked, the machine comes first: it is what moves.
+                        card(ui, &t, |ui| machine(ui, chrome, &t, f, now));
+                        ui.add_space(14.0);
+                        card(ui, &t, |ui| proofs(ui, chrome, &t, f, now));
+                        ui.add_space(14.0);
+                        card(ui, &t, |ui| asked(ui, chrome, &t));
                     }
                     ui.add_space(22.0);
                     if foot(ui, chrome, &t) {
@@ -361,13 +362,32 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, f: &mut Front) -> Option<Act> 
     act
 }
 
+/// One of the page's three parts: a panel a step off the page, its
+/// content laid out from the left (a column of `ui.columns` justifies,
+/// which spreads a wrapped line's words).
+fn card(ui: &mut egui::Ui, t: &crate::theme::Theme, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(t.panel)
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(egui::Margin::same(16))
+        .show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(ui.available_width());
+                add(ui);
+            });
+        });
+}
+
 /// The wordmark, the way on, and what this page is. `true` when "Open
 /// the editor" was clicked.
 fn head(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) -> bool {
     let mut open = false;
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("HELMSMAN").color(t.accent).size(22.0).strong());
-        ui.label(RichText::new("early release").color(t.muted).size(SMALL));
+        // A phone has no room for it beside the button.
+        if ui.max_rect().width() > 480.0 {
+            ui.label(RichText::new("early release").color(t.muted).size(SMALL));
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let r = ui
                 .add(egui::Button::new(RichText::new("Open the editor").size(BODY)))
@@ -465,10 +485,7 @@ fn machine(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &
         ui.label(RichText::new("Break it:").color(t.muted).size(SMALL));
         for fault in Fault::ALL {
             let r = ui
-                .add(egui::Button::selectable(
-                    f.fault == fault,
-                    RichText::new(fault.label()).size(BODY),
-                ))
+                .add(egui::Button::new(RichText::new(fault.label()).size(BODY)).selected(f.fault == fault))
                 .tip(fault.tip());
             chrome.hit(format!("front fault {fault:?}"), r.rect);
             if r.clicked() {
@@ -550,7 +567,7 @@ fn paint_tank(p: &egui::Painter, area: Rect, t: &crate::theme::Theme, f: &Front,
     let pipe = Stroke::new(6.0, STEEL);
     p.line_segment([Pos2::new(area.left() + 4.0, pipe_y), spout], pipe);
     p.line_segment([spout, Pos2::new(spout.x, pipe_y + 14.0)], pipe);
-    let valve = Pos2::new(area.left() + 34.0, pipe_y);
+    let valve = Pos2::new(area.left() + 46.0, pipe_y);
     let open = f.filling();
     p.circle(
         valve,
