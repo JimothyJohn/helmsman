@@ -6765,5 +6765,6 @@ mod devconf {
 }
 
 mod front;
+mod io_names;
 mod shell;
 mod sim_popup;

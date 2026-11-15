@@ -445,10 +445,10 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **Name the sensors first; the device's side is already known** — Nick, 2026-11-14: "Those sensors? It should guide you to name them and their function. Their output? It should be deeply known ahead of time." A new project starts from the I/O: the Agent walks the engineer through each point (what is on it, what it means when on, what is safe when it is lost) and those names and meanings are what the program, the requirements and the fault tests are written in. What a device gives (its channels, types, units, limits, safe values) comes from its profile in the library (`device-profiles`), never asked of the engineer. The plant in the simulation is built from the same answers, so the faults thrown at the program are the named sensors' own.
+- [ ] **Name the sensors first: the device's side, the safe state, the plant** — Nick, 2026-11-14: "Those sensors? It should guide you to name them and their function. Their output? It should be deeply known ahead of time." Built for a new program in the simulation (`crates/helmsman-canvas/src/io_names.rs`): a fold in the Agent tab where each point gets a name, input or output, its type and what it is; the list goes to the Agent ahead of the instruction and the program is written in those names. Left: a device added from the library fills the list from its profile's channels (names, types, units, limits), so nothing about the device is typed (`device-profiles`); each output's safe state when its device is lost, asked once and carried into the map; the simulated plant (`plant.sim`) drafted from the same answers, so the faults thrown at the program are the named sensors' own; the same list for an existing program (its ports and their comments), and on a box.
   needs: nothing
   result: an engineer states what each sensor is once; nothing else about the I/O is asked
-  est: 4d
+  est: 3d
   difficulty: med
   id: agent-names-io
   asked: 2026-11-14
