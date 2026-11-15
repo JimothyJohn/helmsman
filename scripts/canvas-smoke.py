@@ -275,9 +275,21 @@ def box(ctx, base, out):
     r.step("signed-in", sign_in, HEADER_RIGHT, 6000)
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT, 800)
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT, 800)
+    # The agent proposes a device profile (this page's session posts it, as
+    # the box's tool does with its token); the tab reads the box every 3 s.
+    with open(os.path.join(ROOT, "docs", "devices", "moxa-iologik-e1213.device")) as f:
+        profile = f.read()
+    base = r.page.url.split("?")[0].rstrip("/")
+    posted = r.page.request.post(
+        base + "/api/device-profile/proposal",
+        data=json.dumps({"name": "moxa-copy", "text": profile, "summary": "Read from the unit's manual: eight inputs, four outputs and four that follow a jumper."}),
+        headers={"Content-Type": "application/json", "X-Helmsman-Request": "1", "Origin": base},
+    )
+    extra = [] if posted.status == 201 else [f"the proposal was refused: {posted.status} {posted.text()[:200]}"]
+    r.wait(4500); r.shot("devices-proposal")
     r.click(*TAB_AGENT); r.wait(800); r.shot("agent-tab")
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
-    problems = r.problems()
+    problems = extra + r.problems()
     r.page.close()
     # The Monitor by its URL: the header's switch sits elsewhere once
     # somebody is signed in.
