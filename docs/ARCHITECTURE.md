@@ -381,7 +381,17 @@ scan; the scheduler bounds how often.
   show the word yet (the canvas is step 3's). Not yet: the canvas's
   add-by-click (step 3), profiles in the device library.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
-  optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
+  optional `unit=`, `poll_ms=` (inputs), `safe=` (outputs) and
+  `wired=VENDOR/MODEL` in any order. `wired=` names the sensor or actuator
+  on a point by its folder in the device library (`in part_present bool
+  rio di:3 wired=ifm/if6123`): the runtime does nothing with it, the
+  map keeps it per signal (`MapFile::wired`), the agent's `list_devices`
+  gives it on the point, and `helmsman_project::devlib` finds the record
+  (`Index::by_wired`; a sensor's record has no protocol, an
+  `identity.iolink` and its order numbers as `products`, and is never the
+  match for a device found on the network). The record is drafted in the
+  library from the device's IODD. Nothing shows it in the canvas yet
+  (TODO.md `iodd-metadata`);
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
   screen TILE` an output no device takes (the retired floor screen's
   tiles, below). Older maps read unchanged;
@@ -2904,7 +2914,14 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   visitor goes on. Three cards: what was asked in plain words, a tank
   running its program against its plant (`assets/front/`: `main.st`,
   `plant.sim`), and the proofs, one row a requirement test, each of which
-  throws a fault at the machine (`helmsman_sim::iec`). The visitor throws
+  throws a fault at the machine (`helmsman_sim::iec`). `main.st` is the
+  Agent's own answer to `front::instruction()` (the I/O by name, then the
+  four lines shown), kept as it landed: the ignored test
+  `front_door_recording` (agent_ladder_tests.rs) asks the live free chat,
+  keeps the program only if every proof is green on it, and writes
+  `recorded.txt` (date, requests, seconds), which the page quotes. The
+  first run is played back: the request line by line, the writing, the
+  proofs one by one (`Front::asked_shown`, `writing`, `shown`). The visitor throws
   the same faults by hand (`front::Fault`, set on the running
   `helmsman_sim::Plant`) and reads what the program did. `front::Front`
   is the state, with its own `Session`; `App::front` holds it and
@@ -2928,6 +2945,23 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   used twice, stops the send and says why. The front door's tank was
   written from such a list. Contracts in `io_names.rs`'s tests and
   `ui_tests/io_names.rs` (the pane keeps its width with long names).
+- **The Agent watches** (`watch.rs`; Nick, 2026-11-14): what the page
+  already sees go wrong is said unasked in a card over the top of the
+  diagram (on screen whichever tab is open, not modal), one thing at a time, most urgent first (`watch::noticed`): an
+  error that stops the build, a fault, a program held by a lost input
+  with no `NAME_ok`, a red requirement test. Each is one line of what
+  went wrong, the better way when a rule knows one, and two buttons. Fix
+  it (`PlaygroundView::fix_noticed`) puts an instruction that carries the
+  failure in the Agent's box, shows the Agent tab and sends it through the
+  usual checks; Not now hides it until something else is wrong. The words
+  come from rules, not the model, so watching spends no model turn; only
+  the click does. `watch::Watching` holds it back while an edit is
+  unchecked or the Agent is at work, and until the problem has stood
+  `watch::QUIET` seconds. Patterns: compile errors of one kind
+  (`watch::rule_of`) in several places are said once, with one Fix it
+  that lists them all; a kind said `watch::HABIT` times in a session is
+  said to be one ("That is 3 times this session"), counted in memory
+  only. Contracts in `watch.rs`'s tests.
 - **The guided tour** (`tour.rs`; `?tour`, Help › Take the tour; Nick,
   2026-11-06): a card beside the control each step is about, the control
   outlined, over everything in the `Tooltip` order so no panel moves. A

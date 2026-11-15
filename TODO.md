@@ -2,7 +2,7 @@
 
 Done cards were removed on 2026-11-06 (git history has them). Three sections up top: decisions only you can make, things only your hands can do, and what an agent builds next. The roadmap below is the long view.
 
-Freeze (Nick, 2026-11-14): until the front door (`front-door-recorded-run`, `live-smoke` and the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
+Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
 
 ## Open questions for Nick
 
@@ -120,8 +120,8 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door-recorded-run`, `liv
 
 ## Next to build
 
-- [ ] **A sensor's IODD as its metadata: from the library to the point it is wired to** — Why it matters: Nick, 2026-11-14: "ioLink is a core part of this but may fundamentally be different so let's focus on it for digital input and output device metadata more than anything else", and of sensors that day: "Their output? It should be deeply known ahead of time." A prox or a valve sits on a digital channel of a remote I/O block and is never spoken to; its vendor's IODD (every IO-Link device has one) says who makes it, its variants, how each connector is wired, whether it switches without a master, and what its signals and their states are called. Built: helmsman-devices `scripts/iodd-draft.py` drafts a library record from an IODD (`[identity.iolink]`, `[wired]`, `[[signals]]` with `on` / `off` names; helmsman-devices #33), and `helmsman-iolink`'s `iodd` reads the same file in the box's language. Left, in order: (1) real records: fetch a few vendors' IODDs from IODDfinder (https://ioddfinder.io-link.com) for sensors and valves, draft them, and read `wired.switching` (which signal the wire carries, normally open or closed) from each manual with its page, since an IODD does not say; a `collect/<vendor>.toml` entry per file so `docs-fetch.py` holds the hashes; (2) a point knows what is on it: a line or key in the project that ties a signal (`in part_present bool rio di:3`) to a library record, so the I/O list, the Devices tab and the Agent read "Balluff BES, target present" for DI-03, with the `on` / `off` names and the wire; where that lives (the map line, the project file) is to be decided against `agent-names-io`; (3) `agent-names-io` uses it: when the engineer names a sensor from the library, what on means and what the device is are already filled in, and only its function is asked; (4) the simulation's plant takes the sensor's kind and states from the record.
-  needs: nothing for (1); (2) is a design step to settle with `agent-names-io` and `device-profiles`
+- [ ] **A sensor's IODD as its metadata: from the library to the point it is wired to** — Why it matters: Nick, 2026-11-14: "ioLink is a core part of this but may fundamentally be different so let's focus on it for digital input and output device metadata more than anything else", and of sensors that day: "Their output? It should be deeply known ahead of time." A prox or a valve sits on a digital channel of a remote I/O block and is never spoken to; its vendor's IODD (every IO-Link device has one) says who makes it, its variants, how each connector is wired, whether it switches without a master, and what its signals and their states are called. Built: helmsman-devices `scripts/iodd-draft.py` drafts a library record from an IODD (`[identity.iolink]`, the order numbers, `[wired]` with each connector's wires, `[[signals]]` with `on` / `off` names, `[[settings]]` with factory values such as PNP and high active; helmsman-devices #33, #38), with five real records as drafts (ifm IF6123, O5D100, PN7092, KQ6005, SICK WTB4FP; IODDs from IODDfinder through `docs-fetch.py`). In Helmsman a map line names what is on a point, `in part_present bool rio di:3 wired=ifm/if6123`: the box keeps it, the Agent's `list_devices` gives it, and `devlib` finds the record by it, by an order number or by the IO-Link identity. Nothing is live: the box reads the library's `main`, and the records are on its `dev`. Left, in order: (1) `wired.switching` for each record (which signal the switching wire carries with no master, normally open or closed): an IODD does not say and the Smart Sensor Profile leaves it to the vendor, so it comes from each data sheet with its page; none could be fetched on 2026-11-14 (ifm's pages are rendered by script, its asset service answered 404 and 403), so this needs the PDFs by hand or a vendor source that can be fetched; (2) the record's detail where the box can read it: the index has vendor, model, kind and order numbers only, and the signal names, `on` / `off` names, wires and settings are in `device.toml`; either the library builds a small JSON per record or `review.json` is read; (3) the canvas shows it: the I/O list and the Devices tab say "ifm IF6123, inductive sensor" beside the point, with a picker that searches the library by the number on the label and writes `wired=`; a test at the panel's default width; (4) `agent-names-io` uses it: a sensor picked from the library comes with what it is and what on means, and only its function is asked; the relay profile's tool text for `list_devices` and `propose_io_map` says what `wired` is (a new profile id); (5) the simulation's plant takes the sensor's kind and states from the record; (6) more records, sorted by what Nick's benches and customers use.
+  needs: the vendors' data sheets for (1); nothing for (2) and (3); a relay profile id for (4)
   result: a wired sensor is picked from the library by name, and the program, the I/O list and the Agent know what it is and what its signal means without anyone typing it
   id: iodd-metadata
   by: claude-session (iolink)
@@ -430,20 +430,11 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door-recorded-run`, `liv
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **The front door's first run is a stored real answer** — interview 2026-11-14: recorded first, live after. The front door is built (`crates/helmsman-canvas/src/front.rs`): a tank, its program, five proofs and faults to throw by hand; its program is written by hand and the page does not say who wrote it. Left: the first run on the guided screen plays an answer the live model really gave (stored with the build, its profile id and date beside it), at a readable pace, so it is instant and cannot fail. The visitor's own sentence afterwards goes to the live model with the wait shown as today. The stored answer is regenerated by a script and pinned by a test that runs it through the same checks as a live one, so it cannot rot when the checker changes.
+- [ ] **The Agent watches: on a box, and beside the failure** — Nick, 2026-11-14: "the agent should feel like a fundamental part of the environment. It should be watching every time it breaks to point out the stupid thing you did to show how it should be done better." Built for the simulation (`crates/helmsman-canvas/src/watch.rs`): a compile error, a fault, a program held by a lost input and a red requirement test are each said unasked in a card over the diagram with the better way and a Fix it button that hands the failure to the Agent. The words come from rules, so watching costs no model turn (decided 2026-11-14: only the click spends one). Left: the same on a box's page (`box_view`: its diagnostics, the modules' held and faulted states, a lost device); the line drawn beside the failure itself (the editor's line, the test's row) as well as over the diagram; more rules as real mistakes show which are missing; a value out of its limits.
   needs: nothing
-  result: the first impression never waits on the model and never shows a failed answer
-  est: 1d
-  difficulty: low
-  id: front-door-recorded-run
-  asked: 2026-11-14
-  by: claude-session
-
-- [ ] **The Agent watches and speaks first** — Nick, 2026-11-14: "the agent should feel like a fundamental part of the environment. It should be watching every time it breaks to point out the stupid thing you did to show how it should be done better." Today the Agent is a box you type into. Wanted: every failure the environment already sees (a check error, a requirement test going red, a module held by a lost input, a device lost, a value out of its limits) reaches the Agent unasked, and it answers in place, beside the failure: what went wrong in one line, the better way, and the change offered as one click. Never a modal, never a wait in the way of typing. Open before building: what it costs per visitor on the free chat (each failure is a model turn), and which failures are answered by rule without the model.
-  needs: an interview on the triggers and the cost ceiling
-  result: a failure is followed by its explanation and its fix without the engineer asking
-  est: 1w
-  difficulty: high
+  result: on a box too, a failure is followed by its explanation and its fix without the engineer asking
+  est: 3d
+  difficulty: med
   id: agent-watches
   asked: 2026-11-14
   by: claude-session
@@ -457,11 +448,10 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door-recorded-run`, `liv
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **The Agent sees your patterns and fixes them** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." The same mistake made twice, the same edit repeated across rungs of a program, a requirement always written without its fault case: the Agent notices across the session and the project's history and offers the change for all of them at once. Not shaped yet: what is kept about an engineer, where, and for how long.
-  needs: an interview after `agent-watches` is in use
-  result: a repeated mistake is pointed out once and fixed everywhere
-  depends: agent-watches
-  est: 1w
+- [ ] **The Agent sees your patterns: across sessions, and beyond compile errors** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." Built in the simulation (`crates/helmsman-canvas/src/watch.rs`): the same kind of compile error in several places is said once with one Fix it for all of them, and a kind that comes up three times in a session is said to be a habit; the count lives in the page's memory only. Left: habits that last past a reload (what is kept about an engineer, where and for how long is yours to decide: this browser only, the project, or their account on a box); patterns beyond compile errors (the same edit repeated across a program, a requirement always written without its fault case); a habit turned into a standing fix the Agent applies by itself.
+  needs: your decision on what may be kept about an engineer, and where
+  result: a repeated mistake is pointed out once and fixed everywhere, and stays learned
+  est: 4d
   difficulty: high
   id: agent-patterns
   asked: 2026-11-14

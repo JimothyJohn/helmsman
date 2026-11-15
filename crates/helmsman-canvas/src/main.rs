@@ -123,6 +123,7 @@ mod ui_tests;
 mod verify;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod verify_tests;
+mod watch;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

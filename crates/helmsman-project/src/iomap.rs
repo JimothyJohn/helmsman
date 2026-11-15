@@ -33,6 +33,15 @@ pub struct MapSignal {
     pub tail: Vec<String>,
 }
 
+impl MapSignal {
+    /// The `wired=VENDOR/MODEL` option: the sensor or actuator on this
+    /// point, by its folder in the device library. As written, unchecked.
+    #[must_use]
+    pub fn wired(&self) -> Option<&str> {
+        self.tail.iter().find_map(|t| t.strip_prefix("wired="))
+    }
+}
+
 /// What a map's text names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MapText {
@@ -228,6 +237,10 @@ mod tests {
         assert_eq!(m.devices[1].driver, "logix-tag");
         assert_eq!(m.signals.len(), 3);
         assert_eq!(m.signals[2].unit.as_deref(), Some("mm"));
+        assert_eq!(m.signals[2].wired(), None);
+        let wired = skim("in part bool rio di:3 unit=x wired=ifm/if6123 # prox\nin b bool rio di:4 wired\n");
+        assert_eq!(wired.signals[0].wired(), Some("ifm/if6123"));
+        assert_eq!(wired.signals[1].wired(), None);
         assert_eq!(m.signals[1].device, "box");
         assert_eq!(m.odd, 3);
         // What follows the endpoint or the point is kept as written.

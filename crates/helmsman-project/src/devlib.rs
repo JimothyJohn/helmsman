@@ -27,6 +27,13 @@
 //! project when the device is added by click. The older `protocols.*.profile`
 //! is a driver's built-in profile name, another thing.
 //!
+//! A sensor or an actuator that sits on a plain digital channel has a
+//! record too (`kind` `sensor` or `actuator`, drafted there from its
+//! IODD): no `protocols`, an `identity.iolink` (its IO-Link vendor and
+//! device id) and `products`, the order numbers the one record covers.
+//! An I/O map line names such a record with `wired=VENDOR/MODEL`
+//! (`helmsman_io::text`), and [`Index::by_wired`] finds it.
+//!
 //! Everything read here is data from a public repository: names are
 //! bounded and checked, numbers must be numbers, a folder is relative,
 //! under `devices/`, with no `..`, and an index over [`MAX_BYTES`] or
@@ -45,6 +52,8 @@ pub const MAX_BYTES: usize = 4 << 20;
 pub const MAX_DEVICES: usize = 10_000;
 /// Longest text field kept (vendor, model, kind, driver, map, profile, folder).
 pub const MAX_TEXT: usize = 120;
+/// Most order numbers one record lists.
+pub const MAX_PRODUCTS: usize = 128;
 
 /// A vendor's file the entry points at, by reference only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,9 +92,28 @@ pub struct Entry {
     /// The device's profile file in the folder (`NAME.device`), when the
     /// library has one.
     pub profile: Option<String>,
+    /// A sensor's or actuator's IO-Link vendor id and device id
+    /// (`identity.iolink`): what its IODD is found by.
+    pub iolink: Option<(u16, u32)>,
+    /// The order numbers the record covers, as on the label.
+    pub products: Vec<String>,
 }
 
 impl Entry {
+    /// Whether a controller reaches the device over a network. A sensor
+    /// on a digital channel does not: it has no protocol.
+    #[must_use]
+    pub fn networked(&self) -> bool {
+        !self.protocols.is_empty()
+    }
+
+    /// The `wired=` value that names this record: its folder without
+    /// `devices/`.
+    #[must_use]
+    pub fn wired(&self) -> &str {
+        self.folder.strip_prefix("devices/").unwrap_or(&self.folder)
+    }
+
     /// The protocol entry for `driver`.
     #[must_use]
     pub fn protocol(&self, driver: &str) -> Option<&Protocol> {
@@ -224,6 +252,39 @@ fn entry(j: &Json) -> Result<Entry, String> {
             crate::NAME_LEN
         ));
     }
+    let iolink = match j.get("identity").and_then(|i| i.get("iolink")) {
+        None => None,
+        Some(l) => {
+            let vendor = u16_of(l, "vendor_id")?;
+            let device = l
+                .get("device_id")
+                .and_then(Json::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| (1..=0xFF_FFFF).contains(n))
+                .ok_or("device_id: not a number 1..=16777215")?;
+            if vendor == 0 {
+                return Err(format!("{folder}: identity.iolink.vendor_id: 1..=65535"));
+            }
+            Some((vendor, device))
+        }
+    };
+    let mut products = Vec::new();
+    if let Some(p) = j.get("products") {
+        let list = p.as_array().ok_or("products: not a list")?;
+        if list.len() > MAX_PRODUCTS {
+            return Err(format!(
+                "{folder}: {} products, more than {MAX_PRODUCTS}",
+                list.len()
+            ));
+        }
+        for item in list {
+            let name = item.as_str().ok_or("products: not text")?;
+            if name.is_empty() || name.len() > MAX_TEXT || name.chars().any(char::is_control) {
+                return Err(format!("{folder}: products: a printable text of 1..={MAX_TEXT}"));
+            }
+            products.push(name.to_string());
+        }
+    }
     Ok(Entry {
         folder,
         vendor,
@@ -233,6 +294,8 @@ fn entry(j: &Json) -> Result<Entry, String> {
         modbus,
         protocols,
         profile: (!profile.is_empty()).then_some(profile),
+        iolink,
+        products,
     })
 }
 
@@ -308,13 +371,29 @@ impl Index {
             .or_else(|| {
                 self.search(&format!("{vendor_name} {product_code}"))
                     .into_iter()
-                    .next()
+                    .find(|e| e.networked())
             })
     }
 
-    /// The entries whose vendor or model contains every word of `query`,
-    /// case-blind: the second thing a lookup tries. An empty query
-    /// matches nothing.
+    /// The record a map line's `wired=VENDOR/MODEL` names.
+    #[must_use]
+    pub fn by_wired(&self, wired: &str) -> Option<&Entry> {
+        self.devices.iter().find(|e| e.wired() == wired)
+    }
+
+    /// The records for the IO-Link device `vendor_id`, `device_id`.
+    #[must_use]
+    pub fn by_iolink(&self, vendor_id: u16, device_id: u32) -> Vec<&Entry> {
+        self.devices
+            .iter()
+            .filter(|e| e.iolink == Some((vendor_id, device_id)))
+            .collect()
+    }
+
+    /// The entries whose vendor, model and order numbers together
+    /// contain every word of `query`, case-blind: the second thing a
+    /// lookup tries, and how a sensor is found by the number on its
+    /// label. An empty query matches nothing.
     #[must_use]
     pub fn search(&self, query: &str) -> Vec<&Entry> {
         let words: Vec<String> = query.split_whitespace().map(str::to_ascii_lowercase).collect();
@@ -324,20 +403,21 @@ impl Index {
         self.devices
             .iter()
             .filter(|e| {
-                let hay = format!("{} {}", e.vendor, e.model).to_ascii_lowercase();
+                let hay = format!("{} {} {}", e.vendor, e.model, e.products.join(" ")).to_ascii_lowercase();
                 words.iter().all(|w| hay.contains(w.as_str()))
             })
             .collect()
     }
 
     /// Identity first, then the product name as text: what a device
-    /// found on the network is looked up by.
+    /// found on the network is looked up by. A record with no protocol
+    /// (a sensor on a digital channel) is never the answer by text.
     #[must_use]
     pub fn lookup(&self, vendor_id: u16, product_code: u16, product_name: &str) -> Option<&Entry> {
         self.by_identity(vendor_id, product_code)
             .into_iter()
             .next()
-            .or_else(|| self.search(product_name).into_iter().next())
+            .or_else(|| self.search(product_name).into_iter().find(|e| e.networked()))
     }
 }
 
@@ -369,6 +449,92 @@ mod tests {
           "modbus": { "driver": "modbus-tcp", "map": "modbus.map" } } },
         { "folder": "devices/acme/relay-8", "vendor": "Acme", "model": "Relay 8", "kind": "remote-io",
           "protocols": { "modbus": { "driver": "modbus-tcp", "map": "modbus.map" } } } ] }"#;
+
+    /// The library's own index lines for a sensor on a digital channel
+    /// (helmsman-devices, `scripts/build-index.py`).
+    const SENSORS: &str = r#"{ "format": "helmsman-devices-index 1",
+      "devices": [ { "folder": "devices/acme/relay-8", "vendor": "Acme", "model": "Relay 8", "kind": "remote-io",
+          "protocols": { "modbus": { "driver": "modbus-tcp", "map": "modbus.map" } } },
+        { "folder": "devices/ifm/if6123", "vendor": "ifm",
+          "model": "IF6123, IF6124, IG6615, IG6616", "kind": "sensor",
+          "identity": { "iolink": { "vendor_id": 310, "device_id": 791 } },
+          "products": ["IF6123", "IF6124", "IG6615", "IG6616"] },
+        { "folder": "devices/acme/relay-sensor", "vendor": "Acme", "model": "Relay 8 sensor", "kind": "sensor",
+          "identity": { "iolink": { "vendor_id": 7, "device_id": 16777215 } }, "products": ["RS-8"] } ] }"#;
+
+    #[test]
+    fn a_sensor_record_is_found_by_its_folder_its_label_and_its_iolink_identity() {
+        let i = Index::parse(SENSORS).unwrap();
+        let e = i.by_wired("ifm/if6123").unwrap();
+        assert_eq!((e.vendor.as_str(), e.kind.as_str()), ("ifm", "sensor"));
+        assert_eq!(e.iolink, Some((310, 791)));
+        assert_eq!(e.products.len(), 4);
+        assert_eq!(e.wired(), "ifm/if6123");
+        assert!(!e.networked());
+        assert!(i.devices[0].networked());
+        assert_eq!((i.devices[0].iolink, i.devices[0].products.len()), (None, 0));
+        assert!(i.by_wired("ifm/if6124").is_none());
+        assert!(i.by_wired("devices/ifm/if6123").is_none());
+        assert!(i.by_wired("").is_none());
+        // By the number on the label, which the model text may not hold.
+        assert_eq!(i.search("ig6616")[0].folder, "devices/ifm/if6123");
+        assert_eq!(i.search("ifm IG6615").len(), 1);
+        assert_eq!(i.by_iolink(310, 791).len(), 1);
+        assert_eq!(i.by_iolink(310, 792).len(), 0);
+    }
+
+    /// A device found on the network is never matched to a sensor's
+    /// record by text: the sensor is not on the network.
+    #[test]
+    fn a_network_lookup_by_text_passes_over_sensor_records() {
+        let i = Index::parse(SENSORS).unwrap();
+        assert!(i.lookup(1, 2, "IF6123").is_none());
+        assert!(i.lookup_modbus("ifm", "IG6615").is_none());
+        // Both an I/O block and a sensor match the words: the block wins.
+        assert_eq!(i.search("acme relay").len(), 2);
+        assert_eq!(i.lookup(1, 2, "relay 8").unwrap().folder, "devices/acme/relay-8");
+        assert_eq!(
+            i.lookup_modbus("Acme", "Relay").unwrap().folder,
+            "devices/acme/relay-8"
+        );
+    }
+
+    #[test]
+    fn a_wrong_sensor_identity_or_product_list_fails_the_index() {
+        let cases = [
+            (
+                r#""vendor_id": 310, "device_id": 791"#,
+                r#""vendor_id": 0, "device_id": 791"#,
+            ),
+            (
+                r#""vendor_id": 310, "device_id": 791"#,
+                r#""vendor_id": 310, "device_id": 0"#,
+            ),
+            (
+                r#""vendor_id": 310, "device_id": 791"#,
+                r#""vendor_id": 310, "device_id": 16777216"#,
+            ),
+            (
+                r#""vendor_id": 310, "device_id": 791"#,
+                r#""vendor_id": "310", "device_id": 791"#,
+            ),
+            (r#""vendor_id": 310, "device_id": 791"#, r#""vendor_id": 310"#),
+            (r#"["IF6123", "IF6124", "IG6615", "IG6616"]"#, r#""IF6123""#),
+            (r#"["IF6123", "IF6124", "IG6615", "IG6616"]"#, r#"["IF6123", 7]"#),
+            (r#"["IF6123", "IF6124", "IG6615", "IG6616"]"#, r#"[""]"#),
+            (r#"["IF6123", "IF6124", "IG6615", "IG6616"]"#, r#"["a\u0007b"]"#),
+        ];
+        for (from, to) in cases {
+            assert!(SENSORS.contains(from));
+            let e = Index::parse(&SENSORS.replace(from, to)).unwrap_err();
+            assert!(e.starts_with("devices[1]: "), "{to}: {e}");
+        }
+        let many: Vec<String> = (0..=MAX_PRODUCTS).map(|k| format!("\"P{k}\"")).collect();
+        let e = Index::parse(&SENSORS.replace(r#"["RS-8"]"#, &format!("[{}]", many.join(",")))).unwrap_err();
+        assert!(e.contains("more than 128"), "{e}");
+        let long = format!("[\"{}\"]", "x".repeat(MAX_TEXT + 1));
+        assert!(Index::parse(&SENSORS.replace(r#"["RS-8"]"#, &long)).is_err());
+    }
 
     #[test]
     fn parses_matches_by_identity_then_text() {
