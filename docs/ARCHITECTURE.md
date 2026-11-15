@@ -2942,6 +2942,16 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   safeguards fails them; each fault does what its words say) and
   `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
   laptop's, a tablet's and a phone's width).
+- **Name the I/O first** (`io_names.rs`; Nick, 2026-11-14): while an
+  instruction makes a new project (`Scope::NewProject`), the Agent tab
+  carries a fold where the engineer lists the program's points: a name,
+  input or output, BOOL / INT / REAL, and what it is in a few words
+  (`PlaygroundView::new_io`). `send_instruction` puts the list ahead of
+  what was typed (`IoList::instruction`: the names to use exactly, no
+  other input or output), and a name that cannot be a variable's, or one
+  used twice, stops the send and says why. The front door's tank was
+  written from such a list. Contracts in `io_names.rs`'s tests and
+  `ui_tests/io_names.rs` (the pane keeps its width with long names).
 - **The Agent watches** (`watch.rs`; Nick, 2026-11-14): what the page
   already sees go wrong is said unasked in a card over the top of the
   diagram (on screen whichever tab is open, not modal), one thing at a time, most urgent first (`watch::noticed`): an
