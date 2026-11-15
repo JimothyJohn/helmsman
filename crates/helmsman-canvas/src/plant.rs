@@ -609,7 +609,7 @@ impl PlantUi {
             });
         });
         chrome.hit("sensor form", m.response.rect);
-        if done || m.should_close() {
+        if done || crate::theme::escaped(&m) {
             self.adding = None;
         } else {
             self.adding = Some(f);

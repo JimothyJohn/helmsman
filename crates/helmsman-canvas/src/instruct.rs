@@ -163,6 +163,9 @@ pub struct Plan {
     pub scenarios: usize,
     /// The engineer's earlier instructions it went with.
     pub diagnostics: Vec<String>,
+    /// Splits the plan made by itself since a step last passed or the
+    /// engineer last started it ([`crate::steps::MAX_SPLITS`]).
+    pub splits: u8,
 }
 
 /// Where a plan is.
@@ -171,8 +174,12 @@ pub enum PlanState {
     /// Waiting for the engineer to approve it.
     Proposed,
     Running,
-    /// A step failed its checks or ran out of room: what went wrong. The
-    /// engineer tries it again or stops.
+    /// The next step ran out of room: the request in flight asks the
+    /// Agent for it as smaller steps.
+    Splitting,
+    /// A step failed its checks, or ran out of room and could not be
+    /// split: what went wrong and what to do. The engineer tries it again
+    /// or stops.
     Paused(Vec<String>),
 }
 
@@ -386,6 +393,7 @@ impl Instruct {
         match run.mode {
             Mode::Direct => self.checked(run, answer, env),
             Mode::Planning { .. } => self.planned(run, answer, env),
+            Mode::Steps(ref plan) if plan.state == PlanState::Splitting => self.split(run, answer, env),
             Mode::Steps(ref plan) => {
                 let files = plan.files.clone();
                 let source = crate::sim_projects::SimProjects::build_src_of(&files);
@@ -446,6 +454,7 @@ impl Instruct {
             whys: Vec::new(),
             scenarios: 0,
             diagnostics: env.diagnostics.to_vec(),
+            splits: 0,
         }));
         self.run = Some(run);
         Step::Wait
@@ -458,10 +467,11 @@ impl Instruct {
         let Mode::Steps(plan) = &mut run.mode else {
             return None;
         };
-        if plan.state == PlanState::Running {
+        if matches!(plan.state, PlanState::Running | PlanState::Splitting) {
             return None;
         }
         plan.state = PlanState::Running;
+        plan.splits = 0;
         run.retries = 0;
         run.asked_scenarios = false;
         run.attempts.clear();
@@ -474,6 +484,14 @@ impl Instruct {
             unreachable!("only a plan has steps")
         };
         let text = crate::steps::step_request(&run.instruction, &plan.steps, plan.done);
+        Self::plan_ask(run, env, text)
+    }
+
+    /// `text` asked of the Agent on the plan's working copy.
+    fn plan_ask(run: &mut Run, env: &Env<'_>, text: String) -> Ask {
+        let Mode::Steps(plan) = &run.mode else {
+            unreachable!("only a plan has steps")
+        };
         let source = crate::sim_projects::SimProjects::build_src_of(&plan.files);
         let diagnostics = if plan.done == 0 {
             plan.diagnostics.clone()
@@ -525,17 +543,43 @@ impl Instruct {
                 })
             }
             Mode::Steps(plan) => {
-                plan.state = PlanState::Paused(vec![format!(
-                    "Step {} ran out of room before its code was finished.",
-                    plan.done + 1
-                )]);
-                Step::Wait
+                if plan.state == PlanState::Splitting || plan.splits >= crate::steps::MAX_SPLITS {
+                    plan.state = PlanState::Paused(vec![too_big(plan.done)]);
+                    return Step::Wait;
+                }
+                plan.state = PlanState::Splitting;
+                plan.splits += 1;
+                run.retries = 0;
+                run.asked_scenarios = false;
+                run.attempts.clear();
+                let text = crate::steps::split_request(&run.instruction, &plan.steps, plan.done);
+                Step::Ask(Self::plan_ask(run, env, text))
             }
             Mode::Planning { .. } => {
                 self.failed(why);
                 Step::Done
             }
         }
+    }
+
+    /// The Agent's split of the step that ran out of room: two or more
+    /// smaller steps take its place and the first is asked for; anything
+    /// else pauses the plan.
+    fn split(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
+        let Mode::Steps(plan) = &mut run.mode else {
+            unreachable!("only a plan has steps")
+        };
+        let parts = crate::steps::parse(answer);
+        if parts.len() < 2 {
+            plan.state = PlanState::Paused(vec![too_big(plan.done)]);
+            self.run = Some(run);
+            return Step::Wait;
+        }
+        plan.steps.splice(plan.done..=plan.done, parts);
+        plan.state = PlanState::Running;
+        let ask = Self::step_ask(&mut run, env);
+        self.run = Some(run);
+        Step::Ask(ask)
     }
 
     /// One answer checked against `env`: sent back while it fails and
@@ -624,6 +668,7 @@ impl Instruct {
         plan.whys.push(reason(answer).unwrap_or_default());
         plan.written = Some(written.clone());
         plan.done += 1;
+        plan.splits = 0;
         run.scope = Scope::File(written.clone());
         run.retries = 0;
         run.asked_scenarios = false;
@@ -859,6 +904,15 @@ fn sentence(why: &str) -> String {
     format!("{w}.")
 }
 
+/// What a plan says when step `k` (from 0) ran out of room and could not
+/// be split: what happened and the two ways on.
+fn too_big(k: usize) -> String {
+    format!(
+        "Step {} is too big for one answer and the Agent could not split it. Try it again, or stop and ask for this part by itself in a few words.",
+        k + 1
+    )
+}
+
 /// The status line of a green answer for `file`.
 #[must_use]
 pub fn status(file: &str, check: &Check) -> String {
@@ -1092,32 +1146,42 @@ pub struct Progress {
     /// The answer is in and checked; the program waits for its name (a
     /// change to a built-in example becomes a project of its own).
     pub naming: bool,
-    /// About how long this answer takes, s ([`estimate_secs`]).
-    pub estimate: Option<u64>,
+    /// The least and the usual most this instruction takes, s
+    /// ([`estimate_secs`]).
+    pub estimate: Option<(u64, u64)>,
 }
 
-/// About how long an answer takes, s, rounded up to 5 (Nick, 2026-11-13:
-/// "you can at least give it a quick idea of how long it might take in
-/// seconds"): 6 s and a quarter second a line of the file it changes, 15 s
-/// for a new project; at most 2 minutes. From the free chat's timings on
-/// 2026-11-13: 6 to 9 s for files of 10 to 25 lines, 12 to 16 s for the
-/// 22-line traffic example, 19 s for a new project.
+/// How long an instruction takes, s, as (the least, the usual most), each
+/// a multiple of 5 (Nick, 2026-11-14: the single "about 10 s" was passed
+/// about half the time; "it should say DEFINITELY greater than a time").
+/// The clock runs from the instruction through its retries, so the range
+/// is the whole wait. One answer takes about 6 s and a quarter second a
+/// line of the file it changes, 15 s for a new project: the least is
+/// seven tenths of that rounded down (a new project came back in 14 s),
+/// the most three and a half of it rounded up, which holds a retry and a
+/// slow answer. From the free chat's timings: 6 to 9 s for
+/// files of 10 to 25 lines and 19 s for a new project on 2026-11-13; 11,
+/// 11, 14, 17, 22 and 26 s for six ladder rungs on 2026-11-14 (one, one,
+/// one, one, three and two requests).
 #[must_use]
-pub fn estimate_secs(lines: Option<usize>) -> u64 {
+pub fn estimate_secs(lines: Option<usize>) -> (u64, u64) {
     #[allow(clippy::cast_precision_loss)]
-    let raw = lines.map_or(15.0, |n| 6.0 + 0.25 * n as f64);
+    let one = lines.map_or(15.0, |n| 6.0 + 0.25 * n as f64);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let five = ((raw / 5.0).ceil() as u64 * 5).clamp(5, 120);
-    five
+    let least = ((one * 0.7 / 5.0).floor() as u64 * 5).clamp(5, 60);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let most = ((one * 3.5 / 5.0).ceil() as u64 * 5).clamp(15, 300);
+    (least, most)
 }
 
-/// The clock in the status line: `4 s of about 10 s`, and once past it
-/// `14 s, longer than usual`; just `4 s` with no estimate.
+/// The clock in the status line: `4 s · takes 5 to 30 s`, and once past
+/// the range `41 s · longer than the usual 30 s`; just `4 s` with no
+/// estimate.
 #[must_use]
-pub fn clock(secs: u64, estimate: Option<u64>) -> String {
+pub fn clock(secs: u64, estimate: Option<(u64, u64)>) -> String {
     match estimate {
-        Some(e) if secs <= e => format!("{secs} s of about {e} s"),
-        Some(_) => format!("{secs} s, longer than usual"),
+        Some((least, most)) if secs <= most => format!("{secs} s · takes {least} to {most} s"),
+        Some((_, most)) => format!("{secs} s · longer than the usual {most} s"),
         None => format!("{secs} s"),
     }
 }
@@ -1445,6 +1509,10 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
             "Too big for one answer, so the Agent planned it in {n} steps. Each is checked; the file changes once, when all of them pass."
         ),
         PlanState::Running => format!("Step {} of {n}", (p.done + 1).min(n)),
+        PlanState::Splitting => format!(
+            "Step {} of {n} was too big for one answer. Splitting it into smaller steps.",
+            (p.done + 1).min(n)
+        ),
         PlanState::Paused(_) => format!("Paused at step {} of {n}", p.done + 1),
     };
     let r = ui
@@ -1465,7 +1533,7 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
         chrome.hit(format!("agent step {}", k + 1), r.rect);
     }
     let (label, tip) = match &p.state {
-        PlanState::Running => return false,
+        PlanState::Running | PlanState::Splitting => return false,
         PlanState::Proposed => (
             "Run the steps",
             "Runs the steps one after the other. Stop drops the plan and leaves the file as it is.",
@@ -1613,7 +1681,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     {
         act = Some(Act::RunSteps);
     }
-    if plan.is_some_and(|p| p.state != PlanState::Running) {
+    if plan.is_some_and(|p| !matches!(p.state, PlanState::Running | PlanState::Splitting)) {
         // Waiting for the engineer: the plan says what to do.
     } else if let (Some(run), Some(p)) = (&s.run, &v.progress) {
         progress_ui(ui, chrome, run, p);

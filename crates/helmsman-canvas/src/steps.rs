@@ -12,8 +12,10 @@
 //! - **The steps** ([`step_request`]) run one after the other on a
 //!   working copy, each checked and retried like any answer. The file
 //!   changes once, when every step has passed, as one version in History.
-//!   A step that fails its checks, or runs out of room, pauses the plan
-//!   for the engineer: try it again, or stop.
+//!   A step that runs out of room is split into smaller steps by the
+//!   Agent ([`split_request`]) and the plan carries on. A step that fails
+//!   its checks, or cannot be split, pauses the plan for the engineer:
+//!   try it again, or stop.
 
 /// Most steps a plan may have.
 pub const MAX_STEPS: usize = 6;
@@ -51,6 +53,22 @@ pub fn plan_request(instruction: &str, cut_off: bool) -> String {
     };
     format!(
         "{why} Do not write any code in this answer. Split the instruction into 2 to {MAX_STEPS} steps, in the order to do them. Each step is one change to the file that can be written whole and checked on its own with a scenario, and builds on the steps before it. Answer with the numbered list only, one step per line, each step one plain sentence (`1. Add the start/stop latch for the motor.`). If the instruction fits in one answer after all, answer `1.` and the instruction itself.\n\nThe instruction: {instruction}"
+    )
+}
+
+/// Most times a plan splits a step by itself before it pauses for the
+/// engineer (counted again once a step passes, and from each try the
+/// engineer asks for).
+pub const MAX_SPLITS: u8 = 1;
+
+/// The words that ask for step `k` (from 0) of `steps`, whose answer ran
+/// out of room, as smaller steps instead of code.
+#[must_use]
+pub fn split_request(instruction: &str, steps: &[String], k: usize) -> String {
+    format!(
+        "Step {n} ran out of room before its code was finished, so it is too big for one answer. Do not write any code in this answer. Split step {n} alone into 2 or 3 smaller steps, in the order to do them. Each is one change to the file that can be written whole and checked on its own with a scenario. Answer with the numbered list only, one step per line, each step one plain sentence.\n\nThe whole change: {instruction}\nStep {n}, the step to split: {step}",
+        n = k + 1,
+        step = steps[k]
     )
 }
 
