@@ -587,6 +587,12 @@ impl Program {
                 }
                 AggKind::Fb(p) => {
                     for v in &self.code.pous[*p].vars {
+                        // A VAR_IN_OUT is one slot holding where the last
+                        // call's variable was; the next call rewrites it.
+                        if v.section == Section::InOut {
+                            out[off + v.off] = Some(Slot::Elem(Ty::DInt));
+                            continue;
+                        }
                         self.layout(v.ty, off + v.off, out, fixed);
                         if v.constant {
                             fixed.push((off + v.off, self.size_of(v.ty)));

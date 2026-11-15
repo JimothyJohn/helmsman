@@ -479,7 +479,10 @@ impl Program {
                     ty = f.ty;
                 }
                 AggKind::Fb(fb) => {
-                    let f = self.code.pous[*fb].vars.iter().find(|v| v.name == m)?;
+                    let f = self.code.pous[*fb]
+                        .vars
+                        .iter()
+                        .find(|v| v.name == m && v.section != parser::Section::InOut)?;
                     slot += f.off;
                     ty = f.ty;
                 }
