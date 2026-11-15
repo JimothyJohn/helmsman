@@ -895,7 +895,7 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
                             applied = Some(ap);
                         }
                         Step::Done => {}
-                        // A plan in steps: the ladder approves it.
+                        // A paused plan: the ladder tries its step again.
                         Step::Wait => next = ins.approve(&env),
                     }
                 }

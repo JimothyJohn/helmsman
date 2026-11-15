@@ -1311,11 +1311,12 @@ END_PROGRAM",
         assert!(!h.has("agent draft") && !h.has("st draft") && !h.has("agent working"));
     }
 
-    /// Nick, 2026-11-14: a change too big for one answer is split; the
-    /// plan waits for approval in the Agent tab, on screen at the panel's
-    /// default width, and Run the steps sends the first step.
+    /// Nick, 2026-11-14: a change too big for one answer is split and
+    /// just goes: the steps are listed in plain words in the Agent tab,
+    /// on screen at the panel's default width, with Stop beside them and
+    /// no approval to give.
     #[test]
-    fn a_plan_in_steps_waits_in_the_agent_tab_for_approval() {
+    fn a_plan_in_steps_lists_its_steps_and_runs_without_approval() {
         use crate::claude::Incoming;
         use crate::instruct_tests::{LAMP, reply};
         use crate::steps_tests::{PLAN, cut_off};
@@ -1337,33 +1338,25 @@ END_PROGRAM",
         h.frame(vec![]);
         cut_off(h.app.sim.as_mut().unwrap());
         h.wait(0.3);
-        assert!(h.drew("Splitting the change into steps · "));
+        assert!(h.drew("Working out the steps · "));
+        let sent = h.app.sim.as_ref().unwrap().link.sent.len();
         reply(h.app.sim.as_mut().unwrap(), PLAN);
         h.wait(0.3);
-        assert!(h.drew("Too big for one answer, so the Agent planned it in 2 steps."));
-        for key in [
-            "agent plan steps",
-            "agent step 1",
-            "agent step 2",
-            "agent run steps",
-            "agent stop",
-        ] {
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().link.sent.len(),
+            sent + 1,
+            "step 1 goes by itself"
+        );
+        assert!(h.drew("Doing this in 2 steps. Step 1 of 2:"));
+        assert!(!h.drew("planned"), "what it will do, not how it got there");
+        for key in ["agent plan steps", "agent step 1", "agent step 2", "agent stop"] {
             let r = h.rect(key);
             assert!(
                 r.bottom() <= h.size.y && r.right() <= left.right() + 8.0,
                 "{key} on screen in the pane: {r:?}"
             );
         }
-        assert!(!h.has("agent working"), "no spinner while it waits for you");
-        let sent = h.app.sim.as_ref().unwrap().link.sent.len();
-        h.press("agent run steps");
-        h.frame(vec![]);
-        assert_eq!(
-            h.app.sim.as_ref().unwrap().link.sent.len(),
-            sent + 1,
-            "step 1 goes"
-        );
-        assert!(h.drew("Step 1 of 2") && h.has("agent working") && !h.has("agent run steps"));
+        assert!(h.has("agent working") && !h.has("agent run steps"));
         let (l, r) = (
             h.rect("left").right() - left.right(),
             right.left() - h.rect("right").left(),

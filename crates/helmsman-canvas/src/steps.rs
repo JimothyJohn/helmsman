@@ -7,8 +7,10 @@
 //!   that ran out of room.
 //! - **The plan**: the Agent is asked for a numbered list of steps
 //!   ([`plan_request`], read back by [`parse`]). A plan of one step is
-//!   just the instruction, sent as usual. A plan of more waits for the
-//!   engineer to approve it.
+//!   just the instruction, sent as usual. A plan of more runs at once,
+//!   its steps listed in the Agent tab with Stop beside them (Nick, later
+//!   the same day: "just go and assume it's fine, this is just a
+//!   simulation"); only a step that fails waits for the engineer.
 //! - **The steps** ([`step_request`]) run one after the other on a
 //!   working copy, each checked and retried like any answer. The file
 //!   changes once, when every step has passed, as one version in History.
