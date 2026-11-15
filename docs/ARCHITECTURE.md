@@ -2921,7 +2921,14 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   visitor goes on. Three cards: what was asked in plain words, a tank
   running its program against its plant (`assets/front/`: `main.st`,
   `plant.sim`), and the proofs, one row a requirement test, each of which
-  throws a fault at the machine (`helmsman_sim::iec`). The visitor throws
+  throws a fault at the machine (`helmsman_sim::iec`). `main.st` is the
+  Agent's own answer to `front::instruction()` (the I/O by name, then the
+  four lines shown), kept as it landed: the ignored test
+  `front_door_recording` (agent_ladder_tests.rs) asks the live free chat,
+  keeps the program only if every proof is green on it, and writes
+  `recorded.txt` (date, requests, seconds), which the page quotes. The
+  first run is played back: the request line by line, the writing, the
+  proofs one by one (`Front::asked_shown`, `writing`, `shown`). The visitor throws
   the same faults by hand (`front::Fault`, set on the running
   `helmsman_sim::Plant`) and reads what the program did. `front::Front`
   is the state, with its own `Session`; `App::front` holds it and

@@ -4039,6 +4039,31 @@ mod simulated {
         assert_eq!(sim_view(&h).diagram().pou, "STATION");
     }
 
+    /// Nick, 2026-11-14: the trend "died" when a new program loaded. A
+    /// program that is loaded and not yet run says so in the plot; once it
+    /// runs its lanes draw from the first scan.
+    #[test]
+    fn a_program_not_yet_run_says_so_in_the_trend_and_draws_once_it_runs() {
+        let note = "Nothing recorded yet. Run the program to draw its signals.";
+        let mut h = Harness::new(App::sim());
+        h.wait(0.5);
+        assert!(!h.drew(note), "the example opens running");
+        // Another program in its place, stopped (the Agent's, a project).
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            assert!(v.session.load(crate::playground::example("Start/stop latch").src));
+        }
+        h.wait(0.2);
+        assert!(h.drew(note));
+        h.app.sim.as_mut().unwrap().session.set_running(true);
+        h.wait(0.5);
+        assert!(!h.drew(note));
+        let v = h.app.sim.as_ref().unwrap();
+        for name in &v.session.trend.signals {
+            assert!(v.session.trend.history.changes(name) >= 1, "{name} draws");
+        }
+    }
+
     /// Nick, 2026-11-01: the Trend runs along the bottom, where its time
     /// axis is long, not in the side panel's tabs.
     #[test]
