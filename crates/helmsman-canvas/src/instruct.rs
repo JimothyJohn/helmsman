@@ -171,8 +171,7 @@ pub struct Plan {
 /// Where a plan is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlanState {
-    /// Waiting for the engineer to approve it.
-    Proposed,
+    /// Its steps are being asked for, one after the other.
     Running,
     /// The next step ran out of room: the request in flight asks the
     /// Agent for it as smaller steps.
@@ -415,8 +414,10 @@ impl Instruct {
     }
 
     /// A plan came back: one step runs as the instruction itself; more
-    /// wait for the engineer; none (code after all, or words) is read as
-    /// an answer in one go.
+    /// run one after the other from the first, listed in the tab with
+    /// Stop beside them (Nick, 2026-11-14: "just go", it is a simulation
+    /// and nothing is written until every step passes); none (code after
+    /// all, or words) is read as an answer in one go.
     fn planned(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
         let steps = crate::steps::parse(answer);
         if steps.len() < 2 {
@@ -446,7 +447,7 @@ impl Instruct {
         run.mode = Mode::Steps(Box::new(Plan {
             steps,
             done: 0,
-            state: PlanState::Proposed,
+            state: PlanState::Running,
             files: env.files.clone(),
             scope: run.scope.clone(),
             written: None,
@@ -456,12 +457,11 @@ impl Instruct {
             diagnostics: env.diagnostics.to_vec(),
             splits: 0,
         }));
-        self.run = Some(run);
-        Step::Wait
+        Step::Ask(Self::step_ask(self.run.insert(run), env))
     }
 
-    /// The plan waiting for the engineer, or paused: run its next step.
-    /// `None` when no plan waits.
+    /// The paused plan: try its step again. `None` when no plan is
+    /// paused.
     pub fn approve(&mut self, env: &Env<'_>) -> Option<Ask> {
         let run = self.run.as_mut()?;
         let Mode::Steps(plan) = &mut run.mode else {
@@ -1424,7 +1424,7 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let doing = match p.stage {
         Stage::Waiting | Stage::Planning if matches!(run.mode, Mode::Planning { .. }) => {
-            format!("Splitting the change into steps · {clock}")
+            format!("Working out the steps · {clock}")
         }
         Stage::Waiting => format!("Sending to the Agent · {clock}"),
         Stage::Planning => format!("Planning the change · {clock}"),
@@ -1505,19 +1505,16 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
     let t = crate::theme::theme(ui);
     let n = p.steps.len();
     let head = match &p.state {
-        PlanState::Proposed => format!(
-            "Too big for one answer, so the Agent planned it in {n} steps. Each is checked; the file changes once, when all of them pass."
-        ),
-        PlanState::Running => format!("Step {} of {n}", (p.done + 1).min(n)),
+        PlanState::Running => format!("Doing this in {n} steps. Step {} of {n}:", (p.done + 1).min(n)),
         PlanState::Splitting => format!(
-            "Step {} of {n} was too big for one answer. Splitting it into smaller steps.",
+            "Step {} of {n} is being split into smaller steps.",
             (p.done + 1).min(n)
         ),
         PlanState::Paused(_) => format!("Paused at step {} of {n}", p.done + 1),
     };
     let r = ui
         .add(egui::Label::new(RichText::new(head).color(t.fg)).wrap())
-        .tip("A big change goes in steps. Each step is checked like any answer, on a copy; the file is written once, at the end, as one version in History.");
+        .tip("A big change goes in steps, one after the other. Each step is checked like any answer, on a copy; the file is written once, at the end, as one version in History. Stop drops the steps and leaves the file as it is.");
     chrome.hit("agent plan steps", r.rect);
     for (k, step) in p.steps.iter().enumerate() {
         let (text, ink) = match k.cmp(&p.done) {
@@ -1526,7 +1523,7 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
             std::cmp::Ordering::Greater => (format!("{}. {step}", k + 1), t.muted),
         };
         let mut rt = RichText::new(text).color(ink);
-        if k == p.done && p.state != PlanState::Proposed {
+        if k == p.done {
             rt = rt.strong();
         }
         let r = ui.add(egui::Label::new(rt).wrap());
@@ -1534,10 +1531,6 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
     }
     let (label, tip) = match &p.state {
         PlanState::Running | PlanState::Splitting => return false,
-        PlanState::Proposed => (
-            "Run the steps",
-            "Runs the steps one after the other. Stop drops the plan and leaves the file as it is.",
-        ),
         PlanState::Paused(problems) => {
             for line in problems {
                 let r = ui.add(egui::Label::new(RichText::new(line).color(t.ink(RED))).wrap());
