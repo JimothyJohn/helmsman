@@ -41,9 +41,11 @@
 //! before the POUs or in a `CONFIGURATION` and its one `RESOURCE`: the
 //! globals belong to the module, every POU of it sees them (`VAR_EXTERNAL`
 //! may name one, and `VAR_EXTERNAL CONSTANT` reads it only), and nothing
-//! outside the module can, since signals are how modules talk. The rest of
-//! a `CONFIGURATION` (`TASK`, program instances, `VAR_ACCESS`,
-//! `VAR_CONFIG`) is refused.
+//! outside the module can, since signals are how modules talk. A
+//! `CONFIGURATION`'s `TASK` lines and program instances are read past and
+//! run nothing, each one a warning (a module's scan rate is set where it
+//! is deployed, and it runs its one PROGRAM); `VAR_ACCESS` and
+//! `VAR_CONFIG` are refused.
 //! Not yet: STRING, DATE, DT and TOD, pointers and
 //! references, multi-level addresses (`%QW0.1.2`). Nesting is capped at
 //! `MAX_NESTING` levels so hostile input cannot overflow the stack.
@@ -294,15 +296,20 @@ fn program_of(mut code: check::Checked, sizes: ImageSizes) -> Program {
 /// Every problem found, positioned in the XML.
 pub fn compile_plcopen(xml: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>> {
     let lowered = plcopen::lower(xml)?;
-    compile(lowered.st(), sizes).map_err(|diags| {
-        diags
-            .into_iter()
-            .map(|d| Diagnostic {
-                pos: lowered.origin(d.pos),
-                msg: d.msg,
-            })
-            .collect()
-    })
+    let at_xml = |d: Diagnostic| Diagnostic {
+        pos: lowered.origin(d.pos),
+        msg: d.msg,
+    };
+    match compile(lowered.st(), sizes) {
+        Ok(mut program) => {
+            // The warnings (a `<task>` read past, say) are said at the XML
+            // element too.
+            let warnings = core::mem::take(&mut program.code.warnings);
+            program.code.warnings = warnings.into_iter().map(at_xml).collect();
+            Ok(program)
+        }
+        Err(diags) => Err(diags.into_iter().map(at_xml).collect()),
+    }
 }
 
 impl Program {

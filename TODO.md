@@ -517,7 +517,7 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-15
   by: claude-session (board run)
 
-- [ ] **A relay profile that knows VAR_IN_OUT, function outputs and VAR_GLOBAL** — the box and the playground accept them (#446 and this card's PR, 2026-11-15) but the served agent profiles still tell the model they are refused. A new profile id in ../agent-relay must say: VAR_IN_OUT on a FUNCTION_BLOCK only, given by name at every call, a plain variable, element or member of exactly the same type, never a located variable, a PROGRAM input, an expression or a constant, never the same variable twice in one call; VAR_OUTPUT on a FUNCTION, every one bound with `=>` at every call (a call that leaves one out is refused, as ruSTy does: Nick, 2026-11-15); VAR_GLOBAL blocks stand before the first POU (or in a CONFIGURATION and its one RESOURCE), every POU of the module reads and writes a global by name, VAR_EXTERNAL may name one with exactly its type and no initial value (VAR_EXTERNAL CONSTANT for a CONSTANT global, or to read only). Refused: a local with a global's name, a global passed as a VAR_IN_OUT, VAR_GLOBAL inside a POU, TASK and program instances, VAR_ACCESS and VAR_CONFIG; a global is never a port and no other module sees it. A served profile never changes, so this is a new id and the box's and the playground's default moves to it.
+- [ ] **A relay profile that knows VAR_IN_OUT, function outputs and VAR_GLOBAL** — the box and the playground accept them (#446 and this card's PR, 2026-11-15) but the served agent profiles still tell the model they are refused. A new profile id in ../agent-relay must say: VAR_IN_OUT on a FUNCTION_BLOCK only, given by name at every call, a plain variable, element or member of exactly the same type, never a located variable, a PROGRAM input, an expression or a constant, never the same variable twice in one call; VAR_OUTPUT on a FUNCTION, every one bound with `=>` at every call (a call that leaves one out is refused, as ruSTy does: Nick, 2026-11-15); VAR_GLOBAL blocks stand before the first POU (or in a CONFIGURATION and its one RESOURCE), every POU of the module reads and writes a global by name, VAR_EXTERNAL may name one with exactly its type and no initial value (VAR_EXTERNAL CONSTANT for a CONSTANT global, or to read only). Refused: a local with a global's name, a global passed as a VAR_IN_OUT, VAR_GLOBAL inside a POU, VAR_ACCESS and VAR_CONFIG (a CONFIGURATION's TASK lines and program instances are read past with a warning); a global is never a port and no other module sees it. A served profile never changes, so this is a new id and the box's and the playground's default moves to it.
   needs: a session in ../agent-relay for the profile, then your deploy
   result: the agent writes and repairs programs with the syntax the compiler now takes
   est: 3h
@@ -525,15 +525,6 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   id: relay-profile-dialect-2
   asked: 2026-11-15
   by: claude-session (board run)
-
-- [ ] **A CONFIGURATION's tasks and program instances are read past, with a warning** — decided (Nick, 2026-11-15): `TASK` lines and `PROGRAM name WITH task : type;` instances in a `CONFIGURATION` / `RESOURCE` are refused in Structured Text today (`st-var-global`, #450) but silently ignored by the PLCopen importer (`<task>`, `<pouInstance>`), and the 25 configuration files of the ST corpus (matiec 20, iec-checker 5) all stop at `TASK`. Do the same thing in both: parse them, run nothing from them, and say so on the warnings path (#346: the check answer's `warnings`, the canvas rows, the CLI lines) with the task's interval in the words, since a module's scan rate is set where it is deployed. `VAR_ACCESS` and `VAR_CONFIG` stay refused. Tests: each form the corpus uses (INTERVAL, PRIORITY, SINGLE, program instances with and without a task, with input and output connections), the warning's text from both the ST and the XML path, hostile input, the spans of what follows; then the corpus ranking in INVESTIGATION.md §3 and its must-compile list.
-  result: an exported configuration imports as one module, and the engineer is told its task rate was not taken from the file
-  est: 4h
-  difficulty: low
-  id: st-configuration-tasks
-  asked: 2026-11-15
-  by: claude-session (board run)
-  status: ready
 
 ## From user feedback: plan for later
 

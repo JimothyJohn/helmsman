@@ -21,8 +21,10 @@
 //! inline types, and feedback through functions alone. In `<instances>`
 //! the global variable lists of the configuration and of its resources
 //! become the module's `VAR_GLOBAL` blocks (every POU of the module sees
-//! them, and `externalVars` name them); the tasks and program instances
-//! are ignored, since the runtime runs the project's one PROGRAM.
+//! them, and `externalVars` name them); the `<task>` and `<pouInstance>`
+//! elements are written as a `CONFIGURATION` the Structured Text parser
+//! reads past, each one a warning at its element (a module's scan rate is
+//! set where it is deployed, and it runs the project's one PROGRAM).
 
 #![allow(clippy::many_single_char_names)]
 
@@ -103,18 +105,23 @@ pub fn lower(src: &str) -> Result<Lowered, Vec<Diagnostic>> {
         .collect();
     // Global variable lists of the configuration and of its resources: one
     // module has one namespace for them. Tasks and program instances are
-    // not read (the runtime runs the project's one PROGRAM).
+    // written as the one CONFIGURATION the ST parser reads past with a
+    // warning (the runtime runs the project's one PROGRAM).
     let configs = root
         .child("instances")
         .and_then(|i| i.child("configurations"))
         .into_iter()
         .flat_map(|c| c.children_named("configuration"));
+    let mut configured = Vec::new();
     for config in configs {
         cx.global_vars(config);
+        task_lines(config, &mut configured);
         for resource in config.children_named("resource") {
             cx.global_vars(resource);
+            task_lines(resource, &mut configured);
         }
     }
+    cx.configuration(&configured);
     for pou in pous {
         cx.pou(pou, &user);
     }
@@ -127,6 +134,55 @@ pub fn lower(src: &str) -> Result<Lowered, Vec<Diagnostic>> {
         cx.diags.sort_by_key(|d| d.pos);
         Err(cx.diags)
     }
+}
+
+/// The `<task>` and `<pouInstance>` elements directly inside a
+/// configuration or a resource, as lines of a `CONFIGURATION`: the task's
+/// interval when it is a time literal, and each instance after the task it
+/// sits in (or on its own, when it stands beside the tasks).
+fn task_lines(scope: &Element, out: &mut Vec<(Pos, String)>) {
+    for task in scope.children_named("task") {
+        let name = st_name(task.attr("name"), "task");
+        let interval = task
+            .attr("interval")
+            .map(str::trim)
+            .filter(|i| parse_expr(i).is_ok_and(|e| matches!(e.kind, ExprKind::Time(_))))
+            .map_or_else(String::new, |i| format!("INTERVAL := {i}"));
+        out.push((task.pos, format!("  TASK {name}({interval});")));
+        for inst in task.children_named("pouInstance") {
+            out.push((inst.pos, instance_line(inst, Some(&name))));
+        }
+    }
+    for inst in scope.children_named("pouInstance") {
+        out.push((inst.pos, instance_line(inst, None)));
+    }
+}
+
+fn instance_line(inst: &Element, task: Option<&str>) -> String {
+    let with = task.map_or_else(String::new, |t| format!(" WITH {t}"));
+    format!(
+        "  PROGRAM {}{with} : {};",
+        st_name(inst.attr("name"), "instance"),
+        st_name(inst.attr("typeName"), "program")
+    )
+}
+
+/// A name taken from an attribute, as one the ST parser reads: anything
+/// else becomes underscores (the name is only said back in a warning).
+fn st_name(raw: Option<&str>, fallback: &str) -> String {
+    let raw = raw.unwrap_or("").trim();
+    if is_ident(raw) && !crate::parser::is_reserved(&raw.to_ascii_uppercase()) {
+        return raw.to_string();
+    }
+    let mut name = String::from(fallback);
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            name.push(c);
+        } else if !name.ends_with('_') {
+            name.push('_');
+        }
+    }
+    name
 }
 
 fn diag(pos: Pos, msg: impl Into<String>) -> Diagnostic {
@@ -330,6 +386,22 @@ impl Cx {
             }
             n => self.err(e.pos, format!("unknown initial value <{n}>")),
         }
+    }
+
+    /// The tasks and program instances of the project's configurations, as
+    /// one `CONFIGURATION` with one `RESOURCE`: a module has one of each,
+    /// and the checker warns about every line of them.
+    fn configuration(&mut self, items: &[(Pos, String)]) {
+        let Some(&(first, _)) = items.first() else {
+            return;
+        };
+        self.line(first, "CONFIGURATION config");
+        self.line(first, "RESOURCE resource ON PLC");
+        for (at, l) in items {
+            self.line(*at, l);
+        }
+        self.line(first, "END_RESOURCE");
+        self.line(first, "END_CONFIGURATION");
     }
 
     /// The `<globalVars>` lists directly inside a configuration or a

@@ -886,9 +886,27 @@ fn global_variable_lists_import_into_one_module() {
     assert!(st.contains("VAR_GLOBAL CONSTANT"), "{st}");
     assert!(st.contains("VAR_GLOBAL RETAIN"), "{st}");
     assert!(st.contains("VAR_EXTERNAL CONSTANT"), "{st}");
-    assert!(!st.contains("task0") && !st.contains("instance0"), "{st}");
+    // The task and the instance are written as a CONFIGURATION the ST
+    // parser reads past with a warning.
+    assert!(st.contains("TASK task0(INTERVAL := T#20ms);"), "{st}");
+    assert!(st.contains("PROGRAM instance0 WITH task0 : plc_prg;"), "{st}");
 
     let mut p = build(&xml);
+    let w: Vec<String> = p
+        .warnings()
+        .iter()
+        .map(|d| format!("{}: {}", d.pos, d.msg))
+        .collect();
+    assert_eq!(
+        w,
+        [
+            "63:11: TASK TASK0 (interval T#20ms) was not taken from this file: \
+             a module's scan rate is set where the module is deployed",
+            "64:13: program instance INSTANCE0 of PLC_PRG was not taken from this file: \
+             a module runs its one PROGRAM",
+        ],
+        "at the <task> and <pouInstance> elements of the XML"
+    );
     let mut img = Image::new(SIZES);
     p.scan(&mut img).unwrap();
     // The resource's list starts ResourceGlobal at 2; the block adds 3.
@@ -899,6 +917,40 @@ fn global_variable_lists_import_into_one_module() {
     p.scan(&mut img).unwrap();
     assert_eq!(int(&p, "seen"), 8);
     assert_eq!(int(&p, "Hits"), 2);
+}
+
+/// What the box stores is the lowered ST, so the same warnings come from
+/// compiling that text; and a hostile name or interval cannot write ST of
+/// its own into it.
+#[test]
+fn the_lowered_configuration_warns_the_same_and_hostile_attributes_stay_text() {
+    let xml = fixture("globals.xml");
+    let st = plcopen::lower(&xml).unwrap().st().to_string();
+    let (compiled, warnings) = helmsman_iec::compile_warned(&st, SIZES);
+    assert!(compiled.is_ok());
+    assert_eq!(warnings.len(), 2, "{warnings:#?}");
+    assert!(
+        warnings[0]
+            .msg
+            .starts_with("TASK TASK0 (interval T#20ms) was not taken from this file")
+    );
+
+    let hostile = xml
+        .replace(
+            "name=\"task0\" priority=\"0\" interval=\"T#20ms\"",
+            "name=\"t); END_RESOURCE\" priority=\"0\" interval=\"T#20ms); PROGRAM x : y;\"",
+        )
+        .replace("typeName=\"plc_prg\"", "typeName=\"a b;\"");
+    assert_ne!(hostile, xml);
+    let p = build(&hostile);
+    let t: Vec<&str> = p.warnings().iter().map(|d| d.msg.as_str()).collect();
+    assert_eq!(t.len(), 2, "{t:#?}");
+    assert!(t[0].starts_with("TASK TASKT_END_RESOURCE "), "{t:#?}");
+    assert!(!t[0].contains("interval"), "{t:#?}");
+    assert!(
+        t[1].starts_with("program instance INSTANCE0 of PROGRAMA_B_ "),
+        "{t:#?}"
+    );
 }
 
 /// An `externalVars` entry with no global list behind it is a variable of

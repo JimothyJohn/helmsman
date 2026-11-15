@@ -66,8 +66,9 @@ Read this first, so we don't propose things that are already built.
   references, and OOP (METHOD, INTERFACE, EXTENDS). VAR_IN_OUT (on a
   function block) and function outputs are covered since the
   `st-var-in-out` card, and VAR_GLOBAL / VAR_EXTERNAL inside one module
-  since `st-var-global`; the rest of a CONFIGURATION (TASK, program
-  instances, VAR_ACCESS, VAR_CONFIG) is refused.
+  since `st-var-global`; TASK lines and program instances in a
+  CONFIGURATION are read past with a warning since `st-configuration-tasks`
+  (2026-11-15), and VAR_ACCESS and VAR_CONFIG are refused.
 - **Feedback loop**: the checker's errors, the requirement tests
   (`test_NAME.st` with `ASSERT`, run in lockstep by `helmsman_iec::spec`),
   and the ruSTy differential oracle (tests/oracle.rs, run through docker,
@@ -202,21 +203,27 @@ stand on it.
   moved on to their next refusal (a missing `;`, a call form, no
   PROGRAM), and iec-checker's one VAR_GLOBAL inside a PROGRAM is told
   where a global goes.
+  After `st-configuration-tasks` (2026-11-15) the 25 configuration files
+  no longer stop at TASK: the TASK lines and program instances are read
+  past with a warning, so 33 more files parse (39 to 72) and 22 more
+  compile (16 to 38 of 1009); the ranking above is the run after it. The
+  three configuration files of iec-checker stop on other causes (a TOD
+  type, a second PROGRAM, a local that hides a global); the `bad_*` ones
+  stay in their own list.
 
 ```
 per source (files, parse, compile, refused, refused as expected):
   blark: 18 files, 1 parse, 0 compile, 18 refused, 0 refused as expected
-  iec-checker: 53 files, 29 parse, 12 compile, 39 refused, 2 refused as expected
-  matiec: 40 files, 0 parse, 0 compile, 26 refused, 14 refused as expected
+  iec-checker: 53 files, 34 parse, 14 compile, 37 refused, 2 refused as expected
+  matiec: 40 files, 28 parse, 20 compile, 6 refused, 14 refused as expected
   rusty: 541 files, 8 parse, 4 compile, 537 refused, 0 refused as expected
   unitest: 351 files, 1 parse, 0 compile, 351 refused, 0 refused as expected
   wenger: 6 files, 0 parse, 0 compile, 6 refused, 0 refused as expected
-total: 1009 files, 39 parse, 16 compile, 977 refused, 16 refused as expected (named bad_* or bad/, left out of the ranking)
+total: 1009 files, 72 parse, 38 compile, 955 refused, 16 refused as expected (named bad_* or bad/, left out of the ranking)
 
 refusals by cause (first diagnostic of each file):
    726 files  parse: STRING literals are not supported yet  (blark 2, iec-checker 7, matiec 6, rusty 477, unitest 232, wenger 2)
    117 files  parse: expected :, found X  (blark 1, unitest 116)
-    25 files  parse: TASK is not supported: a module  (iec-checker 5, matiec 20)
     23 files  parse: unexpected character ^  (blark 1, rusty 22)
     10 files  compile: no PROGRAM found  (iec-checker 6, rusty 4)
      6 files  parse: expected ;, found (  (blark 1, rusty 5)
@@ -226,8 +233,8 @@ refusals by cause (first diagnostic of each file):
      4 files  parse: X:  is not allowed in names  (rusty 4)
      4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found METHOD  (blark 4)
      4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found UNIT  (wenger 4)
+     3 files  compile: only one PROGRAM is supported  (iec-checker 3)
      3 files  parse: expected ;, found END_TYPE  (iec-checker 1, rusty 2)
-     2 files  compile: only one PROGRAM is supported  (iec-checker 2)
      2 files  parse: LDT literals are not supported yet  (rusty 2)
      2 files  parse: TOD literals are not supported yet  (rusty 2)
      2 files  parse: VAR_ACCESS is not supported: modules do not share variables, signals are how modules talk  (iec-checker 2)
@@ -236,6 +243,7 @@ refusals by cause (first diagnostic of each file):
      1 files  compile: %X: address must start with X, X or X  (iec-checker 1)
      1 files  compile: %X: multi-level addresses (as X extensions assign) are not supported; this runtime takes %X<byte>N<bit> or %X<n>  (iec-checker 1)
      1 files  compile: CONSTANT X needs an initial value  (blark 1)
+     1 files  compile: X is a global variable of this module; a variable of the same name here would hide it, so give this one another name  (iec-checker 1)
      1 files  compile: X: an input (%X) cannot take an initial value  (iec-checker 1)
      1 files  compile: expected BOOL, found INT; convert explicitly with X  (iec-checker 1)
      1 files  compile: expected INT, found LREAL; convert explicitly with X  (iec-checker 1)
@@ -243,6 +251,7 @@ refusals by cause (first diagnostic of each file):
      1 files  compile: integer literal N cannot be a TIME  (iec-checker 1)
      1 files  compile: undeclared variable X (declare it in a VAR block)  (iec-checker 1)
      1 files  compile: unknown function X  (unitest 1)
+     1 files  compile: unknown type TOD (TOD is not supported yet)  (iec-checker 1)
      1 files  compile: unknown type X  (iec-checker 1)
      1 files  parse: DATE literals are not supported yet  (rusty 1)
      1 files  parse: LDATE literals are not supported yet  (rusty 1)
