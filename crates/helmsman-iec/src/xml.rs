@@ -3,7 +3,7 @@
 //! the predefined and numeric character references. A DOCTYPE is refused,
 //! which also rules out entity expansion. Namespaces are not resolved:
 //! names keep their local part (`xhtml:p` is `p`) and `xmlns` attributes
-//! are dropped.
+//! are dropped. Public since helmsman-iolink's IODD reader uses it too.
 
 use crate::lexer::Pos;
 #[cfg(not(feature = "std"))]
@@ -34,6 +34,7 @@ pub struct XmlError {
 }
 
 impl Element {
+    #[must_use]
     pub fn attr(&self, name: &str) -> Option<&str> {
         self.attrs
             .iter()
@@ -49,6 +50,7 @@ impl Element {
         })
     }
 
+    #[must_use]
     pub fn child(&self, name: &str) -> Option<&Self> {
         self.elements().find(|e| e.name == name)
     }
@@ -59,6 +61,7 @@ impl Element {
 
     /// All character data below this element, concatenated, with the
     /// position of the first non-blank piece.
+    #[must_use]
     pub fn text(&self) -> (String, Option<Pos>) {
         let mut s = String::new();
         let mut first = None;

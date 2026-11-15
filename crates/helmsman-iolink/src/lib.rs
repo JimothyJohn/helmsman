@@ -16,6 +16,9 @@
 //! - [`master`]: one Master port, from the wake-up to cyclic Process
 //!   Data, with retries and the loss of the Device.
 //! - [`device`]: a simulated Device, for tests and benches.
+//! - [`pd`]: values inside Process Data by bit offset and length.
+//! - `iodd` (the `iodd` feature, which allocates): a Device's IODD file
+//!   read for its identity and the layout of its Process Data.
 //!
 //! Reference (docs/SOURCES.md, "IO-Link"): IO-Link Interface and System
 //! Specification V1.1.5 (IO-Link Community, order no. 10.002, October
@@ -29,11 +32,17 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "iodd")]
+extern crate alloc;
+
 pub mod checksum;
 pub mod device;
+#[cfg(feature = "iodd")]
+pub mod iodd;
 pub mod master;
 pub mod mseq;
 pub mod page;
+pub mod pd;
 pub mod timing;
 
 pub use mseq::{Channel, Error, Layout, MasterMessage, Mc, Reply};
