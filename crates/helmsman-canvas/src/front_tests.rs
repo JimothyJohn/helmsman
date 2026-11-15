@@ -157,5 +157,9 @@ fn the_proofs_appear_one_by_one() {
     assert_eq!(f.shown(10.0), 0);
     assert_eq!(f.shown(10.0 + crate::front::REVEAL * 2.5), 2);
     assert_eq!(f.shown(100.0), TESTS.len());
-    assert!(f.proved());
+    assert!(
+        crate::front::summary(&f).starts_with("All 5 proved: "),
+        "{}",
+        crate::front::summary(&f)
+    );
 }

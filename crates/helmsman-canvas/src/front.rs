@@ -207,12 +207,6 @@ impl Front {
         n.min(self.proofs.len())
     }
 
-    /// Whether every proof is green.
-    #[must_use]
-    pub fn proved(&self) -> bool {
-        !self.proofs.is_empty() && self.proofs.iter().all(|r| r.state == State::Passed)
-    }
-
     /// Machine time the proofs covered, s.
     #[must_use]
     pub fn proved_s(&self) -> u64 {
