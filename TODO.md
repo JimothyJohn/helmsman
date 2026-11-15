@@ -467,6 +467,15 @@ Freeze (Nick, 2026-11-14): until the front door (`live-smoke` and the promotion 
   asked: 2026-11-14
   by: claude-session
 
+- [ ] **Device configuration follow-ups, from a recovered snapshot** — work that sat uncommitted in a worktree since 2026-11-12, now the branch `wip/recovered-devconf-canvas-20261114` (not built or tested, based on a tree from that day). In it: a failed re-read of a device's configuration keeps the last one on screen beside the error instead of replacing it; a new watchdog draft starts at 60 s and the sentence says seconds; a browser smoke of the Configuration section against the simulated E1200 console (`scripts/canvas-smoke-devconf.py`, `helmsman-devconf/examples/sim_console.rs`). Rebase it on dev, finish its tests, and land it, or delete the branch if the Configuration section has moved on.
+  needs: nothing
+  result: the follow-ups landed, or the branch gone
+  est: 4h
+  difficulty: low
+  id: devconf-recovered
+  asked: 2026-11-14
+  by: claude-session
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
