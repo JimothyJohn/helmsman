@@ -64,7 +64,7 @@ EXPECTED = ("/__seed", "status of 404", "status of 401")
 
 # Every tab in the left pane, in its first order (2026-11-13: one pane, the
 # Agent first; a tab can be docked in a right pane).
-PANES = ("claude", "code", "io", "devices", "files", "history", "palette")
+PANES = ("claude", "code", "io", "devices", "files", "history")
 
 
 def layout(left=1, pane="code", rights="", scan=0, trend=1, bottom="trend", light=0):
