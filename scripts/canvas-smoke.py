@@ -64,7 +64,7 @@ EXPECTED = ("/__seed", "status of 404", "status of 401")
 
 # Every tab in the left pane, in its first order (2026-11-13: one pane, the
 # Agent first; a tab can be docked in a right pane).
-PANES = ("claude", "code", "io", "devices", "files", "history", "palette")
+PANES = ("claude", "code", "io", "devices", "files", "history")
 
 
 def layout(left=1, pane="code", rights="", scan=0, trend=1, bottom="trend", light=0):
@@ -152,6 +152,12 @@ class Run:
         ]
 
 
+# The front door's "Fail the high switch" and "Open the editor", in points
+# at the smoke's 1400 x 860 window (crates/helmsman-canvas/src/front.rs).
+FRONT_FAIL_HIGH = (596, 688)
+FRONT_OPEN_EDITOR = (1264, 33)
+
+
 def open_app(ctx, base, query, lay):
     page = ctx.new_page()
     page.goto(base + "/__seed", wait_until="load")
@@ -164,7 +170,7 @@ def open_app(ctx, base, query, lay):
 
 
 def playground(ctx, base, out):
-    r = Run(open_app(ctx, base, "?playground", layout()), out, "pg")
+    r = Run(open_app(ctx, base, "?playground&editor", layout()), out, "pg")
     r.wait(3000)
     r.shot("editor")
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT)
@@ -220,19 +226,36 @@ def playground(ctx, base, out):
         "VAR l : Latch; END_VAR\nl(set := go);\nlamp := l.q;\nEND_PROGRAM\n"
     )
     r.wait(1500); r.shot("warned")
+    # A slip that does not compile: once the typing stops, the Agent says
+    # what went wrong under the top bar, with Fix it (crate::watch).
+    r.key("Control+a")
+    r.page.keyboard.type(
+        "PROGRAM main\nVAR_INPUT go : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\n"
+        "lmap := go;\nEND_PROGRAM\n"
+    )
+    r.wait(3500); r.shot("agent-noticed")
     problems = r.problems()
     r.page.close()
     # No layout kept: the page opens on the Agent, every tab on the left.
-    r0 = Run(open_app(ctx, base, "?playground", None), out, "pg-default")
+    r0 = Run(open_app(ctx, base, "?playground&editor", None), out, "pg-default")
     r0.wait(2500); r0.shot("agent-first")
     problems += r0.problems()
     r0.page.close()
-    r2 = Run(open_app(ctx, base, "?playground", layout(pane="files", light=1)), out, "pg-light")
+    r2 = Run(open_app(ctx, base, "?playground&editor", layout(pane="files", light=1)), out, "pg-light")
     r2.wait(2500); r2.shot("files")
     r2.click(*TAB_AGENT); r2.wait(600); r2.shot("agent-tab")
     r2.click(1313, 26); r2.wait(1500); r2.shot("monitor")
     problems += r2.problems()
     r2.page.close()
+    # A first visit (nothing kept): the front door, its proofs in, then a
+    # fault thrown and the way on to the editor.
+    rf = Run(open_app(ctx, base, "?playground&front", None), out, "pg-front")
+    rf.wait(2800); rf.shot("writing")
+    rf.wait(7000); rf.shot("proved")
+    rf.click(*FRONT_FAIL_HIGH); rf.wait(16000); rf.shot("high-switch-failed")
+    rf.click(*FRONT_OPEN_EDITOR); rf.wait(1500); rf.shot("editor")
+    problems += rf.problems()
+    rf.page.close()
     return problems
 
 
@@ -348,7 +371,7 @@ def main():
             ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
             problems += playground(ctx, base, a.out)
             ctx.close()
-            problems += phone(browser, base, "?playground", a.out, "pg")
+            problems += phone(browser, base, "?playground&editor", a.out, "pg")
             if proc:
                 bbase = f"http://127.0.0.1:{box_port}"
                 ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")

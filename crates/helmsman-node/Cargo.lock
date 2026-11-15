@@ -1014,6 +1014,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-iolink"
+version = "0.1.0"
+
+[[package]]
 name = "helmsman-modbus"
 version = "0.1.0"
 
@@ -1047,6 +1051,7 @@ dependencies = [
 name = "helmsman-nodecore"
 version = "0.1.0"
 dependencies = [
+ "helmsman-iolink",
  "serde_json",
 ]
 

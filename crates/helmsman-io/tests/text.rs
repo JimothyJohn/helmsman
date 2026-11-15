@@ -111,6 +111,7 @@ fn file() -> impl Strategy<Value = MapFile> {
         any::<bool>(),
         prop::option::of("[!-\"$-~]{1,16}"),
         prop::option::of(1u64..=60_000),
+        prop::option::of("[a-z0-9][a-z0-9_-]{0,6}/[a-z0-9][a-z0-9_-]{0,6}"),
     );
     (
         prop::collection::vec(device, 0..3),
@@ -119,7 +120,7 @@ fn file() -> impl Strategy<Value = MapFile> {
         .prop_map(|(devices, sigs)| {
             let mut f = MapFile::default();
             f.map.devices = devices;
-            for (k, (name, t, out, (kind, dev), point, n, x, with_safe, unit, poll)) in
+            for (k, (name, t, out, (kind, dev), point, n, x, with_safe, unit, poll, wired)) in
                 sigs.into_iter().enumerate()
             {
                 let name = format!("{name}{k}");
@@ -147,6 +148,10 @@ fn file() -> impl Strategy<Value = MapFile> {
                     };
                     f.safe.insert(name.clone(), v);
                 }
+                // Only a device's or the box's point has something wired to it.
+                if let Some(w) = wired.filter(|_| kind < 2) {
+                    f.wired.insert(name.clone(), w);
+                }
                 f.map.signals.push(Signal {
                     name,
                     ty,
@@ -167,6 +172,7 @@ proptest! {
         let back = parse(&text).map_err(|e| TestCaseError::fail(format!("{e:?}\n{text}")))?;
         prop_assert_eq!(&back.map, &f.map, "{}", text);
         prop_assert_eq!(&back.safe, &f.safe, "{}", text);
+        prop_assert_eq!(&back.wired, &f.wired, "{}", text);
     }
 
     #[test]
@@ -249,6 +255,81 @@ device module modbus-tcp h:1
     let errs = parse(src).unwrap_err();
     let lines: Vec<usize> = errs.iter().map(|(n, _)| *n).collect();
     assert_eq!(lines, (1..=18).collect::<Vec<_>>(), "{errs:#?}");
+}
+
+/// `wired=` names the sensor or actuator on a point by its folder in the
+/// device library; the map keeps it and writes it back.
+#[test]
+fn what_is_wired_to_a_point_is_kept_by_signal() {
+    let src = "\
+device rio modbus-tcp 192.168.3.60:502
+in  part_present bool rio di:3 wired=ifm/if6123
+in  level int rio hr:5:i16 unit=mm wired=ifm/o5d100 poll_ms=500
+out clamp bool box do:0 safe=false wired=festo/vuvg-l10
+in  estop bool rio di:0
+";
+    let f = parse(src).unwrap();
+    let wired: Vec<(&str, &str)> = f.wired.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    assert_eq!(
+        wired,
+        [
+            ("clamp", "festo/vuvg-l10"),
+            ("level", "ifm/o5d100"),
+            ("part_present", "ifm/if6123")
+        ]
+    );
+    assert_eq!(f.map.signals.len(), 4);
+    f.map.validate().unwrap();
+    let text = render(&f);
+    assert!(
+        text.contains("in part_present bool rio di:3 wired=ifm/if6123\n"),
+        "{text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|l| l.starts_with("in estop") && l.contains("wired")),
+        "{text}"
+    );
+    assert_eq!(parse(&text).unwrap(), f);
+    // A map written before the option reads the same.
+    assert!(parse(EXAMPLE).unwrap().wired.is_empty());
+}
+
+#[test]
+fn a_wired_value_that_is_not_a_library_folder_is_reported_with_its_line() {
+    let long = "a".repeat(65);
+    let src = format!(
+        "\
+in a bool box di:0 wired=
+in a bool box di:0 wired=ifm
+in a bool box di:0 wired=ifm/
+in a bool box di:0 wired=/if6123
+in a bool box di:0 wired=ifm/if6123/x
+in a bool box di:0 wired=IFM/IF6123
+in a bool box di:0 wired=../etc
+in a bool box di:0 wired=ifm/a..b
+in a bool box di:0 wired=ifm/-x
+in a bool box di:0 wired=ifm/{long}
+in a bool box di:0 wired=ifm/a\u{7}
+in a bool box di:0 wired=devices/ifm/if6123
+in a bool box di:0 wired=ifm/a wired=ifm/b
+in a real module m wired=ifm/a
+out a int screen line1 wired=ifm/a
+in a bool box di:0 wired
+"
+    );
+    let errs = parse(&src).unwrap_err();
+    let lines: Vec<usize> = errs.iter().map(|(n, _)| *n).collect();
+    assert_eq!(lines, (1..=16).collect::<Vec<_>>(), "{errs:#?}");
+    assert!(errs[1].1.contains("VENDOR/MODEL"), "{errs:#?}");
+    assert!(
+        errs[13].1.contains("only a signal on a device or box"),
+        "{errs:#?}"
+    );
+    // The longest folder parts are taken.
+    let ok = format!("in a bool box di:0 wired={0}/{0}\n", "a".repeat(64));
+    assert!(parse(&ok).is_ok());
 }
 
 #[test]

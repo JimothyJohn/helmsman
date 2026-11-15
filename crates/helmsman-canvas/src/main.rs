@@ -53,6 +53,9 @@ mod devices;
 mod diff_ui;
 mod editor;
 mod find;
+mod front;
+#[cfg(test)]
+mod front_tests;
 mod glyph_lib;
 mod glyphs;
 mod help;
@@ -62,6 +65,7 @@ mod icons;
 mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;
+mod io_names;
 mod lamps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod link_tests;
@@ -72,7 +76,6 @@ mod monitor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod node_api_tests;
 mod node_token;
-mod palette;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -120,6 +123,7 @@ mod ui_tests;
 mod verify;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod verify_tests;
+mod watch;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

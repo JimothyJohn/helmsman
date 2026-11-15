@@ -33,6 +33,34 @@ pub struct MapSignal {
     pub tail: Vec<String>,
 }
 
+/// Whether `v` is a `wired=` value: `vendor/model`, each part a folder
+/// name of the device library (`a-z 0-9 . _ -`, starting with a letter
+/// or digit, at most 64, no `..`). The rule of `helmsman_io::text`'s
+/// `wired_ok`, for the code that skims a map and cannot depend on it.
+#[must_use]
+pub fn wired_ok(v: &str) -> bool {
+    let part = |p: &str| {
+        (1..=64).contains(&p.len())
+            && p.bytes()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && p.bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'-'))
+            && !p.contains("..")
+    };
+    v.split_once('/')
+        .is_some_and(|(vendor, model)| part(vendor) && part(model))
+}
+
+impl MapSignal {
+    /// The `wired=VENDOR/MODEL` option: the sensor or actuator on this
+    /// point, by its folder in the device library. As written, unchecked.
+    #[must_use]
+    pub fn wired(&self) -> Option<&str> {
+        self.tail.iter().find_map(|t| t.strip_prefix("wired="))
+    }
+}
+
 /// What a map's text names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MapText {
@@ -228,6 +256,19 @@ mod tests {
         assert_eq!(m.devices[1].driver, "logix-tag");
         assert_eq!(m.signals.len(), 3);
         assert_eq!(m.signals[2].unit.as_deref(), Some("mm"));
+        assert_eq!(m.signals[2].wired(), None);
+        let wired = skim("in part bool rio di:3 unit=x wired=ifm/if6123 # prox\nin b bool rio di:4 wired\n");
+        assert_eq!(wired.signals[0].wired(), Some("ifm/if6123"));
+        assert_eq!(wired.signals[1].wired(), None);
+        for good in ["ifm/if6123", "sick/wtb4f-did8389194", "a/b", "9a/b.c_d-e"] {
+            assert!(wired_ok(good), "{good}");
+        }
+        for bad in [
+            "", "ifm", "ifm/", "/x", "a/b/c", "IFM/x", "../etc", "a/b..c", "a/-b", "a/b?q=x", "a/b c",
+        ] {
+            assert!(!wired_ok(bad), "{bad}");
+        }
+        assert!(!wired_ok(&format!("a/{}", "b".repeat(65))));
         assert_eq!(m.signals[1].device, "box");
         assert_eq!(m.odd, 3);
         // What follows the endpoint or the point is kept as written.

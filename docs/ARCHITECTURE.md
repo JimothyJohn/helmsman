@@ -68,7 +68,7 @@ Three directions of traffic, three different rules:
 | `helmsman-sim` | The simulated plant of a project's `plant.sim`, no I/O and no dependencies: devices that answer the program's outputs (heater, tank, motor, valve or cylinder, photo-eye), hand-set ones (button, switch, selector), free-running sources (ramp, exponential, geometric, pulse, step, sine, seeded random walk) and transmitters (4-20 mA, 0-10 V, counts); each input normal, abnormal (stuck, drift, noise, over, under, slow, chatter) or absent. The canvas's `Session` steps it before each scan (`run_plant`). See "Simulated plant". | built: in the page's simulation |
 | `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10, 43/14 Read Device Identification), reply checks (exact lengths, exceptions, echoes, identification objects), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
 | `helmsman-profinet` | PROFINET IO, RT class 1, as bytes and as two state machines without I/O (every call takes `now`): DCP (Identify, Set), the DCE/RPC envelope, the Connect / Write / PrmEnd / application-ready / Release blocks, cyclic frames and their layout, alarms; `controller` (an IO controller for one device) and `device` (a simulated IO device for tests and benches). `no_std + alloc`, no dependencies. | built: against its own simulated device and scapy's dissector; no real device yet (`mdrive-bringup`) |
-| `helmsman-iolink` | IO-Link (SDCI) between one master port and one device, as bytes and as two state machines without I/O (every call takes `now`): the M-sequence control octet, the M-sequence types as layouts, the Master message and the Device reply with the 6-bit checksum, Direct Parameter page 1; `master` (one port: the wake-up, the test message at COM3, COM2 and COM1, the page read and its checks, PREOPERATE, the cycle time, OPERATE with cyclic Process Data, a message repeated twice and then the device lost and looked for again; `poll` says what the line does next, so the caller owns the transceiver) and `device` (a simulated device for tests and benches). `pd` reads and writes a value inside Process Data by the bit offset and length an IODD gives it; `iodd` (the `iodd` feature, the one part that allocates, on `helmsman_iec::xml`) reads a device's IODD file for its vendor and device id and the layout of its Process Data by name (records, arrays, simple types, conditional layouts). `no_std`, no allocation and no dependencies without `iodd`. A master of our own for the edge node (Nick, 2026-11-14); the node's `iolink` device line and the P4's transceiver driver follow (TODO.md `iolink-node`). | built: against its own simulated device (startup at each rate, the specification's times, loss and return, a line that drops, cuts, flips and invents octets as a property), the IODD reader against the IO-Link Community's 22 example files (fetched, not committed); no transceiver and no real device yet (`iolink-transceiver`). Not built: ISDUs, Events, the interleaved mode, legacy devices, SIO |
+| `helmsman-iolink` | IO-Link (SDCI) between one master port and one device, as bytes and as two state machines without I/O (every call takes `now`): the M-sequence control octet, the M-sequence types as layouts, the Master message and the Device reply with the 6-bit checksum, Direct Parameter page 1; `master` (one port: the wake-up, the test message at COM3, COM2 and COM1, the page read and its checks, PREOPERATE, the cycle time, OPERATE with cyclic Process Data, a message repeated twice and then the device lost and looked for again; `poll` says what the line does next, so the caller owns the transceiver) and `device` (a simulated device for tests and benches). `pd` reads and writes a value inside Process Data by the bit offset and length an IODD gives it; `iodd` (the `iodd` feature, the one part that allocates, on `helmsman_iec::xml`) reads a device's IODD file for its vendor and device id and the layout of its Process Data by name (records, arrays, simple types, conditional layouts). `Iodd::map_lines` writes that layout as the lines of a node's I/O map (helmsman-nodecore's `iolink`). `no_std`, no allocation and no dependencies without `iodd`. A master of our own for the edge node (Nick, 2026-11-14); the node's `iolink` device line and the P4's transceiver driver follow (TODO.md `iolink-node`). | built: against its own simulated device (startup at each rate, the specification's times, loss and return, a line that drops, cuts, flips and invents octets as a property), the IODD reader against the IO-Link Community's 22 example files (fetched, not committed); no transceiver and no real device yet (`iolink-transceiver`). Not built: ISDUs, Events, the interleaved mode, legacy devices, SIO |
 | `helmsman-dhcp` | A DHCP (IPv4) and BOOTP server for the box's own device network, as bytes and a state machine without I/O (every call takes `now`): the message (RFC 2131, options per RFC 2132 and RFC 3396, BOOTP's 300-octet minimum per RFC 1542), a server that keeps one address per Ethernet address (reservations, the address held before, the one asked for, the pool; a running lease is never taken away), the lease file, and `guard` (a probe DISCOVER, and whether a reply came from another server). `no_std + alloc`, no dependencies. The box runs it with `--dhcp IFACE` (helmsman-plc `dhcp`: the sockets tied to that interface, the probe before serving, the lease file in `<state-dir>/dhcp/leases`, `GET /api/dhcp`). | built: against its own tests and property tests, and the box service on loopback; no device yet |
 | `helmsman-l2` | Raw Ethernet frames of one EtherType on one interface: a BPF device on macOS, a packet socket on Linux; also an interface's IPv4 address and mask (`ipv4_net`) and a UDP socket tied to one interface (`bind_to_interface`: `IP_BOUND_IF`, `SO_BINDTODEVICE`), for the box's DHCP server. The one crate with `unsafe` (libc calls); everything else forbids it. | built: compiled for both, the BPF path not yet run (needs `/dev/bpf*` access) |
 | `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
@@ -381,7 +381,32 @@ scan; the scheduler bounds how often.
   show the word yet (the canvas is step 3's). Not yet: the canvas's
   add-by-click (step 3), profiles in the device library.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
-  optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
+  optional `unit=`, `poll_ms=` (inputs), `safe=` (outputs) and
+  `wired=VENDOR/MODEL` in any order. `wired=` names the sensor or actuator
+  on a point by its folder in the device library (`in part_present bool
+  rio di:3 wired=ifm/if6123`): the runtime does nothing with it, the
+  map keeps it per signal (`MapFile::wired`), the agent's `list_devices`
+  gives it on the point, and `helmsman_project::devlib` finds the record
+  (`Index::by_wired`; a sensor's record has no protocol, an
+  `identity.iolink` and its order numbers as `products`, and is never the
+  match for a device found on the network). The record is drafted in the
+  library from the device's IODD, and its detail is `record.json` in its
+  folder (`helmsman_project::devrecord`: what the device is, its on/off
+  signals and what their states are called, its wires, its factory
+  settings, `draft` until a unit was checked, and which signal the
+  switching wire carries only when the library has that from the manual).
+  The box serves a record's brief from `GET
+  /api/devices/library?wired=VENDOR/MODEL` (and beside a `q=` match), and
+  `list_devices` brings it for every wired point as `wired_devices`.
+  `list_library_devices` (a box tool, read-only, over MCP today; the
+  relay's profiles do not list it yet) searches the library by vendor,
+  model or the number on a label and gives each match's `wired` value
+  and brief, which is what an agent needs to write `wired=` on a line.
+  On a box the canvas's Devices tab puts a line under a wired point
+  with the vendor, the model and the kind, the rest in its tooltip
+  (`devices.rs`, `WiredBrief`; one lookup a record). The playground,
+  which has no box, names the folder. A picker that writes `wired=` is
+  not built (TODO.md `iodd-metadata`);
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
   screen TILE` an output no device takes (the retired floor screen's
   tiles, below). Older maps read unchanged;
@@ -2899,6 +2924,59 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   value outside its type's range never reaches the program. The Trend
   tab: up to six pinned signals over the last 10 s.
 - **The live diagram** is the box's (`st_view::Viewer`).
+- **The front door** (`front.rs`; a first visit to the simulation,
+  `?front`, Help › Front page; Nick, 2026-11-14): the whole page until the
+  visitor goes on. Three cards: what was asked in plain words, a tank
+  running its program against its plant (`assets/front/`: `main.st`,
+  `plant.sim`), and the proofs, one row a requirement test, each of which
+  throws a fault at the machine (`helmsman_sim::iec`). `main.st` is the
+  Agent's own answer to `front::instruction()` (the I/O by name, then the
+  four lines shown), kept as it landed: the ignored test
+  `front_door_recording` (agent_ladder_tests.rs) asks the live free chat,
+  keeps the program only if every proof is green on it, and writes
+  `recorded.txt` (date, requests, seconds), which the page quotes. The
+  first run is played back: the request line by line, the writing, the
+  proofs one by one (`Front::asked_shown`, `writing`, `shown`). The visitor throws
+  the same faults by hand (`front::Fault`, set on the running
+  `helmsman_sim::Plant`) and reads what the program did. `front::Front`
+  is the state, with its own `Session`; `App::front` holds it and
+  `App::show` draws nothing else while it is there. "Open the editor"
+  (`App::leave_front`) opens the built-in project `tank`, the same files,
+  and the browser remembers it (`app::FRONT_KEY`), so the next visit
+  opens on the editor; a link for something else (`?editor`, `?tour`,
+  `?monitor`, `?box=`) never sees it (`app::wants_front`). Stacked below
+  `front::STACK_BELOW` points, the machine first. Contracts in
+  `front_tests.rs` (the proofs are green and a program without the
+  safeguards fails them; each fault does what its words say) and
+  `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
+  laptop's, a tablet's and a phone's width).
+- **Name the I/O first** (`io_names.rs`; Nick, 2026-11-14): while an
+  instruction makes a new project (`Scope::NewProject`), the Agent tab
+  carries a fold where the engineer lists the program's points: a name,
+  input or output, BOOL / INT / REAL, and what it is in a few words
+  (`PlaygroundView::new_io`). `send_instruction` puts the list ahead of
+  what was typed (`IoList::instruction`: the names to use exactly, no
+  other input or output), and a name that cannot be a variable's, or one
+  used twice, stops the send and says why. The front door's tank was
+  written from such a list. Contracts in `io_names.rs`'s tests and
+  `ui_tests/io_names.rs` (the pane keeps its width with long names).
+- **The Agent watches** (`watch.rs`; Nick, 2026-11-14): what the page
+  already sees go wrong is said unasked in a card over the top of the
+  diagram (on screen whichever tab is open, not modal), one thing at a time, most urgent first (`watch::noticed`): an
+  error that stops the build, a fault, a program held by a lost input
+  with no `NAME_ok`, a red requirement test. Each is one line of what
+  went wrong, the better way when a rule knows one, and two buttons. Fix
+  it (`PlaygroundView::fix_noticed`) puts an instruction that carries the
+  failure in the Agent's box, shows the Agent tab and sends it through the
+  usual checks; Not now hides it until something else is wrong. The words
+  come from rules, not the model, so watching spends no model turn; only
+  the click does. `watch::Watching` holds it back while an edit is
+  unchecked or the Agent is at work, and until the problem has stood
+  `watch::QUIET` seconds. Patterns: compile errors of one kind
+  (`watch::rule_of`) in several places are said once, with one Fix it
+  that lists them all; a kind said `watch::HABIT` times in a session is
+  said to be one ("That is 3 times this session"), counted in memory
+  only. Contracts in `watch.rs`'s tests.
 - **The guided tour** (`tour.rs`; `?tour`, Help › Take the tour; Nick,
   2026-11-06): a card beside the control each step is about, the control
   outlined, over everything in the `Tooltip` order so no panel moves. A

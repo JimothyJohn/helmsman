@@ -2,7 +2,7 @@
 
 Done cards were removed on 2026-11-06 (git history has them). Three sections up top: decisions only you can make, things only your hands can do, and what an agent builds next. The roadmap below is the long view.
 
-Freeze (Nick, 2026-11-14): until the front door (`front-door`, `front-door-recorded-run`, `live-smoke`) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
+Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
 
 ## Open questions for Nick
 
@@ -14,14 +14,6 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door`, `front-door-recor
   by: claude-session (iolink)
 
 ## Needs your hands
-
-- [ ] **Order an IO-Link master transceiver board and one sensor** — Why it matters: the IO-Link master is built and proven against its own simulated device only (helmsman-iolink: wake-up, COM1/2/3 detection, startup, cyclic Process Data, retries, loss). Nothing has been on a wire, and the P4 needs a master transceiver between its pins and the sensor's C/Q line (24 V, the wake-up current pulse). Two candidates, facts from distributor pages on 2026-11-14 (the vendors' own pages timed out, so neither datasheet has been read): (1) Analog Devices MAX14819 / MAX14819A, a dual-channel master transceiver with L+ supply controllers, SPI, "integrated framers" or external UARTs, 9 to 36 V, 48-pin TQFN, evaluation kit MAX14819EVKIT; (2) ST L6360, a single master port (COM1, COM2, COM3), configured over I2C with the data on a USART, 18 to 32.5 V, evaluation board STEVAL-IOM001V1 (Arduino UNO R3 headers). My pick is the MAX14819 kit: two ports on one board and the framer in the chip takes the bit timing off the P4, which runs the scan and the network beside it. Not checked for either part: how the wake-up pulse is made, and the 3.3 V logic levels against the P4. Any IO-Link sensor with a published IODD will do as the first device; one with 16 bits of input or fewer avoids the interleaved mode the master does not have yet.
-  needs: a 24 V supply on the bench; the part ordered; its datasheet read by a session before the driver is written (first step of `iolink-p4-line`)
-  result: a transceiver board and a sensor on the bench, named on this card with the pins they are wired to
-  options: MAX14819EVKIT | STEVAL-IOM001V1 | another part
-  id: iolink-transceiver
-  asked: 2026-11-14
-  by: claude-session (iolink)
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — Why it matters: a node in a cabinet is powered by its Ethernet cable alone, and today no run has proven that. The PoE module turns the cable's 48 V into the board's supply; if its output is not isolated from the cable side, a USB cable plugged in at the same time ties the laptop's ground to the PoE supply's return, and current can flow through the laptop's USB port. Nobody knows yet which it is, so `scripts/node-flash.sh` makes you pull Ethernet before every USB flash. One measurement settles it: the prompt goes away, or becomes a hard rule. the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
   needs: the PoE module on the board, a meter, a PoE port
@@ -128,7 +120,27 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door`, `front-door-recor
 
 ## Next to build
 
-- [ ] **IO-Link on the node: IODD import, the `iolink` device line, then the P4's line driver** — Why it matters: Nick, 2026-11-14: everything should be reachable, IO-Link sensors included, through a master of our own on the edge node. Built so far (docs/ARCHITECTURE.md `helmsman-iolink`): the message codec, one master port and a simulated device as state machines without I/O, with the timing rules and a noisy line as tests. Also built: `iodd` reads a device's IODD file for its vendor and device id and its Process Data layout by name, and `pd` reads a value out of the octets by that layout (all 22 of the community's example IODDs read; no vendor's file tried yet). Left, in order: (1) try the reader on the IODD of the sensor that gets ordered, from IODDfinder; (2) `iolink-node-line`: an `iolink` device line in helmsman-nodecore's I/O map (port, expected vendor and device id, signals over the Process Data bits) driving `Master` against the simulated device on the host; (3) `iolink-p4-line`: the transceiver driver on the P4 behind `Step` (wake-up, exchange with a timeout), after `iolink-transceiver`; (4) the first real sensor, its capture kept as a test, and only then any wording a user reads (`iolink-membership`). Owed before a device with more than 2 octets of Process Data and M-sequence code 0: the interleaved TYPE_1_1 / TYPE_1_2 mode, which a master shall support (Table A.10 NOTE 3). Later cards: ISDUs (parameters, identity strings), Events, data storage, a second port, a box reading a node's ports.
+- [ ] **helmsman-dhcp: a client moves off its running lease (found by its own property test)** — Why it matters: the DHCP server's promise is that an address handed out in an ACK stays that client's while the lease runs; a block that is moved to another address mid-lease drops its fieldbus connection. On 2026-11-15 `cargo test --workspace` failed once in `crates/helmsman-dhcp/tests/hostile.rs`, `no_request_sequence_breaks_the_invariants`: "00-07-46-00-00-03 moved off its running lease", left 192.168.3.102, right 192.168.3.101. It is rare (the next three runs of that test passed), so CI can fail on it at random on any PR. To reproduce every time, add this line to `crates/helmsman-dhcp/tests/hostile.proptest-regressions`: `cc 32024c1c7cf224596c6941b14f9b5192e7b4dba694ca7a7b2831f9d34cc24c4b`. The shrunk case begins with a DHCPREQUEST from that client with ciaddr 192.168.3.100 and ends with its DHCPDISCOVER. Not fixed here: it was found while gating an unrelated change (the Devices tab's wired line), the crate is another task's, and the seed was left out of that branch so dev stays green until the fix lands with it, regression first.
+  needs: nothing
+  result: the seed is in the regressions file, the test passes with it, and the lease rule holds
+  id: dhcp-lease-moves
+  by: claude-session (iodd-meta)
+
+- [ ] **A sensor's IODD as its metadata: from the library to the point it is wired to** — Why it matters: Nick, 2026-11-14: "ioLink is a core part of this but may fundamentally be different so let's focus on it for digital input and output device metadata more than anything else", and of sensors that day: "Their output? It should be deeply known ahead of time." A prox or a valve sits on a digital channel of a remote I/O block and is never spoken to; its vendor's IODD (every IO-Link device has one) says who makes it, its variants, how each connector is wired, whether it switches without a master, and what its signals and their states are called. Built: helmsman-devices `scripts/iodd-draft.py` drafts a library record from an IODD (`[identity.iolink]`, the order numbers, `[wired]` with each connector's wires, `[[signals]]` with `on` / `off` names, `[[settings]]` with factory values such as PNP and high active; helmsman-devices #33, #38), with five real records as drafts (ifm IF6123, O5D100, PN7092, KQ6005, SICK WTB4FP; IODDs from IODDfinder through `docs-fetch.py`). In Helmsman a map line names what is on a point, `in part_present bool rio di:3 wired=ifm/if6123`: the box keeps it, the Agent's `list_devices` gives it, and `devlib` finds the record by it, by an order number or by the IO-Link identity. Nothing is live: the box reads the library's `main`, and the records are on its `dev`. Left, in order: (1) `wired.switching` for each record (which signal the switching wire carries with no master, normally open or closed): an IODD does not say and the Smart Sensor Profile leaves it to the vendor, so it comes from each data sheet with its page; none could be fetched on 2026-11-14 (ifm's pages are rendered by script, its asset service answered 404 and 403), so this needs the PDFs by hand or a vendor source that can be fetched; (2) done: the library builds `record.json` beside each wired device's `device.toml` (helmsman-devices #39), `helmsman_project::devrecord` reads it, the box serves its brief from `GET /api/devices/library?wired=VENDOR/MODEL`, and the Agent's `list_devices` brings it for every wired point; (3) half done: on a box the Devices tab says what is wired under the point (vendor, model, kind; on/off names, factory settings and the draft note in the tooltip), tested at the panel's default width. Left of it: the same in the playground (it has no box, so the canvas fetches the index and the record itself), the I/O tab, and a picker that searches the library by the number on the label and writes `wired=` into the map line; (4) `agent-names-io` uses it: a sensor picked from the library comes with what it is and what on means, and only its function is asked; the box has the tool for it, `list_library_devices` (search by vendor, model or label number; each match's `wired` value and brief), which MCP clients can call today; the relay's Agent cannot until a new profile id lists it and says what `wired` and `wired_devices` are and that `propose_io_map` may write `wired=VENDOR/MODEL` on a point's line (agent-relay: profiles are pinned, its dev is at helmsman/v10 while the box asks for v7 by default, and a deploy is Nick's, so that is its own piece of work there); (5) the simulation's plant takes the sensor's kind and states from the record; (6) more records, sorted by what Nick's benches and customers use.
+  needs: the vendors' data sheets for (1); nothing for (2) and (3); a relay profile id for (4)
+  result: a wired sensor is picked from the library by name, and the program, the I/O list and the Agent know what it is and what its signal means without anyone typing it
+  id: iodd-metadata
+  by: claude-session (iolink)
+
+- [ ] **Order an IO-Link master transceiver board and one sensor** — Parked (Nick, 2026-11-14, later the same day: IO-Link is for the metadata of digital input and output devices more than anything else; see `iodd-metadata`). Nothing to order until a device has to be spoken to over IO-Link. Why it would matter then: the IO-Link master is built and proven against its own simulated device only (helmsman-iolink: wake-up, COM1/2/3 detection, startup, cyclic Process Data, retries, loss). Nothing has been on a wire, and the P4 needs a master transceiver between its pins and the sensor's C/Q line (24 V, the wake-up current pulse). Two candidates, facts from distributor pages on 2026-11-14 (the vendors' own pages timed out, so neither datasheet has been read): (1) Analog Devices MAX14819 / MAX14819A, a dual-channel master transceiver with L+ supply controllers, SPI, "integrated framers" or external UARTs, 9 to 36 V, 48-pin TQFN, evaluation kit MAX14819EVKIT; (2) ST L6360, a single master port (COM1, COM2, COM3), configured over I2C with the data on a USART, 18 to 32.5 V, evaluation board STEVAL-IOM001V1 (Arduino UNO R3 headers). My pick is the MAX14819 kit: two ports on one board and the framer in the chip takes the bit timing off the P4, which runs the scan and the network beside it. Not checked for either part: how the wake-up pulse is made, and the 3.3 V logic levels against the P4. Any IO-Link sensor with a published IODD will do as the first device; one with 16 bits of input or fewer avoids the interleaved mode the master does not have yet.
+  needs: a 24 V supply on the bench; the part ordered; its datasheet read by a session before the driver is written (first step of `iolink-p4-line`)
+  result: a transceiver board and a sensor on the bench, named on this card with the pins they are wired to
+  options: MAX14819EVKIT | STEVAL-IOM001V1 | another part
+  id: iolink-transceiver
+  asked: 2026-11-14
+  by: claude-session (iolink)
+
+- [ ] **IO-Link on the node: IODD import, the `iolink` device line, then the P4's line driver** — Parked behind `iodd-metadata` (Nick, 2026-11-14, later the same day: the sensor is wired to a plain digital channel and its IODD is its metadata; speaking IO-Link to it comes after, if at all). What is built stays on dev, tested, with nothing calling it. Why it mattered: Nick, 2026-11-14: everything should be reachable, IO-Link sensors included, through a master of our own on the edge node. Built so far (docs/ARCHITECTURE.md `helmsman-iolink`): the message codec, one master port and a simulated device as state machines without I/O, with the timing rules and a noisy line as tests. Also built: `iodd` reads a device's IODD file for its vendor and device id and its Process Data layout by name, and `pd` reads a value out of the octets by that layout (all 22 of the community's example IODDs read; no vendor's file tried yet). Also built in helmsman-nodecore's `iolink`: the `device NAME iolink port=N ...` line and its `pd:OFFSET[:uN|iN]` points, a `Port` that runs one on the master and gives the inputs by point and takes the outputs, and `Iodd::map_lines`, which writes those lines from an IODD; proven from an IODD to values on the simulated device. No firmware calls it, and the node's own `iomap::parse` still refuses an `iolink` line, since no node has a port. Left, in order: (1) try the reader on the IODD of the sensor that gets ordered, from IODDfinder; (2) `iolink-node-image`: a place for `int` points in the node's program image (today it is 4 bytes of bool bits a direction, for the Modbus block's points, so an IO-Link number has nowhere to land), and a map with no Modbus block (today a node's map needs exactly one); (3) `iolink-p4-line`: the transceiver driver on the P4 behind `Step` (wake-up, exchange with a timeout), `iomap::parse` taking `iolink` lines on a board with ports, the io task polling each `Port`, after `iolink-transceiver`; (4) the first real sensor, its capture kept as a test, and only then any wording a user reads (`iolink-membership`). Owed before a device with more than 2 octets of Process Data and M-sequence code 0: the interleaved TYPE_1_1 / TYPE_1_2 mode, which a master shall support (Table A.10 NOTE 3). Later cards: ISDUs (parameters, identity strings), Events, data storage, a second port, a box reading a node's ports.
   needs: nothing for (2); the sensor chosen for (1); `iolink-transceiver` for (3) and (4)
   result: a node's program reads an IO-Link sensor's Process Data by name from a deployed map
   id: iolink-node
@@ -424,61 +436,39 @@ Freeze (Nick, 2026-11-14): until the front door (`front-door`, `front-door-recor
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **The front door: one guided screen where the program proves itself** — interview 2026-11-14. Nick: the public page is a subpar experience, it looks like an IDE and the Agent lets it down. Decided: the reader to win first is a controls engineer who lands on the site cold; the moment is proof (a requirement in plain words, the program written for it, then the machine run against a stuck sensor, a lost device and a bad sequence, holding safe). The public page opens on one screen with three things: the requirement, a machine running, and the list of proofs going green or red as faults are thrown at it. The editor, diagram, tabs and panes sit behind one "Open the editor" button. The machinery is on dev (#403 helmsman-sim, #405 requirement tests against the plant with the fault outputs, #406 hold semantics); this is the screen over it. The machine needs sensors a fault can hit, so not the traffic light: pick one of the textbook examples with inputs (a tank fill or a conveyor with a jam sensor).
+- [ ] **The Agent watches: on a box, and beside the failure** — Nick, 2026-11-14: "the agent should feel like a fundamental part of the environment. It should be watching every time it breaks to point out the stupid thing you did to show how it should be done better." Built for the simulation (`crates/helmsman-canvas/src/watch.rs`): a compile error, a fault, a program held by a lost input and a red requirement test are each said unasked in a card over the diagram with the better way and a Fix it button that hands the failure to the Agent. The words come from rules, so watching costs no model turn (decided 2026-11-14: only the click spends one). Left: the same on a box's page (`box_view`: its diagnostics, the modules' held and faulted states, a lost device); the line drawn beside the failure itself (the editor's line, the test's row) as well as over the diagram; more rules as real mistakes show which are missing; a value out of its limits.
   needs: nothing
-  result: a visitor who gives the page one minute sees a program survive three faults without touching an editor
+  result: on a box too, a failure is followed by its explanation and its fix without the engineer asking
   est: 3d
   difficulty: med
-  id: front-door
-  asked: 2026-11-14
-  by: claude-session
-
-- [ ] **The front door's first run is a stored real answer** — interview 2026-11-14: recorded first, live after. The first run on the guided screen plays an answer the live model really gave (stored with the build, its profile id and date beside it), at a readable pace, so it is instant and cannot fail. The visitor's own sentence afterwards goes to the live model with the wait shown as today. The stored answer is regenerated by a script and pinned by a test that runs it through the same checks as a live one, so it cannot rot when the checker changes.
-  needs: nothing
-  result: the first impression never waits on the model and never shows a failed answer
-  depends: front-door
-  est: 1d
-  difficulty: low
-  id: front-door-recorded-run
-  asked: 2026-11-14
-  by: claude-session
-
-- [ ] **A smoke of the public page after each promotion** — left of `live-state` (interview 2026-11-14). `scripts/live-state.sh` (`make live-state`) now says what a visitor can reach against dev: master, the site's build, the relay's main and its deploy, the device library, the running try box. Not built: driving the live site's page headless after a promotion (the canvas-smoke pattern against the site's address), so a page that is live but broken is caught the same day.
-  needs: nothing
-  result: a promotion ends with screenshots of the live page, or says what broke
-  est: 3h
-  difficulty: low
-  id: live-smoke
-  asked: 2026-11-14
-  by: claude-session
-
-- [ ] **The Agent watches and speaks first** — Nick, 2026-11-14: "the agent should feel like a fundamental part of the environment. It should be watching every time it breaks to point out the stupid thing you did to show how it should be done better." Today the Agent is a box you type into. Wanted: every failure the environment already sees (a check error, a requirement test going red, a module held by a lost input, a device lost, a value out of its limits) reaches the Agent unasked, and it answers in place, beside the failure: what went wrong in one line, the better way, and the change offered as one click. Never a modal, never a wait in the way of typing. Open before building: what it costs per visitor on the free chat (each failure is a model turn), and which failures are answered by rule without the model.
-  needs: an interview on the triggers and the cost ceiling
-  result: a failure is followed by its explanation and its fix without the engineer asking
-  depends: front-door
-  est: 1w
-  difficulty: high
   id: agent-watches
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **Name the sensors first; the device's side is already known** — Nick, 2026-11-14: "Those sensors? It should guide you to name them and their function. Their output? It should be deeply known ahead of time." A new project starts from the I/O: the Agent walks the engineer through each point (what is on it, what it means when on, what is safe when it is lost) and those names and meanings are what the program, the requirements and the fault tests are written in. What a device gives (its channels, types, units, limits, safe values) comes from its profile in the library (`device-profiles`), never asked of the engineer. The plant in the simulation is built from the same answers, so the faults thrown at the program are the named sensors' own.
+- [ ] **Name the sensors first: the device's side, the safe state, the plant** — Nick, 2026-11-14: "Those sensors? It should guide you to name them and their function. Their output? It should be deeply known ahead of time." Built for a new program in the simulation (`crates/helmsman-canvas/src/io_names.rs`): a fold in the Agent tab where each point gets a name, input or output, its type and what it is; the list goes to the Agent ahead of the instruction and the program is written in those names. Left: a device added from the library fills the list from its profile's channels (names, types, units, limits), so nothing about the device is typed (`device-profiles`); each output's safe state when its device is lost, asked once and carried into the map; the simulated plant (`plant.sim`) drafted from the same answers, so the faults thrown at the program are the named sensors' own; the same list for an existing program (its ports and their comments), and on a box.
   needs: nothing
   result: an engineer states what each sensor is once; nothing else about the I/O is asked
-  depends: front-door
-  est: 4d
+  est: 3d
   difficulty: med
   id: agent-names-io
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **The Agent sees your patterns and fixes them** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." The same mistake made twice, the same edit repeated across rungs of a program, a requirement always written without its fault case: the Agent notices across the session and the project's history and offers the change for all of them at once. Not shaped yet: what is kept about an engineer, where, and for how long.
-  needs: an interview after `agent-watches` is in use
-  result: a repeated mistake is pointed out once and fixed everywhere
-  depends: agent-watches
-  est: 1w
+- [ ] **The Agent sees your patterns: across sessions, and beyond compile errors** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." Built in the simulation (`crates/helmsman-canvas/src/watch.rs`): the same kind of compile error in several places is said once with one Fix it for all of them, and a kind that comes up three times in a session is said to be a habit; the count lives in the page's memory only. Left: habits that last past a reload (what is kept about an engineer, where and for how long is yours to decide: this browser only, the project, or their account on a box); patterns beyond compile errors (the same edit repeated across a program, a requirement always written without its fault case); a habit turned into a standing fix the Agent applies by itself.
+  needs: your decision on what may be kept about an engineer, and where
+  result: a repeated mistake is pointed out once and fixed everywhere, and stays learned
+  est: 4d
   difficulty: high
   id: agent-patterns
+  asked: 2026-11-14
+  by: claude-session
+
+- [ ] **Device configuration follow-ups, from a recovered snapshot** — work that sat uncommitted in a worktree since 2026-11-12, now the branch `wip/recovered-devconf-canvas-20261114` (not built or tested, based on a tree from that day). In it: a failed re-read of a device's configuration keeps the last one on screen beside the error instead of replacing it; a new watchdog draft starts at 60 s and the sentence says seconds; a browser smoke of the Configuration section against the simulated E1200 console (`scripts/canvas-smoke-devconf.py`, `helmsman-devconf/examples/sim_console.rs`). Rebase it on dev, finish its tests, and land it, or delete the branch if the Configuration section has moved on.
+  needs: nothing
+  result: the follow-ups landed, or the branch gone
+  est: 4h
+  difficulty: low
+  id: devconf-recovered
   asked: 2026-11-14
   by: claude-session
 

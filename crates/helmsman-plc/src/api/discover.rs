@@ -22,8 +22,11 @@
 //!   library's match. `protocols` says per protocol whether it was looked
 //!   for and, when not, why in words. The per-protocol lists stay for one
 //!   release: `devices` (EtherNet/IP) and `modbus`.
-//! - `GET /api/devices/library?vendor=V&product=P[&address=A]`, or
-//!   `?q=text`: the library's matches, each with the map lines of its
+//! - `GET /api/devices/library?vendor=V&product=P[&address=A]`,
+//!   `?q=text` or `?wired=VENDOR/MODEL` (the sensor or actuator a map
+//!   line names with `wired=`; its match carries `device`, the record's
+//!   brief: what it is, its on/off signals and what their states are
+//!   called, its factory settings): the library's matches, each with the map lines of its
 //!   `enip.map` (or the one map it has) with `ADDR` replaced by `address`
 //!   when given. The index and the map files come from the library's URL
 //!   ([`Discovery::library`]; a site hosts its own with
@@ -51,6 +54,8 @@ pub const FRESH: Duration = Duration::from_secs(60);
 pub const INDEX_FRESH: Duration = Duration::from_secs(24 * 3600);
 /// Largest map file taken from the library.
 const MAX_MAP: usize = 64 * 1024;
+/// Most entries of each list in a record's brief.
+const RECORD_BRIEF: usize = 16;
 
 /// Where a scan reads the ARP table from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -317,6 +322,10 @@ fn entry_json(e: &Entry, driver: &str) -> Json {
     let p = e.protocol(driver).or_else(|| e.protocols.first());
     json!({
         "folder": e.folder, "vendor": e.vendor, "model": e.model, "kind": e.kind,
+        // What a map line's `wired=` takes to name this entry, the order
+        // numbers it covers, and whether it reaches a controller over a
+        // network at all (a sensor on a digital channel does not).
+        "wired": e.wired(), "products": e.products, "networked": e.networked(),
         "driver": p.map(|p| p.driver.clone()),
         "profile": p.and_then(|p| p.profile.clone()),
         "profile_file": e.profile,
@@ -708,10 +717,17 @@ pub(super) fn library(req: &Request, ctx: &Ctx) -> Response {
         q("vendor").and_then(|v| v.parse::<u16>().ok()),
         q("product").and_then(|p| p.parse::<u16>().ok()),
         q("q"),
+        q("wired"),
     ) {
-        (Some(v), Some(p), _) => index.by_identity(v, p),
-        (_, _, Some(text)) if text.chars().count() <= 120 => index.search(text),
-        _ => return Response::error(400, "give vendor and product (numbers), or q (text)"),
+        (Some(v), Some(p), _, _) => index.by_identity(v, p),
+        (_, _, Some(text), _) if text.chars().count() <= 120 => index.search(text),
+        (_, _, _, Some(w)) if helmsman_io::text::wired_ok(w) => index.by_wired(w).into_iter().collect(),
+        _ => {
+            return Response::error(
+                400,
+                "give vendor and product (numbers), q (text), or wired (VENDOR/MODEL)",
+            );
+        }
     };
     let base = st.base().unwrap_or_default();
     let out: Vec<Json> = matches
@@ -728,6 +744,24 @@ pub(super) fn library(req: &Request, ctx: &Ctx) -> Response {
                         j["lines"] = json!(lines);
                     }
                     Err(why) => j["lines_unavailable"] = json!(why),
+                }
+            }
+            // A wired sensor's or actuator's record, held to the record's
+            // rules here: what it is and what its signals mean, in brief.
+            if e.record {
+                let url = e.file_url(&base, helmsman_project::devrecord::FILE);
+                match st
+                    .map_text(&url)
+                    .and_then(|t| helmsman_project::devrecord::Record::parse(&t))
+                    .and_then(|r| {
+                        if r.folder == e.folder {
+                            Ok(r)
+                        } else {
+                            Err(format!("the record is for {}", r.folder))
+                        }
+                    }) {
+                    Ok(r) => j["device"] = r.brief(RECORD_BRIEF),
+                    Err(why) => j["device_unavailable"] = json!(why),
                 }
             }
             // The device's profile, for the canvas to copy into the

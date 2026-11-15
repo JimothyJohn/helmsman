@@ -375,6 +375,7 @@ impl BoxView {
                 }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
+                PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
                 PCall::Config(device, op) => self.devices_ui.config.answer(&device, op, a.status, &a.body),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
@@ -2087,6 +2088,9 @@ impl Body for BoxView {
         self.devices_ui
             .config
             .set_context(is_engineer(self.session.as_ref()), asks);
+        // What is wired to the map's points: one library lookup a frame
+        // for each `wired=` value not asked about yet.
+        let wanted = self.devices_ui.wired_wanted();
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.scan = crate::devices::Scan::Running;
@@ -2107,6 +2111,9 @@ impl Body for BoxView {
                 | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
+        }
+        if let Some(wired) = wanted {
+            self.projects.wired(&wired);
         }
     }
 
@@ -2237,21 +2244,12 @@ impl Body for BoxView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Palette, Tab::Claude]
-    }
-
-    fn ask_agent(&mut self, text: &str, ctx: &egui::Context) {
-        text.clone_into(&mut self.instruct.draft);
-        self.send_instruction(ctx);
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         if tab == Tab::Claude {
             self.agent_tab(ui, chrome);
-            return;
-        }
-        // The shell draws the palette (`palette::show`).
-        if tab == Tab::Palette {
             return;
         }
         let t = theme(ui);

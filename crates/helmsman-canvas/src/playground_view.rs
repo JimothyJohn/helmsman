@@ -21,6 +21,9 @@ use crate::st_view::{Pick, TAP, Viewer};
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
 
+/// The widest the card that says what the Agent noticed gets, pt.
+const NOTICED_WIDTH: f32 = 620.0;
+
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
@@ -201,6 +204,12 @@ pub struct PlaygroundView {
     /// (`crate::requirements`): after every build change, before Deploy
     /// and "Use this code".
     pub tests: crate::requirements::Results,
+    /// The points named ahead of a new program (`crate::io_names`).
+    pub new_io: crate::io_names::IoList,
+    /// When to say what went wrong (`crate::watch`).
+    watching: crate::watch::Watching,
+    /// What the Agent noticed, said under the top bar this frame.
+    pub noticed: Option<crate::watch::Noticed>,
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
@@ -275,6 +284,9 @@ impl PlaygroundView {
             to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
+            new_io: crate::io_names::IoList::default(),
+            watching: crate::watch::Watching::default(),
+            noticed: None,
             selection: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
@@ -799,6 +811,15 @@ impl PlaygroundView {
             return;
         }
         let scope = self.scope();
+        // A new program: the points the engineer named go ahead of what
+        // was typed, and a bad name stops it here.
+        if scope == crate::scope::Scope::NewProject {
+            if let Some(problem) = self.new_io.problems().first() {
+                self.instruct.failed(&format!("the I/O list: {problem}"));
+                return;
+            }
+            self.instruct.draft = self.new_io.instruction(&self.instruct.draft);
+        }
         let file = crate::instruct::target(&scope);
         let earlier = crate::instruct::recent(
             self.proj.revisions().iter().filter_map(|r| r.page.as_deref()),
@@ -1719,7 +1740,111 @@ impl PlaygroundView {
 
     /// Runs the program (and Claude's answer) on with nothing drawn: the
     /// Monitor watches the same session.
+    /// The inputs whose device is lost while the program is held for it.
+    fn held_by(&self) -> Vec<String> {
+        let (true, Some(plant), Some(b)) = (self.session.held, &self.session.plant, &self.session.build)
+        else {
+            return Vec::new();
+        };
+        b.points
+            .iter()
+            .filter(|p| p.dir == crate::playground::Dir::In)
+            .filter(|p| plant.mode(&p.name) == helmsman_sim::Mode::Absent)
+            .map(|p| p.name.to_ascii_lowercase())
+            .collect()
+    }
+
+    /// What the Agent says unasked at page time `t` (`crate::watch`):
+    /// the one thing wrong with the open project, once the typing has
+    /// stopped and nothing else is under way.
+    pub fn notice_problems(&mut self, t: f64) {
+        let diags = self.diags();
+        let held_by = self.held_by();
+        let noticed = crate::watch::noticed(&crate::watch::Seen {
+            diags: &diags,
+            fault: self.session.fault.as_deref(),
+            held_by: &held_by,
+            tests: &self.tests,
+        });
+        let busy = self.pending.is_some() || self.instruct.busy() || self.program_name.is_some();
+        self.noticed = self.watching.say(noticed, busy, t);
+    }
+
+    /// What the Agent noticed, as a card over the top of the diagram:
+    /// on screen whichever tab is open, and in nothing's way (it is not
+    /// modal and takes no room from a panel). What went wrong, the
+    /// better way, Fix it and Not now.
+    fn noticed_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let Some(n) = self.noticed.clone() else {
+            return;
+        };
+        let t = theme(ui);
+        let area = ui.available_rect_before_wrap();
+        let width = (area.width() - 24.0).clamp(160.0, NOTICED_WIDTH);
+        let size = crate::theme::MIN_TEXT;
+        let (mut fix, mut not_now) = (false, false);
+        let shown = egui::Area::new(egui::Id::unique("agent noticed"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(Pos2::new(area.center().x - width / 2.0, area.top() + 44.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .stroke(Stroke::new(1.5, WARN))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.set_width(width - 24.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("The Agent noticed: {}", n.what))
+                                    .color(t.ink(WARN))
+                                    .size(size),
+                            )
+                            .wrap(),
+                        );
+                        if let Some(better) = &n.better {
+                            ui.add(egui::Label::new(RichText::new(better).color(t.fg).size(size)).wrap());
+                        }
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            let r = ui.button(RichText::new("Fix it").size(size)).tip(
+                                "Asks the Agent to fix this. Its change is checked like any other before it lands.",
+                            );
+                            chrome.hit("agent fix it", r.rect);
+                            fix = r.clicked();
+                            let r = ui
+                                .button(RichText::new("Not now").size(size))
+                                .tip("Hides this until something else goes wrong.");
+                            chrome.hit("agent not now", r.rect);
+                            not_now = r.clicked();
+                        });
+                    });
+            });
+        chrome.hit("agent noticed", shown.response.rect);
+        if fix {
+            let ctx = ui.ctx().clone();
+            self.fix_noticed(chrome, &ctx);
+        } else if not_now {
+            self.watching.dismiss(&n.key);
+            self.noticed = None;
+        }
+    }
+
+    /// Fix it: what was noticed goes to the Agent as an instruction, on
+    /// the Agent tab, through the same checks as any other.
+    pub fn fix_noticed(&mut self, chrome: &mut Chrome, ctx: &egui::Context) {
+        let Some(n) = self.noticed.take() else {
+            return;
+        };
+        self.watching.dismiss(&n.key);
+        self.instruct.draft = n.ask;
+        chrome.left = true;
+        chrome.pane = editor::Pane::Claude;
+        self.send_instruction(ctx);
+    }
+
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.notice_problems(ctx.input(|i| i.time));
         if !self.proxy_asked {
             self.proxy_asked = true;
             self.link.check_proxy(ctx);
@@ -2246,25 +2371,19 @@ impl Body for PlaygroundView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Palette, Tab::Claude]
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
             Tab::Io => self.io(ui, chrome),
-            // The shell draws the palette (`palette::show`).
-            Tab::Palette => {}
             Tab::Claude => self.claude(ui, chrome),
         }
     }
 
-    fn ask_agent(&mut self, text: &str, ctx: &egui::Context) {
-        text.clone_into(&mut self.instruct.draft);
-        self.send_instruction(ctx);
-    }
-
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        self.noticed_ui(ui, chrome);
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         if let Some(v) = &mut self.viewer {
             v.icons
@@ -2489,6 +2608,10 @@ impl PlaygroundView {
             }
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
+            // A new program starts from its I/O, named by the engineer.
+            if self.scope() == crate::scope::Scope::NewProject {
+                crate::io_names::ui(ui, chrome, &mut self.new_io);
+            }
             let r = ui
                 .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
                 .tip("On: when the Agent's change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
@@ -2719,6 +2842,18 @@ impl PlaygroundView {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Pick signals to trend above",
+                FontId::proportional(crate::theme::MIN_TEXT),
+                t.muted,
+            );
+            return rect;
+        }
+        if trend.history.is_empty() && !self.session.running {
+            // Loaded and not run yet: say so, where empty lanes read as
+            // a trend that broke.
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Nothing recorded yet. Run the program to draw its signals.",
                 FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
