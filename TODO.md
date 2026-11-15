@@ -482,16 +482,6 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **VAR_IN_OUT and VAR_OUTPUT on FUNCTION** — the two cheap "yes" rows of the §4 table. VAR_IN_OUT on a FUNCTION_BLOCK passes a struct or array by reference inside one module (the standard way every library takes a buffer); a FUNCTION gets VAR_OUTPUT beside its return value. Oracle cases in tests/oracle.rs (ruSTy accepts both), property tests, the no_std build, the playground SYSTEM prompt and a new relay profile id listing them. Refuse anything that would alias across modules (the isolation claim).
-  result: imported FB libraries and agent-written helpers stop failing on the most common refusal
-  est: 2d
-  difficulty: med
-  depends: st-corpus
-  id: st-var-in-out
-  asked: 2026-11-08
-  by: claude-session
-  status: ready
-
 - [ ] **VAR_GLOBAL inside one module** — decided (Nick, 2026-11-08: `st-dialect-line`): VAR_GLOBAL is accepted at CONFIGURATION / RESOURCE scope inside one module and refused across modules, with a message that says signals are how modules talk. Imported CODESYS and Beremiz code uses it everywhere; the corpus will show how often. Oracle cases, property tests, the PLCopen importer's lowering of global variable lists, a relay profile id.
   result: a CODESYS or Beremiz project with globals imports into one module unchanged
   est: 1d

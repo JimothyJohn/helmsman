@@ -85,7 +85,6 @@ fn functions_positional_named_nested_and_defaults() {
 fn function_errors() {
     let e = errors(
         "FUNCTION f : INT VAR_INPUT a : INT; END_VAR f := a; END_FUNCTION
-         FUNCTION g : INT VAR_OUTPUT o : INT; END_VAR g := 1; END_FUNCTION
          PROGRAM t VAR x : INT; s : SINT; END_VAR
            x := f(1, 2);
            x := f(b := 1);
@@ -96,7 +95,6 @@ fn function_errors() {
          END_PROGRAM",
     );
     for want in [
-        "VAR_OUTPUT is not supported in a FUNCTION yet",
         "F takes 1 input(s)",
         "F has no input or output B",
         "A is given twice",
@@ -167,7 +165,6 @@ fn function_block_errors() {
     let e = errors(
         "FUNCTION_BLOCK fb
            VAR_INPUT i : INT; END_VAR VAR_OUTPUT o : INT; END_VAR VAR hidden : INT; END_VAR
-           VAR_IN_OUT r : INT; END_VAR
            o := i;
          END_FUNCTION_BLOCK
          FUNCTION_BLOCK loop1 VAR inner : loop2; END_VAR END_FUNCTION_BLOCK
@@ -184,7 +181,6 @@ fn function_block_errors() {
          END_PROGRAM",
     );
     for want in [
-        "VAR_IN_OUT is not supported in a FUNCTION_BLOCK yet",
         "contains an instance of itself",
         "the target is an output of the function block",
         "HIDDEN is internal to FB",

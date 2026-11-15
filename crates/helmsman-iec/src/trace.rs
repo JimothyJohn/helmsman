@@ -315,7 +315,13 @@ fn flatten(code: &Checked, path: &str, ty: Type, off: usize, out: &mut Vec<Leaf>
             }
         }
         AggKind::Fb(fb) => {
-            for v in &code.pous[*fb].vars {
+            // A VAR_IN_OUT holds a reference, not a value: its referent is
+            // listed under the caller's own variable.
+            for v in code.pous[*fb]
+                .vars
+                .iter()
+                .filter(|v| v.section != crate::parser::Section::InOut)
+            {
                 flatten(code, &format!("{path}.{}", v.name), v.ty, off + v.off, out);
             }
         }
