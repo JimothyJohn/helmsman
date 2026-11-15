@@ -15,9 +15,14 @@ repository.workspace = true
 # JSON without std: the box API's bodies are `json!` values here too, so the
 # field names are the box's (crates/helmsman-plc/src/api/render.rs).
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+# The IO-Link master port a node's `iolink` map lines run on (`no_std`,
+# no dependencies of its own).
+helmsman-iolink = { path = "../helmsman-iolink" }
 
 [dev-dependencies]
 proptest = "1.12"
+# With `iodd`: the tests write map lines from an IODD and run them.
+helmsman-iolink = { path = "../helmsman-iolink", features = ["iodd"] }
 
 [lints]
 workspace = true
