@@ -2138,13 +2138,14 @@ fn without_a_relay_explain_says_the_agent_is_offline() {
 
 #[test]
 fn an_unreachable_relay_still_gives_the_boxs_explanation_then_an_error() {
-    // A port nothing listens on: bound, then released.
-    let addr = {
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap()
-    };
+    // Port 1: a bind to port 0 is given an ephemeral port (32768 and up on
+    // Linux, 49152 and up on macOS), so no test's server can be on it, and
+    // nothing listens there on a CI runner or a dev machine. A port bound
+    // and released here before was reused by another test's server under
+    // CI's parallel load, which answered: `relay_error` (#374's gate,
+    // 2026-11-13).
     let b = Bench::new(Opts {
-        relay: Some(Url::parse(&format!("http://{addr}")).unwrap()),
+        relay: Some(Url::parse("http://127.0.0.1:1").unwrap()),
         ..Opts::default()
     });
     let evs = b.why("lamp");

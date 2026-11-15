@@ -63,6 +63,19 @@ pub enum Icon {
     Undo,
     /// A screen on a stand: the Monitor.
     Monitor,
+    /// A clock face: the History tab (Nick, 2026-11-13).
+    History,
+    /// i in a ring: an info message (Nick, 2026-11-13: levels as icons).
+    Info,
+    /// ! in a triangle: a warning.
+    Warning,
+    /// × in a ring: an error.
+    Error,
+    /// ← : back to the revision before the one shown (the Agent tab's
+    /// step through its changes; Nick, 2026-11-14: arrows, not words).
+    Back,
+    /// → , thin: on to the revision after the one shown.
+    Forward,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -159,7 +172,19 @@ pub fn button_sized(
 /// puts a red ground of that strength behind it and draws it red: the
 /// Messages tab with an error on it. The caller tips it.
 pub fn tab(ui: &mut egui::Ui, icon: Icon, size: f32, on: bool, alarm: Option<f32>) -> Response {
-    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    tab_sensed(ui, icon, size, on, alarm, Sense::click())
+}
+
+/// [`tab`] with its own sense: a side pane's tab can be dragged too.
+pub fn tab_sensed(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    size: f32,
+    on: bool,
+    alarm: Option<f32>,
+    sense: Sense,
+) -> Response {
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), sense);
     let t = theme(ui);
     let painter = ui.painter();
     let red = t.ink(RED);
@@ -324,6 +349,12 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 Stroke::NONE,
             ));
         }
+        Icon::History => {
+            let radius = b.width().min(b.height()) * 0.45;
+            p.circle_stroke(c, radius, stroke);
+            p.line_segment([c, Pos2::new(c.x, c.y - radius * 0.62)], stroke);
+            p.line_segment([c, Pos2::new(c.x + radius * 0.5, c.y + radius * 0.18)], stroke);
+        }
         Icon::Monitor => {
             let screen = Rect::from_min_max(Pos2::new(l, t), Pos2::new(r, bt - b.height() * 0.28));
             p.rect_stroke(screen, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
@@ -424,6 +455,21 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             p.line_segment([z, z + Vec2::new(-head, -dir * head)], stroke);
             p.line_segment([z, z + Vec2::new(head, -dir * head)], stroke);
         }
+        Icon::Back | Icon::Forward => {
+            // A shaft across the middle, an open arrowhead at one end.
+            let (from, to) = if icon == Icon::Back { (r, l) } else { (l, r) };
+            let dir = if icon == Icon::Back { 1.0 } else { -1.0 };
+            p.line_segment([Pos2::new(from, c.y), Pos2::new(to, c.y)], stroke);
+            let head = b.width() * 0.4;
+            p.line_segment(
+                [Pos2::new(to, c.y), Pos2::new(to + dir * head, c.y - head)],
+                stroke,
+            );
+            p.line_segment(
+                [Pos2::new(to, c.y), Pos2::new(to + dir * head, c.y + head)],
+                stroke,
+            );
+        }
         Icon::Deploy => {
             // A shaft from the left edge, an arrowhead at the right.
             let shaft = Stroke::new(w * 1.3, color);
@@ -518,6 +564,42 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 ],
                 stroke,
             ));
+        }
+        Icon::Info => {
+            p.circle_stroke(c, b.width() * 0.5 - w * 0.5, stroke);
+            p.circle_filled(Pos2::new(c.x, t + b.height() * 0.28), w * 0.75, color);
+            p.line_segment(
+                [
+                    Pos2::new(c.x, t + b.height() * 0.45),
+                    Pos2::new(c.x, bt - b.height() * 0.22),
+                ],
+                stroke,
+            );
+        }
+        Icon::Warning => {
+            let inset = w * 0.6;
+            p.add(egui::Shape::closed_line(
+                vec![
+                    Pos2::new(c.x, t + inset),
+                    Pos2::new(r - inset, bt - inset),
+                    Pos2::new(l + inset, bt - inset),
+                ],
+                stroke,
+            ));
+            p.line_segment(
+                [
+                    Pos2::new(c.x, t + b.height() * 0.38),
+                    Pos2::new(c.x, t + b.height() * 0.66),
+                ],
+                stroke,
+            );
+            p.circle_filled(Pos2::new(c.x, t + b.height() * 0.8), w * 0.7, color);
+        }
+        Icon::Error => {
+            p.circle_stroke(c, b.width() * 0.5 - w * 0.5, stroke);
+            let k = b.width() * 0.2;
+            p.line_segment([c + Vec2::new(-k, -k), c + Vec2::new(k, k)], stroke);
+            p.line_segment([c + Vec2::new(-k, k), c + Vec2::new(k, -k)], stroke);
         }
         Icon::Help => {
             p.circle_stroke(c, b.width() * 0.5, stroke);

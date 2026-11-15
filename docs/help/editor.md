@@ -131,7 +131,16 @@ redrawn.
 
 ## The panes
 
-- **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
+- **The left pane** holds every tab, the **Agent** first and showing when
+  the page opens, so the diagram keeps the rest of the width. Drag a
+  tab's glyph to the right edge of the window to dock it in a pane on the
+  right, beside the one on the left (the Code tab and the Agent side by
+  side, say), and drag it back onto the left pane to return it.
+  <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>5</kbd> sends the tab the left pane shows to the
+  right and shows the next one on the left; <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>
+  shows or hides the right pane once a tab is there. The layout is kept
+  in the browser. The tabs: **Agent**, where you type what the open file
+  should do and it is updated (see [The Agent](agent.html)). **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
   the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
@@ -190,8 +199,15 @@ redrawn.
   lines at the pane's width, or, off, keeps each line on one row with a
   scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
-  A double click on any tab, on this pane or the side panel, hides that
-  pane. The tabs are glyphs; hover one for its name. A hidden pane keeps
+  **I/O**: every input and output with its value and a control for each
+  input the diagram does not show. **History**: every saved version of
+  the open project, newest at the top. **Palette**: pictures of the
+  common pieces of a machine and a program (push button, emergency
+  stop, selector, pilot lamp, alarm, interlock, timer, counter, latch,
+  edge, sequence step, operator screen): drag one onto the diagram, or
+  click it, and the Agent is asked to add it to the program, which waits
+  for Deploy like any change.
+  A double click on any tab hides its pane. The tabs are glyphs; hover one for its name. A hidden pane keeps
   its tabs down the strip at the edge, and a click on one opens the pane
   on that tab.
 - **The bottom panel** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>): the **Trend** of the
@@ -199,15 +215,6 @@ redrawn.
   saying now, then the last two hundred things the page had to say, with
   the error count beside the tab. Tick or untick info, warnings and
   errors to list or leave out each.
-- **The side panel**, on the right (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>): **I/O**,
-  every input and output with its value and a control for each input the
-  diagram does not show; **Palette**, pictures of the common pieces of a
-  machine and a program (push button, emergency stop, selector, pilot
-  lamp, alarm, interlock, timer, counter, latch, edge, sequence step,
-  operator screen): drag one onto the diagram, or click it, and the
-  Agent is asked to add it to the program, which waits for Deploy like
-  any change; and **Agent**, where you type what the open file should do
-  and it is updated (see [The Agent](agent.html)).
 
 <img src="img/palette-tab.png" alt="The Palette tab: twelve pictures to drag onto the diagram." width="300">
 

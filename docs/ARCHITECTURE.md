@@ -65,8 +65,10 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
+| `helmsman-sim` | The simulated plant of a project's `plant.sim`, no I/O and no dependencies: devices that answer the program's outputs (heater, tank, motor, valve or cylinder, photo-eye), hand-set ones (button, switch, selector), free-running sources (ramp, exponential, geometric, pulse, step, sine, seeded random walk) and transmitters (4-20 mA, 0-10 V, counts); each input normal, abnormal (stuck, drift, noise, over, under, slow, chatter) or absent. The canvas's `Session` steps it before each scan (`run_plant`). See "Simulated plant". | built: in the page's simulation |
 | `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10, 43/14 Read Device Identification), reply checks (exact lengths, exceptions, echoes, identification objects), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
 | `helmsman-profinet` | PROFINET IO, RT class 1, as bytes and as two state machines without I/O (every call takes `now`): DCP (Identify, Set), the DCE/RPC envelope, the Connect / Write / PrmEnd / application-ready / Release blocks, cyclic frames and their layout, alarms; `controller` (an IO controller for one device) and `device` (a simulated IO device for tests and benches). `no_std + alloc`, no dependencies. | built: against its own simulated device and scapy's dissector; no real device yet (`mdrive-bringup`) |
+| `helmsman-iolink` | IO-Link (SDCI) between one master port and one device, as bytes and as two state machines without I/O (every call takes `now`): the M-sequence control octet, the M-sequence types as layouts, the Master message and the Device reply with the 6-bit checksum, Direct Parameter page 1; `master` (one port: the wake-up, the test message at COM3, COM2 and COM1, the page read and its checks, PREOPERATE, the cycle time, OPERATE with cyclic Process Data, a message repeated twice and then the device lost and looked for again; `poll` says what the line does next, so the caller owns the transceiver) and `device` (a simulated device for tests and benches). `pd` reads and writes a value inside Process Data by the bit offset and length an IODD gives it; `iodd` (the `iodd` feature, the one part that allocates, on `helmsman_iec::xml`) reads a device's IODD file for its vendor and device id and the layout of its Process Data by name (records, arrays, simple types, conditional layouts). `no_std`, no allocation and no dependencies without `iodd`. A master of our own for the edge node (Nick, 2026-11-14); the node's `iolink` device line and the P4's transceiver driver follow (TODO.md `iolink-node`). | built: against its own simulated device (startup at each rate, the specification's times, loss and return, a line that drops, cuts, flips and invents octets as a property), the IODD reader against the IO-Link Community's 22 example files (fetched, not committed); no transceiver and no real device yet (`iolink-transceiver`). Not built: ISDUs, Events, the interleaved mode, legacy devices, SIO |
 | `helmsman-dhcp` | A DHCP (IPv4) and BOOTP server for the box's own device network, as bytes and a state machine without I/O (every call takes `now`): the message (RFC 2131, options per RFC 2132 and RFC 3396, BOOTP's 300-octet minimum per RFC 1542), a server that keeps one address per Ethernet address (reservations, the address held before, the one asked for, the pool; a running lease is never taken away), the lease file, and `guard` (a probe DISCOVER, and whether a reply came from another server). `no_std + alloc`, no dependencies. The box runs it with `--dhcp IFACE` (helmsman-plc `dhcp`: the sockets tied to that interface, the probe before serving, the lease file in `<state-dir>/dhcp/leases`, `GET /api/dhcp`). | built: against its own tests and property tests, and the box service on loopback; no device yet |
 | `helmsman-l2` | Raw Ethernet frames of one EtherType on one interface: a BPF device on macOS, a packet socket on Linux; also an interface's IPv4 address and mask (`ipv4_net`) and a UDP socket tied to one interface (`bind_to_interface`: `IP_BOUND_IF`, `SO_BINDTODEVICE`), for the box's DHCP server. The one crate with `unsafe` (libc calls); everything else forbids it. | built: compiled for both, the BPF path not yet run (needs `/dev/bpf*` access) |
 | `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
@@ -886,6 +888,60 @@ conversation per instruction (a retry continues it); the change is saved
 through `PUT .../files/{f}` with `page`, and Undo is the box's restore.
 A proposal the box's agent stores instead is offered for review and
 nothing is written.
+
+## Simulated plant (`helmsman-sim`, built in the page)
+
+A project's `plant.sim` (`helmsman_project::PLANT`, never built or
+deployed) lists the machine's devices, one a line, `KIND NAME key=value`
+(`text.rs`; each kind's keys, roles and defaults in `Kind::keys`, which
+the popup reads too), and a `mode INPUT WORD [VALUE]` line for each input
+that is not normal. `Plant::step(dt_ms, read)` runs once a scan before
+the program reads its inputs (`Session::run_plant`, ahead of `feed`):
+`read` gives the outputs the last scan left and the panel's values of
+hand-set inputs, every device moves on by the scan on its own millisecond
+clock (a `slow` input's device by a fraction of it), sensors read the
+devices after them, and each input it drives comes back through its mode
+as a `Feed`. `Session` puts the value into the input as its type holds it
+(rounded, held inside an integer's range; TIME in seconds) and the `ok`
+into `NAME_ok` when the program has that input.
+
+- **Physics.** A heater is a first-order lag solved exactly per step
+  (the step size does not move where it gets); a tank integrates its net
+  rate inside 0..max; a motor and a valve slew linearly at their ramp and
+  travel; an eye counts belt time. Sources are functions of their clock,
+  but the walk, which steps at its interval with the seeded generator.
+- **Modes.** Stuck holds the value given or the one it had; drift adds
+  rate × time since it began; noise adds a seeded uniform ± size; over
+  and under go a tenth of the span past the input's range
+  (`Plant::range`); chatter randomises a BOOL for its time after each
+  change; absent gives no value and `ok` FALSE. As on a box (`Link::run`
+  marks a lost device's inputs missing, `runtime::set_inputs` then holds
+  the module, outputs safe), an absent input holds the program
+  (`Session::held`, `spec::Scanned::hold`: no scan, outputs zero) unless
+  the program declares the BOOL input `X_ok`; then it runs on, `X` at its
+  last value. On the box `X_OK` binds to no signal of its own
+  (`signals::bind`, `PortBinding::ok`): it reads whether `X` has a value,
+  and a watched `X` gone missing no longer holds the module
+  (`signals::watched`).
+- **Seeded.** `seed N` (1 by default) fixes the noise, chatter and walk:
+  a run is the same run every time, so a requirement test of a fault is
+  deterministic.
+- **Requirement tests** run against it too (`helmsman_sim::iec`): the
+  runner (`spec::run_with`) calls a `spec::Machine` each scan after the
+  test has driven its inputs and before the program runs; `TestPlant`
+  steps the plant and sets the inputs it drives. Every input starts
+  normal; a test sets a mode with outputs named after the input
+  (`X_absent`, `X_stuck` / `X_stuck_at`, `X_over`, `X_under`,
+  `X_drift`, `X_noise`, `X_slow`, `X_chatter`, found on the first
+  scan). A test-driven input stays the test's while normal; faulted, the
+  plant takes it from the test's value. The page (`verify`,
+  `playground_view::run_tests`) and the box (`project::check`, the
+  requirements API) run the same machine, so a test means the same in
+  both.
+- **Edits** carry: a device of the same name and kind keeps its state,
+  the clock runs on (`Plant::carried`); a cold restart starts the plant
+  over. A line it cannot take, and a port the program has no variable
+  for, are warnings on `plant.sim` in the page's diagnostics.
 
 ## Sim replay (`sim-replay`, built)
 
@@ -1944,7 +2000,21 @@ in `relay_usage`; the box treats it as a label.
   `check_module` (`POST /api/proposals/check`), `simulate_module`
   (`POST /api/proposals/replay`), `propose_change` (`POST /api/proposals`,
   only for a draft that checks clean and has been simulated; param changes
-  as param proposals). A draft reaches the proposal list only when
+  as param proposals), and two reads of a device's own configuration
+  (`GET /api/devices/config`, `GET /api/devices/{id}/config`):
+  `list_device_configs` (which devices have configuration, and their
+  configurator) and `read_device_config` (the facts: firmware,
+  communication watchdog, each output's safe value and power-on state,
+  EtherNet/IP and RESTful on or off; whether a snapshot exists and the
+  drift from it; whether a console password is stored, as a yes or no). A
+  device without configuration is answered "this device has no
+  configuration", an unknown id with a refusal. The result carries an
+  allow-list of keys and drops any key that looks like a secret, a second
+  lock behind the box view, which has no password field; the password
+  reaches no result, description, context or log. The tools say plainly
+  that changes are the engineer's, in the Devices tab; the agent has no
+  set, restart, import, snapshot or password tool, and explain mode runs
+  both. A draft reaches the proposal list only when
   proposed, so the agent iterates on checker and simulator results before
   a human sees anything. Every input is parsed strictly and validated
   (unknown fields refused); a bad one is answered `INVALID_JSON` unrun.
@@ -2001,12 +2071,14 @@ HTTP from another host is refused (Box API, HTTPS). Sources:
   is refused (403). Every message is one audit entry with source `mcp`,
   and every box API call a tool makes is audited as that route always is,
   also `mcp` (audit entries now carry `source`: `api` or `mcp`).
-- **Tools.** The agent's eleven (`helmsman_agent::tools::NAMES`), by the
+- **Tools.** The agent's seventeen (`helmsman_agent::tools::NAMES`), by the
   same executor, which reaches the box through `tools::Caller`: the chat
   agent's goes over loopback HTTP, MCP's calls the API's handler in
   process and may reach only the reads (the devices and the library
   among them), the read-only network scan (`list_devices`, allowed by
-  Nick 2026-11-05) and the four draft routes (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
+  Nick 2026-11-05), `GET` of a device's configuration
+  (`list_device_configs`, `read_device_config`; no other verb or path
+  under `/api/devices/{id}/config` is reachable) and the four draft routes (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
   stays a person on the canvas. Results are text inside the agent's
   `<box-data>` envelope, never `structuredContent`.
 - **Drafts.** The protocol has no sessions, so drafts are server-minted

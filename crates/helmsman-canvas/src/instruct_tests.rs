@@ -58,7 +58,7 @@ pub(crate) fn st(code: &str) -> String {
 }
 
 /// A Messages API stream whose one text block is `text`.
-fn stream(text: &str) -> String {
+pub(crate) fn stream(text: &str) -> String {
     let ev = |name: &str, data: serde_json::Value| format!("event: {name}\ndata: {data}\n\n");
     [
         ev("message_start", json!({"type":"message_start","message":{"model":"claude-sonnet-5-5","id":"m","type":"message","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}})),
@@ -224,6 +224,7 @@ fn the_record_leads_with_the_instruction_and_is_bounded() {
         asked: String::new(),
         retries: 1,
         asked_scenarios: false,
+        mode: crate::instruct::Mode::Direct,
         attempts: vec![instruct::Attempt {
             asked: "a".into(),
             answer: "b".into(),
@@ -679,4 +680,157 @@ fn opening_another_project_ends_the_run_and_sends_no_retry() {
         Some(LAMP),
         "other is untouched by it"
     );
+}
+
+// ---- progress while the answer streams (2026-11-13) ----
+
+#[test]
+fn the_code_written_so_far_is_the_files_block_and_never_a_scenario() {
+    use crate::instruct::partial_code;
+    assert_eq!(partial_code("Why: x.\n\n"), None, "nothing written yet");
+    assert_eq!(partial_code("Why: x.\n\n```s"), None);
+    assert_eq!(
+        partial_code("Why: x.\n\n```st"),
+        None,
+        "the fence line is not finished"
+    );
+    assert_eq!(partial_code("Why: x.\n\n```st\n"), Some(""));
+    assert_eq!(
+        partial_code("```st\nPROGRAM p\nEND_PRO"),
+        Some("PROGRAM p\nEND_PRO")
+    );
+    assert_eq!(
+        partial_code("```st\nPROGRAM p\n`"),
+        Some("PROGRAM p\n"),
+        "a closing fence half there"
+    );
+    assert_eq!(
+        partial_code("```st\nPROGRAM p\n```\n\n```st scenario\nPROGRAM t\n"),
+        Some("PROGRAM p\n")
+    );
+    assert_eq!(
+        partial_code("```st scenario\nPROGRAM t\n"),
+        None,
+        "a scenario is not the file"
+    );
+    assert_eq!(
+        partial_code("```st scenario\nPROGRAM t\n```\n```st\nPROGRAM p\n"),
+        Some("PROGRAM p\n")
+    );
+    assert_eq!(
+        partial_code(&st(LAMP)),
+        Some(LAMP),
+        "a whole answer: the whole file"
+    );
+}
+
+#[test]
+fn the_stage_follows_the_answer_order() {
+    use crate::instruct::{Stage, stage, why_line};
+    assert_eq!(stage(false, ""), Stage::Waiting);
+    assert_eq!(stage(true, ""), Stage::Planning, "thinking");
+    assert_eq!(stage(false, "Why: the lamp latc"), Stage::Planning);
+    assert_eq!(why_line("Why: the lamp latc"), None, "a line still coming");
+    assert_eq!(
+        why_line("Why: the lamp latches.\n").as_deref(),
+        Some("the lamp latches.")
+    );
+    assert_eq!(why_line("The lamp.\n"), None, "no Why line");
+    let code = "Why: x.\n\n```st\nPROGRAM p\nEND_PROGRAM\n";
+    assert_eq!(stage(true, code), Stage::Writing(2));
+    let one = format!("{code}```\n\n```st scenario\nPROGRAM t\n");
+    assert_eq!(stage(true, &one), Stage::Checks(1));
+    assert_eq!(
+        stage(true, &format!("{one}```\n```st scenario\n")),
+        Stage::Checks(2)
+    );
+    assert_eq!(
+        stage(true, "I cannot do that: the program has no lamp."),
+        Stage::Planning,
+        "a refusal never claims to write"
+    );
+}
+
+proptest::proptest! {
+    /// The status line never steps back as an answer streams in, cut
+    /// anywhere: it moves from one stage to the next, never between them.
+    #[test]
+    fn the_stage_only_moves_forward(cuts in proptest::collection::vec(0usize..400, 0..12)) {
+        use crate::instruct::stage;
+        let answer = format!("{}\n\n```st scenario\nPROGRAM test_b\nEND_PROGRAM\n```\n", st(LAMP));
+        let mut at: Vec<usize> = cuts.into_iter().map(|c| c.min(answer.len())).filter(|c| answer.is_char_boundary(*c)).collect();
+        at.push(answer.len());
+        at.sort_unstable();
+        let mut last = stage(true, "");
+        for c in at {
+            let now = stage(true, &answer[..c]);
+            proptest::prop_assert!(now >= last, "{last:?} then {now:?} at {c}");
+            last = now;
+        }
+    }
+}
+
+proptest::proptest! {
+    /// What the tab shows only ever grows as the answer streams in, and
+    /// ends as the whole file: a draft never jumps back or flickers.
+    #[test]
+    fn the_draft_only_grows_as_the_answer_streams(
+        code in "([A-Za-z0-9 :=;()*]{0,20}\n){0,12}",
+        cuts in proptest::collection::vec(0usize..400, 0..30),
+    ) {
+        use crate::instruct::partial_code;
+        let answer = st(&code);
+        let mut ends: Vec<usize> = cuts.into_iter().filter(|&c| c <= answer.len()).collect();
+        ends.push(answer.len());
+        ends.sort_unstable();
+        let mut before: Option<String> = None;
+        for end in ends {
+            let now = partial_code(&answer[..end]).map(str::to_string);
+            if let Some(b) = &before {
+                let n = now.clone().unwrap_or_default();
+                proptest::prop_assert!(n.starts_with(b.as_str()), "{b:?} then {n:?}");
+            }
+            if now.is_some() {
+                before = now;
+            }
+        }
+        proptest::prop_assert_eq!(before.as_deref(), Some(code.as_str()));
+    }
+}
+
+/// Nick, 2026-11-13: "give it a quick idea of how long it might take in
+/// seconds". About 6 s and a quarter second a line, rounded up to 5.
+#[test]
+fn the_estimate_is_a_range_that_grows_with_the_file_and_the_clock_says_when_it_is_over() {
+    use crate::instruct::{clock, estimate_secs};
+    assert_eq!(estimate_secs(Some(0)), (5, 25));
+    assert_eq!(estimate_secs(Some(9)), (5, 30), "LAMP");
+    assert_eq!(estimate_secs(Some(22)), (5, 45), "traffic");
+    assert_eq!(estimate_secs(Some(200)), (35, 200));
+    assert_eq!(
+        estimate_secs(Some(100_000)),
+        (60, 300),
+        "never more than 5 minutes"
+    );
+    assert_eq!(estimate_secs(None), (10, 55), "a new project");
+    // The free chat's whole instructions on 2026-11-14, by the lines of
+    // the file each changed: every one inside its range.
+    for (lines, took) in [
+        (Some(9), 11),
+        (Some(9), 26),
+        (Some(9), 17),
+        (Some(9), 11),
+        (None, 14),
+        (None, 22),
+    ] {
+        let (least, most) = estimate_secs(lines);
+        assert!(
+            (least..=most).contains(&took),
+            "{took} s outside {least} to {most} s"
+        );
+    }
+    assert_eq!(clock(4, Some((5, 30))), "4 s · takes 5 to 30 s");
+    assert_eq!(clock(30, Some((5, 30))), "30 s · takes 5 to 30 s");
+    assert_eq!(clock(41, Some((5, 30))), "41 s · longer than the usual 30 s");
+    assert_eq!(clock(3, None), "3 s");
 }

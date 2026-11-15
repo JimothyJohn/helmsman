@@ -539,6 +539,10 @@ pub struct Answer {
     text_blocks: Vec<u64>,
     /// Bytes past [`MAX_ANSWER`] were dropped.
     pub cut: bool,
+    /// The model has begun thinking: the Agent tab says it is planning
+    /// (Nick, 2026-11-14: the thoughts themselves flickered past too fast
+    /// to read, so only the stage shows).
+    pub thinking: bool,
 }
 
 impl Default for Answer {
@@ -550,6 +554,7 @@ impl Default for Answer {
             model: None,
             text_blocks: Vec::new(),
             cut: false,
+            thinking: false,
         }
     }
 }
@@ -560,8 +565,19 @@ impl Answer {
         matches!(self.phase, Phase::Waiting | Phase::Streaming)
     }
 
+    /// It ended because it ran out of room (the output cap or the
+    /// context window), not because it was finished.
+    #[must_use]
+    pub fn ran_out(&self) -> bool {
+        matches!(
+            self.stop_reason.as_deref(),
+            Some("max_tokens" | "model_context_window_exceeded")
+        )
+    }
+
     /// Applies one event. Unknown events and fields are ignored (the API
-    /// adds them over time); `ping` and thinking deltas show nothing.
+    /// adds them over time); `ping` shows nothing, and a thinking delta
+    /// only sets [`Self::thinking`].
     pub fn apply(&mut self, e: &Event) {
         if !self.running() {
             return;
@@ -590,6 +606,8 @@ impl Answer {
                     && let Some(t) = data["delta"]["text"].as_str()
                 {
                     self.push_text(t);
+                } else if data["delta"]["type"] == "thinking_delta" {
+                    self.thinking = true;
                 }
             }
             "message_delta" => {
@@ -603,7 +621,7 @@ impl Answer {
                         "Claude declined to answer this one. Try rephrasing the question.".into(),
                     ),
                     Some("max_tokens" | "model_context_window_exceeded") => Phase::Failed(
-                        "the answer was cut off: it ran out of room before it was finished".into(),
+                        "the answer ran out of room before the code was finished. A smaller step fits: split the change in two, or ask for one part first".into(),
                     ),
                     _ => Phase::Done,
                 };
@@ -927,6 +945,7 @@ END_PROGRAM
 - Before each check, write down which inputs your scenario has on at that n, and check only what the program should do for exactly those inputs: to check a combination (a and b both on), make the input windows overlap at that n.
 - What the scenarios prove: test what was asked, nothing more, with two or three checks at fixed scans, and never weaken a check to make the code pass. When the instruction changes what the file does, at least one scenario must fail on the file as it is now and pass on yours; the page runs them against the old file to see. If the change keeps what the file does (a rename, a tidy of the declarations, moving code into a FUNCTION_BLOCK or FUNCTION), put a line `Unchanged behaviour: ` and one plain sentence why right after the Why line; then the scenarios need not fail on the old file, but every requirement test and scenario must still pass.
 - Before anything is written, the page takes your code into a copy of the project, adds your scenarios, compiles it, and runs your scenarios and the project's own requirement tests. If anything fails it sends you what failed; then answer again in full: the Why line, the whole file and its scenarios. Only an answer that passes is written into the file, and every scenario that passes is kept with the project as a requirement test.
+- Simulated plant: when <io_devices> lists a plant.sim, the simulation and every scenario run the program against its devices: a heater, tank, motor, valve or eye moves the inputs it drives from the outputs it reads (`heater oven heat=heat_on temp=temp_c` heats temp_c while heat_on), so a scenario need not drive those inputs; it waits for the plant (a TON) and checks the outputs. A scenario makes an input X misbehave by declaring and setting VAR_OUTPUTs named after it: `X_absent : BOOL` (the device is lost: as on the box, the program is held with its outputs off unless it declares the BOOL input X_ok; then it runs on, X at its last value and X_ok FALSE), `X_stuck : BOOL` (with `X_stuck_at` the value), `X_over : BOOL`, `X_under : BOOL` (past its range), `X_drift : REAL` (a second), `X_noise : REAL`, `X_slow : REAL` (times slower), `X_chatter : TIME`, each in effect while TRUE or not 0. Every input starts normal in a scenario. When asked to handle a lost or faulty device, declare X_ok : BOOL as an input and test the fault this way.
 - <requirement_tests> holds the project's requirement tests, each under its file name. Every one must still pass with your code. When the instruction changes behaviour one of them checks, replace that test: send a scenario in a block marked ```st scenario replaces test_<name> (its name as listed) that states the new requirement and checks it. Replace only a test the instruction changes; never replace one to get past a failure the instruction does not ask for. The page keeps a test that still passes with your code, and refuses a replacement of it. Never mark a scenario as replacing a test that is not listed there; with none listed, no scenario replaces anything.
 - <earlier_instructions> lists the last instructions already carried out on this file, oldest first. The file does them now; keep them working unless the new instruction changes them. Words like "it", "that" or "faster" in the new instruction refer to them.
 - If the instruction cannot be done in this dialect, or you need one fact you cannot find in the file, send no code: one or two plain sentences that say why, or the one question to answer. They are shown to the engineer as they are.

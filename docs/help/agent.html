@@ -66,14 +66,34 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
 <nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="the-agent">The Agent</h1>
-<p>The Agent is the way you program by describing the machine. Open the
-<strong>Agent</strong> tab in the side panel (<kbd>Alt</kbd>
-<kbd>Shift</kbd> <kbd>3</kbd>, then the tab), type what the open
-Structured Text file should do, and press <strong>Send</strong>, the
-yellow paper plane (or <kbd>Enter</kbd>). The file is updated in place
-and the editor shows it; there is no conversation to read through.</p>
+<p>The Agent is the way you program by describing the machine. The page
+opens on the <strong>Agent</strong> tab, the first in the left pane:
+type what the open Structured Text file should do, and press
+<strong>Send</strong>, the yellow paper plane (or <kbd>Enter</kbd>). The
+file is updated in place and the editor shows it; there is no
+conversation to read through.</p>
 <img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
 
+<p>While it works, the tab shows how long the instruction has been
+running and the range it takes for a file of that size, from the least
+to the usual most (5 to 30 seconds for a short file, a few minutes for a
+long one). The time includes any second try, so it is the whole wait.
+The tab also shows which step it is at: sending, planning the change,
+writing the file, then writing the checks. Once the Agent has said what
+the change does, that sentence shows under the step, and the code shows
+as it is written, under the words "Draft, checked before it is written".
+The Code tab shows the same draft in place of the file. The file itself
+changes only once the draft compiles and its checks pass; Stop, or a
+draft that fails, leaves it as it was.</p>
+<p>A change too big for one answer goes in steps. A long instruction,
+one in several parts or one on a long file is planned first, and so is
+any change whose answer ran out of room. The tab lists the steps in
+plain words and starts on the first at once; Stop drops them and leaves
+the file as it was. Each step is checked like any answer, on a copy, and
+builds on the steps before it. The file changes once, when every step
+has passed, as one version in History. A step that fails its checks
+pauses the plan with what went wrong: Try this step again, or Stop to
+leave the file as it was.</p>
 <p>An instruction can be a new behaviour ("the lamp latches until stop
 is pressed"), a change ("add a two-second delay before the belt starts")
 or a fix for the errors under the editor. When the Agent is done, the
@@ -83,7 +103,11 @@ example:</p>
 <p>Updated lamp.st: 2 scenarios passed, kept as tests. Why: the lamp now
 latches until stop is pressed.</p>
 </blockquote>
-<p>Nothing runs until you deploy it, as with any edit of your own.</p>
+<p>On a box nothing runs until you deploy it, as with any edit of your
+own. In the simulation the changed program is loaded stopped, with every
+variable, timer and output back at its start, so Run starts it from
+scratch. To have it run at once, clear "Stop and reset after a change"
+in the Agent tab; the choice is remembered in this browser.</p>
 <p>What the change did is marked until your next edit. In the code,
 lines it added are on a green ground and a red rule stands where it
 removed lines (point at the rule to read them). On the diagram, blocks
@@ -129,6 +153,12 @@ revision, so the version before the change is always there.</p>
 file back as it was before the last change (a new revision; the change
 stays in History). It is offered while the file is still as the Agent
 left it; after an edit of your own, go back through History instead.</p>
+<p>In the simulation the arrows beside Send take Undo's place: the left
+arrow steps back one revision, the right arrow forward one, as far as
+the first revision and the newest. Each revision shown runs at once,
+marked green and red with what it changed, and its tooltip names the
+instruction behind it. Saving keeps the version shown; an edit of your
+own puts the arrows away.</p>
 <h2 id="follow-ups">Follow-ups</h2>
 <p>Each instruction goes to the Agent with the whole file and the last
 five instructions carried out on that file, read from History. So "now

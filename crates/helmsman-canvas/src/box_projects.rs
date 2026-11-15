@@ -209,6 +209,7 @@ impl PReq {
 /// A revision as the box lists it.
 fn revision_row(j: &Json) -> Option<crate::history_ui::RevisionRow> {
     Some(crate::history_ui::RevisionRow {
+        about: None,
         n: u32::try_from(j["n"].as_u64()?).ok()?,
         at_ms: j["at_ms"].as_u64().unwrap_or(0),
         by: j["by"].as_str().unwrap_or("?").to_string(),

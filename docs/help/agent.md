@@ -1,12 +1,34 @@
 # The Agent
 
-The Agent is the way you program by describing the machine. Open the
-**Agent** tab in the side panel (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>, then the
-tab), type what the open Structured Text file should do, and press
+The Agent is the way you program by describing the machine. The page
+opens on the **Agent** tab, the first in the left pane: type what the open
+Structured Text file should do, and press
 **Send**, the yellow paper plane (or <kbd>Enter</kbd>). The file is updated in place and the editor shows it; there is
 no conversation to read through.
 
 <img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
+
+While it works, the tab shows how long the instruction has been running
+and the range it takes for a file of that size, from the least to the
+usual most (5 to 30 seconds for a short file, a few minutes for a long
+one). The time includes any second try, so it is the whole wait. The tab
+also shows which step it is at: sending, planning the change, writing
+the file, then writing the checks. Once the
+Agent has said what the change does, that sentence shows under the step,
+and the code shows as it is written, under the words "Draft, checked
+before it is written". The Code tab shows the same draft in place
+of the file. The file itself changes only once the draft compiles and its
+checks pass; Stop, or a draft that fails, leaves it as it was.
+
+A change too big for one answer goes in steps. A long instruction, one
+in several parts or one on a long file is planned first, and so is any
+change whose answer ran out of room. The tab lists the steps in plain
+words and starts on the first at once; Stop drops them and leaves the
+file as it was. Each step is checked like any answer, on a copy, and
+builds on the steps before it. The file changes once, when every step
+has passed, as one version in History. A step that fails its checks
+pauses the plan with what went wrong: Try this step again, or Stop to
+leave the file as it was.
 
 An instruction can be a new behaviour ("the lamp latches until stop is
 pressed"), a change ("add a two-second delay before the belt starts") or
@@ -17,7 +39,11 @@ example:
 > Updated lamp.st: 2 scenarios passed, kept as tests.
 > Why: the lamp now latches until stop is pressed.
 
-Nothing runs until you deploy it, as with any edit of your own.
+On a box nothing runs until you deploy it, as with any edit of your own.
+In the simulation the changed program is loaded stopped, with every
+variable, timer and output back at its start, so Run starts it from
+scratch. To have it run at once, clear "Stop and reset after a change"
+in the Agent tab; the choice is remembered in this browser.
 
 What the change did is marked until your next edit. In the code, lines
 it added are on a green ground and a red rule stands where it removed
@@ -72,6 +98,13 @@ before the change is always there.
 change (a new revision; the change stays in History). It is offered while
 the file is still as the Agent left it; after an edit of your own, go
 back through History instead.
+
+In the simulation the arrows beside Send take Undo's place: the left
+arrow steps back one revision, the right arrow forward one, as far as
+the first revision and the newest. Each revision shown runs at once,
+marked green and red with what it changed, and its tooltip names the
+instruction behind it. Saving keeps the version shown; an edit of your
+own puts the arrows away.
 
 ## Follow-ups
 

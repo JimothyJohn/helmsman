@@ -60,6 +60,19 @@ diagram stays up; the page keeps trying. "Simulate in this browser"
 offers to run the program in the page instead. A page that never reached
 a box at its address goes to the simulation by itself and says so.
 
+## A device goes away
+
+When the box loses a device (unplugged, powered off, off the network),
+every program that reads one of its inputs is **held**: it stops
+scanning and its outputs go to their safe values until the device is
+back. A program can handle the loss itself instead: for an input
+`temp_c`, declare a BOOL input `temp_c_ok`. It needs no signal in the I/O
+map; it reads TRUE while `temp_c` has a value and FALSE while its device
+is lost, and the program keeps running with `temp_c` at its last value.
+Every input the program reads from that device needs its own `_ok` for
+the program to run on. The simulation does the same (see Simulation,
+Devices), so the handling can be tested before it reaches the box.
+
 ## Your work survives a reload
 
 This browser keeps what you had in front of you: the project and file

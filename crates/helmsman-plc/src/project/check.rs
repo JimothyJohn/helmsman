@@ -34,7 +34,8 @@ pub fn test_settings(shape: &Shape) -> spec::Settings {
 /// simulation, in file order.
 #[must_use]
 pub fn run_tests(files: &Files, settings: spec::Settings) -> Vec<spec::Verdict> {
-    spec::run_all(&spec::plan(files.st()), settings)
+    let plant = files.get(helmsman_project::PLANT).unwrap_or("");
+    helmsman_sim::iec::run_all(&spec::plan(files.st()), settings, plant)
 }
 
 pub const USAGE: &str = "\

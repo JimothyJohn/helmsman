@@ -535,7 +535,7 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
         c.failures.push(format!("The code does not compile: {first}"));
         return c;
     }
-    for v in spec::run_all(&plan, settings) {
+    for v in helmsman_sim::iec::run_all(&plan, settings, plant_of(&all)) {
         if let Some(s) = scen.iter().find(|s| s.file == v.file) {
             c.scenarios.push(Ran {
                 file: s.file.clone(),
@@ -595,6 +595,12 @@ fn bare(text: &str) -> String {
 /// whose test still passes, or that the project does not have, is dropped
 /// and the old test stays, with the reason in `failures`. Returns the
 /// scenarios left and what was replaced.
+/// The project's `plant.sim`, empty without one: what its tests run
+/// against.
+fn plant_of(files: &Files) -> &str {
+    files.get(helmsman_project::PLANT).map_or("", String::as_str)
+}
+
 fn contradicted(
     landed: &Files,
     scen: Vec<Scenario>,
@@ -621,7 +627,7 @@ fn contradicted(
             kept.push(s);
             continue;
         };
-        let v = spec::run(&now.main, old, settings);
+        let v = helmsman_sim::iec::run(&now.main, old, settings, plant_of(landed));
         if v.red() || v.untested() {
             replaced.push(Replaced {
                 file: s.file.clone(),
@@ -665,7 +671,7 @@ fn indistinct(
             .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
             .map(|(n, t)| (n.as_str(), t.as_str())),
     );
-    let ran: Vec<_> = spec::run_all(&plan, settings)
+    let ran: Vec<_> = helmsman_sim::iec::run_all(&plan, settings, plant_of(&before))
         .into_iter()
         .filter(|v| scen.iter().any(|s| s.file == v.file))
         .collect();

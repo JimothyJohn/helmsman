@@ -375,6 +375,10 @@ pub fn apply(ctx: &egui::Context, light: bool) {
         ctx.style_mut_of(egui::Theme::Dark, |s| style(s, true));
         ctx.style_mut_of(egui::Theme::Light, |s| style(s, false));
         ctx.data_mut(|d| d.insert_temp(id, true));
+        // The fonts take effect on the next pass: lay the first frame out
+        // again with them, or it is drawn at the default sizes and every
+        // row moves on the second (a click aimed by the first missed).
+        ctx.request_discard("fonts installed");
     }
     // Nick, 2026-11-05: a title or a row is not text to select, and a
     // control shows the finger. Labels are not selectable (the Agent's
@@ -420,6 +424,22 @@ pub fn near_pointer(ctx: &egui::Context, key: &str) -> egui::Modal {
         .fixed_pos(at + egui::vec2(0.0, 14.0))
         .constrain(true);
     egui::Modal::new(egui::Id::unique(key)).area(area)
+}
+
+/// Whether a modal that holds something typed should shut: Escape alone.
+/// A click on the dimmed page behind it does nothing (Nick, 2026-11-14: a
+/// stray click on coming back to the page shut the "Name this program"
+/// question and dropped the Agent's answer with it). A question with
+/// nothing to lose (a delete to confirm, a revision on view) still takes
+/// a click outside as no, by `should_close`.
+#[must_use]
+pub fn escaped<T>(m: &egui::ModalResponse<T>) -> bool {
+    m.response.should_close()
+        || (m.is_top_modal
+            && !m.any_popup_open
+            && m.response
+                .ctx
+                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)))
 }
 
 /// Whether a popup that is not a modal (a window, a panel under a

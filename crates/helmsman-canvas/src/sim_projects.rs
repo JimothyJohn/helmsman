@@ -100,6 +100,12 @@ impl SimRevision {
             by: self.by.clone(),
             what: self.what.clone(),
             page: self.page.is_some(),
+            // The Agent's reason is the change in a few words.
+            about: self.page.as_deref().and_then(|p| {
+                p.lines()
+                    .find_map(|l| l.strip_prefix("Why: "))
+                    .map(str::to_string)
+            }),
         }
     }
 
@@ -476,7 +482,18 @@ impl SimProjects {
     /// is, several each under a `(* file NAME *)` line.
     #[must_use]
     pub fn build_src(&self) -> String {
-        let st: Vec<(&String, &String)> = self.built_files().collect();
+        Self::build_src_of(&self.files)
+    }
+
+    /// A build's source from any set of files (a revision's): its `.st`
+    /// files (tests aside), one as it is, several each under a
+    /// `(* file NAME *)` line.
+    #[must_use]
+    pub fn build_src_of(files: &BTreeMap<String, String>) -> String {
+        let st: Vec<(&String, &String)> = files
+            .iter()
+            .filter(|(n, _)| file_name(n) == Some(FileKind::St) && !helmsman_iec::spec::is_test(n))
+            .collect();
         if let [(_, text)] = st.as_slice() {
             return (*text).clone();
         }

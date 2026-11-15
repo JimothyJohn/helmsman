@@ -105,7 +105,7 @@ impl DevicesUi {
             });
         });
         chrome.hit("device form", m.response.rect);
-        if done || m.should_close() {
+        if done || crate::theme::escaped(&m) {
             self.adding = None;
         } else {
             self.adding = Some(d);
@@ -200,7 +200,7 @@ impl DevicesUi {
             });
         });
         chrome.hit("quick form", m.response.rect);
-        if done || m.should_close() {
+        if done || crate::theme::escaped(&m) {
             self.quick = None;
         } else {
             self.quick = Some(q);
@@ -268,7 +268,7 @@ impl DevicesUi {
             });
         });
         chrome.hit("rename form", m.response.rect);
-        if done || m.should_close() {
+        if done || crate::theme::escaped(&m) {
             self.renaming = None;
             self.rename_plan = None;
         } else {

@@ -88,6 +88,11 @@ mod review_view;
 mod scope;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod scope_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod sim_plant_tests;
+mod sim_popup;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod sim_popup_tests;
 mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
@@ -98,6 +103,9 @@ mod st_hints;
 mod st_syntax;
 mod st_view;
 mod stamp;
+mod steps;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod steps_tests;
 #[cfg(test)]
 mod test_programs;
 mod theme;

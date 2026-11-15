@@ -36,7 +36,7 @@ impl Harness {
 
 #[test]
 fn ctrl_z_in_the_editor_undoes_one_step() {
-    let mut h = Harness::new(App::sim());
+    let mut h = Harness::code();
     h.wait(0.3);
     h.type_in_editor("(*X*)");
     // Past the editor's undo grouping time, so each typing is a step.
@@ -55,7 +55,7 @@ fn ctrl_z_in_the_editor_undoes_one_step() {
 
 #[test]
 fn undo_after_a_file_switch_does_not_bring_the_other_files_text() {
-    let mut h = Harness::new(App::sim());
+    let mut h = Harness::code();
     h.wait(0.3);
     h.type_in_editor("(*AAA*)");
     h.wait(1.5);
@@ -77,7 +77,7 @@ fn undo_after_a_file_switch_does_not_bring_the_other_files_text() {
 
 #[test]
 fn save_and_deploy_do_nothing_on_the_monitor() {
-    let mut h = Harness::new(App::sim());
+    let mut h = Harness::code();
     h.wait(0.3);
     h.type_in_editor("!");
     h.wait(0.6);
@@ -166,7 +166,7 @@ fn galleys(h: &Harness, f: impl Fn(&str) -> bool) -> Vec<std::sync::Arc<eframe::
 /// gutter was laid out at a width the editor does not wrap at.
 #[test]
 fn the_gutter_has_a_row_for_every_row_the_editor_wraps_to() {
-    let mut h = Harness::new(App::sim());
+    let mut h = Harness::code();
     let mut text = String::from("PROGRAM p\n");
     text.extend((0..60).map(|n| format!("(* {} *)\n", "w".repeat(14 + n))));
     text.push_str("END_PROGRAM\n");
@@ -200,7 +200,7 @@ fn the_gutter_has_a_row_for_every_row_the_editor_wraps_to() {
 /// a line. A label wraps as a whole or not at all.
 #[test]
 fn the_code_headers_status_labels_are_not_broken_across_lines() {
-    let mut h = Harness::new(App::sim());
+    let mut h = Harness::code();
     h.wait(0.5);
     {
         let p = &mut h.app.sim.as_mut().unwrap().proj;

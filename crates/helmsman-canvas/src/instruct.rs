@@ -124,6 +124,62 @@ pub struct Run {
     /// A retry asked for scenarios already.
     pub asked_scenarios: bool,
     pub attempts: Vec<Attempt>,
+    /// In one go, planning, or in steps ([`crate::steps`]).
+    pub mode: Mode,
+}
+
+/// How an instruction is carried out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// One answer, the whole change.
+    #[default]
+    Direct,
+    /// The request in flight asks for a plan; `cut_off` when an answer in
+    /// one go ran out of room.
+    Planning { cut_off: bool },
+    /// A plan in steps.
+    Steps(Box<Plan>),
+}
+
+/// A change in steps ([`crate::steps`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plan {
+    pub steps: Vec<String>,
+    /// Steps checked into [`Self::files`].
+    pub done: usize,
+    pub state: PlanState,
+    /// The working copy: the project as the steps done leave it.
+    pub files: Files,
+    /// The scope the instruction was given in (the steps after the first
+    /// change the file the first wrote).
+    pub scope: Scope,
+    /// The file the steps write, once the first has.
+    pub written: Option<String>,
+    /// The scenarios the steps passed, as test files (name, text).
+    pub tests: Vec<(String, String)>,
+    /// Each step's one-sentence reason.
+    pub whys: Vec<String>,
+    /// How many scenarios the steps passed.
+    pub scenarios: usize,
+    /// The engineer's earlier instructions it went with.
+    pub diagnostics: Vec<String>,
+    /// Splits the plan made by itself since a step last passed or the
+    /// engineer last started it ([`crate::steps::MAX_SPLITS`]).
+    pub splits: u8,
+}
+
+/// Where a plan is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlanState {
+    /// Its steps are being asked for, one after the other.
+    Running,
+    /// The next step ran out of room: the request in flight asks the
+    /// Agent for it as smaller steps.
+    Splitting,
+    /// A step failed its checks, or ran out of room and could not be
+    /// split: what went wrong and what to do. The engineer tries it again
+    /// or stops.
+    Paused(Vec<String>),
 }
 
 impl Run {
@@ -183,6 +239,8 @@ pub enum Step {
     Apply(Apply),
     /// Finished; [`Instruct::outcome`] says how.
     Done,
+    /// A plan waits for the engineer ([`Instruct::approve`], or Stop).
+    Wait,
 }
 
 /// How the last instruction came out.
@@ -279,12 +337,26 @@ impl Instruct {
     /// # Errors
     /// [`Self::refusal`].
     pub fn start(&mut self, env: &Env<'_>, earlier: &[String]) -> Result<Ask, String> {
+        self.start_with(env, earlier, false)
+    }
+
+    /// [`Self::start`]; `plan` asks for a plan in steps first
+    /// ([`crate::steps::big_ask`]).
+    ///
+    /// # Errors
+    /// [`Self::refusal`].
+    pub fn start_with(&mut self, env: &Env<'_>, earlier: &[String], plan: bool) -> Result<Ask, String> {
         if let Some(why) = self.refusal() {
             return Err(why);
         }
         let instruction = std::mem::take(&mut self.draft).trim().to_string();
         let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
-        let message = env.message(&instruction, &earlier);
+        let text = if plan {
+            crate::steps::plan_request(&instruction, false)
+        } else {
+            instruction.clone()
+        };
+        let message = env.message(&text, &earlier);
         self.outcome = None;
         self.run = Some(Run {
             instruction: instruction.clone(),
@@ -295,9 +367,14 @@ impl Instruct {
             retries: 0,
             asked_scenarios: false,
             attempts: Vec::new(),
+            mode: if plan {
+                Mode::Planning { cut_off: false }
+            } else {
+                Mode::Direct
+            },
         });
         Ok(Ask {
-            text: instruction,
+            text,
             message,
             context: Vec::new(),
             retry: false,
@@ -309,9 +386,206 @@ impl Instruct {
     /// while it fails and retries are left; else written when green, or
     /// refused with why.
     pub fn answered(&mut self, answer: &str, env: &Env<'_>) -> Step {
-        let Some(mut run) = self.run.take() else {
+        let Some(run) = self.run.take() else {
             return Step::Done;
         };
+        match run.mode {
+            Mode::Direct => self.checked(run, answer, env),
+            Mode::Planning { .. } => self.planned(run, answer, env),
+            Mode::Steps(ref plan) if plan.state == PlanState::Splitting => self.split(run, answer, env),
+            Mode::Steps(ref plan) => {
+                let files = plan.files.clone();
+                let source = crate::sim_projects::SimProjects::build_src_of(&files);
+                let diagnostics = if plan.done == 0 {
+                    plan.diagnostics.clone()
+                } else {
+                    Vec::new()
+                };
+                let env = Env {
+                    scope: run.scope.clone(),
+                    files: &files,
+                    source: &source,
+                    diagnostics: &diagnostics,
+                    ..env.clone()
+                };
+                self.checked(run, answer, &env)
+            }
+        }
+    }
+
+    /// A plan came back: one step runs as the instruction itself; more
+    /// run one after the other from the first, listed in the tab with
+    /// Stop beside them (Nick, 2026-11-14: "just go", it is a simulation
+    /// and nothing is written until every step passes); none (code after
+    /// all, or words) is read as an answer in one go.
+    fn planned(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
+        let steps = crate::steps::parse(answer);
+        if steps.len() < 2 {
+            let cut_off = matches!(run.mode, Mode::Planning { cut_off: true });
+            run.mode = Mode::Direct;
+            if steps.is_empty() || cut_off {
+                if steps.is_empty() {
+                    return self.checked(run, answer, env);
+                }
+                // It ran out of room in one go and the Agent still sees
+                // one step: nothing more to split.
+                self.run = Some(run);
+                self.failed("the change ran out of room in one answer, and the Agent could not split it into steps. Ask for one part first");
+                return Step::Done;
+            }
+            let message = env.message(&run.instruction, &run.earlier);
+            run.asked.clone_from(&message);
+            let text = run.instruction.clone();
+            self.run = Some(run);
+            return Step::Ask(Ask {
+                text,
+                message,
+                context: Vec::new(),
+                retry: false,
+            });
+        }
+        run.mode = Mode::Steps(Box::new(Plan {
+            steps,
+            done: 0,
+            state: PlanState::Running,
+            files: env.files.clone(),
+            scope: run.scope.clone(),
+            written: None,
+            tests: Vec::new(),
+            whys: Vec::new(),
+            scenarios: 0,
+            diagnostics: env.diagnostics.to_vec(),
+            splits: 0,
+        }));
+        Step::Ask(Self::step_ask(self.run.insert(run), env))
+    }
+
+    /// The paused plan: try its step again. `None` when no plan is
+    /// paused.
+    pub fn approve(&mut self, env: &Env<'_>) -> Option<Ask> {
+        let run = self.run.as_mut()?;
+        let Mode::Steps(plan) = &mut run.mode else {
+            return None;
+        };
+        if matches!(plan.state, PlanState::Running | PlanState::Splitting) {
+            return None;
+        }
+        plan.state = PlanState::Running;
+        plan.splits = 0;
+        run.retries = 0;
+        run.asked_scenarios = false;
+        run.attempts.clear();
+        Some(Self::step_ask(run, env))
+    }
+
+    /// The request for the plan's next step, on its working copy.
+    fn step_ask(run: &mut Run, env: &Env<'_>) -> Ask {
+        let Mode::Steps(plan) = &run.mode else {
+            unreachable!("only a plan has steps")
+        };
+        let text = crate::steps::step_request(&run.instruction, &plan.steps, plan.done);
+        Self::plan_ask(run, env, text)
+    }
+
+    /// `text` asked of the Agent on the plan's working copy.
+    fn plan_ask(run: &mut Run, env: &Env<'_>, text: String) -> Ask {
+        let Mode::Steps(plan) = &run.mode else {
+            unreachable!("only a plan has steps")
+        };
+        let source = crate::sim_projects::SimProjects::build_src_of(&plan.files);
+        let diagnostics = if plan.done == 0 {
+            plan.diagnostics.clone()
+        } else {
+            Vec::new()
+        };
+        let env = Env {
+            scope: run.scope.clone(),
+            files: &plan.files,
+            source: &source,
+            diagnostics: &diagnostics,
+            ..env.clone()
+        };
+        let message = env.message(&text, &run.earlier);
+        run.asked.clone_from(&message);
+        Ask {
+            text,
+            message,
+            context: Vec::new(),
+            retry: false,
+        }
+    }
+
+    /// The answer in flight ran out of room. In one go: ask for a plan
+    /// instead. In a step: the plan pauses for the engineer. Planning:
+    /// the instruction ends.
+    pub fn cut_off(&mut self, env: &Env<'_>, why: &str) -> Step {
+        let Some(run) = self.run.as_mut() else {
+            return Step::Done;
+        };
+        match &mut run.mode {
+            Mode::Direct => {
+                run.mode = Mode::Planning { cut_off: true };
+                run.retries = 0;
+                run.asked_scenarios = false;
+                run.attempts.clear();
+                let text = crate::steps::plan_request(&run.instruction, true);
+                let env = Env {
+                    scope: run.scope.clone(),
+                    ..env.clone()
+                };
+                let message = env.message(&text, &run.earlier);
+                run.asked.clone_from(&message);
+                Step::Ask(Ask {
+                    text,
+                    message,
+                    context: Vec::new(),
+                    retry: false,
+                })
+            }
+            Mode::Steps(plan) => {
+                if plan.state == PlanState::Splitting || plan.splits >= crate::steps::MAX_SPLITS {
+                    plan.state = PlanState::Paused(vec![too_big(plan.done)]);
+                    return Step::Wait;
+                }
+                plan.state = PlanState::Splitting;
+                plan.splits += 1;
+                run.retries = 0;
+                run.asked_scenarios = false;
+                run.attempts.clear();
+                let text = crate::steps::split_request(&run.instruction, &plan.steps, plan.done);
+                Step::Ask(Self::plan_ask(run, env, text))
+            }
+            Mode::Planning { .. } => {
+                self.failed(why);
+                Step::Done
+            }
+        }
+    }
+
+    /// The Agent's split of the step that ran out of room: two or more
+    /// smaller steps take its place and the first is asked for; anything
+    /// else pauses the plan.
+    fn split(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
+        let Mode::Steps(plan) = &mut run.mode else {
+            unreachable!("only a plan has steps")
+        };
+        let parts = crate::steps::parse(answer);
+        if parts.len() < 2 {
+            plan.state = PlanState::Paused(vec![too_big(plan.done)]);
+            self.run = Some(run);
+            return Step::Wait;
+        }
+        plan.steps.splice(plan.done..=plan.done, parts);
+        plan.state = PlanState::Running;
+        let ask = Self::step_ask(&mut run, env);
+        self.run = Some(run);
+        Step::Ask(ask)
+    }
+
+    /// One answer checked against `env`: sent back while it fails and
+    /// retries are left, else shown (in steps: kept in the working copy,
+    /// the next step asked, or the plan paused).
+    fn checked(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
         let check = verify::check(&run.scope, env.files, answer, env.settings);
         match verify::next(&check, run.retries, run.asked_scenarios) {
             Next::Retry(text) => {
@@ -348,8 +622,115 @@ impl Instruct {
                     retry: true,
                 })
             }
+            Next::Show if matches!(run.mode, Mode::Steps(_)) => self.step_done(run, answer, &check, env),
             Next::Show => self.show(run, answer, &check, env.files),
         }
+    }
+
+    /// A step's last answer: green goes into the working copy and the next
+    /// step is asked (after the last, the whole change is written); red
+    /// pauses the plan with what failed.
+    fn step_done(&mut self, mut run: Run, answer: &str, check: &Check, env: &Env<'_>) -> Step {
+        let Mode::Steps(mut plan) = std::mem::take(&mut run.mode) else {
+            unreachable!("only a plan has steps")
+        };
+        let landed = if !check.code {
+            Err(vec![match said(answer) {
+                s if s.is_empty() => "The Agent sent no code for this step.".to_string(),
+                s => format!("The Agent sent no code for this step. It says: {s}"),
+            }])
+        } else if check.red() {
+            Err(check.problems())
+        } else {
+            crate::scope::apply(&run.scope, &plan.files, answer).map_err(|r| vec![r.why])
+        };
+        let landed = match landed {
+            Ok(l) => l,
+            Err(problems) => {
+                plan.state = PlanState::Paused(problems);
+                run.mode = Mode::Steps(plan);
+                self.run = Some(run);
+                return Step::Wait;
+            }
+        };
+        let written = run.scope.file().unwrap_or(helmsman_project::MAIN).to_string();
+        if run.scope == Scope::NewProject {
+            plan.files = landed;
+        } else {
+            plan.files.extend(landed);
+        }
+        for (f, t) in &check.add {
+            plan.files.insert(f.clone(), t.clone());
+            plan.tests.retain(|(g, _)| g != f);
+            plan.tests.push((f.clone(), t.clone()));
+        }
+        plan.scenarios += check.scenarios.len();
+        plan.whys.push(reason(answer).unwrap_or_default());
+        plan.written = Some(written.clone());
+        plan.done += 1;
+        plan.splits = 0;
+        run.scope = Scope::File(written.clone());
+        run.retries = 0;
+        run.asked_scenarios = false;
+        run.attempts.clear();
+        if plan.done < plan.steps.len() {
+            run.mode = Mode::Steps(plan);
+            let ask = Self::step_ask(&mut run, env);
+            self.run = Some(run);
+            return Step::Ask(ask);
+        }
+        let Some(text) = plan.files.get(&written).cloned() else {
+            run.mode = Mode::Steps(plan);
+            self.run = Some(run);
+            self.failed("the steps left no file to write");
+            return Step::Done;
+        };
+        let n = plan.steps.len();
+        let mut status = match plan.scenarios {
+            0 => format!("Updated {written} in {n} steps"),
+            1 => format!("Updated {written} in {n} steps: 1 scenario passed, kept as a test"),
+            k => format!("Updated {written} in {n} steps: {k} scenarios passed, kept as tests"),
+        };
+        status.push('.');
+        let why = plan.whys.last().filter(|w| !w.is_empty()).cloned();
+        let mut record = record(&run, &written, why.as_deref(), &status, check, answer);
+        let mut steps = String::from("\nDone in steps, each checked:\n");
+        for (k, s) in plan.steps.iter().enumerate() {
+            let _ = write!(steps, "{}. {}", k + 1, clean(s, MAX_REASON));
+            match plan.whys.get(k).filter(|w| !w.is_empty()) {
+                Some(w) => {
+                    let _ = writeln!(steps, " Why: {w}");
+                }
+                None => steps.push('\n'),
+            }
+        }
+        // After the first lines, which [`recent`] reads back.
+        let at = record
+            .match_indices('\n')
+            .nth(1)
+            .map_or(record.len(), |(i, _)| i + 1);
+        record.insert_str(at, &steps);
+        if record.len() > MAX_RECORD {
+            let mut k = MAX_RECORD;
+            while !record.is_char_boundary(k) {
+                k -= 1;
+            }
+            record.truncate(k);
+        }
+        let apply = Apply {
+            project: run.project.clone(),
+            scope: plan.scope.clone(),
+            file: written,
+            text,
+            tests: plan.tests.clone(),
+            record,
+            status,
+            why,
+            instruction: run.instruction.clone(),
+        };
+        run.mode = Mode::Steps(plan);
+        self.run = Some(run);
+        Step::Apply(apply)
     }
 
     fn show(&mut self, run: Run, answer: &str, check: &Check, files: &Files) -> Step {
@@ -521,6 +902,15 @@ fn sentence(why: &str) -> String {
         _ => w.to_string(),
     };
     format!("{w}.")
+}
+
+/// What a plan says when step `k` (from 0) ran out of room and could not
+/// be split: what happened and the two ways on.
+fn too_big(k: usize) -> String {
+    format!(
+        "Step {} is too big for one answer and the Agent could not split it. Try it again, or stop and ask for this part by itself in a few words.",
+        k + 1
+    )
 }
 
 /// The status line of a green answer for `file`.
@@ -695,8 +1085,10 @@ pub enum Act {
     Send,
     Stop,
     Undo,
-    /// Show this version of the file the Agent changed.
-    Show(crate::agent_marks::Side),
+    /// Run the plan waiting for approval, or try its paused step again.
+    RunSteps,
+    /// Run this revision of the open project (the arrows).
+    Revision(u32),
     /// Open this proposal under Proposals (a box).
     Review(u64),
 }
@@ -713,12 +1105,163 @@ pub struct View {
     /// Proposals already decided (a box), with their status: shown as
     /// decided instead of offered for review.
     pub decided: std::collections::BTreeMap<u64, String>,
-    /// The Agent's change can be swapped Before / After (the playground),
-    /// and the side the file shows; `None`: Undo instead.
-    pub swap: Option<crate::agent_marks::Side>,
+    /// The arrows that step through the open project's revisions after
+    /// an Agent change (the playground); `None`: Undo instead.
+    pub steps: Option<Steps>,
     /// Height the owner draws under the tab, kept free of the box, pt;
     /// `None`: the box is three rows (a tab that scrolls, on a box).
     pub room_below: Option<f32>,
+    /// How the answer under way is coming along, when the owner can see
+    /// it stream (the page); `None`: only the spinner and the words.
+    pub progress: Option<Progress>,
+}
+
+/// Where the arrows go: the revision before and after the one shown,
+/// each with its tip; `None` at that end (the arrow is off).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Steps {
+    pub back: Option<(u32, String)>,
+    pub forward: Option<(u32, String)>,
+}
+
+/// The answer under way, as it streams (Nick, 2026-11-13: "I would love
+/// to see progressive changes being made rather than waiting a long time
+/// assuming something is happening"). Most of the wait is the model
+/// thinking before it writes a word (measured on the free chat: 5.3 of
+/// 7.6 s). The tab shows the time and which [`Stage`] the answer is at,
+/// the answer's one-line reason once it is in, then the code as it is
+/// written, marked as a draft until it is checked. The thinking itself is
+/// not shown (Nick, 2026-11-14: "the flickering through the current
+/// thoughts is too glitchy and not helpful ... only show major updates").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Progress {
+    /// Since the request went, s.
+    pub secs: f64,
+    /// Where the answer is.
+    pub stage: Stage,
+    /// The answer's `Why: ` sentence, once its line is complete.
+    pub why: Option<String>,
+    /// The file's code written so far ([`partial_code`]).
+    pub code: Option<String>,
+    /// The answer is in and checked; the program waits for its name (a
+    /// change to a built-in example becomes a project of its own).
+    pub naming: bool,
+    /// The least and the usual most this instruction takes, s
+    /// ([`estimate_secs`]).
+    pub estimate: Option<(u64, u64)>,
+}
+
+/// How long an instruction takes, s, as (the least, the usual most), each
+/// a multiple of 5 (Nick, 2026-11-14: the single "about 10 s" was passed
+/// about half the time; "it should say DEFINITELY greater than a time").
+/// The clock runs from the instruction through its retries, so the range
+/// is the whole wait. One answer takes about 6 s and a quarter second a
+/// line of the file it changes, 15 s for a new project: the least is
+/// seven tenths of that rounded down (a new project came back in 14 s),
+/// the most three and a half of it rounded up, which holds a retry and a
+/// slow answer. From the free chat's timings: 6 to 9 s for
+/// files of 10 to 25 lines and 19 s for a new project on 2026-11-13; 11,
+/// 11, 14, 17, 22 and 26 s for six ladder rungs on 2026-11-14 (one, one,
+/// one, one, three and two requests).
+#[must_use]
+pub fn estimate_secs(lines: Option<usize>) -> (u64, u64) {
+    #[allow(clippy::cast_precision_loss)]
+    let one = lines.map_or(15.0, |n| 6.0 + 0.25 * n as f64);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let least = ((one * 0.7 / 5.0).floor() as u64 * 5).clamp(5, 60);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let most = ((one * 3.5 / 5.0).ceil() as u64 * 5).clamp(15, 300);
+    (least, most)
+}
+
+/// The clock in the status line: `4 s · takes 5 to 30 s`, and once past
+/// the range `41 s · longer than the usual 30 s`; just `4 s` with no
+/// estimate.
+#[must_use]
+pub fn clock(secs: u64, estimate: Option<(u64, u64)>) -> String {
+    match estimate {
+        Some((least, most)) if secs <= most => format!("{secs} s · takes {least} to {most} s"),
+        Some((_, most)) => format!("{secs} s · longer than the usual {most} s"),
+        None => format!("{secs} s"),
+    }
+}
+
+/// The major steps of an answer, in the order they come; the status line
+/// changes only when the answer moves from one to the next (and as lines
+/// of code are counted).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Stage {
+    /// Sent; nothing back yet.
+    #[default]
+    Waiting,
+    /// The model is thinking, or giving its reason, before any code.
+    Planning,
+    /// The file's code, this many lines so far.
+    Writing(usize),
+    /// The code is written; the scenarios that check it, this many begun.
+    Checks(usize),
+}
+
+/// The [`Stage`] of an answer whose text so far is `text`, `thinking`
+/// when the model has begun to think. The answer's order is the reason,
+/// the code, then its scenarios (`claude::SYSTEM`, [`BOX_RULES`]), so the
+/// stage only moves forward as the text grows (a property test holds it).
+#[must_use]
+pub fn stage(thinking: bool, text: &str) -> Stage {
+    let checks = text.matches("```st scenario").count();
+    match partial_code(text) {
+        Some(_) if checks > 0 => Stage::Checks(checks),
+        Some(code) => Stage::Writing(code.lines().count()),
+        None if thinking || !text.trim().is_empty() => Stage::Planning,
+        None => Stage::Waiting,
+    }
+}
+
+/// The sentence of the answer's `Why: ` line, once that line has ended.
+#[must_use]
+pub fn why_line(text: &str) -> Option<String> {
+    let (line, _) = text.trim_start().split_once('\n')?;
+    let why = line.strip_prefix("Why:")?.trim();
+    (!why.is_empty()).then(|| why.to_string())
+}
+/// How many of the code's last lines the tab shows while it is written.
+pub const DRAFT_LINES: usize = 12;
+
+/// The code of the file's block written so far in an answer that is
+/// still streaming: what follows the first ` ```st ` fence that is not a
+/// scenario, up to its closing fence or the end. A fence line not yet
+/// finished (its newline has not come) gives nothing yet, so a block that
+/// turns out to be a scenario never shows. As the answer grows, what this
+/// returns only grows (a property test holds it).
+#[must_use]
+pub fn partial_code(answer: &str) -> Option<&str> {
+    let mut at = 0;
+    while let Some(k) = answer[at..].find("```st") {
+        let start = at + k;
+        let nl = answer[start..].find('\n')?;
+        let fence = answer[start + 3..start + nl].trim();
+        let body = start + nl + 1;
+        if fence == "st" {
+            let rest = &answer[body..];
+            // The closing fence at the start of a line (the block's first
+            // line too: an empty file), or a part of one at the very end.
+            let end = if rest.starts_with("```") {
+                0
+            } else if let Some(e) = rest.find("\n```") {
+                e + 1
+            } else {
+                let tail = rest.trim_end_matches('`');
+                if tail.len() < rest.len() && (tail.is_empty() || tail.ends_with('\n')) {
+                    tail.len()
+                } else {
+                    rest.len()
+                }
+            };
+            return Some(&rest[..end]);
+        }
+        at = body;
+    }
+    None
 }
 
 /// A chat box where Enter sends and Shift+Enter or Ctrl+Enter starts a new
@@ -857,15 +1400,164 @@ pub fn continue_list(line: &str) -> (String, usize) {
     }
 }
 
+/// The answer under way: a spinner, what it is doing and for how long,
+/// the try when it is a retry; the answer's reason once it is in; once it
+/// writes, the last [`DRAFT_LINES`] of the code as they arrive, under a
+/// word that they are a draft not yet checked.
+fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run, p: &Progress) {
+    use egui::RichText;
+    let t = crate::theme::theme(ui);
+    if p.naming {
+        let r = ui
+            .label(RichText::new("Checked. Name the program to keep it.").color(t.muted))
+            .tip("Every check passed. A change to a built-in example becomes a program of its own: name it, or Cancel to drop it.");
+        chrome.hit("agent naming", r.rect);
+        return;
+    }
+    // The clock moves while nothing else does.
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(250));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let secs = p.secs.max(0.0) as u64;
+    let file = run.target();
+    let clock = clock(secs, p.estimate);
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let doing = match p.stage {
+        Stage::Waiting | Stage::Planning if matches!(run.mode, Mode::Planning { .. }) => {
+            format!("Working out the steps · {clock}")
+        }
+        Stage::Waiting => format!("Sending to the Agent · {clock}"),
+        Stage::Planning => format!("Planning the change · {clock}"),
+        Stage::Writing(0) => format!("Writing {file} · {clock}"),
+        Stage::Writing(n) => format!("Writing {file} · {n} line{} · {clock}", plural(n)),
+        Stage::Checks(n) => format!("Writing {n} check{} · {clock}", plural(n)),
+    };
+    let doing = if run.retries == 0 {
+        doing
+    } else {
+        format!(
+            "Try {} of {}: fixing what failed · {doing}",
+            run.retries + 1,
+            verify::RETRIES + 1
+        )
+    };
+    let tip = if run.retries == 0 {
+        "The Agent is working on the change. It is checked before anything is written into the file."
+            .to_string()
+    } else {
+        run.attempts
+            .last()
+            .map(|a| a.problems.join(" "))
+            .unwrap_or_default()
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spinner();
+        let r = ui.label(RichText::new(doing).color(t.muted)).tip(tip);
+        chrome.hit("agent working", r.rect);
+    });
+    if let Some(why) = &p.why {
+        let r = ui
+            .add(egui::Label::new(RichText::new(why).color(t.muted)).wrap())
+            .tip("What the Agent says the change does. Nothing is written until it is checked.");
+        chrome.hit("agent plan", r.rect);
+    }
+    if let Some(code) = &p.code {
+        let r = ui
+            .label(RichText::new("Draft, checked before it is written:").color(t.muted).italics())
+            .tip("What the Agent is writing, as it arrives. It goes into the file only if it compiles and every check passes; otherwise the file stays as it is.");
+        chrome.hit("agent draft note", r.rect);
+        let all: Vec<&str> = code.lines().collect();
+        let from = all.len().saturating_sub(DRAFT_LINES);
+        // The editor's ground and ink: a draft reads like code.
+        let frame = egui::Frame::new()
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
+            .corner_radius(4.0)
+            .inner_margin(6.0);
+        let r = frame
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                for line in &all[from..] {
+                    // Truncated, never wrapped or widened: a long line
+                    // would grow the pane every frame.
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(if line.is_empty() { " " } else { line })
+                                .monospace()
+                                .color(t.fg),
+                        )
+                        .truncate(),
+                    );
+                }
+            })
+            .response;
+        chrome.hit("agent draft", r.rect);
+    }
+}
+
+/// A plan in steps: why, the steps (done, this one, later), and while it
+/// waits for the engineer, the button that runs it (or tries a paused
+/// step again) beside what went wrong. `true` when that was clicked.
+fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> bool {
+    use egui::RichText;
+
+    use crate::st_view::brand::{GREEN, RED};
+    let t = crate::theme::theme(ui);
+    let n = p.steps.len();
+    let head = match &p.state {
+        PlanState::Running => format!("Doing this in {n} steps. Step {} of {n}:", (p.done + 1).min(n)),
+        PlanState::Splitting => format!(
+            "Step {} of {n} is being split into smaller steps.",
+            (p.done + 1).min(n)
+        ),
+        PlanState::Paused(_) => format!("Paused at step {} of {n}", p.done + 1),
+    };
+    let r = ui
+        .add(egui::Label::new(RichText::new(head).color(t.fg)).wrap())
+        .tip("A big change goes in steps, one after the other. Each step is checked like any answer, on a copy; the file is written once, at the end, as one version in History. Stop drops the steps and leaves the file as it is.");
+    chrome.hit("agent plan steps", r.rect);
+    for (k, step) in p.steps.iter().enumerate() {
+        let (text, ink) = match k.cmp(&p.done) {
+            std::cmp::Ordering::Less => (format!("{}. {step} (passed)", k + 1), t.ink(GREEN)),
+            std::cmp::Ordering::Equal => (format!("{}. {step}", k + 1), t.fg),
+            std::cmp::Ordering::Greater => (format!("{}. {step}", k + 1), t.muted),
+        };
+        let mut rt = RichText::new(text).color(ink);
+        if k == p.done {
+            rt = rt.strong();
+        }
+        let r = ui.add(egui::Label::new(rt).wrap());
+        chrome.hit(format!("agent step {}", k + 1), r.rect);
+    }
+    let (label, tip) = match &p.state {
+        PlanState::Running | PlanState::Splitting => return false,
+        PlanState::Paused(problems) => {
+            for line in problems {
+                let r = ui.add(egui::Label::new(RichText::new(line).color(t.ink(RED))).wrap());
+                chrome.hit("agent step problem", r.rect);
+            }
+            (
+                "Try this step again",
+                "Asks the Agent for this step again, from the steps that passed. Stop drops the plan and leaves the file as it is.",
+            )
+        }
+    };
+    let r = ui
+        .add(egui::Button::new(RichText::new(label).size(18.0)))
+        .tip(tip);
+    chrome.hit("agent run steps", r.rect);
+    r.clicked()
+}
+
 /// The instruction box, as tall as the tab leaves it, then one row: Send
-/// or Stop, Before / After (or Undo), and what is happening. A change that
+/// or Stop, the arrows through the revisions (or Undo), and what is
+/// happening. A change that
 /// landed shows on the canvas and in the code, marked; one that did not
 /// goes to the Messages as an error, and the box is outlined red with one
 /// line that opens them (Nick, 2026-11-13).
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruct, v: &View) -> Option<Act> {
     use egui::RichText;
 
-    use crate::agent_marks::Side;
     use crate::st_view::brand::{RED, WARN};
 
     let t = crate::theme::theme(ui);
@@ -879,9 +1571,14 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     // The box takes the tab's height, less one row of buttons, one of
     // status and what the owner draws under it.
     let row = ui.spacing().interact_size.y;
-    let height = v
-        .room_below
-        .map(|below| (ui.available_height() - 2.0 * row - 24.0 - below).max(4.0 * row));
+    let height = if s.run.is_some() && v.progress.is_some() {
+        // While an answer streams the box only shows what was sent: a few
+        // rows, and the room under it goes to the thinking and the draft.
+        Some(3.0 * row)
+    } else {
+        v.room_below
+            .map(|below| (ui.available_height() - 2.0 * row - 24.0 - below).max(4.0 * row))
+    };
     let tip = format!(
         "Tell the Agent what {target} should do. It changes the file, checks the change with \
          scenarios and the requirement tests, and writes it only if every check passes. \
@@ -930,27 +1627,28 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
                 act = Some(Act::Send);
             }
         }
-        if let Some(side) = v.swap {
-            for (key, label, this, tip) in [
+        if let Some(steps) = &v.steps {
+            for (key, icon, to, end) in [
                 (
-                    "agent before",
-                    "Before",
-                    Side::Before,
-                    "Shows the file as it was before the Agent's change, running. Green: what the change takes out; a red rule: where it adds. Saving keeps the version shown.",
+                    "agent back",
+                    crate::glyphs::Icon::Back,
+                    &steps.back,
+                    "Back: this is the first revision.",
                 ),
                 (
-                    "agent after",
-                    "After",
-                    Side::After,
-                    "Shows the file with the Agent's change, running. Green: what it added; a red rule: what it took out.",
+                    "agent forward",
+                    crate::glyphs::Icon::Forward,
+                    &steps.forward,
+                    "Forward: this is the newest revision.",
                 ),
             ] {
-                let r = ui
-                    .selectable_label(side == this, RichText::new(label).size(18.0))
-                    .tip(tip);
+                let r = crate::glyphs::action(ui, icon, to.is_some(), false)
+                    .tip(to.as_ref().map_or(end, |(_, tip)| tip.as_str()));
                 chrome.hit(key, r.rect);
-                if r.clicked() && side != this {
-                    act = Some(Act::Show(this));
+                if r.clicked()
+                    && let Some((n, _)) = to
+                {
+                    act = Some(Act::Revision(*n));
                 }
             }
         } else if let Some(u) = s.undo() {
@@ -967,7 +1665,20 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             }
         }
     });
-    if let Some(run) = &s.run {
+    let plan = s.run.as_ref().and_then(|r| match &r.mode {
+        Mode::Steps(p) => Some(p),
+        _ => None,
+    });
+    if let Some(p) = plan
+        && plan_ui(ui, chrome, p)
+    {
+        act = Some(Act::RunSteps);
+    }
+    if plan.is_some_and(|p| !matches!(p.state, PlanState::Running | PlanState::Splitting)) {
+        // Waiting for the engineer: the plan says what to do.
+    } else if let (Some(run), Some(p)) = (&s.run, &v.progress) {
+        progress_ui(ui, chrome, run, p);
+    } else if let Some(run) = &s.run {
         ui.horizontal_wrapped(|ui| {
             ui.spinner();
             let (words, tip) = if run.retries == 0 {

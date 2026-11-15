@@ -476,7 +476,8 @@ impl Local for Submitter<'_> {
 fn run_one(files: &Files, file: &str, settings: spec::Settings) -> Option<spec::Verdict> {
     let plan = spec::plan(files.st());
     let t = plan.tests.iter().find(|t| t.file == file)?;
-    Some(spec::run(&plan.main, t, settings))
+    let plant = files.get(helmsman_project::PLANT).unwrap_or("");
+    Some(helmsman_sim::iec::run(&plan.main, t, settings, plant))
 }
 
 /// Runs one requirement on `stream`: the agent writes its test, or (offline,

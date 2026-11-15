@@ -225,6 +225,90 @@ fn a_dropped_device_holds_its_readers_and_sends_their_outputs_safe() {
     assert!(b.rt.stats("line").unwrap().held >= 2);
 }
 
+/// Watches its start button: on a lost device it runs on, the motor off.
+/// (It reads nothing else of the device: an input without its own `_ok`
+/// still holds the module, as `level` would.)
+const GUARDED: &str = "
+PROGRAM line
+VAR_INPUT start : BOOL; start_ok : BOOL; END_VAR
+VAR_OUTPUT motor : BOOL; lamp : BOOL; END_VAR
+  motor := start AND start_ok;
+  lamp := NOT start_ok;
+END_PROGRAM";
+
+#[test]
+fn a_module_that_declares_x_ok_runs_on_through_a_drop_and_reads_it_false() {
+    let sim = rio();
+    let m = map(&sim);
+    let table = SignalTable::new(&m, &BTreeMap::new()).unwrap();
+    let panel = Channels::new();
+    let links = links(&m, helmsman_io::open, Box::new(panel.clone())).unwrap();
+    let rt = Runtime::with_signals(
+        0,
+        0,
+        vec![module("line", GUARDED), module("watch", WATCH)],
+        &table,
+    )
+    .unwrap();
+    let mut b = Bench {
+        sim,
+        panel,
+        table: Mutex::new(table),
+        links,
+        rt,
+        now: 0,
+    };
+    b.sim.state().discrete[1] = true;
+    for _ in 0..3 {
+        b.step();
+    }
+    assert!(b.sim.state().coils[0], "running");
+    assert!(!b.panel.output(0), "start_ok TRUE: no lamp");
+    for _ in 0..8 {
+        b.sim.inject(SimFault::Drop);
+    }
+    b.step();
+    assert!(!b.link("rio").is_up());
+    assert_eq!(b.rt.status("line"), Some(Status::Running), "it handles the loss");
+    assert_eq!(b.rt.status("watch"), Some(Status::Held), "no motor_fb_ok: held");
+    assert_eq!(b.command("motor"), Value::Bool(false), "start_ok FALSE stops it");
+    assert_eq!(b.command("lamp"), Value::Bool(true), "and says so");
+    b.step();
+    assert!(b.panel.output(0), "the box link wrote the lamp");
+    b.sim.clear_faults();
+    b.step();
+    b.step();
+    assert!(b.link("rio").is_up());
+    assert_eq!(b.command("lamp"), Value::Bool(false), "back");
+    b.step();
+    assert!(b.sim.state().coils[0], "running again");
+}
+
+#[test]
+fn x_ok_binds_only_to_a_bool_input_of_an_input_signal() {
+    let sim = rio();
+    let m = map(&sim);
+    let table = SignalTable::new(&m, &BTreeMap::new()).unwrap();
+    let bad = [
+        // Of an output signal: not a health input.
+        "PROGRAM p\nVAR_INPUT motor_ok : BOOL; END_VAR\nEND_PROGRAM",
+        // Not a BOOL.
+        "PROGRAM p\nVAR_INPUT start_ok : INT; END_VAR\nEND_PROGRAM",
+        // Of nothing.
+        "PROGRAM p\nVAR_INPUT nope_ok : BOOL; END_VAR\nEND_PROGRAM",
+        // An output.
+        "PROGRAM p\nVAR_OUTPUT start_ok : BOOL; END_VAR\nEND_PROGRAM",
+    ];
+    for src in bad {
+        assert!(
+            Runtime::with_signals(0, 0, vec![module("p", src)], &table).is_err(),
+            "{src}"
+        );
+    }
+    let good = "PROGRAM p\nVAR_INPUT start_ok : BOOL; END_VAR\nEND_PROGRAM";
+    assert!(Runtime::with_signals(0, 0, vec![module("p", good)], &table).is_ok());
+}
+
 #[test]
 fn after_a_drop_every_output_is_written_again() {
     // motor's safe value is ON, so its command never changes across the

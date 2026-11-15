@@ -432,6 +432,20 @@ pub(crate) struct PortBinding {
     pub dir: PortDir,
     pub ty: StTy,
     pub signal: usize,
+    /// A BOOL `VAR_INPUT X_OK` with no signal of its own: it reads whether
+    /// signal `X` (`signal`) has a value, and the module handles the loss
+    /// itself ([`watched`]).
+    pub ok: bool,
+}
+
+/// The suffix of a health input: `X_OK` reads whether `X` has a value.
+pub(crate) const OK_SUFFIX: &str = "_OK";
+
+/// Whether input `b` of `ports` has a health input watching it: a module
+/// that declares `X_OK` handles `X` going missing itself, so a missing `X`
+/// keeps its last value instead of holding the module.
+pub(crate) fn watched(b: &PortBinding, ports: &[PortBinding]) -> bool {
+    !b.ok && ports.iter().any(|o| o.ok && o.signal == b.signal)
 }
 
 /// Why a module's ports do not fit the table.
@@ -485,6 +499,23 @@ pub(crate) fn bind(module: &str, ports: &[Port], table: &SignalTable) -> (Vec<Po
     let mut errs = Vec::new();
     for p in ports {
         let Some(i) = table.index(&p.name) else {
+            // `X_OK`, BOOL, in: the health of input `X`.
+            if let Some(x) = p
+                .name
+                .strip_suffix(OK_SUFFIX)
+                .filter(|_| p.dir == PortDir::Input && p.ty == StTy::Bool)
+                .and_then(|x| table.index(x))
+                .filter(|&x| table.sigs[x].dir == Dir::In || table.sigs[x].source.is_some())
+            {
+                out.push(PortBinding {
+                    port: p.name.clone(),
+                    dir: p.dir,
+                    ty: p.ty,
+                    signal: x,
+                    ok: true,
+                });
+                continue;
+            }
             errs.push(BindError::UnknownSignal(p.name.clone()));
             continue;
         };
@@ -511,6 +542,7 @@ pub(crate) fn bind(module: &str, ports: &[Port], table: &SignalTable) -> (Vec<Po
             dir: p.dir,
             ty: p.ty,
             signal: i,
+            ok: false,
         });
     }
     (out, errs)

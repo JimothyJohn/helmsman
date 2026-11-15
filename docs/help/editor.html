@@ -192,32 +192,42 @@ Hover one to read its name. The pictures are an early set and will be
 redrawn.</p>
 <h2 id="the-panes">The panes</h2>
 <ul>
-<li><strong>The left pane</strong> has three tabs.
-<strong>Files</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
-the project's files, the examples, and the program tree under them; a
-right-click on a file offers Copy, Paste, Duplicate, Rename and Delete,
-and what you copy pastes into any project you open next.
-<strong>Devices</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>):
-at the top, <strong>I/O wiring</strong> links to the project's
-<code>io.map</code>, the file that says which program variable is wired
-to which device point; then the devices it names, each with its points
-under it, their live values, and whether the link is up; a right-click
-on the blank space adds a device (name, protocol, address, settings) as
-a line of the map; Import device… takes the vendor's EDS file, keeps it
-in the project and fills the form in from it. Under the map's devices,
-<strong>On the network</strong>: Scan lists every EtherNet/IP device
-that answers on the LAN, says whether the map already has it, and shows
-what the public device library knows of it (in the simulation, one
-simulated E1213). <strong>Use this device</strong> under one opens the
-form filled in, the device named by its identity so a changed address
-never loses it; on a read-only example it copies the project first. The
-form has a field for each of the protocol's settings, filled in with the
-usual values and checked against the driver's ranges, with the device's
-io.map line under them. Below that are its inputs and outputs: a known
-device (the ioLogik E1213) lists every channel, and the program's inputs
-and outputs that were on the box's own channels are already ticked on
-the first free ones. Tick any other channel and name it, or add rows
-with
+<li><strong>The left pane</strong> holds every tab, the
+<strong>Agent</strong> first and showing when the page opens, so the
+diagram keeps the rest of the width. Drag a tab's glyph to the right
+edge of the window to dock it in a pane on the right, beside the one on
+the left (the Code tab and the Agent side by side, say), and drag it
+back onto the left pane to return it. <kbd>Alt</kbd> <kbd>Shift</kbd>
+<kbd>5</kbd> sends the tab the left pane shows to the right and shows
+the next one on the left; <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>
+shows or hides the right pane once a tab is there. The layout is kept in
+the browser. The tabs: <strong>Agent</strong>, where you type what the
+open file should do and it is updated (see <a href="agent.html">The
+Agent</a>). <strong>Files</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd>
+<kbd>0</kbd>): the project's files, the examples, and the program tree
+under them; a right-click on a file offers Copy, Paste, Duplicate,
+Rename and Delete, and what you copy pastes into any project you open
+next. <strong>Devices</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd>
+<kbd>4</kbd>): at the top, <strong>I/O wiring</strong> links to the
+project's <code>io.map</code>, the file that says which program variable
+is wired to which device point; then the devices it names, each with its
+points under it, their live values, and whether the link is up; a
+right-click on the blank space adds a device (name, protocol, address,
+settings) as a line of the map; Import device… takes the vendor's EDS
+file, keeps it in the project and fills the form in from it. Under the
+map's devices, <strong>On the network</strong>: Scan lists every
+EtherNet/IP device that answers on the LAN, says whether the map already
+has it, and shows what the public device library knows of it (in the
+simulation, one simulated E1213). <strong>Use this device</strong> under
+one opens the form filled in, the device named by its identity so a
+changed address never loses it; on a read-only example it copies the
+project first. The form has a field for each of the protocol's settings,
+filled in with the usual values and checked against the driver's ranges,
+with the device's io.map line under them. Below that are its inputs and
+outputs: a known device (the ioLogik E1213) lists every channel, and the
+program's inputs and outputs that were on the box's own channels are
+already ticked on the first free ones. Tick any other channel and name
+it, or add rows with
 <ul>
 <li>Input and + Output for any other device. For each row, Program picks
 what the program does with it: one of its own variables, a new variable
@@ -255,10 +265,17 @@ jumped to, the caret moving into it, or a search. The word-wrap button
 beside the file name wraps long lines at the pane's width, or, off,
 keeps each line on one row with a scroll bar under the code; the choice
 is kept with the layout. The key for a tab opens the pane on it, or
-shuts the pane when that tab already shows. A double click on any tab,
-on this pane or the side panel, hides that pane. The tabs are glyphs;
-hover one for its name. A hidden pane keeps its tabs down the strip at
-the edge, and a click on one opens the pane on that tab.</li>
+shuts the pane when that tab already shows. <strong>I/O</strong>: every
+input and output with its value and a control for each input the diagram
+does not show. <strong>History</strong>: every saved version of the open
+project, newest at the top. <strong>Palette</strong>: pictures of the
+common pieces of a machine and a program (push button, emergency stop,
+selector, pilot lamp, alarm, interlock, timer, counter, latch, edge,
+sequence step, operator screen): drag one onto the diagram, or click it,
+and the Agent is asked to add it to the program, which waits for Deploy
+like any change. A double click on any tab hides its pane. The tabs are
+glyphs; hover one for its name. A hidden pane keeps its tabs down the
+strip at the edge, and a click on one opens the pane on that tab.</li>
 </ul></li>
 <li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd>
 <kbd>2</kbd>): the <strong>Trend</strong> of the signals you pin, with a
@@ -266,17 +283,6 @@ long time axis, and <strong>Messages</strong>: what needs saying now,
 then the last two hundred things the page had to say, with the error
 count beside the tab. Tick or untick info, warnings and errors to list
 or leave out each.</li>
-<li><strong>The side panel</strong>, on the right (<kbd>Alt</kbd>
-<kbd>Shift</kbd> <kbd>3</kbd>): <strong>I/O</strong>, every input and
-output with its value and a control for each input the diagram does not
-show; <strong>Palette</strong>, pictures of the common pieces of a
-machine and a program (push button, emergency stop, selector, pilot
-lamp, alarm, interlock, timer, counter, latch, edge, sequence step,
-operator screen): drag one onto the diagram, or click it, and the Agent
-is asked to add it to the program, which waits for Deploy like any
-change; and <strong>Agent</strong>, where you type what the open file
-should do and it is updated (see <a href="agent.html">The
-Agent</a>).</li>
 </ul>
 <img src="img/palette-tab.png" alt="The Palette tab: twelve pictures to drag onto the diagram." width="300">
 

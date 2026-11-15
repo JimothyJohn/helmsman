@@ -98,6 +98,85 @@ inputs without the mouse.
 A project can carry a plant model, a block that stands in for the tank,
 the belt or the compressors, so that it moves with nothing wired.
 
+## Devices
+
+A project's `plant.sim` file stands in for the machine's devices, so the
+program can be checked against something that answers it. One device a
+line, the kind, a name, then what it is wired to and its settings:
+
+```text
+# The oven: heat_on drives temp_c toward 250 with a minute's lag.
+heater oven heat=heat_on temp=temp_c ambient=20 max=250 tau=60s
+sensor pt1 of=oven.temp raw=temp_ma range=0..300 signal=4-20mA
+motor m1 run=motor_run speed=motor_rpm running=motor_running rated=1450 ramp=3s
+valve v1 open=fill_valve opened=valve_open closed=valve_closed travel=2s
+tank t1 fill=fill_valve drain=drain_pump level=level_m high=tank_high max=2
+eye pe1 belt=belt_run seen=part_seen every=4s length=500ms
+button b1 input=start_pb
+source s1 value=line_pressure shape=sine from=4 to=6 period=30s
+```
+
+- **heater**: the temperature rises toward `max` while the output heats
+  (a BOOL, or 0 to 100 %) and falls back to `ambient`; `tau` is the time
+  to 63 % of a change.
+- **tank**: the level rises at `fill_rate` while filling, falls at
+  `drain_rate` while draining, with `high` and `low` switches.
+- **motor**: the speed ramps to the command and back to a stop in
+  `ramp`; `running` is on above 5 % of `rated`.
+- **valve** (or **cylinder**): travels open in `travel`, with `opened`
+  and `closed` limit switches; without a `close` output it springs
+  closed.
+- **eye**: a part blocks it for `length` every `every` of belt time.
+- **button**, **switch**, **selector**: set by hand as before; listing
+  them gives them the behaviours below.
+- **source**: a signal that runs by itself: `ramp`, `exp`, `geometric`,
+  `pulse`, `step`, `sine` or a random `walk`.
+- **sensor**: a transmitter: what it measures (`of=oven.temp`, or an
+  output) scaled from `range` to 4-20 mA, 0-10 V or counts.
+
+Times take `ms`, `s`, `m` or `h`. A line the page cannot read, or one
+that names a variable the program does not have, is a warning on
+`plant.sim` under the editor; the rest still runs.
+
+### Double-click an input
+
+A double-click on an input, on its block in the diagram or on its row in
+the I/O panel, opens **Simulate this input**: which device stands behind
+it, guessed from its name (`temp_c` a heater, `start_pb` a button,
+`valve_open` a valve's limit switch, `part_seen` a photo-eye) with its
+outputs wired to the likeliest of the program's, the device's settings,
+and how the input behaves: **Normal**, **Abnormal** (and which way) or
+**Absent**. **Apply** writes it into `plant.sim` (a built-in example is
+copied into a project of your own first) and the simulation runs it from
+the next scan. An input that is not behaving normally is outlined, yellow
+while abnormal and red while absent.
+
+### Normal, abnormal and absent
+
+Each input a device drives behaves normally unless a `mode` line says
+otherwise:
+
+```text
+mode temp_c stuck 80      # frozen at 80 (no value: where it was)
+mode temp_c drift 0.5     # 0.5 a second off, and growing
+mode temp_c noise 2       # up to 2 either way
+mode temp_c over          # past the top of its range (under: below)
+mode motor_rpm slow 4     # the motor answers 4 times slower
+mode part_seen chatter 50ms   # bounces for 50 ms on each change
+mode temp_c absent        # the device is lost
+```
+
+An absent input does what it does on a box whose link to the device is
+down: the program is **held**, its outputs at their safe (off, zero)
+values, until the input is back. A program that declares a BOOL input
+`NAME_ok` (`temp_c_ok`) handles the loss itself instead: it keeps
+running, the input keeps its last value, and `NAME_ok` reads TRUE while
+the input is there and FALSE while it is absent. The box does the same
+for a program with `NAME_ok`: it needs no signal of that name in the
+I/O map. Noise,
+chatter and the random walk come from `seed N` (1 unless the file says),
+so a run is the same run every time.
+
 ## The trend
 
 The Trend tab along the bottom plots the signals you pin, up to six,
@@ -106,10 +185,12 @@ much of the past the pane shows, from 100 ms to 10 minutes on a
 logarithmic scale (it opens on 30 s), and the plot follows as you drag;
 history is kept for the widest, so widening shows what already ran. The
 lane's scale is at its right edge: it rounds out to an even step and
-moves only when the values cross one. Pin from the tab's list. History
-restarts when you change the set. To put the lanes in another order,
-drag a lane's name up or down and drop it on the lane it should take;
-its history moves with it. Click a lane's name to pick that signal's
+moves only when the values cross one. Pin from the tab's list. Every
+input and output is recorded from the first scan, pinned or not, so a
+signal you pin later arrives with its past and the lanes already there
+carry on. Deploying again keeps the history; a cold restart starts it
+over. To put the lanes in another order, drag a lane's name up or down
+and drop it on the lane it should take. Click a lane's name to pick that signal's
 colour from the palette; the browser keeps your choice. Until you pick
 one, a signal named after a colour (`red`, `lamp_green`) is drawn in
 that colour, the same as its lamp.

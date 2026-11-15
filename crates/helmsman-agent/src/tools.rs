@@ -60,10 +60,12 @@ use crate::http::{self, Timeouts, Url};
 use crate::relay;
 
 /// The tools the box runs, as named in the relay's `tools.json`.
-pub const NAMES: [&str; 15] = [
+pub const NAMES: [&str; 17] = [
     "list_signals",
     "read_signals",
     "list_devices",
+    "list_device_configs",
+    "read_device_config",
     "list_modules",
     "read_module",
     "draft_module",
@@ -99,12 +101,14 @@ const FETCH_JSON_MAX: usize = 256 * 1024;
 /// The tools explain mode runs: reads only. Nothing in it drafts,
 /// checks, simulates or proposes, so an explanation can change nothing
 /// on the box, not even the proposal list.
-pub const READ_ONLY: [&str; 5] = [
+pub const READ_ONLY: [&str; 7] = [
     "list_signals",
     "read_signals",
     "list_modules",
     "read_module",
     "list_devices",
+    "list_device_configs",
+    "read_device_config",
 ];
 
 /// Most names one `compare_plc_tags` result lists per difference.
@@ -424,7 +428,10 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
     match name {
         "list_signals" => parse::<ListSignals>(input).map(drop),
         "read_signals" => parse::<ReadSignals>(input).map(drop),
-        "list_modules" | "read_io_map" | "list_devices" => parse::<Empty>(input).map(drop),
+        "list_modules" | "read_io_map" | "list_devices" | "list_device_configs" => {
+            parse::<Empty>(input).map(drop)
+        }
+        "read_device_config" => parse::<ReadDeviceConfig>(input).map(drop),
         "fetch_document" => parse::<FetchDocument>(input).map(drop),
         "read_module" => parse::<ReadModule>(input).map(drop),
         "draft_module" => parse::<DraftModule>(input).map(drop),
@@ -453,6 +460,12 @@ struct ListSignals {
 #[serde(deny_unknown_fields)]
 struct ReadSignals {
     names: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadDeviceConfig {
+    device: String,
 }
 
 #[derive(Deserialize)]
@@ -569,6 +582,8 @@ pub fn run_with(
         "read_signals" => parse(input).map(|i| read_signals(api, &i)),
         "list_modules" => parse::<Empty>(input).map(|_| list_modules(api)),
         "list_devices" => parse::<Empty>(input).map(|_| list_devices(api)),
+        "list_device_configs" => parse::<Empty>(input).map(|_| list_device_configs(api)),
+        "read_device_config" => parse(input).map(|i| read_device_config(api, &i)),
         "read_module" => parse(input).map(|i| read_module(api, &i)),
         "draft_module" => parse(input).map(|i| draft_module(drafts, i)),
         "check_module" => parse(input).map(|i| check_module(api, drafts, &i)),
@@ -1039,6 +1054,140 @@ fn list_modules(api: &dyn Caller) -> Outcome {
             ok(json!({ "modules": list }), format!("{n} module(s)"))
         }
         Ok((s, b)) => unexpected("listing modules", s, &b),
+        Err(e) => fail(e),
+    }
+}
+
+/// Longest device id the box's map takes; anything longer is refused here.
+const MAX_DEVICE_ID: usize = 48;
+
+/// Whether `s` can be a device id (1 to 48 of A-Z a-z 0-9 _ -), the same
+/// alphabet as a project's `ID.devconf` file.
+fn device_id_ok(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_DEVICE_ID
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// What a device-configuration result may carry, whatever the box API
+/// answered. The box's view has no password field; this is the second
+/// lock: an allow-list of top-level keys (the unit's whole export text is
+/// left out, the facts and the drift are the reading), and below them any
+/// key that looks like a secret is dropped (`password_stored`, a yes/no,
+/// is the one allowed).
+const CONFIG_KEYS: [&str; 6] = [
+    "device",
+    "configurator",
+    "password_stored",
+    "facts",
+    "snapshot",
+    "drift",
+];
+
+fn scrub_secrets(v: &mut Json) {
+    match v {
+        Json::Object(m) => {
+            m.retain(|k, _| {
+                let k = k.to_ascii_lowercase();
+                k == "password_stored"
+                    || !["pass", "secret", "token", "cookie", "chall", "credential"]
+                        .iter()
+                        .any(|w| k.contains(w))
+            });
+            m.values_mut().for_each(scrub_secrets);
+        }
+        Json::Array(a) => a.iter_mut().for_each(scrub_secrets),
+        _ => {}
+    }
+}
+
+/// The error code of a box API answer, if it has one.
+fn code(body: &Json) -> &str {
+    body["code"].as_str().unwrap_or_default()
+}
+
+/// Which devices of the running map have a configuration the box can read,
+/// with each one's configurator: the `configurator` of each entry of
+/// `GET /api/devices` (the profile's `configure` name, null without one;
+/// from the profile alone, so no unit is contacted and no device lock
+/// taken). `read_device_config` reads one unit. Read only; changing a
+/// device's own configuration is the engineer's, in the canvas's Devices
+/// tab.
+fn list_device_configs(api: &dyn Caller) -> Outcome {
+    let links = match api.get("/api/devices") {
+        Ok((200, Json::Array(list))) => list,
+        Ok((s, b)) => return unexpected("reading devices", s, &b),
+        Err(e) => return fail(e),
+    };
+    let found: Vec<Json> = links
+        .iter()
+        .filter_map(|d| {
+            let id = d["name"].as_str().filter(|n| device_id_ok(n))?;
+            let c = d["configurator"].as_str()?;
+            Some(json!({ "device": id, "configurator": c, "state": d["state"] }))
+        })
+        .collect();
+    let n = found.len();
+    let note = if n == 0 {
+        "no device in the running map has a configuration the box can read (its profile needs a `configure` line)"
+    } else {
+        "read_device_config gives one device's facts and drift"
+    };
+    ok(
+        json!({ "devices": found, "note": note }),
+        format!("{n} device(s) with configuration"),
+    )
+}
+
+/// One device's own configuration as the box last read it
+/// (`GET /api/devices/{id}/config`): configurator, facts, whether a
+/// snapshot exists and the drift from it, and whether a console password
+/// is stored (a yes/no).
+fn read_device_config(api: &dyn Caller, i: &ReadDeviceConfig) -> Outcome {
+    if !device_id_ok(&i.device) {
+        return fail("not a device id (1-48 of A-Z a-z 0-9 _ -); list_device_configs gives the ids");
+    }
+    let path = format!("/api/devices/{}/config", http::segment(&i.device));
+    match api.get(&path) {
+        Ok((200, j)) => {
+            let mut out = Map::new();
+            for k in CONFIG_KEYS {
+                if let Some(v) = j.get(k) {
+                    out.insert(k.into(), v.clone());
+                }
+            }
+            let has_snapshot = !j["snapshot"].is_null();
+            out.insert("snapshot_exists".into(), json!(has_snapshot));
+            if !has_snapshot {
+                out.insert(
+                    "drift_note".into(),
+                    json!("no snapshot is saved for this device, so there is nothing to compare against"),
+                );
+            }
+            let mut out = Json::Object(out);
+            scrub_secrets(&mut out);
+            ok(out, format!("configuration of {}", i.device))
+        }
+        Ok((404, b)) if code(&b) == "not_configurable" => ok(
+            json!({
+                "device": i.device, "configured": false,
+                "note": "this device has no configuration: its profile has no `configure` line, so the box has nothing to read",
+            }),
+            format!("{} has no configuration", i.device),
+        ),
+        Ok((409, b)) if code(&b) == "busy" => {
+            let what = match b["busy"].as_str() {
+                Some("restart" | "import") => "the device is restarting for its configuration",
+                _ => "the device is busy with another configuration operation",
+            };
+            fail(format!("{what}; ask again in a minute"))
+        }
+        Ok((404, _)) => fail(format!(
+            "no device {} in the running map; list_device_configs gives the ids",
+            i.device
+        )),
+        Ok((s, b)) => unexpected("reading the device configuration", s, &b),
         Err(e) => fail(e),
     }
 }
@@ -1662,6 +1811,185 @@ END_FUNCTION_BLOCK
         .collect();
         r.extend(extra.into_iter().map(|(k, s, b)| (k.to_string(), s, b)));
         Routes(r)
+    }
+
+    const PASSWORD: &str = "hunter2-console";
+
+    fn config_routes() -> Routes {
+        let mut r = routes(vec![
+            (
+                "GET /api/devices",
+                200,
+                json!([{"name": "box", "state": "up"}, {"name": "io1", "state": "up"},
+                       {"name": "plain", "state": "up"}, {"name": "dead", "state": "down"}]),
+            ),
+            (
+                "GET /api/devices/io1/config",
+                200,
+                json!({
+                    "device": "io1", "configurator": "moxa-e1200", "endpoint": "10.0.0.9",
+                    "export": format!("[System]\r\nPwd={PASSWORD}\r\n"),
+                    "facts": {
+                        "firmware": "3.1", "watchdog": {"enabled": true, "value": "5", "label": null},
+                        "eip_enabled": false, "rest_enabled": true,
+                        "outputs": [{"channel": "DO-00", "safe": {"value": "0", "label": "Off"},
+                                     "power_on": {"value": "0", "label": "Off"}}],
+                    },
+                    "snapshot": {"file": "io1.devconf", "version": "ab", "bytes": 9},
+                    "drift": {"changed": [{"before": "EIP=1", "after": "EIP=0"}], "added": [], "removed": []},
+                    "password_stored": true,
+                    // Leaks the box API never makes, and a stray key.
+                    "password": PASSWORD, "debug": {"MoxaPass": PASSWORD, "note": "x"},
+                    "unlisted": PASSWORD,
+                }),
+            ),
+            (
+                "GET /api/devices/plain/config",
+                404,
+                json!({"error": "no configurator", "code": "not_configurable"}),
+            ),
+            (
+                "GET /api/devices/dead/config",
+                502,
+                json!({"error": "the unit did not answer", "code": "unreachable"}),
+            ),
+        ]);
+        // The first match wins: drop the helper's own one-device list.
+        r.0.remove(0);
+        r
+    }
+
+    #[test]
+    fn read_device_config_gives_facts_and_drift_and_never_the_password() {
+        let o = read_device_config(&config_routes(), &ReadDeviceConfig { device: "io1".into() });
+        assert!(o.ok, "{}", o.data);
+        assert_eq!(o.data["facts"]["eip_enabled"], false);
+        assert_eq!(o.data["facts"]["outputs"][0]["safe"]["label"], "Off");
+        assert_eq!(o.data["drift"]["changed"][0]["after"], "EIP=0");
+        assert_eq!(o.data["password_stored"], true);
+        assert_eq!(o.data["snapshot_exists"], true);
+        assert!(o.data.get("export").is_none());
+        let all = format!(
+            "{} {} {}",
+            o.data,
+            o.summary,
+            envelope("read_device_config", &o.data)
+        );
+        assert!(!all.contains(PASSWORD), "{all}");
+    }
+
+    #[test]
+    fn a_device_without_configuration_says_so() {
+        let o = read_device_config(
+            &config_routes(),
+            &ReadDeviceConfig {
+                device: "plain".into(),
+            },
+        );
+        assert!(o.ok, "{}", o.data);
+        assert_eq!(o.data["configured"], false);
+        assert!(o.summary.contains("no configuration"), "{}", o.summary);
+    }
+
+    #[test]
+    fn an_unknown_device_is_refused_in_a_sentence() {
+        let o = read_device_config(
+            &config_routes(),
+            &ReadDeviceConfig {
+                device: "ghost".into(),
+            },
+        );
+        assert!(!o.ok);
+        assert!(o.summary.contains("no device ghost"), "{}", o.summary);
+        for bad in ["", "a/b", "..", "io1?x=1", "a b", &"x".repeat(49)] {
+            let o = read_device_config(&config_routes(), &ReadDeviceConfig { device: bad.into() });
+            assert!(!o.ok, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn list_device_configs_lists_the_configurable_ones_from_the_device_list_alone() {
+        let mut api = routes(vec![]);
+        api.0.remove(0);
+        api.0.push((
+            "GET /api/devices".into(),
+            200,
+            json!([{"name": "box", "state": "up", "configurator": null},
+                   {"name": "io1", "state": "up", "configurator": "moxa-e1200"},
+                   {"name": "old", "state": "up"},
+                   {"name": "dead", "state": "down", "configurator": "moxa-e1200"}]),
+        ));
+        let o = list_device_configs(&api);
+        assert!(o.ok, "{}", o.data);
+        let l = o.data["devices"].as_array().expect("a list");
+        let ids: Vec<&str> = l.iter().filter_map(|d| d["device"].as_str()).collect();
+        assert_eq!(ids, ["io1", "dead"], "{}", o.data);
+        assert_eq!(l[0]["configurator"], "moxa-e1200");
+        let none = list_device_configs(&routes(vec![]));
+        assert!(none.ok && none.data["devices"] == json!([]), "{}", none.data);
+    }
+
+    #[test]
+    fn listing_makes_one_request_and_none_to_a_unit() {
+        let r = Recorder(std::cell::RefCell::new(Vec::new()));
+        let _ = list_device_configs(&r);
+        assert_eq!(*r.0.borrow(), ["GET /api/devices"]);
+    }
+
+    #[test]
+    fn a_restarting_device_is_said_in_a_sentence() {
+        let api = routes(vec![(
+            "GET /api/devices/io1/config",
+            409,
+            json!({"error": "busy", "code": "busy", "busy": "restart"}),
+        )]);
+        let o = read_device_config(&api, &ReadDeviceConfig { device: "io1".into() });
+        assert!(!o.ok);
+        assert_eq!(
+            o.summary,
+            "the device is restarting for its configuration; ask again in a minute"
+        );
+        assert_eq!(o.data["error"], o.summary);
+    }
+
+    /// Records every call, and answers 404.
+    struct Recorder(std::cell::RefCell<Vec<String>>);
+
+    impl Caller for Recorder {
+        fn call(&self, method: &str, path: &str, _: Option<&Json>) -> Result<(u16, Json), String> {
+            self.0.borrow_mut().push(format!("{method} {path}"));
+            Ok((404, json!({"error": "x"})))
+        }
+    }
+
+    #[test]
+    fn the_device_config_tools_only_ever_get() {
+        let r = Recorder(std::cell::RefCell::new(Vec::new()));
+        let _ = read_device_config(&r, &ReadDeviceConfig { device: "io1".into() });
+        let _ = list_device_configs(&r);
+        let calls = r.0.borrow();
+        assert!(!calls.is_empty());
+        assert!(calls.iter().all(|c| c.starts_with("GET /api/")), "{calls:?}");
+    }
+
+    #[test]
+    fn the_device_config_tools_are_reads_with_strict_inputs() {
+        for n in ["list_device_configs", "read_device_config"] {
+            assert!(READ_ONLY.contains(&n) && NAMES.contains(&n));
+        }
+        assert!(validate("read_device_config", &json!({"device": "io1"})).is_ok());
+        assert!(validate("read_device_config", &json!({"device": "io1", "set": {}})).is_err());
+        assert!(validate("list_device_configs", &json!({"x": 1})).is_err());
+        // No tool name suggests a write path to device configuration.
+        for n in NAMES {
+            assert!(
+                !(n.contains("device") || n.contains("config"))
+                    || n.starts_with("list_")
+                    || n.starts_with("read_")
+                    || n.starts_with("propose_io"),
+                "{n}"
+            );
+        }
     }
 
     #[test]

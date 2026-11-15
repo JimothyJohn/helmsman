@@ -1572,6 +1572,7 @@ dependencies = [
  "helmsman-nodecore",
  "helmsman-plc",
  "helmsman-project",
+ "helmsman-sim",
  "proptest",
  "resvg",
  "serde",
@@ -1631,6 +1632,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-iolink"
+version = "0.1.0"
+dependencies = [
+ "helmsman-iec",
+ "helmsman-iolink",
+ "proptest",
+]
+
+[[package]]
 name = "helmsman-l2"
 version = "0.1.0"
 dependencies = [
@@ -1664,6 +1674,7 @@ dependencies = [
  "helmsman-l2",
  "helmsman-project",
  "helmsman-proto",
+ "helmsman-sim",
  "miniz_oxide 0.9.1",
  "proptest",
  "ring",
@@ -1700,6 +1711,14 @@ name = "helmsman-proto"
 version = "0.1.0"
 dependencies = [
  "helmsman-proto",
+ "proptest",
+]
+
+[[package]]
+name = "helmsman-sim"
+version = "0.1.0"
+dependencies = [
+ "helmsman-iec",
  "proptest",
 ]
 

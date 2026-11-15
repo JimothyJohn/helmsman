@@ -783,6 +783,94 @@ into the code.
 - **How to cite:** `p-net <file> <function>`, `Wireshark <file>`,
   `C706 ch. "RPC PDU Encodings"`; never a `§` of IEC 61158.
 
+### IO-Link Community, IO-Link Interface and System Specification V1.1.5 (October 2025, order no. 10.002, 321 pp)
+
+- **Where:** https://io-link.com/fileadmin/user_upload/Downloads/Package_2025/IOL-Interface-Spec_10002_V1.1.5_Oct2025.zip
+  (linked from https://io-link.com/downloads, Package 2025, no
+  registration asked), fetched 2026-11-14. The archive's SHA-256 is
+  `23d1309bcfeea37e545c1f3d03c34045eb5f81f673a956e1fe22ad50e2cdc457`; the
+  PDF in it, `IOL-Interface-Spec_10002_V1.1.5_Oct2025.pdf`, is
+  `a46805876ba07f2045aa55c2d3c375a85a2268fdec751a6e486ac88e414d3c03`.
+  Not committed. The same text is IEC 61131-9 (SDCI), which is not held.
+- **Read so far (2026-11-14), for `helmsman-iolink`:** Annex A.1 (the
+  M-sequence control octet, check/type and check/status octets, the
+  checksum with its seed 0x52 and equations (A.1), p.238-241), A.2 (the
+  M-sequence types, Figures A.5 to A.14, and Tables A.7, A.8 and A.10
+  for STARTUP, PREOPERATE and OPERATE, p.241-247) and B.1 (Direct
+  Parameter page 1: Table B.1, the MasterCommands of Table B.2, cycle
+  times of Table B.3, the M-sequence capability, Process Data lengths of
+  Table B.6, p.258-263).
+- **Read 2026-11-14 for the master and the simulated device:** Table 9
+  (the three rates, p.59), 5.3.3.3 and Table 10 (the wake-up pulse,
+  p.60), 7.3.2 (wake-up procedure and Table 42, the Master and Device
+  DL-mode handlers, Tables 44 and 45, p.80-88), 7.3.3.3 to 7.3.3.5 (the
+  cycle time's tolerance, the Master and Device message handlers, Tables
+  46 and 47, p.90-96), the idle message (7.3.5 NOTE p.101, Table 52
+  p.103), 7.3.7 (the command handlers, Tables 55 to 57, p.106-108),
+  Tables 85 and 86 (the checks at startup, p.138-140), Figure 82 (the
+  startup sequence, p.155), A.3 and A.4 (timing and errors, p.247-250).
+- **Not read yet, and so not built:** the rest of the physical layer
+  (levels, currents), the Process Data handler's interleaved mode
+  (7.3.4.2), the ISDU and Event handlers (7.3.6, 7.3.8, A.5, A.6),
+  legacy devices (Table A.9 and its reference [8]), SIO mode and the
+  fallback, data storage, the master's port configuration (clause 11).
+- **Test vectors:** the specification prints none for the checksum, so
+  the message octets in the crate's tests were worked by hand from
+  Figure A.1 and equations (A.1). For values inside Process Data it
+  does: `pd`'s tests hold Table F.18 with Figure F.7 (an array of 3-bit
+  integers), Table F.20 and Table F.21 with Figure F.8 (records), p.305-306.
+- **Read 2026-11-14 for `pd`:** Annex F.2 and F.3 (the coding of the
+  basic types, arrays and records; Table F.19's rule 3 for bit offsets,
+  p.298-307).
+- **Trademark and claims** (the notice pages before the contents, "USE
+  OF TRADEMARKS"): PNO (PROFIBUS Nutzerorganisation) owns the registered
+  mark IO-Link; the mark's "use is restricted for members of the IO-Link
+  Community". A product that has not met PNO's certification
+  requirements "may claim only that the product was based on a PNO
+  specification and must not claim compliance or conformance". Vendor
+  ids are assigned by the community (Table B.1 NOTE 2). So nothing a
+  user reads carries the mark or a compliance claim until Nick has
+  settled membership; a master of ours is "based on" the specification.
+- **How to cite:** `IOL §A.1.6 p.240` (clause and page of V1.1.5).
+
+### IO-Link Community, IO Device Description Specification V1.1.5 (October 2025, order no. 10.012, 98 pp) and its guideline's examples
+
+- **Where:** https://io-link.com/fileadmin/user_upload/Downloads/Package_2025/IO-Device-Description_Specification_10.012_V1.1.5_Oct2025.zip
+  (https://io-link.com/downloads, Package 2025), fetched 2026-11-14,
+  SHA-256 `d4b3f53bfc777e45938cf7b7d14fe9b65aa4dccea6875745b3912e1cc59d4dd2`;
+  the PDF in it is
+  `2e385156e4f1008c1ffef5f4c71836bf82346a75412f90ab8a5d7728bc6a175e`. The
+  package also holds the schemas (`Schemas/IODD1.1.xsd`,
+  `IODD-Datatypes1.1.xsd`, `IODD-Primitives1.1.xsd`, ...), which are
+  where `helmsman-iolink`'s `iodd` takes its element names, attribute
+  names and number ranges from. Not committed.
+- **Read (2026-11-14):** 7.5.2 and the opening of 7.5.3 (the data type
+  collection and the type hierarchy, `xsi:type`, p.24-25), 7.5.3.2.1 to
+  7.5.3.2.3 (complex types: a 1-bit BooleanT and unpadded integers
+  inside them, arrays, records and their non-overlapping bit offsets,
+  p.31-34), 7.5.3.3 (the process data union types, not
+  allowed in a device's IODD, p.39-40) and 7.5.5 (the process data
+  collection: conditions, `bitLength` and the formula for the lengths in
+  Direct Parameter page 1, p.49-52); the three schemas above for
+  `DeviceIdentity`, `DatatypeCollection`, the simple types, `ArrayT`,
+  `RecordT`, `RecordItem` and `ProcessData`. The simple types' own
+  clauses (7.5.3.1) and the texts (7.7) were taken from the schemas and
+  the examples, not read; the rest of clause 7 by its headings only.
+- **Not read:** variables, menus, events, the communication profile,
+  language files, the stamp's checksum (7.3.4), so none of them is
+  built. An IODD is not checked against its checksum.
+- **Test corpus, fetched and not vendored:** the 22 example IODDs of the
+  IO Device Description Guideline V1.1.5 package (order no. 10.022,
+  `Examples/`, released 2025-05-05),
+  https://io-link.com/fileadmin/user_upload/Downloads/Package_2025/IO-Device-Description_Guideline_10.022_V1.1.5_Oct2025.zip,
+  SHA-256 `92621bdb8260cb68d7d7a6e19fb5e9dcc3cda473a1fffdd99d9bfa2933abdef3`.
+  `HELMSMAN_IODD_DIR=<that Examples directory> cargo test -p
+  helmsman-iolink --test iodd -- --ignored --nocapture` reads every one
+  (all 22 on 2026-11-14) and holds example 17's layout to what its file
+  states. No vendor's IODD has been read yet; IODDfinder
+  (https://ioddfinder.io-link.com) is where they come from.
+- **How to cite:** `IODD §7.5.5 p.51` (clause and page of V1.1.5).
+
 ### macOS BPF and Linux packet sockets (raw Ethernet, `helmsman-l2`)
 
 - `bpf(4)` and the SDK's `net/bpf.h` (MacOSX.sdk on the Studio,

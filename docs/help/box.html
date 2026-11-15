@@ -116,6 +116,19 @@ over).</p>
 last diagram stays up; the page keeps trying. "Simulate in this browser"
 offers to run the program in the page instead. A page that never reached
 a box at its address goes to the simulation by itself and says so.</p>
+<h2 id="a-device-goes-away">A device goes away</h2>
+<p>When the box loses a device (unplugged, powered off, off the
+network), every program that reads one of its inputs is
+<strong>held</strong>: it stops scanning and its outputs go to their
+safe values until the device is back. A program can handle the loss
+itself instead: for an input <code>temp_c</code>, declare a BOOL input
+<code>temp_c_ok</code>. It needs no signal in the I/O map; it reads TRUE
+while <code>temp_c</code> has a value and FALSE while its device is
+lost, and the program keeps running with <code>temp_c</code> at its last
+value. Every input the program reads from that device needs its own
+<code>_ok</code> for the program to run on. The simulation does the same
+(see Simulation, Devices), so the handling can be tested before it
+reaches the box.</p>
 <h2 id="your-work-survives-a-reload">Your work survives a reload</h2>
 <p>This browser keeps what you had in front of you: the project and file
 you had open, every edit you had not saved yet, what you had typed into

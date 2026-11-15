@@ -753,7 +753,8 @@ impl BoxView {
         match step {
             Some(Step::Ask(ask)) => self.agent_send(&ask.text, false, ctx),
             Some(Step::Apply(apply)) => self.agent_write(&apply),
-            Some(Step::Done) => {
+            // A box never asks for a plan (`steps` is the page's).
+            Some(Step::Done | Step::Wait) => {
                 self.instruct.proposed(&proposals);
                 self.log_agent();
             }
@@ -935,8 +936,9 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
             decided: self.decided.clone(),
-            swap: None,
+            steps: None,
             room_below: None,
+            progress: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
@@ -982,8 +984,9 @@ impl BoxView {
             }
             Some(Act::Undo) => self.undo_change(),
             Some(Act::Review(id)) => self.wants_review = Some(id),
-            // A box's change goes through a deploy: no Before / After here.
-            Some(Act::Show(_)) | None => {}
+            // A box's change goes through a deploy: no arrows here.
+            // A box never plans in steps (`steps` is the page's).
+            Some(Act::Revision(_) | Act::RunSteps) | None => {}
         }
     }
 
@@ -1901,7 +1904,6 @@ impl Body for BoxView {
                 running: open
                     .as_ref()
                     .is_some_and(|o| self.projects.running.as_deref() == Some(o.name.as_str())),
-                history: &self.projects.history,
                 deploy: self.writable().and_then(|()| {
                     if self.busy() {
                         Err("A save or deploy is under way.".into())
@@ -1956,6 +1958,24 @@ impl Body for BoxView {
             if let Some(a) = self.files_ui.blank_menu(ui, chrome, &write, can_paste) {
                 self.project_act(a);
             }
+        }
+    }
+
+    fn history(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if self.projects.open.is_none() {
+            ui.label(
+                RichText::new("Open a project to see its versions.").color(crate::theme::theme(ui).muted),
+            )
+            .tip("Each project keeps every saved version on the box.");
+            return;
+        }
+        // On a box a version runs only once deployed: a pick opens its
+        // details, with Restore for an engineer.
+        let rows = self.projects.history.clone();
+        if let Some(crate::history_ui::Pick::Show(n) | crate::history_ui::Pick::Details(n)) =
+            crate::history_ui::tab_ui(ui, chrome, &rows, None)
+        {
+            self.project_act(crate::projects::Act::ShowRevision(n));
         }
     }
 
