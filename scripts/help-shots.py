@@ -54,18 +54,18 @@ def clip(x, y, w, h):
 # name: (query, layout string, steps, clip or None); points, not pixels.
 # a step is ("key", "Control+Enter") | ("click", x, y) | ("rclick", x, y) | ("move", x, y) | ("wait", ms)
 SHOTS = {
-    "editor": ("?playground", layout(), [("wait", 2500)], None),
-    "editor-light": ("?playground", layout(light=1), [("wait", 2500)], None),
-    "file-menu": ("?playground", layout(), [("click", 137, 26), ("wait", 800)], clip(0, 0, 520, 300)),
-    "glyphs": ("?playground", layout(), [("move", 861, 82), ("wait", 1200)], clip(680, 56, 485, 96)),
+    "editor": ("?playground&editor", layout(), [("wait", 2500)], None),
+    "editor-light": ("?playground&editor", layout(light=1), [("wait", 2500)], None),
+    "file-menu": ("?playground&editor", layout(), [("click", 137, 26), ("wait", 800)], clip(0, 0, 520, 300)),
+    "glyphs": ("?playground&editor", layout(), [("move", 861, 82), ("wait", 1200)], clip(680, 56, 485, 96)),
     # The traffic light's GREEN := block (the first example since 2026-11-12), with the lamps in the corner.
-    "diagram-why": ("?playground", layout(), [("click", 578, 392), ("wait", 1500)], clip(320, 330, 836, 260)),
-    "files-pane": ("?playground", layout(pane="files"), [("wait", 1500)], clip(0, 52, 360, 493)),
-    "context-menu": ("?playground", layout(pane="files"), [("wait", 1500), ("rclick", 55, 373), ("wait", 800)], clip(0, 52, 360, 560)),
-    "io-tab": ("?playground", layout(pane="io", rights=""), [("wait", 1500)], clip(0, 52, 320, 423)),
-    "agent-tab": ("?playground", layout(pane="claude", rights=""), [("wait", 1500)], clip(0, 52, 320, 393)),
-    "palette-tab": ("?playground", layout(pane="palette", rights=""), [("wait", 1500)], clip(0, 52, 320, 393)),
-    "trend": ("?playground", layout(bottom="trend"), [("wait", 8000)], clip(320, 580, 836, 280)),
+    "diagram-why": ("?playground&editor", layout(), [("click", 578, 392), ("wait", 1500)], clip(320, 330, 836, 260)),
+    "files-pane": ("?playground&editor", layout(pane="files"), [("wait", 1500)], clip(0, 52, 360, 493)),
+    "context-menu": ("?playground&editor", layout(pane="files"), [("wait", 1500), ("rclick", 55, 373), ("wait", 800)], clip(0, 52, 360, 560)),
+    "io-tab": ("?playground&editor", layout(pane="io", rights=""), [("wait", 1500)], clip(0, 52, 320, 423)),
+    "agent-tab": ("?playground&editor", layout(pane="claude", rights=""), [("wait", 1500)], clip(0, 52, 320, 393)),
+    "palette-tab": ("?playground&editor", layout(pane="palette", rights=""), [("wait", 1500)], clip(0, 52, 320, 393)),
+    "trend": ("?playground&editor", layout(bottom="trend"), [("wait", 8000)], clip(320, 580, 836, 280)),
     "monitor": ("?playground&monitor", layout(), [("wait", 3000)], None),
     "monitor-stopped": ("?playground&monitor", layout(), [("wait", 2000), ("key", "Control+Enter"), ("wait", 1200)], clip(0, 52, 1400, 260)),
 }

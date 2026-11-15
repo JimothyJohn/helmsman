@@ -1,0 +1,4 @@
+# The tank the program runs against: 2 m deep, the inlet gains 0.45 m a
+# second, the process takes 0.2 m a second all the time.
+tank tank fill=fill level=level high=level_high low=level_low max=2 start=0.4 fill_rate=0.45 leak=0.2 high_at=1.6 low_at=0.2
+button reset_pb input=reset

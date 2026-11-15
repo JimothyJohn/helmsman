@@ -53,6 +53,9 @@ mod devices;
 mod diff_ui;
 mod editor;
 mod find;
+mod front;
+#[cfg(test)]
+mod front_tests;
 mod glyph_lib;
 mod glyphs;
 mod help;

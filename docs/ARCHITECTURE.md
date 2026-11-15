@@ -2899,6 +2899,25 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   value outside its type's range never reaches the program. The Trend
   tab: up to six pinned signals over the last 10 s.
 - **The live diagram** is the box's (`st_view::Viewer`).
+- **The front door** (`front.rs`; a first visit to the simulation,
+  `?front`, Help › Front page; Nick, 2026-11-14): the whole page until the
+  visitor goes on. Three cards: what was asked in plain words, a tank
+  running its program against its plant (`assets/front/`: `main.st`,
+  `plant.sim`), and the proofs, one row a requirement test, each of which
+  throws a fault at the machine (`helmsman_sim::iec`). The visitor throws
+  the same faults by hand (`front::Fault`, set on the running
+  `helmsman_sim::Plant`) and reads what the program did. `front::Front`
+  is the state, with its own `Session`; `App::front` holds it and
+  `App::show` draws nothing else while it is there. "Open the editor"
+  (`App::leave_front`) opens the built-in project `tank`, the same files,
+  and the browser remembers it (`app::FRONT_KEY`), so the next visit
+  opens on the editor; a link for something else (`?editor`, `?tour`,
+  `?monitor`, `?box=`) never sees it (`app::wants_front`). Stacked below
+  `front::STACK_BELOW` points, the machine first. Contracts in
+  `front_tests.rs` (the proofs are green and a program without the
+  safeguards fails them; each fault does what its words say) and
+  `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
+  laptop's, a tablet's and a phone's width).
 - **The guided tour** (`tour.rs`; `?tour`, Help › Take the tour; Nick,
   2026-11-06): a card beside the control each step is about, the control
   outlined, over everything in the `Tooltip` order so no panel moves. A
