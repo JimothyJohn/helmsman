@@ -448,11 +448,10 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-14
   by: claude-session
 
-- [ ] **The Agent sees your patterns and fixes them** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." The same mistake made twice, the same edit repeated across rungs of a program, a requirement always written without its fault case: the Agent notices across the session and the project's history and offers the change for all of them at once. Not shaped yet: what is kept about an engineer, where, and for how long.
-  needs: an interview after `agent-watches` is in use
-  result: a repeated mistake is pointed out once and fixed everywhere
-  depends: agent-watches
-  est: 1w
+- [ ] **The Agent sees your patterns: across sessions, and beyond compile errors** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." Built in the simulation (`crates/helmsman-canvas/src/watch.rs`): the same kind of compile error in several places is said once with one Fix it for all of them, and a kind that comes up three times in a session is said to be a habit; the count lives in the page's memory only. Left: habits that last past a reload (what is kept about an engineer, where and for how long is yours to decide: this browser only, the project, or their account on a box); patterns beyond compile errors (the same edit repeated across a program, a requirement always written without its fault case); a habit turned into a standing fix the Agent applies by itself.
+  needs: your decision on what may be kept about an engineer, and where
+  result: a repeated mistake is pointed out once and fixed everywhere, and stays learned
+  est: 4d
   difficulty: high
   id: agent-patterns
   asked: 2026-11-14
