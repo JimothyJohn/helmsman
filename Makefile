@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
+.PHONY: help install-dev lint fmt test-unit test-integration test-all live-state help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -24,6 +24,9 @@ test-integration:  ## Integration tests (property tests, loopback UDP).
 
 test-all:  ## Everything, locked to Cargo.lock.
 	./scripts/test-all.sh
+
+live-state:  ## What a visitor can reach against what is on dev: site, relay, device library, try box (exit 1 when behind).
+	./scripts/live-state.sh
 
 # ---- Interop targets --------------------------------------------------------
 
