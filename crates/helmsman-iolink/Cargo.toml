@@ -7,15 +7,29 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# `no_std`, no allocation, no dependencies, no features: the octets an
+# `no_std`, no allocation and no dependencies by default: the octets an
 # IO-Link master and a device exchange on the C/Q line, and nothing that
 # drives a transceiver. The master and the simulated device (state
 # machines, every call taking `now`) build on it, so one codec is tested
 # once, on the host.
 [dependencies]
+# Only with `iodd`: its XML reader (no DOCTYPE, no entities), already in
+# the tree for PLCopen files.
+helmsman-iec = { path = "../helmsman-iec", optional = true }
+
+# `iodd`: read a Device's IODD file (`iodd`), for a host that names the
+# Process Data. It allocates and is not for the node.
+[features]
+iodd = ["dep:helmsman-iec"]
+
+[[test]]
+name = "iodd"
+required-features = ["iodd"]
 
 [dev-dependencies]
 proptest = "1.12"
+# The tests build with `iodd` on, so `cargo test --workspace` runs them.
+helmsman-iolink = { path = ".", features = ["iodd"] }
 
 [lints]
 workspace = true

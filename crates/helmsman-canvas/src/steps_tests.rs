@@ -143,8 +143,9 @@ fn the_requests_say_what_is_asked() {
 
 // ---- the flow ----
 
-/// The answer that ran out of room becomes a plan; nothing is sent until
-/// it is approved; each step builds on the last on a copy; the file is
+/// The answer that ran out of room becomes a plan; its first step goes
+/// at once, with no approval (Nick, 2026-11-14: "just go"); each step
+/// builds on the last on a copy; the file is
 /// written once, one revision, with every step's scenario kept.
 #[test]
 fn an_answer_that_ran_out_of_room_goes_in_steps_written_once_at_the_end() {
@@ -158,11 +159,8 @@ fn an_answer_that_ran_out_of_room_goes_in_steps_written_once_at_the_end() {
 
     let sent = v.link.sent.len();
     reply(&mut v, PLAN);
-    assert_eq!(plan_state(&v), Some(PlanState::Proposed));
-    assert_eq!(v.link.sent.len(), sent, "nothing goes before it is approved");
-
-    v.run_steps(&egui::Context::default());
     assert_eq!(plan_state(&v), Some(PlanState::Running));
+    assert_eq!(v.link.sent.len(), sent + 1, "step 1 goes without a click");
     assert!(last_user(&v).contains("Step 1 of 2"), "{}", last_user(&v));
     reply(&mut v, &answer(&horn(), &horn_follows()));
     assert_eq!(v.proj.files["main.st"], LAMP, "the file waits for the last step");
@@ -215,7 +213,6 @@ fn a_step_that_fails_pauses_the_plan_for_the_engineer() {
     send(&mut v, "add a horn and latch the lamp");
     cut_off(&mut v);
     reply(&mut v, PLAN);
-    v.run_steps(&egui::Context::default());
     reply(&mut v, &answer(&horn(), &horn_follows()));
     // Step 2 never latches: red on every try.
     let red = answer(&horn(), &latches());
@@ -251,7 +248,6 @@ fn a_step_that_runs_out_of_room_is_split_and_the_plan_carries_on() {
     send(&mut v, "add a horn and latch the lamp");
     cut_off(&mut v);
     reply(&mut v, PLAN);
-    v.run_steps(&egui::Context::default());
     reply(&mut v, &answer(&horn(), &horn_follows()));
     let sent = v.link.sent.len();
     cut_off(&mut v);
@@ -298,7 +294,6 @@ fn a_step_that_cannot_be_split_pauses_with_a_way_on() {
     send(&mut v, "add a horn and latch the lamp");
     cut_off(&mut v);
     reply(&mut v, PLAN);
-    v.run_steps(&egui::Context::default());
     cut_off(&mut v);
     reply(&mut v, "1. Add a horn that sounds with start.");
     let Some(PlanState::Paused(problems)) = plan_state(&v) else {
