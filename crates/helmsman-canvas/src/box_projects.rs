@@ -134,6 +134,9 @@ pub enum PCall {
     /// knows of the sensor or actuator a point is wired to (answered by
     /// the view, not here).
     Wired(String),
+    /// `GET /api/devices/library?q=`: the picker's search by the number
+    /// on a label (answered by the view, not here).
+    FindWired,
     /// A device's own configuration (`/api/devices/{id}/config...`),
     /// answered by the Devices tab (`device_config.rs`).
     Config(String, crate::device_config::ConfigOp),
@@ -498,6 +501,14 @@ impl BoxProjects {
         self.queue.push(PReq::get(
             PCall::Wired(wired.to_string()),
             format!("/api/devices/library?wired={wired}"),
+        ));
+    }
+
+    /// Searches the device library for the picker (`wired.rs`).
+    pub fn find_wired(&mut self, query: &str) {
+        self.queue.push(PReq::get(
+            PCall::FindWired,
+            format!("/api/devices/library?q={}", crate::remote::segment(query)),
         ));
     }
 
@@ -1796,6 +1807,7 @@ impl BoxProjects {
             | PCall::Discover
             | PCall::Library
             | PCall::Wired(_)
+            | PCall::FindWired
             | PCall::Config(..)
             | PCall::Desk
             | PCall::SaveDesk => {}

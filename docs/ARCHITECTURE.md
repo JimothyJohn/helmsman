@@ -398,15 +398,21 @@ scan; the scheduler bounds how often.
   The box serves a record's brief from `GET
   /api/devices/library?wired=VENDOR/MODEL` (and beside a `q=` match), and
   `list_devices` brings it for every wired point as `wired_devices`.
-  `list_library_devices` (a box tool, read-only, over MCP today; the
-  relay's profiles do not list it yet) searches the library by vendor,
+  `list_library_devices` (a box tool, read-only, over MCP; the relay's
+  Agent from profile `helmsman/v11`) searches the library by vendor,
   model or the number on a label and gives each match's `wired` value
   and brief, which is what an agent needs to write `wired=` on a line.
-  On a box the canvas's Devices tab puts a line under a wired point
+  The canvas's Devices and I/O tabs put a line under a wired point
   with the vendor, the model and the kind, the rest in its tooltip
-  (`devices.rs`, `WiredBrief`; one lookup a record). The playground,
-  which has no box, names the folder. A picker that writes `wired=` is
-  not built (TODO.md `iodd-metadata`);
+  (`devices.rs`, `WiredBrief`; `wired.rs`, `show_line`; one lookup a
+  record): a box answers from `?wired=`, the playground, which has no
+  box, reads the library's index and then the record's `record.json`
+  itself (`wired::Library`, one fetch at a time, none until a map
+  names one). "What is wired here…" on a point opens the picker
+  (`wired::Pick`): it searches by the number on the label (a box's
+  `?q=`, the playground's `Index::search`), offers only records with
+  no protocol, and writes or clears `wired=` on that one line
+  (`wired::set_wired`);
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
   screen TILE` an output no device takes (the retired floor screen's
   tiles, below). Older maps read unchanged;

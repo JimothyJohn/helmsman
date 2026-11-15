@@ -164,6 +164,12 @@ pub struct PlaygroundView {
     /// The device library's index, fetched when the Devices tab scans.
     #[cfg(target_arch = "wasm32")]
     library: crate::web::TextFetch,
+    /// One wired device's `record.json`, fetched for the line under its point.
+    #[cfg(target_arch = "wasm32")]
+    record: crate::web::TextFetch,
+    /// What the playground has read of the device library: the index and
+    /// the records the map names (`wired.rs`).
+    pub(crate) wired_lib: crate::wired::Library,
     /// A one-line note under the top bar (loaded an example, …).
     pub notice: Option<String>,
     /// The text of `notice` while it says the program is running in this
@@ -265,6 +271,9 @@ impl PlaygroundView {
             survey_other: String::new(),
             #[cfg(target_arch = "wasm32")]
             library: crate::web::TextFetch::default(),
+            #[cfg(target_arch = "wasm32")]
+            record: crate::web::TextFetch::default(),
+            wired_lib: crate::wired::Library::default(),
             log: crate::messages::Log::default(),
             seen: Seen::default(),
             notice: None,
@@ -1639,6 +1648,11 @@ impl PlaygroundView {
                 .note(format!("Renamed {} to {}.", plan.old, plan.new), false);
             self.edited(f64::NEG_INFINITY);
         }
+        match self.devices_ui.pick_ui(&ui.ctx().clone(), chrome) {
+            Some(crate::wired::PickAct::Search(_)) => self.wired_lib.search(&mut self.devices_ui),
+            Some(crate::wired::PickAct::Set { signal, wired }) => self.set_wired(&signal, wired.as_deref()),
+            None => {}
+        }
         if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
@@ -1856,13 +1870,20 @@ impl PlaygroundView {
             self.link.check_free(&base, ctx);
         }
         #[cfg(target_arch = "wasm32")]
-        if let Some(r) = self.library.take() {
-            match r.and_then(|t| helmsman_project::devlib::Index::parse(&t)) {
-                Ok(index) => self.devices_ui.attach_library(&index),
-                Err(why) => {
-                    self.devices_ui.library_note =
-                        Some(format!("the device library could not be read: {why}"));
-                }
+        {
+            if let Some(r) = self.library.take() {
+                self.wired_lib.index_answer(r, &mut self.devices_ui);
+            }
+            if let Some(r) = self.record.take() {
+                self.wired_lib.record_answer(r, &mut self.devices_ui);
+            }
+            match self
+                .wired_lib
+                .next(helmsman_project::devlib::DEFAULT_URL, &mut self.devices_ui)
+            {
+                Some(crate::wired::Fetch::Index(url)) => self.library.fetch(&url, ctx),
+                Some(crate::wired::Fetch::Record(_, url)) => self.record.fetch(&url, ctx),
+                None => {}
             }
         }
         for m in self.link.drain() {
@@ -2339,12 +2360,11 @@ impl Body for PlaygroundView {
             .filter(|f| crate::devices::is_eds(f))
             .cloned()
             .collect();
+        self.want_wired();
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.simulated_scan(&map);
-                #[cfg(target_arch = "wasm32")]
-                self.library
-                    .fetch(helmsman_project::devlib::DEFAULT_URL, &ui.ctx().clone());
+                self.wired_lib.scan(&mut self.devices_ui);
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
             Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
@@ -2444,6 +2464,15 @@ impl PlaygroundView {
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
         let outputs: Vec<Point> = self.session.outputs().cloned().collect();
         let on_map = self.on_map();
+        // What is wired to each point, from io.map and the library.
+        self.devices_ui.map = helmsman_project::iomap::skim(
+            self.proj
+                .files
+                .get(helmsman_project::IO_MAP)
+                .map_or("", String::as_str),
+        );
+        self.want_wired();
+        let wired = crate::wired::by_signal(&self.devices_ui.map);
         let off_map: Vec<&Point> = inputs
             .iter()
             .filter(|p| !on_map.iter().any(|r| r.eq_ignore_ascii_case(&p.name)))
@@ -2469,11 +2498,22 @@ impl PlaygroundView {
             egui::Grid::new("pg-io-in").num_columns(cols).show(ui, |ui| {
                 for pair in off_map.chunks(cols) {
                     for p in pair {
-                        ui.scope(|ui| {
+                        // A column: the line saying what is wired goes under the control.
+                        ui.vertical(|ui| {
                             ui.set_max_width(col);
                             let r = ui.scope(|ui| input_ui(ui, p));
                             if let Some(v) = r.inner {
                                 set.push((p.name.clone(), v));
+                            }
+                            if let Some(w) = wired.get(&p.name.to_ascii_lowercase()) {
+                                crate::wired::show_line(
+                                    ui,
+                                    chrome,
+                                    &p.name,
+                                    w,
+                                    self.devices_ui.wired.get(w),
+                                    0.0,
+                                );
                             }
                             self.input_rects
                                 .push((p.name.to_ascii_lowercase(), r.response.rect));
@@ -2516,10 +2556,20 @@ impl PlaygroundView {
             let grid = egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
                 for pair in outputs.chunks(cols) {
                     for p in pair {
-                        ui.scope(|ui| {
+                        ui.vertical(|ui| {
                             ui.set_max_width(col);
                             if output_ui(ui, p) {
                                 picked = Some(p.name.clone());
+                            }
+                            if let Some(w) = wired.get(&p.name.to_ascii_lowercase()) {
+                                crate::wired::show_line(
+                                    ui,
+                                    chrome,
+                                    &p.name,
+                                    w,
+                                    self.devices_ui.wired.get(w),
+                                    0.0,
+                                );
                             }
                         });
                     }
@@ -3425,6 +3475,36 @@ impl PlaygroundView {
     }
 
     /// The inputs the diagram shows a control for.
+    /// Every `wired=` value of the map not looked up yet, queued for the
+    /// library (the Devices and I/O tabs' line under a point).
+    fn want_wired(&mut self) {
+        while let Some(w) = self.devices_ui.wired_wanted() {
+            self.wired_lib.want(w);
+        }
+    }
+
+    /// The picker's choice: `wired=` written on (or taken off) `signal`'s
+    /// line in io.map.
+    fn set_wired(&mut self, signal: &str, wired: Option<&str>) {
+        let Some(t) = self.proj.files.get_mut(helmsman_project::IO_MAP) else {
+            return;
+        };
+        match crate::wired::set_wired(t, signal, wired) {
+            Some(new) => {
+                *t = new;
+                let what = match wired {
+                    Some(w) => format!("{signal} is wired to {w} in io.map."),
+                    None => format!("{signal}'s wired= taken out of io.map."),
+                };
+                self.proj.note(what, false);
+                self.edited(f64::NEG_INFINITY);
+            }
+            None => self
+                .proj
+                .note(format!("{signal} has no line in io.map to record it on."), true),
+        }
+    }
+
     pub(crate) fn on_map(&self) -> Vec<String> {
         let Some(v) = &self.viewer else { return Vec::new() };
         v.reads_on_screen().into_iter().map(|(path, _)| path).collect()
