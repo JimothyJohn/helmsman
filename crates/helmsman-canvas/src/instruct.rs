@@ -1146,32 +1146,42 @@ pub struct Progress {
     /// The answer is in and checked; the program waits for its name (a
     /// change to a built-in example becomes a project of its own).
     pub naming: bool,
-    /// About how long this answer takes, s ([`estimate_secs`]).
-    pub estimate: Option<u64>,
+    /// The least and the usual most this instruction takes, s
+    /// ([`estimate_secs`]).
+    pub estimate: Option<(u64, u64)>,
 }
 
-/// About how long an answer takes, s, rounded up to 5 (Nick, 2026-11-13:
-/// "you can at least give it a quick idea of how long it might take in
-/// seconds"): 6 s and a quarter second a line of the file it changes, 15 s
-/// for a new project; at most 2 minutes. From the free chat's timings on
-/// 2026-11-13: 6 to 9 s for files of 10 to 25 lines, 12 to 16 s for the
-/// 22-line traffic example, 19 s for a new project.
+/// How long an instruction takes, s, as (the least, the usual most), each
+/// a multiple of 5 (Nick, 2026-11-14: the single "about 10 s" was passed
+/// about half the time; "it should say DEFINITELY greater than a time").
+/// The clock runs from the instruction through its retries, so the range
+/// is the whole wait. One answer takes about 6 s and a quarter second a
+/// line of the file it changes, 15 s for a new project: the least is
+/// seven tenths of that rounded down (a new project came back in 14 s),
+/// the most three and a half of it rounded up, which holds a retry and a
+/// slow answer. From the free chat's timings: 6 to 9 s for
+/// files of 10 to 25 lines and 19 s for a new project on 2026-11-13; 11,
+/// 11, 14, 17, 22 and 26 s for six ladder rungs on 2026-11-14 (one, one,
+/// one, one, three and two requests).
 #[must_use]
-pub fn estimate_secs(lines: Option<usize>) -> u64 {
+pub fn estimate_secs(lines: Option<usize>) -> (u64, u64) {
     #[allow(clippy::cast_precision_loss)]
-    let raw = lines.map_or(15.0, |n| 6.0 + 0.25 * n as f64);
+    let one = lines.map_or(15.0, |n| 6.0 + 0.25 * n as f64);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let five = ((raw / 5.0).ceil() as u64 * 5).clamp(5, 120);
-    five
+    let least = ((one * 0.7 / 5.0).floor() as u64 * 5).clamp(5, 60);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let most = ((one * 3.5 / 5.0).ceil() as u64 * 5).clamp(15, 300);
+    (least, most)
 }
 
-/// The clock in the status line: `4 s of about 10 s`, and once past it
-/// `14 s, longer than usual`; just `4 s` with no estimate.
+/// The clock in the status line: `4 s · takes 5 to 30 s`, and once past
+/// the range `41 s · longer than the usual 30 s`; just `4 s` with no
+/// estimate.
 #[must_use]
-pub fn clock(secs: u64, estimate: Option<u64>) -> String {
+pub fn clock(secs: u64, estimate: Option<(u64, u64)>) -> String {
     match estimate {
-        Some(e) if secs <= e => format!("{secs} s of about {e} s"),
-        Some(_) => format!("{secs} s, longer than usual"),
+        Some((least, most)) if secs <= most => format!("{secs} s · takes {least} to {most} s"),
+        Some((_, most)) => format!("{secs} s · longer than the usual {most} s"),
         None => format!("{secs} s"),
     }
 }

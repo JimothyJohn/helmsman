@@ -770,8 +770,9 @@ impl FilesUi {
     /// The name asked for (new project, a copy, a rename, a new file) as
     /// a box in the middle of the screen over a dimmed page, whichever
     /// tab is up (Nick, 2026-11-05: the New project prompt a popup, not
-    /// a field in the side panel). Enter or OK uses the name; Cancel,
-    /// Escape or a click outside leaves things as they are. The view
+    /// a field in the side panel). Enter or OK uses the name; Cancel or
+    /// Escape leaves things as they are; a click outside does nothing
+    /// ([`crate::theme::escaped`]). The view
     /// draws it each frame after the Editor; returns what was asked.
     pub fn naming_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<Act> {
         let n = self.naming.clone()?;
@@ -844,7 +845,7 @@ impl FilesUi {
                 Naming::RenameFile(from) => Act::RenameFile { from, to: name },
             });
         }
-        if cancel || m.should_close() {
+        if cancel || crate::theme::escaped(&m) {
             self.naming = None;
         }
         None
