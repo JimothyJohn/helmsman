@@ -14,7 +14,21 @@ use crate::prelude::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     pub kind: ExprKind,
+    /// Where diagnostics point: the operator of a binary, the `.`, `[` or
+    /// `(` of a member, index or call, the first token of anything else.
     pub pos: Pos,
+    /// The first token of the expression's text, so `start..end` is the
+    /// whole of it. Differs from `pos` for a binary, member, index, bit or
+    /// call (their `pos` is the operator or bracket). Parentheses around
+    /// an expression belong to it: `(a + b)` starts at the `(`. A unary
+    /// `+`, which leaves no node of its own, is likewise part of its
+    /// operand's text.
+    pub start: Pos,
+    /// Exclusive: the position just past the expression's last token (a
+    /// closing `)` or `]` included), before any whitespace or comment that
+    /// follows it. The text from `start` to `end` parses back to this
+    /// tree, positions aside.
+    pub end: Pos,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +140,13 @@ pub type Block = Vec<Stmt>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stmt {
     pub kind: StmtKind,
+    /// The statement's first token, so `pos..end` is the whole of it.
     pub pos: Pos,
+    /// Exclusive: the position just past the statement's last token, its
+    /// terminating `;` (`END_IF;` included for a block statement), before
+    /// any whitespace or comment that follows. The text from `pos` to `end`
+    /// parses back to this statement, positions aside.
+    pub end: Pos,
 }
 
 /// One arm of a CASE: its labels and statements.
@@ -1043,6 +1063,7 @@ impl Parser {
                 return Ok(Stmt {
                     kind: StmtKind::Empty,
                     pos,
+                    end: self.prev_end(),
                 });
             }
             Tok::Ident(kw) => match kw.as_str() {
@@ -1085,7 +1106,11 @@ impl Parser {
             t => return self.err(format!("expected a statement, found {t}")),
         };
         self.expect_semi("statement")?;
-        Ok(Stmt { kind, pos })
+        Ok(Stmt {
+            kind,
+            pos,
+            end: self.prev_end(),
+        })
     }
 
     fn assign_or_call(&mut self) -> R<StmtKind> {
@@ -1300,6 +1325,8 @@ impl Parser {
             chain += 1;
             let rhs = self.binary(level + 1)?;
             lhs = Expr {
+                start: lhs.start,
+                end: rhs.end,
                 kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
                 pos,
             };
@@ -1321,6 +1348,8 @@ impl Parser {
                             prefix: None,
                         },
                         pos,
+                        start: pos,
+                        end: self.prev_end(),
                     });
                 }
                 Tok::Real { value, prefix: None } => {
@@ -1331,6 +1360,8 @@ impl Parser {
                             prefix: None,
                         },
                         pos,
+                        start: pos,
+                        end: self.prev_end(),
                     });
                 }
                 _ => {}
@@ -1339,14 +1370,17 @@ impl Parser {
             let e = self.unary()?;
             self.depth -= 1;
             return Ok(Expr {
+                end: e.end,
                 kind: ExprKind::Unary(UnOp::Neg, Box::new(e)),
                 pos,
+                start: pos,
             });
         }
         if self.eat(&Tok::Plus) {
             self.deeper(1)?;
-            let e = self.unary()?;
+            let mut e = self.unary()?;
             self.depth -= 1;
+            e.start = pos;
             return Ok(e);
         }
         if self.eat_kw("NOT") {
@@ -1354,8 +1388,10 @@ impl Parser {
             let e = self.unary()?;
             self.depth -= 1;
             return Ok(Expr {
+                end: e.end,
                 kind: ExprKind::Unary(UnOp::Not, Box::new(e)),
                 pos,
+                start: pos,
             });
         }
         self.postfix()
@@ -1371,6 +1407,8 @@ impl Parser {
             chain += 1;
             let rhs = self.unary()?;
             lhs = Expr {
+                start: lhs.start,
+                end: rhs.end,
                 kind: ExprKind::Binary(BinOp::Pow, Box::new(lhs), Box::new(rhs)),
                 pos,
             };
@@ -1430,6 +1468,8 @@ impl Parser {
                     match self.advance().0 {
                         Tok::Ident(m) => {
                             e = Expr {
+                                start: e.start,
+                                end: self.prev_end(),
                                 kind: ExprKind::Member(Box::new(e), m),
                                 pos,
                             }
@@ -1437,6 +1477,8 @@ impl Parser {
                         Tok::Int { value, prefix: None } if (0..64).contains(&value) => {
                             let bit = u8::try_from(value).unwrap_or(0);
                             e = Expr {
+                                start: e.start,
+                                end: self.prev_end(),
                                 kind: ExprKind::Bit(Box::new(e), bit),
                                 pos,
                             };
@@ -1457,6 +1499,8 @@ impl Parser {
                     }
                     self.expect(&Tok::RBracket)?;
                     e = Expr {
+                        start: e.start,
+                        end: self.prev_end(),
                         kind: ExprKind::Index(Box::new(e), idx),
                         pos,
                     };
@@ -1470,6 +1514,8 @@ impl Parser {
                     self.advance();
                     let args = self.args()?;
                     e = Expr {
+                        start: e.start,
+                        end: self.prev_end(),
                         kind: ExprKind::Call(Box::new(e), args),
                         pos,
                     };
@@ -1501,6 +1547,9 @@ impl Parser {
                     };
                     return Self::err_at(at, format!("missing ): the ( at {pos} is never closed"));
                 }
+                let mut e = e;
+                e.start = pos;
+                e.end = self.prev_end();
                 return Ok(e);
             }
             Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => ExprKind::Var(s),
@@ -1511,7 +1560,12 @@ impl Parser {
                 });
             }
         };
-        Ok(Expr { kind, pos })
+        Ok(Expr {
+            kind,
+            pos,
+            start: pos,
+            end: self.prev_end(),
+        })
     }
 }
 
