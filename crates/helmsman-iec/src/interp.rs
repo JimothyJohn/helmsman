@@ -486,6 +486,8 @@ impl Machine<'_> {
         let mut i = match p.base {
             Base::Image(loc) => return Ok(Target::Image(loc)),
             Base::Frame => self.base + p.off,
+            // The program's frame starts the memory.
+            Base::Global => p.off,
             // The checker only builds a reference over a variable of the
             // process, and `Move::Ref` stores a slot of `mem`, so the
             // referent is a valid slot.

@@ -557,3 +557,61 @@ fn bitwise_not_on_a_word_stays_a_block() {
 "
     );
 }
+
+// ---- module globals ----
+
+const GLOBALS: &str = "VAR_GLOBAL total : INT; armed : BOOL; END_VAR
+FUNCTION_BLOCK add
+VAR_INPUT n : INT; END_VAR
+VAR_EXTERNAL total : INT; END_VAR
+total := total + n;
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK arm
+VAR_OUTPUT q : BOOL; END_VAR
+q := NOT armed;
+armed := TRUE;
+END_FUNCTION_BLOCK
+PROGRAM t
+VAR seen : INT; END_VAR
+seen := total;
+total := seen + 1;
+END_PROGRAM
+";
+
+/// A global is drawn as any variable is: a read where it is read and a
+/// write where it is written, in the program and in a block, whether the
+/// block names it `VAR_EXTERNAL` or not.
+#[test]
+fn a_read_and_a_write_of_a_global_are_in_the_diagram() {
+    let (_, m) = build(GLOBALS);
+    assert_eq!(
+        program_shape(&m),
+        "\
+#0 read TOTAL
+#1 write SEEN := <- #0
+#2 const 1
+#3 op + <- #1 #2
+#4 write TOTAL := <- #3
+"
+    );
+    assert_eq!(
+        shape(&m.pou("ADD").unwrap().diagram),
+        "\
+#0 read TOTAL
+#1 read N
+#2 op + <- #0 #1
+#3 write TOTAL := <- #2
+"
+    );
+    // Not declared in this block: still a read (it was drawn as a constant),
+    // and a BOOL one, so its NOT is a bubble on the write.
+    assert_eq!(
+        shape(&m.pou("ARM").unwrap().diagram),
+        "\
+#0 read ARMED
+#1 write Q := <- !#0
+#2 const TRUE
+#3 write ARMED := <- #2
+"
+    );
+}

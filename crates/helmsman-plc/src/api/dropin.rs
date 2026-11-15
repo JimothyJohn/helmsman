@@ -434,6 +434,8 @@ fn from_st(src: &str, source: &str) -> Result<Project, Refused> {
                 Section::Output => "Output",
                 Section::InOut => "InOut",
                 Section::Var | Section::Temp => "Local",
+                // It names a module global and adds no variable of its own.
+                Section::External => continue,
             };
             tags.push(l5x::Tag {
                 name: v.name.clone(),

@@ -154,6 +154,37 @@ END_PROGRAM
 }
 
 #[test]
+fn global_initialisers_read_back_from_their_spans() {
+    // Bare, in a CONFIGURATION and in its RESOURCE: all three are walked.
+    let src = "TYPE pt : STRUCT x : INT := 1 + 2; y : INT; END_STRUCT; END_TYPE
+VAR_GLOBAL CONSTANT
+  k : INT := 2 * 3;
+END_VAR
+VAR_GLOBAL
+  g : INT := k + ( 1 ) (* one *) ;
+  arr : ARRAY[0..3] OF INT := [1, 2 (* two *), 3 + 4, 5];
+  p : pt := (x := ( 8 + 9 ), y := - 2);
+END_VAR
+CONFIGURATION cfg
+  VAR_GLOBAL c : INT := - 7; END_VAR
+  RESOURCE r ON plc
+    VAR_GLOBAL RETAIN d : REAL := 1.5E3; e : INT := k; END_VAR
+  END_RESOURCE
+END_CONFIGURATION
+PROGRAM t
+VAR a : INT := g; END_VAR
+a := 1;
+END_PROGRAM
+";
+    let n = check(src).unwrap_or_else(|e| panic!("{e}"));
+    // The same program with no global initialiser at all has fewer nodes
+    // to check: the walker reads the globals' ones too.
+    let bare = "PROGRAM t\nVAR a : INT := 1; END_VAR\na := 1;\nEND_PROGRAM\n";
+    let m = check(bare).unwrap_or_else(|e| panic!("{e}"));
+    assert!(n >= m + 15, "global initialisers are walked: {n} against {m}");
+}
+
+#[test]
 fn library_statement_ranges_are_not_empty() {
     for pou in &ast::library().pous {
         // Library POUs use `system` names, which `ast::parse` refuses

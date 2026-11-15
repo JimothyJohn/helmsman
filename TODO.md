@@ -472,16 +472,6 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **VAR_GLOBAL inside one module** — decided (Nick, 2026-11-08: `st-dialect-line`): VAR_GLOBAL is accepted at CONFIGURATION / RESOURCE scope inside one module and refused across modules, with a message that says signals are how modules talk. Imported CODESYS and Beremiz code uses it everywhere; the corpus will show how often. Oracle cases, property tests, the PLCopen importer's lowering of global variable lists, a relay profile id.
-  result: a CODESYS or Beremiz project with globals imports into one module unchanged
-  est: 1d
-  difficulty: med
-  depends: st-corpus
-  id: st-var-global
-  asked: 2026-11-08
-  by: claude-session
-  status: ready
-
 - [ ] **STRING[n], then typed asserts** — fixed-length `STRING[n]` (default 80 as the standard), with concatenation, LEN, LEFT/RIGHT/MID, CONCAT, FIND, comparisons and the conversions, bounded so the scan stays bounded and the edge node still builds (no_std: no heap). WSTRING later. Then the TcUnit idea from §5: `ASSERT_EQ_<TYPE>(Expected, Actual, Message)` (one block per type, no generics) so a red requirement test reads "speed was 40, expected 50 at 3.2 s" in the Requirements tab and in the agent's retry message. Oracle cases, property tests (every length boundary, invalid UTF-8 refused at the lexer), relay profile id.
   result: messages, recipe names, device IDs and OPC UA / webhook payloads can be written in ST; a failed test says what it saw
   est: 4d
@@ -508,6 +498,32 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   id: matiec-oracle
   asked: 2026-11-08
   by: claude-session
+
+- [ ] **The diagram draws a VAR_IN_OUT argument as a read** — found while building `st-var-in-out` (#446, 2026-11-15): a function block can write through its in-out argument, but helmsman-diagram's lowering draws that argument as an input wire only, so the write the block makes is missing from the picture and the diagram edits (`edit.rs`, built before in-outs existed) have never been tried on such a call. Draw the in-out as both ways, extend the generators in crates/helmsman-diagram/tests/props.rs to call blocks with in-outs and functions with outputs, and make each edit either work on those calls or refuse in plain words.
+  result: a block that takes a buffer by reference shows that it changes it, and editing around it from the diagram is safe
+  est: 1d
+  difficulty: med
+  id: diagram-in-out
+  asked: 2026-11-15
+  by: claude-session (board run)
+
+- [ ] **A relay profile that knows VAR_IN_OUT, function outputs and VAR_GLOBAL** — the box and the playground accept them (#446 and this card's PR, 2026-11-15) but the served agent profiles still tell the model they are refused. A new profile id in ../agent-relay must say: VAR_IN_OUT on a FUNCTION_BLOCK only, given by name at every call, a plain variable, element or member of exactly the same type, never a located variable, a PROGRAM input, an expression or a constant, never the same variable twice in one call; VAR_OUTPUT on a FUNCTION, every one bound with `=>` at every call (a call that leaves one out is refused, as ruSTy does: Nick, 2026-11-15); VAR_GLOBAL blocks stand before the first POU (or in a CONFIGURATION and its one RESOURCE), every POU of the module reads and writes a global by name, VAR_EXTERNAL may name one with exactly its type and no initial value (VAR_EXTERNAL CONSTANT for a CONSTANT global, or to read only). Refused: a local with a global's name, a global passed as a VAR_IN_OUT, VAR_GLOBAL inside a POU, TASK and program instances, VAR_ACCESS and VAR_CONFIG; a global is never a port and no other module sees it. A served profile never changes, so this is a new id and the box's and the playground's default moves to it.
+  needs: a session in ../agent-relay for the profile, then your deploy
+  result: the agent writes and repairs programs with the syntax the compiler now takes
+  est: 3h
+  difficulty: low
+  id: relay-profile-dialect-2
+  asked: 2026-11-15
+  by: claude-session (board run)
+
+- [ ] **A CONFIGURATION's tasks and program instances are read past, with a warning** — decided (Nick, 2026-11-15): `TASK` lines and `PROGRAM name WITH task : type;` instances in a `CONFIGURATION` / `RESOURCE` are refused in Structured Text today (`st-var-global`, #450) but silently ignored by the PLCopen importer (`<task>`, `<pouInstance>`), and the 25 configuration files of the ST corpus (matiec 20, iec-checker 5) all stop at `TASK`. Do the same thing in both: parse them, run nothing from them, and say so on the warnings path (#346: the check answer's `warnings`, the canvas rows, the CLI lines) with the task's interval in the words, since a module's scan rate is set where it is deployed. `VAR_ACCESS` and `VAR_CONFIG` stay refused. Tests: each form the corpus uses (INTERVAL, PRIORITY, SINGLE, program instances with and without a task, with input and output connections), the warning's text from both the ST and the XML path, hostile input, the spans of what follows; then the corpus ranking in INVESTIGATION.md §3 and its must-compile list.
+  result: an exported configuration imports as one module, and the engineer is told its task rate was not taken from the file
+  est: 4h
+  difficulty: low
+  id: st-configuration-tasks
+  asked: 2026-11-15
+  by: claude-session (board run)
+  status: ready
 
 ## From user feedback: plan for later
 

@@ -1614,3 +1614,62 @@ fn new_edits_do_not_move_on_crlf_mixed_case_and_non_ascii_comments() {
     .unwrap();
     assert_eq!(out, s.replace("b := 5; // ✓\r\n c := 6;", "// ✓\r\n c := 6;"));
 }
+
+// ---- module globals ----
+
+const GLOBALS: &str = "VAR_GLOBAL total, spare : INT; armed : BOOL; END_VAR
+VAR_GLOBAL CONSTANT top : INT := 9; END_VAR
+FUNCTION_BLOCK add
+VAR_INPUT n : INT; END_VAR
+VAR_EXTERNAL total : INT; END_VAR
+total := total + n;
+END_FUNCTION_BLOCK
+PROGRAM t
+VAR seen : INT; ok : BOOL; END_VAR
+seen := total + 1;
+ok := armed AND ok;
+END_PROGRAM
+";
+
+/// The edits that splice an expression work on a global as on any
+/// variable; the compiler has the last word on each result.
+#[test]
+fn a_global_is_edited_like_any_variable() {
+    let out = rewire(GLOBALS, "TOTAL + 1", 0, var("spare")).unwrap();
+    assert_eq!(out, GLOBALS.replace("seen := total + 1", "seen := spare + 1"));
+    let out = rewire(GLOBALS, "TOTAL + 1", 1, var("TOP")).unwrap();
+    assert_eq!(out, GLOBALS.replace("seen := total + 1", "seen := total + top"));
+    let out = toggle(GLOBALS, "ARMED AND OK", 0).unwrap();
+    assert_eq!(out, GLOBALS.replace("armed AND ok", "NOT armed AND ok"));
+    let out = set(GLOBALS, "TOTAL + 1", 1, Literal::Int(4)).unwrap();
+    assert_eq!(out, GLOBALS.replace("total + 1", "total + 4"));
+    assert!(mismatch(
+        &rewire(GLOBALS, "TOTAL + 1", 0, var("armed")).unwrap_err()
+    ));
+}
+
+/// A rename is one POU's text. A global's name is the module's, so each
+/// way a rename could touch one is refused and the source is left alone.
+#[test]
+fn a_rename_never_splits_a_global_from_its_declaration() {
+    let say = |pou: &str, from: &str, to: &str| rename_in(GLOBALS, pou, from, to).unwrap_err();
+    // Used in the program with no declaration there.
+    assert_eq!(
+        say("t", "total", "sum"),
+        Refusal::NoSuchVariable {
+            name: "total".into(),
+            pou: "T".into()
+        }
+    );
+    // Named VAR_EXTERNAL in the block: the VAR_GLOBAL is outside it.
+    let e = say("add", "total", "sum").to_string();
+    assert!(e.contains("this module has no VAR_GLOBAL SUM"), "{e}");
+    // A local cannot take a global's name.
+    for (pou, from) in [("t", "seen"), ("add", "n")] {
+        let e = say(pou, from, "spare").to_string();
+        assert!(
+            e.contains("SPARE is a global variable of this module"),
+            "{pou}: {e}"
+        );
+    }
+}
