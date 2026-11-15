@@ -119,7 +119,7 @@ impl Fault {
         match self {
             Self::None => "The tank fills when it runs low and stops when it is full.",
             Self::HighStuck => {
-                "The fill ran longer than a fill takes, so the inlet closed below the brim and the alarm came on."
+                "The fill ran too long, so the inlet closed below the brim and the alarm came on."
             }
             Self::SwitchesLost => {
                 "With its inputs gone the program is held: the inlet is closed until the switches are back."
@@ -188,11 +188,13 @@ impl Front {
     /// reset is let go.
     pub fn tick(&mut self, t: f64) {
         self.since.get_or_insert(t);
+        // The scans up to now run before a pressed reset is let go, so a
+        // press is seen by the program however long the frame took.
+        self.session.advance(t);
         if self.pressed_until.is_some_and(|until| t >= until) {
             self.pressed_until = None;
             self.session.set_input("reset", Value::Bool(false));
         }
-        self.session.advance(t);
         self.peak = self.peak.max(self.level());
     }
 
@@ -281,4 +283,497 @@ impl Front {
     pub fn held(&self) -> bool {
         self.session.held
     }
+}
+
+// ---- the screen ----
+
+use eframe::egui::{
+    self, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
+};
+
+use crate::editor::Chrome;
+use crate::st_view::brand::{BLACK, GRAPHITE, GREEN, RED, STEEL, WARN, WHITE};
+use crate::tips::Tip;
+
+/// What the visitor asked of the front door.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    /// On to the editor, on this project.
+    OpenEditor,
+}
+
+/// Body text and the smallest text, pt (card `ui-legibility`).
+const BODY: f32 = 18.0;
+const SMALL: f32 = 16.0;
+/// Below this width the three parts stack.
+pub const STACK_BELOW: f32 = 980.0;
+/// The widest the page's content gets.
+const MAX_WIDTH: f32 = 1320.0;
+/// The machine's picture.
+const PICTURE: Vec2 = Vec2::new(340.0, 290.0);
+/// The height kept for the sentence under the picture: three lines of it.
+const SAYING: f32 = 78.0;
+/// Water.
+const WATER: Color32 = Color32::from_rgb(0x2E, 0x8B, 0xD6);
+
+/// Draws the front door and says what the visitor asked for.
+pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, f: &mut Front) -> Option<Act> {
+    let t = crate::theme::theme(ui);
+    let now = ui.input(|i| i.time);
+    f.tick(now);
+    // The machine moves and the proofs appear by themselves.
+    ui.ctx().request_repaint();
+    let mut act = None;
+    let page = ui.max_rect();
+    ui.painter().rect_filled(page, CornerRadius::ZERO, t.bg);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let width = ui.available_width().min(MAX_WIDTH);
+            let side = ((ui.available_width() - width) / 2.0).max(0.0) + 20.0;
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(side as i8, 18))
+                .show(ui, |ui| {
+                    ui.set_max_width(width - 40.0);
+                    if head(ui, chrome, &t) {
+                        act = Some(Act::OpenEditor);
+                    }
+                    ui.add_space(18.0);
+                    if ui.available_width() >= STACK_BELOW {
+                        ui.columns(3, |c| {
+                            asked(&mut c[0], chrome, &t);
+                            machine(&mut c[1], chrome, &t, f, now);
+                            proofs(&mut c[2], chrome, &t, f, now);
+                        });
+                    } else {
+                        asked(ui, chrome, &t);
+                        ui.add_space(18.0);
+                        machine(ui, chrome, &t, f, now);
+                        ui.add_space(18.0);
+                        proofs(ui, chrome, &t, f, now);
+                    }
+                    ui.add_space(22.0);
+                    if foot(ui, chrome, &t) {
+                        act = Some(Act::OpenEditor);
+                    }
+                });
+        });
+    act
+}
+
+/// The wordmark, the way on, and what this page is. `true` when "Open
+/// the editor" was clicked.
+fn head(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) -> bool {
+    let mut open = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("HELMSMAN").color(t.accent).size(22.0).strong());
+        ui.label(RichText::new("early release").color(t.muted).size(SMALL));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let r = ui
+                .add(egui::Button::new(RichText::new("Open the editor").size(BODY)))
+                .tip("The program, its live diagram, its files and the Agent, on this same tank.");
+            chrome.hit("front open editor", r.rect);
+            open = r.clicked();
+        });
+    });
+    ui.add_space(14.0);
+    let r = ui.add(
+        egui::Label::new(
+            RichText::new("A control program that proves itself before it runs the machine")
+                .color(t.fg)
+                .size(30.0)
+                .strong(),
+        )
+        .wrap(),
+    );
+    chrome.hit("front headline", r.rect);
+    ui.add_space(6.0);
+    ui.add(
+        egui::Label::new(
+            RichText::new(
+                "This tank's program answers the four requirements below. Each proof is a test that breaks something on the machine and checks the program keeps it safe. Break it yourself with the buttons under the tank.",
+            )
+            .color(t.muted)
+            .size(BODY),
+        )
+        .wrap(),
+    );
+    open
+}
+
+/// A part's heading.
+fn heading(ui: &mut egui::Ui, t: &crate::theme::Theme, text: &str) {
+    ui.label(RichText::new(text).color(t.accent).size(20.0).strong());
+    ui.add_space(8.0);
+}
+
+/// What was asked, in the engineer's words, and the program behind a fold.
+fn asked(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) {
+    heading(ui, t, "What was asked");
+    for (k, line) in ASKED.iter().enumerate() {
+        ui.horizontal_top(|ui| {
+            ui.label(RichText::new(format!("{}.", k + 1)).color(t.muted).size(BODY));
+            let r = ui.add(egui::Label::new(RichText::new(*line).color(t.fg).size(BODY)).wrap());
+            chrome.hit(format!("front asked {}", k + 1), r.rect);
+        });
+        ui.add_space(6.0);
+    }
+    ui.add_space(8.0);
+    let fold = egui::CollapsingHeader::new(RichText::new("The program").color(t.fg).size(BODY))
+        .id_salt("front program")
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(format!(
+                    "{} lines of Structured Text (IEC 61131-3).",
+                    MAIN.lines().count()
+                ))
+                .color(t.muted)
+                .size(SMALL),
+            );
+            egui::ScrollArea::both()
+                .id_salt("front program text")
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(MAIN).color(t.code).font(FontId::monospace(SMALL)))
+                            .extend(),
+                    );
+                });
+        });
+    chrome.hit("front program", fold.header_response.rect);
+}
+
+/// The tank, what is happening to it, and the faults to throw.
+fn machine(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &mut Front, now: f64) {
+    heading(ui, t, "The machine");
+    let size = Vec2::new(PICTURE.x.min(ui.available_width()), PICTURE.y);
+    let (r, _) = ui.allocate_exact_size(size, Sense::hover());
+    chrome.hit("front machine", r);
+    paint_tank(ui.painter(), r, t, f, now);
+    ui.add_space(8.0);
+    // Room for its longest sentence, so the buttons under it stay put
+    // when it changes.
+    let (says, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), SAYING), Sense::hover());
+    let galley = ui
+        .painter()
+        .layout(saying(f), FontId::proportional(BODY), t.fg, says.width());
+    let said = Rect::from_min_size(says.min, galley.size());
+    ui.painter().galley(says.min, galley, t.fg);
+    chrome.hit("front saying", said);
+    ui.add_space(10.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Break it:").color(t.muted).size(SMALL));
+        for fault in Fault::ALL {
+            let r = ui
+                .add(egui::Button::selectable(
+                    f.fault == fault,
+                    RichText::new(fault.label()).size(BODY),
+                ))
+                .tip(fault.tip());
+            chrome.hit(format!("front fault {fault:?}"), r.rect);
+            if r.clicked() {
+                f.set_fault(fault);
+            }
+        }
+        let r = ui
+            .add_enabled(
+                f.alarm(),
+                egui::Button::new(RichText::new("Press reset").size(BODY)),
+            )
+            .tip("The operator's reset button. It clears the alarm only once the fault is gone.");
+        chrome.hit("front reset", r.rect);
+        if r.clicked() {
+            f.press_reset(now);
+        }
+    });
+}
+
+/// One sentence on what the machine is doing now.
+#[must_use]
+pub fn saying(f: &Front) -> String {
+    let happened = match f.fault {
+        Fault::None => false,
+        Fault::HighStuck | Fault::BothOn => f.alarm(),
+        Fault::SwitchesLost => f.held(),
+    };
+    if happened {
+        return match f.fault {
+            Fault::HighStuck => format!("{} Peak {:.2} m of {DEPTH:.0} m.", f.fault.outcome(), f.peak),
+            _ => f.fault.outcome().to_string(),
+        };
+    }
+    if f.alarm() {
+        "The alarm is latched and the inlet closed. Press reset.".into()
+    } else if f.fault == Fault::HighStuck {
+        if f.filling() {
+            "The high switch is dead. The tank is filling past it.".into()
+        } else {
+            "The high switch is dead. Wait for the tank to run low and fill.".into()
+        }
+    } else if f.filling() {
+        "Running low: the inlet is open.".into()
+    } else {
+        "Full enough: the inlet is closed while the process draws it down.".into()
+    }
+}
+
+/// The tank: water to its level, the brim, both switches with what they
+/// read, the inlet with its valve, the alarm lamp, and a band across it
+/// while the program is held.
+fn paint_tank(p: &egui::Painter, area: Rect, t: &crate::theme::Theme, f: &Front, now: f64) {
+    let text = |at: Pos2, anchor: egui::Align2, s: &str, colour: Color32| {
+        p.text(at, anchor, s, FontId::proportional(SMALL), colour);
+    };
+    let tank = Rect::from_min_max(
+        Pos2::new(area.left() + 70.0, area.top() + 64.0),
+        Pos2::new(area.right() - 96.0, area.bottom() - 34.0),
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    let y_of = |m: f64| tank.bottom() - (m / DEPTH).clamp(0.0, 1.0) as f32 * tank.height();
+    // Water, then the walls over it (open at the top).
+    let level = f.level();
+    let water = Rect::from_min_max(Pos2::new(tank.left(), y_of(level)), tank.max);
+    p.rect_filled(water, CornerRadius::ZERO, WATER);
+    let wall = Stroke::new(3.0, t.fg);
+    p.line_segment([tank.left_top(), tank.left_bottom()], wall);
+    p.line_segment([tank.left_bottom(), tank.right_bottom()], wall);
+    p.line_segment([tank.right_bottom(), tank.right_top()], wall);
+    text(
+        Pos2::new(tank.center().x, tank.top() - 4.0),
+        egui::Align2::CENTER_BOTTOM,
+        "brim",
+        t.muted,
+    );
+    // The inlet: a pipe from the left over the wall, its valve, the stream.
+    let pipe_y = tank.top() - 34.0;
+    let spout = Pos2::new(tank.left() + 34.0, pipe_y);
+    let pipe = Stroke::new(6.0, STEEL);
+    p.line_segment([Pos2::new(area.left() + 4.0, pipe_y), spout], pipe);
+    p.line_segment([spout, Pos2::new(spout.x, pipe_y + 14.0)], pipe);
+    let valve = Pos2::new(area.left() + 34.0, pipe_y);
+    let open = f.filling();
+    p.circle(
+        valve,
+        13.0,
+        if open { GREEN } else { GRAPHITE },
+        Stroke::new(2.0, BLACK),
+    );
+    text(
+        Pos2::new(valve.x, valve.y - 16.0),
+        egui::Align2::CENTER_BOTTOM,
+        if open { "inlet open" } else { "inlet closed" },
+        if open { t.ink(GREEN) } else { t.muted },
+    );
+    if open {
+        // The stream, with a ripple so it reads as moving.
+        #[allow(clippy::cast_possible_truncation)]
+        let wobble = ((now * 9.0).sin() * 1.5) as f32;
+        p.line_segment(
+            [
+                Pos2::new(spout.x, pipe_y + 14.0),
+                Pos2::new(spout.x + wobble, water.top().max(pipe_y + 14.0)),
+            ],
+            Stroke::new(5.0, WATER),
+        );
+    }
+    // The switches, on the right wall at the level each makes.
+    let lost = f.fault == Fault::SwitchesLost;
+    for (name, at, on) in [("high", HIGH_AT, f.high()), ("low", LOW_AT, f.low())] {
+        let c = Pos2::new(tank.right() + 16.0, y_of(at));
+        p.line_segment(
+            [
+                Pos2::new(tank.right() - 10.0, c.y),
+                Pos2::new(tank.right() + 6.0, c.y),
+            ],
+            Stroke::new(2.0, t.fg),
+        );
+        let (fill, word) = if lost {
+            (GRAPHITE, "lost")
+        } else if on {
+            (GREEN, "on")
+        } else {
+            (GRAPHITE, "off")
+        };
+        p.circle(c, 8.0, fill, Stroke::new(1.5, BLACK));
+        if lost {
+            let d = Vec2::splat(5.0);
+            let cross = Stroke::new(2.0, RED);
+            p.line_segment([c - d, c + d], cross);
+            p.line_segment([c + Vec2::new(-5.0, 5.0), c + Vec2::new(5.0, -5.0)], cross);
+        }
+        text(
+            Pos2::new(c.x + 13.0, c.y),
+            egui::Align2::LEFT_CENTER,
+            &format!("{name}: {word}"),
+            if on && !lost { t.ink(GREEN) } else { t.muted },
+        );
+    }
+    // The level, in the water or just above it.
+    text(
+        Pos2::new(tank.center().x, (water.top() + 6.0).min(tank.bottom() - 22.0)),
+        egui::Align2::CENTER_TOP,
+        &format!("{level:.2} m"),
+        WHITE,
+    );
+    text(
+        Pos2::new(tank.center().x, tank.bottom() + 6.0),
+        egui::Align2::CENTER_TOP,
+        "the process draws it down",
+        t.muted,
+    );
+    // The alarm lamp, top right: lit and pulsing while on.
+    let lamp = Pos2::new(area.right() - 30.0, area.top() + 26.0);
+    if f.alarm() {
+        #[allow(clippy::cast_possible_truncation)]
+        let pulse = 0.25 + 0.2 * ((now * 5.0).sin() as f32).abs();
+        p.circle_filled(lamp, 20.0, RED.gamma_multiply(pulse));
+        p.circle_filled(lamp, 13.0, RED);
+    } else {
+        p.circle(lamp, 13.0, RED.linear_multiply(0.18), Stroke::new(1.0, BLACK));
+    }
+    text(
+        Pos2::new(lamp.x, lamp.y + 18.0),
+        egui::Align2::CENTER_TOP,
+        "alarm",
+        if f.alarm() { t.ink(RED) } else { t.muted },
+    );
+    if f.held() {
+        let band = Rect::from_center_size(tank.center(), Vec2::new(tank.width() + 24.0, 34.0));
+        p.rect(
+            band,
+            CornerRadius::same(6),
+            BLACK,
+            Stroke::new(1.5, WARN),
+            StrokeKind::Outside,
+        );
+        p.text(
+            band.center(),
+            egui::Align2::CENTER_CENTER,
+            "program held, outputs safe",
+            FontId::proportional(SMALL),
+            WARN,
+        );
+    }
+}
+
+/// The proofs, appearing one by one, then what they add up to.
+fn proofs(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &Front, now: f64) {
+    heading(ui, t, "The proofs");
+    let shown = f.shown(now);
+    for (k, row) in f.proofs.iter().take(shown).enumerate() {
+        let passed = row.state == State::Passed;
+        ui.horizontal_top(|ui| {
+            let (mark, _) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::hover());
+            paint_mark(ui.painter(), mark, passed);
+            let room = ui.available_width();
+            ui.vertical(|ui| {
+                ui.set_max_width(room);
+                let r =
+                    ui.add(egui::Label::new(RichText::new(&row.requirement).color(t.fg).size(BODY)).wrap());
+                chrome.hit(format!("front proof {}", k + 1), r.rect);
+                let under = if passed {
+                    format!("Proved over {} of machine time.", seconds(row.elapsed_ms))
+                } else {
+                    row.why.clone()
+                };
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(under)
+                            .color(if passed { t.muted } else { t.ink(RED) })
+                            .size(SMALL),
+                    )
+                    .wrap(),
+                );
+            });
+        });
+        ui.add_space(8.0);
+    }
+    if shown < f.proofs.len() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(
+                RichText::new(format!("Proving {} of {}", shown + 1, f.proofs.len()))
+                    .color(t.muted)
+                    .size(BODY),
+            );
+        });
+        return;
+    }
+    ui.add_space(4.0);
+    let r = ui.add(egui::Label::new(RichText::new(summary(f)).color(t.fg).size(BODY).strong()).wrap());
+    chrome.hit("front summary", r.rect);
+    ui.add_space(4.0);
+    ui.add(
+        egui::Label::new(
+            RichText::new("The same tests run on the controller before every deploy. A red one refuses it.")
+                .color(t.muted)
+                .size(SMALL),
+        )
+        .wrap(),
+    );
+}
+
+/// `12 s` or `0.5 s`.
+fn seconds(ms: u64) -> String {
+    if ms >= 10_000 {
+        format!("{} s", ms / 1000)
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        let s = ms as f64 / 1000.0;
+        format!("{s:.1} s")
+    }
+}
+
+/// What the proofs add up to.
+#[must_use]
+pub fn summary(f: &Front) -> String {
+    let n = f.proofs.len();
+    let green = f.proofs.iter().filter(|r| r.state == State::Passed).count();
+    if green == n {
+        format!(
+            "All {n} proved: {} s of machine time, checked in this page in a moment.",
+            f.proved_s()
+        )
+    } else {
+        format!("{green} of {n} proved. The program would be refused.")
+    }
+}
+
+/// A green disc with a tick, or a red one with a cross.
+fn paint_mark(p: &egui::Painter, r: Rect, passed: bool) {
+    let c = r.center();
+    p.circle_filled(c, 11.0, if passed { GREEN } else { RED });
+    let ink = Stroke::new(2.5, BLACK);
+    if passed {
+        p.line_segment([c + Vec2::new(-5.0, 0.5), c + Vec2::new(-1.5, 4.0)], ink);
+        p.line_segment([c + Vec2::new(-1.5, 4.0), c + Vec2::new(5.5, -4.0)], ink);
+    } else {
+        p.line_segment([c + Vec2::new(-4.5, -4.5), c + Vec2::new(4.5, 4.5)], ink);
+        p.line_segment([c + Vec2::new(-4.5, 4.5), c + Vec2::new(4.5, -4.5)], ink);
+    }
+}
+
+/// The way on, again, for someone who read to the bottom. `true` when
+/// clicked.
+fn foot(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) -> bool {
+    ui.separator();
+    ui.add_space(10.0);
+    let mut open = false;
+    ui.horizontal_wrapped(|ui| {
+        let r = ui
+            .add(egui::Button::new(
+                RichText::new("Change this program yourself").size(BODY).strong(),
+            ))
+            .tip("Opens the editor on this tank. Tell the Agent what to change in plain words; every change is proved the same way before it lands.");
+        chrome.hit("front change", r.rect);
+        open = r.clicked();
+        ui.label(
+            RichText::new(
+                "Structured Text (IEC 61131-3), EtherNet/IP and Modbus TCP, one controller.",
+            )
+            .color(t.muted)
+            .size(SMALL),
+        );
+    });
+    open
 }
