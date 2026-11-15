@@ -390,8 +390,15 @@ scan; the scheduler bounds how often.
   (`Index::by_wired`; a sensor's record has no protocol, an
   `identity.iolink` and its order numbers as `products`, and is never the
   match for a device found on the network). The record is drafted in the
-  library from the device's IODD. Nothing shows it in the canvas yet
-  (TODO.md `iodd-metadata`);
+  library from the device's IODD, and its detail is `record.json` in its
+  folder (`helmsman_project::devrecord`: what the device is, its on/off
+  signals and what their states are called, its wires, its factory
+  settings, `draft` until a unit was checked, and which signal the
+  switching wire carries only when the library has that from the manual).
+  The box serves a record's brief from `GET
+  /api/devices/library?wired=VENDOR/MODEL` (and beside a `q=` match), and
+  `list_devices` brings it for every wired point as `wired_devices`.
+  Nothing shows it in the canvas yet (TODO.md `iodd-metadata`);
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
   screen TILE` an output no device takes (the retired floor screen's
   tiles, below). Older maps read unchanged;

@@ -765,9 +765,57 @@ fn list_devices(api: &dyn Caller) -> Outcome {
             "devices": devices, "map_lines_skipped": map.odd,
             "on_the_network": network, "network_unavailable": unavailable,
             "plant_states": plant,
+            "wired_devices": wired_devices(api, &map),
         }),
         summary,
     )
+}
+
+/// Most library records one `list_devices` looks up.
+const MAX_WIRED: usize = 16;
+
+/// What is wired to the map's points: for each `wired=VENDOR/MODEL` a
+/// point names, the device library's record in brief (what the sensor or
+/// actuator is, its on/off signals and what their states are called, its
+/// factory settings), from `GET /api/devices/library?wired=`. A record
+/// the library does not have, or cannot be read, says so under
+/// `unavailable`; nothing here fails the listing.
+fn wired_devices(api: &dyn Caller, map: &helmsman_project::iomap::MapText) -> Json {
+    let mut out = Map::new();
+    for wired in map.signals.iter().filter_map(|s| s.wired()) {
+        if out.contains_key(wired) {
+            continue;
+        }
+        if out.len() == MAX_WIRED {
+            out.insert("more".into(), json!("only the first 16 are looked up"));
+            break;
+        }
+        // The box's parser has already held the value to VENDOR/MODEL;
+        // a skimmed map may hold anything, so it is held to that again
+        // before it goes into a path.
+        let known = helmsman_project::iomap::wired_ok(wired);
+        let found = if known {
+            match api.get(&format!("/api/devices/library?wired={wired}")) {
+                Ok((200, j)) => match j["matches"].get(0) {
+                    Some(m) if m["device"].is_object() => m["device"].clone(),
+                    Some(m) => {
+                        json!({ "unavailable": m["device_unavailable"].as_str().unwrap_or("the library has no record for it") })
+                    }
+                    None => {
+                        json!({ "unavailable": j["unavailable"].as_str().unwrap_or("not in the device library") })
+                    }
+                },
+                Ok((s, b)) => {
+                    json!({ "unavailable": format!("{s}: {}", b["error"].as_str().unwrap_or("no reason given")) })
+                }
+                Err(e) => json!({ "unavailable": e }),
+            }
+        } else {
+            json!({ "unavailable": "not a device library folder (VENDOR/MODEL)" })
+        };
+        out.insert(wired.to_string(), found);
+    }
+    Json::Object(out)
 }
 
 /// `list_devices`'s one-line summary.
@@ -2004,6 +2052,67 @@ END_FUNCTION_BLOCK
         assert!(points[0]["wired"].is_null(), "{}", o.data);
         assert_eq!(points[1]["signal"], "level_in");
         assert_eq!(points[1]["wired"], "ifm/o5d100", "{}", o.data);
+        // No library route on this box: said, not fatal.
+        assert_eq!(
+            o.data["wired_devices"]["ifm/o5d100"]["unavailable"], "404: no such resource",
+            "{}",
+            o.data
+        );
+    }
+
+    #[test]
+    fn list_devices_brings_the_librarys_record_for_what_is_wired() {
+        let brief = json!({"wired": "ifm/o5d100", "vendor": "ifm", "kind": "sensor", "draft": true,
+            "signals": [{"dir": "in", "name": "Switch state [OUT1]", "on": "Active", "off": "Inactive"}]});
+        let map = "in a bool box di:0 wired=ifm/o5d100\nin b bool box di:1 wired=ifm/o5d100\n\
+                   in c bool box di:2 wired=ifm/gone\nin d bool box di:3 wired=ifm/none\n\
+                   in e bool box di:4 wired=../../etc\nin f bool box di:5 wired=a/b?q=x\n";
+        let mut r = routes(vec![
+            (
+                "GET /api/devices/library?wired=ifm/o5d100",
+                200,
+                json!({"matches": [{"vendor": "ifm", "device": brief}]}),
+            ),
+            (
+                "GET /api/devices/library?wired=ifm/gone",
+                200,
+                json!({"matches": [{"vendor": "ifm", "device_unavailable": "404"}]}),
+            ),
+            (
+                "GET /api/devices/library?wired=ifm/none",
+                200,
+                json!({"matches": []}),
+            ),
+        ]);
+        r.0.retain(|(k, _, _)| k != "GET /api/io_map");
+        r.0.push(("GET /api/io_map".into(), 200, json!({"text": map})));
+        let o = list_devices(&r);
+        assert!(o.ok, "{}", o.data);
+        let wired = o.data["wired_devices"].as_object().expect("an object");
+        assert_eq!(wired.len(), 5, "one entry a record, not a point: {}", o.data);
+        assert_eq!(wired["ifm/o5d100"], brief);
+        assert_eq!(wired["ifm/gone"]["unavailable"], "404");
+        assert_eq!(wired["ifm/none"]["unavailable"], "not in the device library");
+        // Never asked of the box: not a library folder.
+        assert_eq!(
+            wired["../../etc"]["unavailable"],
+            "not a device library folder (VENDOR/MODEL)"
+        );
+        assert_eq!(
+            wired["a/b?q=x"]["unavailable"],
+            "not a device library folder (VENDOR/MODEL)"
+        );
+        // More records than are looked up: the rest is said.
+        let lines: Vec<String> = (0..20)
+            .map(|k| format!("in s{k} bool box di:{k} wired=v/m{k}"))
+            .collect();
+        let many = lines.join("\n");
+        r.0.retain(|(k, _, _)| k != "GET /api/io_map");
+        r.0.push(("GET /api/io_map".into(), 200, json!({"text": many})));
+        let o = list_devices(&r);
+        let wired = o.data["wired_devices"].as_object().unwrap();
+        assert_eq!(wired.len(), 17, "{}", o.data);
+        assert!(wired.contains_key("more"));
     }
 
     #[test]

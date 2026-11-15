@@ -97,6 +97,9 @@ pub struct Entry {
     pub iolink: Option<(u16, u32)>,
     /// The order numbers the record covers, as on the label.
     pub products: Vec<String>,
+    /// The folder has a `record.json` ([`crate::devrecord`]): a wired
+    /// sensor's or actuator's detail.
+    pub record: bool,
 }
 
 impl Entry {
@@ -285,6 +288,11 @@ fn entry(j: &Json) -> Result<Entry, String> {
             products.push(name.to_string());
         }
     }
+    let record = match j.get("record") {
+        None => false,
+        Some(r) if r.as_str() == Some(crate::devrecord::FILE) => true,
+        Some(_) => return Err(format!("{folder}: record: not {}", crate::devrecord::FILE)),
+    };
     Ok(Entry {
         folder,
         vendor,
@@ -296,6 +304,7 @@ fn entry(j: &Json) -> Result<Entry, String> {
         profile: (!profile.is_empty()).then_some(profile),
         iolink,
         products,
+        record,
     })
 }
 
@@ -458,7 +467,7 @@ mod tests {
         { "folder": "devices/ifm/if6123", "vendor": "ifm",
           "model": "IF6123, IF6124, IG6615, IG6616", "kind": "sensor",
           "identity": { "iolink": { "vendor_id": 310, "device_id": 791 } },
-          "products": ["IF6123", "IF6124", "IG6615", "IG6616"] },
+          "products": ["IF6123", "IF6124", "IG6615", "IG6616"], "record": "record.json" },
         { "folder": "devices/acme/relay-sensor", "vendor": "Acme", "model": "Relay 8 sensor", "kind": "sensor",
           "identity": { "iolink": { "vendor_id": 7, "device_id": 16777215 } }, "products": ["RS-8"] } ] }"#;
 
@@ -470,6 +479,14 @@ mod tests {
         assert_eq!(e.iolink, Some((310, 791)));
         assert_eq!(e.products.len(), 4);
         assert_eq!(e.wired(), "ifm/if6123");
+        assert!(e.record && !i.devices[0].record && !i.devices[2].record);
+        assert_eq!(
+            e.file_url("https://x/main", crate::devrecord::FILE),
+            "https://x/main/devices/ifm/if6123/record.json"
+        );
+        assert!(
+            Index::parse(&SENSORS.replace(r#""record": "record.json""#, r#""record": "../x.json""#)).is_err()
+        );
         assert!(!e.networked());
         assert!(i.devices[0].networked());
         assert_eq!((i.devices[0].iolink, i.devices[0].products.len()), (None, 0));
