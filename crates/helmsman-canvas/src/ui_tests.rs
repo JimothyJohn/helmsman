@@ -3921,26 +3921,71 @@ mod simulated {
     }
 
     #[test]
-    fn scroll_pans_pinch_zooms_and_the_instance_view_switches_diagrams() {
+    fn scroll_and_pinch_zoom_a_drag_and_the_keys_pan_and_the_instance_view_switches_diagrams() {
         let mut h = stations();
         // Inside the diagram, left of its right edge.
         let centre = Pos2::new(h.app.chrome.diagram.right() - 150.0, 450.0);
+        let wheel = |y: f32| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, y),
+            modifiers: Modifiers::NONE,
+            phase: eframe::egui::TouchPhase::Move,
+            source: eframe::egui::MouseWheelSource::Wheel,
+        };
+        // Nick, 2026-11-14: the wheel zooms about the pointer (it moved
+        // the diagram up and down): what is under the pointer stays there.
         let before = sim_view(&h).cams[0];
-        h.frame(vec![
-            Event::PointerMoved(centre),
-            Event::MouseWheel {
-                unit: MouseWheelUnit::Point,
-                delta: Vec2::new(0.0, -120.0),
-                modifiers: Modifiers::NONE,
-                phase: eframe::egui::TouchPhase::Move,
-                source: eframe::egui::MouseWheelSource::Wheel,
-            },
-        ]);
-        h.wait(0.2);
-        let panned = sim_view(&h).cams[0];
-        assert!(panned.offset.y < before.offset.y, "{before:?} -> {panned:?}");
+        let under = before.to_world(centre);
+        h.frame(vec![Event::PointerMoved(centre), wheel(120.0)]);
+        h.wait(0.3);
+        let nearer = sim_view(&h).cams[0];
+        assert!(nearer.zoom > before.zoom, "{before:?} -> {nearer:?}");
+        let now = nearer.to_world(centre);
+        assert!(
+            (now.0 - under.0).abs() < 1.0 && (now.1 - under.1).abs() < 1.0,
+            "the point under the pointer moved: {under:?} -> {now:?}"
+        );
+        h.frame(vec![wheel(-240.0)]);
+        h.wait(0.3);
+        let further = sim_view(&h).cams[0];
+        assert!(further.zoom < nearer.zoom, "scrolling back zooms out");
         h.frame(vec![Event::Zoom(1.5)]);
-        assert!(sim_view(&h).cams[0].zoom > panned.zoom);
+        let pinched = sim_view(&h).cams[0];
+        assert!(pinched.zoom > further.zoom, "a pinch still zooms");
+        // The arrow keys and W A S D move the view; right shows what is
+        // further right.
+        let held = |h: &mut Harness, key: Key| {
+            let ev = |pressed| Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            };
+            let from = sim_view(h).cams[0].offset;
+            h.frame(vec![ev(true)]);
+            h.wait(0.1);
+            h.frame(vec![ev(false)]);
+            let to = sim_view(h).cams[0].offset;
+            assert_eq!(sim_view(h).cams[0].zoom, pinched.zoom, "{key:?} zoomed");
+            to - from
+        };
+        for (key, x, y) in [
+            (Key::ArrowRight, -1.0, 0.0),
+            (Key::D, -1.0, 0.0),
+            (Key::ArrowLeft, 1.0, 0.0),
+            (Key::A, 1.0, 0.0),
+            (Key::ArrowDown, 0.0, -1.0),
+            (Key::S, 0.0, -1.0),
+            (Key::ArrowUp, 0.0, 1.0),
+            (Key::W, 0.0, 1.0),
+        ] {
+            let by = held(&mut h, key);
+            assert!(
+                by.x * x >= 0.0 && by.y * y >= 0.0 && (by.x * x + by.y * y) > 10.0,
+                "{key:?} moved the view by {by:?}"
+            );
+        }
         let v = h.app.sim.as_mut().unwrap().viewer.as_mut().unwrap();
         v.open(1);
         h.frame(vec![]);

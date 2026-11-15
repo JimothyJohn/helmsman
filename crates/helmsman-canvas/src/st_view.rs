@@ -55,6 +55,11 @@ pub const LEGIBLE: f32 = 0.75;
 /// and a block's label 18. At the 1.2 it was, a small program sat in a
 /// sixth of the canvas with 12 pt port names (2026-11-10).
 pub const FIT_MAX: f32 = 1.6;
+/// Points of wheel or two-finger scroll that zoom the diagram by e
+/// (egui's own figure for a Ctrl scroll).
+pub const SCROLL_ZOOM: f32 = 200.0;
+/// How fast a held arrow key (or W A S D) moves the view, points a second.
+pub const KEY_PAN: f32 = 900.0;
 /// The band along the diagram's top the glyph buttons sit in, points: a
 /// fit keeps the diagram below it.
 pub const GLYPH_BAND: f32 = 52.0;
@@ -1089,17 +1094,45 @@ impl Viewer {
             cam.offset.y += GLYPH_BAND;
         }
         cam.origin = area.min;
-        let (hover, scroll, zoom) = ui
-            .ctx()
-            .input(|i| (i.pointer.hover_pos(), i.smooth_scroll_delta, i.zoom_delta()));
+        // The wheel (or a two-finger scroll) zooms about the pointer, as
+        // a pinch does; a drag on empty space, the arrow keys or W A S D
+        // move the view (Nick, 2026-11-14: scroll moved it up and down).
+        let (hover, scroll, zoom, keys, dt) = ui.ctx().input(|i| {
+            use egui::Key;
+            let held = |a: Key, b: Key| f32::from(u8::from(i.key_down(a) || i.key_down(b)));
+            let keys = if i.modifiers.any() {
+                Vec2::ZERO
+            } else {
+                Vec2::new(
+                    held(Key::ArrowRight, Key::D) - held(Key::ArrowLeft, Key::A),
+                    held(Key::ArrowDown, Key::S) - held(Key::ArrowUp, Key::W),
+                )
+            };
+            (
+                i.pointer.hover_pos(),
+                i.smooth_scroll_delta,
+                i.zoom_delta(),
+                keys,
+                i.stable_dt.min(0.1),
+            )
+        });
         if response.hovered() {
-            if (zoom - 1.0).abs() > f32::EPSILON {
-                if let Some(h) = hover {
-                    cam.zoom_at(h, zoom);
-                }
-            } else if scroll != Vec2::ZERO {
-                cam.offset += scroll;
+            let zoom = if (zoom - 1.0).abs() > f32::EPSILON {
+                zoom
+            } else {
+                (scroll.y / SCROLL_ZOOM).exp()
+            };
+            if (zoom - 1.0).abs() > f32::EPSILON
+                && let Some(h) = hover
+            {
+                cam.zoom_at(h, zoom);
+            }
+            // The keys are the diagram's only while nothing is typed in.
+            if keys != Vec2::ZERO && ui.ctx().memory(|m| m.focused().is_none()) {
+                // Right shows what is further right: the diagram goes left.
+                cam.offset -= keys * KEY_PAN * dt;
                 cam.moved = true;
+                ui.ctx().request_repaint();
             }
         }
         let double = response.double_clicked();
