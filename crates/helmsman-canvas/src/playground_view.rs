@@ -1516,12 +1516,13 @@ impl PlaygroundView {
             });
         });
         chrome.hit("program form", m.response.rect);
-        // OK first: the click that pressed it also reads as a click on
-        // the modal's backdrop, which would otherwise shut the question.
+        // Only Cancel drops the answer: a click on the page behind or
+        // Escape leaves the question open, since the checked program
+        // behind it took a minute to get and is gone once this shuts.
         if ok {
             self.program_name = Some(p);
             self.confirm_program_name();
-        } else if done || m.should_close() {
+        } else if done {
             self.program_name = None;
             if let Some(a) = self.to_name.take() {
                 self.instruct
@@ -1588,9 +1589,6 @@ impl PlaygroundView {
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
-        // Drawn after the unsaved-edits question: a modal that appears in
-        // the frame a click is released in reads that release as a click
-        // on its backdrop and shuts itself.
         self.program_name_ui(&ui.ctx().clone(), chrome);
         self.revision_ui(&ui.ctx().clone(), chrome);
         for (name, r) in std::mem::take(&mut self.input_rects) {

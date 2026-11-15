@@ -3042,3 +3042,49 @@ fn thinking_only_marks_the_answer_as_planning() {
     assert!(a.thinking);
     assert!(a.text.is_empty(), "none of it is text");
 }
+
+/// A click beside the "Name this program" question, or Escape, leaves it
+/// open with the checked answer behind it (Nick, 2026-11-14: he came back
+/// to the page, clicked off the question and lost the Agent's program).
+/// Only its Cancel drops the answer.
+#[test]
+fn a_click_off_the_name_question_keeps_the_agents_answer() {
+    use crate::instruct::Kind;
+    let mut s = Screen::as_opened();
+    s.chrome.show(Pane::Claude);
+    s.frame(vec![]);
+    s.view.chat.key_mut().push_str(KEY);
+    s.view.instruct.draft = "a latch please".into();
+    s.view.send_instruction(&s.ctx.clone());
+    let latch = STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n"));
+    // Asked once for a scenario, then taken with none.
+    for n in 0..2 {
+        let (seq, _) = s.view.link.sent[n].clone();
+        s.view.link.inbox.push(Incoming::Chunk {
+            seq,
+            text: latch.clone(),
+        });
+        s.view.link.inbox.push(Incoming::End { seq });
+        s.wait(0.1);
+    }
+    assert!(s.view.program_name.is_some(), "asked for a name");
+    s.chrome.hits.clear();
+    s.wait(0.1);
+    let form = s.chrome.rect("program form").expect("the question");
+    let beside = Pos2::new(1390.0, 850.0);
+    assert!(!form.contains(beside));
+    s.click(beside);
+    s.wait(0.1);
+    assert!(s.view.program_name.is_some(), "a click outside shut the question");
+    s.key(egui::Key::Escape);
+    s.wait(0.1);
+    assert!(s.view.program_name.is_some(), "Escape shut the question");
+    // The answer is still behind it: Use this code lands the program.
+    s.chrome.hits.clear();
+    s.frame(vec![]);
+    let ok = s.chrome.rect("program ok").expect("Use this code").center();
+    s.click(ok);
+    assert!(s.view.program_name.is_none());
+    assert_eq!(s.view.new_program.as_deref(), Some("latch-2"));
+    assert_eq!(s.view.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
+}

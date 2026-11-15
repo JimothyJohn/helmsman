@@ -923,7 +923,7 @@ impl ConfigUi {
             }
         });
         chrome.hit("config form", r.response.rect);
-        if r.should_close() {
+        if crate::theme::escaped(&r) {
             close = true;
         }
         if close {
