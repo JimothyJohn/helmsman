@@ -2946,6 +2946,19 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   safeguards fails them; each fault does what its words say) and
   `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
   laptop's, a tablet's and a phone's width).
+- **The Agent watches** (`watch.rs`; Nick, 2026-11-14): what the page
+  already sees go wrong is said unasked in a card over the top of the
+  diagram (on screen whichever tab is open, not modal), one thing at a time, most urgent first (`watch::noticed`): an
+  error that stops the build, a fault, a program held by a lost input
+  with no `NAME_ok`, a red requirement test. Each is one line of what
+  went wrong, the better way when a rule knows one, and two buttons. Fix
+  it (`PlaygroundView::fix_noticed`) puts an instruction that carries the
+  failure in the Agent's box, shows the Agent tab and sends it through the
+  usual checks; Not now hides it until something else is wrong. The words
+  come from rules, not the model, so watching spends no model turn; only
+  the click does. `watch::Watching` holds it back while an edit is
+  unchecked or the Agent is at work, and until the problem has stood
+  `watch::QUIET` seconds. Contracts in `watch.rs`'s tests.
 - **The guided tour** (`tour.rs`; `?tour`, Help › Take the tour; Nick,
   2026-11-06): a card beside the control each step is about, the control
   outlined, over everything in the `Tooltip` order so no panel moves. A
