@@ -152,12 +152,8 @@ pub struct PlaygroundView {
     /// The popup a right click or double click on the diagram opened
     /// (`crate::diagram_edit`).
     pub dedit: crate::diagram_edit::EditUi,
-    /// The next rebuilt viewer keeps the one it replaces: its cameras,
-    /// its pick and the places of the blocks an edit renamed.
-    keep_view: bool,
-    /// What is deployed is what a diagram edit last wrote, or what
-    /// Undo or Redo of it restored: Undo and Redo then deploy again.
-    diagram_deployed: bool,
+    /// What a diagram edit asks of the rebuild and of Undo.
+    dstate: crate::diagram_edit::Follow,
     viewer_of: String,
     /// When the editor last changed and is not checked yet.
     pending: Option<f64>,
@@ -271,8 +267,7 @@ impl PlaygroundView {
             layers: Layers::load(tweaks),
             fresh: false,
             dedit: crate::diagram_edit::EditUi::default(),
-            keep_view: false,
-            diagram_deployed: false,
+            dstate: crate::diagram_edit::Follow::default(),
             viewer_of: String::new(),
             pending: None,
             last_pick: None,
@@ -430,7 +425,7 @@ impl PlaygroundView {
     /// Loads the open project's build into the session, compiled and
     /// stopped.
     fn reload(&mut self) {
-        self.diagram_deployed = false;
+        self.dstate.deployed = false;
         let src = self.proj.build_src();
         self.session.load(&src);
         self.pending = None;
@@ -455,7 +450,7 @@ impl PlaygroundView {
     /// and is checked after the pause. What runs waits for Deploy (typing
     /// waits; a diagram gesture deploys, [`Self::diagram_edit`]).
     fn edited(&mut self, t: f64) {
-        self.diagram_deployed = false;
+        self.dstate.deployed = false;
         self.session.src = self.proj.build_src();
         self.pending = Some(t);
         self.notice = None;
@@ -775,10 +770,10 @@ impl PlaygroundView {
         self.proj.files.insert(file.clone(), new.clone());
         self.proj.open_file(&file);
         self.edited(now);
-        self.keep_view = true;
+        self.dstate.keep_view = true;
         self.deploy_as(false);
-        self.keep_view = false;
-        self.diagram_deployed = self.diagram_in_sync();
+        self.dstate.keep_view = false;
+        self.dstate.deployed = self.diagram_in_sync();
         chrome.flash(
             &new,
             patch.start..patch.start + patch.text.len(),
@@ -803,7 +798,7 @@ impl PlaygroundView {
         if let Some(v) = &self.viewer {
             self.layers.track(v);
         }
-        let keep = std::mem::take(&mut self.keep_view);
+        let keep = std::mem::take(&mut self.dstate.keep_view);
         let previous = if keep { self.viewer.take() } else { None };
         self.fresh = true;
         self.viewer = b.module.clone().map(|m| {
@@ -3949,7 +3944,7 @@ impl Workspace for PlaygroundView {
         let id = self.source_id();
         // A diagram edit is deployed, so Undo of it is too, while the
         // diagram still shows the code as it stands.
-        let follows = self.diagram_deployed && self.diagram_in_sync();
+        let follows = self.dstate.deployed && self.diagram_in_sync();
         let Some(text) = self.proj.current_text_mut() else {
             return false;
         };
@@ -3958,10 +3953,10 @@ impl Workspace for PlaygroundView {
             let t = ctx.input(|i| i.time);
             self.edited(t);
             if follows {
-                self.keep_view = true;
+                self.dstate.keep_view = true;
                 self.deploy_as(false);
-                self.keep_view = false;
-                self.diagram_deployed = self.diagram_in_sync();
+                self.dstate.keep_view = false;
+                self.dstate.deployed = self.diagram_in_sync();
             }
         }
         done
@@ -3979,7 +3974,7 @@ impl Workspace for PlaygroundView {
     /// typed text reaches the program running. One that does not compile is
     /// refused, its errors listed, and the program running is unchanged.
     fn deploy(&mut self) {
-        self.diagram_deployed = false;
+        self.dstate.deployed = false;
         self.deploy_as(true);
     }
 

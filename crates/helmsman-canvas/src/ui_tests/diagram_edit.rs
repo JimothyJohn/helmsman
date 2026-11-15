@@ -421,7 +421,7 @@ fn a_value_that_does_not_fit_the_constant_is_refused() {
         let why = h
             .popup_error()
             .unwrap_or_else(|| panic!("no refusal for {text:?}"));
-        assert!(!why.is_empty());
+        assert_ne!(why, "");
         assert_eq!(h.file(), SRC, "{text:?}: {why}");
         h.tap("diagram value cancel");
         assert_eq!(h.stage(), "closed");
@@ -475,7 +475,8 @@ fn gestures_refuse_when_the_code_does_not_compile() {
     let mut h = Harness::editing(SRC);
     h.type_in_editor_for_test("!!");
     h.wait(1.0);
-    assert!(!h.app.sim.as_ref().unwrap().session.diags.is_empty());
+    let diags = h.app.sim.as_ref().unwrap().session.diags.len();
+    assert_ne!(diags, 0, "the typing does not compile");
     let broken = h.file();
     let at = h.op("OR");
     h.right_click(at);
@@ -582,8 +583,11 @@ fn a_red_requirement_test_leaves_the_edit_in_the_code_and_the_program_as_it_was(
     {
         let v = h.app.sim.as_mut().unwrap();
         v.proj.create("lamp", None);
-        v.proj.files.insert("main.st".into(), crate::verify_tests::LAMP.into());
-        v.proj.add_file("test_lamp.st", crate::verify_tests::FOLLOWS.into());
+        v.proj
+            .files
+            .insert("main.st".into(), crate::verify_tests::LAMP.into());
+        v.proj
+            .add_file("test_lamp.st", crate::verify_tests::FOLLOWS.into());
         v.proj.save();
         v.open_project("lamp");
     }
@@ -608,7 +612,14 @@ fn a_red_requirement_test_leaves_the_edit_in_the_code_and_the_program_as_it_was(
     let lamp = crate::verify_tests::LAMP;
     assert_eq!(h.file(), lamp.replace("lamp := start", "lamp := NOT start"));
     assert_eq!(h.deployed(), lamp, "the red test kept the old program running");
-    let note = h.app.sim.as_ref().unwrap().notice.clone().expect("a note says why");
+    let note = h
+        .app
+        .sim
+        .as_ref()
+        .unwrap()
+        .notice
+        .clone()
+        .expect("a note says why");
     assert!(note.contains("lamp"), "{note}");
     // The diagram is behind the code now: the next gesture says so.
     let at = h.block(|k, _| matches!(k, NodeKind::Write { .. }));

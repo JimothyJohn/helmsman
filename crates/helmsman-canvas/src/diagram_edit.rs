@@ -39,6 +39,17 @@ const LIST_H: f32 = 264.0;
 /// The widest a popup is, in points.
 const POPUP_W: f32 = 380.0;
 
+/// What the host remembers between a diagram edit and what follows it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Follow {
+    /// The next rebuilt viewer keeps the one it replaces: its cameras,
+    /// its pick and the places of the blocks an edit renamed.
+    pub keep_view: bool,
+    /// What is deployed is what a diagram edit last wrote, or what Undo
+    /// or Redo of it restored: Undo and Redo then deploy again.
+    pub deployed: bool,
+}
+
 /// Whether the diagram's gestures change the program.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Gate {

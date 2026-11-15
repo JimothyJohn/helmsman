@@ -608,17 +608,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 4: editing on the canvas, simulation** — st_view.rs gestures: right-click a block or pin for Change operator ▸, Negate input, Connect to… (a searchable variable list, works on touch), Edit value…, Rename…, Delete statement; double-click a constant to edit it in place. Commit: push the old text into the same `TextEditState` undoer the editor uses (`add_undo`, its own entry), so Ctrl+Z undoes a diagram edit like typing; mark dirty; scroll the ST to the patch and highlight it about 1.5 s; rebuild the `Viewer` keeping the camera and the picked block.
-  result: in the playground and browser projects an engineer changes logic on the diagram and the code follows
-  notes: the edited block keeps its dragged position: the patch returns old key → new key for arrange.rs (blocks match by POU, label, text, ordinal, and the text changes). Tooltips on everything, 18 pt text, popups capped to the column; `every_tab_leaves_the_panels_their_width` stays green. Headless tests: gesture → buffer text, Undo restores it, the position carries over.
-  est: 1.5d
-  difficulty: high
-  depends: diagram-edit-rewire
-  id: diagram-edit-canvas
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits 5: on a box** — the same gestures on a box, on only for an engineer (`writable()`) and only while the diagram shows the open buffer, not the running module; otherwise off with a tooltip saying why. Nothing new on the box: Save and Deploy go through the existing policy, which sets the tier from the diff.
   result: diagram edits on a Pi land like typed edits, approval and audit unchanged
   notes: box_projects_tests: edit, Save, the stale-save 409, against the real API. A diagram edit runs on a box only after Deploy, the same as typing.
