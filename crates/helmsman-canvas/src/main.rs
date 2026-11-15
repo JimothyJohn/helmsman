@@ -49,6 +49,7 @@ mod desk;
 mod device_config;
 mod device_form;
 mod device_form_ui;
+mod device_proposal;
 mod devices;
 mod diff_ui;
 mod editor;

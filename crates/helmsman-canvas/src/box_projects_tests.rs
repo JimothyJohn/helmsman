@@ -3900,3 +3900,137 @@ fn a_file_that_does_not_compile_is_still_saved_to_the_box_with_everything_in_it(
     assert!(stored.ends_with('\n'), "{stored:?}");
     assert_eq!(text_of(p, "main.st"), stored);
 }
+
+// ---- the agent's device profile, on the Devices tab ----
+
+/// The E1213's profile, as the agent would propose it.
+const E1213_PROFILE: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
+
+impl Bench {
+    /// The agent's `propose_device_profile`: the box token posts it.
+    fn propose(&self, name: &str, text: &str, summary: &str) -> u16 {
+        let body = serde_json::json!({ "name": name, "text": text, "summary": summary }).to_string();
+        let head = format!(
+            "POST /api/device-profile/proposal HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            crate::box_tests::TOKEN,
+            body.len()
+        );
+        self.raw(&head, body.as_bytes()).0
+    }
+}
+
+/// Frames and the box's answers, a poll's worth of page time at a time,
+/// until `done` holds (a deadline, no sleeps).
+fn pump_until(b: &Bench, jar: &Jar, h: &mut Harness, what: &str, mut done: impl FnMut(&mut Harness) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        h.frame(vec![]);
+        let Harness { ctx, app, time } = h;
+        pump(b, jar, app.boxv.as_mut().unwrap(), ctx, *time);
+        h.frame(vec![]);
+        if done(h) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        // The next read of the proposal is due.
+        h.time += crate::device_proposal::POLL_S + 0.1;
+    }
+}
+
+#[test]
+fn a_proposed_profile_is_shown_renamed_and_saved_into_the_open_project_on_a_real_box() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line3", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.press("pane devices");
+    h.wait(0.3);
+
+    // Nothing pending: the first read comes back 404 and nothing is shown.
+    let mut rounds = 0;
+    pump_until(&b, &jar, &mut h, "the first read", |_| {
+        rounds += 1;
+        rounds >= 2
+    });
+    assert!(h.app.chrome.rect("proposal").is_none());
+
+    // The agent proposes; the tab shows it.
+    assert_eq!(
+        b.propose("e1213-copy", E1213_PROFILE, "Read from the E1213's manual."),
+        201
+    );
+    pump_until(&b, &jar, &mut h, "the proposal on the tab", |h| {
+        h.app.chrome.rect("proposal save").is_some()
+    });
+    assert!(h.app.chrome.rect("proposal channel DI-00").is_some());
+    assert_eq!(
+        h.bv().devices_ui.proposal.held.as_ref().unwrap().channels.len(),
+        40
+    );
+
+    // The engineer renames a channel and saves.
+    h.press("proposal channel DI-00");
+    for pressed in [true, false] {
+        h.frame(vec![Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }]);
+    }
+    h.frame(vec![Event::Text("part_present".into())]);
+    h.frame(vec![]);
+    h.press("proposal save");
+    pump_until(&b, &jar, &mut h, "the saved file in the open project", |h| {
+        h.bv()
+            .projects
+            .open
+            .as_ref()
+            .and_then(|o| o.bufs.get("e1213-copy.device"))
+            .is_some_and(|f| f.loaded)
+    });
+    let saved = b.json("/api/projects/line3/files/e1213-copy.device");
+    let text = saved["text"].as_str().unwrap();
+    assert!(text.contains("in part_present"), "{text}");
+    assert!(!text.contains("in DI-00 "), "the old name is gone: {text}");
+    assert!(text.contains("DI-01"), "the others are as proposed");
+    assert_eq!(
+        h.bv().projects.open.as_ref().unwrap().bufs["e1213-copy.device"].text,
+        text
+    );
+    // The proposal is gone from the box and from the tab, and the tab
+    // says what was saved.
+    let (status, _) = b.get("/api/device-profile/proposal");
+    assert_eq!(status, 404);
+    h.frame(vec![]);
+    assert!(h.app.chrome.rect("proposal save").is_none());
+    assert!(
+        h.app.chrome.rect("proposal done").is_some(),
+        "the note of what was saved"
+    );
+    assert_eq!(h.bv().devices_ui.proposal.saved_file(), Some("e1213-copy.device"));
+
+    // A second proposal under the same name: the file is not replaced.
+    assert_eq!(b.propose("e1213-copy", E1213_PROFILE, "Again."), 201);
+    pump_until(&b, &jar, &mut h, "the second proposal", |h| {
+        h.app.chrome.rect("proposal save").is_some()
+    });
+    h.press("proposal save");
+    pump_until(&b, &jar, &mut h, "the refusal beside the name", |h| {
+        h.bv().devices_ui.proposal.refusals.name.is_some()
+    });
+    assert_eq!(
+        b.json("/api/projects/line3/files/e1213-copy.device")["text"]
+            .as_str()
+            .unwrap(),
+        text,
+        "the file that was there is untouched"
+    );
+    assert!(
+        h.app.chrome.rect("proposal save").is_some(),
+        "kept, to save under another name"
+    );
+}
