@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman · Check a device</title>
+<meta name="description" content="Read what the Helmsman device library says about a device, compare it with a reading from a real unit, and report what is wrong.">
+<link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
+<style>
+:root{--yellow:#FFC20E;--black:#141414;--header-fg:#C8C8C8;
+--stencil:'Saira Stencil One',Impact,sans-serif;--cond:'Barlow Condensed','Arial Narrow',sans-serif;
+--mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif;
+color-scheme:dark;
+--bg:#141414;--fg:#F0F0F0;--muted:#A3A3A3;--rule:#3A3A3A;--rule-strong:#F0F0F0;--panel:#1E1E1E;--field:#0C0C0C;--cell:#2C2C2C;
+--ok:#62D391;--warn:#FF8F63;--doc:#5BC0EB;--on-chip:#141414}
+:root[data-theme="light"]{color-scheme:light;
+--bg:#FFFFFF;--fg:#141414;--muted:#555555;--rule:#B9B9B9;--rule-strong:#141414;--panel:#F2F2F0;--field:#FFFFFF;--cell:#DFDFDC;
+--ok:#1B7F47;--warn:#B23A0B;--doc:#1D6F94;--on-chip:#FFFFFF}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 var(--sans)}
+[hidden]{display:none!important}
+.wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
+header.top{background:var(--black);color:#fff;border-bottom:4px solid var(--yellow)}
+header.top .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px;min-height:56px}
+header.top .brand{color:#fff;text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em}
+header.top .section{font:700 13px/1 var(--cond);letter-spacing:.3em;text-transform:uppercase;color:var(--yellow)}
+header.top .site{margin-left:auto;color:var(--header-fg);text-decoration:none;font:13px var(--mono)}
+header.top .theme{margin:0;padding:6px 0;background:none;border:0;color:var(--header-fg);font:13px var(--mono);cursor:pointer}
+header.top a:hover,header.top .theme:hover{color:var(--yellow)}
+:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+main .wrap{padding-top:32px;padding-bottom:72px}
+h1{font:clamp(30px,5vw,44px)/1 var(--stencil);letter-spacing:.03em;text-transform:uppercase;margin:0 0 10px}
+.lede{max-width:680px;margin:0 0 24px;color:var(--muted)}
+h2{font:700 20px/1.15 var(--cond);letter-spacing:.06em;text-transform:uppercase;margin:0}
+.hint{color:var(--muted);font-size:13.5px;margin:0 0 12px;max-width:680px}
+.said{font:13px/1.5 var(--mono);color:var(--muted);margin:0;overflow-wrap:anywhere}
+.said b{color:var(--fg)}
+.pick{display:grid;grid-template-columns:minmax(0,360px) minmax(0,1fr);gap:8px 20px;align-items:end;margin:0 0 24px}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,360px);gap:32px;align-items:start}
+@media (max-width:900px){.cols,.pick{grid-template-columns:minmax(0,1fr)}}
+.steps{display:grid;gap:26px;min-width:0}
+.step{border-top:4px solid var(--rule-strong);padding-top:12px;min-width:0}
+.side{position:sticky;top:12px;display:grid;gap:12px;min-width:0;border-top:4px solid var(--yellow);padding-top:12px}
+@media (max-width:900px){.side{position:static}}
+label{display:grid;gap:3px;font:600 11.5px/1.3 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);min-width:0}
+input,select,textarea{font:14px/1.3 var(--mono);color:var(--fg);background:var(--field);border:1px solid var(--rule);padding:8px 9px;width:100%;min-width:0;border-radius:0}
+textarea{min-height:110px;resize:vertical}
+button,.btn{font:600 13px/1 var(--mono);padding:10px 13px;border:2px solid var(--rule-strong);background:transparent;color:var(--fg);cursor:pointer;text-decoration:none;display:inline-block;border-radius:0}
+.btn.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black)}
+button.quiet{border:1px solid var(--rule);color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.grid{display:grid;gap:10px 12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr))}
+details>summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+details>summary::-webkit-details-marker{display:none}
+details>summary::after{content:"+";font:600 18px/1 var(--mono);color:var(--muted)}
+details[open]>summary::after{content:"\2212"}
+details.step[open]>summary{margin-bottom:8px}
+.fold{border-bottom:1px solid var(--rule)}
+.fold>summary{padding:11px 0;font:600 14px/1.3 var(--sans)}
+.fold>summary em{font:12px var(--mono);font-style:normal;color:var(--muted);margin-left:auto}
+.claim{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 14px;padding:10px 0;border-top:1px solid var(--rule);align-items:start}
+@media (max-width:620px){.claim{grid-template-columns:minmax(0,1fr)}}
+.claim .what{min-width:0;overflow-wrap:anywhere}
+.claim .val{font-family:var(--mono);font-size:13.5px}
+.claim .more{font-size:13.5px;margin-top:2px}
+.claim .basis{font-size:12.5px;color:var(--muted);margin-top:4px}
+.claim .fix{grid-column:1/-1}
+.tag{font:600 10.5px/1 var(--mono);padding:3px 5px;letter-spacing:.04em;text-transform:uppercase;margin-right:6px;white-space:nowrap;color:var(--on-chip)}
+.tag.unit{background:var(--ok)}.tag.doc{background:var(--doc)}.tag.inf{background:var(--warn)}
+.verdict{display:flex;gap:2px}
+.verdict button{padding:7px 9px;font-size:12px;border:1px solid var(--rule);color:var(--muted)}
+.verdict button[aria-pressed="true"]{color:var(--on-chip);border-color:transparent}
+.verdict button[data-v="right"][aria-pressed="true"]{background:var(--ok)}
+.verdict button[data-v="wrong"][aria-pressed="true"]{background:var(--warn)}
+.verdict button[data-v="unsure"][aria-pressed="true"]{background:var(--cell);color:var(--fg);border-color:var(--fg)}
+.cmd{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px;margin:4px 0 10px}
+.cmd code{font:13px/1.4 var(--mono);background:var(--field);border:1px solid var(--rule);padding:9px 10px;overflow-x:auto;white-space:nowrap}
+.cmd button{padding:8px 10px;border-width:1px;font-size:12px}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+td,th{text-align:left;padding:6px 10px 6px 0;border-bottom:1px solid var(--rule);vertical-align:top;overflow-wrap:anywhere}
+th{font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.pill{font:600 11px/1 var(--mono);padding:4px 6px;text-transform:uppercase;letter-spacing:.04em;color:var(--on-chip);white-space:nowrap}
+.pill.ok{background:var(--ok)}.pill.no{background:var(--warn)}
+h3{font:600 12px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:18px 0 4px}
+.lv{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+.lv span{font:600 11px/1 var(--mono);min-width:24px;padding:5px 4px;text-align:center;background:var(--cell);color:var(--muted)}
+.lv span.on{background:var(--yellow);color:var(--black)}
+.drop{border:2px dashed var(--rule);padding:14px;display:grid;gap:8px;background:var(--panel)}
+.drop.over{border-color:var(--yellow)}
+.drop p{margin:0}
+.file{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;border-bottom:1px solid var(--rule);padding:8px 0}
+.tally{font:13px/1.6 var(--mono);margin:0}
+pre{margin:8px 0;background:var(--field);border:1px solid var(--rule);font:12.5px/1.55 var(--mono);padding:12px;overflow:auto;max-height:40vh;white-space:pre-wrap;overflow-wrap:anywhere}
+.toast{font:12.5px var(--mono);color:var(--ok);min-height:1.4em;margin:0}
+footer{color:var(--muted);padding:0 0 48px;font:13px var(--mono)}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="../">HELMSMAN</a><span class="section">Check a device</span>
+  <a class="site" href="../#library">Device library</a>
+  <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
+</div></header>
+
+<main><div class="wrap">
+  <h1>Check a device</h1>
+  <p class="lede">The agent drafted each entry from the vendor's documents. Pick a device you know and open only the parts you can speak to. A reading from a real unit is what turns an entry from drafted to proven.</p>
+  <p class="said" id="load" aria-live="polite">Loading the library…</p>
+
+  <div id="app" hidden>
+    <div class="pick"><label>Device<select id="dev"></select></label><p class="said" id="state"></p></div>
+    <div class="cols">
+      <div class="steps" id="work">
+        <div class="step">
+          <h2>What the entry claims</h2>
+          <div id="claims"></div>
+        </div>
+        <details class="step" id="test">
+          <summary><h2>Test it on a unit</h2></summary>
+          <div id="test-body"></div>
+          <div id="result"></div>
+        </details>
+        <details class="step" id="hand">
+          <summary><h2>Hand something over</h2></summary>
+          <p class="hint">A manual behind a login, or something only a person who has wired one knows. A file is named by its checksum and link; the file itself stays on your computer.</p>
+          <div class="drop" id="drop">
+            <p><b>Drop files here</b>, or choose them.</p>
+            <input type="file" id="file" multiple aria-label="Choose files to hand over">
+          </div>
+          <div id="files"></div>
+          <label style="margin-top:12px">Anything the documents do not say<textarea id="note"></textarea></label>
+        </details>
+      </div>
+      <aside class="side" aria-label="Your report">
+        <p class="said" id="path"></p>
+        <p class="tally" id="tally"></p>
+        <details class="fold"><summary>See what will be sent</summary><pre id="out" tabindex="0"></pre></details>
+        <div class="row"><a class="btn primary" id="go" target="_blank" rel="noopener">Open the report on GitHub</a><button type="button" id="copy">Copy it</button></div>
+        <p class="hint" id="say"></p>
+        <p class="toast" id="toast" aria-live="polite"></p>
+      </aside>
+    </div>
+  </div>
+</div></main>
+<footer><div class="wrap">Helmsman Factory Automation · early release · the library is open at <a href="https://github.com/JimothyJohn/helmsman-devices">github.com/JimothyJohn/helmsman-devices</a></div></footer>
+
+<script>
+(function(){var h=document.documentElement,b=document.querySelector('header.top .theme');function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();
+</script>
+<script>
+(function(){
+'use strict';
+const RAW='https://raw.githubusercontent.com/JimothyJohn/helmsman-devices/';
+const GH='https://github.com/JimothyJohn/helmsman-devices/';
+const FOLDER=/^devices\/[a-z0-9][a-z0-9_.-]{0,63}\/[a-z0-9][a-z0-9_.-]{0,63}$/;
+const BOUNTY=50;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ---- the data: nothing from the network is used before it is checked ---- */
+const str=(v,max)=>typeof v==='string'&&v.length>0&&v.length<=max&&!/[\u0000-\u001f\u007f]/.test(v)?v:'';
+const num=(v,top)=>Number.isInteger(v)&&v>=0&&v<=top?v:null;
+const asm=v=>{if(!v||typeof v!=='object')return null;const i=num(v.instance,65535);return i===null?null:{instance:i,bytes:num(v.bytes,65535)}};
+function clean(d){
+  if(!d||typeof d!=='object'||!FOLDER.test(d.folder)||!str(d.vendor,160)||!str(d.model,160))return null;
+  const o={folder:d.folder,vendor:d.vendor,model:d.model,channels:str(d.channels,160),firmware:str(d.firmware,160),
+    checked:/^\d{4}-\d{2}-\d{2}$/.test(d.checked_on)?d.checked_on:'',enip:null,modbus:null,points:[],sources:[],wiring:null};
+  if(d.enip&&typeof d.enip==='object'){
+    const e=d.enip,i=e.identity&&typeof e.identity==='object'?e.identity:null;
+    o.enip={map:e.map===true,eds:str(e.eds,160),input:asm(e.input),output:asm(e.output),config:asm(e.config),identity:null};
+    if(i)o.enip.identity={vendor_id:num(i.vendor_id,65535),product_code:num(i.product_code,65535),device_type:num(i.device_type,65535),
+      revisions:Array.isArray(i.revisions)?i.revisions.slice(0,32).map(r=>str(r,16)).filter(Boolean):[],product_name:str(i.product_name,160)};
+  }
+  if(d.modbus&&typeof d.modbus==='object')o.modbus={map:d.modbus.map===true,port:num(d.modbus.port,65535),unit:num(d.modbus.unit,255)};
+  if(Array.isArray(d.points))for(const p of d.points.slice(0,256)){if(p&&str(p.name,160))o.points.push({name:p.name,enip:str(p.enip,160),modbus:str(p.modbus,160),meaning:str(p.meaning,600),source:str(p.source,600)})}
+  if(Array.isArray(d.sources))for(const s of d.sources.slice(0,256)){if(s&&str(s.title,160))o.sources.push({title:s.title,sha256:/^[0-9a-f]{64}$/.test(s.sha256)?s.sha256:'',where:str(s.where,600)})}
+  if(d.wiring&&str(d.wiring.note,600))o.wiring={note:d.wiring.note,source:str(d.wiring.source,600)};
+  return o}
+async function load(){
+  for(const branch of ['main','dev']){
+    try{
+      const r=await fetch(RAW+branch+'/review.json',{credentials:'omit',referrerPolicy:'no-referrer'});
+      if(!r.ok)continue;
+      const j=await r.json();
+      if(!j||j.format!=='helmsman-devices-review 1'||!Array.isArray(j.devices))continue;
+      const list=j.devices.slice(0,2000).map(clean).filter(Boolean);
+      if(list.length)return {list,branch};
+    }catch(e){}
+  }
+  return null}
+
+/* ---- state ---- */
+let LIB=[],cur=0,R={},openFor='';const openG=new Set();
+try{R=JSON.parse(localStorage.getItem('helmsman-review'))||{}}catch(e){R={}}
+const rv=()=>{const f=LIB[cur].folder,r=R[f]&&typeof R[f]==='object'?R[f]:(R[f]={});
+  r.v=r.v&&typeof r.v==='object'?r.v:{};r.paste=typeof r.paste==='string'?r.paste:'';r.fw=typeof r.fw==='string'?r.fw:'';r.date=typeof r.date==='string'?r.date:'';r.note=typeof r.note==='string'?r.note:'';r.files=Array.isArray(r.files)?r.files:[];return r};
+const save=()=>{try{localStorage.setItem('helmsman-review',JSON.stringify(R))}catch(e){}};
+const stage=d=>d.checked?'proven on a unit':(d.points.length||(d.enip&&d.enip.map)||(d.modbus&&d.modbus.map))?'drafted from documents':'identity only';
+
+/* ---- claims ---- */
+const tagOf=s=>/inferred/i.test(s)?'inf':/bench|confirmed on|checked on a unit/i.test(s)?'unit':'doc';
+const TAG={unit:'checked on a unit',doc:'from a document',inf:'partly inferred'};
+const nb=n=>n+(n===1?' byte':' bytes');
+function claims(d){const c=[],docs=['doc','From the documents listed under this entry'];
+  const idb=d.checked?['unit','Read from a unit on '+d.checked+(d.firmware?', firmware '+d.firmware:'')]:d.enip&&d.enip.eds?['doc','From the EDS '+d.enip.eds]:docs;
+  const add=(k,g,t,v,b,more)=>c.push({k,g,t,v:String(v),tag:b[0],basis:b[1],more:more||''});
+  if(d.channels)add('ch','The device','Channels',d.channels,docs);
+  const i=d.enip&&d.enip.identity;
+  if(i){if(i.vendor_id!==null)add('id.vendor_id','Identity on the wire','Vendor id',i.vendor_id,idb);if(i.product_code!==null)add('id.product_code','Identity on the wire','Product code',i.product_code,idb);
+    if(i.device_type!==null)add('id.device_type','Identity on the wire','Device type',i.device_type,idb);if(i.revisions.length)add('id.revisions','Identity on the wire','Revisions known to match',i.revisions.join(', '),idb);
+    if(i.product_name)add('id.product_name','Identity on the wire','Name it reports',i.product_name,idb)}
+  if(d.enip)for(const [k,t] of [['input','Input data'],['output','Output data'],['config','Configuration']])if(d.enip[k])add('en.'+k,'EtherNet/IP connection',t,'assembly '+d.enip[k].instance+', '+(d.enip[k].bytes!==null?nb(d.enip[k].bytes):'size not fixed'),idb);
+  if(d.modbus)add('mb','Modbus TCP','Server','port '+(d.modbus.port===null?502:d.modbus.port)+(d.modbus.unit!==null?', unit '+d.modbus.unit:''),docs);
+  d.points.forEach((p,n)=>add('pt.'+n,'What the bytes mean',p.name,[p.enip&&'EtherNet/IP '+p.enip,p.modbus&&'Modbus '+p.modbus].filter(Boolean).join('  ·  '),[tagOf(p.source),p.source||'no source given'],p.meaning));
+  if(d.wiring)add('wire','Wiring','Before it works',d.wiring.note,[tagOf(d.wiring.source),d.wiring.source||'no source given']);
+  d.sources.forEach((s,n)=>add('src.'+n,'Documents it rests on',s.title,s.sha256?'SHA-256 '+s.sha256.slice(0,16)+'…':'no checksum',['doc',s.where||'no link on file']));
+  return c}
+const vBtns=(k,st,labels)=>'<div class="verdict" data-c="'+esc(k)+'">'+[['right',labels[0]],['wrong',labels[1]],['unsure',"Can't tell"]].map(([v,l])=>'<button type="button" data-v="'+v+'" aria-pressed="'+(st===v)+'">'+l+'</button>').join('')+'</div>';
+const fixBox=(k,st,ph)=>st&&st.v==='wrong'?'<input class="fix" data-fix="'+esc(k)+'" value="'+esc(st.fix||'')+'" placeholder="'+ph+'" aria-label="'+ph+'">':'';
+function drawClaims(){const d=LIB[cur],r=rv(),cs=claims(d),inf=cs.filter(c=>c.tag==='inf').length;
+  if(openFor!==d.folder){openFor=d.folder;openG.clear();for(const c of cs)if(c.tag==='inf')openG.add(c.g)}
+  let h='<p class="hint">'+cs.length+' claims'+(inf?', '+inf+' partly inferred. Those are open below; start there.':'. Open the part you know about.')+'</p>';
+  for(const g of [...new Set(cs.map(c=>c.g))]){const gc=cs.filter(c=>c.g===g),m=gc.filter(c=>(r.v[c.k]||{}).v).length;
+    h+='<details class="fold" data-g="'+esc(g)+'"'+(openG.has(g)?' open':'')+'><summary>'+esc(g)+'<em>'+gc.length+(m?', '+m+' marked':'')+'</em></summary>';
+    for(const c of gc){const st=r.v[c.k]||{};
+      h+='<div class="claim"><div class="what"><b>'+esc(c.t)+'</b> <span class="val">'+esc(c.v)+'</span>'+(c.more?'<div class="more">'+esc(c.more)+'</div>':'')+'<div class="basis"><span class="tag '+c.tag+'">'+TAG[c.tag]+'</span>'+esc(c.basis)+'</div></div>'+vBtns(c.k,st.v,['Right','Wrong'])+fixBox(c.k,st,'What is it really, and where does it say so?')+'</div>'}
+    h+='</details>'}
+  if(!d.points.length)h+='<p class="hint" style="margin-top:10px">What the bytes mean has not been read from the manual yet.</p>';
+  $('#claims').innerHTML=h}
+
+/* ---- a reading from a unit: what scripts/enip-identify.py and scripts/modbus-read.py print ---- */
+function parseReading(t){const r={id:{},asm:{},mb:{},mbid:{},any:false};let sect='';
+  for(const line of t.split('\n').slice(0,2000)){let m;
+    if(m=/^\s*\[identity\.(enip|modbus)\]/.exec(line)){sect=m[1];continue}
+    if(m=/^\s*(vendor_id|device_type|product_code)\s*=\s*(\d{1,5})\s*$/.exec(line)){r.id[m[1]]=+m[2];r.any=true}
+    else if(m=/^\s*(revision|product_name|vendor_name|product_code)\s*=\s*['"](.{0,160})['"]\s*$/.exec(line)){(sect==='modbus'?r.mbid:r.id)[m[1]]=m[2];r.any=true}
+    else if(m=/^#\s*assembly\s+(\d{1,5}):\s*(\d{1,5})\s*bytes,\s*now\s*([0-9a-f]{0,4096})/i.exec(line)){r.asm[+m[1]]={bytes:+m[2],hex:m[3].toLowerCase()};r.any=true}
+    else if(m=/^#\s*(di|coil)\s+(\d{1,5})(?:\.\.\d{1,5})?:\s*([01]{1,4096})\s*$/.exec(line)){r.mb[m[1]]=r.mb[m[1]]||{};[...m[3]].forEach((b,i)=>{r.mb[m[1]][+m[2]+i]=+b});r.any=true}
+    else if(m=/^#\s*(ir|hr)\s+(\d{1,5})(?:\.\.\d{1,5})?:\s*((?:[0-9a-f]{4}\s?){1,2048})\s*$/i.exec(line)){r.mb[m[1]]=r.mb[m[1]]||{};m[3].trim().split(/\s+/).forEach((w,i)=>{r.mb[m[1]][+m[2]+i]=w.toLowerCase()});r.any=true}}
+  return r}
+function compare(d,r){const rows=[],i=d.enip&&d.enip.identity,L={vendor_id:'Vendor id',device_type:'Device type',product_code:'Product code',product_name:'Name it reports'};
+  for(const k in L)if(r.id[k]!==undefined){const e=i&&i[k]!==null&&i[k]!==''?i[k]:undefined;rows.push([L[k],e===undefined?'':e,r.id[k],e===undefined?'new':e===r.id[k]?'ok':'diff'])}
+  if(r.id.revision!==undefined){const e=i&&i.revisions.length?i.revisions:null;rows.push(['Revision',e?e.join(', '):'',r.id.revision,!e?'new':e.includes(r.id.revision)?'ok':'rev'])}
+  for(const inst in r.asm){const role=d.enip&&['input','output','config'].find(k=>d.enip[k]&&d.enip[k].instance===+inst);
+    if(!role){rows.push(['Assembly '+inst,'not in the entry',nb(r.asm[inst].bytes),'new']);continue}
+    const e=d.enip[role].bytes;rows.push([role[0].toUpperCase()+role.slice(1)+' assembly '+inst,e===null?'size not fixed':nb(e),nb(r.asm[inst].bytes),e===null?'new':e===r.asm[inst].bytes?'ok':'diff'])}
+  return rows}
+function enipRange(e){const re=/\b(in|out|di|do):(\d{1,6})(?:\.(\d))?(?::([a-z]\d\d))?/g,a=re.exec(e||'');if(!a)return null;const end=re.lastIndex,b=re.exec(e);
+  const ar=m=>(m[1]==='in'||m[1]==='di')?'input':'output',pos=m=>m[4]?+m[2]:(m[1]==='di'||m[1]==='do')?+m[2]:+m[2]*8+(+m[3]||0);
+  let to=pos(a);if(b&&e.slice(end,b.index).trim()==='..'&&ar(b)===ar(a)&&!!b[4]===!!a[4])to=pos(b);
+  return {area:ar(a),type:a[4]||'bit',from:pos(a),to}}
+function modbusRange(e){const m=/\b(di|coil|ir|hr):(\d{1,5})(?::([a-z0-9]{1,5}))?(?:\s*\.\.\s*(?:(di|coil|ir|hr):)?(\d{1,5})(?::([a-z0-9]{1,5}))?)?/.exec(e||'');if(!m||(m[4]&&m[4]!==m[1]))return null;
+  const wide=/32/.test(m[6]||m[3]||''),first=+m[2];let last=m[5]===undefined?first:+m[5];if(wide)last+=1;if(last<first||last>65535)return null;
+  return {table:m[1],first,last,width:wide?2:1,text:m[1]+':'+first+(m[3]?':'+m[3]:'')+(m[5]!==undefined?'..'+m[1]+':'+m[5]+(m[6]?':'+m[6]:''):'')}}
+function live(d,r){const out=[];
+  d.points.forEach((p,n)=>{
+    const g=d.enip?enipRange(p.enip):null,a=g&&d.enip[g.area]?r.asm[d.enip[g.area].instance]:null;
+    if(a&&a.hex){const by=(a.hex.match(/../g)||[]).map(x=>parseInt(x,16)),vals=[];
+      if(g.type==='bit'){for(let b=g.from;b<=g.to&&vals.length<64;b++){if((b>>3)>=by.length)break;vals.push((by[b>>3]>>(b&7))&1)}}
+      else{const w=/16/.test(g.type)?2:4;for(let B=g.from;B<=g.to&&vals.length<32;B+=w){if(B+w>by.length)break;vals.push(a.hex.slice(B*2,(B+w)*2))}}
+      if(vals.length){out.push({k:'live.'+n,name:p.name,via:'EtherNet/IP',bit:g.type==='bit',vals});return}}
+    const q=d.modbus?modbusRange(p.modbus):null,t=q&&r.mb[q.table];
+    if(t){const vals=[];for(let ad=q.first;ad<=q.last&&vals.length<64;ad+=q.width){const w=[];for(let k=0;k<q.width;k++)w.push(t[ad+k]);if(w.some(x=>x===undefined))break;vals.push(q.width===1?w[0]:w.join(''))}
+      if(vals.length)out.push({k:'live.'+n,name:p.name,via:'Modbus',bit:q.table==='di'||q.table==='coil',vals})}});
+  return out}
+const UNIT=GH+'issues/new?title='+encodeURIComponent('Unit offer: ');
+function drawTest(){const d=LIB[cur],r=rv();let h='<p class="hint">The scripts below only read: nothing is written to the device and no output is switched. They need Python 3.9 or later and nothing else. Leave the serial number line out of what you paste.</p>';
+  h+='<div class="cmd"><code>git clone -b dev '+esc(GH.slice(0,-1))+'</code><button type="button" data-copy>Copy</button></div>';
+  if(d.enip){const insts=['input','output','config'].map(k=>d.enip[k]&&d.enip[k].instance).filter(x=>x!=null);
+    h+='<div class="cmd"><code>python3 -I scripts/enip-identify.py ITS-ADDRESS '+insts.join(' ')+'</code><button type="button" data-copy>Copy</button></div>'}
+  if(d.modbus){const rs=d.points.map(p=>modbusRange(p.modbus)).filter(Boolean).map(q=>q.text);
+    h+='<div class="cmd"><code>python3 -I scripts/modbus-read.py ITS-ADDRESS '+esc(rs.join(' '))+'</code><button type="button" data-copy>Copy</button></div>'}
+  h+='<label>Paste everything the script printed<textarea id="paste" spellcheck="false">'+esc(r.paste)+'</textarea></label>'
+    +'<div class="grid" style="margin-top:10px"><label>Its firmware<input id="fw" value="'+esc(r.fw)+'"></label><label>Date of the reading<input id="date" type="date" value="'+esc(r.date)+'"></label></div>';
+  if(!d.checked)h+='<p class="hint" style="margin-top:12px">No unit of this device has been tested. If you would rather send yours to the bench, <a href="'+esc(UNIT+encodeURIComponent(d.vendor+' '+d.model))+'" target="_blank" rel="noopener">offer it</a>: a verified device earns $'+BOUNTY+'.</p>';
+  $('#test-body').innerHTML=h;drawResult()}
+function drawResult(){const d=LIB[cur],r=rv(),el=$('#result');if(!r.paste.trim()){el.innerHTML='';return}
+  const rd=parseReading(r.paste);if(!rd.any){el.innerHTML='<p class="hint" style="margin-top:10px">No identity, assembly or Modbus range found in that text. Paste everything the script printed, from the first line.</p>';return}
+  const ST={ok:['ok','matches'],diff:['no','differs'],new:['no','not in the entry'],rev:['no','new revision']},cmp=compare(d,rd);let h='';
+  if(cmp.length)h+='<h3>The unit against the entry</h3><div class="scroll"><table><tr><th>What</th><th>Entry says</th><th>Unit says</th><th></th></tr>'+cmp.map(x=>'<tr><td>'+esc(x[0])+'</td><td>'+esc(x[1])+'</td><td>'+esc(x[2])+'</td><td><span class="pill '+ST[x[3]][0]+'">'+ST[x[3]][1]+'</span></td></tr>').join('')+'</table></div>';
+  const lv=live(d,rd);
+  if(lv.length){h+='<h3>What the entry makes of the data right now</h3><p class="hint" style="margin-top:6px">Each group is decoded the way the entry says. Look at the device: is this what it is doing?</p>';
+    for(const x of lv){const st=r.v[x.k]||{};
+      h+='<div class="claim"><div class="what"><b>'+esc(x.name)+'</b> <span class="val">'+x.via+'</span><div class="lv">'+x.vals.map((v,i)=>x.bit?'<span class="'+(v?'on':'')+'" title="channel '+i+' is '+(v?'on':'off')+'">'+i+'</span>':'<span title="channel '+i+', as sent">'+esc(v)+'</span>').join('')+'</div><div class="basis">'+(x.bit?(x.vals.some(Boolean)?'On: '+x.vals.map((v,i)=>v?i:null).filter(v=>v!==null).join(', ')+'. The rest are off.':'All off.'):'Values as they came off the wire, one box a channel.')+'</div></div>'+vBtns(x.k,st.v,['That is it','No'])+fixBox(x.k,st,'What is the device really doing?')+'</div>'}}
+  else if(d.points.length)h+='<p class="hint" style="margin-top:10px">The reading has no data for the places the entry\'s points sit in, so there is nothing to decode. Use the command above as written.</p>';
+  el.innerHTML=h}
+
+/* ---- files handed over: hashed here, never uploaded ---- */
+async function sha256(buf){const d=await crypto.subtle.digest('SHA-256',buf);return [...new Uint8Array(d)].map(b=>b.toString(16).padStart(2,'0')).join('')}
+async function take(fl){const r=rv();for(const f of [...fl].slice(0,16)){if(f.size>512*1024*1024)continue;r.files.push({name:String(f.name).slice(0,160),size:f.size,sha256:await sha256(await f.arrayBuffer()),url:''})}r.files=r.files.slice(0,32);drawFiles();drawSum()}
+function drawFiles(){$('#files').innerHTML=rv().files.map((f,i)=>'<div class="file"><div style="display:grid;gap:6px;min-width:0"><p class="said"><b>'+esc(f.name)+'</b>, '+esc(f.size)+' bytes, SHA-256 '+esc(String(f.sha256).slice(0,16))+'…</p><label>Public link to it, if there is one<input data-fu="'+i+'" value="'+esc(f.url)+'" placeholder="https://"></label></div><button type="button" class="quiet" data-fdel="'+i+'">Remove</button></div>').join('')}
+
+/* ---- the report ---- */
+function body(){const d=LIB[cur],r=rv(),cs=claims(d),L={right:'right',wrong:'WRONG',unsure:"can't tell"},out=['Review of `'+d.folder+'` ('+d.vendor+' '+d.model+'), from the Helmsman site.',''];
+  const marked=cs.filter(c=>r.v[c.k]&&r.v[c.k].v);
+  if(marked.length){out.push('## Claims');for(const c of marked){const s=r.v[c.k];out.push('- ['+L[s.v]+'] '+c.t+': '+c.v+(s.v==='wrong'?'\n  Correction: '+(s.fix||'(none given)'):''))}out.push('- '+(cs.length-marked.length)+' other claims not looked at','')}
+  if(r.paste.trim()){const rd=parseReading(r.paste);out.push('## Unit reading','Firmware: '+(r.fw||'not given')+'. Date: '+(r.date||'not given')+'.','```text',r.paste.replace(/^.*serial.*\n?/gim,'').replace(/`/g,"'").trim().slice(0,6000),'```');
+    for(const x of compare(d,rd))out.push('- '+x[0]+': entry '+(x[1]===''?'nothing':x[1])+', unit '+x[2]+' ('+(x[3]==='ok'?'matches':x[3]==='diff'?'DIFFERS':x[3]==='rev'?'new revision':'not in the entry')+')');
+    for(const x of live(d,rd)){const s=r.v[x.k];if(s&&s.v)out.push('- Decoded '+x.name+' ('+x.via+') as '+x.vals.join(x.bit?'':' ')+': reviewer says '+(s.v==='right'?'that is what the device is doing':s.v==='wrong'?'NO. '+(s.fix||''):"can't tell"))}
+    out.push('')}
+  if(r.files.length)out.push('## Files handed over','The files themselves are not attached.',...r.files.map(f=>'- '+f.name+', '+f.size+' bytes, SHA-256 '+f.sha256+', '+(f.url||'no public link given')),'');
+  if(r.note.trim())out.push('## Notes',r.note.trim().slice(0,4000),'');
+  return out.join('\n')}
+function drawSum(){const d=LIB[cur],r=rv(),cs=claims(d),n=v=>cs.filter(c=>(r.v[c.k]||{}).v===v).length,b=body(),title=(r.paste.trim()?'Unit check: ':'Review: ')+d.vendor+' '+d.model;
+  $('#path').innerHTML='<a href="'+esc(GH+'tree/'+BRANCH+'/'+d.folder)+'" target="_blank" rel="noopener">'+esc(d.folder)+'</a>';
+  $('#state').innerHTML='<b>'+stage(d)+'</b>'+(d.checked?', '+esc(d.checked)+(d.firmware?', firmware '+esc(d.firmware):''):'')+'. '+[d.enip&&'EtherNet/IP',d.modbus&&'Modbus TCP'].filter(Boolean).join(', ')+'.';
+  $('#tally').innerHTML='<b>'+cs.length+'</b> claims: <b>'+n('right')+'</b> right, <b>'+n('wrong')+'</b> wrong, <b>'+n('unsure')+"</b> can't tell.<br>Unit reading: <b>"+(r.paste.trim()?'attached':'none')+'</b>. Files: <b>'+r.files.length+'</b>.';
+  $('#out').textContent=b;
+  const full=GH+'issues/new?title='+encodeURIComponent(title)+'&body='+encodeURIComponent(b),long=full.length>7000;
+  $('#go').href=long?GH+'issues/new?title='+encodeURIComponent(title)+'&body='+encodeURIComponent('(Paste the copied report here.)'):full;
+  $('#say').textContent=long?'This report is too long for a link. Copy it, then open the issue and paste.':'This opens a filled-in public issue for you to read before you post it.';save()}
+function drawAll(){$('#dev').value=cur;drawClaims();drawTest();drawFiles();$('#note').value=rv().note;drawSum()}
+
+/* ---- events ---- */
+let BRANCH='main';
+function pick(folder){const i=LIB.findIndex(d=>d.folder===folder);if(i>=0){cur=i;return true}return false}
+function wire(){
+  $('#dev').addEventListener('change',e=>{cur=+e.target.value||0;history.replaceState(null,'','#'+LIB[cur].folder);drawAll()});
+  $('#claims').addEventListener('toggle',e=>{const g=e.target.dataset&&e.target.dataset.g;if(g)e.target.open?openG.add(g):openG.delete(g)},true);
+  $('#work').addEventListener('click',e=>{const t=e.target.closest('button');if(!t)return;const r=rv();
+    if(t.dataset.v){const k=t.parentNode.dataset.c,was=(r.v[k]||{}).v;if(was===t.dataset.v)delete r.v[k];else r.v[k]={v:t.dataset.v,fix:(r.v[k]||{}).fix||''};
+      if(k.indexOf('live.')===0)drawResult();else drawClaims();drawSum();const f=document.querySelector('[data-fix="'+k+'"]');if(f)f.focus();return}
+    if(t.dataset.copy!==undefined){navigator.clipboard.writeText(t.previousElementSibling.textContent).then(()=>{t.textContent='Copied'},()=>{t.textContent='Select it'});return}
+    if(t.dataset.fdel!==undefined){r.files.splice(+t.dataset.fdel,1);drawFiles();drawSum()}});
+  $('#work').addEventListener('input',e=>{const t=e.target,r=rv();
+    if(t.dataset.fix){if(r.v[t.dataset.fix])r.v[t.dataset.fix].fix=t.value.slice(0,600)}
+    else if(t.id==='paste'){r.paste=t.value.slice(0,20000);drawResult()}else if(t.id==='fw')r.fw=t.value.slice(0,160);else if(t.id==='date')r.date=t.value.slice(0,10);
+    else if(t.id==='note')r.note=t.value;else if(t.dataset.fu!==undefined){if(r.files[+t.dataset.fu])r.files[+t.dataset.fu].url=t.value.trim().slice(0,600)}else return;drawSum()});
+  const z=$('#drop');z.addEventListener('dragover',e=>{e.preventDefault();z.classList.add('over')});z.addEventListener('dragleave',()=>z.classList.remove('over'));
+  z.addEventListener('drop',e=>{e.preventDefault();z.classList.remove('over');take(e.dataTransfer.files)});
+  $('#file').addEventListener('change',e=>{take(e.target.files).then(()=>{e.target.value=''})});
+  $('#copy').addEventListener('click',()=>{navigator.clipboard.writeText(body()).then(()=>{$('#toast').textContent='Copied.'},()=>{const d=$('#out').closest('details');d.open=true;const g=document.createRange();g.selectNodeContents($('#out'));const s=getSelection();s.removeAllRanges();s.addRange(g);$('#toast').textContent='Copy is blocked here. The report is selected: press Ctrl or Cmd C.'})});
+  addEventListener('hashchange',()=>{if(pick(decodeURIComponent(location.hash.slice(1))))drawAll()})}
+load().then(res=>{
+  if(!res){$('#load').innerHTML='The library could not be loaded here. It is on GitHub: <a href="'+GH+'">github.com/JimothyJohn/helmsman-devices</a>.';return}
+  LIB=res.list;BRANCH=res.branch;
+  LIB.sort((a,b)=>(a.vendor+' '+a.model).localeCompare(b.vendor+' '+b.model,undefined,{numeric:true}));
+  const by={};LIB.forEach((d,i)=>(by[d.vendor.toUpperCase()]=by[d.vendor.toUpperCase()]||[]).push([d,i]));
+  $('#dev').innerHTML=Object.values(by).map(a=>'<optgroup label="'+esc(a[0][0].vendor)+'">'+a.map(([d,i])=>'<option value="'+i+'">'+esc(d.model)+' · '+stage(d)+'</option>').join('')+'</optgroup>').join('');
+  let h='';try{h=decodeURIComponent(location.hash.slice(1))}catch(e){}
+  const want=h==='test'?'':h;if(!pick(want))cur=0;
+  $('#load').textContent=LIB.length+' devices'+(res.branch==='dev'?', read from the library\'s dev branch':'')+'.';
+  $('#app').hidden=false;wire();drawAll();if(h==='test'){$('#test').open=true}
+});
+})();
+</script>
+</body>
+</html>
