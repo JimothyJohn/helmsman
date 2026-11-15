@@ -340,8 +340,8 @@ fn corpus() -> Vec<Case> {
         // VAR_OUTPUT on a function, bound with =>. Every call binds both
         // outputs: ruSTy refuses a call that leaves one out, with named
         // inputs or positional ones (E032, "this POU takes 4 arguments but
-        // 2 arguments were supplied"). Helmsman accepts that call and
-        // drops the output; tests/in_out.rs holds it, with no oracle.
+        // 2 arguments were supplied"), and so does Helmsman (Nick,
+        // 2026-11-15; the refusal is in tests/in_out.rs).
         case(
             "FUNCTION oracle_divmod : DINT
                VAR_INPUT a, b : DINT; END_VAR

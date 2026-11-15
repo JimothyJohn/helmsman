@@ -36,7 +36,8 @@
 //! IEC 61131-3 does not have; see library.st: a blinking MODE with a
 //! PERIOD of 0 or below faults the module, [`BadParam::BlinkPeriod`]). Pragmas (`{...}`) are skipped. `VAR_IN_OUT`
 //! (function blocks only: the caller's own variable, passed by reference
-//! inside one module) and `VAR_OUTPUT` on a function. `VAR_GLOBAL`, written
+//! inside one module) and `VAR_OUTPUT` on a function (every call binds
+//! every output with `=>`). `VAR_GLOBAL`, written
 //! before the POUs or in a `CONFIGURATION` and its one `RESOURCE`: the
 //! globals belong to the module, every POU of it sees them (`VAR_EXTERNAL`
 //! may name one, and `VAR_EXTERNAL CONSTANT` reads it only), and nothing

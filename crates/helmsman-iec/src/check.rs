@@ -2533,6 +2533,25 @@ impl<'a> Ck<'a> {
                 ok = false;
             }
         }
+        // A function has no instance to read an output from afterwards, so
+        // a call binds every one (slot 0 is the result, which the call is).
+        if kind == PouType::Function {
+            for v in self.pous[p]
+                .vars
+                .clone()
+                .iter()
+                .filter(|v| v.section == Section::Output && v.off != 0 && !seen.contains(&v.name))
+            {
+                self.err(
+                    at,
+                    format!(
+                        "{callee}: output {n} must be bound at every call ({n} => variable)",
+                        n = v.name
+                    ),
+                );
+                ok = false;
+            }
+        }
         ok &= self.no_shared_names(&callee, &given, inst);
         ok.then_some((moves, outs))
     }

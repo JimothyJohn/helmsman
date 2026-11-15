@@ -271,31 +271,52 @@ fn a_function_returns_its_value_and_fills_its_outputs() {
     let mut p = build(&with(
         DIVMOD,
         "q, r, w : DINT; good : BOOL; n : LINT;",
-        "q := divmod(17, 5, rem => r, ok => good); w := divmod(a := 9, b := 0, rem => n);",
+        "q := divmod(17, 5, rem => r, ok => good); w := divmod(a := 9, b := 0, rem => n, ok => good);",
     ));
     scan(&mut p, 0);
     assert_eq!(int(&p, "q"), 3);
     assert_eq!(int(&p, "r"), 2);
-    assert_eq!(p.get("good"), Some(Value::Bool(true)));
+    assert_eq!(p.get("good"), Some(Value::Bool(false)), "the second call's");
     assert_eq!(int(&p, "w"), 0);
     assert_eq!(int(&p, "n"), 9, "DINT widens into the LINT target");
 }
 
+/// Every output of a function is bound at every call, with positional or
+/// named inputs, as an expression or as a statement: a call that leaves
+/// one out is refused and names it (ruSTy refuses it too, E032).
 #[test]
-fn an_output_left_unbound_is_simply_dropped() {
-    let mut p = build(&with(
-        DIVMOD,
-        "q, r : DINT;",
-        "q := divmod(17, 5); r := 77; q := q + divmod(7, 2, rem => r);",
+fn a_function_call_binds_every_output() {
+    for body in [
+        "q := divmod(17, 5);",
+        "q := divmod(a := 17, b := 5);",
+        "q := divmod(17, 5, rem => r);",
+        "q := divmod(17, 5, ok => good);",
+        "divmod(17, 5, rem => r);",
+        "q := 1 + divmod(divmod(17, 5, rem => r, ok => good), 2, ok => good);",
+    ] {
+        let e = errors(&with(DIVMOD, "q, r : DINT; good : BOOL;", body));
+        assert!(e.contains("DIVMOD: output"), "{body}: {e}");
+        assert!(e.contains("=> variable"), "{body}: {e}");
+    }
+    // Each missing output is named, once.
+    let e = errors(&with(DIVMOD, "q : DINT;", "q := divmod(17, 5);"));
+    assert!(e.contains("output REM") && e.contains("output OK"), "{e}");
+    assert_eq!(e.matches("DIVMOD: output").count(), 2, "{e}");
+    // A function block's outputs are read from the instance: nothing to bind.
+    build(&with(
+        "",
+        "t : TON; x : BOOL;",
+        "t(IN := x, PT := T#1s); x := t.Q;",
     ));
-    scan(&mut p, 0);
-    assert_eq!(int(&p, "q"), 3 + 3);
-    assert_eq!(int(&p, "r"), 1);
 }
 
 #[test]
 fn a_function_statement_can_bind_outputs_and_drop_the_result() {
-    let mut p = build(&with(DIVMOD, "r : DINT;", "divmod(17, 5, rem => r);"));
+    let mut p = build(&with(
+        DIVMOD,
+        "r : DINT; good : BOOL;",
+        "divmod(17, 5, rem => r, ok => good);",
+    ));
     scan(&mut p, 0);
     assert_eq!(int(&p, "r"), 2);
 }
@@ -338,8 +359,8 @@ fn an_output_can_land_in_an_array_element_or_a_member() {
 fn nested_calls_each_fill_their_own_outputs() {
     let mut p = build(&with(
         DIVMOD,
-        "q, r1, r2 : DINT;",
-        "q := divmod(divmod(100, 7, rem => r1), 3, rem => r2);",
+        "q, r1, r2 : DINT; g1, g2 : BOOL;",
+        "q := divmod(divmod(100, 7, rem => r1, ok => g1), 3, rem => r2, ok => g2);",
     ));
     scan(&mut p, 0);
     assert_eq!(int(&p, "q"), 4);
