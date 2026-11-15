@@ -2831,6 +2831,18 @@ impl PlaygroundView {
             );
             return rect;
         }
+        if trend.history.is_empty() && !self.session.running {
+            // Loaded and not run yet: say so, where empty lanes read as
+            // a trend that broke.
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Nothing recorded yet. Run the program to draw its signals.",
+                FontId::proportional(crate::theme::MIN_TEXT),
+                t.muted,
+            );
+            return rect;
+        }
         let n = trend.signals.len();
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / n as f32;

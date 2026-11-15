@@ -778,6 +778,18 @@ status is scan health, memory and fieldbus links. What exists:
   (deploy, control, save settings) the firmware carries out. The
   canvas's `node_api_tests.rs` parses the node's JSON with the same code
   that parses a box, so the two cannot drift apart unnoticed.
+  Since 2026-11-14 also `iolink`, which no firmware calls yet: the
+  `device NAME iolink port=N [vendor= device= in_bits= out_bits=
+  cycle_ms=]` line of a map and its `pd:OFFSET[:uN|iN]` points (bool and
+  int), and `Port`, one such device on `helmsman_iolink::master::Master`
+  (docs/ARCHITECTURE.md `helmsman-iolink`): inputs by point, outputs
+  packed whole or declared invalid, a device of another identity or of
+  other Process Data lengths refused with the reason. It is proven from
+  an IODD to values on the simulated device (`tests/iolink.rs`). A node
+  has no IO-Link master port, so `iomap::parse` still refuses the line;
+  what is missing is in TODO.md `iolink-node` (the transceiver and its
+  driver, and a place for `int` points in the program's image, which
+  holds bool bits only).
 - **`helmsman-node`'s `node` binary** (`api` feature; `scripts/node-build.sh
   api`, `scripts/node-flash.sh node`): settings and program from flash
   (factory record written on an empty partition), the I/O task on its
