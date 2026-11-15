@@ -149,6 +149,15 @@ pub struct PlaygroundView {
     pub layers: Layers,
     /// The viewer was just built: lay it out from the layers.
     fresh: bool,
+    /// The popup a right click or double click on the diagram opened
+    /// (`crate::diagram_edit`).
+    pub dedit: crate::diagram_edit::EditUi,
+    /// The next rebuilt viewer keeps the one it replaces: its cameras,
+    /// its pick and the places of the blocks an edit renamed.
+    keep_view: bool,
+    /// What is deployed is what a diagram edit last wrote, or what
+    /// Undo or Redo of it restored: Undo and Redo then deploy again.
+    diagram_deployed: bool,
     viewer_of: String,
     /// When the editor last changed and is not checked yet.
     pending: Option<f64>,
@@ -261,6 +270,9 @@ impl PlaygroundView {
             history_at: None,
             layers: Layers::load(tweaks),
             fresh: false,
+            dedit: crate::diagram_edit::EditUi::default(),
+            keep_view: false,
+            diagram_deployed: false,
             viewer_of: String::new(),
             pending: None,
             last_pick: None,
@@ -418,6 +430,7 @@ impl PlaygroundView {
     /// Loads the open project's build into the session, compiled and
     /// stopped.
     fn reload(&mut self) {
+        self.diagram_deployed = false;
         let src = self.proj.build_src();
         self.session.load(&src);
         self.pending = None;
@@ -439,8 +452,10 @@ impl PlaygroundView {
     }
 
     /// The editor's text changed: the session's source follows at once
-    /// and is checked after the pause. What runs waits for Deploy.
+    /// and is checked after the pause. What runs waits for Deploy (typing
+    /// waits; a diagram gesture deploys, [`Self::diagram_edit`]).
     fn edited(&mut self, t: f64) {
+        self.diagram_deployed = false;
         self.session.src = self.proj.build_src();
         self.pending = Some(t);
         self.notice = None;
@@ -624,6 +639,154 @@ impl PlaygroundView {
         }
     }
 
+    /// [`Self::deploy`], and `format`: the open project's edited files are
+    /// first put in the one layout. A diagram edit deploys unformatted,
+    /// so the file holds the splice and nothing else.
+    fn deploy_as(&mut self, format: bool) {
+        // A red requirement test refuses the deploy, naming it.
+        if let Some(why) = self.tests_refuse(None) {
+            self.notice = Some(why.clone());
+            self.log.error(
+                self.session.now_ms as f64 / 1000.0,
+                format!("Deploy of {} refused. {why}", self.proj.open),
+            );
+            return;
+        }
+        // What runs is what the files say, in the one layout.
+        if format && self.proj.format() > 0 {
+            self.edited(f64::NEG_INFINITY);
+        }
+        let src = self.proj.build_src();
+        let carried = self.session.deploy(&src);
+        self.pending = None;
+        self.sync_viewer();
+        if let Some(carried) = carried {
+            self.session.set_running(true);
+            self.seen.running = Some(true);
+            self.seen.scans = self.session.scans;
+            self.proj.running = Some(self.proj.open.clone());
+            let program = self
+                .viewer
+                .as_ref()
+                .and_then(|v| v.module.program())
+                .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
+            let note = format!(
+                "{} is running in this page{program}.{}",
+                self.proj.open,
+                carried.describe()
+            );
+            self.running_notice = Some(note.clone());
+            self.notice = Some(note);
+            self.log.info(
+                self.session.now_ms as f64 / 1000.0,
+                format!("Deployed {}: running in this page{program}.", self.proj.open),
+            );
+        } else {
+            self.notice = Some(format!(
+                "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
+                self.proj.open,
+                self.session.diags.len()
+            ));
+            self.log.error(
+                self.session.now_ms as f64 / 1000.0,
+                format!(
+                    "Deploy of {} refused: {} problem(s).",
+                    self.proj.open,
+                    self.session.diags.len()
+                ),
+            );
+        }
+    }
+
+    /// The diagram shows the code in the editor: the program deployed is
+    /// the text of the files as they stand.
+    fn diagram_in_sync(&self) -> bool {
+        self.viewer
+            .as_ref()
+            .is_some_and(|v| v.src == self.proj.build_src())
+    }
+
+    /// Whether the diagram's gestures change the code now, and when not,
+    /// what to do about it.
+    #[must_use]
+    pub fn edit_gate(&self) -> crate::diagram_edit::Gate {
+        use crate::diagram_edit::Gate;
+        if self.viewer.is_none() {
+            return Gate::Off("There is no diagram to edit: the program does not compile.".into());
+        }
+        if self.proj.sole_built_file().is_none() {
+            return Gate::Off(
+                "Editing from the diagram works on projects with one program file for now. \
+                 This project has more: change the code in the editor."
+                    .into(),
+            );
+        }
+        if !self.diagram_in_sync() {
+            return Gate::Off(match self.session.diags.first() {
+                Some(d) => format!(
+                    "The code in the editor does not compile ({d}), so the diagram cannot follow it. \
+                     Fix it, then Deploy."
+                ),
+                None => "The diagram shows the program as last deployed, not the code in the editor. \
+                         Deploy first, then edit from the diagram."
+                    .into(),
+            });
+        }
+        Gate::On
+    }
+
+    /// Makes `edit` on the code and deploys it, as the Deploy button would
+    /// (same checks: a red requirement test or a compile error leaves the
+    /// edit in the code and the program running as it was, and the note
+    /// under the top bar says why). The old text is one entry of the
+    /// editor's undo history, the edited text is highlighted in the
+    /// editor, and the diagram keeps its camera, its pick and where its
+    /// blocks were dragged to.
+    ///
+    /// # Errors
+    /// Why nothing was changed, in words: the engine's refusal of the
+    /// edit, or why the diagram's gestures are off.
+    pub fn diagram_edit(
+        &mut self,
+        edit: helmsman_diagram::edit::Edit,
+        ctx: &egui::Context,
+        chrome: &mut Chrome,
+    ) -> Result<(), String> {
+        if let crate::diagram_edit::Gate::Off(why) = self.edit_gate() {
+            return Err(why);
+        }
+        let (Some(v), Some(file)) = (&self.viewer, self.proj.sole_built_file()) else {
+            return Err("There is no diagram to edit.".into());
+        };
+        let patch = helmsman_diagram::edit::apply(&v.src, &v.module, edit)
+            .map_err(|refusal| format!("Not changed: {refusal}."))?;
+        let old = self.proj.files.get(&file).cloned().unwrap_or_default();
+        if old != v.src {
+            return Err("The diagram shows other code than the editor. Deploy first.".into());
+        }
+        let new = patch.apply_to(&old);
+        if new.len() > MAX_SOURCE {
+            return Err(format!(
+                "Not changed: the code would be over {MAX_SOURCE} characters, the most a file takes."
+            ));
+        }
+        let now = ctx.input(|i| i.time);
+        editor::push_undo(ctx, editor::source_id("pg-source", &self.proj.open, &file), &old);
+        self.proj.files.insert(file.clone(), new.clone());
+        self.proj.open_file(&file);
+        self.edited(now);
+        self.keep_view = true;
+        self.deploy_as(false);
+        self.keep_view = false;
+        self.diagram_deployed = self.diagram_in_sync();
+        chrome.flash(
+            &new,
+            patch.start..patch.start + patch.text.len(),
+            now + Chrome::FLASH,
+        );
+        Ok(())
+    }
+
     /// Rebuilds the diagram when the program running changed.
     fn sync_viewer(&mut self) {
         let Some(b) = &self.session.build else {
@@ -640,6 +803,8 @@ impl PlaygroundView {
         if let Some(v) = &self.viewer {
             self.layers.track(v);
         }
+        let keep = std::mem::take(&mut self.keep_view);
+        let previous = if keep { self.viewer.take() } else { None };
         self.fresh = true;
         self.viewer = b.module.clone().map(|m| {
             let mut v = Viewer::new(&b.src, m);
@@ -648,6 +813,16 @@ impl PlaygroundView {
             v.because = old.filter(|o| v.knows(o));
             v
         });
+        // A diagram edit changed the text of the blocks it touched, which
+        // is what names them: the camera, the pick and the places they
+        // were dragged to go with them.
+        if let (Some(before), Some(now)) = (&previous, &mut self.viewer) {
+            let renamed = before.edited_blocks(now);
+            let pairs: Vec<_> = renamed.iter().map(|r| (r.0.clone(), r.1.clone())).collect();
+            self.layers.carry(before, &pairs);
+            now.carry_view(before, &renamed);
+            self.last_pick = now.pick;
+        }
     }
 
     /// Checks the editor if it has been quiet long enough (or `now`):
@@ -2405,7 +2580,9 @@ impl Body for PlaygroundView {
         let t = theme(ui);
         self.noticed_ui(ui, chrome);
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
+        let gate = self.edit_gate();
         if let Some(v) = &mut self.viewer {
+            v.edit_gate = gate;
             v.icons
                 .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
             v.crumbs_ui(ui, &[]);
@@ -2417,6 +2594,10 @@ impl Body for PlaygroundView {
                 v.saw(t, now);
             }
             v.canvas(ui, scan);
+            if let Some(g) = v.gesture.take() {
+                self.dedit.open(v, g);
+            }
+            let asked = self.dedit.show(ui.ctx(), chrome, area, v);
             let mut jump = None;
             if v.pick != self.last_pick {
                 self.last_pick = v.pick;
@@ -2432,6 +2613,12 @@ impl Body for PlaygroundView {
                 match self.proj.locate(line) {
                     Some((file, l)) => self.goto(&file, l, chrome),
                     None => chrome.goto(line),
+                }
+            }
+            if let Some(edit) = asked {
+                match self.diagram_edit(edit, ui.ctx(), chrome) {
+                    Ok(()) => self.dedit.close(),
+                    Err(why) => self.dedit.fail(why),
                 }
             }
             return;
@@ -3760,6 +3947,9 @@ impl Workspace for PlaygroundView {
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
         let id = self.source_id();
+        // A diagram edit is deployed, so Undo of it is too, while the
+        // diagram still shows the code as it stands.
+        let follows = self.diagram_deployed && self.diagram_in_sync();
         let Some(text) = self.proj.current_text_mut() else {
             return false;
         };
@@ -3767,6 +3957,12 @@ impl Workspace for PlaygroundView {
         if done {
             let t = ctx.input(|i| i.time);
             self.edited(t);
+            if follows {
+                self.keep_view = true;
+                self.deploy_as(false);
+                self.keep_view = false;
+                self.diagram_deployed = self.diagram_in_sync();
+            }
         }
         done
     }
@@ -3780,62 +3976,11 @@ impl Workspace for PlaygroundView {
     }
 
     /// Compiles the open project and runs it in the page: the one place
-    /// an edit reaches the program running. One that does not compile is
+    /// typed text reaches the program running. One that does not compile is
     /// refused, its errors listed, and the program running is unchanged.
     fn deploy(&mut self) {
-        // A red requirement test refuses the deploy, naming it.
-        if let Some(why) = self.tests_refuse(None) {
-            self.notice = Some(why.clone());
-            self.log.error(
-                self.session.now_ms as f64 / 1000.0,
-                format!("Deploy of {} refused. {why}", self.proj.open),
-            );
-            return;
-        }
-        // What runs is what the files say, in the one layout.
-        if self.proj.format() > 0 {
-            self.edited(f64::NEG_INFINITY);
-        }
-        let src = self.proj.build_src();
-        let carried = self.session.deploy(&src);
-        self.pending = None;
-        self.sync_viewer();
-        if let Some(carried) = carried {
-            self.session.set_running(true);
-            self.seen.running = Some(true);
-            self.seen.scans = self.session.scans;
-            self.proj.running = Some(self.proj.open.clone());
-            let program = self
-                .viewer
-                .as_ref()
-                .and_then(|v| v.module.program())
-                .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
-            let note = format!(
-                "{} is running in this page{program}.{}",
-                self.proj.open,
-                carried.describe()
-            );
-            self.running_notice = Some(note.clone());
-            self.notice = Some(note);
-            self.log.info(
-                self.session.now_ms as f64 / 1000.0,
-                format!("Deployed {}: running in this page{program}.", self.proj.open),
-            );
-        } else {
-            self.notice = Some(format!(
-                "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
-                self.proj.open,
-                self.session.diags.len()
-            ));
-            self.log.error(
-                self.session.now_ms as f64 / 1000.0,
-                format!(
-                    "Deploy of {} refused: {} problem(s).",
-                    self.proj.open,
-                    self.session.diags.len()
-                ),
-            );
-        }
+        self.diagram_deployed = false;
+        self.deploy_as(true);
     }
 
     fn busy(&self) -> bool {

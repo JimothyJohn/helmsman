@@ -249,6 +249,9 @@ pub struct Chrome {
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
     jump: Option<u32>,
+    /// The bytes a diagram edit just wrote, drawn highlighted until the
+    /// page time given ([`Self::flash`]).
+    pub flash: Option<(std::ops::Range<usize>, f64)>,
     /// Controls drawn this frame, by name.
     pub hits: Vec<(String, Rect)>,
     /// Where the diagram was drawn this frame (the glyph buttons sit in
@@ -299,6 +302,7 @@ impl Default for Chrome {
             light: false,
             line: None,
             jump: None,
+            flash: None,
             hits: Vec::new(),
             diagram: Rect::NOTHING,
             find: None,
@@ -557,6 +561,18 @@ impl Chrome {
         self.toggle(Pane::Files);
     }
 
+    /// How long a diagram edit's text stays highlighted in the editor, s.
+    pub const FLASH: f64 = 1.5;
+
+    /// Highlights the bytes `range` of the open file until `until` (page
+    /// time), and sends the editor to their line in `text`.
+    pub fn flash(&mut self, text: &str, range: std::ops::Range<usize>, until: f64) {
+        let start = range.start.min(text.len());
+        let line = text[..start].char_indices().filter(|(_, c)| *c == '\n').count();
+        self.goto(u32::try_from(line + 1).unwrap_or(u32::MAX));
+        self.flash = Some((range, until));
+    }
+
     /// Sends the ST editor to `line` (it scrolls there when next drawn).
     pub fn goto(&mut self, line: u32) {
         if line > 0 {
@@ -763,6 +779,18 @@ pub fn undo(ctx: &egui::Context, id: egui::Id, text: &mut String, redo: bool) ->
     state.set_undoer(undoer);
     state.store(ctx, id);
     changed
+}
+
+/// Puts `text`, as it is now, in the ST editor `id`'s undo history as a
+/// point of its own, so that after the caller replaces the text (a diagram
+/// edit) one Undo brings `text` back, as it does for typing. The caret
+/// stays where it was.
+pub fn push_undo(ctx: &egui::Context, id: egui::Id, text: &str) {
+    let mut state = TextEditState::load(ctx, id).unwrap_or_default();
+    let mut undoer = state.undoer();
+    undoer.add_undo(&(state.cursor.char_range().unwrap_or_default(), text.to_string()));
+    state.set_undoer(undoer);
+    state.store(ctx, id);
 }
 
 /// What a view puts in the Editor's frame.
@@ -1290,6 +1318,16 @@ pub fn st_editor(
                 .collect()
         })
         .unwrap_or_default();
+    let mut marks = marks;
+    if let Some((r, until)) = chrome.flash.clone() {
+        if now < until && r.end <= text.as_str().len() {
+            marks.push((r, crate::st_view::brand::YELLOW.gamma_multiply(0.6)));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        } else {
+            chrome.flash = None;
+        }
+    }
     let at = chrome.line;
     let agent = chrome
         .st_marks
