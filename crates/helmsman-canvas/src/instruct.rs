@@ -74,8 +74,8 @@ pub struct Env<'a> {
 impl Env<'_> {
     /// The user message for `text`, the instruction or what failed, with
     /// the file and the envelopes after it.
-    fn message(&self, text: &str, earlier: &[String]) -> String {
-        let scope = self.scope.envelope(self.project, self.files);
+    fn message(&self, text: &str, earlier: &[String], edits: bool) -> String {
+        let scope = self.scope.envelope_for(self.project, self.files, edits);
         // The file goes once: when the program is that one file, the
         // `<edit_scope>` carries it and `<current_program>` points there.
         let same = self
@@ -100,6 +100,11 @@ impl Env<'_> {
         m
     }
 }
+
+/// The free chat's agent the Agent tab asks: the one that answers with
+/// the lines that change (`crate::edits`). A relay that does not serve
+/// it is asked for its chat, which sends whole files.
+pub const AGENT: &str = "edits";
 
 /// One answer that did not pass its checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -324,6 +329,10 @@ pub struct Instruct {
     pub draft: String,
     pub run: Option<Run>,
     pub outcome: Option<Outcome>,
+    /// The Agent asked answers with the lines that change
+    /// (`crate::edits`), so it is asked for those and not for the whole
+    /// file. The page sets it before each instruction.
+    pub edits: bool,
 }
 
 impl Instruct {
@@ -401,7 +410,7 @@ impl Instruct {
         spec: bool,
     ) -> Ask {
         let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
-        let message = env.message(text, &earlier);
+        let message = env.message(text, &earlier, self.edits);
         self.outcome = None;
         self.run = Some(Run {
             instruction,
@@ -479,7 +488,7 @@ impl Instruct {
                 self.failed("the change ran out of room in one answer, and the Agent could not split it into steps. Ask for one part first");
                 return Step::Done;
             }
-            let message = env.message(&run.instruction, &run.earlier);
+            let message = env.message(&run.instruction, &run.earlier, self.edits);
             run.asked.clone_from(&message);
             let text = run.instruction.clone();
             self.run = Some(run);
@@ -504,7 +513,69 @@ impl Instruct {
             diagnostics: env.diagnostics.to_vec(),
             splits: 0,
         }));
-        Step::Ask(Self::step_ask(self.run.insert(run), env))
+        Step::Ask(Self::step_ask(self.run.insert(run), env, self.edits))
+    }
+
+    /// The instruction under way, sent again as `text` (the instruction
+    /// with the engineer's answer in it, `crate::ask::with_answer`): only
+    /// while its first request is still out, in one go. `None` otherwise.
+    pub fn resend(&mut self, env: &Env<'_>, text: &str) -> Option<Ask> {
+        let edits = self.edits;
+        let run = self.run.as_mut()?;
+        if run.mode != Mode::Direct || run.retries > 0 || !run.attempts.is_empty() {
+            return None;
+        }
+        let env = Env {
+            scope: run.scope.clone(),
+            ..env.clone()
+        };
+        let message = env.message(text, &run.earlier, edits);
+        run.asked.clone_from(&message);
+        Some(Ask {
+            text: text.to_string(),
+            message,
+            context: Vec::new(),
+            retry: false,
+        })
+    }
+
+    /// A change that passed its checks ([`Step::Apply`]) but does not do
+    /// what the engineer answered meanwhile (`crate::ask`): `answer`, the
+    /// Agent's own words, goes back to it with `text`, as a failed check
+    /// does. `None` when no such change is waiting, or it was not made
+    /// in one go.
+    pub fn amend(&mut self, env: &Env<'_>, answer: &str, text: &str) -> Option<Ask> {
+        let edits = self.edits;
+        let run = self.run.as_mut()?;
+        if run.mode != Mode::Direct {
+            return None;
+        }
+        run.attempts.push(Attempt {
+            asked: std::mem::take(&mut run.asked),
+            answer: answer.to_string(),
+            problems: vec![text.to_string()],
+        });
+        run.retries += 1;
+        let env = Env {
+            scope: run.scope.clone(),
+            ..env.clone()
+        };
+        let message = env.message(text, &run.earlier, edits);
+        run.asked.clone_from(&message);
+        let context = run
+            .attempts
+            .iter()
+            .map(|a| Exchange {
+                asked: a.asked.clone(),
+                answer: a.answer.clone(),
+            })
+            .collect();
+        Some(Ask {
+            text: text.to_string(),
+            message,
+            context,
+            retry: true,
+        })
     }
 
     /// The paused plan: try its step again. `None` when no plan is
@@ -522,20 +593,20 @@ impl Instruct {
         run.retries = 0;
         run.asked_scenarios = false;
         run.attempts.clear();
-        Some(Self::step_ask(run, env))
+        Some(Self::step_ask(run, env, self.edits))
     }
 
     /// The request for the plan's next step, on its working copy.
-    fn step_ask(run: &mut Run, env: &Env<'_>) -> Ask {
+    fn step_ask(run: &mut Run, env: &Env<'_>, edits: bool) -> Ask {
         let Mode::Steps(plan) = &run.mode else {
             unreachable!("only a plan has steps")
         };
         let text = crate::steps::step_request(&run.instruction, &plan.steps, plan.done);
-        Self::plan_ask(run, env, text)
+        Self::plan_ask(run, env, text, edits)
     }
 
     /// `text` asked of the Agent on the plan's working copy.
-    fn plan_ask(run: &mut Run, env: &Env<'_>, text: String) -> Ask {
+    fn plan_ask(run: &mut Run, env: &Env<'_>, text: String, edits: bool) -> Ask {
         let Mode::Steps(plan) = &run.mode else {
             unreachable!("only a plan has steps")
         };
@@ -552,7 +623,7 @@ impl Instruct {
             diagnostics: &diagnostics,
             ..env.clone()
         };
-        let message = env.message(&text, &run.earlier);
+        let message = env.message(&text, &run.earlier, edits);
         run.asked.clone_from(&message);
         Ask {
             text,
@@ -580,7 +651,7 @@ impl Instruct {
                     scope: run.scope.clone(),
                     ..env.clone()
                 };
-                let message = env.message(&text, &run.earlier);
+                let message = env.message(&text, &run.earlier, self.edits);
                 run.asked.clone_from(&message);
                 Step::Ask(Ask {
                     text,
@@ -600,7 +671,7 @@ impl Instruct {
                 run.asked_scenarios = false;
                 run.attempts.clear();
                 let text = crate::steps::split_request(&run.instruction, &plan.steps, plan.done);
-                Step::Ask(Self::plan_ask(run, env, text))
+                Step::Ask(Self::plan_ask(run, env, text, self.edits))
             }
             Mode::Planning { .. } => {
                 self.failed(why);
@@ -624,7 +695,7 @@ impl Instruct {
         }
         plan.steps.splice(plan.done..=plan.done, parts);
         plan.state = PlanState::Running;
-        let ask = Self::step_ask(&mut run, env);
+        let ask = Self::step_ask(&mut run, env, self.edits);
         self.run = Some(run);
         Step::Ask(ask)
     }
@@ -633,12 +704,35 @@ impl Instruct {
     /// retries are left, else shown (in steps: kept in the working copy,
     /// the next step asked, or the plan paused).
     fn checked(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
-        let check = verify::check(&run.scope, env.files, answer, env.settings);
+        // An answer given as the lines that change is checked, shown and
+        // written as the whole file it makes (`crate::edits`); what goes
+        // back to the Agent after a failure is its own answer.
+        let raw = answer;
+        let (answer, check) = match crate::edits::expand(&run.scope, env.files, raw) {
+            Ok(whole) => {
+                let check = verify::check(&run.scope, env.files, &whole, env.settings);
+                (whole, check)
+            }
+            Err(why) => (
+                raw.to_string(),
+                Check {
+                    code: true,
+                    failures: vec![why],
+                    ..Check::default()
+                },
+            ),
+        };
+        let answer = answer.as_str();
         match verify::next(&check, run.retries, run.asked_scenarios) {
             Next::Retry(text) => {
+                let text = if crate::edits::has_edits(raw) {
+                    crate::edits::retry_words(&text)
+                } else {
+                    text
+                };
                 run.attempts.push(Attempt {
                     asked: std::mem::take(&mut run.asked),
-                    answer: answer.to_string(),
+                    answer: raw.to_string(),
                     problems: if check.unchecked() {
                         vec!["The answer gave code but no scenario to check it.".into()]
                     } else {
@@ -656,7 +750,7 @@ impl Instruct {
                     scope: run.scope.clone(),
                     ..env.clone()
                 };
-                let message = env.message(&text, &run.earlier);
+                let message = env.message(&text, &run.earlier, self.edits);
                 run.asked.clone_from(&message);
                 let context = run
                     .attempts
@@ -728,7 +822,7 @@ impl Instruct {
         run.attempts.clear();
         if plan.done < plan.steps.len() {
             run.mode = Mode::Steps(plan);
-            let ask = Self::step_ask(&mut run, env);
+            let ask = Self::step_ask(&mut run, env, self.edits);
             self.run = Some(run);
             return Step::Ask(ask);
         }
@@ -1173,6 +1267,8 @@ pub enum Act {
     Revision(u32),
     /// Open this proposal under Proposals (a box).
     Review(u64),
+    /// This answer to the question on show (`crate::ask`).
+    Answer(usize),
 }
 
 /// What the owner tells the tab.
@@ -1196,6 +1292,9 @@ pub struct View {
     /// How the answer under way is coming along, when the owner can see
     /// it stream (the page); `None`: only the spinner and the words.
     pub progress: Option<Progress>,
+    /// The question that goes with the instruction under way or just
+    /// done (`crate::ask`), when there is one.
+    pub card: Option<crate::ask::Card>,
 }
 
 /// Where the arrows go: the revision before and after the one shown,
@@ -1293,9 +1392,14 @@ pub enum Stage {
 #[must_use]
 pub fn stage(thinking: bool, text: &str) -> Stage {
     let checks = text.matches("```st scenario").count();
+    // An answer given as the lines that change (`crate::edits`) has no
+    // whole file to count the lines of.
+    let edits = text.contains("```st edit");
     match partial_code(text) {
         Some(_) if checks > 0 => Stage::Checks(checks),
         Some(code) => Stage::Writing(code.lines().count()),
+        None if edits && checks > 0 => Stage::Checks(checks),
+        None if edits => Stage::Writing(0),
         None if thinking || !text.trim().is_empty() => Stage::Planning,
         None => Stage::Waiting,
     }
@@ -1757,6 +1861,14 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             }
         }
     });
+    // The question goes right under the box, above the progress and the
+    // draft: it is the one thing here that waits for the engineer, so it
+    // is never what a long draft pushes off the screen.
+    if let Some(card) = &v.card
+        && let Some(k) = crate::ask::ui(ui, chrome, card)
+    {
+        act = Some(Act::Answer(k));
+    }
     let plan = s.run.as_ref().and_then(|r| match &r.mode {
         Mode::Steps(p) => Some(p),
         _ => None,
