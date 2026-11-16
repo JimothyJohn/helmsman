@@ -527,7 +527,7 @@ fn plain(m: &Module) -> Module {
 // ---- reading the text -------------------------------------------------
 
 /// The byte offset of a 1-based line and column (the lexer counts bytes).
-fn offset_in(s: &str, p: Pos) -> usize {
+pub(crate) fn offset_in(s: &str, p: Pos) -> usize {
     let mut at = 0;
     for _ in 1..p.line {
         match s.as_bytes()[at..].iter().position(|&b| b == b'\n') {
@@ -540,7 +540,7 @@ fn offset_in(s: &str, p: Pos) -> usize {
 
 /// Steps over whitespace, `(* *)` and `/* */` comments, `//` comments and
 /// `{ }` pragmas, as the lexer does.
-fn skip_trivia(b: &[u8], mut i: usize) -> usize {
+pub(crate) fn skip_trivia(b: &[u8], mut i: usize) -> usize {
     fn close(b: &[u8], from: usize, c: u8) -> usize {
         let mut i = from;
         while i + 1 < b.len() {
