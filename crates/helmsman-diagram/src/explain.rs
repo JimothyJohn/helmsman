@@ -482,7 +482,7 @@ fn collect(d: &Diagram, n: NodeId, port: usize, out: &mut Vec<String>) {
         NodeKind::For { var } => Some(var.clone()),
         NodeKind::Fb { instance, .. } => node.outs.get(port).map(|o| format!("{instance}.{o}")),
         NodeKind::Const { .. } | NodeKind::Jump => None,
-        NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } => {
+        NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } | NodeKind::Fold { .. } => {
             for w in d.inputs(n) {
                 collect(d, w.from, w.out, out);
             }

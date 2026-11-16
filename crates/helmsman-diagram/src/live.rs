@@ -172,7 +172,10 @@ pub fn annotate(d: &Diagram, t: &dyn Scan, prefix: &str) -> Live {
                 let first = eval_one(op, input(0), n.ins.len());
                 vec![(1..n.ins.len()).fold(first, |acc, k| eval(op, acc, input(k)))]
             }
-            NodeKind::Func { .. } | NodeKind::Access { .. } | NodeKind::Jump => vec![None; n.outs.len()],
+            // A fold's values come from the diagram it folds (`View::live`).
+            NodeKind::Func { .. } | NodeKind::Access { .. } | NodeKind::Jump | NodeKind::Fold { .. } => {
+                vec![None; n.outs.len()]
+            }
         };
         values.push(out);
     }

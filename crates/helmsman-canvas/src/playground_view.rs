@@ -899,6 +899,9 @@ impl PlaygroundView {
         let mut text = crate::devices::describe(&crate::devices::tree(&map, &live, &|_| {
             crate::devices::LinkState::Simulated
         }));
+        text.push_str(&crate::device_io::describe_free(&map, &|f| {
+            self.proj.files.get(f).cloned()
+        }));
         text.push_str(&crate::devices::describe_found(&self.devices_ui.found));
         text.push_str(&crate::plant::describe(&self.plant_states(&map)));
         if let Some(plant) = self
@@ -1800,6 +1803,24 @@ impl PlaygroundView {
             self.proj.add_file(&q.file, q.text.clone());
             self.apply_wiring(&q.wiring);
         }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.add_io_ui(&ui.ctx().clone(), chrome)
+        {
+            self.apply_wiring(&w);
+        }
+        if let Some(crate::devices::DeviceAct::Remove(names)) =
+            self.devices_ui.remove_ui(&ui.ctx().clone(), chrome)
+            && let Some(t) = self.proj.files.get_mut(helmsman_project::IO_MAP)
+        {
+            *t = crate::device_form::remove_signals(t, &names);
+            self.proj.note(
+                match names.as_slice() {
+                    [one] => format!("{one} removed from io.map."),
+                    _ => format!("{} points removed from io.map.", names.len()),
+                },
+                false,
+            );
+            self.edited(f64::NEG_INFINITY);
+        }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
         }
@@ -2036,8 +2057,7 @@ impl PlaygroundView {
         };
         self.watching.dismiss(&n.key);
         self.instruct.draft = n.ask;
-        chrome.left = true;
-        chrome.pane = editor::Pane::Claude;
+        chrome.show(editor::Pane::Claude);
         self.send_instruction(ctx);
     }
 
@@ -2536,6 +2556,16 @@ impl Body for PlaygroundView {
         self.devices_ui.plant.simulated = true;
         self.devices_ui.copy_first = self.proj.is_example();
         self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
+        self.devices_ui.can_declare =
+            crate::device_form::program_file(self.proj.files.iter().map(|(n, t)| (n.as_str(), t.as_str())))
+                .is_some();
+        self.devices_ui.set_profiles(
+            self.proj
+                .files
+                .iter()
+                .filter(|(n, _)| n.ends_with(helmsman_project::DEVICE_EXT))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
         self.devices_ui.map = map.clone();
         self.devices_ui.eds_files = self
             .proj
@@ -2551,6 +2581,13 @@ impl Body for PlaygroundView {
                 self.wired_lib.scan(&mut self.devices_ui);
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
+            Some(crate::devices::DeviceAct::AddIo(device)) => {
+                // A read-only example is copied first; the copy keeps the
+                // device's name.
+                if self.own_project() {
+                    self.devices_ui.open_add_io(&device);
+                }
+            }
             Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
             Some(crate::devices::DeviceAct::OpenMap) => {
                 self.proj.open_file(helmsman_project::IO_MAP);
@@ -2560,6 +2597,7 @@ impl Body for PlaygroundView {
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
                 | crate::devices::DeviceAct::Delete(_)
+                | crate::devices::DeviceAct::Remove(_)
                 | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}

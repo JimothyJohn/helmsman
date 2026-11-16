@@ -2031,7 +2031,7 @@ fn draw(
         // assignment's the page inverted, a variable's or an operator's a
         // grey of the page with its ink.
         let (head, ink) = match &n.kind {
-            NodeKind::Fb { .. } | NodeKind::For { .. } => (YELLOW, BLACK),
+            NodeKind::Fb { .. } | NodeKind::For { .. } | NodeKind::Fold { .. } => (YELLOW, BLACK),
             NodeKind::Write { .. } => (t.fg, t.bg),
             NodeKind::Read { .. } | NodeKind::Const { .. } => (t.rule, t.fg),
             NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } => (t.shade, t.fg),

@@ -291,6 +291,7 @@ fn what(k: &NodeKind, label: &str) -> String {
         NodeKind::Write { .. } => "write",
         NodeKind::For { .. } => "for",
         NodeKind::Jump => "jump",
+        NodeKind::Fold { .. } => "fold",
     };
     format!("{tag} {label}")
 }

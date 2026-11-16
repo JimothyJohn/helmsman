@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod programs;
+
 use std::fmt::Write as _;
 
 use helmsman_diagram::{Diagram, Module, NodeKind, Rect, lower};
@@ -35,6 +37,7 @@ pub fn shape(d: &Diagram) -> String {
             NodeKind::Write { .. } => "write",
             NodeKind::For { .. } => "for",
             NodeKind::Jump => "jump",
+            NodeKind::Fold { .. } => "fold",
         };
         let ins: Vec<String> = d
             .inputs(n.id)
