@@ -10,3 +10,5 @@ __pycache__/
 # Built from helmsman-device/footage/clips/ by footage/shots.py install.
 helmsman-device/assets/footage/
 helmsman-device/assets/real/
+# 2K takes, 77 MB: kept beside the repo, see helmsman-device/README.md.
+helmsman-device/footage/finals/

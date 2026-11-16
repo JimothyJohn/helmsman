@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build, check and render the device film's rough cuts to
-# marketing/helmsman-device-{a,b,c}.mp4 at 60 fps. Needs Node 22+, FFmpeg and python3;
+# marketing/helmsman-device-{a,b,c}.mp4 at 2560x1440, 60 fps. Needs Node 22+, FFmpeg and python3;
 # HyperFrames runs through npx at a pinned version, as in ../helmsman-ad-v2.
 #   ./render.sh              all three, delivery quality
 #   ./render.sh draft        all three, a fast pass while editing
@@ -25,7 +25,7 @@ draft | looks | delivery)
         (
             cd "cut-$cut"
             $HF check
-            $HF render --quality "$quality" --fps 60 -o "../../helmsman-device-$cut.mp4"
+            $HF render --quality "$quality" --fps 60 --resolution landscape-1440p -o "../../helmsman-device-$cut.mp4"
             ffprobe -v error -show_entries format=duration,size -of default=nw=1 "../../helmsman-device-$cut.mp4"
         )
     done

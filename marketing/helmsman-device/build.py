@@ -17,11 +17,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 # Measured in the clips (footage/outputs/box/sheets): seconds into the clip.
-PLUG_LIGHT = 4.0  # the light bar comes on
-LINE_GREEN = 1.4  # the stack light changes and the cartons start
-MOUNT_CLICK = 3.0  # the block is seated and the hand lets go
-RACK_THUD = 3.97
-DOOR_CLUNK = 2.02
+PLUG_LIGHT = 3.2  # the light bar comes on (the plug's click is at 3.1)
+LINE_GREEN = 0.8  # the stack light comes on; the cartons roll a second later
+MOUNT_CLICK = 2.94  # the block seats on the rail
+RACK_THUD = 2.82
+DOOR_CLUNK = 2.4
 APP_START = 3.34  # app-latch.mp4: the press on START
 
 

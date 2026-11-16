@@ -7,7 +7,7 @@ repainted in the film's style, then that painting animated as the first frame of
     ./shots.py clips  [name ...]     # outputs/box/clip-<name>.mp4, a 768P draft, $0.02 a second
     ./shots.py finals [name ...]     # outputs/box/final-<name>.mp4, 2K on the full model, $0.13 a second
     ./shots.py sheet                 # outputs/box/sheet.jpg, every painted still on one page
-    ./shots.py install [name ...]    # clips/<name>.mp4 into ../assets/, interpolated to 60 fps
+    ./shots.py install [name ...]    # the kept takes into ../assets/, 1440p at 60 fps
 
 It drives the storyboard CLI (~/github/storyboard), which bounds-checks each
 request, retries, and writes a costed record per run under outputs/box/runs/.
@@ -515,14 +515,17 @@ def clip(name: str, resolution: str = "768P", prefix: str = "clip") -> int:
 
 # The model renders 24 fps; the film is 60. Motion-compensated interpolation holds up
 # because every move in these clips is slow.
-TO_60 = "minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
+TO_60 = "scale=2560:1440:flags=lanczos,minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
 REAL_SOUND = ("plug", "mount", "rackout", "walkaway", "dongles", "linestart")
 
 
 def install(name: str) -> int:
-    """clips/<name>.mp4 (the take that was kept, committed) -> ../assets/footage/<name>.mp4
-    at 60 fps, and for the shots the cuts play with their own sound, ../assets/real/<name>.mp3."""
-    src = HERE / "clips" / f"{name}.mp4"
+    """The kept take -> ../assets/footage/<name>.mp4 at 1440p and 60 fps, and for the shots
+    the cuts play with their own sound, ../assets/real/<name>.mp3. The take is the 2K final
+    in finals/ when there is one (too large to commit), else the 768P draft in clips/."""
+    src = HERE / "finals" / f"{name}.mp4"
+    if not src.exists():
+        src = HERE / "clips" / f"{name}.mp4"
     assets = HERE.parent / "assets"
     (assets / "footage").mkdir(parents=True, exist_ok=True)
     (assets / "real").mkdir(parents=True, exist_ok=True)
@@ -569,7 +572,8 @@ def main() -> int:
         prompts.mkdir(parents=True, exist_ok=True)
         if run(["scan", str(prompts)]) != 0:
             return 1
-    with ThreadPoolExecutor(PARALLEL) as pool:
+    # the hosted API takes about five predictions at once; the interpolation is local
+    with ThreadPoolExecutor(8 if job is install else PARALLEL) as pool:
         codes = list(pool.map(job, names))
     for name, code in zip(names, codes):
         if code:

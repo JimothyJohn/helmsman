@@ -1,4 +1,4 @@
-# Helmsman device film, three rough cuts (1920x1080, 60 fps)
+# Helmsman device film, three rough cuts (2560x1440, 60 fps)
 
 The second ad (`../helmsman-ad-v2`) with the controller as an object in a
 real plant: it is clipped onto a rail, one Ethernet cable goes in and its
@@ -31,40 +31,49 @@ there first.
 
 ## The footage
 
-Every shot is generated in three steps through the `storyboard` CLI in
+Every shot is generated in four steps through the `storyboard` CLI in
 `~/github/storyboard`, and `footage/shots.py` holds every prompt:
 
     footage/shots.py stills [name ...]   # a composed photographic still, about $0.04
     footage/shots.py paint  [name ...]   # that still repainted in the film's look, $0.04
-    footage/shots.py clips  [name ...]   # the painting animated, about $0.02 a second
+    footage/shots.py clips  [name ...]   # the painting animated, a 768P draft, $0.02 a second
+    footage/shots.py finals [name ...]   # the same at 2K on the full model, $0.13 a second
     footage/shots.py sheet               # every painted still on one page
 
-The still fixes what is in the frame, the repaint fixes the look, and the
-painting is the first frame of a 4 to 6 s clip (MiniMax H3, the 768P draft
-model). The device stays the same object from shot to shot because every
-device still is composed from the same three reference pictures
-(`docs/brand/helmsman-device*.jpg`).
+The still fixes what is in the frame, the repaint fixes the look and the
+level of detail, and the painting is the first frame of a 4 to 6 s clip
+(MiniMax H3). The device stays the same object from shot to shot because
+every device still is composed from the same three reference pictures
+(`docs/brand/helmsman-device*.jpg`). Draft on `clips`, spend on `finals`
+once: all fifteen at 2K cost $9.62 on 2026-11-15.
 
 Look at every still and clip before it goes in a cut. The first plug-in
-take grew a second socket for the cable, and a repaint prompt that names
-something to leave out paints it in: say what is there, never what is not.
+take grew a second socket for the cable. A repaint prompt that names
+something to leave out paints it in, and one that asks for scuffs and dust
+gets a scuffed, dusty device: say what is there, and say it is clean.
 
-The take that is kept is copied from `footage/outputs/box/clip-<name>.mp4`
-to `footage/clips/<name>.mp4` and committed. The model renders 24 fps and
-the film is 60, so `footage/shots.py install` interpolates each clip
-(FFmpeg `minterpolate`, about nine minutes for all fifteen) into
-`assets/footage/`; `render.sh` runs it when that folder is empty. It holds
-up because every move in the clips is slow.
+Replicate's URLs for a still die after about two hours. Set
+`H3_ASSET_BUCKET` (storyboard's reference bucket, public read; needs the
+`aws` CLI) and the script copies each still there before it is used.
 
-These are drafts at 1344x768, scaled up. A cut that is kept gets its shots
-rendered once more at 2K on the full model (`--resolution 2K` in
-`shots.py`, about $0.13 a second, near $11 for all fifteen) before it
-ships.
+The takes that are kept:
 
-The moments the cuts land on a beat were measured in the clips and are the
-constants at the top of `build.py`: the light bar coming on, the stack
-light changing, the block seated on the rail, the rack's thud, the door's
-clunk. New takes need new numbers.
+- `footage/clips/<name>.mp4`: 768P drafts, committed (9.5 MB), so the film
+  builds from a clone.
+- `footage/finals/<name>.mp4`: the 2K takes (2560x1440, 77 MB), not
+  committed. Nick's copy is `~/Movies/helmsman-device/finals-2k/` on the
+  Studio; put them in `footage/finals/` to build the film from them.
+
+The model renders 24 fps and the film is 60, so `footage/shots.py install`
+scales each kept take to 1440p and interpolates it (FFmpeg `minterpolate`)
+into `assets/footage/`, from `finals/` when a take is there and from
+`clips/` otherwise; `render.sh` runs it when that folder is empty. It
+holds up because every move in the clips is slow.
+
+The moments the cuts land on a beat were measured in the 2K takes and are
+the constants at the top of `build.py`: the light bar coming on, the stack
+light, the block seating on the rail, the rack's thud, the door's clunk.
+New takes need new numbers, and the drafts in `clips/` have different ones.
 
 ## Sound
 
