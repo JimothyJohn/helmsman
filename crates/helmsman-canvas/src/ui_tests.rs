@@ -273,11 +273,9 @@ fn sim_view(h: &Harness) -> &Viewer {
 /// Screen centre and on-screen width of the first node matching `f`.
 fn node(v: &Viewer, f: impl Fn(&NodeKind) -> bool) -> (Pos2, f32) {
     let n = v.diagram().nodes.iter().find(|n| f(&n.kind)).expect("the node");
-    let cam = v.cams[v.scope];
-    (
-        cam.to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0),
-        n.rect.w * cam.zoom,
-    )
+    // Where it is drawn (inside a fold: the fold's box).
+    let r = v.block_on_screen(n.id).expect("the node is drawn");
+    (r.center(), r.width())
 }
 
 /// The bounds of the line and path strokes the last frame drew inside
@@ -1749,6 +1747,7 @@ END_PROGRAM",
             retries: 1,
             asked_scenarios: false,
             mode: crate::instruct::Mode::Direct,
+            spec: false,
             attempts: vec![Attempt {
                 asked: String::new(),
                 answer: String::new(),
@@ -4630,6 +4629,7 @@ mod simulated {
             asked_scenarios: false,
             mode: crate::instruct::Mode::Direct,
             attempts: Vec::new(),
+            spec: false,
         });
         h.app.sim.as_mut().unwrap().card = Some(Card {
             question: Some(Question {
@@ -6902,5 +6902,6 @@ mod layouts;
 mod proposal;
 mod shell;
 mod sim_popup;
+mod spec_mode;
 mod vendor;
 mod wired;

@@ -2708,6 +2708,27 @@ canvas" at the end of this section.
   every operator of the run, refuses an operator drawn with two inputs
   (`ManyInputs`), and brackets whatever would otherwise join a
   neighbouring run, so an edit never changes the number of blocks.
+- **Folds: several blocks drawn as one** (`helmsman_diagram::fold`). A
+  `Fold` names blocks the reader would rather see as one thing; `view`
+  gives the diagram with each fold as one block (`NodeKind::Fold`) whose
+  pins are the wires that crossed its edge, laid out by the same layout.
+  Two shapes: blocks within one statement (convex), or consecutive whole
+  statements of one block with all that is nested in them (the variables
+  read and written become named pins). A fold that is neither, or shares
+  a block with an earlier one, is left out and the view says why. The
+  view maps its blocks, ports, wires and regions back (`View::live`,
+  `View::drivers`, `View::original`), so lowering, the trace mapping and
+  the edit spans are those of the diagram underneath. The rules that
+  make folds: `fold::chips` (a comparison with a literal is one block,
+  `> 80.0`, fed by the variable, which keeps its own block), on as the
+  diagram opens (`fold::auto`). On the canvas (`Viewer::shown`, tests in
+  `st_view_fold_tests.rs`) the viewer keeps everything in the diagram's
+  own numbers and draws the view: a click on a fold picks a block under
+  it, a double click opens it into its blocks (outlined, with a tab that
+  folds them back), a folded comparison is edited in place (double click
+  its value, right click for the operator), a dragged fold keeps its
+  place. Opened folds are carried across a redeploy; they are not yet in
+  `diagram.layout`.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label
@@ -3170,6 +3191,38 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   used twice, stops the send and says why. The front door's tank was
   written from such a list. Contracts in `io_names.rs`'s tests and
   `ui_tests/io_names.rs` (the pane keeps its width with long names).
+- **Spec mode** (`spec_mode.rs`; Nick, 2026-11-15): with `Scope::NewProject`
+  the Agent tab offers "From a spec…", a window (`spec_mode::form_ui`)
+  where a specification is pasted or `.md` / `.txt` files are added
+  (`Spec::add_file` holds `helmsman_project::check_text`'s rules and
+  refuses with the reason; the wasm picker is `web::pick_spec_file`, which
+  refuses a file over the cap before it is read). `Spec::message` is the
+  request: `spec_mode::RULES`, then the documents in a `<specification>`
+  envelope (`spec_mode::defang` makes every envelope tag of
+  `scope::ENVELOPES`, open or close, and a forged document line harmless).
+  The page's own prompt (the relay's `playground-v4` on the free route,
+  `claude::SYSTEM` on the others) carries the answer format; the rules say
+  only what differs: names with a comment on each declaration line, a
+  scenario per requirement up to `verify::MAX_SCENARIOS`, and the
+  requirements with no scenario in one ```` ```requirements ```` block
+  (`spec_mode::untested`: at most 40 lines, cut, control characters out).
+  `MAX_SPEC` (120 KiB of request body) is `claude::FREE_MAX_BODY` less the
+  fixed words and two failed answers a retry carries; a compile-time
+  assertion and a test hold it. The run is `Instruct::start_spec`
+  (History's instruction is "From a spec: names", never the spec; a retry
+  adds `spec_mode::RETRY`), checked as any new program. Its `Apply` (which
+  now carries the answer and the scenarios it ran) goes to
+  `PlaygroundView::write`, which, for a spec run, builds a `Draft`
+  (`helmsman_iec::spec::declared_ports` reads each port's declaration
+  comment) and opens `spec_mode::review_ui` instead of the name question.
+  Nothing is written until `accept_spec`, which makes the project in one
+  revision from `Draft::files`: `main.st`, the scenarios that passed,
+  `spec::placeholder` tests for the rest, `io.map` from
+  `sim_projects::example_io_map` and `spec.md` (a kept file, so it is put
+  into the files map, not `add_file`); the project's own size rules are
+  checked before Accept. Discard drops the draft. A spec run into an
+  existing project, PDFs and the box's page are not built. Contracts in
+  `spec_mode_tests.rs` and `ui_tests/spec_mode.rs`.
 - **The Agent watches** (`watch.rs`; Nick, 2026-11-14): what the page
   already sees go wrong is said unasked in a card over the top of the
   diagram (on screen whichever tab is open, not modal), one thing at a time, most urgent first (`watch::noticed`): an

@@ -131,6 +131,9 @@ pub struct Run {
     pub attempts: Vec<Attempt>,
     /// In one go, planning, or in steps ([`crate::steps`]).
     pub mode: Mode,
+    /// A run from a specification ([`crate::spec_mode`]): a retry says
+    /// what shape the answer keeps.
+    pub spec: bool,
 }
 
 /// How an instruction is carried out.
@@ -237,6 +240,16 @@ pub struct Apply {
     pub status: String,
     pub why: Option<String>,
     pub instruction: String,
+    /// What the draft of a spec run is read from.
+    pub evidence: Box<Evidence>,
+}
+
+/// The Agent's whole answer and the scenarios it ran, passed or not: a
+/// spec run reads its review screen from them ([`crate::spec_mode::Draft`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Evidence {
+    pub answer: String,
+    pub ran: Vec<verify::Ran>,
 }
 
 /// What [`Instruct::answered`] asks the caller to do.
@@ -365,16 +378,42 @@ impl Instruct {
             return Err(why);
         }
         let instruction = std::mem::take(&mut self.draft).trim().to_string();
-        let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
         let text = if plan {
             crate::steps::plan_request(&instruction, false)
         } else {
             instruction.clone()
         };
-        let message = env.message(&text, &earlier, self.edits);
+        Ok(self.begin(env, earlier, instruction, &text, plan, false))
+    }
+
+    /// Starts a run from a specification ([`crate::spec_mode`]): `text`
+    /// is the whole request (its own cap holds, not
+    /// [`MAX_INSTRUCTION`]) and `label` is what History records as the
+    /// instruction. The draft is left as it is.
+    ///
+    /// # Errors
+    /// The Agent is busy.
+    pub fn start_spec(&mut self, env: &Env<'_>, label: &str, text: &str) -> Result<Ask, String> {
+        if self.busy() {
+            return Err("The Agent is still working on the last instruction.".into());
+        }
+        Ok(self.begin(env, &[], label.to_string(), text, false, true))
+    }
+
+    fn begin(
+        &mut self,
+        env: &Env<'_>,
+        earlier: &[String],
+        instruction: String,
+        text: &str,
+        plan: bool,
+        spec: bool,
+    ) -> Ask {
+        let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
+        let message = env.message(text, &earlier, self.edits);
         self.outcome = None;
         self.run = Some(Run {
-            instruction: instruction.clone(),
+            instruction,
             project: env.project.to_string(),
             scope: env.scope.clone(),
             earlier,
@@ -387,13 +426,14 @@ impl Instruct {
             } else {
                 Mode::Direct
             },
+            spec,
         });
-        Ok(Ask {
-            text,
+        Ask {
+            text: text.to_string(),
             message,
             context: Vec::new(),
             retry: false,
-        })
+        }
     }
 
     /// The Agent's whole answer to the request in flight, checked against
@@ -701,6 +741,11 @@ impl Instruct {
                 });
                 run.retries += 1;
                 run.asked_scenarios |= check.unchecked();
+                let text = if run.spec {
+                    format!("{text}\n{}", crate::spec_mode::RETRY)
+                } else {
+                    text
+                };
                 let env = Env {
                     scope: run.scope.clone(),
                     ..env.clone()
@@ -831,6 +876,10 @@ impl Instruct {
             status,
             why,
             instruction: run.instruction.clone(),
+            evidence: Box::new(Evidence {
+                answer: answer.to_string(),
+                ran: check.scenarios.clone(),
+            }),
         };
         run.mode = Mode::Steps(plan);
         self.run = Some(run);
@@ -903,6 +952,10 @@ impl Instruct {
             status,
             why,
             instruction: run.instruction,
+            evidence: Box::new(Evidence {
+                answer: answer.to_string(),
+                ran: check.scenarios.clone(),
+            }),
         })
     }
 
@@ -915,6 +968,12 @@ impl Instruct {
         o.problems.clone_from(&apply.warnings);
         o.undo = undo;
         self.outcome = Some(o);
+    }
+
+    /// The draft of a spec run was dropped on review: nothing was written.
+    pub fn discarded(&mut self, status: &str) {
+        self.run = None;
+        self.outcome = Some(Outcome::new(Kind::Said, status));
     }
 
     /// A green answer the caller could not write, and why.
@@ -1268,6 +1327,8 @@ pub struct Progress {
     /// The answer is in and checked; the program waits for its name (a
     /// change to a built-in example becomes a project of its own).
     pub naming: bool,
+    /// ...for a spec run: the draft is on review.
+    pub review: bool,
     /// The least and the usual most this instruction takes, s
     /// ([`estimate_secs`]).
     pub estimate: Option<(u64, u64)>,
@@ -1535,9 +1596,18 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
     use egui::RichText;
     let t = crate::theme::theme(ui);
     if p.naming {
-        let r = ui
-            .label(RichText::new("Checked. Name the program to keep it.").color(t.muted))
-            .tip("Every check passed. A change to a built-in example becomes a program of its own: name it, or Cancel to drop it.");
+        let (text, tip) = if p.review {
+            (
+                "Checked. Review the draft to keep it.",
+                "The draft is on screen: Accept makes the project, Discard drops it.",
+            )
+        } else {
+            (
+                "Checked. Name the program to keep it.",
+                "Every check passed. A change to a built-in example becomes a program of its own: name it, or Cancel to drop it.",
+            )
+        };
+        let r = ui.label(RichText::new(text).color(t.muted)).tip(tip);
         chrome.hit("agent naming", r.rect);
         return;
     }
