@@ -167,6 +167,7 @@ impl Layers {
         self.shared = Arrangement::from_text(shared).unwrap_or_default();
         self.key = Some(key.to_string());
         v.reset_arrangement();
+        v.reset_folds();
         v.arrange(&self.shared);
         self.applied = self.shared.within(v);
         let mine = self.personal(key);
@@ -219,6 +220,7 @@ impl Layers {
     pub fn reset(&mut self, v: &mut Viewer) {
         let Some(key) = self.key.clone() else { return };
         v.reset_arrangement();
+        v.reset_folds();
         let mine = if self.tweaked() {
             v.arrange(&self.shared);
             Arrangement::default()
