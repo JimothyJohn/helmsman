@@ -645,6 +645,100 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   by: claude-session
   status: ready
 
+### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
+
+Order: chips, then the fold layer, then everything that folds. Gates,
+chips and idioms are on as the diagram opens; arms, sections and output
+cards fold on request and the choice is kept in `diagram.layout`.
+
+- [ ] **Condition chips: a comparison against a constant is one block** — `level > 80.0` is three blocks today (read, constant, operator). One block labelled with the comparison, lit when true; `x >= lo AND x <= hi` on one variable reads as one range block.
+  result: a condition reads as the sentence the engineer would say, and takes one block
+  est: 5h
+  difficulty: med
+  id: diagram-chips
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **The fold layer: a set of blocks shown as one, opened in place** — a view over `Diagram` (lowering, the trace mapping and the edit spans untouched): a fold names its blocks, the pins are the wires that cross its edge, its title and live state come from what it holds. The canvas draws a folded set as one block, opens it by a double click and shows where you are in the breadcrumb the function block instances use. Folded or open is kept per fold in the arrangement.
+  result: one mechanism every card below uses to hide detail
+  est: 1d
+  difficulty: high
+  id: diagram-fold
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Folded arms: an IF arm or CASE branch as one block** — title its condition, inputs what it reads from outside, outputs what it writes.
+  result: a long IF reads as its conditions and what each one sets
+  est: 4h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-fold-arms
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Sections named by a comment** — a comment on its own line above a run of statements names a fold over them (`(* Infeed permissives *)`), up to the next such comment or a blank-line break. A relay profile that always writes them is a card of its own in ../agent-relay once this is in.
+  result: the author's own names for the parts of a program are the top level of its diagram
+  est: 5h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-fold-sections
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Idiom blocks: latch, edge, selector, set/reset** — the seal-in `(start OR m) AND NOT stop` drawn as a latch with set and reset pins, `x AND NOT x_prev` as a rising edge, `IF c THEN y := a; ELSE y := b` as a selector, an IF that only writes TRUE or FALSE as set/reset. Recognised on the diagram, never by guessing: a shape that differs by one wire stays as it is.
+  result: the standard circuits show under their names
+  est: 1d
+  difficulty: high
+  depends: diagram-fold
+  id: diagram-idioms
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **State block: a CASE on a state variable as one block of states** — the states as chips, the active one lit, a tap on a chip opens that state's arm.
+  result: a sequence shows which step it is in at a glance
+  est: 6h
+  difficulty: med
+  depends: diagram-fold-arms
+  id: diagram-state-block
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Output cards: one card per output with its logic folded in** — the blocks `drivers` already finds for an output, as one fold whose inputs are the signals it finally depends on.
+  result: the top of a program's diagram answers "what drives each output"
+  est: 6h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-output-cards
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Permissive table: an OR of ANDs as rows of conditions** — one row per term, one cell per signal (must be on, must be off). Live: the row that holds is lit, and when the output is off each row marks the cell that stops it.
+  result: an interlock reads as a table and says what is missing
+  est: 1d
+  difficulty: high
+  depends: diagram-fold
+  id: diagram-permissive-table
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Zoom picks the level of detail** — far: sections and output cards with their live state; middle: a statement as one line; near: the blocks. Uses the folds above, opens nothing the user folded by hand.
+  result: a large program is readable at any zoom
+  est: 6h
+  difficulty: med
+  depends: diagram-fold-sections, diagram-output-cards
+  id: diagram-semantic-zoom
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
 ## Product vision (interview 2026-10-29)
 
 Working title until naming lands. A small, opinionated controller for factory edge boxes (Pi 5 reference, headless, browser UI), for non-mission-critical work: low-frequency detection, shift-aware scheduling of its own outputs, on-floor signalling (stack light, andon, screen). Data is pushed elsewhere (webhooks, OPC UA); the box keeps no historian.

@@ -433,7 +433,7 @@ fn gate_text(d: &Diagram, r: RegionId) -> (String, NodeId) {
     let text = if region.negated {
         // NOT binds tighter than any binary operator.
         match &n.kind {
-            NodeKind::Op { .. } if n.ins.len() == 2 => format!("NOT ({base})"),
+            NodeKind::Op { .. } if n.ins.len() >= 2 => format!("NOT ({base})"),
             _ => format!("NOT {base}"),
         }
     } else {

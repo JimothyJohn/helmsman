@@ -456,3 +456,40 @@ fn a_block_instance_drives_its_outputs_in_the_caller_and_its_body_in_its_own_vie
         ["read RUN", "read FAULT", "TRUE", "write ON"]
     );
 }
+
+#[test]
+fn a_block_with_many_inputs_shows_what_the_program_computed() {
+    // Every combination of four inputs: the block's value is the variable
+    // the interpreter wrote from the same expression.
+    let src = prog(
+        "a AT %IX0.0 : BOOL; b AT %IX0.1 : BOOL; c AT %IX0.2 : BOOL; d AT %IX0.3 : BOOL; all, any, odd, mix : BOOL;",
+        "all := a AND NOT b AND c AND d;\nany := a OR b OR NOT c OR d;\nodd := a XOR b XOR c XOR d;\nmix := a AND b AND c OR NOT d OR b AND d;",
+    );
+    let (mut p, m) = build(&src);
+    let d = &m.program().unwrap().diagram;
+    let ops: Vec<_> = d
+        .wires
+        .iter()
+        .filter_map(|w| match &d.node(w.to).kind {
+            NodeKind::Write { path } if matches!(d.node(w.from).kind, NodeKind::Op { .. }) => {
+                Some((w.from, path.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ops.len(), 4);
+    assert_eq!(d.node(ops[0].0).ins.len(), 4);
+    for inputs in 0..16 {
+        let t = scan(&mut p, inputs);
+        let live = annotate(d, &t, "");
+        for (op, path) in &ops {
+            let wrote = t.get(path);
+            assert!(wrote.is_some(), "{path}");
+            assert_eq!(
+                live.values[op.0 as usize],
+                [wrote],
+                "{path} with inputs {inputs:04b}"
+            );
+        }
+    }
+}

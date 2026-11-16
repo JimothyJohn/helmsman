@@ -311,7 +311,10 @@ fn offered(m: &Module) -> Vec<Edit> {
                     "+" | "-" | "*" | "/" => &[BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div],
                     _ => &[],
                 };
-                for &to in family.iter().filter(|b| b.symbol() != op) {
+                // A run of one operator is one block with an input each:
+                // it can only become an operator that also takes any number.
+                let fits = |to: BinOp| n.ins.len() == 2 || helmsman_diagram::lower::chains(to);
+                for &to in family.iter().filter(|b| b.symbol() != op && fits(**b)) {
                     out.push(Edit::SwapOp {
                         pou: p.name.clone(),
                         node: n.id,
