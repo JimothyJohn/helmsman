@@ -16,6 +16,8 @@
 //!   [`drivers()`]: the same as the blocks, wires and regions to highlight.
 //! - [`edit`]: a gesture on the diagram (a value, a negation bubble, an
 //!   operator) as an exact, checked splice of the source text.
+//! - [`fold`]: a set of blocks shown as one (a condition, a latch, an IF
+//!   arm, a commented section), as a view that maps back to the diagram.
 //! - [`diff`]: what a proposal changes, line by line in the source and
 //!   block by block in the diagram, for the review screen.
 //!
@@ -50,6 +52,7 @@
 pub mod diff;
 pub mod edit;
 pub mod explain;
+pub mod fold;
 pub mod layout;
 pub mod live;
 pub mod lower;
