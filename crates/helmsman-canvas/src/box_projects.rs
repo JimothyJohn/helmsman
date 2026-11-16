@@ -500,7 +500,7 @@ fn unbound_ports(text: &str) -> Vec<String> {
 /// `why`, a box's refusal of a deploy, with what to do about an input that
 /// has no signal added: the box's check is as it was, only the words
 /// after it say how to go on.
-fn deploy_words(why: String) -> String {
+pub(crate) fn deploy_words(why: String) -> String {
     let ports = unbound_ports(&why);
     if ports.is_empty() {
         return why;

@@ -528,3 +528,130 @@ fn a_bool_only_spec_deploys_and_runs_on_the_box() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
+
+// ---- the state alone ----
+
+#[test]
+fn a_pdf_answer_for_nothing_in_flight_changes_nothing_and_a_refusal_is_in_words() {
+    use crate::box_spec::BoxSpec;
+    let mut s = BoxSpec::new();
+    assert_eq!(s.pdf_answer("ghost.pdf", 201, "{\"id\":1}"), None);
+    s.spec.add_file("a.pdf", &pdf(100)).unwrap();
+    s.spec.add_file("b.pdf", &pdf(100)).unwrap();
+    let reqs = s.upload_requests();
+    assert_eq!(reqs.len(), 2);
+    assert!(
+        reqs.iter()
+            .all(|r| r.url.starts_with("/api/dropins?name=") && r.url.ends_with("&kind=pdf"))
+    );
+    assert!(reqs.iter().all(|r| r.ctype == "application/pdf" && r.method == "POST"));
+    assert!(s.uploading);
+    assert_eq!(s.pdf_answer("a.pdf", 201, "{\"id\":4}"), None, "b is still on its way");
+    // A 201 that names no id is not kept.
+    assert_eq!(s.pdf_answer("b.pdf", 201, "{}"), Some(false));
+    let why = s.spec.pdfs[1].refused.clone().unwrap();
+    assert!(
+        why.contains("did not say where") && why.contains("Nothing was sent to the agent"),
+        "{why}"
+    );
+    assert_eq!(s.dropins(), [4]);
+    assert!(!s.uploading);
+    // Sent again after the person took it out and added it back.
+    s.spec.remove_pdf(1);
+    s.spec.add_file("b.pdf", &pdf(100)).unwrap();
+    assert_eq!(s.upload_requests().len(), 1, "only the one not kept");
+    assert_eq!(s.pdf_answer("b.pdf", 201, "{\"id\":5}"), Some(true));
+    assert_eq!(s.dropins(), [4, 5]);
+    // The box's refusals, each in words naming the file.
+    for (status, body, says) in [
+        (413, "{\"error\":\"a PDF is at most 2 MiB\"}", "too large"),
+        (415, "{\"error\":\"this is not a PDF\"}", "does not take"),
+        (401, "", "Sign in again"),
+        (0, "connection reset", "did not answer"),
+        (500, "{\"error\":\"disk full\"}", "disk full"),
+    ] {
+        let mut s = BoxSpec::new();
+        s.spec.add_file("x.pdf", &pdf(100)).unwrap();
+        s.upload_requests();
+        assert_eq!(s.pdf_answer("x.pdf", status, body), Some(false), "{status}");
+        let why = s.spec.pdfs[0].refused.clone().unwrap();
+        assert!(
+            why.contains(says) && why.contains("Nothing was sent to the agent"),
+            "{status}: {why}"
+        );
+    }
+}
+
+#[test]
+fn a_draft_waits_for_its_run_and_accept_refuses_twice_in_a_row() {
+    use crate::box_spec::BoxSpec;
+    let mut s = BoxSpec::new();
+    assert!(s.spec.on_box && s.review.is_none() && !s.accepting);
+    let apply = crate::instruct::Apply {
+        project: String::new(),
+        scope: crate::scope::Scope::NewProject,
+        file: "main.st".into(),
+        text: sm::MOTOR.into(),
+        tests: Vec::new(),
+        warnings: Vec::new(),
+        record: String::new(),
+        status: String::new(),
+        why: None,
+        instruction: "From a spec: Pasted".into(),
+        evidence: Box::new(crate::instruct::Evidence {
+            answer: String::new(),
+            ran: Vec::new(),
+        }),
+    };
+    // No documents held: no draft (the run was never started here).
+    assert!(!s.drafted(apply.clone(), &[]));
+    s.spec.pasted = "Belt.".into();
+    s.begin_run();
+    assert!(s.drafted(apply, &["conveyor".into()]));
+    assert_eq!(s.review.as_ref().unwrap().name, "conveyor-2");
+    assert!(s.accept(&["conveyor".into()]).is_some());
+    assert!(s.accepting);
+    assert!(
+        s.accept(&[]).is_none(),
+        "a second Accept while the first is on its way"
+    );
+    s.refused("conveyor-2", 409, "{\"error\":\"taken\"}");
+    assert!(!s.accepting);
+    assert!(
+        s.review
+            .as_ref()
+            .unwrap()
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Nothing was written")
+    );
+    assert!(s.drop_run());
+    assert!(!s.drop_run());
+}
+
+#[test]
+fn the_words_after_a_refused_deploy_name_every_input_with_no_signal_and_change_nothing_else() {
+    use crate::box_projects::deploy_words;
+    let one = "x was not deployed: modules do not fit together: tank: port LEVEL: no signal of that name".to_string();
+    let said = deploy_words(one.clone());
+    assert!(said.starts_with(&one), "the box's own words stay first: {said}");
+    assert!(said.contains("Input level has no signal on this box"), "{said}");
+    let two = "tank: port LEVEL: no signal of that name; tank: port Temp_1: no signal of that name; tank: port LEVEL: no signal of that name";
+    let said = deploy_words(two.into());
+    assert!(
+        said.contains("Input level, temp_1 have no signal on this box"),
+        "each once, lower case: {said}"
+    );
+    // Other refusals are left exactly as the box said them, and so is a
+    // sentence that only looks like one.
+    for other in [
+        "x was not deployed: a module does not build",
+        "no signal of that name",
+        ": no signal of that name",
+        "the word port: no signal of that name",
+        "",
+    ] {
+        assert_eq!(deploy_words(other.into()), other, "{other:?}");
+    }
+}

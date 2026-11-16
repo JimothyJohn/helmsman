@@ -280,3 +280,192 @@ fn the_kept_spec_file_is_listed_and_opens_as_text_in_the_code_tab() {
     assert!(h.drew("The belt."), "its text is shown");
     assert!(h.small_text().is_empty(), "{:?}", h.small_text());
 }
+
+// ---- on a box ----
+
+/// A box's page with an engineer signed in and the box's project list
+/// read (a spec needs both).
+fn boxed() -> Harness {
+    let mut h = Harness::new(App::boxed());
+    h.app.review.as_mut().unwrap().state.session = Some(crate::review::Session {
+        user: Some("alice".into()),
+        role: "engineer".into(),
+    });
+    let b = h.app.boxv.as_mut().unwrap();
+    b.projects.available = Some(true);
+    b.projects.new_runs = Some(crate::box_projects::Runs {
+        sizes: helmsman_iec::ImageSizes { i: 32, q: 32, m: 256 },
+        period: std::time::Duration::from_millis(10),
+    });
+    h.wait(0.3);
+    h
+}
+
+/// The run a draft on review belongs to: the Agent is held until Accept
+/// or Discard.
+fn on_review(h: &mut Harness, draft: Draft, name: &str) {
+    let b = h.app.boxv.as_mut().unwrap();
+    b.instruct.run = Some(crate::instruct::Run {
+        instruction: "From a spec: Pasted".into(),
+        project: String::new(),
+        scope: crate::scope::Scope::NewProject,
+        earlier: Vec::new(),
+        asked: String::new(),
+        retries: 0,
+        asked_scenarios: false,
+        attempts: Vec::new(),
+        mode: crate::instruct::Mode::Direct,
+        spec: true,
+    });
+    b.spec.review = Some(Review::new(draft, name.into()));
+}
+
+fn box_draft() -> Draft {
+    let mut d = long_draft();
+    d.ports.push(Port {
+        name: "tank_level".into(),
+        input: true,
+        ty: "INT".into(),
+        what: Some("the tank level in percent".into()),
+    });
+    d.for_box(vec![crate::spec_mode::PdfRecord {
+        name: "manual.pdf".into(),
+        size: 100,
+        sha256: "0".repeat(64),
+    }])
+}
+
+fn pdf(n: usize) -> Vec<u8> {
+    let mut v = b"%PDF-1.4\n".to_vec();
+    v.resize(n, b' ');
+    v
+}
+
+#[test]
+fn the_box_entry_leaves_the_panel_its_width_and_is_off_for_an_operator_with_the_reason() {
+    let mut h = boxed();
+    h.press("tab claude");
+    h.wait(0.3);
+    assert!(h.has("spec open"), "the Agent tab offers it");
+    let left = h.rect("left");
+    for k in 0..2 {
+        h.wait(0.2);
+        let grew = h.rect("left").right() - left.right();
+        assert!((0.0..=8.0).contains(&grew), "{k}: the panel grew {grew} pt");
+    }
+    assert!(h.rect("spec open").right() <= h.rect("left").right() + 0.5, "inside its panel");
+    assert!(h.small_text().is_empty(), "{:?}", h.small_text());
+    h.press("spec open");
+    h.wait(0.3);
+    assert!(h.has("spec form") && h.has("spec add file"));
+    assert!(
+        h.app.boxv.as_ref().unwrap().spec.spec.on_box,
+        "a box's window: PDFs and the box's caps"
+    );
+    h.press("spec close");
+    h.wait(0.2);
+    // An operator: the button does nothing and the tooltip says why.
+    h.app.review.as_mut().unwrap().state.session = Some(crate::review::Session {
+        user: Some("bob".into()),
+        role: "operator".into(),
+    });
+    h.wait(0.3);
+    h.press("spec open");
+    h.wait(0.3);
+    assert!(!h.has("spec form"), "an operator cannot open it");
+    let why = h.app.boxv.as_ref().unwrap().spec_entry_blocked().unwrap();
+    assert!(why.contains("only an engineer"), "{why}");
+}
+
+#[test]
+fn the_box_window_lists_pdfs_with_sizes_and_totals_and_stays_inside_a_narrow_page() {
+    for (w, hgt) in [(1400.0, 860.0), (760.0, 640.0), (360.0, 640.0)] {
+        let mut h = boxed();
+        h.size = Vec2::new(w, hgt);
+        let b = h.app.boxv.as_mut().unwrap();
+        b.spec.spec.open = true;
+        b.spec.spec.pasted = "line\n".repeat(200);
+        b.spec
+            .spec
+            .add_file(&format!("{}.pdf", "m".repeat(100)), &pdf(3000))
+            .unwrap();
+        b.spec.spec.add_file("plant.md", b"# Plant").unwrap();
+        b.spec.spec.add_file("second.pdf", &pdf(2000)).unwrap();
+        b.spec.spec.pdfs[1].refused =
+            Some("The box could not read second.pdf: not a PDF. Nothing was sent to the agent.".into());
+        h.wait(0.4);
+        inside(
+            &h,
+            &[
+                "spec form",
+                "spec text",
+                "spec add file",
+                "spec build",
+                "spec close",
+                "spec pdf 1",
+                "spec pdf remove 1",
+                "spec doc 1",
+                "spec total",
+                "spec pdfs",
+            ],
+        );
+        assert!(h.rect("spec form").width() <= w, "{w}");
+        assert!(h.small_text().is_empty(), "{w}: {:?}", h.small_text());
+        assert!(h.drew("PDF 2.9 KiB") && h.drew("characters"), "{w}: size and totals");
+        assert!(h.drew("PDFs 2 of 5; conversation"), "{w}");
+        // A PDF the box refused blocks Build and says which.
+        assert!(h.has("spec error"), "{w}");
+        // Taking the PDF out takes its row away.
+        if w > 1000.0 {
+            h.press("spec pdf remove 1");
+            h.wait(0.3);
+            assert_eq!(h.app.boxv.as_ref().unwrap().spec.spec.pdfs.len(), 1, "{w}");
+        }
+    }
+}
+
+#[test]
+fn the_box_review_lists_the_inputs_that_need_a_device_and_points_at_assign() {
+    for (w, hgt) in [(1400.0, 860.0), (360.0, 640.0)] {
+        let mut h = boxed();
+        h.size = Vec2::new(w, hgt);
+        on_review(&mut h, box_draft(), "tank");
+        h.wait(0.4);
+        assert!(
+            h.has("spec needs device"),
+            "{w}: {:?}",
+            h.app.chrome.hits.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()
+        );
+        assert!(
+            h.drew("Needs a device before it can run on the controller: tank_level")
+                && h.drew("Assign to device I/O"),
+            "{w}"
+        );
+        if w > 1000.0 {
+            assert!(h.drew("not tested yet"), "the failed scenario's requirement");
+        }
+        inside(&h, &["spec review", "spec accept", "spec discard"]);
+        let page = screen(&h).expand(0.5);
+        let r = h.rect("spec needs device");
+        assert!(r.left() >= page.left() && r.right() <= page.right(), "{w}: {r:?}");
+        assert!(h.small_text().is_empty(), "{w}: {:?}", h.small_text());
+        h.press("spec discard");
+        h.wait(0.3);
+        let b = h.app.boxv.as_ref().unwrap();
+        assert!(b.spec.review.is_none());
+        assert_eq!(
+            b.instruct.outcome.as_ref().map(|o| o.status.as_str()),
+            Some("Discarded the draft from the spec. Nothing was made.")
+        );
+        assert!(!b.instruct.busy(), "{w}");
+    }
+}
+
+#[test]
+fn a_draft_with_every_input_on_a_channel_does_not_ask_for_a_device() {
+    let mut h = boxed();
+    on_review(&mut h, long_draft().for_box(Vec::new()), "belt");
+    h.wait(0.4);
+    assert!(!h.has("spec needs device"));
+    assert!(!h.drew("Assign to device I/O"));
+}

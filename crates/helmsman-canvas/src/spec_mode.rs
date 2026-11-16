@@ -995,7 +995,8 @@ pub fn form_ui(
     }
     let size = crate::theme::BODY;
     let width = window_width(ctx);
-    let tall = (ctx.content_rect().height() * 0.45).max(80.0);
+    let tall = (ctx.content_rect().height() * 0.25).max(80.0);
+    let rows_tall = (ctx.content_rect().height() * 0.15).max(48.0);
     let mut act = None;
     let mut remove = None;
     let mut remove_pdf = None;
@@ -1020,20 +1021,12 @@ pub fn form_ui(
                     .tip("The specification, as text. Everything here and in the added files goes to the Agent as data to read.");
                 chrome.hit("spec text", r.rect.intersect(ui.clip_rect()));
             });
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            let r = ui
-                .button(RichText::new("Add file…").size(size))
-                .tip(if spec.on_box {
-                    "Adds a .md, .txt or .pdf file to the specification. Up to 8 files and 5 PDFs; a text file with control characters or that is not UTF-8 text is refused. A PDF goes to the box and the Agent reads it there: at most 2 MiB each."
-                } else {
-                    "Adds a .md or .txt file to the specification. Up to 8 files; a file with control characters or that is not UTF-8 text is refused."
-                });
-            chrome.hit("spec add file", r.rect);
-            if r.clicked() {
-                act = Some(FormAct::AddFile);
-            }
-        });
+        // The files in a scroll area of their own: a page that is short
+        // keeps its buttons in reach however many files there are.
+        egui::ScrollArea::vertical()
+            .id_salt("spec-files")
+            .max_height(rows_tall)
+            .show(ui, |ui| {
         for (k, d) in spec.docs.iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 let r = ui
@@ -1083,6 +1076,7 @@ pub fn form_ui(
                 chrome.hit(format!("spec pdf error {}", k + 1), r.rect);
             }
         }
+            });
         for m in spec.meters() {
             let r = ui
                 .add(
@@ -1096,6 +1090,20 @@ pub fn form_ui(
                 .tip(&m.tip);
             chrome.hit(m.key, r.rect);
         }
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            let r = ui
+                .button(RichText::new("Add file…").size(size))
+                .tip(if spec.on_box {
+                    "Adds a .md, .txt or .pdf file to the specification. Up to 8 files and 5 PDFs; a text file with control characters or that is not UTF-8 text is refused. A PDF goes to the box and the Agent reads it there: at most 2 MiB each."
+                } else {
+                    "Adds a .md or .txt file to the specification. Up to 8 files; a file with control characters or that is not UTF-8 text is refused."
+                });
+            chrome.hit("spec add file", r.rect);
+            if r.clicked() {
+                act = Some(FormAct::AddFile);
+            }
+        });
         let why = spec.refusal().or_else(|| blocked.map(str::to_string));
         if let Some(e) = spec.error.as_ref().or(why.as_ref()) {
             let r = ui
