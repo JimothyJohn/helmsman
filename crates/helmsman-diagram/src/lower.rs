@@ -33,6 +33,14 @@
 //!   ports, struct fields, function results); an operand whose type the
 //!   declarations do not give (a generic function's result, an enumeration
 //!   value) keeps the block, which is never wrong, only less compact.
+//!
+//! ## A run of one operator is one block
+//!
+//! `a AND b AND c AND d` is one AND block with four inputs, not three
+//! blocks in a row: the FBD convention for AND, OR, XOR, `+` and `*`
+//! ([`chains`]). Only a run as written is joined (see [`chain`]), so the
+//! inputs are evaluated in the source's order and a parenthesised operand
+//! keeps its own block.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -441,6 +449,44 @@ struct Lower<'a> {
     written: Vec<String>,
     /// This statement's reads, so a variable read twice is one node.
     reads: HashMap<String, NodeId>,
+}
+
+/// Whether a run of `op` is one block with an input per operand: the
+/// operators FBD draws with any number of inputs.
+#[must_use]
+pub const fn chains(op: BinOp) -> bool {
+    matches!(op, BinOp::And | BinOp::Or | BinOp::Xor | BinOp::Add | BinOp::Mul)
+}
+
+/// A binary expression written in parentheses: its text starts before its
+/// left operand's does.
+pub(crate) fn parenthesised(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Binary(_, l, _) if e.start != l.start)
+}
+
+/// The operands of the binary expression `e`, left to right. A run of one
+/// chaining operator as written (`a AND b AND c`, which parses as
+/// `(a AND b) AND c`) gives all of them, so it lowers to one block; a
+/// parenthesised operand is the author's own grouping and stays a block of
+/// its own, as does any other operator. The order of evaluation is the
+/// source's.
+pub(crate) fn chain(e: &Expr) -> Vec<&Expr> {
+    let ExprKind::Binary(op, l, r) = &e.kind else {
+        return vec![e];
+    };
+    let mut rev = vec![&**r];
+    let mut left = &**l;
+    while chains(*op)
+        && let ExprKind::Binary(o, ll, lr) = &left.kind
+        && o == op
+        && !parenthesised(left)
+    {
+        rev.push(lr);
+        left = ll;
+    }
+    rev.push(left);
+    rev.reverse();
+    rev
 }
 
 fn line_starts(src: &str) -> Vec<usize> {
@@ -1020,20 +1066,24 @@ impl Lower<'_> {
                 self.wire(s, n, 0);
                 (n, 0).into()
             }
-            ExprKind::Binary(op, a, b) => {
-                let sa = self.expr(a)?;
-                let sb = self.expr(b)?;
+            ExprKind::Binary(op, ..) => {
+                let operands = chain(e);
+                let mut srcs = Vec::with_capacity(operands.len());
+                for x in &operands {
+                    srcs.push(self.expr(x)?);
+                }
                 let sym = op.symbol();
                 let n = self.node(
                     NodeKind::Op { op: sym.into() },
                     sym.into(),
                     text::expr(e),
-                    vec![String::new(), String::new()],
+                    vec![String::new(); operands.len()],
                     vec![String::new()],
                     e.pos,
                 );
-                self.wire(sa, n, 0);
-                self.wire(sb, n, 1);
+                for (k, s) in srcs.into_iter().enumerate() {
+                    self.wire(s, n, k);
+                }
                 let whole = self.span(e);
                 self.d.ops.insert(n, whole);
                 (n, 0).into()
