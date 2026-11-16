@@ -29,7 +29,7 @@ fn variable(d: &Diagram, n: NodeId) -> Option<&str> {
 }
 
 /// How many places read output of `n`: wires and region gates.
-fn consumers(d: &Diagram, n: NodeId) -> usize {
+pub(super) fn consumers(d: &Diagram, n: NodeId) -> usize {
     d.wires.iter().filter(|w| w.from == n).count()
         + d.regions
             .iter()
@@ -56,7 +56,7 @@ pub(super) fn key(seen: &mut BTreeMap<String, usize>, rule: &str, var: &str) -> 
 }
 
 /// Whether all of `nodes` are one statement in one region.
-fn one_place(d: &Diagram, nodes: &[NodeId]) -> bool {
+pub(super) fn one_place(d: &Diagram, nodes: &[NodeId]) -> bool {
     let first = d.node(nodes[0]);
     nodes
         .iter()

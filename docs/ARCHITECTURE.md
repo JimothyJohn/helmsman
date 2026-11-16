@@ -2787,15 +2787,27 @@ canvas" at the end of this section.
     (`Fold::rows`: the arm's labels and its region, whose gate says
     whether it ran). Nested CASEs are offered too; the outer one wins
     while it is closed.
+  - `fold::table`: an OR of two terms or more, one of them an AND of two
+    signals or more, is one `FoldKind::Table` fold (`Fold::table`: a
+    `FoldCell` per signal of each term, with its bubble, and the OR whose
+    value is the table's). A cell is a plain BOOL signal (a variable, an
+    element or output of a function block, an earlier write) or a
+    comparison with a literal (`fold::chips::chip_of`); anything else in
+    a term, a negated AND, an AND read elsewhere, an OR inside an AND,
+    OR or XOR, or AND and OR on WORDs (`Diagram::bools`, set by the
+    lowering from the declarations) leaves the expression as gates. The
+    fold's pins are the distinct signals, one each: `view` leaves the
+    bubble off a table's pin because each cell carries its own.
   `fold::auto` is what a diagram opens with: the idioms, the state
-  blocks and the chips, the larger shape first (a range wins over its
-  two comparisons).
+  blocks, the tables and the chips, the larger shape first (a range wins
+  over its two comparisons).
   A fold that draws more than its pins is sized by the layout from its
   own rows: `Fold::body` gives a `layout::Body` (rows, widest label) and
   `view` lays out with `layout::layout_with`; the block is as tall as its
   pins or rows, whichever are more, and `layout::body_row` is where row
   `k` sits, between the input and output names (the canvas draws and hits
-  chips there; `FoldKind::Table` is meant to reuse it).
+  chips there; a table uses it with `Body::chars` from `FoldTable::chars`
+  and `layout::body_cell` for the cells that share a row).
   On the canvas (`Viewer::shown`, tests in `st_view_fold_tests.rs`) the
   viewer keeps everything in the diagram's own numbers and draws the
   view: a click on a fold picks a block under it, a double click opens
@@ -2808,7 +2820,13 @@ canvas" at the end of this section.
   click on its label. A state block is on as the diagram opens: a chip
   per state (`Viewer::state_rows`), the one whose arm ran lit from the
   scan underneath, and a click on a chip opens the fold on that arm
-  (`Viewer::open_arm`: picked and framed with the tab that folds it back). The Q/E jump keeps its stops when an IF is drawn
+  (`Viewer::open_arm`: picked and framed with the tab that folds it back).
+  A table block is on as well: a chip per cell (`Viewer::table_rows`,
+  `draw_table_row`), the row whose cells all hold lit, and with the
+  output FALSE the cells that are not satisfied in the fault colour; a
+  cell's hover (`Viewer::cell_tip`) says what its row needs and what the
+  signal is. A gesture on a table's pin is refused (`base_pin`): its pin
+  feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
 - **Layout**: statements stack in source order, each a band laid out as a

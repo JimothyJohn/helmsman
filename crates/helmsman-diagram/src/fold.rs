@@ -29,6 +29,7 @@ pub mod chips;
 pub mod idioms;
 pub mod states;
 pub mod structure;
+pub mod table;
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
@@ -95,6 +96,32 @@ pub struct Fold {
     /// [`FoldKind::State`] block. Empty for a fold that is its pins alone.
     /// The layout sizes the block by them ([`Fold::body`]).
     pub rows: Vec<FoldRow>,
+    /// What a [`FoldKind::Table`] block draws: a row of cells per term.
+    /// `None` for any other fold.
+    pub table: Option<FoldTable>,
+}
+
+/// The conditions of a [`FoldKind::Table`] fold: an OR of ANDs as rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldTable {
+    /// One row per term of the OR, one cell per signal of the term.
+    pub rows: Vec<Vec<FoldCell>>,
+    /// The OR: its output is the table's, and each row is a way to make
+    /// it TRUE.
+    pub out: NodeId,
+}
+
+/// One condition of a table row: a signal that must be on, or off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldCell {
+    /// The output of the diagram that carries the signal (a variable's
+    /// block, an earlier write, a function block's output, a folded
+    /// comparison's operator).
+    pub from: (NodeId, usize),
+    /// The row needs the signal off: a bubble where it enters the AND.
+    pub negated: bool,
+    /// What the cell names: `START`, `T.Q`, `LEVEL > 80.0`.
+    pub label: String,
 }
 
 /// One row of a fold's own drawing.
@@ -111,6 +138,34 @@ pub struct FoldRow {
 /// The longest row label the block is sized for, in characters; the
 /// canvas cuts a longer one with an ellipsis.
 pub const ROW_CHARS: usize = 24;
+
+/// The longest name a table cell is sized for; the canvas cuts a longer
+/// one with an ellipsis and says the rest on hover.
+pub const CELL_CHARS: usize = 12;
+
+/// The widest a table row is drawn, in characters: its cells share it, so
+/// a row of many signals shows each name cut short, never a wider block.
+pub const TABLE_CHARS: usize = 40;
+
+/// What a cell takes beside its name: the mark and the gap after it.
+pub const CELL_MARK: usize = 3;
+
+impl FoldTable {
+    /// The width of the widest row, in characters, up to [`TABLE_CHARS`].
+    #[must_use]
+    pub fn chars(&self) -> usize {
+        self.rows
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .map(|c| c.label.chars().count().min(CELL_CHARS) + CELL_MARK)
+                    .sum::<usize>()
+            })
+            .max()
+            .unwrap_or(0)
+            .min(TABLE_CHARS)
+    }
+}
 
 impl Fold {
     /// A fold of blocks within one statement.
@@ -130,6 +185,7 @@ impl Fold {
             names: BTreeMap::new(),
             blocks: false,
             rows: Vec::new(),
+            table: None,
         }
     }
 
@@ -163,6 +219,7 @@ impl Fold {
             names: BTreeMap::new(),
             blocks: false,
             rows: Vec::new(),
+            table: None,
         }
     }
 
@@ -180,10 +237,24 @@ impl Fold {
         self
     }
 
+    /// The same fold drawing `table` between its pins.
+    #[must_use]
+    pub fn with_table(mut self, table: FoldTable) -> Self {
+        self.table = Some(table);
+        self
+    }
+
     /// What the layout gives the block: a row per [`Fold::rows`], as wide
-    /// as the longest label (up to [`ROW_CHARS`]).
+    /// as the longest label (up to [`ROW_CHARS`]); for a table a row per
+    /// term, as wide as its cells ([`FoldTable::chars`]).
     #[must_use]
     pub fn body(&self) -> Body {
+        if let Some(t) = &self.table {
+            return Body {
+                rows: t.rows.len(),
+                chars: t.chars(),
+            };
+        }
         Body {
             rows: self.rows.len(),
             chars: self
@@ -226,8 +297,8 @@ fn nested(d: &Diagram, stmts: &[usize]) -> (BTreeSet<usize>, BTreeSet<RegionId>)
 
 /// The folds a diagram opens with: the standard circuits under their
 /// names ([`idioms`]: a selector, a set/reset, a range, a latch, an edge),
-/// a CASE on a state variable ([`states`]) and a comparison with its
-/// literal ([`chips`]). The variables a folded IF or CASE reads keep their
+/// a CASE on a state variable ([`states`]), an OR of ANDs as a table of
+/// conditions ([`table`]) and a comparison with its literal ([`chips`]). The variables a folded IF or CASE reads keep their
 /// blocks.
 #[must_use]
 pub fn auto(d: &Diagram) -> Vec<Fold> {
@@ -242,6 +313,7 @@ pub fn auto(d: &Diagram) -> Vec<Fold> {
         .chain(idioms::ranges(d))
         .chain(idioms::latches(d))
         .chain(idioms::edges(d))
+        .chain(table::tables(d))
         .chain(chips::chips(d))
         .collect()
 }
@@ -543,6 +615,9 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         }
     }
     let source = |n: NodeId| alias[n.0 as usize];
+    // A table's cells carry the bubbles: one pin per signal, however many
+    // rows read it and whichever way.
+    let table = |f: Option<usize>| f.is_some_and(|f| applied[f].kind == FoldKind::Table);
 
     // The pins of each fold: the conditions and the wires that cross its
     // edge, in order, then (for whole statements) the variables read and
@@ -587,7 +662,7 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         if let Some(f) = b {
             let pin = Input::Wire {
                 from: (from, w.out),
-                negated: w.negated,
+                negated: w.negated && !table(b),
             };
             if !ins[f].contains(&pin) {
                 ins[f].push(pin);
@@ -805,7 +880,7 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
             Some(f) => {
                 let pin = Input::Wire {
                     from: (source, w.out),
-                    negated: w.negated,
+                    negated: w.negated && !table(b),
                 };
                 let Some(k) = ins[f].iter().position(|i| *i == pin) else {
                     continue;
@@ -823,7 +898,7 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
                     out,
                     to,
                     inp,
-                    negated: w.negated,
+                    negated: w.negated && !table(b),
                 });
             }
         }
@@ -931,6 +1006,7 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
             .filter_map(|(&r, &s)| Some((region_shown[r.0 as usize]?, s)))
             .collect(),
         ops: d.ops.iter().filter_map(|(&n, &s)| Some((own(n)?, s))).collect(),
+        bools: d.bools.iter().filter_map(|&n| own(n)).collect(),
     };
     let bodies: Vec<Body> = applied.iter().map(Fold::body).collect();
     layout::layout_with(&mut diagram, &|n| match n.kind {

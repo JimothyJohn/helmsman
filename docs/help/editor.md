@@ -87,6 +87,15 @@ you cannot draw into it. What you can do:
   is in lights up as it runs. Click a row to open the CASE and see what
   that state does; the tab over it draws the states as one block again.
   A double-click on the block opens it the same way.
+- **Read an interlock as a table.** A condition written as several ways
+  to be true, `(a AND b AND NOT c) OR (d AND e) OR f`, is drawn as one
+  block with a row for each way and a cell for each signal in it. A
+  filled dot on a cell means the row needs the signal on, a ring means it
+  needs it off. The row that holds lights up. When the output is off,
+  the cells that keep each row from holding turn red: that row is waiting
+  for exactly those signals. Hover a cell to see what its row needs and
+  what the signal is now. A double-click opens the block into its gates,
+  and the tab over it draws them as one block again.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Zoom with the

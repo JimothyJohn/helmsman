@@ -98,6 +98,21 @@ pub fn body_row(n: &Node, k: usize) -> Rect {
     }
 }
 
+/// Cell `j` of `of` in row `k` of the body of fold block `n`: the row
+/// ([`body_row`]) shared out evenly, a hair of gap between neighbours.
+#[must_use]
+pub fn body_cell(n: &Node, k: usize, j: usize, of: usize) -> Rect {
+    let row = body_row(n, k);
+    let of = of.max(1);
+    let w = row.w / of as f32;
+    Rect {
+        x: row.x + w * j as f32,
+        y: row.y,
+        w: (w - 2.0).max(0.0),
+        h: row.h,
+    }
+}
+
 /// Lays out every node and region of `d` in place.
 pub fn layout(d: &mut Diagram) {
     layout_with(d, &|_| Body::default());

@@ -243,7 +243,15 @@ fn folds_of(d: &Diagram, seeds: &[(u8, u16, u16)]) -> Vec<Fold> {
     let mut out = Vec::new();
     for (k, &(shape, a, b)) in seeds.iter().enumerate() {
         let key = format!("f{k}");
-        if shape % 7 == 6 {
+        if shape % 7 == 5 {
+            // An OR of ANDs as a table of conditions, if there is one.
+            let tables = helmsman_diagram::fold::table::tables(d);
+            if !tables.is_empty() {
+                let mut f = tables[a as usize % tables.len()].clone();
+                f.key = key;
+                out.push(f);
+            }
+        } else if shape % 7 == 6 {
             // A CASE on a variable as a block of states, if there is one.
             let cases = helmsman_diagram::fold::states::states(d);
             if !cases.is_empty() {
@@ -334,13 +342,15 @@ fn well_formed(d: &Diagram, v: &View) -> Result<(), TestCaseError> {
         if a == b && v.original(a).is_none() {
             continue;
         }
+        // A table's cells carry the bubbles, its pins have none.
+        let into_table = v.fold_at(b).is_some_and(|f| f.kind == FoldKind::Table);
         let from = v.port(w.from, w.out);
         prop_assert!(from.is_some(), "{:?} lost its source", w);
         let (fa, fo) = from.unwrap();
         prop_assert!(
             f.wires
                 .iter()
-                .any(|x| (x.from, x.out, x.to, x.negated) == (fa, fo, b, w.negated)),
+                .any(|x| (x.from, x.out, x.to, x.negated) == (fa, fo, b, w.negated && !into_table)),
             "{:?} is not in the view",
             w
         );
@@ -414,6 +424,18 @@ proptest! {
             }
         }
     }
+}
+
+/// The generator offers table folds too, and they apply.
+#[test]
+fn the_generated_folds_include_tables_that_apply() {
+    let d = diagram("a, b, c, y : BOOL;", "y := a AND NOT b OR c AND b;");
+    let folds = folds_of(&d, &[(5, 0, 0)]);
+    assert_eq!(folds.len(), 1);
+    assert_eq!(folds[0].kind, FoldKind::Table);
+    let v = view(&d, &folds);
+    assert_eq!(v.skipped, []);
+    well_formed(&d, &v).unwrap();
 }
 
 /// The property above is only worth its name if its folds apply: on a

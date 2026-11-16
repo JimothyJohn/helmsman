@@ -1086,6 +1086,9 @@ impl Lower<'_> {
                 }
                 let whole = self.span(e);
                 self.d.ops.insert(n, whole);
+                if matches!(op, BinOp::And | BinOp::Or) && self.is_bool(e) {
+                    self.d.bools.insert(n);
+                }
                 (n, 0).into()
             }
             ExprKind::Call(..) => {

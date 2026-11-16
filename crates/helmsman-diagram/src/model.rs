@@ -212,6 +212,10 @@ pub struct Diagram {
     /// The whole expression of each binary operator block, parentheses
     /// around it included; [`Node::pos`] is where its operator sits.
     pub ops: BTreeMap<NodeId, Span>,
+    /// The `AND` and `OR` blocks the declarations show are on BOOL
+    /// operands (the same operators on a WORD are bitwise): what a
+    /// [`crate::fold::table`] needs to know before it draws a condition.
+    pub bools: std::collections::BTreeSet<NodeId>,
 }
 
 impl Diagram {
