@@ -5,7 +5,7 @@ use eframe::egui::{self, Event, PointerButton, Pos2, RawInput, Rect, Vec2};
 use helmsman_diagram::fold::{Fold, FoldKind};
 use helmsman_diagram::{NodeId, NodeKind};
 
-use super::{Arrangement, Pick, Scan, Viewer};
+use super::{Arrangement, Cam, Pick, Scan, Viewer};
 use crate::playground::Session;
 
 const SRC: &str = "PROGRAM line
@@ -389,6 +389,324 @@ fn a_comment_over_the_whole_program_outlines_nothing() {
     let h = Harness::of(&src);
     assert_eq!(h.view.opened_tabs(h.view.cams[h.view.scope]).len(), 0);
     assert_eq!(h.folded(), ["MOTOR"]);
+}
+
+// ---- a CASE on a state variable ------------------------------------------
+
+/// A sequence: the scan sits in state 1 (`1, 2`).
+const SEQ: &str = "PROGRAM seq
+VAR
+  step : INT := 1;
+  go AT %IX0.0 : BOOL;
+  red AT %QX0.0 : BOOL;
+  green AT %QX0.1 : BOOL;
+END_VAR
+CASE step OF
+  0: red := TRUE;
+  1, 2: green := TRUE; red := FALSE;
+  3..5: step := 0;
+ELSE
+  step := 0;
+END_CASE;
+END_PROGRAM
+";
+
+/// A state block's rows: the label and whether the arm ran.
+type Rows = Vec<(String, Option<bool>)>;
+
+impl Harness {
+    /// The state block drawn: its block and what is drawn for its rows.
+    fn states(&self) -> Option<(NodeId, Rows)> {
+        let live = self
+            .view
+            .live(self.session.trace.as_ref().map(|t| t as &dyn Scan));
+        let rows = self.view.state_rows(live.as_ref());
+        let (n, rows) = rows.into_iter().next()?;
+        Some((n, rows.into_iter().map(|r| (r.label, r.on)).collect()))
+    }
+
+    /// The middle of the chip of the state labelled `label`, on screen.
+    fn chip(&self, label: &str) -> Pos2 {
+        let (n, rows) = self.states().expect("a state block is drawn");
+        let k = rows.iter().position(|(l, _)| l == label).expect(label);
+        let node = self.view.shown().node(n);
+        let cam = self.view.cams[self.view.scope];
+        cam.rect(&helmsman_diagram::layout::body_row(node, k)).center()
+    }
+}
+
+#[test]
+fn a_case_on_a_state_variable_is_drawn_as_one_block_of_states() {
+    let h = Harness::of(SEQ);
+    assert_eq!(h.folded(), ["STEP"]);
+    assert!(h.view.shown().regions.is_empty(), "the arms are inside the block");
+    let (_, rows) = h.states().unwrap();
+    let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
+    assert_eq!(labels, ["0", "1, 2", "3..5", "ELSE"]);
+    // The variable keeps its block, to set and watch.
+    assert!(
+        h.view
+            .shown()
+            .nodes
+            .iter()
+            .any(|n| matches!(&n.kind, NodeKind::Read { path } if path == "STEP"))
+    );
+}
+
+#[test]
+fn the_state_the_scan_is_in_is_the_one_lit() {
+    let h = Harness::of(SEQ);
+    let (_, rows) = h.states().unwrap();
+    let lit: Vec<&str> = rows
+        .iter()
+        .filter(|(_, on)| *on == Some(true))
+        .map(|(l, _)| l.as_str())
+        .collect();
+    assert_eq!(lit, ["1, 2"]);
+    assert!(rows.iter().all(|(_, on)| on.is_some()));
+    // No scan: nothing is lit, nothing is claimed.
+    let rows = h.view.state_rows(None);
+    assert!(rows[0].1.iter().all(|r| r.on.is_none()));
+}
+
+#[test]
+fn a_state_no_arm_has_lights_nothing() {
+    let src = SEQ
+        .replace("step : INT := 1;", "step : INT := 9;")
+        .replace("ELSE\n  step := 0;\n", "");
+    let h = Harness::of(&src);
+    let (_, rows) = h.states().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|(_, on)| *on == Some(false)), "{rows:?}");
+}
+
+#[test]
+fn the_values_on_the_block_are_the_diagrams_own() {
+    let h = Harness::of(SEQ);
+    let live = h
+        .view
+        .live(h.session.trace.as_ref().map(|t| t as &dyn Scan))
+        .unwrap();
+    let v = h.view.view().unwrap();
+    let seen = v.live(&live);
+    let d = h.view.diagram();
+    let mut checked = 0;
+    for n in &d.nodes {
+        for (out, value) in live.values[n.id.0 as usize].iter().enumerate() {
+            if let Some((to, k)) = v.port(n.id, out) {
+                assert_eq!(seen.values[to.0 as usize][k], *value, "{}", n.text);
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0);
+}
+
+#[test]
+fn a_tap_on_a_state_opens_the_sequence_on_that_state() {
+    let mut h = Harness::of(SEQ);
+    let arm = h.view.diagram().stmts[0].arms[2];
+    let at = h.chip("3..5");
+    h.press(at, 1);
+    assert_eq!(h.folded(), Vec::<String>::new(), "its arms are drawn again");
+    assert_eq!(h.view.shown().regions.len(), 4);
+    assert_eq!(h.view.pick, Some(Pick::Region(arm)));
+    // Values are those of the diagram it opened into.
+    assert_eq!(h.view.shown(), h.view.diagram());
+    // The view eases over to the arm; let it arrive.
+    for _ in 0..3 {
+        h.time += 2.0;
+        h.frame(vec![]);
+    }
+    assert!(h.view.glide.is_none());
+    // The tab over it folds it back, and a state can be tapped again.
+    let tabs = h.view.opened_tabs(h.view.cams[h.view.scope]);
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(tabs[0].1, "STEP");
+    h.press(tabs[0].3.center(), 2);
+    assert_eq!(
+        h.folded(),
+        ["STEP"],
+        "{:?} {:?}",
+        tabs[0],
+        h.view.cams[h.view.scope]
+    );
+    h.press(h.chip("ELSE"), 1);
+    let last = h.view.diagram().stmts[0].arms[3];
+    assert_eq!(h.view.pick, Some(Pick::Region(last)));
+}
+
+/// Where the view is going after a tap: the arm's box on screen and the
+/// zoom, at the end of the glide.
+fn aimed(h: &Harness, arm: helmsman_diagram::RegionId) -> (Rect, f32, Option<Rect>) {
+    let g = h.view.glide.as_ref().expect("the view eases over to the arm");
+    let cam = Cam {
+        offset: g.to.0,
+        zoom: g.to.1,
+        ..h.view.cams[h.view.scope]
+    };
+    let shown = h.view.view().map_or(Some(arm), |v| v.region_shown(arm)).unwrap();
+    let rect = cam.rect(&h.view.shown().region(shown).rect);
+    let tab = h.view.opened_tabs(cam).into_iter().next().map(|(.., tab)| tab);
+    (rect, g.to.1, tab)
+}
+
+/// The part of the view the diagram is drawn in.
+fn visible(h: &Harness) -> Rect {
+    let cam = h.view.cams[h.view.scope];
+    Rect::from_min_size(cam.origin, cam.area)
+}
+
+#[test]
+fn after_a_tap_the_arm_is_whole_on_screen_with_the_tab_and_no_closer_than_before() {
+    for zoom in [0.8, 1.0, 1.6] {
+        let mut h = Harness::of(SEQ);
+        h.view.cams[h.view.scope].zoom = zoom;
+        h.frame(vec![]);
+        let before = h.view.cams[h.view.scope].zoom;
+        let arm = h.view.diagram().stmts[0].arms[2];
+        let at = h.chip("3..5");
+        h.press(at, 1);
+        // Read the aim before the glide ends (a press ends with idle frames).
+        let (rect, to, tab) = aimed_or_arrived(&h, arm);
+        let view = visible(&h);
+        assert!(to <= before + 1e-3, "zoom {to} after a tap at {before}");
+        assert!(view.contains_rect(rect), "{rect:?} not in {view:?} at {before}");
+        let tab = tab.expect("the fold's tab");
+        assert!(view.contains_rect(tab), "{tab:?} not in {view:?} at {before}");
+        // Centred: the middle of the arm is near the middle of the view.
+        let off = (rect.center() - view.center()).abs();
+        // (the frame centres the arm and its tab together).
+        assert!(
+            off.x < view.width() / 4.0 && off.y < view.height() / 2.0,
+            "{off:?}"
+        );
+    }
+}
+
+/// The aim of the last tap, whether the glide is still going or arrived.
+fn aimed_or_arrived(h: &Harness, arm: helmsman_diagram::RegionId) -> (Rect, f32, Option<Rect>) {
+    if h.view.glide.is_some() {
+        return aimed(h, arm);
+    }
+    let cam = h.view.cams[h.view.scope];
+    let shown = h.view.view().map_or(Some(arm), |v| v.region_shown(arm)).unwrap();
+    let tab = h.view.opened_tabs(cam).into_iter().next().map(|(.., t)| t);
+    (cam.rect(&h.view.shown().region(shown).rect), cam.zoom, tab)
+}
+
+#[test]
+fn the_last_of_thirty_states_is_framed_whole_and_not_zoomed_in() {
+    use std::fmt::Write as _;
+    let mut src = String::from("PROGRAM seq\nVAR step : INT; y : BOOL; END_VAR\nCASE step OF\n");
+    for i in 0..30 {
+        writeln!(src, "  {i}: y := {};", i % 2 == 0).unwrap();
+    }
+    src.push_str("END_CASE;\nEND_PROGRAM\n");
+    let mut h = Harness::of(&src);
+    let before = h.view.cams[h.view.scope].zoom;
+    let arm = h.view.diagram().stmts[0].arms[29];
+    let at = h.chip("29");
+    h.press(at, 1);
+    let (rect, to, _) = aimed_or_arrived(&h, arm);
+    let view = visible(&h);
+    assert!(to <= before + 1e-3, "{to} vs {before}");
+    assert!(view.contains_rect(rect), "{rect:?} not in {view:?}");
+    assert_eq!(h.view.pick, Some(Pick::Region(arm)));
+}
+
+#[test]
+fn an_arm_wider_than_the_view_is_zoomed_out_to_the_legible_floor_and_shown_from_its_corner() {
+    use std::fmt::Write as _;
+    let mut src = String::from(
+        "PROGRAM seq\nVAR step : INT; y : ARRAY[0..59] OF BOOL; END_VAR\nCASE step OF\n 0: step := 1;\n 1:\n",
+    );
+    for i in 0..60 {
+        writeln!(src, "  y[{i}] := step > {i};").unwrap();
+    }
+    src.push_str("END_CASE;\nEND_PROGRAM\n");
+    let mut h = Harness::of(&src);
+    h.view.cams[h.view.scope].zoom = 2.0;
+    h.frame(vec![]);
+    let arm = h.view.diagram().stmts[0].arms[1];
+    let at = h.chip("1");
+    h.press(at, 1);
+    let (rect, to, _) = aimed_or_arrived(&h, arm);
+    let view = visible(&h);
+    assert!((super::LEGIBLE - 1e-3..2.0).contains(&to), "{to}");
+    // Whole when it fits at that zoom, else its top left corner in view.
+    assert!(
+        view.contains_rect(rect) || view.contains(rect.min),
+        "{rect:?} not in {view:?}"
+    );
+}
+
+#[test]
+fn a_frame_is_never_closer_than_asked_and_says_whether_it_fits() {
+    let area = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+    let small = helmsman_diagram::Rect {
+        x: 10.0,
+        y: 10.0,
+        w: 100.0,
+        h: 50.0,
+    };
+    let mut cam = Cam::default();
+    assert!(cam.frame_within(area, &small, 1.0));
+    assert!((cam.zoom - 1.0).abs() < 1e-6, "{}", cam.zoom);
+    let huge = helmsman_diagram::Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 5000.0,
+        h: 300.0,
+    };
+    assert!(!cam.frame_within(area, &huge, 1.0));
+    assert!((cam.zoom - super::LEGIBLE).abs() < 1e-6);
+    // Asked for less than the floor, it gives no more than asked.
+    cam.frame_within(area, &small, 0.5);
+    assert!((cam.zoom - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn a_tap_beside_the_states_does_not_open_them() {
+    let mut h = Harness::of(SEQ);
+    // The header picks, as any block's.
+    let at = h.header("STEP");
+    h.press(at, 1);
+    assert_eq!(h.folded(), ["STEP"]);
+    assert!(h.view.chip_at(h.view.cams[h.view.scope], at).is_none());
+    // A double click on the block still opens it, as for any fold.
+    h.press(at, 2);
+    assert_eq!(h.folded(), Vec::<String>::new());
+}
+
+#[test]
+fn the_jump_keys_stop_at_the_state_block() {
+    let h = Harness::of(SEQ);
+    let stops = h.view.stops();
+    assert_eq!(stops.len(), 1);
+    let (n, _) = h.states().unwrap();
+    let block = h.view.shown().node(n).rect;
+    let r = stops[0].rect;
+    assert!(r.x <= block.x && r.y <= block.y && r.right() >= block.right() && r.bottom() >= block.bottom());
+}
+
+#[test]
+fn a_sequence_of_many_states_grows_the_block_down_not_across() {
+    use std::fmt::Write as _;
+    let mut src = String::from("PROGRAM seq\nVAR step : INT; y : BOOL; END_VAR\nCASE step OF\n");
+    for i in 0..30 {
+        writeln!(src, "  {i}: y := {};", i % 2 == 0).unwrap();
+    }
+    src.push_str("END_CASE;\nEND_PROGRAM\n");
+    let h = Harness::of(&src);
+    let (n, rows) = h.states().unwrap();
+    assert_eq!(rows.len(), 30);
+    let r = h.view.shown().node(n).rect;
+    assert!(r.h > 30.0 * 16.0 && r.w < 300.0, "{r:?}");
+    // The last state is as tappable as the first.
+    let cam = h.view.cams[h.view.scope];
+    assert!(h.view.chip_at(cam, h.chip("29")).is_some());
+    assert!(h.view.chip_at(cam, h.chip("0")).is_some());
 }
 
 // ---- fold state kept in `diagram.layout` ----
