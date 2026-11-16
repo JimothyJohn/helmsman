@@ -3259,9 +3259,38 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   `spec::placeholder` tests for the rest, `io.map` from
   `sim_projects::example_io_map` and `spec.md` (a kept file, so it is put
   into the files map, not `add_file`); the project's own size rules are
-  checked before Accept. Discard drops the draft. A spec run into an
-  existing project, PDFs and the box's page are not built. Contracts in
-  `spec_mode_tests.rs` and `ui_tests/spec_mode.rs`.
+  checked before Accept. Discard drops the draft. A scenario that did not
+  pass is not kept as a test, but its requirement is a `spec::placeholder`
+  like those with no scenario (`Draft::placeholders`), listed "not tested
+  yet" with the reason in its tooltip. A spec run into an existing project
+  is not built. Contracts in `spec_mode_tests.rs` and
+  `ui_tests/spec_mode.rs`.
+  - **On a box** (`box_spec.rs`, `box_view.rs`; Nick, 2026-11-15, "in both"):
+    the same window and review with `Spec::on_box`. The Agent tab's "From a
+    spec…" is for an engineer (`BoxView::spec_entry_blocked`) with the
+    agent reachable, a project open or not. `Spec` also takes PDFs
+    (`Pdf`): the box's caps (`BOX_PDF` 2 MiB, `BOX_PDFS` 5, `BOX_HISTORY`
+    3584 KiB less room for two retries, text at most `BOX_MESSAGE` less
+    `BOX_FIXED`) are held when a file is added and again at Build, a test
+    ties them to the box's own constants and base64. Build first keeps each
+    PDF as a drop-in (`POST /api/dropins`, `device_vendor::upload_request`,
+    answered through `PCall::SpecPdf`, the refusal in
+    `device_vendor::refusal_words` beside the document), then sends
+    `instruct::BOX_NEW_RULES` (the answer format `BOX_RULES` shares, for a
+    new project), `spec_mode::RULES` and the text with the drop-in ids, in
+    a new conversation; retries continue it. The run is checked against the
+    sizes and scan period `GET /api/projects` reports for a project made
+    now (`tests`, `BoxProjects::new_runs`). Accept is one
+    `POST /api/projects/{name}/zip` (`PCall::SpecProject`): the zip route is
+    the one atomic write of many files, a taken name is a 409 and nothing is
+    written, and it carries no label, so History shows "uploaded a zip". A
+    PDF is recorded in `spec.md` by name, size and SHA-256 (`sha2`, the
+    box's own version), never stored. `io.map` is `sim_projects::box_io_map`:
+    a number input gets no line (the box refuses a screen tile as an input),
+    so the review lists it as needing a device and a Deploy the box refuses
+    for it (`port X: no signal of that name`) is followed by
+    `box_projects::deploy_words`. Contracts in `box_spec_tests.rs` (the real
+    box API) and `ui_tests/spec_mode.rs`.
 - **The Agent watches** (`watch.rs`; Nick, 2026-11-14): what the page
   already sees go wrong is said unasked in a card over the top of the
   diagram (on screen whichever tab is open, not modal), one thing at a time, most urgent first (`watch::noticed`): an

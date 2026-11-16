@@ -254,7 +254,12 @@ this; change it here first when a decision changes.
   paste a scope of work or add `.md` and `.txt` files, with the total
   against the one request's cap, and Build; the draft comes back on a
   review screen (the name, the I/O, each requirement passed or not, the
-  untested ones, the reason) and nothing is made until Accept. A change that lands
+  untested ones, the reason) and nothing is made until Accept. On a box
+  (Nick, 2026-11-15; `crate::box_spec`) the Agent tab offers it to an
+  engineer with a project open or not, the window also takes `.pdf`
+  files with the box's caps beside the total, the review lists the
+  inputs that need a device, and Accept sends the project to the box as
+  one zip. A change that lands
   runs at once and is seen on the canvas, marked, with nothing written in
   the tab (its reason goes to the Messages). One that does not is an
   error in the Messages (their red count, and they open), the box is

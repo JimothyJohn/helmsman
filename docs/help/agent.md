@@ -150,8 +150,8 @@ Each check runs against the program on a copy, with the same second tries
 as any instruction. What it comes back with is a draft on a review screen:
 the project's name, one row for each input and output (its type and what
 it is, from the comment on its declaration), one row for each requirement
-with **passed** or **did not pass**, then the requirements the
-specification states that have no check yet, the Agent's reason and
+with **passed** or **not tested yet**, then the requirements the
+specification states that have no check, the Agent's reason and
 anything that did not pass. Nothing is made until **Accept**; **Discard**
 drops the draft.
 
@@ -160,7 +160,35 @@ and the names of the documents. It holds `main.st`, a test for each check
 that passed, an empty test for each requirement with no check (shown as
 untested, never red), an `io.map` that puts every input and output on
 simulated I/O, and `spec.md`, your documents under a heading each. A check
-that did not pass is not kept. Deploy runs it as for any project.
+that did not pass is not kept as a test, but its requirement is: it is
+listed as **not tested yet** with the empty test, and the reason it
+failed is in its tooltip. Deploy runs it as for any project.
+
+### From a spec on a box
+
+On a box, sign in as an engineer and press **From a spec…** in the Agent
+tab, with a project open or not; a spec always makes a new project. The
+window also takes `.pdf` files. A PDF is kept on the box and the Agent
+reads it there, so a scanned manual or a datasheet can be part of the
+specification. A box takes a PDF of at most 2 MiB, five PDFs in a
+conversation, and about 3.5 MiB in all (a PDF counts a third more than
+its size), with room kept for the Agent's answer and a second try. The
+window shows each document with its size and the totals against these.
+The box says so beside a PDF it does not keep, and then nothing is sent
+to the Agent.
+
+The review is the same. Accept sends the whole project to the box in one
+request. A name the box already has is refused beside the name field and
+nothing is written. A PDF is not kept in the project, because a project
+holds text: `spec.md` records it by name, size and SHA-256. History shows
+the one version as an upload.
+
+On a box a number input has no signal until you assign it to a channel of
+a device, so its line is left out of `io.map` and the review lists it
+under **Needs a device**. The project is made and its tests run, but
+Deploy is refused until each such input is assigned: open the project and
+use **Assign to device I/O** in the I/O tab. A true or false input and
+any output start on the box's own channels.
 
 ## In the simulation
 

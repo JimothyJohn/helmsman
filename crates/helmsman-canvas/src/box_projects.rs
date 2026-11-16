@@ -150,6 +150,12 @@ pub enum PCall {
     /// `POST /api/dropins`: the vendor's file for the agent
     /// (answered by the Devices tab, `device_vendor.rs`).
     VendorFile,
+    /// `POST /api/dropins`: a PDF of a specification (the name it was
+    /// sent under); answered by the view (`box_spec.rs`).
+    SpecPdf(String),
+    /// `POST /api/projects/{name}/zip`: the project a spec makes, whole;
+    /// answered by the view (`box_spec.rs`).
+    SpecProject(String),
     /// `GET /api/pane-layouts`: the pane layouts the box keeps (answered
     /// by `pane_layout::OnBox`).
     PaneLayouts,
@@ -391,6 +397,10 @@ pub struct BoxProjects {
     saving_layout: Option<String>,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
+    /// How the box would check a project made now (its image sizes and
+    /// scan period), from the project list: what a spec run is checked
+    /// against before there is a project to ask.
+    pub new_runs: Option<Runs>,
     /// The open project's requirement tests as the box last ran them
     /// (`crate::requirements`): asked when the project opens, after each
     /// save, on Run, and reported by a refused deploy.
@@ -467,6 +477,45 @@ fn has_ext(file: &str, ext: &str) -> bool {
     std::path::Path::new(file)
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+/// The ports a box's refusal says have no signal (`port LEVEL: no signal of
+/// that name`, `BindError::UnknownSignal` on the box), lower case as
+/// `io.map` names them, each once.
+fn unbound_ports(text: &str) -> Vec<String> {
+    const SAYS: &str = ": no signal of that name";
+    let mut out: Vec<String> = Vec::new();
+    for (at, _) in text.match_indices(SAYS) {
+        let before = &text[..at];
+        let name: String = before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let named_a_port = before[..before.len() - name.len()].ends_with("port ");
+        let name = name.to_ascii_lowercase();
+        if named_a_port && !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// `why`, a box's refusal of a deploy, with what to do about an input that
+/// has no signal added: the box's check is as it was, only the words
+/// after it say how to go on.
+pub(crate) fn deploy_words(why: String) -> String {
+    let ports = unbound_ports(&why);
+    if ports.is_empty() {
+        return why;
+    }
+    let (names, verb) = (ports.join(", "), if ports.len() == 1 { "has" } else { "have" });
+    format!(
+        "{why}. Input {names} {verb} no signal on this box: assign each to a device channel (Assign to device I/O in the I/O tab), then deploy again."
+    )
 }
 
 fn short(s: &str) -> &str {
@@ -1194,6 +1243,27 @@ impl BoxProjects {
         });
     }
 
+    /// The project a spec makes, as one zip (the one atomic write of many
+    /// files): a name the box has is refused (409) and nothing is written.
+    /// The answer goes to the view ([`PCall::SpecProject`]).
+    pub fn spec_project(&mut self, name: &str, zip: Vec<u8>) {
+        self.queue.push(PReq {
+            call: PCall::SpecProject(name.into()),
+            method: "POST",
+            url: format!("{}/zip", project_url(name)),
+            body: Some(zip),
+            ctype: "application/zip",
+        });
+    }
+
+    /// The box made project `name` from a spec: it opens, and the list is
+    /// read again.
+    pub fn spec_made(&mut self, name: &str) {
+        self.note(format!("Made {name} on the box."), false);
+        self.open_keeping_edits(name);
+        self.relist();
+    }
+
     /// Sends the upload the box refused as taken again, replacing.
     pub fn replace(&mut self) {
         let Some(p) = self.pending.take() else { return };
@@ -1338,6 +1408,7 @@ impl BoxProjects {
                     return;
                 }
                 self.available = Some(true);
+                self.new_runs = Runs::parse(&j["tests"]);
                 let current = j["running"]["current"].as_bool() == Some(true);
                 self.running = j["running"]["project"]
                     .as_str()
@@ -1737,7 +1808,10 @@ impl BoxProjects {
             PCall::Replay(name) => match j["replay"].as_u64().filter(|_| a.status == 201) {
                 Some(n) => self.deploy_now(&name, Some(n)),
                 None => {
-                    self.deploy = Deploy::Failed(format!("the sim replay did not run: {}", error_of(a)));
+                    self.deploy = Deploy::Failed(deploy_words(format!(
+                        "the sim replay did not run: {}",
+                        error_of(a)
+                    )));
                 }
             },
             PCall::Deploy { project, replay } => {
@@ -1772,11 +1846,14 @@ impl BoxProjects {
                 } else if a.status == 428 && replay.is_none() {
                     // The policy wants a replay the check did not say.
                     self.replay(&project);
-                } else if a.status == 422 {
-                    self.diags = diags_of(&j);
-                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 } else {
-                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
+                    if a.status == 422 {
+                        self.diags = diags_of(&j);
+                    }
+                    self.deploy = Deploy::Failed(deploy_words(format!(
+                        "{project} was not deployed: {}",
+                        error_of(a)
+                    )));
                 }
             }
             PCall::Upload(project) => {
@@ -1850,6 +1927,8 @@ impl BoxProjects {
             | PCall::ProposalAccept
             | PCall::ProposalDiscard
             | PCall::VendorFile
+            | PCall::SpecPdf(_)
+            | PCall::SpecProject(_)
             | PCall::PaneLayouts
             | PCall::KeepPaneLayout(_)
             | PCall::DropPaneLayout(_)

@@ -42,6 +42,7 @@ mod box_popup;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_projects_tests;
+mod box_spec;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_tests;
 mod box_trend;

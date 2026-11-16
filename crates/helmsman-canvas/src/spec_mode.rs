@@ -20,8 +20,10 @@
 //!   the Agent's reason and the warnings. Nothing is written until Accept;
 //!   [`Draft::files`] is then the whole project, one revision.
 //!
-//! Everything here takes plain data, so the box's page can use the same
-//! request, draft and screens.
+//! Everything here takes plain data, so the box's page uses the same
+//! request, draft and screens (`crate::box_spec`). On a box the engineer
+//! can also add PDFs ([`Pdf`]): the box keeps each as a drop-in and the
+//! Agent reads it in the same message. The simulation never offers one.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -64,6 +66,42 @@ pub const MAX_UNTESTED: usize = 40;
 /// What the file picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const ACCEPT: &str = ".md,.txt";
+/// What the file picker offers on a box, which also takes PDFs.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub const ACCEPT_BOX: &str = ".md,.txt,.pdf";
+
+// ---- what a box takes (`api::chat`, `api::pdf`, `helmsman_agent::Limits`) ----
+
+/// Longest message to the box's agent, characters.
+pub const BOX_MESSAGE: usize = crate::box_agent::MAX_MESSAGE;
+/// What a conversation on a box holds, bytes (`Limits::history_bytes`).
+pub const BOX_HISTORY: usize = 3584 * 1024;
+/// Largest PDF a box takes, bytes.
+pub const BOX_PDF: usize = 2 << 20;
+/// Most PDFs a conversation carries.
+pub const BOX_PDFS: usize = 5;
+/// Most drop-ins one message names.
+pub const BOX_DROPINS: usize = 8;
+/// What each PDF costs in the conversation besides its base64: the
+/// `document` block's wrapper and the note the box adds beside it
+/// (about 0.9 KiB; this is the round number over it).
+pub const PDF_WRAP: usize = 1024;
+/// The room on a box for what is not the documents: the box rules, the
+/// specification rules, the page's envelopes (twice [`FIXED_ROOM`]).
+pub const BOX_FIXED: usize = 2 * FIXED_ROOM;
+/// What a box's conversation keeps free for the Agent's answer and its
+/// two retries ([`ANSWER_ROOM`] each, and their words).
+pub const BOX_RETRY_ROOM: usize = 2 * ANSWER_ROOM + FIXED_ROOM;
+const _: () = assert!(
+    BOX_FIXED < BOX_MESSAGE && BOX_FIXED + BOX_RETRY_ROOM < BOX_HISTORY,
+    "a box takes a specification and its retries"
+);
+
+/// `n` bytes as base64 text, padding included.
+#[must_use]
+pub const fn base64_len(n: usize) -> usize {
+    n.div_ceil(3) * 4
+}
 /// The spec's file in the project it makes: kept, never built
 /// (`helmsman_project::kept_name`).
 pub const SPEC_FILE: &str = "spec.md";
@@ -94,6 +132,61 @@ pub struct Doc {
     pub text: String,
 }
 
+/// A PDF of a specification, on a box: held here until it is sent to the
+/// box as a drop-in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pdf {
+    /// A file name made safe ([`doc_name`]).
+    pub name: String,
+    pub bytes: Vec<u8>,
+    /// The box's id for it, once the box has kept it.
+    pub id: Option<u64>,
+    /// It is on its way to the box.
+    pub sending: bool,
+    /// Why the box did not keep it, said beside the document.
+    pub refused: Option<String>,
+}
+
+impl Pdf {
+    /// What the project's [`SPEC_FILE`] records of it.
+    #[must_use]
+    pub fn record(&self) -> PdfRecord {
+        PdfRecord {
+            name: self.name.clone(),
+            size: self.bytes.len(),
+            sha256: sha256_hex(&self.bytes),
+        }
+    }
+
+    /// What it costs in a conversation on a box, bytes.
+    #[must_use]
+    pub const fn cost(&self) -> usize {
+        base64_len(self.bytes.len()) + PDF_WRAP
+    }
+}
+
+/// A PDF as the specification's record has it: the file itself is not
+/// kept in the project (a kept file is text).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PdfRecord {
+    pub name: String,
+    pub size: usize,
+    /// Lower case hexadecimal, 64 characters.
+    pub sha256: String,
+}
+
+/// SHA-256 of `bytes`, as 64 lower case hexadecimal characters.
+#[must_use]
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    let sum = sha2::Sha256::digest(bytes);
+    let mut s = String::with_capacity(64);
+    for b in sum {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 /// The specification as the engineer is putting it together: the window's
 /// state.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -104,6 +197,11 @@ pub struct Spec {
     pub pasted: String,
     /// The files added, in the order added.
     pub docs: Vec<Doc>,
+    /// The window is on a box's page: PDFs are taken and the caps are the
+    /// box's, not the free route's.
+    pub on_box: bool,
+    /// The PDFs added (a box only), in the order added.
+    pub pdfs: Vec<Pdf>,
     /// Why the last file was not added.
     pub error: Option<String>,
 }
@@ -172,6 +270,32 @@ pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
     })
 }
 
+/// Whether `name` is a PDF.
+fn pdf_kind(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+}
+
+/// [`pick_refusal`] on a box: a `.pdf` is also taken, up to [`BOX_PDF`].
+#[must_use]
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub fn pick_refusal_box(name: &str, size: f64) -> Option<String> {
+    if !pdf_kind(name) {
+        return pick_refusal(name, size);
+    }
+    let shown = doc_name(name);
+    #[allow(clippy::cast_precision_loss)]
+    let over = size > BOX_PDF as f64;
+    over.then(|| {
+        format!(
+            "{shown} was not read: it is {:.1} MiB and a box takes a PDF of at most {} MiB. Send the pages that matter.",
+            size / 1_048_576.0,
+            BOX_PDF >> 20
+        )
+    })
+}
+
 /// `text` as the request body holds it: its length once JSON escaping is
 /// counted.
 fn escaped_len(text: &str) -> usize {
@@ -233,6 +357,9 @@ impl Spec {
     #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
     pub fn add_file(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
         let shown = doc_name(name);
+        if self.on_box && pdf_kind(name) {
+            return self.add_pdf(&shown, bytes);
+        }
         if !text_kind(name) {
             return Err(format!(
                 "{shown} was not added: a specification is a .md or .txt file."
@@ -246,23 +373,112 @@ impl Spec {
         if text.trim().is_empty() {
             return Err(format!("{shown} was not added: it has no text."));
         }
-        if self.docs.len() >= MAX_DOCS {
+        if self.docs.len() + self.pdfs.len() >= MAX_DOCS {
             return Err(format!(
                 "{shown} was not added: a specification has at most {MAX_DOCS} files."
             ));
         }
-        let mut unique = shown.clone();
-        let mut k = 2;
-        while self.docs.iter().any(|d| d.name.eq_ignore_ascii_case(&unique)) {
-            unique = format!("{shown} ({k})");
-            k += 1;
-        }
+        let unique = self.unique(&shown);
         self.docs.push(Doc {
             name: unique,
             text: text.to_string(),
         });
         self.error = None;
         Ok(())
+    }
+
+    /// `shown`, told apart from every document already here.
+    fn unique(&self, shown: &str) -> String {
+        let mut unique = shown.to_string();
+        let mut k = 2;
+        while self.names().iter().any(|n| n.eq_ignore_ascii_case(&unique)) {
+            unique = format!("{shown} ({k})");
+            k += 1;
+        }
+        unique
+    }
+
+    /// Adds a PDF (a box only): the box's own rules, checked here first so
+    /// the reason is heard before anything is sent: not empty, at most
+    /// [`BOX_PDF`], starts with `%PDF-` (whatever the name says), at most
+    /// [`BOX_PDFS`], and room in the conversation with what is there.
+    fn add_pdf(&mut self, shown: &str, bytes: &[u8]) -> Result<(), String> {
+        if bytes.is_empty() {
+            return Err(format!("{shown} was not added: it is empty."));
+        }
+        if bytes.len() > BOX_PDF {
+            return Err(format!(
+                "{shown} was not added: it is {:.1} MiB and a box takes a PDF of at most {} MiB. Send the pages that matter.",
+                bytes.len() as f64 / 1_048_576.0,
+                BOX_PDF >> 20
+            ));
+        }
+        if !bytes.starts_with(b"%PDF-") {
+            return Err(format!(
+                "{shown} was not added: it is not a PDF (its bytes do not start with %PDF-)."
+            ));
+        }
+        if self.docs.len() + self.pdfs.len() >= MAX_DOCS {
+            return Err(format!(
+                "{shown} was not added: a specification has at most {MAX_DOCS} files."
+            ));
+        }
+        if self.pdfs.len() >= BOX_PDFS {
+            return Err(format!(
+                "{shown} was not added: a conversation on a box carries at most {BOX_PDFS} PDFs."
+            ));
+        }
+        let name = self.unique(shown);
+        self.pdfs.push(Pdf {
+            name,
+            bytes: bytes.to_vec(),
+            id: None,
+            sending: false,
+            refused: None,
+        });
+        if let Some(why) = self.history_refusal() {
+            let name = self.pdfs.pop().map_or_else(String::new, |p| p.name);
+            return Err(format!("{name} was not added: {why}"));
+        }
+        self.error = None;
+        Ok(())
+    }
+
+    /// The name of every document, pasted text first, then files, then PDFs.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.documents()
+            .into_iter()
+            .map(|d| d.name)
+            .chain(self.pdfs.iter().map(|p| p.name.clone()))
+            .collect()
+    }
+
+    /// Drops PDF `k` (0 is the first added).
+    pub fn remove_pdf(&mut self, k: usize) {
+        if k < self.pdfs.len() {
+            self.pdfs.remove(k);
+        }
+    }
+
+    /// What the conversation on a box would hold with this specification:
+    /// its text, the PDFs as base64, the fixed words and the room kept for
+    /// the Agent's answer and its retries, bytes.
+    #[must_use]
+    pub fn history(&self) -> usize {
+        self.body().len() + BOX_FIXED + BOX_RETRY_ROOM + self.pdfs.iter().map(Pdf::cost).sum::<usize>()
+    }
+
+    /// Why the documents do not fit one conversation on a box, if they do not.
+    fn history_refusal(&self) -> Option<String> {
+        let used = self.history();
+        (used > BOX_HISTORY).then(|| {
+            format!(
+                "the documents need {} KiB of the {} KiB a conversation on a box holds (a PDF counts as base64, a third more than its size, and room is kept for the answer and a retry). Remove a file or send the pages that matter.",
+                used.div_ceil(1024),
+                BOX_HISTORY / 1024
+            )
+        })
     }
 
     /// Drops document `k` (0 is the first added).
@@ -295,6 +511,14 @@ impl Spec {
             s.push_str(defang(d.text.trim_end()).as_str());
             s.push_str("\n\n");
         }
+        for p in &self.pdfs {
+            let _ = writeln!(
+                s,
+                "{DOC_MARK}: {} (PDF, drop-in {}: the document is in this message) ===\n",
+                p.name,
+                p.id.unwrap_or(0)
+            );
+        }
         s
     }
 
@@ -307,11 +531,14 @@ impl Spec {
     /// Why the specification cannot be sent as it is, if it cannot.
     #[must_use]
     pub fn refusal(&self) -> Option<String> {
-        if self.documents().is_empty() {
+        if self.documents().is_empty() && self.pdfs.is_empty() {
             return Some("Paste a specification or add a file first.".into());
         }
         if let Err(why) = helmsman_project::check_text(self.pasted.as_bytes()) {
             return Some(format!("The pasted text: {why}."));
+        }
+        if self.on_box {
+            return self.box_refusal();
         }
         let size = self.size();
         (size > MAX_SPEC).then(|| {
@@ -323,11 +550,72 @@ impl Spec {
         })
     }
 
+    /// [`Self::refusal`] on a box: the message cap, the drop-ins one message
+    /// names, the box's own refusals of a PDF, the conversation's room.
+    fn box_refusal(&self) -> Option<String> {
+        if let Some(p) = self.pdfs.iter().find(|p| p.refused.is_some()) {
+            return Some(format!(
+                "The box did not keep {}: remove it to go on without it.",
+                p.name
+            ));
+        }
+        if self.pdfs.len() > BOX_DROPINS.min(BOX_PDFS) {
+            return Some(format!("A conversation carries at most {BOX_PDFS} PDFs."));
+        }
+        let chars = self.body().chars().count();
+        if chars + BOX_FIXED > BOX_MESSAGE {
+            return Some(format!(
+                "The text is {} characters and one message to the agent on this box takes at most {} with the rules beside it. Remove a file or shorten it.",
+                chars,
+                BOX_MESSAGE - BOX_FIXED
+            ));
+        }
+        self.history_refusal()
+            .map(|why| format!("The conversation is full: {why}"))
+    }
+
+    /// The totals the window shows against the caps that apply.
+    #[must_use]
+    pub fn meters(&self) -> Vec<Meter> {
+        if !self.on_box {
+            let used = self.size();
+            return vec![Meter {
+                key: "spec total",
+                text: format!("{} of {} used", kib(used), kib(MAX_SPEC)),
+                over: used > MAX_SPEC,
+                tip: "The specification as the request carries it, against what one request takes with the Agent's answer and a retry beside it.".into(),
+            }];
+        }
+        let chars = self.body().chars().count();
+        let room = BOX_MESSAGE - BOX_FIXED;
+        let mut out = vec![Meter {
+            key: "spec total",
+            text: format!("Text {chars} of {room} characters"),
+            over: chars > room,
+            tip: "The text of the specification as one message to the agent on this box takes it: at most 200 000 characters with the rules beside it.".into(),
+        }];
+        if !self.pdfs.is_empty() {
+            let used = self.history();
+            out.push(Meter {
+                key: "spec pdfs",
+                text: format!(
+                    "PDFs {} of {BOX_PDFS}; conversation {} of {}",
+                    self.pdfs.len(),
+                    mib(used),
+                    mib(BOX_HISTORY)
+                ),
+                over: used > BOX_HISTORY || self.pdfs.len() > BOX_PDFS,
+                tip: "A conversation on a box carries at most 5 PDFs and 3.5 MiB. A PDF counts as base64, a third more than its size, and room is kept for the Agent's answer and a retry.".into(),
+            });
+        }
+        out
+    }
+
     /// What the History page records as the instruction: the documents'
     /// names, not their text.
     #[must_use]
     pub fn label(&self) -> String {
-        let names: Vec<String> = self.documents().into_iter().map(|d| d.name).collect();
+        let names = self.names();
         let mut s = format!("From a spec: {}", names.join(", "));
         if s.chars().count() > 200 {
             s = s.chars().take(199).collect();
@@ -462,6 +750,11 @@ pub struct Draft {
     pub warnings: Vec<String>,
     /// The specification, kept in the project as [`SPEC_FILE`].
     pub docs: Vec<Doc>,
+    /// The PDFs of the specification, recorded in [`SPEC_FILE`] by name,
+    /// size and SHA-256 (the files themselves are not kept).
+    pub pdfs: Vec<PdfRecord>,
+    /// The draft is for a box: its `io.map` has no line for a number input.
+    pub on_box: bool,
     /// What History records as the instruction.
     pub label: String,
 }
@@ -513,8 +806,53 @@ impl Draft {
             why: apply.why.clone(),
             warnings: apply.warnings.clone(),
             docs,
+            pdfs: Vec::new(),
+            on_box: false,
             label: apply.instruction.clone(),
         }
+    }
+
+    /// The draft for a box's page: the PDFs recorded, and an `io.map` that
+    /// leaves a number input without a line.
+    #[must_use]
+    pub fn for_box(mut self, pdfs: Vec<PdfRecord>) -> Self {
+        self.pdfs = pdfs;
+        self.on_box = true;
+        self
+    }
+
+    /// The requirements kept as a test with nothing in it yet: those the
+    /// answer listed with no scenario, then those whose scenario did not
+    /// pass (a requirement is never lost; the failed scenario itself is
+    /// not kept).
+    #[must_use]
+    pub fn placeholders(&self) -> Vec<&str> {
+        let key = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        let mut seen: Vec<String> = self.untested.iter().map(|u| key(u)).collect();
+        let mut out: Vec<&str> = self.untested.iter().map(String::as_str).collect();
+        for r in self.tested.iter().filter(|r| !r.passed) {
+            let k = key(&r.requirement);
+            if r.requirement.trim().is_empty() || seen.contains(&k) {
+                continue;
+            }
+            seen.push(k);
+            out.push(r.requirement.as_str());
+        }
+        out
+    }
+
+    /// The inputs of a box's draft that have no signal until they are
+    /// assigned to a device channel: the number inputs.
+    #[must_use]
+    pub fn needs_device(&self) -> Vec<&str> {
+        if !self.on_box {
+            return Vec::new();
+        }
+        self.ports
+            .iter()
+            .filter(|p| p.input && !p.ty.eq_ignore_ascii_case("BOOL"))
+            .map(|p| p.name.as_str())
+            .collect()
     }
 
     fn count(&self, input: bool) -> usize {
@@ -535,7 +873,7 @@ impl Draft {
         for (f, t) in &self.kept {
             files.insert(f.clone(), t.clone());
         }
-        for requirement in &self.untested {
+        for requirement in self.placeholders() {
             let taken: Vec<String> = files.keys().cloned().collect();
             let name = crate::requirements::name_for(requirement, &taken);
             files.insert(
@@ -545,9 +883,13 @@ impl Draft {
         }
         files.insert(
             helmsman_project::IO_MAP.to_string(),
-            crate::sim_projects::example_io_map(&self.program),
+            if self.on_box {
+                crate::sim_projects::box_io_map(&self.program)
+            } else {
+                crate::sim_projects::example_io_map(&self.program)
+            },
         );
-        files.insert(SPEC_FILE.to_string(), spec_md(&self.docs));
+        files.insert(SPEC_FILE.to_string(), spec_md_with(&self.docs, &self.pdfs));
         helmsman_project::Files(files.clone())
             .check()
             .map_err(|e| format!("The project would break its own rules: {}", e.join("; ")))?;
@@ -564,7 +906,7 @@ impl Draft {
             plural(o),
             self.kept.len(),
             plural(self.kept.len()),
-            self.untested.len(),
+            self.placeholders().len(),
         )
     }
 }
@@ -575,7 +917,27 @@ const fn plural(n: usize) -> &'static str {
 
 /// [`SPEC_FILE`]'s text: each document under a `# NAME` heading, in order.
 #[must_use]
+#[cfg(test)]
 pub fn spec_md(docs: &[Doc]) -> String {
+    spec_md_with(docs, &[])
+}
+
+/// [`spec_md`] with the PDFs after the text: each under its own heading as
+/// its size and SHA-256 (the PDF is not kept in the project).
+#[must_use]
+pub fn spec_md_with(docs: &[Doc], pdfs: &[PdfRecord]) -> String {
+    let mut s = spec_md_text(docs);
+    for p in pdfs {
+        let _ = write!(
+            s,
+            "# {}\n\nA PDF of {} bytes, SHA-256 {}. The Agent read it while the project was made; the file itself is not kept in the project.\n\n",
+            p.name, p.size, p.sha256
+        );
+    }
+    s
+}
+
+fn spec_md_text(docs: &[Doc]) -> String {
     let mut s = String::new();
     for d in docs {
         let _ = write!(s, "# {}\n\n{}\n\n", d.name, d.text.trim_end());
@@ -604,6 +966,21 @@ fn kib(bytes: usize) -> String {
     format!("{:.1} KiB", bytes as f64 / 1024.0)
 }
 
+fn mib(bytes: usize) -> String {
+    format!("{:.2} MiB", bytes as f64 / 1_048_576.0)
+}
+
+/// One total the window shows against its cap.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Meter {
+    /// The window's hit key.
+    pub key: &'static str,
+    pub text: String,
+    /// Over its cap.
+    pub over: bool,
+    pub tip: String,
+}
+
 /// The window the specification is put together in: a box to paste into,
 /// the files added with a remove control each, the total against the cap
 /// and Build. `blocked` is why Build cannot go for a reason outside the
@@ -619,14 +996,16 @@ pub fn form_ui(
     }
     let size = crate::theme::BODY;
     let width = window_width(ctx);
-    let tall = (ctx.content_rect().height() * 0.45).max(80.0);
+    let tall = (ctx.content_rect().height() * 0.25).max(80.0);
+    let rows_tall = (ctx.content_rect().height() * 0.15).max(48.0);
     let mut act = None;
     let mut remove = None;
+    let mut remove_pdf = None;
     let m = egui::Modal::new(egui::Id::unique("spec-form")).show(ctx, |ui| {
         let t = crate::theme::theme(ui);
         ui.set_width(width);
         ui.label(RichText::new("From a spec").strong().size(size))
-            .tip("Paste a scope of work or product documentation, or add .md and .txt files. The Agent finds the inputs and outputs, names them, writes the program and a test for each requirement it can check.");
+            .tip("Paste a scope of work or product documentation, or add .md and .txt files (and PDFs, on a box). The Agent finds the inputs and outputs, names them, writes the program and a test for each requirement it can check.");
         ui.add_space(6.0);
         egui::ScrollArea::vertical()
             .id_salt("spec-scroll")
@@ -643,16 +1022,12 @@ pub fn form_ui(
                     .tip("The specification, as text. Everything here and in the added files goes to the Agent as data to read.");
                 chrome.hit("spec text", r.rect.intersect(ui.clip_rect()));
             });
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            let r = ui
-                .button(RichText::new("Add file…").size(size))
-                .tip("Adds a .md or .txt file to the specification. Up to 8 files; a file with control characters or that is not UTF-8 text is refused.");
-            chrome.hit("spec add file", r.rect);
-            if r.clicked() {
-                act = Some(FormAct::AddFile);
-            }
-        });
+        // The files in a scroll area of their own: a page that is short
+        // keeps its buttons in reach however many files there are.
+        egui::ScrollArea::vertical()
+            .id_salt("spec-files")
+            .max_height(rows_tall)
+            .show(ui, |ui| {
         for (k, d) in spec.docs.iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 let r = ui
@@ -670,17 +1045,66 @@ pub fn form_ui(
                 }
             });
         }
-        let used = spec.size();
-        let over = used > MAX_SPEC;
-        let total = format!("{} of {} used", kib(used), kib(MAX_SPEC));
-        let r = ui
-            .label(RichText::new(total).size(size).color(if over {
-                t.ink(RED)
-            } else {
-                t.muted
-            }))
-            .tip("The specification as the request carries it, against what one request takes with the Agent's answer and a retry beside it.");
-        chrome.hit("spec total", r.rect);
+        for (k, p) in spec.pdfs.iter().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                let state = if let Some(e) = &p.refused {
+                    format!("PDF, not kept by the box: {e}")
+                } else if p.id.is_some() {
+                    "PDF, kept by the box".to_string()
+                } else if p.sending {
+                    "PDF, going to the box".to_string()
+                } else {
+                    "PDF, sent to the box when you press Build".to_string()
+                };
+                let r = ui
+                    .label(RichText::new(&p.name).size(size))
+                    .tip(format!("{}: {state}.", p.name));
+                chrome.hit(format!("spec pdf {}", k + 1), r.rect);
+                ui.label(RichText::new(format!("PDF {}", kib(p.bytes.len()))).color(t.muted).size(size))
+                    .tip("The file's size. The Agent reads the PDF itself; its pages count against the conversation as base64.");
+                let r = ui
+                    .add_enabled(!p.sending, egui::Button::new(RichText::new("×").size(size)))
+                    .tip("Takes this PDF out of the specification.");
+                chrome.hit(format!("spec pdf remove {}", k + 1), r.rect);
+                if r.clicked() {
+                    remove_pdf = Some(k);
+                }
+            });
+            if let Some(e) = &p.refused {
+                let r = ui
+                    .add(egui::Label::new(RichText::new(e).size(size).color(t.ink(RED))).wrap())
+                    .tip("Why the box did not keep this PDF. Nothing was sent to the Agent.");
+                chrome.hit(format!("spec pdf error {}", k + 1), r.rect);
+            }
+        }
+            });
+        for m in spec.meters() {
+            let r = ui
+                .add(
+                    egui::Label::new(RichText::new(&m.text).size(size).color(if m.over {
+                        t.ink(RED)
+                    } else {
+                        t.muted
+                    }))
+                    .wrap(),
+                )
+                .tip(&m.tip);
+            chrome.hit(m.key, r.rect);
+        }
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            let r = ui
+                .button(RichText::new("Add file…").size(size))
+                .tip(if spec.on_box {
+                    "Adds a .md, .txt or .pdf file to the specification. Up to 8 files and 5 PDFs; a text file with control characters or that is not UTF-8 text is refused. A PDF goes to the box and the Agent reads it there: at most 2 MiB each."
+                } else {
+                    "Adds a .md or .txt file to the specification. Up to 8 files; a file with control characters or that is not UTF-8 text is refused."
+                });
+            chrome.hit("spec add file", r.rect);
+            if r.clicked() {
+                act = Some(FormAct::AddFile);
+            }
+        });
         let why = spec.refusal().or_else(|| blocked.map(str::to_string));
         if let Some(e) = spec.error.as_ref().or(why.as_ref()) {
             let r = ui
@@ -711,6 +1135,9 @@ pub fn form_ui(
     chrome.hit("spec form", m.response.rect);
     if let Some(k) = remove {
         spec.remove(k);
+    }
+    if let Some(k) = remove_pdf {
+        spec.remove_pdf(k);
     }
     if crate::theme::escaped(&m) {
         spec.open = false;
@@ -803,7 +1230,11 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
                 ui.add_space(4.0);
                 let n = r.draft.ports.len();
                 ui.label(RichText::new(format!("I/O ({n})")).strong().size(size))
-                    .tip("Every input and output of the program, from its declarations. Each starts on simulated I/O.");
+                    .tip(if r.draft.on_box {
+                        "Every input and output of the program, from its declarations. On this box a BOOL point starts on the box's own channels and a number output on a screen tile; a number input has no signal yet."
+                    } else {
+                        "Every input and output of the program, from its declarations. Each starts on simulated I/O."
+                    });
                 for (k, p) in r.draft.ports.iter().enumerate() {
                     ui.horizontal_wrapped(|ui| {
                         let dir = if p.input { "in" } else { "out" };
@@ -829,10 +1260,27 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
                         }
                     });
                 }
+                let needs = r.draft.needs_device();
+                if !needs.is_empty() {
+                    let l = ui
+                        .add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "Needs a device before it can run on the controller: {}. Open the project, then use Assign to device I/O in the I/O tab to give each one a device channel. Deploy is refused until then.",
+                                    needs.join(", ")
+                                ))
+                                .size(size)
+                                .color(red),
+                            )
+                            .wrap(),
+                        )
+                        .tip("A number input has no signal on a box until it is assigned to a channel of a device: the box has no channel of its own that a number could come from, so the map has no line for it. The program is made and checked as it stands; only Deploy waits for the assignment.");
+                    chrome.hit("spec needs device", l.rect);
+                }
                 ui.add_space(4.0);
                 let n = r.draft.tested.len() + r.draft.untested.len();
                 ui.label(RichText::new(format!("Requirements ({n})")).strong().size(size))
-                    .tip("Each requirement the Agent found. A passed one is kept as a requirement test; one that did not pass is not kept; an untested one is kept as a test with nothing in it yet.");
+                    .tip("Each requirement the Agent found. A passed one is kept as a requirement test; one whose scenario did not pass, or that has no scenario, is kept as a test with nothing in it yet.");
                 for (k, s) in r.draft.tested.iter().enumerate() {
                     ui.horizontal_wrapped(|ui| {
                         let (word, colour, tip) = if s.passed {
@@ -843,9 +1291,12 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
                             )
                         } else {
                             (
-                                "did not pass",
-                                red,
-                                format!("This scenario did not pass, so it is not kept: {}", s.why),
+                                "not tested yet",
+                                t.muted,
+                                format!(
+                                    "The Agent's scenario for this requirement did not pass, so the scenario is not kept. The requirement is kept as a test with nothing in it yet, shown as untested and never red. Why the scenario failed: {}",
+                                    s.why
+                                ),
                             )
                         };
                         let l = ui.label(RichText::new(word).size(size).color(colour)).tip(&tip);
@@ -900,7 +1351,12 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
             let yes = ui
                 .add_enabled(r.refusal.is_none(), egui::Button::new(RichText::new("Accept").strong().size(size)))
                 .tip(r.refusal.clone().unwrap_or_else(|| {
-                    "Makes the project under this name: the program, the tests, the I/O map and the specification, as one revision.".into()
+                    if r.draft.on_box {
+                        "Makes the project on the box under this name, whole in one request: the program, the tests, the I/O map and the specification. A name the box already has is refused and nothing is written."
+                    } else {
+                        "Makes the project under this name: the program, the tests, the I/O map and the specification, as one revision."
+                    }
+                    .into()
                 }));
             chrome.hit("spec accept", yes.rect);
             let no = ui
@@ -920,4 +1376,4 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "spec_mode_tests.rs"]
-mod tests;
+pub(crate) mod tests;

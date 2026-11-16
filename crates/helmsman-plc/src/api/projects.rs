@@ -95,6 +95,9 @@ pub(super) fn get(ctx: &Ctx, rest: &[&str]) -> Response {
                         "running": current.as_deref() == Some(n.as_str()),
                     })).collect::<Vec<_>>(),
                     "running": running_json(ctx, p),
+                    // How a project made now would be checked: the same
+                    // settings every project's own answer reports.
+                    "tests": tests_json(&test_settings(ctx)),
                 }),
             ),
             Err(r) => refusal(&r),
