@@ -157,6 +157,11 @@ class Run:
         ]
 
 
+# "From a spec..." in the Agent tab of a new project, and the box its window
+# draws in the middle of the page, in points.
+AGENT_SPEC = (78, 308)
+SPEC_WINDOW = (380, 285, 640, 330)
+
 # The front door's "Fail the high switch" and "Open the editor", in points
 # at the smoke's 1400 x 860 window (crates/helmsman-canvas/src/front.rs).
 FRONT_FAIL_HIGH = (596, 688)
@@ -189,6 +194,11 @@ def playground(ctx, base, out):
     r.step("folded", lambda: r.click(*FOLD_LINE_2), LEFT)
     r.click(*FOLD_LINE_2); r.wait(300)
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
+    # Spec mode (2026-11-15): "From a spec..." opens its window; text typed
+    # into it shows; Escape shuts it with the text kept.
+    r.step("spec-window", lambda: r.click(*AGENT_SPEC), SPEC_WINDOW)
+    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), SPEC_WINDOW)
+    r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
     for x, name in ((137, "file-menu"), (190, "edit-menu"), (235, "view-menu"), (283, "help-menu")):
