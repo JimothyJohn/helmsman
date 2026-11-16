@@ -273,10 +273,7 @@ fn a_design_is_read_kept_and_built_a_batch_at_a_time_without_the_pane_growing() 
     );
     h.press("design section 3");
     h.wait(0.2);
-    assert!(
-        h.drew("### main") || h.drew("mode_manager"),
-        "the Parts section is shown"
-    );
+    assert!(h.drew("The one PROGRAM"), "the Parts section is shown");
     assert_eq!(sim(&mut h).design.read.as_ref().map(|r| r.section), Some(2));
     h.press("design window close");
     h.wait(0.2);
@@ -484,4 +481,23 @@ fn on_a_box_the_entry_the_progress_and_the_cards_leave_the_panel_its_width() {
     assert!(h.has("design kept") && h.has("design build"));
     assert!(h.drew("Build steps 1 to 2 of 2"));
     in_panel(&h, left, &["design kept", "design build"]);
+}
+
+#[test]
+fn no_section_of_the_design_shows_a_raw_marker_and_a_wide_table_stays_in_the_window() {
+    let mut h = page();
+    served(&mut h, OPEN);
+    sim(&mut h).design.description = "A bottling line.".into();
+    send(&mut h);
+    answer_turn(&mut h, LINE_1, "max_tokens");
+    answer_turn(&mut h, LINE_2, "end_turn");
+    h.size = Vec2::new(360.0, 700.0);
+    h.wait(0.3);
+    for k in 1..=7 {
+        h.press(&format!("design section {k}"));
+        h.wait(0.3);
+        assert!(!h.drew("**"), "section {k}: a bold mark is showing");
+        assert!(!h.drew("|---"), "section {k}: a table separator is showing");
+        inside_page(&h, &["design read window", "design body"]);
+    }
 }

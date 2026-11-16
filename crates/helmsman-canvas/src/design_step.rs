@@ -558,6 +558,8 @@ pub struct Read {
     pub description: String,
     /// The section on show in the window (into [`sections`]).
     pub section: usize,
+    /// The section on show, read as Markdown: which section and its blocks.
+    pub shown: Option<(usize, Vec<crate::md_view::Block>)>,
 }
 
 impl Read {
@@ -571,6 +573,7 @@ impl Read {
             turns,
             description,
             section: 0,
+            shown: None,
         }
     }
 

@@ -196,8 +196,7 @@ fn read_card(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut Designer, v: &Entry
         .tip("What the design holds, read from its headings.");
     chrome.hit("design card", r.rect);
     if !read.design.summary.is_empty() {
-        let r = ui
-            .add(egui::Label::new(RichText::new(&read.design.summary).size(size)).wrap())
+        let r = crate::md_view::label(ui, &read.design.summary, size)
             .tip("The design's own one-sentence summary.");
         chrome.hit("design summary", r.rect);
     }
@@ -449,18 +448,23 @@ pub fn read_window(
             .show(ui, |ui| {
                 ui.set_max_width(width - 14.0);
                 if !read.design.summary.is_empty() {
-                    let r = ui
-                        .add(egui::Label::new(RichText::new(&read.design.summary).strong().size(size)).wrap())
+                    let r = crate::md_view::label(ui, &read.design.summary, size)
                         .tip("The design's one-sentence summary.");
                     chrome.hit("design window summary", r.rect.intersect(ui.clip_rect()));
                 }
                 problems_ui(ui, chrome, &read.problems, "design window problem");
-                let body = parts
-                    .get(read.section)
-                    .map_or("The design has no sections the page knows.", |(_, b)| b.as_str());
+                let at = read.section;
+                if read.shown.as_ref().is_none_or(|(k, _)| *k != at) {
+                    let body = parts
+                        .get(at)
+                        .map_or("The design has no sections the page knows.", |(_, b)| b.as_str());
+                    read.shown = Some((at, crate::md_view::parse(body)));
+                }
+                let blocks = read.shown.as_ref().map_or(&[][..], |(_, b)| b.as_slice());
                 let r = ui
-                    .add(egui::Label::new(RichText::new(body).size(size).color(t.fg)).wrap())
-                    .tip("The section as the model wrote it.");
+                    .scope(|ui| crate::md_view::show(ui, blocks, size, "design-body"))
+                    .response
+                    .tip("The section, set out as Markdown: tables as grids, code as written. design.md keeps the model's text as it wrote it.");
                 chrome.hit("design body", r.rect.intersect(ui.clip_rect()));
             });
         ui.add_space(8.0);

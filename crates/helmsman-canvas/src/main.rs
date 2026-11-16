@@ -90,6 +90,7 @@ mod jump;
 mod lamps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod link_tests;
+mod md_view;
 mod messages;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]
