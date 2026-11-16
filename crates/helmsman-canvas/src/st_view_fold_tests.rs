@@ -633,7 +633,7 @@ fn an_arm_wider_than_the_view_is_zoomed_out_to_the_legible_floor_and_shown_from_
     h.press(at, 1);
     let (rect, to, _) = aimed_or_arrived(&h, arm);
     let view = visible(&h);
-    assert!(to < 2.0 && to >= super::LEGIBLE - 1e-3, "{to}");
+    assert!((super::LEGIBLE - 1e-3..2.0).contains(&to), "{to}");
     // Whole when it fits at that zoom, else its top left corner in view.
     assert!(
         view.contains_rect(rect) || view.contains(rect.min),
