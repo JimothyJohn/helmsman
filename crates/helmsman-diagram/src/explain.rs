@@ -706,6 +706,144 @@ pub fn drivers(m: &Module, t: &dyn Scan, pou: usize, prefix: &str, path: &str) -
     out
 }
 
+/// The signals variable `path` finally depends on in POU `pou`'s
+/// diagram: the leaves of everything that sets it, with no scan needed.
+/// Walks back from every assignment to it through operators, functions,
+/// function block calls (their arguments), the earlier assignments it is
+/// wired from, other variables the program sets (their assignments in
+/// turn) and the gates around each (an IF arm's condition and the earlier
+/// arms', a CASE selector, a loop head). What it stops at: a variable no
+/// assignment sets (an input, a located bit, a field of a struct), named
+/// once, upper-case, as the diagram spells it. Literals, `VAR CONSTANT`
+/// names and a loop's own variable are not signals, and neither is
+/// `path` itself (a latch reads itself). In source order of the first
+/// read; empty for a variable nothing sets. Linear in the diagram and
+/// every variable is visited once, so a cycle ends.
+#[must_use]
+pub fn signals(m: &Module, pou: usize, path: &str) -> Vec<String> {
+    let Some(p) = m.pous.get(pou) else {
+        return Vec::new();
+    };
+    let d = &p.diagram;
+    let path = path.to_ascii_uppercase();
+    let mut into: Vec<Vec<usize>> = vec![Vec::new(); d.nodes.len()];
+    for (k, w) in d.wires.iter().enumerate() {
+        into[w.to.0 as usize].push(k);
+    }
+    let mut seen_nodes = vec![false; d.nodes.len()];
+    let mut seen_vars: HashSet<String> = HashSet::new();
+    // First read of each leaf, as a node number: the order they come in.
+    let mut leaves: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut vars = vec![path.clone()];
+    let mut nodes: Vec<NodeId> = Vec::new();
+    let mut regions_seen = vec![false; d.regions.len()];
+    loop {
+        if let Some(n) = nodes.pop() {
+            let k = n.0 as usize;
+            if std::mem::replace(&mut seen_nodes[k], true) {
+                continue;
+            }
+            for &w in &into[k] {
+                nodes.push(d.wires[w].from);
+            }
+            let node = d.node(n);
+            match &node.kind {
+                NodeKind::Read { path: v } | NodeKind::Access { path: v } => {
+                    let is_loop_var = d
+                        .nodes
+                        .iter()
+                        .any(|x| matches!(&x.kind, NodeKind::For { var } if var == v));
+                    if !is_loop_var {
+                        vars.push(v.clone());
+                    }
+                }
+                _ => {}
+            }
+            let mut at = node.region;
+            while let Some(r) = at {
+                if std::mem::replace(&mut regions_seen[r.0 as usize], true) {
+                    break;
+                }
+                let region = d.region(r);
+                if matches!(region.kind, RegionKind::Elsif | RegionKind::Else) {
+                    for s in &d.regions {
+                        if s.stmt == region.stmt
+                            && s.arm < region.arm
+                            && let Some((g, _)) = s.gate
+                        {
+                            nodes.push(g);
+                        }
+                    }
+                }
+                if let Some((g, _)) = region.gate {
+                    nodes.push(g);
+                }
+                at = region.parent;
+            }
+            // Where a leaf was read, for the order.
+            if let NodeKind::Read { path: v } | NodeKind::Access { path: v } = &node.kind {
+                leaves
+                    .entry(v.clone())
+                    .and_modify(|f| *f = (*f).min(n.0))
+                    .or_insert(n.0);
+            }
+        } else if let Some(v) = vars.pop() {
+            if !seen_vars.insert(v.clone()) {
+                continue;
+            }
+            let writes: Vec<NodeId> = d
+                .nodes
+                .iter()
+                .filter(|n| matches!(&n.kind, NodeKind::Write { path } if *path == v))
+                .map(|n| n.id)
+                .collect();
+            if !writes.is_empty() {
+                nodes.extend(writes);
+                continue;
+            }
+            // An instance's output: its calls drive it.
+            if let Some(dot) = v.rfind('.') {
+                let inst = &v[..dot];
+                if p.vars
+                    .get(crate::lower::root_of(inst))
+                    .is_some_and(|x| x.fb.is_some())
+                {
+                    for n in &d.nodes {
+                        if matches!(&n.kind, NodeKind::Fb { instance, .. } if instance == inst) {
+                            nodes.push(n.id);
+                        }
+                    }
+                    leaves.remove(&v);
+                    continue;
+                }
+            }
+            if p.vars.get(crate::lower::root_of(&v)).is_some_and(|x| x.constant) {
+                leaves.remove(&v);
+            }
+        } else {
+            break;
+        }
+    }
+    // Only what was read and has no assignment of its own is a leaf.
+    let mut out: Vec<(u32, String)> = leaves
+        .into_iter()
+        .filter(|(v, _)| {
+            *v != path
+                && !d
+                    .nodes
+                    .iter()
+                    .any(|n| matches!(&n.kind, NodeKind::Write { path } if path == v))
+                && !d
+                    .nodes
+                    .iter()
+                    .any(|n| matches!(&n.kind, NodeKind::For { var } if var == v))
+        })
+        .map(|(v, n)| (n, v))
+        .collect();
+    out.sort();
+    out.into_iter().map(|(_, v)| v).collect()
+}
+
 struct Walk<'a, 'o> {
     d: &'a Diagram,
     t: &'a dyn Scan,
