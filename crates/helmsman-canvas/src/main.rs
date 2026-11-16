@@ -118,6 +118,7 @@ mod sim_projects;
 mod sim_projects_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod slow_link_tests;
+mod spec_mode;
 mod st_fold;
 mod st_hints;
 mod st_syntax;
