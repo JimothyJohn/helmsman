@@ -150,6 +150,13 @@ pub enum PCall {
     /// `POST /api/dropins`: the vendor's file for the agent
     /// (answered by the Devices tab, `device_vendor.rs`).
     VendorFile,
+    /// `GET /api/pane-layouts`: the pane layouts the box keeps (answered
+    /// by `pane_layout::OnBox`).
+    PaneLayouts,
+    /// `PUT /api/pane-layouts`: one of them kept, by name.
+    KeepPaneLayout(String),
+    /// `DELETE /api/pane-layouts/{name}`.
+    DropPaneLayout(String),
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -410,7 +417,7 @@ pub struct Restore {
     pub drafts: BTreeMap<String, BTreeMap<String, crate::desk::Draft>>,
 }
 
-fn error_of(a: &Answer) -> String {
+pub(crate) fn error_of(a: &Answer) -> String {
     serde_json::from_str::<Json>(&a.body)
         .ok()
         .and_then(|j| j["error"].as_str().map(str::to_string))
@@ -1843,6 +1850,9 @@ impl BoxProjects {
             | PCall::ProposalAccept
             | PCall::ProposalDiscard
             | PCall::VendorFile
+            | PCall::PaneLayouts
+            | PCall::KeepPaneLayout(_)
+            | PCall::DropPaneLayout(_)
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {
