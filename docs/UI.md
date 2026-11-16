@@ -448,6 +448,7 @@ focused text field alone, never to the editor's history as well
 | Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
 | Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |
+| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (pointer over the diagram, nothing typed in) | (keys of our own, beside W A S D) |
 
 Each menu item prints its key. Reserved, not built (TODO card
 `hotkey-agent-reserved`): F2 / Shift F2 the Agent.
