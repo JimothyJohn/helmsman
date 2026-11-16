@@ -6,6 +6,20 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Open questions for Nick
 
+- [ ] **How should `diagram.layout` hold what was opened and folded on the diagram?** — the diagram now draws several blocks as one (a latch, a selector, a section under its comment, an arm). What the reader opened or folded, and where a folded block was dragged, is kept across a redeploy but forgotten on reload. `diagram.layout` is the place, and its reader refuses any line that is not a `move` (`helmsman_project::layout::parse`), so a file with a new `fold` line is refused whole by a page or box built before the change: it would show the automatic arrangement and say why, losing the moves too. My pick is a new line kind under a new header (`helmsman-layout 2`), with the new reader taking both versions and writing version 1 whenever there is no fold state to store, so a project that never folds anything stays readable everywhere.
+  options: version 2 header, write 1 when no fold state | new line under version 1 (old readers refuse such files) | keep fold state in the browser only, not in the project
+  result: a diagram opens the way it was left, with a known cost for older boxes
+  id: diagram-layout-fold-format
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **Output cards: which shape?** — the card says one card per output with its logic folded in. An output's logic is usually spread over statements that are not next to each other, and a fold is either blocks of one statement or a run of consecutive statements, so most outputs cannot be one fold without drawing the same statement inside two cards. My pick is a second way to look at the same program rather than a fold: an Outputs view (beside the program tree) with one card per output, its live value and the signals it finally depends on (`drivers` gives them), where a tap goes to the diagram with that output's path lit. The diagram itself stays in source order.
+  options: an Outputs view of cards that jump to the lit path | folds only where an output's logic is one run of statements | drop it: the lit path already answers it
+  result: "what drives each output" has an answer at a glance
+  id: diagram-output-cards-shape
+  asked: 2026-11-16
+  by: claude-session
+
 - [ ] **Which model answers the Agent on the relay's default tier?** — the agent ladder compared four on 2026-11-15 (16 rungs, three runs each, through a local relay on OpenRouter; card `agent-faster-model`). `deepseek/deepseek-v4.1-flash` (today's): 45 of 45, median 8 s, mean 11.1 s, $0.072 for the 45. `deepseek/deepseek-v4.1-flash-1017` (its October snapshot): 45 of 45, median 6 s, mean 7.3 s, $0.042. `anthropic/claude-haiku-5.5`: 45 of 45, median 7 s, mean 9.6 s, $0.052. `qwen/qwen3.8-flash`: stopped after six instructions that took 54 to 118 s each. The runs shared one machine and ran at the same time, so read the seconds as a ranking, not as absolutes. My pick is the 1017 snapshot: fastest and cheapest here, same pass rate, and a dated snapshot does not change under you. It is your deployment setting (`RELAY_MODEL`, or the `default` tier's model).
   options: deepseek-v4.1-flash-1017 | claude-haiku-5.5 | keep deepseek-v4.1-flash
   result: a model choice backed by the ladder's numbers
@@ -700,19 +714,20 @@ cards fold on request and the choice is kept in `diagram.layout`.
   by: claude-session
   status: ready
 
-- [ ] **Keep opened folds and moved folds in `diagram.layout`** — the canvas carries them across a redeploy only; a reload forgets them. Fold keys (`Fold::key`) are the names to store.
+- [ ] **Keep opened folds and moved folds in `diagram.layout`** — the canvas carries them across a redeploy only (`Viewer::opened`, `collapsed`, `fold_moved`); a reload forgets them. Fold keys (`Fold::key`) are the names to store. The file format is a question (`diagram-layout-fold-format`): the reader refuses unknown lines.
   result: a diagram opens the way it was left
-  est: 3h
-  difficulty: low
+  est: 5h
+  difficulty: med
+  depends: diagram-layout-fold-format
   id: diagram-fold-persist
   asked: 2026-11-15
   by: claude-session
   status: ready
 
-- [ ] **State block: a CASE on a state variable as one block of states** — the states as chips, the active one lit, a tap on a chip opens that state's arm.
+- [ ] **State block: a CASE on a state variable as one block of states** — the states as chips, the active one lit, a tap on a chip opens that state's arm. `FoldKind::State` exists and nothing makes or draws one. Needs a rule (a CASE whose selector is one plain variable: `Fold::over_stmts` on it) and its own drawing in `st_view::draw`: a fold block is sized by its pins (`layout::size`), so a block with a row per state needs the layout to size it from the fold. The arm labels and which arm ran are in the diagram underneath (`Region::label`, `Live::gates`).
   result: a sequence shows which step it is in at a glance
-  est: 6h
-  difficulty: med
+  est: 1d
+  difficulty: high
   id: diagram-state-block
   asked: 2026-11-15
   by: claude-session
@@ -722,25 +737,26 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the top of a program's diagram answers "what drives each output"
   est: 6h
   difficulty: med
+  depends: diagram-output-cards-shape
   id: diagram-output-cards
   asked: 2026-11-15
   by: claude-session
   status: ready
 
-- [ ] **Permissive table: an OR of ANDs as rows of conditions** — one row per term, one cell per signal (must be on, must be off). Live: the row that holds is lit, and when the output is off each row marks the cell that stops it.
+- [ ] **Permissive table: an OR of ANDs as rows of conditions** — one row per term, one cell per signal (must be on, must be off). Live: the row that holds is lit, and when the output is off each row marks the cell that stops it. `FoldKind::Table` exists and nothing makes or draws one. The rule is a fold within a statement over an n-input OR and the n-input ANDs that feed it; drawn as a plain fold it would lose which signal belongs to which row, so it needs its own drawing and its own size, as the state block does (build the sizing once for both).
   result: an interlock reads as a table and says what is missing
   est: 1d
   difficulty: high
+  depends: diagram-state-block
   id: diagram-permissive-table
   asked: 2026-11-15
   by: claude-session
   status: ready
 
-- [ ] **Zoom picks the level of detail** — far: sections and output cards with their live state; middle: a statement as one line; near: the blocks. Uses the folds above, opens nothing the user folded by hand.
+- [ ] **Zoom picks the level of detail** — far: every section and arm drawn as one block with its live state; middle: a statement as one line; near: the blocks. Sections and arms fold on request today (`Viewer::set_fold`); this folds them by zoom instead and opens nothing the reader folded by hand. The middle level is new: one fold per statement titled with its text.
   result: a large program is readable at any zoom
   est: 6h
   difficulty: med
-  depends: diagram-output-cards
   id: diagram-semantic-zoom
   asked: 2026-11-15
   by: claude-session
