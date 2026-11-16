@@ -433,7 +433,7 @@ fn gate_text(d: &Diagram, r: RegionId) -> (String, NodeId) {
     let text = if region.negated {
         // NOT binds tighter than any binary operator.
         match &n.kind {
-            NodeKind::Op { .. } if n.ins.len() == 2 => format!("NOT ({base})"),
+            NodeKind::Op { .. } if n.ins.len() >= 2 => format!("NOT ({base})"),
             _ => format!("NOT {base}"),
         }
     } else {
@@ -482,7 +482,7 @@ fn collect(d: &Diagram, n: NodeId, port: usize, out: &mut Vec<String>) {
         NodeKind::For { var } => Some(var.clone()),
         NodeKind::Fb { instance, .. } => node.outs.get(port).map(|o| format!("{instance}.{o}")),
         NodeKind::Const { .. } | NodeKind::Jump => None,
-        NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } => {
+        NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } | NodeKind::Fold { .. } => {
             for w in d.inputs(n) {
                 collect(d, w.from, w.out, out);
             }

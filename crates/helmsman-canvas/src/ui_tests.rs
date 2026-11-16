@@ -3393,12 +3393,12 @@ mod chrome {
 
     /// Requirement tests in the simulation (TODO.md spec-tests): the
     /// project's `test_*.st` files run green or red with why; a red one
-    /// refuses Deploy and a block answer's "Use this code", naming it; a
-    /// test file never builds into the program; fixed, the deploy goes
-    /// through. (The Requirements tab that listed them is archived,
-    /// 2026-11-08; the gate stays.)
+    /// refuses nothing (Nick, 2026-11-15): Deploy and a block answer's
+    /// "Use this code" go ahead and name it; a test file never builds into
+    /// the program; fixed, the deploy says nothing of tests. (The
+    /// Requirements tab that listed them is archived, 2026-11-08.)
     #[test]
-    fn requirement_tests_gate_deploy_and_use_this_code_in_the_simulation() {
+    fn a_red_requirement_test_is_named_by_deploy_and_use_this_code_and_refuses_neither() {
         let mut h = Harness::new(App::sim());
         h.wait(0.3);
         assert!(
@@ -3427,16 +3427,24 @@ mod chrome {
             !sim.session.src.contains("PROGRAM test_lamp"),
             "the test is not in the build"
         );
-        // Deploy: refused, with the test named.
+        // Deploy: it runs, with the red test named after what runs.
         h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Enter);
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
         let notice = sim.notice.clone().unwrap_or_default();
         assert!(
-            notice.starts_with("Refused: requirement test test_lamp:"),
+            notice.starts_with("mine is running in this page")
+                && notice.contains("Requirement test test_lamp:")
+                && notice.ends_with("is red."),
             "{notice}"
         );
-        // A block answer into this project: refused too; nothing added.
+        assert!(
+            sim.log
+                .iter()
+                .any(|m| m.text.starts_with("Deployed mine with a test red.")),
+            "said in Messages too"
+        );
+        // A block answer into this project: taken too, the test named.
         let before = sim.proj.files.len();
         h.app.sim.as_mut().unwrap().take_code(
             "FUNCTION_BLOCK helper\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT y : BOOL; END_VAR\ny := x;\nEND_FUNCTION_BLOCK\n"
@@ -3444,8 +3452,14 @@ mod chrome {
         );
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
-        assert_eq!(sim.proj.files.len(), before, "{:?}", sim.proj.files.keys());
-        assert!(sim.notice.clone().unwrap_or_default().starts_with("Refused:"));
+        assert_eq!(sim.proj.files.len(), before + 1, "{:?}", sim.proj.files.keys());
+        let notice = sim.notice.clone().unwrap_or_default();
+        assert!(
+            notice.contains("opened from the Agent's answer")
+                && notice.contains("test_lamp")
+                && notice.ends_with("is red."),
+            "{notice}"
+        );
         // Fixed: green, Deploy goes through.
         {
             let sim = h.app.sim.as_mut().unwrap();

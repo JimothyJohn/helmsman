@@ -386,6 +386,44 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-10
   by: claude-session
 
+- [ ] **The design step: a strong model designs the system, the everyday agent builds it** — Nick, 2026-11-15: "I need Opus 5.5 equivalent jumping in for hardcore system designs in one-shot for you to build from. Something so absurd that more abstraction will need to be added." Interview the same day: a design step the engineer asks for (not an escalation the cheap model decides, not the whole chat on the strong model); Opus 5.5 on the Anthropic key behind the relay's `best` tier; reachable from boxes with a token and, capped, from the playground. The session's own call: the playground runs it on the free chat's own capped key, never the Anthropic key, so the hard bound on public spend stays. Built: the relay profile `helmsman/design-v1` (agent-relay #39). It answers with no program: Machine, Signals, Parts (each with its ST interface and state table), Faults, numbered testable Requirements, a Build order whose steps name the requirements they must pass, Open questions with the value assumed. The dialect, the project, its I/O and its requirement tests go in the request as `<dialect>`, `<project>`, `<io_devices>`, `<requirement_tests>`. A big design takes several turns: after an answer that stopped at max_tokens the client sends the one word `Continue` with the assistant turn (its thinking block included) and the answer carries on from the exact character. Measured on a bottling line: 472 s for the first turn, 230 s for the second, about 78,000 output tokens, 11 parts, 81 requirements, 19 build steps. Left, each its own card below: the canvas and the box (`design-step-canvas`, `design-step-box`), the playground's capped profile and a daily budget per box (relay), the deploy (`design-step-deploy`).
+  result: an engineer describes a whole machine, reads its design, and the Agent builds it step by step against the design's requirements
+  est: 4d
+  difficulty: high
+  id: design-step
+  asked: 2026-11-15
+  by: design-step session
+
+- [ ] **Design step on the canvas: ask for a design, read it, build from it** — a new `crates/helmsman-canvas/src/design.rs` (instruct.rs, claude.rs and agent_ladder_tests.rs belong to the agent-speed session until its PRs land): the request with the four tagged blocks, the `Continue` loop on a max_tokens stop (keep the assistant turn's blocks as they came, thinking included), a parser for the answer's headings (tolerant: a missing heading is shown as it is, never guessed), the design kept with the project as `design.md` and shown readable at the panel's default width, and its Build order handed to the steps run (`steps.rs`), each step carrying its part's section and the requirements it names. Today a plan is at most 6 steps on one file (`MAX_STEPS`) and the bottling line's design has 19 steps over 11 parts: that limit, and one PROGRAM per project, are what the abstraction work has to lift; until then the step run takes the design in batches and says so. The page hides the design entry when the relay does not serve it.
+  needs: the relay serving design-v1 (`design-step-deploy`) to try it live; fixtures of the bottling-line turns for tests (the session's scratchpad has them; hold them as test data)
+  result: the Agent tab has a design entry; a design is a project file; Build runs its steps
+  depends: design-step
+  est: 2d
+  difficulty: high
+  id: design-step-canvas
+  asked: 2026-11-15
+  by: design-step session
+
+- [ ] **Design step on a box: the box asks the relay for the design profile** — `POST /api/chat` reaches one agent profile today (`--relay-agent`, default v7). A design request goes to `helmsman/design-v1` with the box's dialect, its project files, `list_devices` output (wired devices included) and its requirement tests as the tagged blocks; the stream is forwarded as it is, and a `Continue` is one more request. An unknown-profile answer from the relay (it has no `best` tier) reaches the page as "the design step is not available on this relay", not as an error. The relay's function allows 600 s a turn: the box's own request timeout must not be shorter.
+  needs: nothing to build; the relay deployed with a `best` tier to try it
+  result: `--relay-design-agent design-v1` (or the default once deployed) and a design route the box page uses
+  depends: design-step
+  est: 1d
+  difficulty: med
+  id: design-step-box
+  asked: 2026-11-15
+  by: design-step session
+
+- [ ] **Deploy the relay with a `best` tier** — the live relay (stack `agent-relay`, checked 2026-11-15 with `aws cloudformation describe-stacks`) has one model, `deepseek/deepseek-v4.1-flash`, and no `Tiers` parameter; its `main` is 29 commits behind `dev` (tiers, #24 on, are not on it). The Anthropic key is in Secrets Manager already (`agent-relay/anthropic-api-key`, 2026-11-04). Order: agent-relay #39 lands on dev; your merge of the relay's dev into main; then from the deploy checkout `SECOND_UPSTREAM_SECRET=agent-relay/anthropic-api-key RELAY_TIERS='{"upstreams":{"or":{"kind":"openrouter"},"ant":{"kind":"anthropic"}},"tiers":{"default":{"upstream":"or","model":"deepseek/deepseek-v4.1-flash"},"best":{"upstream":"ant","model":"claude-opus-5-5"}}}' ./scripts/deploy.sh`. Without the tiers the same build still starts and leaves design-v1 out (it says so in its log). A design turn ran 472 s against the function's 600 s Timeout; the free chat's function allows 120 s, which no design turn fits, so its Timeout rises with the playground's design profile (a draft PR in the relay, deploy chain). Cost seen: about 78,000 output tokens for a large design, $20 a million on Opus 5.5.
+  needs: your merge of agent-relay dev into main, then the deploy (a hand-off script will carry the one line)
+  result: `GET /v1/agents` on the live relay lists helmsman/design-v1 served by claude-opus-5-5
+  depends: design-step
+  est: 1h
+  difficulty: low
+  id: design-step-deploy
+  asked: 2026-11-15
+  by: design-step session
+
 - [ ] **Agent speed: less thinking on small asks** — Nick, 2026-11-13: the Agent is slow; approved lever. Measured on the free chat: on a simple instruction the model thinks for 5 to 10 s and writes the whole file in 1 to 2 s, so thinking is most of the wait. A new relay profile (a served profile never changes): thinking off or at its lowest for one-line changes (a rename, a time, a constant) and kept for new logic, chosen by the page from the instruction and the scope, or by the relay from the request. Kept only if the agent ladder still passes 14 of 14 (`cargo test -p helmsman-canvas agent_ladder -- --ignored`, against a relay serving the profile); the ladder's seconds before and after go in the PR.
   needs: a session in ../agent-relay for the profile, your deploy
   result: small instructions answer in a few seconds instead of 8 to 20
@@ -645,6 +683,15 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   by: claude-session
   status: ready
 
+- [ ] **Deleting a statement that made lowering forget a variable is refused, and the property test fails on it** — `x := a; CASE … f(q => x) … END_CASE; REPEAT … UNTIL x END_REPEAT;`: with the CASE there, `UNTIL x` is a fresh read of `x` (an arm wrote it); without it, the same `UNTIL x` is wired from the write before the CASE. `edit::DeleteStmt` sees a statement that stays change and refuses with "the statements that stay", and `every_offered_rewire_argument_delete_and_rename_is_exact_checked_and_undoable` does not count that refusal as honest. Present on dev before the n-input blocks; CI's gate failed on it once on #456 (run 43799804478) and passed on a rerun. Repro: add `cc befa1eaf242960c577f6a3d948482297221b7f6a44ec5d42b068865b22962259` to tests/props.proptest-regressions. Decide which is right: the delete is allowed (a read that only changes where it is wired from is not a change), or the refusal is honest and gets its own reason.
+  result: the gate cannot fail on a random seed for this, and the delete does what the decision says
+  est: 3h
+  difficulty: med
+  id: delete-stmt-forgotten-write
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
 - [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
   result: building new logic from the diagram, not only changing it
   notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
@@ -653,6 +700,100 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   depends: diagram-edit-docs
   id: diagram-edit-v2-v3
   asked: 2026-11-07
+  by: claude-session
+  status: ready
+
+### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
+
+Order: chips, then the fold layer, then everything that folds. Gates,
+chips and idioms are on as the diagram opens; arms, sections and output
+cards fold on request and the choice is kept in `diagram.layout`.
+
+- [ ] **Condition chips: a comparison against a constant is one block** — `level > 80.0` is three blocks today (read, constant, operator). One block labelled with the comparison, lit when true; `x >= lo AND x <= hi` on one variable reads as one range block.
+  result: a condition reads as the sentence the engineer would say, and takes one block
+  est: 5h
+  difficulty: med
+  id: diagram-chips
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **The fold layer: a set of blocks shown as one, opened in place** — a view over `Diagram` (lowering, the trace mapping and the edit spans untouched): a fold names its blocks, the pins are the wires that cross its edge, its title and live state come from what it holds. The canvas draws a folded set as one block, opens it by a double click and shows where you are in the breadcrumb the function block instances use. Folded or open is kept per fold in the arrangement.
+  result: one mechanism every card below uses to hide detail
+  est: 1d
+  difficulty: high
+  id: diagram-fold
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Folded arms: an IF arm or CASE branch as one block** — title its condition, inputs what it reads from outside, outputs what it writes.
+  result: a long IF reads as its conditions and what each one sets
+  est: 4h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-fold-arms
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Sections named by a comment** — a comment on its own line above a run of statements names a fold over them (`(* Infeed permissives *)`), up to the next such comment or a blank-line break. A relay profile that always writes them is a card of its own in ../agent-relay once this is in.
+  result: the author's own names for the parts of a program are the top level of its diagram
+  est: 5h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-fold-sections
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Idiom blocks: latch, edge, selector, set/reset** — the seal-in `(start OR m) AND NOT stop` drawn as a latch with set and reset pins, `x AND NOT x_prev` as a rising edge, `IF c THEN y := a; ELSE y := b` as a selector, an IF that only writes TRUE or FALSE as set/reset. Recognised on the diagram, never by guessing: a shape that differs by one wire stays as it is.
+  result: the standard circuits show under their names
+  est: 1d
+  difficulty: high
+  depends: diagram-fold
+  id: diagram-idioms
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **State block: a CASE on a state variable as one block of states** — the states as chips, the active one lit, a tap on a chip opens that state's arm.
+  result: a sequence shows which step it is in at a glance
+  est: 6h
+  difficulty: med
+  depends: diagram-fold-arms
+  id: diagram-state-block
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Output cards: one card per output with its logic folded in** — the blocks `drivers` already finds for an output, as one fold whose inputs are the signals it finally depends on.
+  result: the top of a program's diagram answers "what drives each output"
+  est: 6h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-output-cards
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Permissive table: an OR of ANDs as rows of conditions** — one row per term, one cell per signal (must be on, must be off). Live: the row that holds is lit, and when the output is off each row marks the cell that stops it.
+  result: an interlock reads as a table and says what is missing
+  est: 1d
+  difficulty: high
+  depends: diagram-fold
+  id: diagram-permissive-table
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Zoom picks the level of detail** — far: sections and output cards with their live state; middle: a statement as one line; near: the blocks. Uses the folds above, opens nothing the user folded by hand.
+  result: a large program is readable at any zoom
+  est: 6h
+  difficulty: med
+  depends: diagram-fold-sections, diagram-output-cards
+  id: diagram-semantic-zoom
+  asked: 2026-11-15
   by: claude-session
   status: ready
 

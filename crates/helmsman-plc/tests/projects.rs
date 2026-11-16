@@ -2370,10 +2370,10 @@ END_PROGRAM
 
 /// Requirement tests (TODO.md spec-tests): `test_*.st` files run on the
 /// box through `POST /api/projects/{p}/tests` (token or session, nothing
-/// changes), never build into a module, and a red one refuses the deploy
-/// with 409 naming the requirement, nothing changed; green, it deploys.
+/// changes), never build into a module, and a red one refuses no deploy
+/// (Nick, 2026-11-15): the deploy's answer and its audit line name it.
 #[test]
-fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
+fn requirement_tests_run_on_the_box_and_a_red_one_is_named_by_the_deploy_it_does_not_refuse() {
     let b = Bench::new();
     let s = b.alice();
     b.project(
@@ -2426,15 +2426,16 @@ fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
         401,
         "no credential, no run"
     );
-    // The deploy is refused before anything builds or runs.
+    // A red test refuses nothing: the deploy lands, and its answer names
+    // the test so the page can say so.
     let r = b.deploy(&s, "line3");
-    assert_eq!(r.status, 409, "{r:?}");
+    assert_eq!(r.status, 200, "{r:?}");
     let j = r.json();
-    assert!(j["error"].as_str().unwrap().contains("requirement test"), "{j}");
-    assert!(j["error"].as_str().unwrap().contains("test_lamp"), "{j}");
-    assert_eq!(j["changed"], false, "{j}");
-    assert_eq!(j["tests"][0]["passed"], false, "{j}");
-    assert_eq!(b.head(), before, "nothing committed");
+    assert_eq!(j["applied"], true, "{j}");
+    assert_eq!(j["red"].as_array().unwrap().len(), 1, "{j}");
+    assert!(j["red"][0].as_str().unwrap().contains("test_lamp"), "{j}");
+    assert_ne!(b.head(), before, "committed");
+    wait("the module running", || b.modules() == ["conveyor"]);
     // Fixed: green, and the deploy goes through.
     let r = put_file(b.addr, &s, "line3", "test_lamp.st", TEST_GREEN, None);
     assert_eq!(r.status, 200, "{r:?}");
@@ -2444,8 +2445,9 @@ fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
     assert_eq!(j["tests"][0]["why"], "", "{j}");
     let r = b.deploy(&s, "line3");
     assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["red"], json!([]), "{r:?}");
     wait("the module running", || b.modules() == ["conveyor"]);
-    // The refusal and the runs are audited.
+    // The runs, and the deploy made with a test red, are audited.
     let audit = get(b.addr, "/api/audit?limit=1000").json();
     let detail: Vec<String> = audit["entries"]
         .as_array()
@@ -2461,8 +2463,10 @@ fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
         "the red run is audited: {detail:?}"
     );
     assert!(
-        detail.iter().any(|d| d.contains("requirement test(s) red")),
-        "the refusal is audited: {detail:?}"
+        detail.iter().any(
+            |d| d.contains("applied") && d.contains("deployed with 1 requirement test(s) red: test_lamp")
+        ),
+        "the deploy with a red test is audited: {detail:?}"
     );
 }
 

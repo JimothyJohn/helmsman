@@ -578,7 +578,7 @@ fn the_menu_and_popups_draw_nothing_under_the_smallest_text() {
 }
 
 #[test]
-fn a_red_requirement_test_leaves_the_edit_in_the_code_and_the_program_as_it_was() {
+fn an_edit_that_turns_a_requirement_test_red_still_runs_and_the_note_names_the_test() {
     let mut h = Harness::editing(SRC);
     {
         let v = h.app.sim.as_mut().unwrap();
@@ -593,7 +593,7 @@ fn a_red_requirement_test_leaves_the_edit_in_the_code_and_the_program_as_it_was(
     }
     h.wait(0.4);
     assert!(
-        h.app.sim.as_ref().unwrap().tests.refusal().is_none(),
+        h.app.sim.as_ref().unwrap().tests.warning().is_none(),
         "the test is green first"
     );
     let write = {
@@ -611,7 +611,11 @@ fn a_red_requirement_test_leaves_the_edit_in_the_code_and_the_program_as_it_was(
     h.tap("diagram menu negate");
     let lamp = crate::verify_tests::LAMP;
     assert_eq!(h.file(), lamp.replace("lamp := start", "lamp := NOT start"));
-    assert_eq!(h.deployed(), lamp, "the red test kept the old program running");
+    assert_eq!(
+        h.deployed(),
+        lamp.replace("lamp := start", "lamp := NOT start"),
+        "a red test refuses no deploy: the edit runs"
+    );
     let note = h
         .app
         .sim
@@ -619,14 +623,10 @@ fn a_red_requirement_test_leaves_the_edit_in_the_code_and_the_program_as_it_was(
         .unwrap()
         .notice
         .clone()
-        .expect("a note says why");
-    assert!(note.contains("lamp"), "{note}");
-    // The diagram is behind the code now: the next gesture says so.
-    // On the block of a program output the menu still opens, for io.map's
-    // assignment, and says why the code's own items are off.
+        .expect("a note names the test");
+    assert!(note.contains("test_lamp") && note.contains("is red"), "{note}");
+    // The diagram is of the code that runs: the next gesture opens.
     let at = h.block(|k, _| matches!(k, NodeKind::Write { .. }));
     h.right_click(at);
-    assert!(h.has("diagram menu assign"));
-    assert!(!h.has("diagram menu negate"), "the code's items stay off");
-    assert!(h.drew("Deploy first"), "and the menu says why");
+    assert!(h.off_note().is_none(), "{:?}", h.off_note());
 }

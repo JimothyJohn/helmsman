@@ -334,9 +334,9 @@ this; change it here first when a decision changes.
   are written, and comments and layout stay as typed.
   - **It deploys.** Typing waits for Deploy; a diagram gesture writes the
     code and deploys it at once, with the same checks as the Deploy button
-    (a red requirement test or a compile error leaves the change in the
-    code and the program running as it was, and the note under the top
-    bar says why). What runs keeps its state as a Deploy carries it.
+    (a compile error leaves the change in the code and the program
+    running as it was, and the note under the top bar says why; a red
+    requirement test refuses nothing and is named in that note). What runs keeps its state as a Deploy carries it.
   - **Undo.** Ctrl+Z undoes a diagram edit as it undoes typing, one step
     each, and the program follows (Redo too) while the diagram still shows
     the code as it stands.
@@ -484,6 +484,7 @@ focused text field alone, never to the editor's history as well
 | Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
 | Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |
+| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (pointer over the diagram, nothing typed in) | (keys of our own, beside W A S D) |
 
 Each menu item prints its key. Reserved, not built (TODO card
 `hotkey-agent-reserved`): F2 / Shift F2 the Agent.
