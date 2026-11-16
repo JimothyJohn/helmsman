@@ -46,18 +46,30 @@ impl Harness {
         sim_view(self).src.clone()
     }
 
-    /// The screen centre of the first block that is `f`.
-    fn block(&self, f: impl Fn(&NodeKind, &str) -> bool) -> Pos2 {
-        let v = sim_view(self);
-        let n = v
+    /// Opens whatever fold hides block `n` (the latch is one block until
+    /// a double click shows its gates), and lets the view settle.
+    fn reveal(&mut self, n: helmsman_diagram::NodeId) {
+        let v = self.app.sim.as_mut().unwrap().viewer.as_mut().expect("a diagram");
+        v.reveal(n);
+        v.refit();
+        self.frame(vec![]);
+        self.frame(vec![]);
+    }
+
+    /// The header of the first block that is `f`, on screen.
+    fn block(&mut self, f: impl Fn(&NodeKind, &str) -> bool) -> Pos2 {
+        let n = sim_view(self)
             .diagram()
             .nodes
             .iter()
             .find(|n| f(&n.kind, &n.text))
-            .expect("the block");
+            .expect("the block")
+            .id;
+        self.reveal(n);
         // Where it is drawn (a literal folded into its comparison is that
         // one block), in its header: an input's control sits under it.
-        let r = v.block_on_screen(n.id).expect("the block is drawn");
+        let v = sim_view(self);
+        let r = v.block_on_screen(n).expect("the block is drawn");
         Pos2::new(
             r.center().x,
             r.min.y + (r.height() / 2.0).min(10.0 * v.cams[v.scope].zoom),
@@ -65,26 +77,26 @@ impl Harness {
     }
 
     /// The screen position of input `k` of the first block computing `text`.
-    fn pin(&self, text: &str, k: usize) -> Pos2 {
-        let v = sim_view(self);
-        let n = v
+    fn pin(&mut self, text: &str, k: usize) -> Pos2 {
+        let n = sim_view(self)
             .diagram()
             .nodes
             .iter()
             .find(|n| n.text == text && !matches!(n.kind, NodeKind::Write { .. }))
-            .unwrap_or_else(|| panic!("no block computing {text}"));
-        v.pin_on_screen(n.id, k).expect("the pin is drawn")
+            .unwrap_or_else(|| panic!("no block computing {text}"))
+            .id;
+        self.reveal(n);
+        sim_view(self).pin_on_screen(n, k).expect("the pin is drawn")
     }
 
-    fn op(&self, op: &str) -> Pos2 {
+    fn op(&mut self, op: &str) -> Pos2 {
         self.block(|k, _| matches!(k, NodeKind::Op { op: o } if o == op))
     }
 
-    fn constant(&self, text: &str) -> Pos2 {
+    fn constant(&mut self, text: &str) -> Pos2 {
         self.block(|k, t| matches!(k, NodeKind::Const { .. }) && t == text)
     }
 
-    /// Clicks into the ST editor and types `s`.
     fn type_in_editor_for_test(&mut self, s: &str) {
         let at = self.rect("st editor").left_top() + Vec2::new(60.0, 6.0);
         self.click(at);

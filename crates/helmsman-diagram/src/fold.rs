@@ -85,6 +85,11 @@ pub struct Fold {
     /// Names for its input pins by the output that feeds them (`set`,
     /// `reset`); any other pin is named after its source.
     pub names: BTreeMap<(NodeId, usize), String>,
+    /// For whole statements: the variables they read keep a block each,
+    /// wired into the fold (one per variable), instead of being pins by
+    /// name. On the canvas a variable's block is where an input is set
+    /// and watched, so it stays.
+    pub blocks: bool,
 }
 
 impl Fold {
@@ -103,6 +108,7 @@ impl Fold {
             nodes: nodes.into_iter().collect(),
             stmts: Vec::new(),
             names: BTreeMap::new(),
+            blocks: false,
         }
     }
 
@@ -134,7 +140,23 @@ impl Fold {
                 .collect(),
             stmts: stmts.to_vec(),
             names: BTreeMap::new(),
+            blocks: false,
         }
+    }
+
+    /// The regions inside the fold: the arms of its statements and of
+    /// every statement nested in them. None for a fold within a statement.
+    #[must_use]
+    pub fn regions(&self, d: &Diagram) -> BTreeSet<RegionId> {
+        nested(d, &self.stmts).1
+    }
+
+    /// The same fold with the variables its statements read kept as
+    /// blocks ([`Fold::blocks`]).
+    #[must_use]
+    pub fn with_blocks(mut self) -> Self {
+        self.blocks = true;
+        self
     }
 }
 
@@ -158,11 +180,22 @@ fn nested(d: &Diagram, stmts: &[usize]) -> (BTreeSet<usize>, BTreeSet<RegionId>)
     (inside, regions)
 }
 
-/// The folds a diagram opens with: the ones that are plain convention
-/// and hide nothing a reader would look for (see [`chips`]).
+/// The folds a diagram opens with: the standard circuits under their
+/// names ([`idioms`]: a selector, a set/reset, a range, a latch, an edge)
+/// and a comparison with its literal ([`chips`]). The variables a folded
+/// IF reads keep their blocks.
 #[must_use]
 pub fn auto(d: &Diagram) -> Vec<Fold> {
-    chips::chips(d)
+    // A fold that shares a block with an earlier one is left out, so the
+    // larger shape goes first: a range before its two comparisons.
+    let whole = idioms::selects(d).into_iter().chain(idioms::set_resets(d));
+    whole
+        .map(Fold::with_blocks)
+        .chain(idioms::ranges(d))
+        .chain(idioms::latches(d))
+        .chain(idioms::edges(d))
+        .chain(chips::chips(d))
+        .collect()
 }
 
 /// Why a fold was left out of a view.
@@ -427,30 +460,85 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
     }
     // What each whole-statement fold hides.
     let mut gone_stmts: Vec<Option<usize>> = vec![None; d.stmts.len()];
-    let mut gone_regions: Vec<bool> = vec![false; d.regions.len()];
+    let mut gone_regions: Vec<Option<usize>> = vec![None; d.regions.len()];
     for (k, f) in applied.iter().enumerate() {
         let (inside, regions) = nested(d, &f.stmts);
         for s in inside {
             gone_stmts[s] = Some(k);
         }
         for r in regions {
-            gone_regions[r.0 as usize] = true;
+            gone_regions[r.0 as usize] = Some(k);
         }
     }
+    // A fold that keeps its variables as blocks: the first read of each
+    // variable stays a block of the view, in the fold's place, and stands
+    // for the other reads of it inside the fold.
+    let mut alias: Vec<NodeId> = d.nodes.iter().map(|n| n.id).collect();
+    let mut kept: Vec<Option<usize>> = vec![None; d.nodes.len()];
+    for (k, f) in applied.iter_mut().enumerate() {
+        if f.stmts.is_empty() || !f.blocks {
+            continue;
+        }
+        let mut firsts: Vec<(&str, NodeId)> = Vec::new();
+        for n in f.nodes.clone() {
+            let NodeKind::Read { path } = &d.node(n).kind else {
+                continue;
+            };
+            if let Some((_, first)) = firsts.iter().find(|(p, _)| p == path) {
+                alias[n.0 as usize] = *first;
+            } else {
+                firsts.push((path, n));
+                f.nodes.remove(&n);
+                claimed[n.0 as usize] = None;
+                kept[n.0 as usize] = Some(k);
+            }
+        }
+    }
+    let source = |n: NodeId| alias[n.0 as usize];
 
-    // The pins of each fold: the wires that cross its edge, in wire
-    // order, then (for whole statements) the variables read and written.
+    // The pins of each fold: the conditions and the wires that cross its
+    // edge, in order, then (for whole statements) the variables read and
+    // written.
     let mut ins: Vec<Vec<Input>> = vec![Vec::new(); applied.len()];
     let mut outs: Vec<Vec<(NodeId, usize)>> = vec![Vec::new(); applied.len()];
     let fold_of = |n: NodeId| claimed[n.0 as usize];
+    // A gate is read like a wire: a region that stays is gated from a
+    // fold's output, and a region inside a fold gated from outside it
+    // is one more input of the fold (through its bubble, if negated).
+    // Conditions first: they are the fold's first pins.
+    let mut gate_wires: Vec<((NodeId, usize), bool, usize)> = Vec::new();
+    for r in &d.regions {
+        let Some((g, port)) = r.gate else { continue };
+        let g = source(g);
+        let inside = gone_regions[r.id.0 as usize];
+        if let Some(k) = inside {
+            if fold_of(g) == Some(k) {
+                continue;
+            }
+            let pin = Input::Wire {
+                from: (g, port),
+                negated: r.negated,
+            };
+            if !ins[k].contains(&pin) {
+                ins[k].push(pin);
+                gate_wires.push(((g, port), r.negated, k));
+            }
+        }
+        if let Some(f) = fold_of(g)
+            && !outs[f].contains(&(g, port))
+        {
+            outs[f].push((g, port));
+        }
+    }
     for w in &d.wires {
-        let (a, b) = (fold_of(w.from), fold_of(w.to));
+        let from = source(w.from);
+        let (a, b) = (fold_of(from), fold_of(w.to));
         if a == b && a.is_some() {
             continue;
         }
         if let Some(f) = b {
             let pin = Input::Wire {
-                from: (w.from, w.out),
+                from: (from, w.out),
                 negated: w.negated,
             };
             if !ins[f].contains(&pin) {
@@ -458,20 +546,9 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
             }
         }
         if let Some(f) = a
-            && !outs[f].contains(&(w.from, w.out))
+            && !outs[f].contains(&(from, w.out))
         {
-            outs[f].push((w.from, w.out));
-        }
-    }
-    for r in &d.regions {
-        if gone_regions[r.id.0 as usize] {
-            continue;
-        }
-        if let Some((g, port)) = r.gate
-            && let Some(f) = fold_of(g)
-            && !outs[f].contains(&(g, port))
-        {
-            outs[f].push((g, port));
+            outs[f].push((from, w.out));
         }
     }
     for (k, f) in applied.iter().enumerate() {
@@ -481,7 +558,8 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         let mut last_write: Vec<(String, NodeId)> = Vec::new();
         for &n in &f.nodes {
             match &d.node(n).kind {
-                NodeKind::Read { path } => {
+                // (With its variables kept as blocks, each is a wire.)
+                NodeKind::Read { path } if !f.blocks => {
                     let pin = Input::Read(path.clone());
                     if !ins[k].contains(&pin) {
                         ins[k].push(pin);
@@ -521,8 +599,12 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
     }
     let mut needs: Vec<HashSet<usize>> = vec![HashSet::new(); units];
     let mut feeds: Vec<Vec<usize>> = vec![Vec::new(); units];
-    for w in &d.wires {
-        let (a, b) = (unit(w.from), unit(w.to));
+    let before = d.wires.iter().map(|w| (unit(source(w.from)), unit(w.to))).chain(
+        gate_wires
+            .iter()
+            .map(|&((g, _), _, k)| (unit(g), d.nodes.len() + k)),
+    );
+    for (a, b) in before {
         if a != b && needs[b].insert(a) {
             feeds[a].push(b);
         }
@@ -548,7 +630,7 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
     let mut region_shown: Vec<Option<RegionId>> = vec![None; d.regions.len()];
     let mut region_origin = Vec::new();
     for r in &d.regions {
-        if !gone_regions[r.id.0 as usize] {
+        if gone_regions[r.id.0 as usize].is_none() {
             #[allow(clippy::cast_possible_truncation)]
             let id = RegionId(region_origin.len() as u32);
             region_shown[r.id.0 as usize] = Some(id);
@@ -572,6 +654,17 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         })
         .collect();
 
+    // Where a fold sits: its first statement's place, or its blocks'.
+    let place = |f: &Fold| {
+        let anchor = d.node(*f.nodes.first().unwrap_or(&NodeId(0)));
+        f.stmts
+            .first()
+            .map_or((anchor.stmt, anchor.pos, anchor.region), |&s| {
+                let st = &d.stmts[s];
+                (st.id, st.pos, st.region)
+            })
+    };
+
     // Blocks.
     let mut shown: Vec<NodeId> = vec![NodeId(0); d.nodes.len()];
     let mut origin = Vec::with_capacity(order.len());
@@ -583,9 +676,15 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
             let n = &d.nodes[u];
             shown[u] = id;
             origin.push(Origin::Node(n.id));
+            // A variable a fold keeps as a block sits with the fold.
+            let (stmt, region) = kept[u].map_or((n.stmt, n.region), |k| {
+                let (stmt, _, region) = place(&applied[k]);
+                (stmt, region)
+            });
             nodes.push(Node {
                 id,
-                region: region_to(n.region),
+                stmt,
+                region: region_to(region),
                 rect: Rect::default(),
                 ..n.clone()
             });
@@ -596,15 +695,7 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         for n in &f.nodes {
             shown[n.0 as usize] = id;
         }
-        // Where it sits: its first statement's place, or its blocks'.
-        let anchor = d.node(*f.nodes.first().unwrap_or(&NodeId(0)));
-        let (stmt, pos, region) = f
-            .stmts
-            .first()
-            .map_or((anchor.stmt, anchor.pos, anchor.region), |&s| {
-                let st = &d.stmts[s];
-                (st.id, st.pos, st.region)
-            });
+        let (stmt, pos, region) = place(f);
         origin.push(Origin::Fold(k));
         #[allow(clippy::cast_possible_truncation)]
         nodes.push(Node {
@@ -653,18 +744,19 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
     let mut wire_origin: Vec<Vec<usize>> = Vec::new();
     let mut seen: HashMap<(NodeId, usize, NodeId, usize), usize> = HashMap::new();
     for (index, w) in d.wires.iter().enumerate() {
-        let (a, b) = (fold_of(w.from), fold_of(w.to));
+        let source = source(w.from);
+        let (a, b) = (fold_of(source), fold_of(w.to));
         if a == b && a.is_some() {
             continue;
         }
-        let Some((from, out)) = port(w.from, w.out) else {
+        let Some((from, out)) = port(source, w.out) else {
             continue;
         };
         let (to, inp) = match b {
             None => (shown[w.to.0 as usize], w.inp),
             Some(f) => {
                 let pin = Input::Wire {
-                    from: (w.from, w.out),
+                    from: (source, w.out),
                     negated: w.negated,
                 };
                 let Some(k) = ins[f].iter().position(|i| *i == pin) else {
@@ -686,6 +778,33 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
                     negated: w.negated,
                 });
             }
+        }
+    }
+
+    // The gates read from outside a fold: wires of the view alone.
+    for &((g, port_no), negated, k) in &gate_wires {
+        let pin = Input::Wire {
+            from: (g, port_no),
+            negated,
+        };
+        let (Some((from, out)), Some(inp), Some(&member)) = (
+            port(g, port_no),
+            ins[k].iter().position(|i| *i == pin),
+            applied[k].nodes.first(),
+        ) else {
+            continue;
+        };
+        let to = shown[member.0 as usize];
+        if let std::collections::hash_map::Entry::Vacant(slot) = seen.entry((from, out, to, inp)) {
+            slot.insert(wires.len());
+            wire_origin.push(Vec::new());
+            wires.push(Wire {
+                from,
+                out,
+                to,
+                inp,
+                negated,
+            });
         }
     }
 
@@ -732,7 +851,7 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
             Region {
                 id: RegionId(k as u32),
                 parent: region_to(r.parent),
-                gate: r.gate.and_then(|(g, p)| port(g, p)),
+                gate: r.gate.and_then(|(g, p)| port(source(g), p)),
                 body: map_stmts(&r.body),
                 rect: Rect::default(),
                 ..r.clone()
