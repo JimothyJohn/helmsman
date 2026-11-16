@@ -120,10 +120,12 @@ test's until the test makes it misbehave.
 
 The page runs the tests whenever the project's build changes; a box runs
 them when a project opens, after each save and before every deploy
-(`POST /api/projects/{p}/tests` runs them on demand). **A red test refuses
-Deploy and the Agent's "Use this code"**, naming the requirement, so a
-change cannot land past a requirement it breaks. The Agent writes the
-tests with each change; edit them like any file.
+(`POST /api/projects/{p}/tests` runs them on demand). **A red test never
+stops a deploy or a change from the Agent.** The deploy goes ahead and the
+note beside it names the test and why it failed; on a box the same line
+is written to the audit trail. The Agent writes the tests with each
+change and fixes what fails before it answers; a check it could not get
+to pass is listed with its answer. Edit the tests like any file.
 
 ## Upload and download
 

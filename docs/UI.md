@@ -298,9 +298,9 @@ this; change it here first when a decision changes.
   are written, and comments and layout stay as typed.
   - **It deploys.** Typing waits for Deploy; a diagram gesture writes the
     code and deploys it at once, with the same checks as the Deploy button
-    (a red requirement test or a compile error leaves the change in the
-    code and the program running as it was, and the note under the top
-    bar says why). What runs keeps its state as a Deploy carries it.
+    (a compile error leaves the change in the code and the program
+    running as it was, and the note under the top bar says why; a red
+    requirement test refuses nothing and is named in that note). What runs keeps its state as a Deploy carries it.
   - **Undo.** Ctrl+Z undoes a diagram edit as it undoes typing, one step
     each, and the program follows (Redo too) while the diagram still shows
     the code as it stands.
