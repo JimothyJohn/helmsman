@@ -415,6 +415,17 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-13
   by: claude-session
 
+- [ ] **Agent wait: one question while the Agent works** — Nick, 2026-11-15: the waiting time is the worst part of the Agent; use it. Interview and prototype that day. When an instruction is sent, a second relay profile on a small fast model gets the instruction and the program and returns at most one question about how the machine should behave, with two or three answers to click, or nothing (a rename, a time, a constant must draw nothing). The card shows under the progress line while the main turn runs. Decided: (1) the turn keeps running: an answer that arrives before any draft text resends the instruction with the answer added; later, the answer is compared with the result, an agreeing answer ticks as covered and a differing one starts one follow-up turn on the draft; (2) an answer guides this turn and is recorded on its History page, it creates no lasting requirement test; (3) no chat thread. Prototype (16 instructions, one run each, 2026-11-15): a small model with thinking off answered in 2.1 s median, 3.5 s max, asked on 8 of 8 underspecified instructions and its first question was the useful one (restart after an emergency stop is released, a pending start cancelled by stop, an alarm until reset); the second and third were filler, hence the cap of one; it asked once about something the program already answered. The relay's default model took 5.0 s median, 10.2 s max and 4 of 16 replies held no answer, so the profile needs a model of its own (`RELAY_MODEL` serves every profile with one). Order of work: the relay profile and its per-profile model; the question card on the page; the answer check against the result; a ladder rung per behaviour (no question on the clear rungs, the answer honoured on an open one). The page first, a box after `agent-progress-box`.
+  needs: a session in ../agent-relay for the profile and the per-profile model, your deploy
+  result: an engineer answers one question about the machine while the Agent writes, and the result is checked against it
+  depends: agent-edits-not-files
+  est: 3d
+  difficulty: high
+  id: agent-wait-questions
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
 - [ ] **The box's Agent tab shows its progress too** — the page shows the time, the latest thought and the draft as it streams (feat/agent-progress); the box's Agent tab goes through `POST /api/chat` and still shows only a spinner (`instruct::View::progress` is `None` there). Needs the thinking and text deltas through the box's chat stream to the canvas, then the same `Progress`.
   needs: nothing
   result: an engineer on a box sees the Agent think and write, as in the playground
@@ -642,6 +653,100 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   depends: diagram-edit-docs
   id: diagram-edit-v2-v3
   asked: 2026-11-07
+  by: claude-session
+  status: ready
+
+### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
+
+Order: chips, then the fold layer, then everything that folds. Gates,
+chips and idioms are on as the diagram opens; arms, sections and output
+cards fold on request and the choice is kept in `diagram.layout`.
+
+- [ ] **Condition chips: a comparison against a constant is one block** — `level > 80.0` is three blocks today (read, constant, operator). One block labelled with the comparison, lit when true; `x >= lo AND x <= hi` on one variable reads as one range block.
+  result: a condition reads as the sentence the engineer would say, and takes one block
+  est: 5h
+  difficulty: med
+  id: diagram-chips
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **The fold layer: a set of blocks shown as one, opened in place** — a view over `Diagram` (lowering, the trace mapping and the edit spans untouched): a fold names its blocks, the pins are the wires that cross its edge, its title and live state come from what it holds. The canvas draws a folded set as one block, opens it by a double click and shows where you are in the breadcrumb the function block instances use. Folded or open is kept per fold in the arrangement.
+  result: one mechanism every card below uses to hide detail
+  est: 1d
+  difficulty: high
+  id: diagram-fold
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Folded arms: an IF arm or CASE branch as one block** — title its condition, inputs what it reads from outside, outputs what it writes.
+  result: a long IF reads as its conditions and what each one sets
+  est: 4h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-fold-arms
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Sections named by a comment** — a comment on its own line above a run of statements names a fold over them (`(* Infeed permissives *)`), up to the next such comment or a blank-line break. A relay profile that always writes them is a card of its own in ../agent-relay once this is in.
+  result: the author's own names for the parts of a program are the top level of its diagram
+  est: 5h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-fold-sections
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Idiom blocks: latch, edge, selector, set/reset** — the seal-in `(start OR m) AND NOT stop` drawn as a latch with set and reset pins, `x AND NOT x_prev` as a rising edge, `IF c THEN y := a; ELSE y := b` as a selector, an IF that only writes TRUE or FALSE as set/reset. Recognised on the diagram, never by guessing: a shape that differs by one wire stays as it is.
+  result: the standard circuits show under their names
+  est: 1d
+  difficulty: high
+  depends: diagram-fold
+  id: diagram-idioms
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **State block: a CASE on a state variable as one block of states** — the states as chips, the active one lit, a tap on a chip opens that state's arm.
+  result: a sequence shows which step it is in at a glance
+  est: 6h
+  difficulty: med
+  depends: diagram-fold-arms
+  id: diagram-state-block
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Output cards: one card per output with its logic folded in** — the blocks `drivers` already finds for an output, as one fold whose inputs are the signals it finally depends on.
+  result: the top of a program's diagram answers "what drives each output"
+  est: 6h
+  difficulty: med
+  depends: diagram-fold
+  id: diagram-output-cards
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Permissive table: an OR of ANDs as rows of conditions** — one row per term, one cell per signal (must be on, must be off). Live: the row that holds is lit, and when the output is off each row marks the cell that stops it.
+  result: an interlock reads as a table and says what is missing
+  est: 1d
+  difficulty: high
+  depends: diagram-fold
+  id: diagram-permissive-table
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
+- [ ] **Zoom picks the level of detail** — far: sections and output cards with their live state; middle: a statement as one line; near: the blocks. Uses the folds above, opens nothing the user folded by hand.
+  result: a large program is readable at any zoom
+  est: 6h
+  difficulty: med
+  depends: diagram-fold-sections, diagram-output-cards
+  id: diagram-semantic-zoom
+  asked: 2026-11-15
   by: claude-session
   status: ready
 

@@ -2667,6 +2667,14 @@ canvas" at the end of this section.
   does NOT on an operand whose type the declarations do not give.
   Properties over generated programs: every negated wire carries a BOOL
   (by the compiled program's types), and no NOT block has a BOOL input.
+- **A run of one operator is one block** (`lower::chain`): `a AND b AND
+  c AND d` is one AND with four inputs, the FBD convention, for AND, OR,
+  XOR, `+` and `*`. Only a run as written is joined, so the inputs are
+  evaluated in the source's order and an operand in the author's
+  parentheses keeps its own block. `edit::SwapOp` on such a block changes
+  every operator of the run, refuses an operator drawn with two inputs
+  (`ManyInputs`), and brackets whatever would otherwise join a
+  neighbouring run, so an edit never changes the number of blocks.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label

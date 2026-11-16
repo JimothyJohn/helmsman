@@ -226,7 +226,7 @@ fn a_swapped_operator_keeps_its_operands_grouped_as_they_were() {
         src("a := b * (c * a);")
     );
     // ...and so does the swapped expression in its parent.
-    let s = src("x := y AND z AND x;");
+    let s = src("x := (y AND z) AND x;");
     assert_eq!(
         swap(&s, "Y AND Z", BinOp::Or).unwrap(),
         src("x := (y OR z) AND x;")
@@ -245,6 +245,60 @@ fn a_swapped_operator_keeps_its_operands_grouped_as_they_were() {
     // Under a NOT bubble the operator is already in brackets.
     let s = src("x := NOT (y AND z);");
     assert_eq!(swap(&s, "Y AND Z", BinOp::Or).unwrap(), src("x := NOT (y OR z);"));
+}
+
+#[test]
+fn a_run_of_one_operator_swaps_as_the_one_block_it_is() {
+    // Every operator of the run changes.
+    let s = src("x := y AND z AND x;");
+    assert_eq!(
+        swap(&s, "Y AND Z AND X", BinOp::Or).unwrap(),
+        src("x := y OR z OR x;")
+    );
+    let s = src("x := y and z & x AND y;");
+    assert_eq!(
+        swap(&s, "Y AND Z AND X AND Y", BinOp::Or).unwrap(),
+        src("x := y or z OR x OR y;")
+    );
+    let s = src("a := a + b + c;");
+    assert_eq!(swap(&s, "A + B + C", BinOp::Mul).unwrap(), src("a := a * b * c;"));
+    // An operand that would regroup gets brackets, whichever input it is.
+    let s = src("x := y OR z AND x OR y AND z;");
+    assert_eq!(
+        swap(&s, "Y OR Z AND X OR Y AND Z", BinOp::And).unwrap(),
+        src("x := y AND (z AND x) AND (y AND z);")
+    );
+    // An operator drawn with two inputs cannot take three.
+    let s = src("a := a + b + c;");
+    assert_eq!(
+        swap(&s, "A + B + C", BinOp::Sub),
+        Err(Refusal::ManyInputs {
+            from: "+".into(),
+            to: "-".into(),
+            inputs: 3
+        })
+    );
+}
+
+#[test]
+fn a_swap_never_joins_the_block_to_a_neighbouring_run() {
+    // Without the brackets `y OR z OR x` would be one block where there
+    // were two.
+    let s = src("x := y AND z OR x;");
+    assert_eq!(
+        swap(&s, "Y AND Z", BinOp::Or).unwrap(),
+        src("x := (y OR z) OR x;")
+    );
+    let s = src("x := y AND z OR x;");
+    assert_eq!(
+        swap(&s, "Y AND Z OR X", BinOp::And).unwrap(),
+        src("x := (y AND z) AND x;")
+    );
+    let s = src("a := a * b + c;");
+    assert_eq!(
+        swap(&s, "A * B + C", BinOp::Mul).unwrap(),
+        src("a := (a * b) * c;")
+    );
 }
 
 #[test]
