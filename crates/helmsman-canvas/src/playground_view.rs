@@ -2022,8 +2022,7 @@ impl PlaygroundView {
         };
         self.watching.dismiss(&n.key);
         self.instruct.draft = n.ask;
-        chrome.left = true;
-        chrome.pane = editor::Pane::Claude;
+        chrome.show(editor::Pane::Claude);
         self.send_instruction(ctx);
     }
 
