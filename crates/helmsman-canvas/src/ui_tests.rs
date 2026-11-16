@@ -2622,19 +2622,11 @@ mod chrome {
             map.contains("device iologik_e1213 device:moxa-iologik-e1213 cip=991:515:0x00e12130\n"),
             "{map}"
         );
-        assert!(
-            map.contains("in  iologik_e1213_di_04 bool iologik_e1213 ch:DI-04\n"),
-            "{map}"
+        assert_eq!(
+            map.matches(" iologik_e1213 ch:").count(),
+            0,
+            "the device alone: no channel is in the project until it is added: {map}"
         );
-        assert!(
-            map.contains("out iologik_e1213_do_00 bool iologik_e1213 ch:DO-00 safe=false\n"),
-            "{map}"
-        );
-        assert!(
-            map.contains("in  iologik_e1213_di_04_count int iologik_e1213 ch:DI-04-count\n"),
-            "{map}"
-        );
-        assert_eq!(map.matches(" iologik_e1213 ch:").count(), 40, "{map}");
         assert!(
             !map.contains("enip-io") && !map.contains("modbus-tcp"),
             "no protocol: {map}"
@@ -2645,8 +2637,16 @@ mod chrome {
             "wired at once"
         );
         assert!(!h.has("add network 192.168.127.254"), "a wired device has no Add");
-        // The listing shows it with its forty points.
+        // The listing shows it with no point, and its forty one row away.
         assert!(h.has("device iologik_e1213"));
+        assert!(!h.has("point iologik_e1213_di_04"));
+        assert!(h.has("add io iologik_e1213"), "+ Add I/O under the device");
+        // The agent reads what the device has beyond the project's points.
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(
+            text.contains("  iologik_e1213 (40): in bool ch:DI-00; "),
+            "{text}"
+        );
         h.press("devices scan");
         h.wait(0.3);
         assert_eq!(
@@ -2718,18 +2718,41 @@ mod chrome {
         assert_eq!(d.name, "iologik_e1213", "named by the library's model");
         assert_eq!(d.endpoint, "cip=991:515:0x00e12130");
         assert_eq!(d.protocol, 1, "EtherNet/IP");
-        // The E1213's channels are listed; the program's lamp (on the box's
-        // own channel) is bound to the first output already.
-        assert_eq!(d.points.len(), 20, "12 inputs, 8 outputs");
-        let on: Vec<(&str, &str)> = d
-            .points
-            .iter()
-            .filter(|r| r.on)
-            .map(|r| (r.name.as_str(), r.point.as_str()))
-            .collect();
-        assert_eq!(on, [("run", "di:0"), ("lamp", "do:0")]);
+        // The form holds the device's settings and none of its channels.
+        assert!(d.points.is_empty(), "{:?}", d.points);
+        assert!(!h.has("point 0 on"));
         h.press("device ok");
         h.wait(0.3);
+        assert!(!h.has("device form"));
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert_eq!(
+            map.matches(" iologik_e1213 ").count(),
+            1,
+            "the device line alone: {map}"
+        );
+        // The program's lamp takes the first output in + Add I/O.
+        h.press("add io iologik_e1213");
+        h.wait(0.3);
+        assert!(
+            h.has("io form") && h.has("io for"),
+            "the program has variables to wire"
+        );
+        assert!(h.has("io add DI0") && h.has("io add DO0"));
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .devices_ui
+            .adding_io
+            .as_mut()
+            .unwrap()
+            .for_var = Some("lamp".into());
+        h.wait(0.2);
+        assert!(!h.has("io add DI0"), "an output variable is offered outputs only");
+        h.press("io add DO0");
+        h.wait(0.3);
+        h.press("io done");
+        h.wait(0.2);
         let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
         assert!(
             map.contains("out lamp bool iologik_e1213 do:0 safe=false"),
@@ -2810,47 +2833,6 @@ mod chrome {
             assert!(map.contains(" bool box di:0"), "{map}");
         }
         assert!(h.has("device form"));
-        // Start and stop on DI-00/01, the motor on DO-00, from the program.
-        let rows = h
-            .app
-            .sim
-            .as_ref()
-            .unwrap()
-            .devices_ui
-            .adding
-            .clone()
-            .unwrap()
-            .points;
-        let on: Vec<(&str, &str)> = rows
-            .iter()
-            .filter(|r| r.on)
-            .map(|r| (r.name.as_str(), r.point.as_str()))
-            .collect();
-        assert_eq!(on, [("start", "di:0"), ("stop", "di:1"), ("motor", "do:0")]);
-        // Tick DI-05 and name it: a new variable.
-        h.press("point 5 on");
-        h.press("point 5 name");
-        h.frame(vec![Event::Key {
-            key: egui::Key::A,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        }]);
-        h.frame(vec![Event::Text("door".into())]);
-        h.wait(0.2);
-        let r5 = h
-            .app
-            .sim
-            .as_ref()
-            .unwrap()
-            .devices_ui
-            .adding
-            .clone()
-            .unwrap()
-            .points[5]
-            .clone();
-        assert!(r5.on && r5.name == "door", "{r5:?}");
         h.press("device ok");
         h.wait(0.3);
         assert!(
@@ -2858,14 +2840,49 @@ mod chrome {
             "{:?}",
             h.app.sim.as_ref().unwrap().devices_ui.adding
         );
+        // Start on DI-00 from the program, then DI-05 as a new variable.
+        h.press("add io iologik_e1213");
+        h.wait(0.3);
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .devices_ui
+            .adding_io
+            .as_mut()
+            .unwrap()
+            .for_var = Some("start".into());
+        h.wait(0.2);
+        h.press("io add DI0");
+        h.wait(0.3);
+        assert_eq!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .devices_ui
+                .adding_io
+                .as_ref()
+                .unwrap()
+                .for_var,
+            None,
+            "the next channel is a new variable again"
+        );
+        h.press("io add DI5");
+        h.wait(0.3);
+        h.press("io done");
+        h.wait(0.2);
         {
             let sim = h.app.sim.as_ref().unwrap();
             let map = &sim.proj.files["io.map"];
-            assert!(!map.contains(" box di:") && !map.contains(" box do:"), "{map}");
+            assert!(!map.contains(" box di:0"), "start moved off the box: {map}");
             assert!(map.contains("in  start bool iologik_e1213 di:0\n"), "{map}");
-            assert!(map.contains("in  door bool iologik_e1213 di:5\n"), "{map}");
+            assert!(
+                map.contains("in  iologik_e1213_di5 bool iologik_e1213 di:5\n"),
+                "{map}"
+            );
             let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
-            assert!(st.contains("  door : BOOL;"), "{st}");
+            assert!(st.contains("  iologik_e1213_di5 : BOOL;"), "{st}");
             assert!(helmsman_iec::ast::parse(st).is_ok(), "{st}");
         }
         // The I/O wiring link opens the file in the editor.
@@ -2997,33 +3014,14 @@ mod chrome {
         let d = h.app.sim.as_ref().unwrap().devices_ui.adding.clone().unwrap();
         assert_eq!(d.editing.as_deref(), Some("e1213"));
         assert!(d.params.contains("profile=moxa-e1213"), "{}", d.params);
-        assert_eq!(d.points.iter().filter(|r| r.on).count(), 1, "run on DI-00");
-        // Tick DO-00 for the lamp (the program's own), then Save.
-        h.app
-            .sim
-            .as_mut()
-            .unwrap()
-            .devices_ui
-            .adding
-            .as_mut()
-            .unwrap()
-            .points[12]
-            .use_ = crate::device_form::Use::Existing("lamp".into());
-        {
-            let r = &mut h
-                .app
-                .sim
-                .as_mut()
-                .unwrap()
-                .devices_ui
-                .adding
-                .as_mut()
-                .unwrap()
-                .points[12];
-            r.on = true;
-            r.name = "lamp".into();
-        }
-        h.wait(0.2);
+        assert_eq!(
+            d.points.len(),
+            1,
+            "run, kept for Save; no row for a channel not added"
+        );
+        // The name and nothing else: no point to tick, and how the device
+        // is reached is Advanced's.
+        assert!(h.has("device name") && !h.has("device endpoint") && !h.has("point 0 on"));
         h.press("device ok");
         h.wait(0.3);
         assert!(
@@ -3051,11 +3049,16 @@ mod chrome {
             "{map}"
         );
         assert!(
-            map.contains("in  run bool e1213 di:0\n")
-                && map.contains("out lamp bool e1213 do:0 safe=false\n"),
-            "{map}"
+            map.contains("in  run bool e1213 di:0\n") && map.contains("out lamp bool box do:0 safe=false\n"),
+            "its point and the box's own line are as they were: {map}"
         );
-        assert!(!map.contains("box do:0"), "{map}");
+        // With Advanced on, the same form has the address and the timing.
+        h.app.chrome.advanced = true;
+        h.press("edit device e1213");
+        h.wait(0.3);
+        assert!(h.has("device endpoint"));
+        h.press("device cancel");
+        h.wait(0.2);
         // Delete: asks, then the device and its lines are gone.
         h.press("delete device e1213");
         h.wait(0.2);
@@ -6779,9 +6782,11 @@ mod devconf {
     }
 }
 
+mod device_io;
 mod diagram_edit;
 mod front;
 mod io_names;
+mod layouts;
 mod proposal;
 mod shell;
 mod sim_popup;

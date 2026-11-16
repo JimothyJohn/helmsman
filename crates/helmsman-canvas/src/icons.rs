@@ -121,9 +121,11 @@ impl Icons {
                 (None, path.split(['.', '[']).next())
             }
             NodeKind::Func { name } => (Some(name.as_str()), None),
-            NodeKind::Const { .. } | NodeKind::Op { .. } | NodeKind::For { .. } | NodeKind::Jump => {
-                (None, None)
-            }
+            NodeKind::Const { .. }
+            | NodeKind::Op { .. }
+            | NodeKind::For { .. }
+            | NodeKind::Jump
+            | NodeKind::Fold { .. } => (None, None),
         };
         let keys = [ty, name].into_iter().flatten().map(str::to_ascii_uppercase);
         for key in keys {

@@ -81,6 +81,9 @@ pub enum NodeKind {
     For { var: String },
     /// `EXIT`, `CONTINUE` or `RETURN`.
     Jump,
+    /// Several blocks shown as one: only in a [`crate::fold::View`]'s
+    /// diagram, never out of the lowering. `fold` indexes the view's folds.
+    Fold { fold: u32, kind: crate::fold::FoldKind },
 }
 
 impl NodeKind {
@@ -92,7 +95,7 @@ impl NodeKind {
     pub const fn headed(&self) -> bool {
         matches!(
             self,
-            Self::Read { .. } | Self::Write { .. } | Self::Fb { .. } | Self::For { .. }
+            Self::Read { .. } | Self::Write { .. } | Self::Fb { .. } | Self::For { .. } | Self::Fold { .. }
         )
     }
 }

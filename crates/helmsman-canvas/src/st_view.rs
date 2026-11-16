@@ -63,6 +63,15 @@ pub const KEY_PAN: f32 = 900.0;
 /// The band along the diagram's top the glyph buttons sit in, points: a
 /// fit keeps the diagram below it.
 pub const GLYPH_BAND: f32 = 52.0;
+/// The largest zoom a Q or E jump goes to ([`crate::jump`]): one function
+/// block with its arguments fills a part of the view and keeps its
+/// neighbours around it, instead of a timer as large as the window.
+pub const FOCUS_MAX: f32 = 2.0;
+/// The room a jump leaves around what it frames, diagram units.
+pub const FOCUS_PAD: f32 = 40.0;
+/// How long a jump takes to ease the view over, seconds: long enough to
+/// see which way it went.
+pub const GLIDE: f64 = 0.18;
 
 /// Pan and zoom: `screen = origin + offset + world * zoom`.
 #[derive(Clone, Copy, Debug)]
@@ -132,6 +141,65 @@ impl Cam {
         self.offset = Vec2::splat(30.0 * self.zoom);
         self.fitted = true;
         self.moved = false;
+    }
+
+    /// Frames `r` in `area` with [`FOCUS_PAD`] around it, as close as
+    /// [`FOCUS_MAX`] lets it: in the middle, or from its top left corner
+    /// along a side that does not fit at the smallest zoom (an IF larger
+    /// than the view shows its label and condition).
+    fn frame(&mut self, area: Rect, r: &helmsman_diagram::Rect) {
+        let pad = 2.0 * FOCUS_PAD;
+        let zoom = (area.width() / (r.w + pad))
+            .min(area.height() / (r.h + pad))
+            .clamp(LEGIBLE, FOCUS_MAX);
+        let along = |lo: f32, hi: f32, at: f32, len: f32| {
+            let start = if (len + pad) * zoom > hi - lo {
+                lo + FOCUS_PAD * zoom
+            } else {
+                f32::midpoint(lo, hi) - len * zoom / 2.0
+            };
+            start - at * zoom
+        };
+        self.zoom = zoom;
+        self.offset = Vec2::new(
+            along(area.left(), area.right(), r.x, r.w),
+            along(area.top(), area.bottom(), r.y, r.h),
+        ) - self.origin.to_vec2();
+        self.moved = true;
+    }
+
+    /// Whether the view is where `to` (an offset and a zoom) put it.
+    fn rests_at(self, to: (Vec2, f32)) -> bool {
+        (self.offset - to.0).length() < 0.5 && (self.zoom - to.1).abs() < 1e-3
+    }
+}
+
+/// A Q or E jump under way: the view of scope `scope` eases from one
+/// offset and zoom to another, from page time `t0` for [`GLIDE`].
+#[derive(Clone, Copy, Debug)]
+struct Glide {
+    scope: usize,
+    from: (Vec2, f32),
+    to: (Vec2, f32),
+    t0: f64,
+}
+
+impl Glide {
+    /// The offset and zoom at page time `now`, and whether that is the
+    /// end. The zoom changes by equal factors and the diagram point in
+    /// the middle of the view (`half` its size) moves in a straight line.
+    fn at(&self, now: f64, half: Vec2) -> ((Vec2, f32), bool) {
+        let s = ((now - self.t0) / GLIDE).clamp(0.0, 1.0);
+        if s >= 1.0 {
+            return (self.to, true);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let s = s as f32;
+        let e = s * s * (3.0 - 2.0 * s);
+        let zoom = self.from.1 * (self.to.1 / self.from.1).powf(e);
+        let world = |(offset, zoom): (Vec2, f32)| (half - offset) / zoom;
+        let (a, b) = (world(self.from), world(self.to));
+        ((half - (a + (b - a) * e) * zoom, zoom), false)
     }
 }
 
@@ -208,6 +276,12 @@ pub struct Viewer {
     /// Why a gesture did nothing, and where it was made: shown until the
     /// next click or Escape.
     pub off_note: Option<(Pos2, String)>,
+    /// The Q or E jump the view is easing through.
+    glide: Option<Glide>,
+    /// Where the last jump went: the scope, the stop it picked and the
+    /// offset and zoom it left. While the view rests there the next jump
+    /// steps on from that stop ([`crate::jump::next`]).
+    jumped: Option<(usize, Pick, (Vec2, f32))>,
 }
 
 /// One row of the program tree.
@@ -450,6 +524,8 @@ impl Viewer {
             edit_gate: crate::diagram_edit::Gate::Off(crate::diagram_edit::BOX_REASON.into()),
             gesture: None,
             off_note: None,
+            glide: None,
+            jumped: None,
         }
     }
 
@@ -1235,6 +1311,37 @@ impl Viewer {
             .map_or(Grab::Pan, |r| Grab::Region(r.id))
     }
 
+    /// Q or E ([`crate::jump`]): picks the next (`forward`) or previous
+    /// stop on the diagram shown and starts the view easing over to frame
+    /// it in `area`, below the glyph strip. Nothing with no stops.
+    fn jump(&mut self, forward: bool, area: Rect, now: f64) {
+        let stops = crate::jump::stops(self.diagram());
+        let cam = self.cams[self.scope];
+        let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
+        // A jump still easing over counts as having arrived, so two quick
+        // presses go two stops on.
+        let at = self
+            .jumped
+            .filter(|&(scope, _, to)| scope == self.scope && (self.glide.is_some() || cam.rests_at(to)))
+            .and_then(|(_, pick, _)| stops.iter().position(|s| s.pick == pick));
+        let Some(k) = crate::jump::next(&stops, at, cam.to_world(below.center()), forward) else {
+            return;
+        };
+        let mut to = cam;
+        to.frame(below, &stops[k].rect);
+        to.clamp(area, self.diagram().size);
+        let to = (to.offset, to.zoom);
+        self.cams[self.scope].moved = true;
+        self.glide = Some(Glide {
+            scope: self.scope,
+            from: (cam.offset, cam.zoom),
+            to,
+            t0: now,
+        });
+        self.jumped = Some((self.scope, stops[k].pick, to));
+        self.pick = Some(stops[k].pick);
+    }
+
     /// The diagram, panned, zoomed and clickable, with `scan` on it.
     pub fn canvas(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         let area = ui.available_rect_before_wrap();
@@ -1258,12 +1365,37 @@ impl Viewer {
             cam.offset.y += GLYPH_BAND;
         }
         cam.origin = area.min;
+        // A jump under way moves the view first; anything the operator
+        // does to it this frame ends the jump where it is.
+        let now = ui.input(|i| i.time);
+        self.glide = self.glide.filter(|g| g.scope == self.scope);
+        if let Some(g) = self.glide {
+            let (to, done) = g.at(now, area.size() / 2.0);
+            (cam.offset, cam.zoom) = to;
+            if done {
+                self.glide = None;
+            } else {
+                ui.ctx().request_repaint();
+            }
+        }
+        let glided = (cam.offset, cam.zoom);
         // The wheel (or a two-finger scroll) zooms about the pointer, as
         // a pinch does; a drag on empty space, the arrow keys or W A S D
         // move the view (Nick, 2026-11-14: scroll moved it up and down).
-        let (hover, scroll, zoom, keys, dt) = ui.ctx().input(|i| {
+        // Q and E jump to the previous and the next stop.
+        let (hover, scroll, zoom, keys, jump, dt) = ui.ctx().input(|i| {
             use egui::Key;
             let held = |a: Key, b: Key| f32::from(u8::from(i.key_down(a) || i.key_down(b)));
+            // The key's own modifiers: a chord with E or Q is not a jump.
+            let jump = i.events.iter().find_map(|e| match e {
+                egui::Event::Key {
+                    key: key @ (Key::E | Key::Q),
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers.is_none() => Some(*key == Key::E),
+                _ => None,
+            });
             let keys = if i.modifiers.any() {
                 Vec2::ZERO
             } else {
@@ -1277,9 +1409,12 @@ impl Viewer {
                 i.smooth_scroll_delta,
                 i.zoom_delta(),
                 keys,
+                jump,
                 i.stable_dt.min(0.1),
             )
         });
+        // The keys are the diagram's only while nothing is typed in.
+        let keyboard = response.hovered() && ui.ctx().memory(|m| m.focused().is_none());
         if response.hovered() {
             let zoom = if (zoom - 1.0).abs() > f32::EPSILON {
                 zoom
@@ -1291,8 +1426,7 @@ impl Viewer {
             {
                 cam.zoom_at(h, zoom);
             }
-            // The keys are the diagram's only while nothing is typed in.
-            if keys != Vec2::ZERO && ui.ctx().memory(|m| m.focused().is_none()) {
+            if keys != Vec2::ZERO && keyboard {
                 // Right shows what is further right: the diagram goes left.
                 cam.offset -= keys * KEY_PAN * dt;
                 cam.moved = true;
@@ -1300,6 +1434,9 @@ impl Viewer {
             }
         }
         let double = response.double_clicked();
+        if (cam.offset, cam.zoom) != glided || double || response.dragged() {
+            self.glide = None;
+        }
         let cam = *cam;
         // A double click on a block instance opens it; anywhere else it
         // fits the diagram to the view.
@@ -1340,6 +1477,9 @@ impl Viewer {
         }
         let size = self.diagram().size;
         self.cams[self.scope].clamp(area, size);
+        if let Some(forward) = jump.filter(|_| keyboard) {
+            self.jump(forward, area, now);
+        }
         let cam = self.cams[self.scope];
         if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
@@ -1891,7 +2031,7 @@ fn draw(
         // assignment's the page inverted, a variable's or an operator's a
         // grey of the page with its ink.
         let (head, ink) = match &n.kind {
-            NodeKind::Fb { .. } | NodeKind::For { .. } => (YELLOW, BLACK),
+            NodeKind::Fb { .. } | NodeKind::For { .. } | NodeKind::Fold { .. } => (YELLOW, BLACK),
             NodeKind::Write { .. } => (t.fg, t.bg),
             NodeKind::Read { .. } | NodeKind::Const { .. } => (t.rule, t.fg),
             NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } => (t.shade, t.fg),

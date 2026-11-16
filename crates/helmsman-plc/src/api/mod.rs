@@ -43,6 +43,7 @@
 //! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
+//! POST /api/design                        token: describe a machine, or continue a design cut at max_tokens {description} | {session}; the relay's design profile answers with a control system design in Markdown, one turn per request, streamed
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
 //! POST /api/help                          token or session: what went wrong, or a question, in words; a diagnosis and a Markdown issue with the box's context, redacted, or an answer from the help pages (see [`help`])
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
@@ -123,6 +124,7 @@ mod carry;
 pub mod catalog;
 pub mod chat;
 mod control;
+pub mod design;
 pub mod desk;
 #[cfg(feature = "box")]
 pub mod devconf;
@@ -826,6 +828,8 @@ enum Reply {
     Chat(chat::Taken),
     /// One explanation for the agent.
     Explain(explain::Job),
+    /// One turn of a design.
+    Design(design::Job),
     /// One requirement: the agent writes its test.
     Requirement(Box<requirements::Job>),
     /// One help request: a diagnosis and an issue.
@@ -961,6 +965,11 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 explain::serve(chat, &mut stream, job);
             }
         }
+        Reply::Design(job) => {
+            if let Some(chat) = &ctx.chat {
+                design::serve(ctx, chat, &mut stream, job);
+            }
+        }
         Reply::Chat(taken) => {
             if let Some(chat) = &ctx.chat {
                 chat.serve(&mut stream, taken, &ctx.catalog());
@@ -983,6 +992,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 Reply::Once(_)
                 | Reply::Chat(_)
                 | Reply::Explain(_)
+                | Reply::Design(_)
                 | Reply::Requirement(_)
                 | Reply::Help(_)
                 | Reply::File(_) => Ok(()),
@@ -1127,6 +1137,9 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
     {
         return start_explain(req, ctx);
     }
+    if req.method == "POST" && req.segments == ["api", "design"] {
+        return start_design(req, ctx);
+    }
     if req.method == "POST" && req.segments == ["api", "help"] {
         return match help::start(req, ctx) {
             Ok(job) => Reply::Help(Box::new(job)),
@@ -1247,6 +1260,35 @@ fn start_chat(req: &Request, ctx: &Ctx) -> Reply {
                 return Reply::Once(audit_full());
             }
             Reply::Chat(taken)
+        }
+    }
+}
+
+/// `POST /api/design`: checked and its design taken here (a bad request is
+/// a plain 4xx), audited, then one turn streamed.
+fn start_design(req: &Request, ctx: &Ctx) -> Reply {
+    let Some(chat) = &ctx.chat else {
+        let r = Response::error(
+            503,
+            "no relay configured on this box (--relay); the design step needs the agent",
+        );
+        return Reply::Once(match audit(ctx, req, 503, "design: no relay configured") {
+            Some(_) => r,
+            None => audit_full(),
+        });
+    };
+    match design::take(chat, &req.body) {
+        Err((r, detail)) => Reply::Once(match audit(ctx, req, r.status, &detail) {
+            Some(_) => r,
+            None => audit_full(),
+        }),
+        Ok(job) => {
+            let detail = format!("design: session {}", job.id());
+            if audit(ctx, req, 200, &detail).is_none() {
+                design::release(chat, job);
+                return Reply::Once(audit_full());
+            }
+            Reply::Design(job)
         }
     }
 }
@@ -1481,7 +1523,10 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat" | "explain" | "help" | "bundles" | "logout"]
+        | [
+            "api",
+            "chat" | "explain" | "design" | "help" | "bundles" | "logout",
+        ]
         | ["api", "devices", "discover"]
         | ["api", "market", "list" | "install"]
         | ["api", "devices", _, "browse"]
@@ -2022,6 +2067,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/policy", true, "the approval policy this box enforces, and its transport: https and the certificate's SHA-256 fingerprint"),
             e("GET", "/api/events", true, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
+            e("POST", "/api/design", true, "{description} to start a design of a machine, or {session} to continue one cut at max_tokens: one relay turn per request, an event stream: session, thinking, text, then done {stop, output_tokens, turns, more} (more: post {session} again) or error; the box adds its dialect, running modules, devices and requirement tests"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
             e("POST", "/api/help", true, "{question, messages?}: what went wrong, in words (1 to 2000 characters) with the page's recent messages; the box attaches its build, the running project, its devices and their errors, all redacted of secrets. An event stream: help, text, tool_call, tool_result, retrying, issue (a diagnosis and a Markdown issue to copy; nothing is filed), done or error"),
             e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB), a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side) or a PDF (at most 2 MiB, passed to the model unread): stored in memory, 201 with its id"),

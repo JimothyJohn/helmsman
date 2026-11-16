@@ -105,6 +105,12 @@ TAB_RIGHT_FIRST = (1229, 71)
 FOLD_LINE_2 = (14, 168)
 TAB_TREND = (344, 600)
 TAB_MESSAGES = (385, 600)
+# The View menu, its "Pane layouts…" item, and two of the popup's
+# ready-made layouts.
+VIEW_MENU = (235, 26)
+VIEW_PANE_LAYOUTS = (279, 479)
+LAYOUT_DEFAULT = (668, 330)
+LAYOUT_PROGRAMMING = (668, 368)
 HEADER_RIGHT = (1150, 8, 200, 36)
 MOD = "ControlOrMeta"
 
@@ -234,6 +240,15 @@ def playground(ctx, base, out):
         m.move(*TAB_RIGHT_FIRST); m.down()
         m.move(160, 300, steps=12); m.up()
     r.step("docked-back", drag_back, RIGHT_TABS)
+    # View › Pane layouts… (2026-11-15): the popup, then the ready-made
+    # Programming layout (the code docked on the right), then Default.
+    def layouts():
+        r.click(*VIEW_MENU); r.wait(1500)
+        r.click(*VIEW_PANE_LAYOUTS)
+    r.step("pane-layouts", layouts, LEFT, 1500)
+    r.step("layout-programming", lambda: r.click(*LAYOUT_PROGRAMMING), RIGHT_TABS, 1000)
+    layouts(); r.wait(1500)
+    r.step("layout-default", lambda: r.click(*LAYOUT_DEFAULT), RIGHT_TABS, 1000)
     r.click(1313, 26); r.wait(1500); r.shot("monitor")
     r.click(1243, 26); r.wait(800); r.shot("editor-again")
     # A program the checker warns of (RETAIN where it is not kept): marked
