@@ -6,6 +6,12 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Open questions for Nick
 
+- [ ] **Keep `sha2` in the canvas for the spec's PDF fingerprint?** — #475 (spec mode on a box) records each PDF in `spec.md` by name, size and SHA-256, since a project file is text and cannot hold the PDF. Nothing in the canvas computed SHA-256, so it added `sha2` 0.11.1 with default features off: the version the box, its agent and the I/O crate already build, no new crate in Cargo.lock, and `wasm_deps` is green. Dropping it leaves name and size only, so two different PDFs of one name and size could not be told apart later.
+  options: keep | drop, name and size only
+  id: spec-pdf-sha2
+  asked: 2026-11-16
+  by: claude-session
+
 - [ ] **Which model answers the Agent on the relay's default tier?** — the agent ladder compared four on 2026-11-15 (16 rungs, three runs each, through a local relay on OpenRouter; card `agent-faster-model`). `deepseek/deepseek-v4.1-flash` (today's): 45 of 45, median 8 s, mean 11.1 s, $0.072 for the 45. `deepseek/deepseek-v4.1-flash-1017` (its October snapshot): 45 of 45, median 6 s, mean 7.3 s, $0.042. `anthropic/claude-haiku-5.5`: 45 of 45, median 7 s, mean 9.6 s, $0.052. `qwen/qwen3.8-flash`: stopped after six instructions that took 54 to 118 s each. The runs shared one machine and ran at the same time, so read the seconds as a ranking, not as absolutes. My pick is the 1017 snapshot: fastest and cheapest here, same pass rate, and a dated snapshot does not change under you. It is your deployment setting (`RELAY_MODEL`, or the `default` tier's model).
   options: deepseek-v4.1-flash-1017 | claude-haiku-5.5 | keep deepseek-v4.1-flash
   result: a model choice backed by the ladder's numbers
@@ -21,6 +27,15 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: design-step session
 
 ## Needs your hands
+
+- [ ] **Run spec mode against a real model, in the simulation and on a box** — #471 and #475 are tested with scripted answers only; no model has yet read a scope of work and answered in the format (a `Why:` line, the PROGRAM with a comment on each input and output, one scenario a requirement, a `requirements` block). Paste a real scope of work into "From a spec…" in the Agent tab of the playground, then the same with a PDF on a box whose agent is online, and note what comes back: names, comments, how many requirements are tested, whether the retries are used up.
+  needs: a scope of work or a product document you would really build from; a box with its agent reachable for the PDF half (the try box, started for this and stopped after)
+  result: spec mode is known to work on real documents, or the first real failures are on the board
+  est: 30m
+  difficulty: low
+  id: spec-mode-real-run
+  asked: 2026-11-16
+  by: claude-session
 
 - [ ] **Deploy the relay so the Agent's edits and its one question go live** — Why it matters: the page on dev answers a long program with only the lines that change and asks one question while it works, but only where the relay serves those agents; the deployed relay does not yet, so the published page behaves as before. agent-relay #40 (merged to its dev when green) adds the demo's `edits`, `ask` and `check` agents; nothing in template.yaml changes. Steps: (1) promote agent-relay dev to its default branch; (2) deploy as usual (`scripts/deploy.sh`) with `DemoAddressTurnsPerHour` raised from 40 to about 120: one instruction is now up to three turns (the question, the change, the check), so the old limit closes the free chat for everyone about three times sooner; (3) `curl -s -H "Origin: <the page's origin>" <demo url>/demo/v1/status` should list `"agents":["ask","check","edits"]`; (4) tell a session, which then runs the ladder against the deployed demo and looks at the card in a browser.
   needs: agent-relay #40 merged, your promote and deploy
@@ -133,6 +148,51 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 ## Next to build
+
+- [ ] **A fold changes the diagram of a nested IF: a property test fails now and then** — `any_folds_give_a_well_formed_laid_out_view_with_the_same_values` (crates/helmsman-diagram/tests/fold.rs:363) failed once in a full workspace run on dev at d75dbe6 (2026-11-16) and passed three reruns: its cases are random, so the suite is not deterministic and CI can go red on any PR. The case it shrank to: body `IF a > 0 THEN a := a + 0; ELSIF a > 0 THEN x := a > 0; IF x THEN a := a + 0; ELSIF x THEN a := a + 0; END_IF; END_IF;`, seeds `[]`, inputs 0 (proptest seed `cc 607ae925dd777822d1d0fa587fd45b8700b96382f98af952aa46de0c57cc601f`): two diagrams the test holds equal differ. Hold that body as a fixed regression test, fix what the fold does to it, and give the property a fixed seed or check in its regressions file so a failure repeats.
+  needs: nothing
+  result: the fold keeps that diagram as the test says, and the suite gives the same answer every run
+  est: 3h
+  difficulty: med
+  id: diagram-fold-property-flake
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **A spec run into the project that is open** — spec mode (#471, #475) always makes a new project; Nick's ask was to "parse and add it". Left out because a kept file (`spec.md`) cannot be saved one at a time: `Projects::save` on a box and `SimProjects::add_file` in the page take only names `file_name` knows, and a box has no atomic write of several files short of a whole-project zip. Shape: the same window with a project open offers "Add to this project"; the spec goes in as an instruction on the open program file (`Scope::File`), the review shows what changes (I/O added, requirements added or replaced), and Accept writes the file, the tests and the new section of `spec.md` together.
+  needs: nothing
+  result: more documentation dumped in later lands in the same project, with its spec kept beside the first
+  est: 2d
+  difficulty: med
+  id: spec-into-open-project
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **PDFs in the playground's spec window** — on a box a spec can be a PDF (#475, a drop-in on `/api/chat`); in the page it is pasted text, `.md` or `.txt` (#471). The page's free route carries no documents at all (the relay's demo function refuses them, 256 KiB a request), so this is for a visitor's own key and the local proxy: `claude.rs` builds `content` as a string today and would send a `document` block.
+  needs: nothing
+  result: a PDF scope of work builds a project in the page with a key, and the window says why not on the free route
+  est: 1d
+  difficulty: med
+  id: spec-pdf-in-page
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **History says "From a spec" for a project made on a box** — the page's revision is labelled "From a spec: <document names>"; a box's shows "uploaded a zip", because Accept is `POST /api/projects/{name}/zip` and that route takes no label. Give the zip route an optional label (bounded, one line, audited as any save) and have spec mode send it.
+  needs: nothing
+  result: a spec-made project's first revision names its documents on a box as in the page
+  est: 3h
+  difficulty: low
+  id: spec-zip-label
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **A starter io.map a box loads: no screen tile for a number input** — `sim_projects::example_io_map` writes `in NAME int screen NAME` for a numeric input, and a box refuses that map (`IoMap::validate`: "a screen tile is something the box shows: an out signal"). Nothing loads io.map in the page, so it shows only when such a project reaches a box: an example with a numeric input copied by "Use this device", a download and upload. Spec mode on a box avoids it (`sim_projects::box_io_map` writes no line and the review lists the inputs that need a device); the page's examples and its spec mode still write the bad line.
+  needs: nothing
+  result: every io.map the page writes loads on a box, checked in a test with `helmsman_io::text::parse` and `validate`
+  est: 3h
+  difficulty: low
+  id: starter-io-map-loads
+  asked: 2026-11-16
+  by: claude-session
 
 - [ ] **helmsman-dhcp: a client moves off its running lease (found by its own property test)** — Why it matters: the DHCP server's promise is that an address handed out in an ACK stays that client's while the lease runs; a block that is moved to another address mid-lease drops its fieldbus connection. On 2026-11-15 `cargo test --workspace` failed once in `crates/helmsman-dhcp/tests/hostile.rs`, `no_request_sequence_breaks_the_invariants`: "00-07-46-00-00-03 moved off its running lease", left 192.168.3.102, right 192.168.3.101. It is rare (the next three runs of that test passed), so CI can fail on it at random on any PR. To reproduce every time, add this line to `crates/helmsman-dhcp/tests/hostile.proptest-regressions`: `cc 32024c1c7cf224596c6941b14f9b5192e7b4dba694ca7a7b2831f9d34cc24c4b`. The shrunk case begins with a DHCPREQUEST from that client with ciaddr 192.168.3.100 and ends with its DHCPDISCOVER. Not fixed here: it was found while gating an unrelated change (the Devices tab's wired line), the crate is another task's, and the seed was left out of that branch so dev stays green until the fix lands with it, regression first.
   needs: nothing
@@ -308,6 +368,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   est: 2d
   difficulty: med
   depends: agent-on-box
+  notes: 2026-11-16: the relay now serves helmsman/v8, v9 and v10 (harness profiles, v2 sessions only); a box still has no /v2 client, so its default stays v7 and `propose_device_profile` (v10) is not reachable live from a box. Spec mode (#475) went through v7's chat for that reason.
   id: relay-v2-client
   asked: 2026-11-05
   by: claude-session
