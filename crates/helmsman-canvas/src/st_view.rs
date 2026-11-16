@@ -10,7 +10,7 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
     epaint::CubicBezierShape,
 };
-use helmsman_diagram::fold::{Fold, FoldKind, Origin, View};
+use helmsman_diagram::fold::{Fold, FoldKind, Origin, View, structure};
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
 use helmsman_diagram::lower::Var;
 use helmsman_diagram::{
@@ -288,6 +288,9 @@ pub struct Viewer {
     /// The folds the reader opened, as (POU, fold key): drawn as their
     /// blocks, outlined, until folded back.
     opened: std::collections::BTreeSet<(String, String)>,
+    /// The folds that start as their blocks (a section, an arm: see
+    /// [`on_request`]) and the reader folded, as (POU, fold key).
+    collapsed: std::collections::BTreeSet<(String, String)>,
     /// How far the operator moved each folded block, as (POU number, fold
     /// key, by).
     fold_moved: Vec<(usize, String, Vec2)>,
@@ -300,6 +303,12 @@ pub struct Viewer {
     /// offset and zoom it left. While the view rests there the next jump
     /// steps on from that stop ([`crate::jump::next`]).
     jumped: Option<(usize, Pick, (Vec2, f32))>,
+}
+
+/// Whether folds of `kind` start as their blocks and fold when the reader
+/// asks: the author's own structure. The standard circuits start folded.
+const fn on_request(kind: FoldKind) -> bool {
+    matches!(kind, FoldKind::Arm | FoldKind::Section | FoldKind::Output)
 }
 
 /// Height of the tab over an opened fold's blocks, in diagram units.
@@ -520,10 +529,23 @@ impl Viewer {
         }
         let cams = vec![Cam::default(); scopes.len()];
         let moved = vec![Vec::new(); module.pous.len()];
+        // The standard circuits, then what the author's own structure
+        // offers: sections named by a comment, then arms.
         let folds = module
             .pous
             .iter()
-            .map(|p| helmsman_diagram::fold::auto(&p.diagram))
+            .map(|p| {
+                let d = &p.diagram;
+                // A section that is the whole body names nothing.
+                let sections = structure::sections(d, src)
+                    .into_iter()
+                    .filter(|f| f.stmts.len() < d.top.len());
+                let by_request = sections.chain(structure::arms(d));
+                helmsman_diagram::fold::auto(d)
+                    .into_iter()
+                    .chain(by_request.map(Fold::with_blocks))
+                    .collect()
+            })
             .collect();
         let views = vec![None; module.pous.len()];
         let mut v = Self {
@@ -554,6 +576,7 @@ impl Viewer {
             assign: Vec::new(),
             folds,
             opened: std::collections::BTreeSet::new(),
+            collapsed: std::collections::BTreeSet::new(),
             fold_moved: Vec::new(),
             views,
             glide: None,
@@ -567,10 +590,14 @@ impl Viewer {
     /// still closed applied, each block where the operator left it.
     fn reshow(&mut self) {
         for pou in 0..self.module.pous.len() {
-            let name = &self.module.pous[pou].name;
-            let closed: Vec<Fold> = self.folds[pou]
-                .iter()
-                .filter(|f| !self.opened.contains(&(name.clone(), f.key.clone())))
+            // The folds the reader made go first (a fold that shares a
+            // block with an earlier one is left out): a folded section
+            // is one block whatever is inside it.
+            let asked = self.folds[pou].iter().filter(|f| on_request(f.kind));
+            let standard = self.folds[pou].iter().filter(|f| !on_request(f.kind));
+            let closed: Vec<Fold> = asked
+                .chain(standard)
+                .filter(|f| self.is_closed(pou, f))
                 .cloned()
                 .collect();
             if closed.is_empty() {
@@ -599,6 +626,16 @@ impl Viewer {
             }
             helmsman_diagram::layout::refit(&mut view.diagram);
             self.views[pou] = Some(view);
+        }
+    }
+
+    /// Whether fold `f` of POU number `pou` is drawn as one block now.
+    fn is_closed(&self, pou: usize, f: &Fold) -> bool {
+        let entry = (self.module.pous[pou].name.clone(), f.key.clone());
+        if on_request(f.kind) {
+            self.collapsed.contains(&entry)
+        } else {
+            !self.opened.contains(&entry)
         }
     }
 
@@ -687,6 +724,22 @@ impl Viewer {
         Some(self.cams[self.scope].rect(&self.shown().node(s).rect))
     }
 
+    /// Opens every fold that hides block `n` of the diagram shown, as a
+    /// reader would by double clicks (a comparison folded with its
+    /// literal is never opened: it is edited as it is).
+    #[cfg(test)]
+    pub(crate) fn reveal(&mut self, n: NodeId) {
+        let pou = self.scopes[self.scope].pou;
+        let keys: Vec<String> = self.folds[pou]
+            .iter()
+            .filter(|f| f.kind != FoldKind::Chip && f.nodes.contains(&n) && self.is_closed(pou, f))
+            .map(|f| f.key.clone())
+            .collect();
+        for key in keys {
+            self.set_fold(&key, true);
+        }
+    }
+
     /// Where input `k` of block `n` of the diagram is drawn on screen:
     /// its own pin, or the pin of the fold it is in that carries the same
     /// wire. `None` for a pin inside a fold.
@@ -745,12 +798,22 @@ impl Viewer {
     /// Draws fold `key` of the POU shown as its blocks (`open`) or as
     /// one block again.
     pub fn set_fold(&mut self, key: &str, open: bool) {
-        let name = self.module.pous[self.scopes[self.scope].pou].name.clone();
-        let entry = (name, key.to_string());
-        if open {
-            self.opened.insert(entry);
+        let pou = self.scopes[self.scope].pou;
+        let Some(kind) = self.folds[pou].iter().find(|f| f.key == key).map(|f| f.kind) else {
+            return;
+        };
+        let entry = (self.module.pous[pou].name.clone(), key.to_string());
+        // What starts as its blocks is kept while folded; what starts
+        // folded, while opened.
+        let (set, hold) = if on_request(kind) {
+            (&mut self.collapsed, !open)
         } else {
-            self.opened.remove(&entry);
+            (&mut self.opened, open)
+        };
+        if hold {
+            set.insert(entry);
+        } else {
+            set.remove(&entry);
         }
         self.pick = None;
         self.reshow();
@@ -760,23 +823,27 @@ impl Viewer {
     /// and the tab over it that folds it back, on screen.
     fn opened_tabs(&self, cam: Cam) -> Vec<(String, String, Rect, Rect)> {
         let pou = self.scopes[self.scope].pou;
-        let name = &self.module.pous[pou].name;
         let d = self.shown();
         let mut out = Vec::new();
         for f in &self.folds[pou] {
-            if !self.opened.contains(&(name.clone(), f.key.clone())) {
+            // An arm has its region's box and label already; a folded
+            // comparison is never opened.
+            if self.is_closed(pou, f) || matches!(f.kind, FoldKind::Arm | FoldKind::Chip) {
                 continue;
             }
-            // Blocks inside another fold that is closed are not drawn.
-            let rects: Option<Vec<Rect>> = f
+            // Around whatever is drawn for its blocks (a fold inside it
+            // that is closed is one of them).
+            let boxes = f.regions(self.diagram()).into_iter().filter_map(|r| {
+                let r = self.view().map_or(Some(r), |v| v.region_shown(r))?;
+                Some(cam.rect(&d.region(r).rect))
+            });
+            let rects: Vec<Rect> = f
                 .nodes
                 .iter()
-                .map(|&n| {
-                    let s = self.to_shown(n)?;
-                    self.to_base(s).map(|_| cam.rect(&d.node(s).rect))
-                })
+                .filter_map(|&n| self.to_shown(n))
+                .map(|s| cam.rect(&d.node(s).rect))
+                .chain(boxes)
                 .collect();
-            let Some(rects) = rects else { continue };
             let Some(around) = rects.into_iter().reduce(Rect::union) else {
                 continue;
             };
@@ -789,6 +856,24 @@ impl Viewer {
             out.push((f.key.clone(), f.title.clone(), around, tab));
         }
         out
+    }
+
+    /// The arm whose label strip is under screen point `p`, if it folds:
+    /// its fold's key.
+    fn arm_at(&self, cam: Cam, p: Pos2) -> Option<String> {
+        let (x, y) = cam.to_world(p);
+        let shown = self.shown();
+        let r = shown
+            .regions
+            .iter()
+            .filter(|r| r.rect.contains(x, y) && y <= r.rect.y + LABEL_H)
+            .min_by(|a, b| (a.rect.w * a.rect.h).total_cmp(&(b.rect.w * b.rect.h)))?;
+        let base = self.view().map_or(r.id, |v| v.region_origin[r.id.0 as usize]);
+        let body = &self.diagram().region(base).body;
+        self.folds[self.scopes[self.scope].pou]
+            .iter()
+            .find(|f| f.kind == FoldKind::Arm && f.stmts == *body)
+            .map(|f| f.key.clone())
     }
 
     /// Moves block `n` as drawn by `by`: a block of the diagram, or a fold.
@@ -1094,6 +1179,7 @@ impl Viewer {
         // A fold the reader opened stays open while the program still
         // has it under the same key.
         self.opened.clone_from(&old.opened);
+        self.collapsed.clone_from(&old.collapsed);
         self.reshow();
         let Some(pick) = old.pick else { return };
         let pou = self.scopes.get(self.scope).map_or(0, |s| s.pou);
@@ -1625,21 +1711,69 @@ impl Viewer {
             .map_or(Grab::Pan, |r| Grab::Region(r.id))
     }
 
-    /// Q or E ([`crate::jump`]): picks the next (`forward`) or previous
-    /// stop on the diagram shown and starts the view easing over to frame
-    /// it in `area`, below the glyph strip. Nothing with no stops.
-    fn jump(&mut self, forward: bool, area: Rect, now: f64) {
-        // Where things are drawn, named as the diagram names them.
-        let stops: Vec<crate::jump::Stop> = crate::jump::stops(self.shown())
+    /// The stops of the diagram shown ([`crate::jump::stops`]), each
+    /// framed where it is drawn: a stop inside a fold is the fold's block
+    /// (an IF drawn as a selector is still a stop).
+    pub(crate) fn stops(&self) -> Vec<crate::jump::Stop> {
+        let base = crate::jump::stops(self.diagram());
+        let Some(v) = self.view() else { return base };
+        let d = self.diagram();
+        let drawn: Vec<crate::jump::Stop> = crate::jump::stops(&v.diagram)
             .into_iter()
             .filter_map(|s| {
                 let pick = match s.pick {
                     Pick::Node(n) => Pick::Node(self.pick_of(n)?),
-                    Pick::Region(r) => Pick::Region(self.view().map_or(r, |v| v.region_origin[r.0 as usize])),
+                    Pick::Region(r) => Pick::Region(v.region_origin[r.0 as usize]),
                 };
                 Some(crate::jump::Stop { pick, rect: s.rect })
             })
             .collect();
+        let around = |blocks: &mut dyn Iterator<Item = NodeId>| {
+            blocks
+                .filter_map(|n| v.shown(n))
+                .map(|n| v.diagram.node(n).rect)
+                .reduce(|a, b| {
+                    let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+                    helmsman_diagram::Rect {
+                        x,
+                        y,
+                        w: a.right().max(b.right()) - x,
+                        h: a.bottom().max(b.bottom()) - y,
+                    }
+                })
+        };
+        base.into_iter()
+            .map(|s| {
+                if let Some(at) = drawn.iter().find(|x| x.pick == s.pick) {
+                    return crate::jump::Stop {
+                        pick: s.pick,
+                        rect: at.rect,
+                    };
+                }
+                // Folded away: whatever is drawn for its blocks.
+                let rect = match s.pick {
+                    Pick::Node(n) => around(&mut std::iter::once(n)),
+                    Pick::Region(r) => {
+                        let stmt = d.region(r).stmt;
+                        let inside = |n: &&helmsman_diagram::Node| {
+                            n.stmt == stmt || d.chain(n.region).any(|q| q.stmt == stmt)
+                        };
+                        around(&mut d.nodes.iter().filter(inside).map(|n| n.id))
+                    }
+                };
+                crate::jump::Stop {
+                    pick: s.pick,
+                    rect: rect.unwrap_or(s.rect),
+                }
+            })
+            .collect()
+    }
+
+    /// Q or E ([`crate::jump`]): picks the next (`forward`) or previous
+    /// stop on the diagram shown and starts the view easing over to frame
+    /// it in `area`, below the glyph strip. Nothing with no stops.
+    fn jump(&mut self, forward: bool, area: Rect, now: f64) {
+        let stops = self.stops();
         let cam = self.cams[self.scope];
         let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
         // A jump still easing over counts as having arrived, so two quick
@@ -1784,6 +1918,12 @@ impl Viewer {
         {
             // ...and its tab folds them back.
             self.set_fold(&key, false);
+        } else if double
+            && let Some(p) = response.interact_pointer_pos()
+            && let Some(key) = self.arm_at(cam, p)
+        {
+            // An arm folds from its label.
+            self.set_fold(&key, false);
         } else if double {
             let into = response
                 .interact_pointer_pos()
@@ -1904,7 +2044,11 @@ impl Viewer {
             } else if tabs.iter().any(|(.., tab)| tab.contains(p)) {
                 response
                     .clone()
-                    .on_hover_text_at_pointer("Double-click draws these blocks as one again.");
+                    .on_hover_text_at_pointer("Double-click draws these blocks as one.");
+            } else if self.arm_at(cam, p).is_some() {
+                response
+                    .clone()
+                    .on_hover_text_at_pointer("Double-click draws what this arm does as one block.");
             }
         }
         if response.hovered()
@@ -2678,9 +2822,11 @@ END_PROGRAM
             .nodes
             .iter()
             .filter_map(|n| match &n.kind {
-                NodeKind::Fb { instance, .. } => {
-                    Some((instance.to_ascii_uppercase(), v.openable().contains(&n.id)))
-                }
+                // `openable` numbers blocks as they are drawn.
+                NodeKind::Fb { instance, .. } => Some((
+                    instance.to_ascii_uppercase(),
+                    v.to_shown(n.id).is_some_and(|s| v.openable().contains(&s)),
+                )),
                 _ => None,
             })
             .collect();
@@ -2695,7 +2841,7 @@ END_PROGRAM
         assert!(fbs.contains(&("PARTS".into(), false)), "nor a counter: {fbs:?}");
         // Every block marked opens, and inside the motor nothing does.
         for n in v.openable() {
-            v.pick = Some(super::Pick::Node(n));
+            v.pick = v.to_base(n).map(super::Pick::Node);
             assert!(v.step_into(), "a marked block opens");
             assert!(v.openable().is_empty(), "the motor calls no block of its own");
             assert!(v.step_out());
@@ -3011,7 +3157,13 @@ END_PROGRAM
         fn at(&self, k: &NodeKind) -> Pos2 {
             let v = &self.sv.view;
             let n = v.diagram().nodes.iter().find(|n| n.kind == *k).unwrap();
-            v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+            // Where it is drawn, in its header (an input's control sits
+            // under it).
+            let r = v.block_on_screen(n.id).unwrap();
+            Pos2::new(
+                r.center().x,
+                r.min.y + (r.height() / 2.0).min(8.0 * v.cams[v.scope].zoom),
+            )
         }
 
         /// The nodes drawn at full strength, by label.

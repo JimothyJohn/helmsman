@@ -70,24 +70,29 @@ fn a_seal_in_is_one_latch_with_set_and_reset_pins() {
         shape(&v.diagram),
         "\
 #0 read S
-#1 read M
-#2 read R
-#3 fold M <- #0 #1 !#2
-#4 write M := <- #3
+#1 read R
+#2 fold M <- #0 !#1
+#3 write M := <- #2
 "
     );
+    // The variable read back to hold itself is part of the latch.
+    assert_eq!(v.diagram.node(fold_blocks(&v)[0].id).ins, ["set", "reset"]);
+    // Held from an earlier write of it, that write is an input by name.
+    let d = diagram("s, r, m : BOOL;", "m := s;\nm := (s OR m) AND NOT r;");
+    let v = applied(&d, &latches(&d));
     assert_eq!(v.diagram.node(fold_blocks(&v)[0].id).ins, ["set", "M", "reset"]);
 }
 
 #[test]
 fn every_commuted_seal_in_is_found_with_the_right_pins() {
-    // (source, pin names: the wires of the OR in order, then the reset)
-    for (body, pins) in [
-        ("m := (s OR m) AND NOT r;", ["set", "M", "reset"]),
-        ("m := (m OR s) AND NOT r;", ["M", "set", "reset"]),
-        ("m := NOT r AND (s OR m);", ["set", "M", "reset"]),
-        ("m := NOT r AND (m OR s);", ["M", "set", "reset"]),
+    // Whichever way round it is written: set, then reset.
+    for body in [
+        "m := (s OR m) AND NOT r;",
+        "m := (m OR s) AND NOT r;",
+        "m := NOT r AND (s OR m);",
+        "m := NOT r AND (m OR s);",
     ] {
+        let pins = ["set", "reset"];
         let d = diagram("s, r, m : BOOL;", body);
         let f = latches(&d);
         assert_eq!(f.len(), 1, "{body}");
@@ -99,8 +104,8 @@ fn every_commuted_seal_in_is_found_with_the_right_pins() {
         assert_eq!(v.outs[0].len(), 1, "{body}: one output, into the write");
         assert_eq!(
             v.diagram.nodes.len(),
-            5,
-            "{body}: the three reads, the fold, the write"
+            4,
+            "{body}: the two reads, the fold, the write"
         );
     }
 }
