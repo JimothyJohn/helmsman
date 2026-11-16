@@ -782,17 +782,11 @@ fn a_failing_test_is_written_reported_failed_and_red() {
     let tests = b.tests();
     assert_eq!(tests["ok"], false);
     assert_eq!(tests["red"].as_array().unwrap().len(), 1, "{tests}");
-    // The deploy gate refuses it before anything builds.
+    // A red test refuses no deploy: the box never answers that it is why.
     let s = b.alice();
     let r = send(b.addr, "POST", "/api/projects/line/deploy", &[bearer(&s)], "{}");
-    assert_eq!(r.status, 409, "{r:?}");
-    assert!(
-        r.json()["error"]
-            .as_str()
-            .unwrap()
-            .contains("requirement test(s) red"),
-        "{r:?}"
-    );
+    assert!(!r.body.contains("not deployed"), "{r:?}");
+    assert!(!r.json()["error"].as_str().unwrap_or("").contains("requirement test"), "{r:?}");
 }
 
 #[test]

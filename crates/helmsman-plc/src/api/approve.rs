@@ -226,14 +226,16 @@ fn err(why: &str) -> Json {
 
 /// What every apply, rollback and replay starts with: the target exists
 /// (404), the box has an approval path (501), and the target has a change
-/// set (409). The approval path, the target change set, and the proposal
-/// it came from.
+/// set (409). The approval path, the target change set, the proposal it
+/// came from, and a project's red requirement tests (a warning: they
+/// refuse nothing).
 fn prelude<'c>(
     req: &Request,
     ctx: &'c Ctx,
     target_ref: Target<'_>,
     label: &str,
-) -> Result<(&'c Approval, ChangeSet, Option<Stored>), Response> {
+) -> Result<(&'c Approval, ChangeSet, Option<Stored>, Vec<String>), Response> {
+    let mut red = Vec::new();
     let (cs, proposal) = match target_ref {
         Target::Proposal(id) => {
             let Some(p) = super::proposal_id(id).and_then(|id| ctx.box_.proposals.get(id)) else {
@@ -263,11 +265,17 @@ fn prelude<'c>(
                 ));
             }
         },
-        // A red requirement test refuses the deploy before anything builds
-        // (`helmsman_iec::spec`; TODO.md spec-tests).
+        // The project's requirement tests run before it builds
+        // (`helmsman_iec::spec`); a red one is carried to the answer and
+        // the audit trail, and refuses nothing.
         Target::Project(name) => {
-            match super::projects::red_tests(ctx, name).and_then(|()| super::projects::built(ctx, name)) {
-                Ok(b) => (Some(b.change), None),
+            match super::projects::red_tests(ctx, name)
+                .and_then(|r| super::projects::built(ctx, name).map(|b| (b, r)))
+            {
+                Ok((b, r)) => {
+                    red = r;
+                    (Some(b.change), None)
+                }
                 Err((status, body, why)) => {
                     return Err(refuse(
                         ctx,
@@ -305,7 +313,7 @@ fn prelude<'c>(
             note,
         ));
     };
-    Ok((appr, cs, proposal))
+    Ok((appr, cs, proposal, red))
 }
 
 fn what(target_ref: Target<'_>) -> String {
@@ -322,7 +330,7 @@ fn what(target_ref: Target<'_>) -> String {
 #[allow(clippy::too_many_lines)]
 pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Response {
     let label = format!("replay of {}", what(target_ref));
-    let (appr, target, _) = match prelude(req, ctx, target_ref, &label) {
+    let (appr, target, _, _) = match prelude(req, ctx, target_ref, &label) {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -568,7 +576,7 @@ fn meta(target: Target<'_>, p: Option<&Stored>, by: &Approver) -> Meta {
 #[allow(clippy::too_many_lines)]
 pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Response {
     let label = what(target_ref);
-    let (appr, target, proposal) = match prelude(req, ctx, target_ref, &label) {
+    let (appr, target, proposal, red) = match prelude(req, ctx, target_ref, &label) {
         Ok(x) => x,
         Err(r) => return r,
     };
@@ -778,7 +786,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         ctx,
         req,
         202,
-        &format!("{label}: approved ({tier}) by {who}; applying"),
+        &format!("{label}: approved ({tier}) by {who}{}; applying", red_note(&red)),
         note,
     )
     .is_none()
@@ -898,11 +906,13 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             let _ = write!(detail, "; {n}");
         }
     }
+    detail.push_str(&red_note(&red));
     let _ = record(ctx, req, 200, &detail, note);
     Response::json(
         200,
         &json!({
             "applied": true,
+            "red": red,
             "tier": tier.as_str(),
             "reasons": reasons,
             "role": role.as_str(),
@@ -915,6 +925,20 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "state": state,
         }),
     )
+}
+
+/// The red requirement tests a project was deployed with, for an audit
+/// line; empty when none is red.
+fn red_note(red: &[String]) -> String {
+    if red.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; deployed with {} requirement test(s) red: {}",
+            red.len(),
+            red.join("; ")
+        )
+    }
 }
 
 /// The commit failed after the box took the change: puts `running` back
