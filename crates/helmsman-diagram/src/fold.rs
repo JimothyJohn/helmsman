@@ -25,12 +25,15 @@
 //! the view is then the diagram as it was at that place, never a wrong one.
 //! With no folds the view is the diagram itself, block for block.
 
+pub mod chips;
+
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 
 use helmsman_iec::Value;
 use helmsman_iec::trace::StmtId;
 
+use crate::explain::Drivers;
 use crate::layout;
 use crate::live::{Gate, Live};
 use crate::model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, Stmt, Wire};
@@ -153,6 +156,13 @@ fn nested(d: &Diagram, stmts: &[usize]) -> (BTreeSet<usize>, BTreeSet<RegionId>)
     (inside, regions)
 }
 
+/// The folds a diagram opens with: the ones that are plain convention
+/// and hide nothing a reader would look for (see [`chips`]).
+#[must_use]
+pub fn auto(d: &Diagram) -> Vec<Fold> {
+    chips::chips(d)
+}
+
 /// Why a fold was left out of a view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Skipped {
@@ -205,6 +215,9 @@ pub struct View {
     pub ins: Vec<Vec<Input>>,
     /// Per applied fold, per output pin: the output it carries.
     pub outs: Vec<Vec<(NodeId, usize)>>,
+    /// Per wire of [`View::diagram`]: the wires of the diagram it shows
+    /// (several when two blocks of one fold read the same output).
+    pub wire_origin: Vec<Vec<usize>>,
     /// Per block of the diagram the view was made from: the block showing
     /// it.
     shown: Vec<NodeId>,
@@ -257,6 +270,29 @@ impl View {
                 .iter()
                 .position(|&p| p == (n, out))
                 .map(|k| (shown, k)),
+        }
+    }
+
+    /// A highlighted path of the diagram the view was made from, on the
+    /// view: a folded block is on the path if any of its blocks is, a
+    /// wire if any wire it shows is.
+    #[must_use]
+    pub fn drivers(&self, on: &Drivers) -> Drivers {
+        Drivers {
+            nodes: self
+                .origin
+                .iter()
+                .map(|o| match *o {
+                    Origin::Node(n) => on.node(n),
+                    Origin::Fold(f) => self.folds[f].nodes.iter().any(|&n| on.node(n)),
+                })
+                .collect(),
+            wires: self
+                .wire_origin
+                .iter()
+                .map(|from| from.iter().any(|&k| on.wire(k)))
+                .collect(),
+            regions: self.region_origin.iter().map(|&r| on.region(r)).collect(),
         }
     }
 
@@ -612,8 +648,9 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         }
     };
     let mut wires: Vec<Wire> = Vec::new();
-    let mut seen: HashSet<(NodeId, usize, NodeId, usize)> = HashSet::new();
-    for w in &d.wires {
+    let mut wire_origin: Vec<Vec<usize>> = Vec::new();
+    let mut seen: HashMap<(NodeId, usize, NodeId, usize), usize> = HashMap::new();
+    for (index, w) in d.wires.iter().enumerate() {
         let (a, b) = (fold_of(w.from), fold_of(w.to));
         if a == b && a.is_some() {
             continue;
@@ -634,14 +671,19 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
                 (shown[w.to.0 as usize], k)
             }
         };
-        if seen.insert((from, out, to, inp)) {
-            wires.push(Wire {
-                from,
-                out,
-                to,
-                inp,
-                negated: w.negated,
-            });
+        match seen.get(&(from, out, to, inp)) {
+            Some(&k) => wire_origin[k].push(index),
+            None => {
+                seen.insert((from, out, to, inp), wires.len());
+                wire_origin.push(vec![index]);
+                wires.push(Wire {
+                    from,
+                    out,
+                    to,
+                    inp,
+                    negated: w.negated,
+                });
+            }
         }
     }
 
@@ -727,6 +769,7 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         region_origin,
         ins,
         outs,
+        wire_origin,
         shown,
         region_shown,
     }

@@ -422,3 +422,81 @@ fn the_generated_folds_are_ones_that_apply() {
     assert!(v.folds.iter().any(|f| f.stmts.is_empty()));
     assert!(v.folds.iter().any(|f| !f.stmts.is_empty()));
 }
+
+#[test]
+fn a_comparison_with_a_literal_is_one_block_fed_by_the_variable() {
+    let d = diagram(
+        "lvl : REAL; n : INT; hot, y : BOOL;",
+        "hot := lvl > 80.0 AND 3 <= n;\nIF n = 2 THEN y := TRUE; END_IF;",
+    );
+    let folds = helmsman_diagram::fold::auto(&d);
+    assert_eq!(
+        folds.iter().map(|f| f.title.as_str()).collect::<Vec<_>>(),
+        ["> 80.0", "3 <=", "= 2"]
+    );
+    let v = view(&d, &folds);
+    assert_eq!(v.skipped, []);
+    assert_eq!(
+        shape(&v.diagram),
+        "\
+#0 read LVL
+#1 fold > 80.0 <- #0
+#2 read N
+#3 fold 3 <= <- #2
+#4 op AND <- #1 #3
+#5 write HOT := <- #4
+#6 read N
+#7 fold = 2 <- #6
+#8 const TRUE [R0]
+#9 write Y := [R0] <- #8
+R0 IF N = 2 gate=#7 body=1
+"
+    );
+    check(&v.diagram);
+}
+
+#[test]
+fn only_a_literal_compared_once_folds() {
+    // Two variables, two literals, a named constant, a bubble: as they are.
+    let src = "PROGRAM t\nVAR CONSTANT lim : INT := 5; END_VAR\nVAR a, b : INT; x, y : BOOL; END_VAR\n\
+               y := a > b;\ny := 1 < 2;\ny := a > lim;\ny := x = NOT y;\nEND_PROGRAM\n";
+    let d = build(src).1.program().unwrap().diagram.clone();
+    assert_eq!(helmsman_diagram::fold::auto(&d), []);
+}
+
+#[test]
+fn the_path_that_drives_an_output_runs_through_the_fold_it_is_in() {
+    let src = prog(
+        "a AT %IX0.0 : BOOL; n : INT; y, z, u : BOOL;",
+        "y := a AND n > 3;\nz := y;\nu := TRUE;",
+    );
+    let (mut p, m) = build(&src);
+    let d = &m.program().unwrap().diagram;
+    let mut folds = helmsman_diagram::fold::auto(d);
+    folds.push(Fold::over_stmts(d, "s", FoldKind::Section, "second", &[d.top[1]]));
+    let v = view(d, &folds);
+    assert_eq!(v.skipped, []);
+    let (r, t) = p.scan_traced(&mut Image::new(SIZES), Duration::from_millis(10));
+    r.unwrap();
+    let on = helmsman_diagram::drivers(&m, &t, 0, "", "Z");
+    let seen = v.drivers(&on);
+    assert_eq!(seen.nodes.len(), v.diagram.nodes.len());
+    assert_eq!(seen.wires.len(), v.diagram.wires.len());
+    let lit: Vec<&str> = v
+        .diagram
+        .nodes
+        .iter()
+        .filter(|n| seen.node(n.id))
+        .map(|n| n.label.as_str())
+        .collect();
+    assert_eq!(lit, ["A", "N", "> 3", "AND", "Y :=", "second"]);
+    // The wire into the fold is on the path; the unrelated statement is not.
+    let into = v
+        .diagram
+        .wires
+        .iter()
+        .position(|w| v.fold_at(w.to).is_some_and(|f| f.key == "s"))
+        .unwrap();
+    assert!(seen.wire(into));
+    assert!(!lit.contains(&"U :="));
+}

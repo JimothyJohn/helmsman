@@ -667,24 +667,24 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
 
 ### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
 
-Order: chips, then the fold layer, then everything that folds. Gates,
+Built: n-input gates, the fold layer (`helmsman_diagram::fold`) with the canvas drawing it, and the comparison with its literal. Each card below is a rule that makes folds, or a renderer for one. Gates,
 chips and idioms are on as the diagram opens; arms, sections and output
 cards fold on request and the choice is kept in `diagram.layout`.
 
-- [ ] **Condition chips: a comparison against a constant is one block** — `level > 80.0` is three blocks today (read, constant, operator). One block labelled with the comparison, lit when true; `x >= lo AND x <= hi` on one variable reads as one range block.
-  result: a condition reads as the sentence the engineer would say, and takes one block
-  est: 5h
+- [ ] **Range block: one variable between two bounds** — `x >= lo AND x <= hi` on one variable as one block (`lo .. hi`), a rule beside `fold::chips` (the comparison with a literal is built: `> 80.0`, edited in place).
+  result: a window on a value reads as one condition
+  est: 3h
   difficulty: med
-  id: diagram-chips
+  id: diagram-range
   asked: 2026-11-15
   by: claude-session
   status: ready
 
-- [ ] **The fold layer: a set of blocks shown as one, opened in place** — a view over `Diagram` (lowering, the trace mapping and the edit spans untouched): a fold names its blocks, the pins are the wires that cross its edge, its title and live state come from what it holds. The canvas draws a folded set as one block, opens it by a double click and shows where you are in the breadcrumb the function block instances use. Folded or open is kept per fold in the arrangement.
-  result: one mechanism every card below uses to hide detail
-  est: 1d
-  difficulty: high
-  id: diagram-fold
+- [ ] **Keep opened folds and moved folds in `diagram.layout`** — the canvas carries them across a redeploy only; a reload forgets them. Fold keys (`Fold::key`) are the names to store.
+  result: a diagram opens the way it was left
+  est: 3h
+  difficulty: low
+  id: diagram-fold-persist
   asked: 2026-11-15
   by: claude-session
   status: ready
@@ -693,7 +693,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: a long IF reads as its conditions and what each one sets
   est: 4h
   difficulty: med
-  depends: diagram-fold
   id: diagram-fold-arms
   asked: 2026-11-15
   by: claude-session
@@ -703,7 +702,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the author's own names for the parts of a program are the top level of its diagram
   est: 5h
   difficulty: med
-  depends: diagram-fold
   id: diagram-fold-sections
   asked: 2026-11-15
   by: claude-session
@@ -713,7 +711,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the standard circuits show under their names
   est: 1d
   difficulty: high
-  depends: diagram-fold
   id: diagram-idioms
   asked: 2026-11-15
   by: claude-session
@@ -733,7 +730,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the top of a program's diagram answers "what drives each output"
   est: 6h
   difficulty: med
-  depends: diagram-fold
   id: diagram-output-cards
   asked: 2026-11-15
   by: claude-session
@@ -743,7 +739,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: an interlock reads as a table and says what is missing
   est: 1d
   difficulty: high
-  depends: diagram-fold
   id: diagram-permissive-table
   asked: 2026-11-15
   by: claude-session

@@ -83,7 +83,10 @@ impl Viewer {
     /// else the nearest block.
     pub(crate) fn hit_at(&self, cam: Cam, p: Pos2) -> Option<Hit> {
         let (x, y) = cam.to_world(p);
-        let d = self.diagram();
+        // On the diagram as drawn; a fold (several blocks as one) has
+        // nothing to change until it is opened, but for a comparison
+        // folded with its literal.
+        let d = self.shown();
         let reach = (PIN_REACH / cam.zoom).max(PORT_ROW / 2.0);
         let pin = d
             .nodes
@@ -96,17 +99,20 @@ impl Viewer {
             .filter(|(.., dist)| *dist <= reach)
             .min_by(|a, b| a.2.total_cmp(&b.2));
         if let Some((node, input, _)) = pin {
-            return Some(Hit::Pin { node, input });
+            return self
+                .base_pin(node, input)
+                .map(|(node, input)| Hit::Pin { node, input });
         }
-        node_near(d, x, y, TAP / 2.0 / cam.zoom).map(Hit::Block)
+        node_near(d, x, y, TAP / 2.0 / cam.zoom)
+            .and_then(|n| self.base_block(n))
+            .map(Hit::Block)
     }
 
     /// The constant block under `p`.
     pub(crate) fn const_at(&self, cam: Cam, p: Pos2) -> Option<NodeId> {
         let (x, y) = cam.to_world(p);
-        let d = self.diagram();
-        let n = d.node_at(x, y)?;
-        matches!(d.node(n).kind, NodeKind::Const { .. }).then_some(n)
+        let n = self.shown().node_at(x, y)?;
+        self.base_const(n)
     }
 
     /// Takes a gesture made at `at`: for the host when gestures are on,
@@ -363,6 +369,8 @@ fn offset_in(s: &str, p: ast::Pos) -> usize {
     (at + (p.col as usize).saturating_sub(1)).min(s.len())
 }
 
+const COMPARISONS: [&str; 6] = ["=", "<>", "<", "<=", ">", ">="];
+
 const ALL_OPS: [BinOp; 15] = [
     BinOp::Or,
     BinOp::Xor,
@@ -432,6 +440,18 @@ fn entries(v: &Viewer, hit: Hit) -> Entries {
                     if applies(v, &e) {
                         out.operators.push((to, e));
                     }
+                }
+            }
+            // A comparison against one literal is drawn as one block with
+            // it (`> 10`): its menu changes the value too, or puts a
+            // variable in its place.
+            if matches!(&n.kind, NodeKind::Op { op } if COMPARISONS.contains(&op.as_str())) {
+                let mut literals = d
+                    .inputs(node)
+                    .filter(|w| matches!(d.node(w.from).kind, NodeKind::Const { .. }));
+                if let (Some(w), None) = (literals.next(), literals.next()) {
+                    out.value = Some((pin_of(node, w.inp), d.node(w.from).text.clone()));
+                    out.connect = Some(pin_of(node, w.inp));
                 }
             }
             for (k, name) in n.ins.iter().enumerate() {
@@ -1041,7 +1061,7 @@ mod box_tests {
 
     fn centre(v: &Viewer, f: impl Fn(&NodeKind) -> bool) -> Pos2 {
         let n = v.diagram().nodes.iter().find(|n| f(&n.kind)).unwrap();
-        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+        v.block_on_screen(n.id).unwrap().center()
     }
 
     #[test]
