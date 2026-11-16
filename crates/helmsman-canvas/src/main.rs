@@ -33,6 +33,8 @@ mod arrange_tests;
 mod ask;
 #[cfg(test)]
 mod ask_tests;
+mod assign;
+mod assign_ui;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;

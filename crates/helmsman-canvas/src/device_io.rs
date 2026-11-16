@@ -309,6 +309,19 @@ pub struct Removal {
     pub unused: bool,
 }
 
+/// Every channel of `map`'s device `name`, by the profiles read (see
+/// [`DevicesUi::channels_of`]).
+#[must_use]
+pub fn channels_in(map: &MapText, profiles: &Profiles, name: &str) -> Option<Vec<Channel>> {
+    let dev = map.devices.iter().find(|d| d.name == name)?;
+    match dev.driver.strip_prefix("device:") {
+        Some(stem) => profiles
+            .get(&format!("{stem}{}", helmsman_project::DEVICE_EXT))
+            .map(|(_, c)| c.clone()),
+        None => channels(dev, None),
+    }
+}
+
 /// The project's device profiles as the tab last saw them: file name to
 /// its text and the channels it lists.
 pub type Profiles = BTreeMap<String, (String, Vec<Channel>)>;
@@ -332,14 +345,7 @@ impl DevicesUi {
     /// knows them (or the map has no such device).
     #[must_use]
     pub fn channels_of(&self, name: &str) -> Option<Vec<Channel>> {
-        let dev = self.map.devices.iter().find(|d| d.name == name)?;
-        match dev.driver.strip_prefix("device:") {
-            Some(stem) => self
-                .profiles
-                .get(&format!("{stem}{}", helmsman_project::DEVICE_EXT))
-                .map(|(_, c)| c.clone()),
-            None => channels(dev, None),
-        }
+        channels_in(&self.map, &self.profiles, name)
     }
 
     /// Opens the picker on `device`.

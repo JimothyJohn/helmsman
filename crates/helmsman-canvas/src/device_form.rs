@@ -102,8 +102,13 @@ pub struct Port {
 /// The program's inputs and outputs a map signal can bind, from its ST.
 #[must_use]
 pub fn ports_of(src: &str) -> Vec<Port> {
+    ports_in(&crate::playground::Session::new(src))
+}
+
+/// [`ports_of`] for a program already compiled.
+#[must_use]
+pub fn ports_in(s: &crate::playground::Session) -> Vec<Port> {
     use crate::playground::{Dir as PDir, Place};
-    let s = crate::playground::Session::new(src);
     s.inputs()
         .chain(s.outputs())
         .filter(|p| p.place == Place::Port)
@@ -672,7 +677,7 @@ pub fn apply_map(map: &str, w: &Wiring) -> String {
 /// `map` with `signals` after the last line device `device` has (its own
 /// line, or the last signal on it); at the end when the map has no such
 /// device. Every other line stays as it was.
-fn insert_signals(map: &str, device: &str, signals: &[String]) -> String {
+pub(crate) fn insert_signals(map: &str, device: &str, signals: &[String]) -> String {
     let mut out = String::with_capacity(map.len() + 64 * signals.len());
     let mut at = None;
     for line in map.split_inclusive('\n') {

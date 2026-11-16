@@ -4185,6 +4185,348 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
     assert!(h.bv().chat_sent.is_empty(), "the agent was not asked");
 }
 
+// ---- assigning a program port to a device channel (crate::assign) ----
+
+/// The conveyor program and a map that adds a device with free channels
+/// beside the box's own `start` and `lamp`.
+const ASSIGN_MAP: &str = "\
+device rio modbus-tcp 127.0.0.1:9 unit=1 timeout_ms=200
+in  rio_di_04 bool rio di:4  # the button
+in  rio_di_05 bool rio di:5
+out rio_do_00 bool rio coil:0 safe=false
+
+in  start bool box di:0
+out lamp  bool box do:0 safe=false
+out horn  bool box do:1 safe=false
+";
+
+/// What the box's signals say `name` is bound to, once it says it: the
+/// binding's kind, device and point.
+fn binding_of(b: &Bench, name: &str) -> Option<(String, String, String)> {
+    let j = b.json("/api/signals");
+    let all = j
+        .as_array()
+        .cloned()
+        .or_else(|| j["signals"].as_array().cloned())?;
+    let s = all.iter().find(|s| s["name"] == name)?;
+    let text = |k: &str| s["binding"][k].as_str().unwrap_or_default().to_string();
+    Some((text("kind"), text("device"), text("point")))
+}
+
+/// A page signed in as an engineer, drawn, with project `line` made and
+/// open, and the I/O tab docked.
+fn assigning(b: &Bench, jar: &Jar) -> Harness {
+    let mut v = drawn(b, jar);
+    make(
+        b,
+        jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", SOURCE), ("io.map", ASSIGN_MAP)],
+    );
+    values(b, &mut v, 0.0);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.app.chrome.dock(crate::editor::Pane::Io, true);
+    h.wait(0.3);
+    h
+}
+
+fn buffer(h: &mut Harness) -> String {
+    h.bv().projects.open.as_ref().unwrap().bufs["io.map"].text.clone()
+}
+
+#[test]
+fn an_engineer_assigns_from_the_devices_tab_saves_deploys_and_the_box_binds_it() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.press("pane devices");
+    h.wait(0.4);
+    h.right_click(h.rect("point rio_di_04").center());
+    h.press("menu assign channel");
+    h.wait(0.2);
+    assert!(
+        h.rect("assign port start").width() > 0.0,
+        "the unassigned bool input"
+    );
+    assert!(
+        h.app.chrome.rect("assign port lamp").is_none(),
+        "an output is not offered to an input channel"
+    );
+    h.press("assign port start");
+    h.wait(0.3);
+    let want = ASSIGN_MAP
+        .replace(
+            "in  rio_di_04 bool rio di:4  # the button",
+            "in  start bool rio di:4  # the button",
+        )
+        .replace("in  start bool box di:0\n", "");
+    assert_eq!(buffer(&mut h), want);
+    assert!(
+        h.bv().projects.dirty(),
+        "an unsaved edit: it goes to the box with Save"
+    );
+    assert_eq!(
+        b.json("/api/projects/line/files/io.map")["text"],
+        ASSIGN_MAP,
+        "the box still has the old map"
+    );
+    // Save: the box holds what the page showed.
+    h.bv().projects.save();
+    settle(&b, &jar, &mut h.bv().projects);
+    assert!(!h.bv().projects.dirty());
+    assert_eq!(b.json("/api/projects/line/files/io.map")["text"], want.as_str());
+    // Deploy: the box's signals say start is on the device.
+    h.bv().projects.deploy();
+    settle(&b, &jar, &mut h.bv().projects);
+    let deployed = h.bv().projects.deploy.clone();
+    assert!(matches!(deployed, Deploy::Done(_)), "{deployed:?}");
+    wait("start bound to rio on the box", || {
+        binding_of(&b, "start") == Some(("device".into(), "rio".into(), "di:4".into()))
+    });
+    assert_eq!(
+        binding_of(&b, "lamp").map(|(k, ..)| k).as_deref(),
+        Some("box"),
+        "the output stayed where it was"
+    );
+}
+
+#[test]
+fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.press("tab io");
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("io row start").is_some(),
+        "the live row of a program input"
+    );
+    assert!(
+        h.app.chrome.rect("io row horn").is_some(),
+        "a signal the program does not have is listed too"
+    );
+    // `horn` is no port of the program: no menu on it.
+    h.right_click(h.rect("io row horn").center());
+    assert!(h.app.chrome.rect("menu assign port").is_none());
+    // An output port, to the device's coil.
+    h.right_click(h.rect("io row lamp").center());
+    h.press("menu assign port");
+    h.wait(0.2);
+    assert!(
+        h.app.chrome.rect("assign channel rio di:4").is_none(),
+        "wrong direction"
+    );
+    h.press("assign channel rio coil:0");
+    h.wait(0.3);
+    let moved = ASSIGN_MAP
+        .replace(
+            "out rio_do_00 bool rio coil:0 safe=false",
+            "out lamp bool rio coil:0 safe=false",
+        )
+        .replace("out lamp  bool box do:0 safe=false\n", "");
+    assert_eq!(buffer(&mut h), moved);
+    // And an input.
+    h.right_click(h.rect("io row start").center());
+    h.press("menu assign port");
+    h.wait(0.2);
+    h.press("assign channel rio di:5");
+    h.wait(0.3);
+    let both = moved
+        .replace("in  rio_di_05 bool rio di:5", "in  start bool rio di:5")
+        .replace("in  start bool box di:0\n", "");
+    assert_eq!(buffer(&mut h), both);
+    h.bv().projects.save();
+    settle(&b, &jar, &mut h.bv().projects);
+    assert_eq!(b.json("/api/projects/line/files/io.map")["text"], both.as_str());
+    h.bv().projects.deploy();
+    settle(&b, &jar, &mut h.bv().projects);
+    let deployed = h.bv().projects.deploy.clone();
+    assert!(matches!(deployed, Deploy::Done(_)), "{deployed:?}");
+    wait("start and lamp bound to rio on the box", || {
+        binding_of(&b, "start") == Some(("device".into(), "rio".into(), "di:5".into()))
+            && binding_of(&b, "lamp") == Some(("device".into(), "rio".into(), "coil:0".into()))
+    });
+    // Back to simulated I/O: the lamp goes to the box's first free output.
+    h.right_click(h.rect("io row lamp").center());
+    assert!(h.app.chrome.rect("menu back to simulated").is_some());
+    h.press("menu back to simulated");
+    h.wait(0.3);
+    let back = buffer(&mut h);
+    assert!(
+        !back.contains("coil:0"),
+        "the line goes, as Remove takes it: {back}"
+    );
+    assert!(back.ends_with("out lamp bool box do:0 safe=false\n"), "{back}");
+    assert!(h.bv().projects.dirty());
+}
+
+#[test]
+fn the_diagram_of_a_box_offers_assign_on_a_port_block_with_its_code_edits_off() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.wait(0.3);
+    // The lamp's Write block on the diagram of the program running.
+    let at = {
+        let v = h.bv().view.as_ref().expect("the diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, helmsman_diagram::NodeKind::Write { path } if path.eq_ignore_ascii_case("lamp"))
+            })
+            .expect("the lamp's block");
+        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    };
+    h.right_click(at);
+    assert!(
+        h.app.chrome.rect("diagram menu assign").is_some(),
+        "offered on a box"
+    );
+    assert!(
+        h.app.chrome.rect("diagram menu rename").is_none()
+            && h.app.chrome.rect("diagram menu delete").is_none(),
+        "the code's own edits stay off on a box"
+    );
+    h.press("diagram menu assign");
+    h.wait(0.2);
+    h.press("assign channel rio coil:0");
+    h.wait(0.3);
+    assert!(buffer(&mut h).contains("out lamp bool rio coil:0 safe=false"));
+    assert!(h.bv().projects.dirty());
+}
+
+#[test]
+fn an_operator_sees_the_items_off_and_nothing_is_written() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut eng = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut eng.projects,
+        "line",
+        &[("main.st", SOURCE), ("io.map", ASSIGN_MAP)],
+    );
+    let jar2 = Jar::default();
+    let v = page(&b, &jar2, Some(("bob", BOB)));
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.wait(0.3);
+    h.press("pane devices");
+    h.wait(0.4);
+    h.right_click(h.rect("point rio_di_04").center());
+    assert!(
+        h.app.chrome.rect("menu assign channel").is_some(),
+        "shown, but off"
+    );
+    h.press("menu assign channel");
+    h.wait(0.2);
+    assert!(h.app.chrome.rect("assign form").is_none(), "nothing opens");
+    assert_eq!(buffer(&mut h), ASSIGN_MAP);
+    assert!(!h.bv().projects.dirty());
+    // The reason is the neighbouring items' own: why this person cannot write.
+    let why = h.bv().writable().unwrap_err();
+    assert!(why.contains("only an engineer"), "{why}");
+}
+
+/// A device added alone: its line and its profile, no signal on it.
+const FRESH_MAP: &str = "\
+device rio device:moxa-iologik-e1213 127.0.0.1
+in  start bool box di:0
+out lamp  bool box do:0 safe=false
+out horn  bool box do:1 safe=false
+";
+
+const E1213: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
+
+#[test]
+fn a_port_goes_to_a_channel_with_no_line_on_the_box_and_the_box_binds_it() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut v = drawn(&b, &jar);
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", SOURCE),
+            ("io.map", FRESH_MAP),
+            ("moxa-iologik-e1213.device", E1213),
+        ],
+    );
+    values(&b, &mut v, 0.0);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.app.chrome.dock(crate::editor::Pane::Io, true);
+    h.wait(0.3);
+    h.press("tab io");
+    h.wait(0.3);
+    // The I/O tab's row: the device has channels though the map has no line.
+    h.right_click(h.rect("io row start").center());
+    h.press("menu assign port");
+    h.wait(0.2);
+    assert!(
+        h.app.chrome.rect("assign channel rio ch:DI-04").is_some(),
+        "a channel with no line"
+    );
+    assert!(
+        h.app.chrome.rect("assign channel rio ch:DO-00").is_none(),
+        "wrong direction"
+    );
+    h.press("assign channel rio ch:DI-04");
+    h.wait(0.3);
+    let got = buffer(&mut h);
+    assert!(got.contains(" start bool rio ch:DI-04"), "{got}");
+    assert!(!got.contains("start bool box"), "{got}");
+    crate::assign::testing::loads_with(&got, E1213);
+    // The lamp, from the diagram's block.
+    let at = {
+        let v = h.bv().view.as_ref().expect("the diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, helmsman_diagram::NodeKind::Write { path } if path.eq_ignore_ascii_case("lamp"))
+            })
+            .expect("the lamp's block");
+        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    };
+    h.right_click(at);
+    h.press("diagram menu assign");
+    h.wait(0.2);
+    h.press("assign channel rio ch:DO-02");
+    h.wait(0.3);
+    let both = buffer(&mut h);
+    assert!(
+        both.contains(" lamp bool rio ch:DO-02") && both.contains("safe=false"),
+        "{both}"
+    );
+    assert!(!both.contains("out lamp  bool box"), "{both}");
+    crate::assign::testing::loads_with(&both, E1213);
+    // Save: the box holds what the page showed; deploy: its signals say so.
+    h.bv().projects.save();
+    settle(&b, &jar, &mut h.bv().projects);
+    assert_eq!(b.json("/api/projects/line/files/io.map")["text"], both.as_str());
+    h.bv().projects.deploy();
+    settle(&b, &jar, &mut h.bv().projects);
+    let deployed = h.bv().projects.deploy.clone();
+    assert!(
+        matches!(deployed, Deploy::Done(_)),
+        "{deployed:?} {:?}",
+        h.bv().projects.diags
+    );
+    wait("start and lamp bound to rio on the box", || {
+        binding_of(&b, "start") == Some(("device".into(), "rio".into(), "ch:DI-04".into()))
+            && binding_of(&b, "lamp") == Some(("device".into(), "rio".into(), "ch:DO-02".into()))
+    });
+}
+
 /// Nick, 2026-11-15: "a box also keeps layouts, so any browser that opens
 /// it offers them". An engineer keeps a layout of theirs on the box; an
 /// operator on another screen is offered it, exactly as it was (tabs,

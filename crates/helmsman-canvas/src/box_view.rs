@@ -112,6 +112,12 @@ pub struct BoxView {
     pub wants_sim: bool,
     /// The diagram's pick last frame (a new one sends the ST there).
     last_pick: Option<Pick>,
+    /// The diagram's menu: on a box it offers only what io.map can take
+    /// (`crate::assign`), as the code is changed in the editor.
+    pub dedit: crate::diagram_edit::EditUi,
+    /// The program's ports as last read, by the text they came from: the
+    /// diagram and the I/O tab ask every frame.
+    ports_memo: std::cell::RefCell<Option<(String, Vec<crate::device_form::Port>)>>,
     /// The scope (an instance prefix, `""` for the program) to open once
     /// the diagram is there: the Monitor's "Open diagram".
     pub open_at: Option<String>,
@@ -337,6 +343,8 @@ impl BoxView {
             generation: 0,
             wants_sim: false,
             last_pick: None,
+            dedit: crate::diagram_edit::EditUi::default(),
+            ports_memo: std::cell::RefCell::new(None),
             open_at: None,
             #[cfg(target_arch = "wasm32")]
             driver: crate::web::Driver::default(),
@@ -1219,6 +1227,12 @@ impl BoxView {
                 }
             }
         }
+        if self.devices_ui.assigning.is_some() {
+            self.assign_context();
+        }
+        if let Some(a) = self.devices_ui.assign_ui(&ui.ctx().clone(), chrome) {
+            self.assign_act(&a);
+        }
         match self.devices_ui.pick_ui(&ui.ctx().clone(), chrome) {
             Some(crate::wired::PickAct::Search(q)) => {
                 self.projects.find_wired(&q);
@@ -1399,6 +1413,93 @@ impl BoxView {
                 .new_file_with(helmsman_project::IO_MAP, &crate::device_form::apply_map("", w)),
         }
         Ok(())
+    }
+
+    /// The open project's program's inputs and outputs (none while its
+    /// files are not loaded).
+    fn program_ports(&self) -> Vec<crate::device_form::Port> {
+        let files = self.loaded_files();
+        let program = crate::device_form::program_file(files.iter().map(|(n, t)| (n.as_str(), t.as_str())))
+            .and_then(|f| files.iter().find(|(n, _)| *n == f).map(|(_, t)| t.clone()))
+            .unwrap_or_default();
+        let mut memo = self.ports_memo.borrow_mut();
+        if let Some((text, ports)) = memo.as_ref()
+            && *text == program
+        {
+            return ports.clone();
+        }
+        let ports = crate::device_form::ports_of(&program);
+        *memo = Some((program, ports.clone()));
+        ports
+    }
+
+    /// Why io.map cannot be written, when it cannot.
+    fn assign_write(&self) -> Result<(), String> {
+        if self.has_projects() {
+            self.writable()
+        } else {
+            Err("This box runs without projects: its map is a file on the box.".into())
+        }
+    }
+
+    /// What a menu on `port` asked for: the question of which channel, or
+    /// the port back on simulated I/O at once.
+    fn assign_ask(&mut self, port: String, ask: crate::assign_ui::PortAsk) {
+        match ask {
+            crate::assign_ui::PortAsk::Assign => {
+                self.devices_ui.assigning = Some(crate::assign_ui::Ask::Port(port));
+            }
+            crate::assign_ui::PortAsk::Back => self.assign_act(&crate::assign::AssignAct::Back { port }),
+        }
+    }
+
+    /// Writes an assignment (or its undoing) into the open project's
+    /// io.map buffer, as the form's Add does: it is then unsaved, and goes
+    /// to the box with Save or Deploy. Refused, with nothing changed and
+    /// the reason in a note, when it cannot be made.
+    fn assign_act(&mut self, a: &crate::assign::AssignAct) {
+        if let Err(why) = self.assign_write() {
+            self.projects.note(why, true);
+            return;
+        }
+        self.assign_context();
+        let ports = self.program_ports();
+        let Some(o) = &mut self.projects.open else {
+            self.projects.note("Open a project first.", true);
+            return;
+        };
+        let Some(b) = o.bufs.get_mut(helmsman_project::IO_MAP) else {
+            self.projects.note(
+                "This project has no io.map to assign in. Add a device in the Devices tab first.",
+                true,
+            );
+            return;
+        };
+        if !b.loaded {
+            self.projects.note("io.map is not loaded yet.", true);
+            return;
+        }
+        match a.run(&b.text, &ports, &|d| self.devices_ui.channels_of(d)) {
+            Ok(c) => {
+                b.text = c.text;
+                self.projects.note(c.summary, false);
+            }
+            Err(why) => self.projects.note(why, true),
+        }
+    }
+
+    /// The map and the program's ports, as the question about an
+    /// assignment reads them this frame.
+    fn assign_context(&mut self) {
+        self.devices_ui.map = helmsman_project::iomap::skim(&self.map_text().0);
+        self.devices_ui.program = self.program_ports();
+        let files = self.loaded_files();
+        self.devices_ui.set_profiles(
+            files
+                .iter()
+                .filter(|(n, _)| n.ends_with(helmsman_project::DEVICE_EXT))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
     }
 
     fn add_device_line(&mut self, line: &str) {
@@ -2196,7 +2297,7 @@ impl Body for BoxView {
         let program = crate::device_form::program_file(refs.iter().copied())
             .and_then(|f| files.iter().find(|(n, _)| *n == f).map(|(_, t)| t.clone()))
             .unwrap_or_default();
-        self.devices_ui.program = crate::device_form::ports_of(&program);
+        self.devices_ui.program = self.program_ports();
         self.devices_ui.can_declare = !program.is_empty();
         self.devices_ui.set_profiles(
             refs.iter()
@@ -2274,6 +2375,7 @@ impl Body for BoxView {
                 | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
+            Some(crate::devices::DeviceAct::Assign(a)) => self.assign_act(&a),
         }
         if let Some(wired) = wanted {
             self.projects.wired(&wired);
@@ -2416,6 +2518,7 @@ impl Body for BoxView {
             return;
         }
         let t = theme(ui);
+        self.assign_context();
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         // What is wired to each signal, from the map and the library.
         self.devices_ui.map = helmsman_project::iomap::skim(&self.map_text().0);
@@ -2423,6 +2526,11 @@ impl Body for BoxView {
             self.projects.wired(&w);
         }
         let wired = crate::wired::by_signal(&self.devices_ui.map);
+        // Which signals are the open project's program ports, where each
+        // is, and what a right-click on its row offers.
+        let menus = self.devices_ui.port_menus(&self.assign_write());
+        let map = self.devices_ui.map.clone();
+        let mut asks: Vec<(String, crate::assign_ui::PortAsk)> = Vec::new();
         let known = &self.devices_ui.wired;
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
             if let Some(v) = &mut self.view {
@@ -2467,10 +2575,23 @@ impl Body for BoxView {
                                             color,
                                             crate::glyph_lib::tip(glyph),
                                         );
-                                        let l = ui.label(RichText::new(text).monospace().color(color));
+                                        let is_port =
+                                            menus.iter().any(|m| m.port.eq_ignore_ascii_case(&s.name));
+                                        let l = ui.add(
+                                            egui::Label::new(RichText::new(text).monospace().color(color))
+                                                .sense(egui::Sense::click()),
+                                        );
+                                        let mut hover = if is_port {
+                                            crate::assign::place_of(&map, &s.name).describe()
+                                        } else {
+                                            tip.to_string()
+                                        };
                                         if let Some(e) = &s.point_error {
-                                            l.on_hover_text(e);
+                                            hover.push('\n');
+                                            hover.push_str(e);
                                         }
+                                        l.clone().tip(hover);
+                                        crate::assign_ui::row_menu(&l, chrome, &menus, &s.name, &mut asks);
                                     });
                                     if let Some(w) = wired.get(&s.name.to_ascii_lowercase()) {
                                         crate::wired::show_line(ui, chrome, &s.name, w, known.get(w), 0.0);
@@ -2483,11 +2604,15 @@ impl Body for BoxView {
                 ui.add_space(6.0);
             }
         });
+        for (port, ask) in asks {
+            self.assign_ask(port, ask);
+        }
     }
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         self.banner(ui, chrome);
+        self.assign_context();
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         let mut jump = None;
         let mut reads = Vec::new();
@@ -2499,9 +2624,11 @@ impl Body for BoxView {
             .and_then(|o| o.bufs.get(crate::icons::FILE))
             .filter(|b| b.loaded)
             .map(|b| b.text.clone());
+        let menus = self.devices_ui.port_menus(&self.assign_write());
         match &mut self.view {
             Some(v) if v.drawable() => {
                 v.icons.update(icons.as_deref());
+                v.assign = menus;
                 let outer = vec![
                     "This box".to_string(),
                     self.state.selected.clone().unwrap_or_default(),
@@ -2511,18 +2638,29 @@ impl Body for BoxView {
                 }
                 area = ui.available_rect_before_wrap();
                 v.canvas(ui, scan);
+                reads = v.reads_on_screen();
+                // The force buttons over the Read blocks take the right-click first.
+                v.secondary_on_controls(ui, &reads);
+                if let Some(g) = v.gesture.take() {
+                    self.dedit.open(v, g);
+                }
+                // Edits to the code are off on a box: what the menu holds is
+                // what io.map can take, so no edit comes back.
+                let _ = self.dedit.show(ui.ctx(), chrome, area, v);
                 if v.pick != self.last_pick {
                     self.last_pick = v.pick;
                     if let Some((line, _)) = v.picked() {
                         jump = Some((projects::file_line(&v.src, line), line));
                     }
                 }
-                reads = v.reads_on_screen();
             }
             _ => {
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| ui.label(RichText::new(self.waiting()).color(t.muted)));
             }
+        }
+        if let Some((port, ask)) = self.dedit.take_assign() {
+            self.assign_ask(port, ask);
         }
         if let Some((at, line)) = jump {
             match at {

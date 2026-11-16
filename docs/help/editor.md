@@ -217,7 +217,17 @@ redrawn.
   scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
   **I/O**: every input and output with its value and a control for each
-  input the diagram does not show. **History**: every saved version of
+  input the diagram does not show. Hover a row to see where its point is,
+  on a device or still simulated; right-click it, or the input's or
+  output's block in the diagram, for **Assign to device I/O…**, which lists
+  the channels of the project's devices with the same direction and type,
+  those already added and those still under + Add I/O, and ties the point
+  to the one you pick (its line in io.map takes the program's name).
+  **Back to simulated I/O** takes the line out again, as Remove does. In
+  the Devices tab a point already added offers **Assign to program input…**
+  or **output…**; a channel not added yet goes to a variable with the
+  picker's For. The change is in io.map; on a box it goes with Save or
+  Deploy. **History**: every saved version of
   the open project, newest at the top.
   A double click on any tab hides its pane. The tabs are glyphs; hover one for its name. A hidden pane keeps
   its tabs down the strip at the edge, and a click on one opens the pane
