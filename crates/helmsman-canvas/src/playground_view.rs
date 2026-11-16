@@ -3299,7 +3299,8 @@ impl PlaygroundView {
                 .as_ref()
                 .and_then(|v| v.because.clone())
                 .unwrap_or_default();
-            let (cols, col) = columns(ui);
+            // One card to a row, at the pane's width.
+            let (cols, col) = (1, ui.available_width());
             let grid = egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
                 for pair in outputs.chunks(cols) {
                     for p in pair {
@@ -4886,6 +4887,7 @@ fn output_ui(
         t.fg
     };
     let row = crate::output_cards::Row {
+        key: &p.name,
         text,
         color,
         glyph: crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool),

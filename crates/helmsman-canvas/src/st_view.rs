@@ -1785,6 +1785,7 @@ impl Viewer {
                 t.fg
             };
             let row = crate::output_cards::Row {
+                key: path,
                 text: format!(
                     "{} {} = {}",
                     if on { "●" } else { "○" },
@@ -3495,12 +3496,15 @@ END_PROGRAM
     fn the_cards_are_the_outputs_with_the_signals_that_set_them() {
         let h = Harness::new();
         let cards = h.sv.view.output_cards();
-        let got: Vec<(&str, Vec<&str>, bool)> = cards
+        let got: Vec<(&str, Vec<String>, bool)> = cards
             .iter()
             .map(|c| {
                 (
                     c.name.as_str(),
-                    c.signals.iter().map(String::as_str).collect(),
+                    c.signals
+                        .iter()
+                        .map(|s| format!("{:?}:{}", s.kind, s.name))
+                        .collect(),
                     c.driven,
                 )
             })
@@ -3508,8 +3512,12 @@ END_PROGRAM
         assert_eq!(
             got,
             [
-                ("MOTOR", vec!["START", "STOP"], true),
-                ("LAMP", vec!["OTHER"], true),
+                (
+                    "MOTOR",
+                    vec!["Input:START".into(), "Input:STOP".into(), "Kept:MOTOR".into()],
+                    true
+                ),
+                ("LAMP", vec!["Input:OTHER".into()], true),
             ],
             "COUNT and the inputs are no outputs"
         );

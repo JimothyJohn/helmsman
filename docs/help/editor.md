@@ -218,8 +218,10 @@ redrawn.
   opens the pane on it, or shuts the pane when that tab already shows.
   **I/O**: every input and output with its value and a control for each
   input the diagram does not show. Each output is a card: its name and
-  value, and under them "driven by" and the signals it finally depends on,
-  through every statement that sets it. An output nothing sets says so.
+  value, and under them what it finally depends on, through every
+  statement that sets it: the signals read from outside (driven by), the
+  values the program keeps from one scan to the next (kept) and the
+  timers and counters it reads. An output nothing sets says so.
   Tap a card and the diagram goes to that output's write with the path
   that sets it lit, framed with room around it and no closer than you
   were; a write inside a closed fold lights the fold and leaves it

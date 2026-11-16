@@ -5,11 +5,11 @@ mod common;
 use std::fmt::Write as _;
 
 use common::{build, prog};
-use helmsman_diagram::signals;
+use helmsman_diagram::{Source, SourceKind, signals};
 
 fn of(vars: &str, body: &str, out: &str) -> Vec<String> {
     let (_, m) = build(&prog(vars, body));
-    signals(&m, 0, out)
+    names(&signals(&m, 0, out))
 }
 
 #[test]
@@ -34,7 +34,7 @@ fn constants_and_literals_are_not_signals() {
     let (_, m) = build(
         "PROGRAM t\nVAR CONSTANT k : INT := 3; END_VAR\nVAR n : INT; y : BOOL; END_VAR\ny := n > k;\nEND_PROGRAM\n",
     );
-    assert_eq!(signals(&m, 0, "y"), ["N"]);
+    assert_eq!(names(&signals(&m, 0, "y")), ["N"]);
 }
 
 #[test]
@@ -48,9 +48,9 @@ fn an_intermediate_variable_is_followed_to_its_inputs() {
 }
 
 #[test]
-fn an_intermediate_set_in_a_later_statement_still_counts() {
+fn an_intermediate_read_ahead_of_its_assignment_is_kept_state_and_followed() {
     let got = of("a, b : BOOL; mid, y : BOOL;", "y := mid;\nmid := a AND b;", "y");
-    assert_eq!(got, ["A", "B"]);
+    assert_eq!(got, ["A", "B", "kept:MID"]);
 }
 
 #[test]
@@ -83,19 +83,19 @@ fn a_case_selector_is_a_signal() {
 }
 
 #[test]
-fn a_latch_does_not_list_itself() {
+fn a_latch_is_kept_state_of_its_own() {
     let got = of(
         "start, stop : BOOL; run : BOOL;",
         "run := (start OR run) AND NOT stop;",
         "run",
     );
-    assert_eq!(got, ["START", "STOP"]);
+    assert_eq!(got, ["START", "STOP", "kept:RUN"]);
 }
 
 #[test]
 fn two_outputs_that_read_each_other_end() {
     let got = of("a : BOOL; p, q : BOOL;", "p := a OR q;\nq := p;", "p");
-    assert_eq!(got, ["A"]);
+    assert_eq!(got, ["A", "kept:Q"]);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn a_function_block_output_brings_the_blocks_arguments() {
         "t(IN := go AND hold, PT := T#1s);\ny := t.Q;",
         "y",
     );
-    assert_eq!(got, ["GO", "HOLD"]);
+    assert_eq!(got, ["GO", "HOLD", "block:T"]);
 }
 
 #[test]
@@ -160,6 +160,45 @@ fn two_hundred_outputs_each_get_their_own_answer() {
     let (_, m) = build(&prog(&vars, &body));
     for k in 0..200 {
         let want = if k % 2 == 0 { "A" } else { "B" };
-        assert_eq!(signals(&m, 0, &format!("y{k}")), [want]);
+        assert_eq!(names(&signals(&m, 0, &format!("y{k}"))), [want]);
     }
+}
+
+fn names(s: &[Source]) -> Vec<String> {
+    s.iter()
+        .map(|s| match s.kind {
+            SourceKind::Input => s.name.clone(),
+            SourceKind::Kept => format!("kept:{}", s.name),
+            SourceKind::Block => format!("block:{}", s.name),
+        })
+        .collect()
+}
+
+/// The traffic light's shape: a step counter the program keeps, stepped by
+/// a timer, and lamps that read it. What tells the lamps apart is the
+/// counter and the timer, and behind them the one input.
+#[test]
+fn a_step_counter_and_its_timer_are_sources_and_the_walk_goes_through_them_to_the_input() {
+    let got = of(
+        "run : BOOL; phase : INT; t : TON; green : BOOL;",
+        "t(IN := run AND NOT t.Q, PT := T#3s);\nIF t.Q THEN phase := (phase + 1) MOD 3; END_IF;\ngreen := run AND phase = 0;",
+        "green",
+    );
+    assert_eq!(got, ["RUN", "kept:PHASE", "block:T"]);
+}
+
+#[test]
+fn a_block_names_its_type_and_the_other_sources_name_none() {
+    let (_, m) = build(&prog(
+        "go : BOOL; t : TON; y : BOOL;",
+        "t(IN := go, PT := T#1s);\ny := t.Q;",
+    ));
+    let got = signals(&m, 0, "y");
+    let t = got.iter().find(|s| s.kind == SourceKind::Block).unwrap();
+    assert_eq!((t.name.as_str(), t.fb.as_str()), ("T", "TON"));
+    assert!(
+        got.iter()
+            .filter(|s| s.kind != SourceKind::Block)
+            .all(|s| s.fb.is_empty())
+    );
 }

@@ -61,6 +61,10 @@ fn fifty_outputs_with_long_names_keep_the_panel_at_its_default_width() {
         "the cards {outs:?} stay in the {RIGHT_W} pt panel"
     );
     assert!(h.drew("driven by"), "a card says what drives it");
+    assert!(
+        outs.width() > RIGHT_W * 0.8,
+        "one card to a row, at the pane's width: {outs:?}"
+    );
 }
 
 #[test]

@@ -60,7 +60,7 @@ pub mod model;
 pub mod phrase;
 pub mod text;
 
-pub use explain::{Because, Drivers, Why, drivers, explain, signals};
+pub use explain::{Because, Drivers, Source, SourceKind, Why, drivers, explain, signals};
 pub use live::{Gate, Live, Scan, annotate};
 pub use lower::{LowerError, Module, Pou, StmtPos, lower, lower_table};
 pub use model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Span, Stmt, Wire};
