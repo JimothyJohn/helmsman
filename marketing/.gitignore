@@ -1,3 +1,14 @@
 # Renders are rebuilt by <project>/render.sh; HyperFrames keeps its history and snapshots in .hyperframes.
 /*.mp4
 .hyperframes/
+# Each cut-*/ is written by helmsman-device/build.py; the footage is made by footage/shots.py.
+helmsman-device/cut-*/
+helmsman-device/footage/outputs/
+helmsman-device/footage/prompts/
+helmsman-device/footage/MEDIA-INDEX.md
+__pycache__/
+# Built from helmsman-device/footage/clips/ by footage/shots.py install.
+helmsman-device/assets/footage/
+helmsman-device/assets/real/
+# 2K takes, 77 MB: kept beside the repo, see helmsman-device/README.md.
+helmsman-device/footage/finals/
