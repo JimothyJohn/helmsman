@@ -758,10 +758,16 @@ mod in_the_page {
         );
         let o = v.instruct.outcome.clone().unwrap();
         assert_eq!(o.kind, Kind::Applied, "{o:?}");
-        assert!(o.status.ends_with("2 checks did not pass."), "the test and the scenario: {o:?}");
+        assert!(
+            o.status.ends_with("2 checks did not pass."),
+            "the test and the scenario: {o:?}"
+        );
         assert!(o.problems.join(" ").contains("test_lamp is red"), "{o:?}");
         assert!(v.proj.files["main.st"].contains("lamp := NOT start;"));
-        assert_eq!(v.proj.files["test_lamp.st"], FOLLOWS, "the test is kept as it was");
+        assert_eq!(
+            v.proj.files["test_lamp.st"], FOLLOWS,
+            "the test is kept as it was"
+        );
         assert_eq!(v.proj.revisions().len(), revs + 1);
         assert_eq!(v.tests.red().len(), 1, "and it shows red: {:?}", v.tests);
     }

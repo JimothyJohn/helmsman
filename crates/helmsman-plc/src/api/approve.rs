@@ -224,6 +224,15 @@ fn err(why: &str) -> Json {
     json!({ "error": why, "changed": false })
 }
 
+/// What [`prelude`] found.
+struct Start<'c> {
+    appr: &'c Approval,
+    target: ChangeSet,
+    proposal: Option<Stored>,
+    /// A project's red requirement tests, one line each: a warning.
+    red: Vec<String>,
+}
+
 /// What every apply, rollback and replay starts with: the target exists
 /// (404), the box has an approval path (501), and the target has a change
 /// set (409). The approval path, the target change set, the proposal it
@@ -234,7 +243,7 @@ fn prelude<'c>(
     ctx: &'c Ctx,
     target_ref: Target<'_>,
     label: &str,
-) -> Result<(&'c Approval, ChangeSet, Option<Stored>, Vec<String>), Response> {
+) -> Result<Start<'c>, Response> {
     let mut red = Vec::new();
     let (cs, proposal) = match target_ref {
         Target::Proposal(id) => {
@@ -313,7 +322,12 @@ fn prelude<'c>(
             note,
         ));
     };
-    Ok((appr, cs, proposal, red))
+    Ok(Start {
+        appr,
+        target: cs,
+        proposal,
+        red,
+    })
 }
 
 fn what(target_ref: Target<'_>) -> String {
@@ -330,8 +344,8 @@ fn what(target_ref: Target<'_>) -> String {
 #[allow(clippy::too_many_lines)]
 pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Response {
     let label = format!("replay of {}", what(target_ref));
-    let (appr, target, _, _) = match prelude(req, ctx, target_ref, &label) {
-        Ok(x) => x,
+    let (appr, target) = match prelude(req, ctx, target_ref, &label) {
+        Ok(s) => (s.appr, s.target),
         Err(r) => return r,
     };
     let content = target.id();
@@ -576,8 +590,13 @@ fn meta(target: Target<'_>, p: Option<&Stored>, by: &Approver) -> Meta {
 #[allow(clippy::too_many_lines)]
 pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Response {
     let label = what(target_ref);
-    let (appr, target, proposal, red) = match prelude(req, ctx, target_ref, &label) {
-        Ok(x) => x,
+    let Start {
+        appr,
+        target,
+        proposal,
+        red,
+    } = match prelude(req, ctx, target_ref, &label) {
+        Ok(s) => s,
         Err(r) => return r,
     };
     let content = target.id();

@@ -674,7 +674,10 @@ impl PlaygroundView {
                 carried.describe()
             );
             self.running_notice = Some(note.clone());
-            self.notice = Some(red.as_ref().map_or_else(|| note.clone(), |why| format!("{note} {why}")));
+            self.notice = Some(
+                red.as_ref()
+                    .map_or_else(|| note.clone(), |why| format!("{note} {why}")),
+            );
             self.log.info(
                 self.session.now_ms as f64 / 1000.0,
                 format!("Deployed {}: running in this page{program}.", self.proj.open),

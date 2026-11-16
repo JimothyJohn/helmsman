@@ -389,7 +389,10 @@ fn an_answer_still_red_after_its_retries_is_written_and_the_tab_says_what_did_no
     assert!(o.problems.iter().any(|p| p.contains("lamp off failed")), "{o:?}");
     assert!(o.undo.is_some(), "Undo is offered");
     assert_eq!(v.proj.files.get("main.st"), Some(&commented()));
-    assert!(!v.proj.files.contains_key("test_lamp_off.st"), "a failed scenario is no test");
+    assert!(
+        !v.proj.files.contains_key("test_lamp_off.st"),
+        "a failed scenario is no test"
+    );
     assert_eq!(
         v.proj.files.len(),
         before.len(),

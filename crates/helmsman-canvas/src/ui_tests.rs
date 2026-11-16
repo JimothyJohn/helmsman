@@ -3439,7 +3439,9 @@ mod chrome {
             "{notice}"
         );
         assert!(
-            sim.log.iter().any(|m| m.text.starts_with("Deployed mine with a test red.")),
+            sim.log
+                .iter()
+                .any(|m| m.text.starts_with("Deployed mine with a test red.")),
             "said in Messages too"
         );
         // A block answer into this project: taken too, the test named.
@@ -3453,7 +3455,9 @@ mod chrome {
         assert_eq!(sim.proj.files.len(), before + 1, "{:?}", sim.proj.files.keys());
         let notice = sim.notice.clone().unwrap_or_default();
         assert!(
-            notice.contains("opened from the Agent's answer") && notice.contains("test_lamp") && notice.ends_with("is red."),
+            notice.contains("opened from the Agent's answer")
+                && notice.contains("test_lamp")
+                && notice.ends_with("is red."),
             "{notice}"
         );
         // Fixed: green, Deploy goes through.

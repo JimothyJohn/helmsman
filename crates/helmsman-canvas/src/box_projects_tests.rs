@@ -1058,7 +1058,9 @@ fn requirement_tests_show_on_the_box_and_a_red_one_is_named_by_the_deploy_it_doe
         panic!("a red test refused the deploy: {:?}", p.deploy);
     };
     assert!(
-        what.contains("line is running") && what.contains("Requirement test test_lamp") && what.contains("is red"),
+        what.contains("line is running")
+            && what.contains("Requirement test test_lamp")
+            && what.contains("is red"),
         "{what}"
     );
     assert_eq!(p.running.as_deref(), Some("line"));

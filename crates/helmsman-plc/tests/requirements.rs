@@ -786,7 +786,13 @@ fn a_failing_test_is_written_reported_failed_and_red() {
     let s = b.alice();
     let r = send(b.addr, "POST", "/api/projects/line/deploy", &[bearer(&s)], "{}");
     assert!(!r.body.contains("not deployed"), "{r:?}");
-    assert!(!r.json()["error"].as_str().unwrap_or("").contains("requirement test"), "{r:?}");
+    assert!(
+        !r.json()["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("requirement test"),
+        "{r:?}"
+    );
 }
 
 #[test]

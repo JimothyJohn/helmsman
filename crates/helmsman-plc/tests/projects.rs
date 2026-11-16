@@ -2463,9 +2463,9 @@ fn requirement_tests_run_on_the_box_and_a_red_one_is_named_by_the_deploy_it_does
         "the red run is audited: {detail:?}"
     );
     assert!(
-        detail
-            .iter()
-            .any(|d| d.contains("applied") && d.contains("deployed with 1 requirement test(s) red: test_lamp")),
+        detail.iter().any(
+            |d| d.contains("applied") && d.contains("deployed with 1 requirement test(s) red: test_lamp")
+        ),
         "the deploy with a red test is audited: {detail:?}"
     );
 }
