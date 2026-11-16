@@ -953,6 +953,39 @@ through `PUT .../files/{f}` with `page`, and Undo is the box's restore.
 A proposal the box's agent stores instead is offered for review and
 nothing is written.
 
+On the free chat the page asks for less and uses the wait (`agent-edits-not-files`,
+`agent-wait-questions`, 2026-11-15). The relay's status says what a turn's
+body may carry beside its messages (`claude::Takes`: `"thinking"`,
+`"agents"`), and the page sends nothing a relay did not list, so an older
+relay is asked as before.
+
+- **The lines that change.** Where the relay serves the `edits` agent, the
+  `<edit_scope>` asks for ```` ```st edit ```` blocks (the lines as they
+  are, a line of `=======`, the lines as they are to be) and
+  `edits::expand` puts them into the file before anything else looks: every
+  check above runs on the whole file it makes, so the rules are the same
+  either way. A block applies only where its lines stand in the file
+  exactly once (white space at a line's end aside, then indentation
+  aside); otherwise the answer is refused in words the Agent can act on. A
+  long file is then no reason to plan in steps (`steps::big_ask`). An
+  agent that sends a whole file is still taken.
+- **One question.** With the instruction, the relay's `ask` agent gets the
+  instruction and the program on a second link (`claude::Side`) and
+  answers in about a second with at most one question and two or three
+  answers, or nothing (`ask::parse`). It shows as a card under the
+  instruction box. A click before the Agent has written anything sends
+  the instruction again with the answer in it (`Instruct::resend`). A
+  later click waits: once the change has passed its checks it is held
+  while the relay's `check` agent says whether it does what was picked
+  (`ask::verdict`), for at most `ask::CHECK_PATIENCE` seconds. A change
+  that differs goes back to the Agent once, as a failed check does
+  (`Instruct::amend`); if that correction never passes, the change that
+  did is written. The question and the answer go on the change's History
+  page; they make no test of their own. Not on a box yet.
+
+Asking without extended thinking was measured and left out: the agent
+ladder's `HELMSMAN_LADDER_QUICK=all` says why (`agent_ladder_tests.rs`).
+
 ## Simulated plant (`helmsman-sim`, built in the page)
 
 A project's `plant.sim` (`helmsman_project::PLANT`, never built or

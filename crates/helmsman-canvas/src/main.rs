@@ -30,6 +30,9 @@ mod app;
 mod arrange;
 #[cfg(test)]
 mod arrange_tests;
+mod ask;
+#[cfg(test)]
+mod ask_tests;
 mod assign;
 mod assign_ui;
 mod box_agent;
@@ -65,6 +68,9 @@ mod devices;
 mod diagram_edit;
 mod diff_ui;
 mod editor;
+mod edits;
+#[cfg(test)]
+mod edits_tests;
 mod find;
 mod front;
 #[cfg(test)]

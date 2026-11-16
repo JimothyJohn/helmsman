@@ -4563,6 +4563,120 @@ mod simulated {
         grew(&h, "answered");
     }
 
+    /// The question card (`crate::ask`): the longest question and answers
+    /// a card can hold wrap inside the Agent tab at the right panel's
+    /// default width, unanswered and in every state after a click, and a
+    /// click on an answer is taken once.
+    #[test]
+    fn the_question_card_wraps_inside_the_panel_and_takes_one_click() {
+        use crate::ask::{Card, MAX_ANSWER, MAX_QUESTION, Question, State};
+        let mut h = Harness::new(App::sim());
+        // Docked right: the Agent at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        h.wait(0.3);
+        let right = h.rect("right");
+        h.press("tab claude");
+        h.wait(0.3);
+        assert!(!h.has("agent card"), "no question: no card");
+        let grew = |h: &Harness, what: &str| {
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&r), "{what}: the right panel grew {r} pt");
+            // The card and everything on it stay inside the panel's
+            // default width (236 pt) and on the screen.
+            let card = h.rect("agent card");
+            assert!(
+                card.width() <= 236.0,
+                "{what}: the card is {} pt wide",
+                card.width()
+            );
+            assert!(
+                card.bottom() <= 860.0,
+                "{what}: the card ends at {} pt, off the screen",
+                card.bottom()
+            );
+            for key in [
+                "agent question",
+                "agent answer 0",
+                "agent answer 1",
+                "agent answered",
+                "agent answer status",
+            ] {
+                if h.has(key) {
+                    let r = h.rect(key);
+                    assert!(
+                        r.left() >= card.left() && r.right() <= card.right(),
+                        "{what}: {key} {r:?} is inside the card {card:?}"
+                    );
+                }
+            }
+        };
+        let long = |n: usize| {
+            "does the motor stay off "
+                .repeat(n)
+                .chars()
+                .take(n)
+                .collect::<String>()
+        };
+        // An instruction is under way: a question goes with one.
+        let open = h.app.sim.as_ref().unwrap().proj.open.clone();
+        h.app.sim.as_mut().unwrap().instruct.run = Some(crate::instruct::Run {
+            instruction: "Add an emergency stop.".into(),
+            project: open,
+            scope: crate::scope::Scope::File("main.st".into()),
+            earlier: Vec::new(),
+            asked: String::new(),
+            retries: 0,
+            asked_scenarios: false,
+            mode: crate::instruct::Mode::Direct,
+            attempts: Vec::new(),
+            spec: false,
+        });
+        h.app.sim.as_mut().unwrap().card = Some(Card {
+            question: Some(Question {
+                text: long(MAX_QUESTION),
+                // One answer with no space in it: it cannot wrap at a word.
+                answers: vec![long(MAX_ANSWER), "W".repeat(MAX_ANSWER), "Short".into()],
+            }),
+            picked: None,
+            state: State::Open,
+        });
+        h.wait(0.3);
+        for key in [
+            "agent question",
+            "agent answer 0",
+            "agent answer 1",
+            "agent answer 2",
+        ] {
+            assert!(h.has(key), "{key}");
+        }
+        assert!(!h.has("agent answered"));
+        grew(&h, "unanswered");
+        h.press("agent answer 0");
+        h.wait(0.3);
+        let card = h.app.sim.as_ref().unwrap().card.clone().unwrap();
+        assert_eq!(card.picked, Some(0));
+        assert!(h.has("agent answered") && h.has("agent answer status"));
+        assert!(!h.has("agent answer 0"), "answered: the buttons are gone");
+        grew(&h, "answered");
+        for state in [
+            State::Sent,
+            State::Waiting,
+            State::Checking,
+            State::Covered,
+            State::Amending,
+            State::Kept,
+            State::Unchecked,
+        ] {
+            let sim = h.app.sim.as_mut().unwrap();
+            let card = sim.card.as_mut().unwrap();
+            card.picked = Some(0);
+            card.state = state.clone();
+            h.wait(0.3);
+            assert!(h.has("agent answer status"), "{state:?}");
+            grew(&h, &format!("{state:?}"));
+        }
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());

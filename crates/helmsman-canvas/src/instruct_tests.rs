@@ -871,3 +871,57 @@ fn the_estimate_is_a_range_that_grows_with_the_file_and_the_clock_says_when_it_i
     assert_eq!(clock(41, Some((5, 30))), "41 s · longer than the usual 30 s");
     assert_eq!(clock(3, None), "3 s");
 }
+
+/// The free chat is sent only what its status said it takes: an older
+/// relay refuses a body with any field but the messages.
+#[test]
+fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
+    use crate::claude::{Free, NoStore, Takes, Turn};
+    let turn = Turn {
+        agent: Some("edits"),
+        quick: true,
+    };
+    let body_with = |status: &str| {
+        let mut chat = crate::claude::Chat::new(Box::new(NoStore));
+        chat.receive(Incoming::Proxy(false));
+        chat.set_free_base("https://relay.example");
+        chat.receive(Incoming::Takes(Takes::from_status(status)));
+        chat.receive(Incoming::Free(Free::Open));
+        let (_, req) = chat.send_turn("q", &[], turn).unwrap();
+        serde_json::from_str::<serde_json::Value>(&req.body).unwrap()
+    };
+    let msgs = json!([{"role": "user", "content": "q"}]);
+    // An older relay, and anything that is not the list it should be.
+    for old in [
+        r#"{"open": true}"#,
+        r#"{"open": true, "thinking": "off", "agents": "edits"}"#,
+        r#"{"open": true, "thinking": ["on"], "agents": ["other", 7, null]}"#,
+        "not json",
+        "",
+    ] {
+        assert_eq!(body_with(old), json!({"messages": msgs}), "{old}");
+    }
+    assert_eq!(
+        body_with(r#"{"open": true, "thinking": ["off"]}"#),
+        json!({"messages": msgs, "thinking": "off"})
+    );
+    assert_eq!(
+        body_with(r#"{"open": true, "agents": ["ask", "edits"]}"#),
+        json!({"messages": msgs, "agent": "edits"})
+    );
+    assert_eq!(
+        body_with(r#"{"open": true, "thinking": ["off"], "agents": ["edits"]}"#),
+        json!({"messages": msgs, "agent": "edits", "thinking": "off"})
+    );
+    // A key or the proxy answers every turn the same way: nothing added.
+    let direct = crate::claude::request_turn(
+        &crate::claude::Route::Proxy,
+        crate::claude::Model::default(),
+        &[],
+        "q",
+        turn,
+    );
+    let body: serde_json::Value = serde_json::from_str(&direct.body).unwrap();
+    assert_eq!(body.get("agent"), None);
+    assert_eq!(body.get("thinking"), None);
+}
