@@ -132,6 +132,36 @@ in it, even for a few selected lines or a block. Nothing may be left
 out: an answer that skips part of the file, or writes "rest unchanged"
 where code should be, is sent back.
 
+## From a spec
+
+To start a project from a written scope of work or product documentation,
+open the **Agent** tab with a built-in example open and press
+**From a spec…**. A window opens with a box to paste into and
+**Add file…** for `.md` and `.txt` files (up to eight). The window lists
+each file with its size and a × to take it out, and shows the total
+against the most one request takes (120 KiB), because the Agent's answer
+and a second try travel in the same request. A file that is empty, is not
+UTF-8 text, or holds control characters is refused with the reason and
+nothing of it is changed. Press **Build**.
+
+The Agent reads the specification, finds the inputs and outputs, names
+them, writes the program and one check for each requirement it can test.
+Each check runs against the program on a copy, with the same second tries
+as any instruction. What it comes back with is a draft on a review screen:
+the project's name, one row for each input and output (its type and what
+it is, from the comment on its declaration), one row for each requirement
+with **passed** or **did not pass**, then the requirements the
+specification states that have no check yet, the Agent's reason and
+anything that did not pass. Nothing is made until **Accept**; **Discard**
+drops the draft.
+
+Accept makes the project as one version in History, called "From a spec"
+and the names of the documents. It holds `main.st`, a test for each check
+that passed, an empty test for each requirement with no check (shown as
+untested, never red), an `io.map` that puts every input and output on
+simulated I/O, and `spec.md`, your documents under a heading each. A check
+that did not pass is not kept. Deploy runs it as for any project.
+
 ## In the simulation
 
 In the playground the Agent is free to try during the early release, with
