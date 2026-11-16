@@ -563,3 +563,39 @@ fn folds_survive_a_reload_as_tweaks_and_a_save_as_the_shared_default() {
     assert!(third.tweaked());
     assert!(c.folded().contains(&"MOTOR".to_string()));
 }
+
+/// A card's tap with the output's write inside a closed fold lights the
+/// fold that stands for it and leaves it closed (the diagram stays as the
+/// reader arranged it).
+#[test]
+fn a_card_whose_write_is_inside_a_closed_fold_lights_the_fold_and_keeps_it_closed() {
+    let mut h = Harness::with_section();
+    let folds = |h: &Harness| {
+        h.view
+            .shown()
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Fold { .. }))
+            .count()
+    };
+    let before = folds(&h);
+    assert!(before > 0, "the section is drawn as one block");
+    h.view.show_output("lamp");
+    for _ in 0..60 {
+        h.frame(vec![]);
+    }
+    assert_eq!(folds(&h), before, "no fold opened");
+    let on = h.view.highlighted().cloned().expect("the path is lit");
+    let seen = h.view.view().expect("a fold is closed").drivers(&on);
+    let fold_lit = h
+        .view
+        .shown()
+        .nodes
+        .iter()
+        .any(|n| matches!(n.kind, NodeKind::Fold { .. }) && seen.node(n.id));
+    assert!(fold_lit, "the fold that holds the write is lit");
+    let bounds = h.view.lit_bounds(&seen).expect("something to frame");
+    let cam = h.view.cams[0];
+    let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+    assert!(screen.contains_rect(cam.rect(&bounds)), "{:?}", cam.rect(&bounds));
+}

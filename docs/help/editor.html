@@ -283,22 +283,28 @@ width, or, off, keeps each line on one row with a scroll bar under the
 code; the choice is kept with the layout. The key for a tab opens the
 pane on it, or shuts the pane when that tab already shows.
 <strong>I/O</strong>: every input and output with its value and a
-control for each input the diagram does not show. Hover a row to see
-where its point is, on a device or still simulated; right-click it, or
-the input's or output's block in the diagram, for <strong>Assign to
-device I/O…</strong>, which lists the channels of the project's devices
-with the same direction and type, those already added and those still
-under + Add I/O, and ties the point to the one you pick (its line in
-io.map takes the program's name). <strong>Back to simulated I/O</strong>
-takes the line out again, as Remove does. In the Devices tab a point
-already added offers <strong>Assign to program input…</strong> or
-<strong>output…</strong>; a channel not added yet goes to a variable
-with the picker's For. The change is in io.map; on a box it goes with
-Save or Deploy. <strong>History</strong>: every saved version of the
-open project, newest at the top. A double click on any tab hides its
-pane. The tabs are glyphs; hover one for its name. A hidden pane keeps
-its tabs down the strip at the edge, and a click on one opens the pane
-on that tab.</li>
+control for each input the diagram does not show. Each output is a card:
+its name and value, and under them "driven by" and the signals it
+finally depends on, through every statement that sets it. An output
+nothing sets says so. Tap a card and the diagram goes to that output's
+write with the path that sets it lit, framed with room around it and no
+closer than you were; a write inside a closed fold lights the fold and
+leaves it closed. Hover a row to see where its point is, on a device or
+still simulated; right-click it, or the input's or output's block in the
+diagram, for <strong>Assign to device I/O…</strong>, which lists the
+channels of the project's devices with the same direction and type,
+those already added and those still under + Add I/O, and ties the point
+to the one you pick (its line in io.map takes the program's name).
+<strong>Back to simulated I/O</strong> takes the line out again, as
+Remove does. In the Devices tab a point already added offers
+<strong>Assign to program input…</strong> or <strong>output…</strong>; a
+channel not added yet goes to a variable with the picker's For. The
+change is in io.map; on a box it goes with Save or Deploy.
+<strong>History</strong>: every saved version of the open project,
+newest at the top. A double click on any tab hides its pane. The tabs
+are glyphs; hover one for its name. A hidden pane keeps its tabs down
+the strip at the edge, and a click on one opens the pane on that
+tab.</li>
 <li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd>
 <kbd>2</kbd>): the <strong>Trend</strong> of the signals you pin, with a
 long time axis, and <strong>Messages</strong>: what needs saying now,
