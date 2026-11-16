@@ -1363,6 +1363,13 @@ impl Chat {
         Ok((self.seq, req))
     }
 
+    /// Whether a turn that names `agent` is answered by it: the route is
+    /// the free chat and its status lists the agent.
+    #[must_use]
+    pub fn serves(&self, agent: &str) -> bool {
+        matches!(self.route(), Ok(Route::Free(_))) && self.takes.agents.iter().any(|a| a == agent)
+    }
+
     /// The current answer's number: a new question or a retry moves it.
     #[must_use]
     pub const fn seq(&self) -> u64 {

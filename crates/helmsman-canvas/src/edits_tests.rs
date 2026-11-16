@@ -334,3 +334,39 @@ fn text_inside_a_block_is_never_read_as_markup_or_instructions() {
         "{got}"
     );
 }
+
+/// A retry asks an agent that answered with edit blocks for edit blocks
+/// again, and one that sent the whole file for the whole file.
+#[test]
+fn a_retry_asks_again_in_the_form_the_answer_came_in() {
+    use crate::edits::{has_edits, retry_words};
+    use crate::verify::{Check, Next, next};
+    let red = Check {
+        code: true,
+        failures: vec!["The code does not compile: 3:1: x".into()],
+        ..Check::default()
+    };
+    let Next::Retry(text) = next(&red, 0, false) else {
+        panic!("a red answer goes back")
+    };
+    assert!(text.contains("the whole file with the fix made in it"));
+    let for_edits = retry_words(&text);
+    assert!(!for_edits.contains("whole file"), "{for_edits}");
+    assert!(for_edits.contains("```st edit blocks copied from the file as it was sent to you"));
+    assert!(
+        for_edits.contains("The code does not compile"),
+        "what failed is still said"
+    );
+    let bare = Check {
+        code: true,
+        ..Check::default()
+    };
+    if let Next::Retry(text) = next(&bare, 0, false) {
+        assert!(retry_words(&text).contains("the same ```st edit blocks,"));
+    }
+    assert!(has_edits(&estop_answer()));
+    assert!(!has_edits(&format!("```st\n{LATCH}```")));
+    assert!(!has_edits(
+        "I would edit it.\n```st scenario\nPROGRAM test_edit\nEND_PROGRAM\n```"
+    ));
+}

@@ -31,6 +31,29 @@ pub fn is_edit(info: &str) -> bool {
     !is_scenario(info) && info.split_whitespace().any(|w| w.eq_ignore_ascii_case("edit"))
 }
 
+/// Whether `answer` gives its change as edit blocks.
+#[must_use]
+pub fn has_edits(answer: &str) -> bool {
+    segments(answer)
+        .iter()
+        .any(|s| matches!(s, Segment::Code { info, .. } if is_edit(info)))
+}
+
+/// A retry's words (`crate::verify::next`) for an agent that answered
+/// with edit blocks: it is asked for edit blocks again, copied from the
+/// file it was sent, since nothing of a failed answer is kept.
+#[must_use]
+pub fn retry_words(text: &str) -> String {
+    text.replace(
+        crate::verify::FIXED_FILE,
+        "the change with the fix in it, as ```st edit blocks copied from the file as it was sent to you (nothing of this answer was kept),",
+    )
+    .replace(
+        crate::verify::SAME_FILE,
+        "the same ```st edit blocks,",
+    )
+}
+
 /// One place that changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edit {

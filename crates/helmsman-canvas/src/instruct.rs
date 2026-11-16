@@ -74,8 +74,8 @@ pub struct Env<'a> {
 impl Env<'_> {
     /// The user message for `text`, the instruction or what failed, with
     /// the file and the envelopes after it.
-    fn message(&self, text: &str, earlier: &[String]) -> String {
-        let scope = self.scope.envelope(self.project, self.files);
+    fn message(&self, text: &str, earlier: &[String], edits: bool) -> String {
+        let scope = self.scope.envelope_for(self.project, self.files, edits);
         // The file goes once: when the program is that one file, the
         // `<edit_scope>` carries it and `<current_program>` points there.
         let same = self
@@ -109,10 +109,36 @@ pub const AGENT: &str = "edits";
 /// Whether `instruction` is a small change to what is there, one the
 /// Agent answers as well without extended thinking and several seconds
 /// sooner.
+///
+/// Measured on the agent ladder (2026-11-15, three runs of each rung
+/// with and without thinking): without it a first answer comes in 1 to
+/// 3 s, not 6 to 10, but its scenarios are wrong more often, so about
+/// six in ten go round once more, with thinking. That pays for a change
+/// of a name or a value, where there is little to get wrong (the ladder's
+/// five such instructions took 78 s in all, not 125), and not for new
+/// behaviour, where the retry eats the gain; a new project without
+/// thinking failed outright once. So: one short line on a file that
+/// exists, that opens with a word for changing what is there and names
+/// no condition.
 #[must_use]
 pub fn small(instruction: &str, scope: &Scope) -> bool {
-    let _ = (instruction, scope);
-    false
+    const OPENS: [&str; 15] = [
+        "rename", "change", "set", "make", "count", "use", "increase", "decrease", "raise", "lower",
+        "shorten", "lengthen", "swap", "invert", "fix",
+    ];
+    const CONDITIONS: [&str; 12] = [
+        "when", "while", "if", "after", "until", "unless", "then", "before", "once", "whenever", "only",
+        "add",
+    ];
+    let text = instruction.trim();
+    if *scope == Scope::NewProject || text.contains('\n') || text.chars().count() > 100 {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    let mut words = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '#')
+        .filter(|w| !w.is_empty());
+    words.next().is_some_and(|first| OPENS.contains(&first)) && !words.any(|w| CONDITIONS.contains(&w))
 }
 
 /// One answer that did not pass its checks.
@@ -323,6 +349,10 @@ pub struct Instruct {
     pub draft: String,
     pub run: Option<Run>,
     pub outcome: Option<Outcome>,
+    /// The Agent asked answers with the lines that change
+    /// (`crate::edits`), so it is asked for those and not for the whole
+    /// file. The page sets it before each instruction.
+    pub edits: bool,
 }
 
 impl Instruct {
@@ -374,7 +404,7 @@ impl Instruct {
         } else {
             instruction.clone()
         };
-        let message = env.message(&text, &earlier);
+        let message = env.message(&text, &earlier, self.edits);
         let quick = !plan && small(&instruction, &env.scope);
         self.outcome = None;
         self.run = Some(Run {
@@ -453,7 +483,7 @@ impl Instruct {
                 self.failed("the change ran out of room in one answer, and the Agent could not split it into steps. Ask for one part first");
                 return Step::Done;
             }
-            let message = env.message(&run.instruction, &run.earlier);
+            let message = env.message(&run.instruction, &run.earlier, self.edits);
             run.asked.clone_from(&message);
             let text = run.instruction.clone();
             self.run = Some(run);
@@ -478,7 +508,7 @@ impl Instruct {
             diagnostics: env.diagnostics.to_vec(),
             splits: 0,
         }));
-        Step::Ask(Self::step_ask(self.run.insert(run), env))
+        Step::Ask(Self::step_ask(self.run.insert(run), env, self.edits))
     }
 
     /// The paused plan: try its step again. `None` when no plan is
@@ -496,20 +526,20 @@ impl Instruct {
         run.retries = 0;
         run.asked_scenarios = false;
         run.attempts.clear();
-        Some(Self::step_ask(run, env))
+        Some(Self::step_ask(run, env, self.edits))
     }
 
     /// The request for the plan's next step, on its working copy.
-    fn step_ask(run: &mut Run, env: &Env<'_>) -> Ask {
+    fn step_ask(run: &mut Run, env: &Env<'_>, edits: bool) -> Ask {
         let Mode::Steps(plan) = &run.mode else {
             unreachable!("only a plan has steps")
         };
         let text = crate::steps::step_request(&run.instruction, &plan.steps, plan.done);
-        Self::plan_ask(run, env, text)
+        Self::plan_ask(run, env, text, edits)
     }
 
     /// `text` asked of the Agent on the plan's working copy.
-    fn plan_ask(run: &mut Run, env: &Env<'_>, text: String) -> Ask {
+    fn plan_ask(run: &mut Run, env: &Env<'_>, text: String, edits: bool) -> Ask {
         let Mode::Steps(plan) = &run.mode else {
             unreachable!("only a plan has steps")
         };
@@ -526,7 +556,7 @@ impl Instruct {
             diagnostics: &diagnostics,
             ..env.clone()
         };
-        let message = env.message(&text, &run.earlier);
+        let message = env.message(&text, &run.earlier, edits);
         run.asked.clone_from(&message);
         Ask {
             text,
@@ -555,7 +585,7 @@ impl Instruct {
                     scope: run.scope.clone(),
                     ..env.clone()
                 };
-                let message = env.message(&text, &run.earlier);
+                let message = env.message(&text, &run.earlier, self.edits);
                 run.asked.clone_from(&message);
                 Step::Ask(Ask {
                     text,
@@ -576,7 +606,7 @@ impl Instruct {
                 run.asked_scenarios = false;
                 run.attempts.clear();
                 let text = crate::steps::split_request(&run.instruction, &plan.steps, plan.done);
-                Step::Ask(Self::plan_ask(run, env, text))
+                Step::Ask(Self::plan_ask(run, env, text, self.edits))
             }
             Mode::Planning { .. } => {
                 self.failed(why);
@@ -600,7 +630,7 @@ impl Instruct {
         }
         plan.steps.splice(plan.done..=plan.done, parts);
         plan.state = PlanState::Running;
-        let ask = Self::step_ask(&mut run, env);
+        let ask = Self::step_ask(&mut run, env, self.edits);
         self.run = Some(run);
         Step::Ask(ask)
     }
@@ -630,6 +660,11 @@ impl Instruct {
         let answer = answer.as_str();
         match verify::next(&check, run.retries, run.asked_scenarios) {
             Next::Retry(text) => {
+                let text = if crate::edits::has_edits(raw) {
+                    crate::edits::retry_words(&text)
+                } else {
+                    text
+                };
                 run.attempts.push(Attempt {
                     asked: std::mem::take(&mut run.asked),
                     answer: raw.to_string(),
@@ -645,7 +680,7 @@ impl Instruct {
                     scope: run.scope.clone(),
                     ..env.clone()
                 };
-                let message = env.message(&text, &run.earlier);
+                let message = env.message(&text, &run.earlier, self.edits);
                 run.asked.clone_from(&message);
                 let context = run
                     .attempts
@@ -717,7 +752,7 @@ impl Instruct {
         run.attempts.clear();
         if plan.done < plan.steps.len() {
             run.mode = Mode::Steps(plan);
-            let ask = Self::step_ask(&mut run, env);
+            let ask = Self::step_ask(&mut run, env, self.edits);
             self.run = Some(run);
             return Step::Ask(ask);
         }

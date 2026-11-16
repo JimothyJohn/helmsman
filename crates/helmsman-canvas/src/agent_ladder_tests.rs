@@ -421,6 +421,77 @@ END_IF;
 END_PROGRAM
 ";
 
+/// How many zones the long program has: about 250 lines, so a rung on
+/// it shows what an answer costs when the file is long and the change
+/// is one line (`agent-edits-not-files`).
+const ZONES: u32 = 60;
+
+/// A conveyor line of [`ZONES`] zones, each running while its eye sees
+/// a box and for `hold17` (zone 17) or 2 s (the others) after.
+fn long_program(hold17: &str) -> &'static str {
+    let mut s = String::from("PROGRAM line\nVAR_INPUT\n  start : BOOL;\n  stop : BOOL;\n");
+    for k in 1..=ZONES {
+        let _ = writeln!(s, "  eye{k} : BOOL;");
+    }
+    s.push_str("END_VAR\nVAR_OUTPUT\n  run : BOOL;\n");
+    for k in 1..=ZONES {
+        let _ = writeln!(s, "  zone{k} : BOOL;");
+    }
+    s.push_str("END_VAR\nVAR\n");
+    for k in 1..=ZONES {
+        let _ = writeln!(s, "  hold{k} : TOF;");
+    }
+    s.push_str("END_VAR\n(* Start runs the line and it stays running; stop halts it. *)\n");
+    s.push_str("run := (start OR run) AND NOT stop;\n");
+    s.push_str("(* A zone runs while its eye sees a box, and a little after it has passed. *)\n");
+    for k in 1..=ZONES {
+        let pt = if k == 17 { hold17 } else { "T#2s" };
+        let _ = writeln!(
+            s,
+            "hold{k}(IN := eye{k}, PT := {pt});\nzone{k} := run AND hold{k}.Q;"
+        );
+    }
+    s.push_str("END_PROGRAM\n");
+    Box::leak(s.into_boxed_str())
+}
+
+const LONG: &str = "(* Zone 17 runs on for 5 s after its box has passed; zone 16 still for 2 s. *)
+PROGRAM test_hidden
+VAR_INPUT
+  zone16 : BOOL;
+  zone17 : BOOL;
+END_VAR
+VAR_OUTPUT
+  start : BOOL;
+  eye16 : BOOL;
+  eye17 : BOOL;
+  done : BOOL;
+END_VAR
+VAR
+  n : INT;
+  both_run : ASSERT;
+  z17_runs_on : ASSERT;
+  z16_stopped : ASSERT;
+  z17_stops : ASSERT;
+END_VAR
+n := n + 1;
+start := n >= 2 AND n <= 5;
+eye16 := n >= 20 AND n <= 50;
+eye17 := n >= 20 AND n <= 50;
+IF n = 40 THEN
+  both_run(COND := zone16 AND zone17);
+END_IF;
+IF n = 400 THEN
+  z17_runs_on(COND := zone17);
+  z16_stopped(COND := NOT zone16);
+END_IF;
+IF n = 600 THEN
+  z17_stops(COND := NOT zone17);
+  done := TRUE;
+END_IF;
+END_PROGRAM
+";
+
 fn rungs() -> Vec<Rung> {
     vec![
         Rung {
@@ -504,6 +575,18 @@ fn rungs() -> Vec<Rung> {
                 instruction: "Add an output horn that sounds for 1 s each time the motor starts.",
                 hidden: HORN,
                 expect: &["horn"],
+                forbid: &[],
+            }],
+        },
+        Rung {
+            name: "long",
+            base: long_program("T#2s"),
+            tests: &[],
+            scope: Where::File,
+            asks: &[Ask {
+                instruction: "Zone 17 runs on for 5 s after its box has passed, not 2 s.",
+                hidden: LONG,
+                expect: &["zone60", "hold60"],
                 forbid: &[],
             }],
         },
@@ -902,9 +985,11 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
         let mut calls = 0;
         let mut cost = 0.0;
         let mut applied = None;
-        // As the page does: a big ask is planned in steps first.
+        // As the page does: a big ask is planned in steps first, and an
+        // agent that sends the lines that change is asked for those.
         let lines = scope.file().and_then(|f| files.get(f)).map(|t| t.lines().count());
-        let plan = crate::steps::big_ask(ask.instruction, lines);
+        ins.edits = chat.serves(crate::instruct::AGENT) && setup.agent.is_some();
+        let plan = crate::steps::big_ask(ask.instruction, lines.filter(|_| !ins.edits));
         let mut next = match ins.start_with(&env, &earlier, plan) {
             Ok(a) => Some(a),
             Err(why) => {
@@ -1191,6 +1276,7 @@ fn front_door_recording() {
 /// must accept.
 fn reference(rung: &str) -> &'static str {
     match rung {
+        "long" => long_program("T#5s"),
         "rename" | "chain" => {
             "PROGRAM blink
 VAR_OUTPUT

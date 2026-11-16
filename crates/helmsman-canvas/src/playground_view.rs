@@ -1019,7 +1019,12 @@ impl PlaygroundView {
             .file()
             .and_then(|f| env.files.get(f))
             .map(|t| t.lines().count());
-        let plan = crate::steps::big_ask(&self.instruct.draft, lines);
+        // An Agent that answers with the lines that change is asked for
+        // those, and a long file is then no reason to plan in steps: the
+        // answer is as short as the change.
+        let edits = self.chat.serves(crate::instruct::AGENT);
+        self.instruct.edits = edits;
+        let plan = crate::steps::big_ask(&self.instruct.draft, lines.filter(|_| !edits));
         match self.instruct.start_with(&env, &earlier, plan) {
             Ok(ask) => {
                 self.asked_at = ctx.input(|i| i.time);

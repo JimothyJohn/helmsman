@@ -156,22 +156,32 @@ impl Scope {
     /// neutralizes it).
     #[must_use]
     pub fn envelope(&self, project: &str, files: &Files) -> String {
+        self.envelope_for(project, files, false)
+    }
+
+    /// [`Self::envelope`]; `edits` asks for the lines that change
+    /// (`crate::edits`) where the envelope otherwise asks for the whole
+    /// file back. What is sent is the same either way: the whole file,
+    /// and the section when there is one.
+    #[must_use]
+    pub fn envelope_for(&self, project: &str, files: &Files, edits: bool) -> String {
         let mut m = format!("{} ({})\nproject: {project}\n", self.label(), self.rule());
         match self {
             Self::NewProject => {
                 m.push_str("new project: answer with one complete PROGRAM");
             }
             Self::File(f) => {
-                m.push_str(
-                    &[
-                        "file: ",
-                        f,
+                m.push_str(&["file: ", f].concat());
+                m.push_str(&if edits {
+                    ["\nanswer with the lines of ", f, " that change, as ```st edit blocks\ntext:\n"].concat()
+                } else {
+                    [
                         "\nanswer with the whole of ",
                         f,
                         ", every line of it, with the edits made in it\ntext:\n",
                     ]
-                    .concat(),
-                );
+                    .concat()
+                });
                 m.push_str(files.get(f).map_or("", String::as_str));
             }
             Self::Lines { file, from, to } | Self::Block { file, from, to, .. } => {
@@ -193,18 +203,19 @@ impl Scope {
                 // The whole file goes, the section beside it (Nick,
                 // 2026-11-05: "send and receive the whole file so nothing
                 // is missed"); only the section may change.
-                m.push_str(
-                    &[
-                        "answer with the whole of ",
-                        file,
-                        ", every line of it, changed only in lines ",
-                        &from.to_string(),
-                        "-",
-                        &to.to_string(),
-                        "\nsection:\n",
-                    ]
-                    .concat(),
-                );
+                m.push_str(if edits {
+                    "answer with ```st edit blocks that change only lines "
+                } else {
+                    "answer with the whole of "
+                });
+                if !edits {
+                    m.push_str(&[file, ", every line of it, changed only in lines "].concat());
+                }
+                m.push_str(&[&from.to_string(), "-", &to.to_string()].concat());
+                if edits {
+                    m.push_str(&[" of ", file].concat());
+                }
+                m.push_str("\nsection:\n");
                 let text = files.get(file).map_or("", String::as_str);
                 for l in text
                     .split_inclusive('\n')
