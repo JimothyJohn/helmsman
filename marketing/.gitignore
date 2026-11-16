@@ -6,3 +6,4 @@ helmsman-device/cut-*/
 helmsman-device/footage/outputs/
 helmsman-device/footage/prompts/
 helmsman-device/footage/MEDIA-INDEX.md
+__pycache__/

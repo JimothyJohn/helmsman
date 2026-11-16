@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """The footage for the device film: one composed still per shot (Seedream),
-then that still animated as the first frame of a short clip (MiniMax H3).
+repainted in the film's style, then that painting animated as the first frame of a short clip (MiniMax H3).
 
     ./shots.py stills [name ...]     # outputs/box/<name>.jpg, about $0.04 each
+    ./shots.py paint  [name ...]     # outputs/box/<name>-oil.jpg, the still in the film's style
     ./shots.py clips  [name ...]     # outputs/box/clip-<name>.mp4, about $0.02 a second
-    ./shots.py sheet                 # outputs/box/sheet.jpg, every still on one page
+    ./shots.py sheet                 # outputs/box/sheet.jpg, every painted still on one page
+    ./shots.py install [name ...]    # the clips into ../assets/, interpolated to 60 fps
 
 It drives the storyboard CLI (~/github/storyboard), which bounds-checks each
 request, retries, and writes a costed record per run under outputs/box/runs/.
@@ -58,6 +60,32 @@ KEEP = (
     "exactly as in the first frame; it never gains text, a logo, a screen, buttons or ports"
 )
 
+# The film's look: painterly realism in graphite and one yellow. The composed still
+# fixes what is in the frame; this repaints it, and the painting is the first frame.
+PAINT = (
+    "Redraw the reference image exactly: the same composition, camera angle, objects, people, "
+    "poses and proportions, with exactly the objects the reference has. Change "
+    "only the rendering style: painterly realism. At first glance it reads as a film still with "
+    "real lens depth of field, real materials and dramatic directional light with deep shadows, "
+    "but every surface is hand-painted in thick oil paint with visible, confident brushstrokes "
+    "and palette-knife highlights, edges slightly simplified. The palette is strictly limited and "
+    "moody: deep charcoal, graphite and steel grays with warm off-white highlights for "
+    "everything, and one single saturated colour, a strong industrial yellow: whatever is yellow "
+    "in the reference stays yellow, and whatever is pink, blue, orange, red or green there "
+    "becomes gray or that yellow. Skin is a natural muted tone."
+)
+# Said only for the shots the device is in: naming it elsewhere paints one in.
+PAINT_DEVICE = (
+    "The small black block keeps its exact shape, with its single Ethernet socket and single "
+    "light bar."
+)
+LOOK = (
+    "painterly realism: it moves like live-action film with real depth of field and light, and "
+    "every surface is hand-painted in thick oil paint with visible brushstrokes, in graphite "
+    "grays with industrial yellow as the only saturated colour, exactly as in the first frame; "
+    "the painted texture stays stable and never turns photographic"
+)
+
 # name: refs (earlier stills this one is composed from), still, then the clip:
 # seconds, subject, what stays fixed, summary, description, sound.
 SHOTS: dict[str, dict] = {
@@ -68,6 +96,7 @@ SHOTS: dict[str, dict] = {
         f"work-worn hand holds {DEVICE} flat on the open palm at chest height, the narrow port "
         "face toward the camera, the light bar dark. The block is clearly smaller than the "
         f"palm. Behind, far out of focus, {PLANT}. {NO_TEXT}",
+        "paint": "The light bar under the socket is dark and unlit.",
         "seconds": 5,
         "summary": "on a factory floor: an engineer's open hand holds <Subject 1> while the "
         "camera slowly pushes in.",
@@ -86,6 +115,7 @@ SHOTS: dict[str, dict] = {
         "port face toward the camera, the light bar dark. Beside it one neatly coiled yellow "
         "Ethernet patch cable. A single work lamp rakes warm light from the left; behind, out "
         f"of focus, {PLANT}. {NO_TEXT}",
+        "paint": "The light bar under the socket is dark and unlit.",
         "seconds": 5,
         "summary": "in a plant maintenance shop: <Subject 1> sits on a steel workbench while "
         "the camera slowly slides past it.",
@@ -103,6 +133,7 @@ SHOTS: dict[str, dict] = {
         f"between them. A hand in a thin gray work glove holds {DEVICE} upright a few "
         "centimetres in front of that gap, narrow port face outward toward the camera, light "
         f"bar dark, about to clip it onto the rail. Cool overhead shop light. {NO_TEXT}",
+        "paint": "The light bar under the socket is dark and unlit.",
         "seconds": 5,
         "summary": "inside an open control cabinet: a gloved hand slowly clips <Subject 1> onto "
         "the DIN rail and lets go.",
@@ -126,6 +157,7 @@ SHOTS: dict[str, dict] = {
         "tip of the plug is one centimetre in front of the socket, pointing straight into it, "
         "the cable running back horizontally out of the frame. Gray terminal blocks soft in the "
         f"background. {NO_TEXT}",
+        "paint": "The light bar under the socket is dark and unlit, and the socket is empty.",
         "seconds": 6,
         "summary": "in extreme close-up inside a control cabinet: fingers slowly push a yellow "
         "Ethernet cable into <Subject 1> and its light bar comes on.",
@@ -151,6 +183,7 @@ SHOTS: dict[str, dict] = {
         "curves down into the slotted gray wire duct below. The thin light bar beneath the "
         "socket glows a steady warm yellow as in the third reference image, the only coloured "
         f"light in the cabinet. Cool overhead shop light. {NO_TEXT}",
+        "paint": "The light bar under the socket glows steady yellow.",
         "seconds": 5,
         "summary": "inside an open control cabinet: <Subject 1> runs on the DIN rail with one "
         "yellow cable in it while the camera slowly pushes in.",
@@ -171,6 +204,7 @@ SHOTS: dict[str, dict] = {
         "shirt, safety glasses, hair tied back, stands with one hand on the cabinet door, her "
         "other hand empty, looking toward the conveyor line running on the right. No laptop, "
         f"no cart, no tools on the floor. {NO_TEXT}",
+        "paint": "The light bar under the socket glows steady yellow.",
         "seconds": 5,
         "summary": "on a plant floor: an engineer slowly swings a control cabinet door shut on "
         "<Subject 1> and walks away empty-handed toward the running line.",
@@ -302,16 +336,17 @@ SHOTS: dict[str, dict] = {
         "brown cardboard cartons sit motionless on the rollers in the foreground. On a post at "
         "the left edge of the frame a three-tier industrial stack light, its red tier lit, "
         f"its amber and green tiers dark. Nobody in the frame. {NO_TEXT}",
+        "paint": "Only the top tier of the stack light is lit, glowing yellow; the other tiers are dark gray.",
         "seconds": 5,
         "subject": "the roller conveyor with three brown cartons and the stack light on a post "
         "in the first frame",
         "keep": "the conveyor, the cartons and the stack light stay exactly as in the first "
         "frame; only the lit tier and the cartons' position change",
-        "summary": "low along a stopped conveyor: the stack light on <Subject 1> goes from red "
-        "to green and the cartons slowly start to roll.",
-        "desc": "three brown cartons sit still on a stopped roller conveyor and the stack "
-        "light on the post shows red. At about one second the red tier goes dark and the "
-        "green tier lights. At about two seconds the rollers begin to turn and the three "
+        "summary": "low along a stopped conveyor: the stack light on <Subject 1> changes "
+        "from its top tier to its bottom tier and the cartons slowly start to roll.",
+        "desc": "three brown cartons sit still on a stopped roller conveyor and the top tier "
+        "of the stack light on the post is lit. At about one second the top tier goes dark and "
+        "the bottom tier lights bright yellow. At about two seconds the rollers begin to turn and the three "
         "cartons slowly start to glide away from the camera along the conveyor, one after "
         "another, at an even pace. The camera holds still.",
         "sound": "a quiet stopped line; one soft relay click; a motor winding up; rollers "
@@ -387,7 +422,7 @@ retention_analysis:
 <Subject 1> (appears in [Shot 1]): fully_preserved - {keep}.
 
 detailed_description:
-The target video is live-action, photorealistic documentary realism in a horizontal frame, one continuous {seconds}-second take with no cuts beginning exactly on the first frame; every movement is slow, smooth and deliberate, nothing fast. No text, captions or logos appear at any point.
+The target video is {look}. It is a horizontal frame, one continuous {seconds}-second take with no cuts beginning exactly on the first frame; every movement is slow, smooth and deliberate, nothing fast. No text, captions or logos appear at any point.
 [Shot 1] The video begins exactly on the first frame: {desc}
 
 overall_soundscape:
@@ -416,6 +451,13 @@ def still(name: str) -> int:
     return run(args)
 
 
+def paint(name: str) -> int:
+    shot = SHOTS[name]
+    words = [PAINT, PAINT_DEVICE if shot["refs"] else "", shot.get("paint", "")]
+    args = ["still", " ".join(w for w in words if w), "--project", "box", "--name", f"{name}-oil"]
+    return run(args + ["--aspect", "16:9", "--size", "2K", "--ref", url_of(name)])
+
+
 def clip(name: str) -> int:
     shot = SHOTS[name]
     prompts = HERE / "prompts" / "box"
@@ -427,19 +469,42 @@ def clip(name: str) -> int:
         summary=shot["summary"],
         desc=shot["desc"],
         sound=shot["sound"],
+        look=LOOK,
     )
     prompt = prompts / f"prompt.{name}.txt"
     prompt.write_text(text)
     if run(["validate", str(prompt)]) != 0:
         return 1
     return run(
-        ["generate", str(prompts), "--prompt-file", str(prompt), "--first-frame", url_of(name)]
+        ["generate", str(prompts), "--prompt-file", str(prompt), "--first-frame", url_of(f"{name}-oil")]
         + ["--duration", str(shot["seconds"]), "--resolution", "768P", "--ratio", "16:9", "--name", f"clip-{name}"]
     )
 
 
+# The model renders 24 fps; the film is 60. Motion-compensated interpolation holds up
+# because every move in these clips is slow.
+TO_60 = "minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
+REAL_SOUND = ("plug", "mount", "rackout", "walkaway", "dongles", "linestart")
+
+
+def install(name: str) -> int:
+    """outputs/box/clip-<name>.mp4 -> ../assets/footage/<name>.mp4 at 60 fps, and for
+    the shots the cuts play with their own sound, ../assets/real/<name>.mp3."""
+    src = OUT / f"clip-{name}.mp4"
+    assets = HERE.parent / "assets"
+    (assets / "footage").mkdir(parents=True, exist_ok=True)
+    (assets / "real").mkdir(parents=True, exist_ok=True)
+    video = ["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vf", TO_60, "-an", "-c:v", "libx264"]
+    video += ["-crf", "14", "-preset", "slow", "-pix_fmt", "yuv420p", str(assets / "footage" / f"{name}.mp4")]
+    code = subprocess.run(video).returncode
+    if code == 0 and name in REAL_SOUND:
+        audio = ["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vn", "-c:a", "libmp3lame", "-q:a", "3"]
+        code = subprocess.run(audio + [str(assets / "real" / f"{name}.mp3")]).returncode
+    return code
+
+
 def sheet() -> int:
-    names = [n for n in SHOTS if (OUT / f"{n}.jpg").exists()]
+    names = [f"{n}-oil" for n in SHOTS if (OUT / f"{n}-oil.jpg").exists()]
     cols = 4
     rows = -(-len(names) // cols)
     args = ["ffmpeg", "-v", "error", "-y"]
@@ -455,7 +520,7 @@ def sheet() -> int:
 
 
 def main() -> int:
-    if len(sys.argv) < 2 or sys.argv[1] not in ("stills", "clips", "sheet"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("stills", "paint", "clips", "sheet", "install"):
         print(__doc__)
         return 2
     if sys.argv[1] == "sheet":
@@ -465,7 +530,7 @@ def main() -> int:
     if unknown:
         print("unknown shot:", ", ".join(unknown), file=sys.stderr)
         return 2
-    job = still if sys.argv[1] == "stills" else clip
+    job = {"stills": still, "paint": paint, "clips": clip, "install": install}[sys.argv[1]]
     prompts = HERE / "prompts" / "box"
     if job is clip and not (prompts / "manifest.json").exists():
         # generate reads a project manifest even when a first frame is the only picture
