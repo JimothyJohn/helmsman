@@ -415,6 +415,17 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-13
   by: claude-session
 
+- [ ] **Agent wait: one question while the Agent works** — Nick, 2026-11-15: the waiting time is the worst part of the Agent; use it. Interview and prototype that day. When an instruction is sent, a second relay profile on a small fast model gets the instruction and the program and returns at most one question about how the machine should behave, with two or three answers to click, or nothing (a rename, a time, a constant must draw nothing). The card shows under the progress line while the main turn runs. Decided: (1) the turn keeps running: an answer that arrives before any draft text resends the instruction with the answer added; later, the answer is compared with the result, an agreeing answer ticks as covered and a differing one starts one follow-up turn on the draft; (2) an answer guides this turn and is recorded on its History page, it creates no lasting requirement test; (3) no chat thread. Prototype (16 instructions, one run each, 2026-11-15): a small model with thinking off answered in 2.1 s median, 3.5 s max, asked on 8 of 8 underspecified instructions and its first question was the useful one (restart after an emergency stop is released, a pending start cancelled by stop, an alarm until reset); the second and third were filler, hence the cap of one; it asked once about something the program already answered. The relay's default model took 5.0 s median, 10.2 s max and 4 of 16 replies held no answer, so the profile needs a model of its own (`RELAY_MODEL` serves every profile with one). Order of work: the relay profile and its per-profile model; the question card on the page; the answer check against the result; a ladder rung per behaviour (no question on the clear rungs, the answer honoured on an open one). The page first, a box after `agent-progress-box`.
+  needs: a session in ../agent-relay for the profile and the per-profile model, your deploy
+  result: an engineer answers one question about the machine while the Agent writes, and the result is checked against it
+  depends: agent-edits-not-files
+  est: 3d
+  difficulty: high
+  id: agent-wait-questions
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
 - [ ] **The box's Agent tab shows its progress too** — the page shows the time, the latest thought and the draft as it streams (feat/agent-progress); the box's Agent tab goes through `POST /api/chat` and still shows only a spinner (`instruct::View::progress` is `None` there). Needs the thinking and text deltas through the box's chat stream to the canvas, then the same `Progress`.
   needs: nothing
   result: an engineer on a box sees the Agent think and write, as in the playground
