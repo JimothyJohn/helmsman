@@ -881,7 +881,7 @@ impl PlaygroundView {
     /// Picks output `name`, as a tap on it does.
     pub fn pick(&mut self, name: &str) {
         if let Some(v) = &mut self.viewer {
-            v.because = Some(name.to_string());
+            v.show_output(name);
         }
     }
 
@@ -3289,14 +3289,27 @@ impl PlaygroundView {
                 ui.label(RichText::new("none").color(t.muted)).tip(outputs_tip);
             }
             let mut picked = None;
-            let (cols, col) = columns(ui);
+            let cards = self
+                .viewer
+                .as_ref()
+                .map(crate::st_view::Viewer::output_cards)
+                .unwrap_or_default();
+            let lit = self
+                .viewer
+                .as_ref()
+                .and_then(|v| v.because.clone())
+                .unwrap_or_default();
+            // One card to a row, at the pane's width.
+            let (cols, col) = (1, ui.available_width());
             let grid = egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
                 for pair in outputs.chunks(cols) {
                     for p in pair {
                         ui.vertical(|ui| {
                             ui.set_max_width(col);
                             let place = crate::assign::place_of(&map, &p.name).describe();
-                            let (clicked, anchor) = output_ui(ui, p, &place);
+                            let card = cards.iter().find(|c| c.name.eq_ignore_ascii_case(&p.name));
+                            let selected = lit.eq_ignore_ascii_case(&p.name);
+                            let (clicked, anchor) = output_ui(ui, p, &place, card, selected);
                             if clicked {
                                 picked = Some(p.name.clone());
                             }
@@ -4847,7 +4860,13 @@ fn row_label(ui: &mut egui::Ui, label: &str, place: &str) -> egui::Response {
 /// One output: a lamp (BOOL) or a readout. Returns whether it was clicked,
 /// and the response a right-click on its row opens a menu from. `place` is
 /// where the point is now, in its tooltip.
-fn output_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (bool, egui::Response) {
+fn output_ui(
+    ui: &mut egui::Ui,
+    p: &Point,
+    place: &str,
+    card: Option<&crate::output_cards::OutputCard>,
+    selected: bool,
+) -> (bool, egui::Response) {
     let t = theme(ui);
     let on = p.value == Value::Bool(true);
     let name = match p.address() {
@@ -4867,23 +4886,16 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (bool, egui::Response
     } else {
         t.fg
     };
-    let glyph = crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool);
-    ui.horizontal(|ui| {
-        crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, color, crate::glyph_lib::tip(glyph));
-        let b = egui::Button::new(
-            RichText::new(text)
-                .monospace()
-                .size(crate::theme::MIN_TEXT)
-                .color(color),
-        )
-        .wrap_mode(egui::TextWrapMode::Truncate)
-        .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
-        let r = ui
-            .add(b)
-            .tip(format!("Click to pick its block in the diagram.\n{place}"));
-        (r.clicked(), r)
-    })
-    .inner
+    let row = crate::output_cards::Row {
+        key: &p.name,
+        text,
+        color,
+        glyph: crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool),
+        place,
+        selected,
+        card,
+    };
+    crate::output_cards::show(ui, &row)
 }
 
 /// A value for a readout (TIME in ms).

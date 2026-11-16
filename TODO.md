@@ -750,15 +750,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   status: ready
 
 
-- [ ] **Outputs view: one card per output, a tap lights its path on the diagram** — decided 2026-11-16: a second way to look at the same program, not a fold (an output's logic is usually spread over statements that are not next to each other, and one statement cannot sit inside two cards). A view beside the program tree with one card per output: its name, its live value and the signals it finally depends on (`View::drivers` gives them). A tap goes to the diagram with that output's path lit. The diagram itself stays in source order.
-  result: "what drives each output" has an answer at a glance
-  est: 6h
-  difficulty: med
-  id: diagram-output-cards
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
 - [ ] **Zoom picks the level of detail** — far: every section and arm drawn as one block with its live state; middle: a statement as one line; near: the blocks. Sections and arms fold on request today (`Viewer::set_fold`); this folds them by zoom instead and opens nothing the reader folded by hand. The middle level is new: one fold per statement titled with its text.
   result: a large program is readable at any zoom
   est: 6h

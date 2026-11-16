@@ -312,6 +312,11 @@ pub struct Viewer {
     /// offset and zoom it left. While the view rests there the next jump
     /// steps on from that stop ([`crate::jump::next`]).
     jumped: Option<(usize, Pick, (Vec2, f32))>,
+    /// An output card was tapped: frame what its path lights once a frame
+    /// has it ([`Viewer::show_output`]).
+    frame_lit: bool,
+    /// The output cards of the source in `.0` ([`Viewer::output_cards`]).
+    cards: std::cell::RefCell<Option<(String, Vec<crate::output_cards::OutputCard>)>>,
 }
 
 /// Whether folds of `kind` start as their blocks and fold when the reader
@@ -683,6 +688,8 @@ impl Viewer {
             fold_moved: Vec::new(),
             views,
             glide: None,
+            frame_lit: false,
+            cards: std::cell::RefCell::new(None),
             jumped: None,
         };
         v.reshow();
@@ -1728,6 +1735,55 @@ impl Viewer {
         out
     }
 
+    /// One card per output of the program: its `VAR_OUTPUT`s (assigned or
+    /// not) and the located outputs it assigns, in declaration order, each
+    /// with the signals it finally depends on.
+    #[must_use]
+    pub fn output_cards(&self) -> Vec<crate::output_cards::OutputCard> {
+        if let Some((src, cards)) = &*self.cards.borrow()
+            && *src == self.src
+        {
+            return cards.clone();
+        }
+        let cards = self.make_cards();
+        *self.cards.borrow_mut() = Some((self.src.clone(), cards.clone()));
+        cards
+    }
+
+    fn make_cards(&self) -> Vec<crate::output_cards::OutputCard> {
+        let Some(k) = self
+            .module
+            .pous
+            .iter()
+            .position(|p| p.kind == helmsman_iec::ast::PouKind::Program)
+        else {
+            return Vec::new();
+        };
+        let p = &self.module.pous[k];
+        let written = |name: &str| {
+            p.diagram
+                .nodes
+                .iter()
+                .any(|n| matches!(&n.kind, NodeKind::Write { path } if path == name))
+        };
+        let mut outs: Vec<(&String, &Var)> = p
+            .vars
+            .iter()
+            .filter(|(name, v)| {
+                v.fb.is_none()
+                    && (v.section == helmsman_iec::ast::Section::Output || (v.located && written(name)))
+            })
+            .collect();
+        outs.sort_by(|a, b| (a.1.line, a.0).cmp(&(b.1.line, b.0)));
+        outs.into_iter()
+            .map(|(name, _)| crate::output_cards::OutputCard {
+                name: name.clone(),
+                signals: helmsman_diagram::signals(&self.module, k, name),
+                driven: written(name),
+            })
+            .collect()
+    }
+
     /// The scope picker (program, or a block through one instance).
     /// Shows scope `k`: the program or a block instance.
     pub fn open(&mut self, k: usize) {
@@ -1901,43 +1957,108 @@ impl Viewer {
         hit
     }
 
-    /// The outputs with their values; a click picks one.
+    /// The outputs as cards with their values; a tap lights the path that
+    /// sets one and goes to it ([`Self::show_output`]).
     pub fn outputs_ui(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         ui.label(RichText::new("Outputs").strong())
             .tip("Click an output to light the path that sets it in the diagram.");
         let t = theme(ui);
-        for path in self.outputs() {
-            let value = scan.and_then(|s| s.get(&path));
+        let cards = self.output_cards();
+        let mut tapped = None;
+        for card in &cards {
+            let path = &card.name;
+            let value = scan.and_then(|s| s.get(path));
             let on = value == Some(Value::Bool(true));
             let color = if on {
-                crate::lamps::colour(&path).map_or(t.accent, |c| t.ink(c))
+                crate::lamps::colour(path).map_or(t.accent, |c| t.ink(c))
             } else {
                 t.fg
             };
-            let text = RichText::new(format!("{} {path} = {}", if on { "●" } else { "○" }, show(value)))
-                .monospace()
-                .color(color);
-            let glyph = crate::glyph_lib::for_point(&path, false, matches!(value, Some(Value::Bool(_))));
-            let clicked = ui
-                .horizontal(|ui| {
-                    crate::glyph_lib::show(
-                        ui,
-                        glyph,
-                        crate::glyphs::ROW,
-                        color,
-                        crate::glyph_lib::tip(glyph),
-                    );
-                    let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
-                        .min_size(Vec2::new(ui.available_width(), TAP));
-                    ui.add(row)
-                        .tip("Click to light why it has this value in the diagram.")
-                        .clicked()
-                })
-                .inner;
-            if clicked {
-                self.because = Some(path);
+            let row = crate::output_cards::Row {
+                key: path,
+                text: format!(
+                    "{} {} = {}",
+                    if on { "●" } else { "○" },
+                    path.to_ascii_lowercase(),
+                    show(value)
+                ),
+                color,
+                glyph: crate::glyph_lib::for_point(path, false, matches!(value, Some(Value::Bool(_)))),
+                place: "",
+                selected: self.because.as_deref() == Some(path.as_str()),
+                card: Some(card),
+            };
+            if crate::output_cards::show(ui, &row).0 {
+                tapped = Some(path.clone());
             }
         }
+        if let Some(path) = tapped {
+            self.show_output(&path);
+        }
+    }
+
+    /// A tap on an output's card: its program path lit on the program's
+    /// diagram (as a click on its write gives), and the view eased to
+    /// frame what is lit once the next frame draws it. Folds stay as they
+    /// are: a lit block inside a closed fold lights the fold.
+    pub fn show_output(&mut self, path: &str) {
+        if self.scope != 0 {
+            self.open(0);
+        }
+        self.xref = None;
+        self.because = Some(path.to_ascii_uppercase());
+        self.frame_lit = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn frame_lit_pending(&self) -> bool {
+        self.frame_lit
+    }
+
+    /// Frames the lit blocks (`lit`, on the diagram shown) in `area`, at
+    /// the zoom the view has unless they do not fit. Waits while there is
+    /// no scan to light them from; gives up when a scan lights nothing.
+    fn frame_output(&mut self, lit: Option<&Drivers>, have_scan: bool, area: Rect, now: f64) {
+        let Some(on) = lit else {
+            self.frame_lit = !have_scan;
+            return;
+        };
+        self.frame_lit = false;
+        let Some(rect) = self.lit_bounds(on) else {
+            return;
+        };
+        let cam = self.cams[self.scope];
+        let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
+        let mut to = cam;
+        to.frame_within(below, &rect, cam.zoom.min(FOCUS_MAX));
+        to.clamp(area, self.shown().size);
+        self.cams[self.scope].moved = true;
+        self.glide = Some(Glide {
+            scope: self.scope,
+            from: (cam.offset, cam.zoom),
+            to: (to.offset, to.zoom),
+            t0: now,
+        });
+        self.jumped = None;
+    }
+
+    /// The box around the blocks of the diagram shown that `on` lights.
+    #[must_use]
+    pub(crate) fn lit_bounds(&self, on: &Drivers) -> Option<helmsman_diagram::Rect> {
+        self.shown()
+            .nodes
+            .iter()
+            .filter(|n| on.node(n.id))
+            .map(|n| n.rect)
+            .reduce(|a, b| {
+                let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+                helmsman_diagram::Rect {
+                    x,
+                    y,
+                    w: a.right().max(b.right()) - x,
+                    h: a.bottom().max(b.bottom()) - y,
+                }
+            })
     }
 
     /// The variable a tap on node `n` asks about: a variable read or
@@ -2393,6 +2514,10 @@ impl Viewer {
             (Some(v), Some(on)) => Some(v.drivers(on)),
             (_, on) => on.clone(),
         };
+        if self.frame_lit {
+            self.frame_output(lit.as_ref(), scan.is_some(), area, ui.input(|i| i.time));
+            ui.ctx().request_repaint();
+        }
         let mut added: Vec<NodeId> = added.into_iter().filter_map(|n| self.to_shown(n)).collect();
         added.dedup();
         let pick = match self.pick {
@@ -3707,6 +3832,107 @@ END_PROGRAM
 
     fn write(path: &str) -> NodeKind {
         NodeKind::Write { path: path.into() }
+    }
+
+    /// The cards (`output_cards`): the program's outputs, each with the
+    /// signals it finally depends on; a latch does not list itself.
+    #[test]
+    fn the_cards_are_the_outputs_with_the_signals_that_set_them() {
+        let h = Harness::new();
+        let cards = h.sv.view.output_cards();
+        let got: Vec<(&str, Vec<String>, bool)> = cards
+            .iter()
+            .map(|c| {
+                (
+                    c.name.as_str(),
+                    c.signals
+                        .iter()
+                        .map(|s| format!("{:?}:{}", s.kind, s.name))
+                        .collect(),
+                    c.driven,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "MOTOR",
+                    vec!["Input:START".into(), "Input:STOP".into(), "Kept:MOTOR".into()],
+                    true
+                ),
+                ("LAMP", vec!["Input:OTHER".into()], true),
+            ],
+            "COUNT and the inputs are no outputs"
+        );
+    }
+
+    #[test]
+    fn an_output_nothing_sets_has_a_card_that_says_so() {
+        let src = "PROGRAM p
+VAR_INPUT a : BOOL; END_VAR
+VAR_OUTPUT y : BOOL; z : BOOL; END_VAR
+z := a;
+END_PROGRAM
+";
+        let session = Session::new(src);
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let cards = Viewer::new(src, module).output_cards();
+        assert_eq!(cards.len(), 2);
+        assert_eq!((cards[0].name.as_str(), cards[0].driven), ("Y", false));
+        assert_eq!(cards[0].signals.len(), 0);
+        assert_eq!((cards[1].name.as_str(), cards[1].driven), ("Z", true));
+    }
+
+    /// A tap on a card is a click on that output's write: the same path
+    /// lit, and the view eased to frame every lit block without zooming
+    /// in past where it was.
+    #[test]
+    fn a_card_lights_what_a_click_on_its_write_lights_and_frames_it() {
+        let mut h = Harness::new();
+        h.click(h.at(&write("MOTOR")));
+        h.frame(vec![]);
+        let by_click = h.sv.view.highlighted().cloned().unwrap();
+        // Empty space clears it; pan far off, then tap the card.
+        h.click(Pos2::new(1190.0, 790.0));
+        assert!(h.sv.view.highlighted().is_none());
+        let zoom = h.sv.view.cams[0].zoom;
+        h.sv.view.cams[0].offset += Vec2::new(-900.0, -300.0);
+        h.sv.view.show_output("motor");
+        for _ in 0..60 {
+            h.frame(vec![]);
+        }
+        let on = h.sv.view.highlighted().cloned().unwrap();
+        assert_eq!(on, by_click, "the path a click gives");
+        let cam = h.sv.view.cams[0];
+        assert!(
+            cam.zoom <= zoom + 1e-3,
+            "no closer than it was: {} > {zoom}",
+            cam.zoom
+        );
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        let bounds = h.sv.view.lit_bounds(&on).unwrap();
+        assert!(
+            screen.contains_rect(cam.rect(&bounds)),
+            "every lit block is in view: {:?}",
+            cam.rect(&bounds)
+        );
+        assert!(!h.sv.view.frame_lit, "asked once");
+    }
+
+    #[test]
+    fn a_card_for_an_output_with_no_path_here_frames_nothing_and_asks_once() {
+        let mut h = Harness::new();
+        let cam = h.sv.view.cams[0];
+        h.sv.view.show_output("nowhere");
+        for _ in 0..10 {
+            h.frame(vec![]);
+        }
+        assert!(!h.sv.view.frame_lit);
+        assert_eq!(
+            (h.sv.view.cams[0].offset, h.sv.view.cams[0].zoom),
+            (cam.offset, cam.zoom)
+        );
     }
 
     /// Edit › Go to definition and Cross references (hotkey cards,
