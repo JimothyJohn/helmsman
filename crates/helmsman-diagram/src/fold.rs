@@ -27,6 +27,7 @@
 
 pub mod chips;
 pub mod idioms;
+pub mod states;
 pub mod structure;
 
 use std::cmp::Reverse;
@@ -36,7 +37,7 @@ use helmsman_iec::Value;
 use helmsman_iec::trace::StmtId;
 
 use crate::explain::Drivers;
-use crate::layout;
+use crate::layout::{self, Body};
 use crate::live::{Gate, Live};
 use crate::model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, Stmt, Wire};
 
@@ -61,7 +62,7 @@ pub enum FoldKind {
     Section,
     /// Everything that drives one output.
     Output,
-    /// A CASE on a state variable.
+    /// A CASE on a state variable: a row per state ([`Fold::rows`]).
     State,
     /// An OR of ANDs as rows of conditions.
     Table,
@@ -90,7 +91,26 @@ pub struct Fold {
     /// name. On the canvas a variable's block is where an input is set
     /// and watched, so it stays.
     pub blocks: bool,
+    /// What the block draws between its pins, one row each: a state of a
+    /// [`FoldKind::State`] block. Empty for a fold that is its pins alone.
+    /// The layout sizes the block by them ([`Fold::body`]).
+    pub rows: Vec<FoldRow>,
 }
+
+/// One row of a fold's own drawing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldRow {
+    /// What the row says: the arm's label without its keyword (`1, 3..5`,
+    /// `ELSE`).
+    pub label: String,
+    /// The region of the diagram it stands for: its gate says whether it
+    /// ran ([`Live::gates`]).
+    pub region: RegionId,
+}
+
+/// The longest row label the block is sized for, in characters; the
+/// canvas cuts a longer one with an ellipsis.
+pub const ROW_CHARS: usize = 24;
 
 impl Fold {
     /// A fold of blocks within one statement.
@@ -109,6 +129,7 @@ impl Fold {
             stmts: Vec::new(),
             names: BTreeMap::new(),
             blocks: false,
+            rows: Vec::new(),
         }
     }
 
@@ -141,6 +162,7 @@ impl Fold {
             stmts: stmts.to_vec(),
             names: BTreeMap::new(),
             blocks: false,
+            rows: Vec::new(),
         }
     }
 
@@ -149,6 +171,28 @@ impl Fold {
     #[must_use]
     pub fn regions(&self, d: &Diagram) -> BTreeSet<RegionId> {
         nested(d, &self.stmts).1
+    }
+
+    /// The same fold drawing `rows` between its pins.
+    #[must_use]
+    pub fn with_rows(mut self, rows: Vec<FoldRow>) -> Self {
+        self.rows = rows;
+        self
+    }
+
+    /// What the layout gives the block: a row per [`Fold::rows`], as wide
+    /// as the longest label (up to [`ROW_CHARS`]).
+    #[must_use]
+    pub fn body(&self) -> Body {
+        Body {
+            rows: self.rows.len(),
+            chars: self
+                .rows
+                .iter()
+                .map(|r| r.label.chars().count().min(ROW_CHARS))
+                .max()
+                .unwrap_or(0),
+        }
     }
 
     /// The same fold with the variables its statements read kept as
@@ -181,14 +225,18 @@ fn nested(d: &Diagram, stmts: &[usize]) -> (BTreeSet<usize>, BTreeSet<RegionId>)
 }
 
 /// The folds a diagram opens with: the standard circuits under their
-/// names ([`idioms`]: a selector, a set/reset, a range, a latch, an edge)
-/// and a comparison with its literal ([`chips`]). The variables a folded
-/// IF reads keep their blocks.
+/// names ([`idioms`]: a selector, a set/reset, a range, a latch, an edge),
+/// a CASE on a state variable ([`states`]) and a comparison with its
+/// literal ([`chips`]). The variables a folded IF or CASE reads keep their
+/// blocks.
 #[must_use]
 pub fn auto(d: &Diagram) -> Vec<Fold> {
     // A fold that shares a block with an earlier one is left out, so the
     // larger shape goes first: a range before its two comparisons.
-    let whole = idioms::selects(d).into_iter().chain(idioms::set_resets(d));
+    let whole = idioms::selects(d)
+        .into_iter()
+        .chain(idioms::set_resets(d))
+        .chain(states::states(d));
     whole
         .map(Fold::with_blocks)
         .chain(idioms::ranges(d))
@@ -884,7 +932,11 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
             .collect(),
         ops: d.ops.iter().filter_map(|(&n, &s)| Some((own(n)?, s))).collect(),
     };
-    layout::layout(&mut diagram);
+    let bodies: Vec<Body> = applied.iter().map(Fold::body).collect();
+    layout::layout_with(&mut diagram, &|n| match n.kind {
+        NodeKind::Fold { fold, .. } => bodies[fold as usize],
+        _ => Body::default(),
+    });
     View {
         diagram,
         folds: applied,

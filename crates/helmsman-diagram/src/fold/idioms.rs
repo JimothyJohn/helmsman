@@ -48,7 +48,7 @@ fn binary<'a>(d: &'a Diagram, n: NodeId, op: &str) -> Option<[&'a Wire; 2]> {
 }
 
 /// The nth fold of `rule` over `var` so far, as the key's tail.
-fn key(seen: &mut BTreeMap<String, usize>, rule: &str, var: &str) -> String {
+pub(super) fn key(seen: &mut BTreeMap<String, usize>, rule: &str, var: &str) -> String {
     let k = format!("{rule}:{var}");
     let n = seen.entry(k.clone()).or_insert(0);
     *n += 1;
