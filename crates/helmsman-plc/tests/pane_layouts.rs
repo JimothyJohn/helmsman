@@ -60,7 +60,10 @@ fn layouts_survive_a_restart_in_the_export_files_shape() {
     let j: Json = serde_json::from_str(&text).unwrap();
     assert_eq!(j["format"], FORMAT);
     assert_eq!(j["layouts"][0]["left_width"], 400.0);
-    assert!(j["layouts"][0].get("right_width").is_none(), "a size not given is not written: {text}");
+    assert!(
+        j["layouts"][0].get("right_width").is_none(),
+        "a size not given is not written: {text}"
+    );
     let mut k = Kept::in_file(file.clone());
     assert_eq!(names(&mut k), ["commissioning LINE 3", "Wall screen"]);
     assert!(k.list()[0].bottom_open);
@@ -72,9 +75,15 @@ fn layouts_survive_a_restart_in_the_export_files_shape() {
 #[test]
 fn a_file_that_is_not_the_list_reads_as_none_and_bad_entries_are_dropped() {
     let dir = folder("garbage");
-    for (k, text) in ["", "not json", "[]", r#"{"format":"helmsman-pane-layouts 2","layouts":[]}"#, "{\"layouts\":7}"]
-        .into_iter()
-        .enumerate()
+    for (k, text) in [
+        "",
+        "not json",
+        "[]",
+        r#"{"format":"helmsman-pane-layouts 2","layouts":[]}"#,
+        "{\"layouts\":7}",
+    ]
+    .into_iter()
+    .enumerate()
     {
         let file = dir.join(format!("{k}.json"));
         std::fs::write(&file, text).unwrap();
@@ -107,7 +116,8 @@ fn the_box_keeps_at_most_max_layouts_and_refuses_the_next() {
     }
     assert_eq!(k.set(layout("one more")), Err(Refused::Full));
     assert_eq!(k.list().len(), MAX_LAYOUTS);
-    k.set(layout("N3")).expect("a name the box has is replaced when full");
+    k.set(layout("N3"))
+        .expect("a name the box has is replaced when full");
     assert_eq!(k.remove("n0"), Ok(true));
     k.set(layout("one more")).unwrap();
 }
@@ -134,11 +144,26 @@ fn only_a_layout_that_keeps_every_rule_is_read() {
     assert!(!kept.contains("hunter2") && !kept.contains("script"), "{kept}");
     // Names.
     let long = "x".repeat(MAX_NAME + 1);
-    for name in ["", " ", " a", "a ", "a\nb", "a\u{0}", "\u{1b}[31mred", long.as_str()] {
+    for name in [
+        "",
+        " ",
+        " a",
+        "a ",
+        "a\nb",
+        "a\u{0}",
+        "\u{1b}[31mred",
+        long.as_str(),
+    ] {
         assert!(ok(&body(name)).is_err(), "{name:?}");
     }
-    assert!(ok(&body(&"é".repeat(MAX_NAME))).is_ok(), "the limit is characters");
-    assert!(ok(&body("<b>Line 3</b> & \"co\"")).is_ok(), "a name is text, kept as it is");
+    assert!(
+        ok(&body(&"é".repeat(MAX_NAME))).is_ok(),
+        "the limit is characters"
+    );
+    assert!(
+        ok(&body("<b>Line 3</b> & \"co\"")).is_ok(),
+        "a name is text, kept as it is"
+    );
     // Each field, broken one at a time.
     let broken: Vec<(&str, Json)> = vec![
         ("left", json!(["nope"])),
@@ -169,7 +194,10 @@ fn only_a_layout_that_keeps_every_rule_is_read() {
     let mut j = body("A");
     j["right"] = json!([]);
     j["left"] = json!(["devices", "files", "claude", "code", "io"]);
-    assert!(ok(&j).is_ok(), "an empty pane may name any tab: the page falls back");
+    assert!(
+        ok(&j).is_ok(),
+        "an empty pane may name any tab: the page falls back"
+    );
     j["right_shows"] = json!("");
     assert!(ok(&j).is_ok());
     j["right_shows"] = json!("nope");
