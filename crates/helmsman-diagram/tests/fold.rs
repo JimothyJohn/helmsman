@@ -429,7 +429,7 @@ fn a_comparison_with_a_literal_is_one_block_fed_by_the_variable() {
         "lvl : REAL; n : INT; hot, y : BOOL;",
         "hot := lvl > 80.0 AND 3 <= n;\nIF n = 2 THEN y := TRUE; END_IF;",
     );
-    let folds = helmsman_diagram::fold::auto(&d);
+    let folds = helmsman_diagram::fold::chips::chips(&d);
     assert_eq!(
         folds.iter().map(|f| f.title.as_str()).collect::<Vec<_>>(),
         ["> 80.0", "3 <=", "= 2"]
@@ -461,7 +461,7 @@ fn only_a_literal_compared_once_folds() {
     let src = "PROGRAM t\nVAR CONSTANT lim : INT := 5; END_VAR\nVAR a, b : INT; x, y : BOOL; END_VAR\n\
                y := a > b;\ny := 1 < 2;\ny := a > lim;\ny := x = NOT y;\nEND_PROGRAM\n";
     let d = build(src).1.program().unwrap().diagram.clone();
-    assert_eq!(helmsman_diagram::fold::auto(&d), []);
+    assert_eq!(helmsman_diagram::fold::chips::chips(&d), []);
 }
 
 #[test]
@@ -499,4 +499,109 @@ fn the_path_that_drives_an_output_runs_through_the_fold_it_is_in() {
         .unwrap();
     assert!(seen.wire(into));
     assert!(!lit.contains(&"U :="));
+}
+
+#[test]
+fn a_fold_can_keep_the_variables_it_reads_as_blocks_wired_into_it() {
+    let d = diagram(
+        "c, a, b, y, z : BOOL;",
+        "IF c THEN y := a AND c; ELSE y := b; END_IF;\nz := y;",
+    );
+    let f = Fold::over_stmts(&d, "s", FoldKind::Select, "pick", &[d.top[0]]).with_blocks();
+    let v = view(&d, &[f]);
+    assert_eq!(v.skipped, []);
+    // One block per variable (C is read twice in the IF), each wired in;
+    // the condition comes in as a wire too.
+    assert_eq!(
+        shape(&v.diagram),
+        "\
+#0 read C
+#1 read A
+#2 read B
+#3 fold pick <- #0 #1 #2
+#4 read Y
+#5 write Z := <- #4
+"
+    );
+    assert_eq!(v.diagram.node(NodeId(3)).ins, ["C", "A", "B"]);
+    assert_eq!(v.diagram.node(NodeId(3)).outs, ["Y"]);
+    check(&v.diagram);
+    // The kept blocks are the diagram's own first reads; a second read of
+    // the same variable is shown by the fold.
+    let reads_of_c: Vec<NodeId> = d
+        .nodes
+        .iter()
+        .filter(|n| matches!(&n.kind, NodeKind::Read { path } if path == "C"))
+        .map(|n| n.id)
+        .collect();
+    assert_eq!(reads_of_c.len(), 2);
+    assert_eq!(v.original(NodeId(0)), Some(reads_of_c[0]));
+    assert_eq!(v.shown(reads_of_c[1]), Some(NodeId(3)));
+    assert!(!v.folds[0].nodes.contains(&reads_of_c[0]));
+    // Without it, the same fold names them on its pins.
+    let plain = view(
+        &d,
+        &[Fold::over_stmts(&d, "s", FoldKind::Select, "pick", &[d.top[0]])],
+    );
+    assert_eq!(plain.diagram.nodes.len(), 3);
+}
+
+#[test]
+fn a_gate_read_from_outside_a_fold_is_one_of_its_inputs() {
+    // The inner IF is gated by a write made before the fold, through a
+    // bubble; the arm fold must show it.
+    let d = diagram(
+        "a, b, g, y : BOOL;",
+        "g := a;\nIF b THEN\n  IF NOT g THEN y := TRUE; END_IF;\n  y := y;\nEND_IF;",
+    );
+    let body = d.regions[0].body.clone();
+    let v = view(&d, &[Fold::over_stmts(&d, "arm", FoldKind::Arm, "IF B", &body)]);
+    assert_eq!(v.skipped, []);
+    let fold = v
+        .diagram
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, NodeKind::Fold { .. }))
+        .unwrap();
+    let into: Vec<_> = v.diagram.inputs(fold.id).collect();
+    assert_eq!(into.len(), 1, "{}", shape(&v.diagram));
+    assert!(into[0].negated);
+    assert!(matches!(&v.diagram.node(into[0].from).kind, NodeKind::Write { path } if path == "G"));
+    assert_eq!(fold.ins[0], "G");
+    check(&v.diagram);
+}
+
+#[test]
+fn the_folds_a_diagram_opens_with_all_apply_and_the_larger_shape_wins() {
+    let d = diagram(
+        "x, n : INT; start, stop, m, ok, y : BOOL;",
+        "m := (start OR m) AND NOT stop;\nok := x >= 10 AND x <= 20;\ny := n > 3;\nIF ok THEN n := 1; ELSE n := 2; END_IF;",
+    );
+    let folds = helmsman_diagram::fold::auto(&d);
+    let v = view(&d, &folds);
+    // The range took its two comparisons; the chip rule offered them too.
+    assert!(
+        v.skipped.iter().all(|(_, why)| *why == Skipped::Overlaps),
+        "{:?}",
+        v.skipped
+    );
+    let mut kinds: Vec<FoldKind> = v.folds.iter().map(|f| f.kind).collect();
+    kinds.sort();
+    assert_eq!(
+        kinds,
+        [FoldKind::Chip, FoldKind::Range, FoldKind::Latch, FoldKind::Select]
+    );
+    check(&v.diagram);
+    // Every variable still has a block.
+    for name in ["START", "STOP", "X", "N", "OK"] {
+        assert!(
+            v.diagram
+                .nodes
+                .iter()
+                .any(|n| matches!(&n.kind, NodeKind::Read { path } if path == name)
+                    || matches!(&n.kind, NodeKind::Write { path } if path == name)),
+            "{name}\n{}",
+            shape(&v.diagram)
+        );
+    }
 }

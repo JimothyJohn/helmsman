@@ -703,16 +703,16 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
 
 ### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
 
-Built: n-input gates, the fold layer (`helmsman_diagram::fold`) with the canvas drawing it, and the comparison with its literal. Each card below is a rule that makes folds, or a renderer for one. Gates,
+Built: n-input gates, the fold layer (`helmsman_diagram::fold`) with the canvas drawing it, the comparison with its literal, range, latch, edge, selector and set/reset (on as the diagram opens), and sections named by a comment and arms (fold on request). Each card below is one more rule or renderer. Gates,
 chips and idioms are on as the diagram opens; arms, sections and output
 cards fold on request and the choice is kept in `diagram.layout`.
 
-- [ ] **Range block: one variable between two bounds** — `x >= lo AND x <= hi` on one variable as one block (`lo .. hi`), a rule beside `fold::chips` (the comparison with a literal is built: `> 80.0`, edited in place).
-  result: a window on a value reads as one condition
-  est: 3h
-  difficulty: med
-  id: diagram-range
-  asked: 2026-11-15
+- [ ] **A relay profile that writes section comments** — the diagram names a run of statements by the comment alone on its line above it (`fold::structure::sections`). A new profile id in ../agent-relay whose prompt asks for one short comment above each part of a program (a served profile never changes).
+  result: programs the Agent writes open with their parts named on the diagram
+  est: 2h
+  difficulty: low
+  id: relay-profile-sections
+  asked: 2026-11-16
   by: claude-session
   status: ready
 
@@ -725,38 +725,10 @@ cards fold on request and the choice is kept in `diagram.layout`.
   by: claude-session
   status: ready
 
-- [ ] **Folded arms: an IF arm or CASE branch as one block** — title its condition, inputs what it reads from outside, outputs what it writes.
-  result: a long IF reads as its conditions and what each one sets
-  est: 4h
-  difficulty: med
-  id: diagram-fold-arms
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
-- [ ] **Sections named by a comment** — a comment on its own line above a run of statements names a fold over them (`(* Infeed permissives *)`), up to the next such comment or a blank-line break. A relay profile that always writes them is a card of its own in ../agent-relay once this is in.
-  result: the author's own names for the parts of a program are the top level of its diagram
-  est: 5h
-  difficulty: med
-  id: diagram-fold-sections
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
-- [ ] **Idiom blocks: latch, edge, selector, set/reset** — the seal-in `(start OR m) AND NOT stop` drawn as a latch with set and reset pins, `x AND NOT x_prev` as a rising edge, `IF c THEN y := a; ELSE y := b` as a selector, an IF that only writes TRUE or FALSE as set/reset. Recognised on the diagram, never by guessing: a shape that differs by one wire stays as it is.
-  result: the standard circuits show under their names
-  est: 1d
-  difficulty: high
-  id: diagram-idioms
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
 - [ ] **State block: a CASE on a state variable as one block of states** — the states as chips, the active one lit, a tap on a chip opens that state's arm.
   result: a sequence shows which step it is in at a glance
   est: 6h
   difficulty: med
-  depends: diagram-fold-arms
   id: diagram-state-block
   asked: 2026-11-15
   by: claude-session
@@ -784,7 +756,7 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: a large program is readable at any zoom
   est: 6h
   difficulty: med
-  depends: diagram-fold-sections, diagram-output-cards
+  depends: diagram-output-cards
   id: diagram-semantic-zoom
   asked: 2026-11-15
   by: claude-session

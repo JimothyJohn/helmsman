@@ -115,7 +115,14 @@ pub fn latches(d: &Diagram) -> Vec<Fold> {
             {
                 continue;
             }
-            let nodes = [or_w.from, and];
+            // The variable read back only to hold itself is part of the
+            // latch; one wired from an earlier write, or read elsewhere in
+            // the statement too, stays an input by its name.
+            let own = matches!(d.node(fb.from).kind, NodeKind::Read { .. }) && consumers(d, fb.from) == 1;
+            let mut nodes = vec![or_w.from, and];
+            if own {
+                nodes.push(fb.from);
+            }
             if !one_place(d, &nodes) {
                 continue;
             }

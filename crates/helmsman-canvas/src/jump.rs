@@ -323,7 +323,7 @@ END_PROGRAM
 
         /// The stop the view frames: the one picked.
         fn framed(&self) -> String {
-            let all = stops(self.view.diagram());
+            let all = self.view.stops();
             let k = all
                 .iter()
                 .position(|s| Some(s.pick) == self.view.pick)
@@ -394,7 +394,8 @@ END_PROGRAM
         // one there, E has none on its side and goes round to the first.
         let rightmost = |h: &Harness| {
             let cam = h.view.cams[h.view.scope];
-            stops(h.view.diagram())
+            h.view
+                .stops()
                 .iter()
                 .map(|s| cam.to_screen(s.rect.x + s.rect.w / 2.0, 0.0).x)
                 .fold(f32::MIN, f32::max)
@@ -417,7 +418,7 @@ END_PROGRAM
         assert!(rightmost(&h) < SIZE.x / 2.0, "every stop is left of the centre");
         let cam = h.view.cams[h.view.scope];
         let centre = cam.to_world(Pos2::new(SIZE.x / 2.0, f32::midpoint(SIZE.y, GLYPH_BAND)));
-        let all = stops(h.view.diagram());
+        let all = h.view.stops();
         let nearest = next(&all, None, centre, false).unwrap();
         h.press(Modifiers::NONE, Key::Q);
         assert_eq!(h.view.pick, Some(all[nearest].pick));

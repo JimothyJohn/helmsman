@@ -2706,17 +2706,36 @@ canvas" at the end of this section.
   a block with an earlier one, is left out and the view says why. The
   view maps its blocks, ports, wires and regions back (`View::live`,
   `View::drivers`, `View::original`), so lowering, the trace mapping and
-  the edit spans are those of the diagram underneath. The rules that
-  make folds: `fold::chips` (a comparison with a literal is one block,
-  `> 80.0`, fed by the variable, which keeps its own block), on as the
-  diagram opens (`fold::auto`). On the canvas (`Viewer::shown`, tests in
-  `st_view_fold_tests.rs`) the viewer keeps everything in the diagram's
-  own numbers and draws the view: a click on a fold picks a block under
-  it, a double click opens it into its blocks (outlined, with a tab that
-  folds them back), a folded comparison is edited in place (double click
-  its value, right click for the operator), a dragged fold keeps its
-  place. Opened folds are carried across a redeploy; they are not yet in
-  `diagram.layout`.
+  the edit spans are those of the diagram underneath. A whole-statement
+  fold made `with_blocks` keeps one block per variable it reads, wired
+  into it (on the canvas that block is where an input is set), and a
+  region inside a fold that is gated from outside it is one more input.
+  The rules that make folds, each a function from a diagram to folds
+  that never guesses (a shape one wire off is left as it is):
+  - `fold::chips`: a comparison with a literal is one block (`> 80.0`)
+    fed by the variable.
+  - `fold::idioms`: `ranges` (`10 .. 20`, strictness shown), `latches`
+    (the seal-in, with `set` and `reset` pins), `edges` (`rising X`,
+    only with its `prev := x` statement after it), `selects` (IF/ELSE
+    assigning one variable), `set_resets` (an IF that only writes TRUE
+    or FALSE).
+  - `fold::structure`: `arms` (an outermost IF, CASE or loop arm of two
+    statements or more) and `sections` (a comment alone on its line
+    above a top-level statement names the run of statements under it).
+  `fold::auto` is what a diagram opens with: the idioms and the chips,
+  the larger shape first (a range wins over its two comparisons).
+  On the canvas (`Viewer::shown`, tests in `st_view_fold_tests.rs`) the
+  viewer keeps everything in the diagram's own numbers and draws the
+  view: a click on a fold picks a block under it, a double click opens
+  it into its blocks (outlined, with a tab that folds them back), a
+  folded comparison is edited in place (double click its value, right
+  click for the operator), a right click on a fold's pin is a gesture
+  on the pin behind it, a dragged fold keeps its place. Sections and
+  arms start as their blocks (`on_request`): a section is outlined
+  under its name and folds from that tab, an arm folds from a double
+  click on its label. The Q/E jump keeps its stops when an IF is drawn
+  as one block (`Viewer::stops`). What the reader opened or folded is
+  carried across a redeploy; it is not yet in `diagram.layout`.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label
