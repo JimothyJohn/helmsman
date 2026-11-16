@@ -243,7 +243,15 @@ fn folds_of(d: &Diagram, seeds: &[(u8, u16, u16)]) -> Vec<Fold> {
     let mut out = Vec::new();
     for (k, &(shape, a, b)) in seeds.iter().enumerate() {
         let key = format!("f{k}");
-        if shape % 3 < 2 {
+        if shape % 7 == 6 {
+            // A CASE on a variable as a block of states, if there is one.
+            let cases = helmsman_diagram::fold::states::states(d);
+            if !cases.is_empty() {
+                let mut f = cases[a as usize % cases.len()].clone();
+                f.key = key;
+                out.push(f.with_blocks());
+            }
+        } else if shape % 3 < 2 {
             let mut blocks: Vec<&[usize]> = vec![&d.top];
             blocks.extend(d.regions.iter().map(|r| r.body.as_slice()));
             let block = blocks[a as usize % blocks.len()];

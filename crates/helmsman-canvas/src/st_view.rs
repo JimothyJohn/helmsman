@@ -11,7 +11,7 @@ use eframe::egui::{
     epaint::CubicBezierShape,
 };
 use helmsman_diagram::fold::{Fold, FoldKind, Origin, View, structure};
-use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
+use helmsman_diagram::layout::{self, HEADER, LABEL_H, in_port, out_port};
 use helmsman_diagram::lower::Var;
 use helmsman_diagram::{
     Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, drivers,
@@ -149,10 +149,18 @@ impl Cam {
     /// along a side that does not fit at the smallest zoom (an IF larger
     /// than the view shows its label and condition).
     fn frame(&mut self, area: Rect, r: &helmsman_diagram::Rect) {
+        self.frame_within(area, r, FOCUS_MAX);
+    }
+
+    /// [`Self::frame`] never closer than `max_zoom`. Returns whether `r`
+    /// with its padding fits in `area` at the zoom chosen (it does not
+    /// when it is larger than the view at [`LEGIBLE`]).
+    fn frame_within(&mut self, area: Rect, r: &helmsman_diagram::Rect, max_zoom: f32) -> bool {
         let pad = 2.0 * FOCUS_PAD;
         let zoom = (area.width() / (r.w + pad))
             .min(area.height() / (r.h + pad))
-            .clamp(LEGIBLE, FOCUS_MAX);
+            .clamp(LEGIBLE.min(max_zoom), max_zoom);
+        let fits = (r.w + pad) * zoom <= area.width() + 0.01 && (r.h + pad) * zoom <= area.height() + 0.01;
         let along = |lo: f32, hi: f32, at: f32, len: f32| {
             let start = if (len + pad) * zoom > hi - lo {
                 lo + FOCUS_PAD * zoom
@@ -167,6 +175,7 @@ impl Cam {
             along(area.top(), area.bottom(), r.y, r.h),
         ) - self.origin.to_vec2();
         self.moved = true;
+        fits
     }
 
     /// Whether the view is where `to` (an offset and a zoom) put it.
@@ -912,6 +921,108 @@ impl Viewer {
         self.pick = None;
         self.edits += 1;
         self.reshow();
+    }
+
+    /// The state under screen point `p`, on a state block drawn: the
+    /// fold's key and the arm's region of the diagram. A tap lands on the
+    /// row it is level with, anywhere between the pins' names.
+    fn chip_at(&self, cam: Cam, p: Pos2) -> Option<(String, RegionId)> {
+        let (x, y) = cam.to_world(p);
+        let d = self.shown();
+        let n = d.node_at(x, y)?;
+        let f = self.fold_shown(n).filter(|f| f.kind == FoldKind::State)?;
+        let node = d.node(n);
+        f.rows
+            .iter()
+            .enumerate()
+            .find(|&(k, _)| {
+                let r = layout::body_row(node, k);
+                x >= r.x && x <= r.right() && y >= r.y - 1.0 && y <= r.bottom() + 1.0
+            })
+            .map(|(_, row)| (f.key.clone(), row.region))
+    }
+
+    /// Opens state block `key` and shows its arm `arm` (a region of the
+    /// diagram): picked, and the view easing over to frame it in `area`.
+    fn open_arm(&mut self, key: &str, arm: RegionId, area: Rect, now: f64) {
+        self.set_fold(key, true);
+        self.because = None;
+        self.xref = None;
+        let Some(shown) = self.view().map_or(Some(arm), |v| v.region_shown(arm)) else {
+            return;
+        };
+        self.pick = Some(Pick::Region(arm));
+        let cam = self.cams[self.scope];
+        let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
+        let arm_rect = self.shown().region(shown).rect;
+        // The tab over the opened fold, in diagram units (a camera at the
+        // origin at zoom 1 draws diagram units as they are).
+        let world = Cam {
+            offset: Vec2::ZERO,
+            zoom: 1.0,
+            origin: Pos2::ZERO,
+            ..cam
+        };
+        let tab = self
+            .opened_tabs(world)
+            .into_iter()
+            .find(|(k, ..)| k == key)
+            .map(|(.., t)| helmsman_diagram::Rect {
+                x: t.min.x,
+                y: t.min.y,
+                w: t.width(),
+                h: t.height(),
+            });
+        // Whole on screen, centred, never closer than the reader had it:
+        // with its tab (the way back) if both fit at that zoom, else the
+        // arm alone.
+        let mut to = cam;
+        let with_tab = tab.map(|t| {
+            let (x, y) = (t.x.min(arm_rect.x), t.y.min(arm_rect.y));
+            helmsman_diagram::Rect {
+                x,
+                y,
+                w: t.right().max(arm_rect.right()) - x,
+                h: t.bottom().max(arm_rect.bottom()) - y,
+            }
+        });
+        let both = with_tab.is_some_and(|r| to.frame_within(below, &r, cam.zoom));
+        if !both {
+            to = cam;
+            to.frame_within(below, &arm_rect, cam.zoom);
+        }
+        to.clamp(area, self.shown().size);
+        self.cams[self.scope].moved = true;
+        self.glide = Some(Glide {
+            scope: self.scope,
+            from: (cam.offset, cam.zoom),
+            to: (to.offset, to.zoom),
+            t0: now,
+        });
+    }
+
+    /// The rows of each state block drawn, lit by `live` (the scan of the
+    /// diagram underneath: an arm ran if its gate is open).
+    fn state_rows(&self, live: Option<&Live>) -> Vec<(NodeId, Vec<StateRow>)> {
+        let Some(v) = self.view() else {
+            return Vec::new();
+        };
+        v.diagram
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let f = v.fold_at(n.id).filter(|f| f.kind == FoldKind::State)?;
+                let rows = f
+                    .rows
+                    .iter()
+                    .map(|r| StateRow {
+                        label: r.label.clone(),
+                        on: live.map(|l| l.gates.get(r.region.0 as usize).is_some_and(|g| g.open())),
+                    })
+                    .collect();
+                Some((n.id, rows))
+            })
+            .collect()
     }
 
     /// Each opened fold of the POU shown with the box around its blocks
@@ -2134,7 +2245,15 @@ impl Viewer {
             self.jump(forward, area, now);
         }
         let cam = self.cams[self.scope];
-        if response.clicked()
+        let chip = response
+            .clicked()
+            .then(|| response.interact_pointer_pos())
+            .flatten()
+            .and_then(|p| self.chip_at(cam, p));
+        if let Some((key, arm)) = chip {
+            // A tap on a state opens the sequence on that state's arm.
+            self.open_arm(&key, arm, area, now);
+        } else if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
         {
             let (x, y) = cam.to_world(p);
@@ -2208,10 +2327,15 @@ impl Viewer {
                 .map(|n| n.id),
         );
         let tabs = self.opened_tabs(cam);
+        let rows = self.state_rows(live.as_ref());
         if response.hovered()
             && let Some(p) = hover
         {
-            if self.fold_at(cam, p).is_some() {
+            if self.chip_at(cam, p).is_some() {
+                response
+                    .clone()
+                    .on_hover_text_at_pointer("A state of this sequence. Click to see what it does.");
+            } else if self.fold_at(cam, p).is_some() {
                 response
                     .clone()
                     .on_hover_text_at_pointer("Several blocks drawn as one. Double-click shows them.");
@@ -2263,6 +2387,7 @@ impl Viewer {
                 added: &added,
                 opens: &opens,
                 ghosts: old.map(|o| (o, removed.as_slice())),
+                rows: &rows,
             },
         );
         for (_, title, around, tab) in &tabs {
@@ -2463,6 +2588,17 @@ struct Marks<'a> {
     /// Blocks it removed, in the old diagram: drawn as red ghosts where
     /// they were.
     ghosts: Option<(&'a Diagram, &'a [NodeId])>,
+    /// The rows of the state blocks drawn, by block ([`Viewer::state_rows`]).
+    rows: &'a [(NodeId, Vec<StateRow>)],
+}
+
+/// One state of a state block, as [`draw`] paints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateRow {
+    /// The arm's label: `1, 3..5`, `ELSE`.
+    pub label: String,
+    /// Whether the arm ran in the scan drawn; `None` with no scan.
+    pub on: Option<bool>,
 }
 
 /// Where a statement is marked on the diagram: the blocks it ends in, or
@@ -2593,6 +2729,7 @@ fn draw(
         added,
         opens,
         ghosts,
+        rows,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -2836,8 +2973,13 @@ fn draw(
         // too small to draw (Nick, 2026-11-01).
         // A standard block takes its picture from the glyph library
         // instead of its character (`Icons::glyph`).
-        let glyph = icons.glyph(n);
-        let icon = if glyph.is_some() { None } else { icons.of(n) };
+        let states = rows.iter().find(|(id, _)| *id == n.id).map(|(_, r)| r.as_slice());
+        let glyph = icons.glyph(n).filter(|_| states.is_none());
+        let icon = if glyph.is_some() || states.is_some() {
+            None
+        } else {
+            icons.of(n)
+        };
         if !text {
             if let Some(g) = glyph {
                 let side = (18.0 * z).max(14.0);
@@ -2854,6 +2996,39 @@ fn draw(
                     i,
                     font((14.0 * z).max(11.0)),
                     ink.gamma_multiply(fade),
+                );
+            }
+        }
+        for (k, row) in states.into_iter().flatten().enumerate() {
+            // One chip per state: the one that ran lit in the brand yellow.
+            let c = cam.rect(&layout::body_row(n, k));
+            let (fill, ink) = match row.on {
+                Some(true) => (YELLOW, BLACK),
+                _ => (t.shade, t.fg),
+            };
+            let chip = CornerRadius::same(3);
+            painter.rect_filled(c, chip, fill.gamma_multiply(fade));
+            painter.rect_stroke(
+                c,
+                chip,
+                Stroke::new(
+                    1.0 * z.max(0.6),
+                    if row.on == Some(true) { YELLOW } else { t.edge },
+                ),
+                StrokeKind::Inside,
+            );
+            if text {
+                let g = fitted(
+                    painter,
+                    &row.label,
+                    font(11.0 * z),
+                    ink.gamma_multiply(fade),
+                    c.width() - 8.0 * z,
+                );
+                painter.galley(
+                    Pos2::new(c.left() + 4.0 * z, c.center().y - g.size().y / 2.0),
+                    g,
+                    ink,
                 );
             }
         }
