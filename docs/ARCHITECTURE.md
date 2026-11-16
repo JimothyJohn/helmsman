@@ -3310,6 +3310,61 @@ both). No box, no server: everything runs in the page (`playground.rs`,
     for it (`port X: no signal of that name`) is followed by
     `box_projects::deploy_words`. Contracts in `box_spec_tests.rs` (the real
     box API) and `ui_tests/spec_mode.rs`.
+- **The design step** (`design.rs`, `design_step.rs`, `design_ui.rs`; Nick,
+  2026-11-15, card `design-step-canvas`): "Design a machine…" in the Agent
+  tab, beside "From a spec…", on both pages. `design.rs` is the contract
+  with the relay's `helmsman/design-v1` (the request, `Continue`, the
+  reader, `Design::problems`, `Design::step_brief`); `design_step.rs` is
+  the state and the streams, free of I/O like `box_agent.rs`; `design_ui.rs`
+  is the screens (the entry and its cards in the tab, the description
+  window, the window the design is read in), plain data in and an `Act` out.
+  - **Two routes, one `Designer`.** On a box the page posts `{description}`
+    to `POST /api/design` and `{session}` again while `done.more` is true
+    (`BoxView`, its own `ChatHttp`; the box adds the dialect and the
+    project). In the simulation it asks the relay's design entry at a second
+    address, `HELMSMAN_DESIGN_URL` when the page is built (unset: no entry;
+    `scripts/build-playground.sh` checks it is an origin and opens the
+    page's `connect-src` to it): `GET {url}/demo/v1/status` decides whether
+    the entry is shown (`Avail::from_status`: the entry is there only while
+    the relay lists the agent and says it is open; closed, it says so; the
+    chat's own status is never read for it), and `POST {url}/demo/v1/messages`
+    carries `{"agent": "design", "messages"}` and nothing else. A continued
+    design sends the first message again, each answer as the blocks the
+    stream gave (`Block`: thinking with its signature, redacted thinking,
+    text, exactly) and the word `Continue`; the relay takes 9 messages and
+    1 MiB, so a design that needs more says it is too large for the
+    playground (`design_step::TOO_LARGE`) rather than fail. Refusals are
+    put in words (`refusal`): `design_closed`, `design_allowance_used`
+    (with the wait from `retry_after_s`, counted down in the tab), 413,
+    403, `upstream_rejected`, `upstream_unavailable`; neither touches the
+    chat's state. A stream without `relay_usage` (the box's `done`) was cut
+    off: the tab says so and offers Carry on (the turn is asked again) or
+    Discard; Stop leaves no draft. The page transport is `web::ClaudeLink`
+    with `claude::json_post` (no key, no other header).
+  - **Kept as `design.md`**, a kept file (`helmsman_project::kept_name`) like
+    `spec.md`: Keep is one revision in the simulation (a built-in example
+    first becomes a project named for the machine). The box's file route
+    writes only the files a project uses, so on a box Keep makes a copy of
+    the open project, as the box holds it, with `design.md` in it, through
+    the atomic zip route (`PCall::DesignProject`; a taken name goes to a free
+    one, nothing is written over, unsaved edits stop it). The cleaner box
+    route, `design.md` through `PUT .../files`, is a change to
+    `helmsman-project`'s file names and is not made here.
+  - **Build** reads the kept `design.md` again (`KeptCache`), shows
+    `Design::problems` before it offers Build (a design with a problem is
+    never built), and hands the build order to the steps run in batches of
+    at most `steps::MAX_STEPS`: `Instruct::start_design_steps` makes a
+    `Plan` whose `briefs` are `Design::step_brief` for each step (instead of
+    `steps::step_request`) and whose `of` is where the batch stands in the
+    design ("steps 1 to 6 of 19" in the tab). The run is the steps run's:
+    a working copy, each step checked and retried, the file written once
+    when the batch has passed. A design step that runs out of room pauses
+    and is not split (a smaller step would lose the parts and requirements
+    it names). The steps built are counted per project in the page, after
+    the batch is written (not across a reload); one PROGRAM per project and
+    the six-step plan stay. Contracts in `design_step_tests.rs` (the
+    recorded bottling line), `design_page_tests.rs`, `box_design_tests.rs`
+    (the real box API) and `ui_tests/design.rs` (the panel's default width).
 - **The Agent watches** (`watch.rs`; Nick, 2026-11-14): what the page
   already sees go wrong is said unasked in a card over the top of the
   diagram (on screen whichever tab is open, not modal), one thing at a time, most urgent first (`watch::noticed`): an

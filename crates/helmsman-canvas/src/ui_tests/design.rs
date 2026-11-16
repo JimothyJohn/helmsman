@@ -423,9 +423,15 @@ fn box_turn(text: &str, more: bool) -> String {
     let e = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
     [
         e("session", json!({"id": "d1"})),
-        e("thinking", json!({"delta": format!("Stations first. {}", "Q".repeat(300))})),
+        e(
+            "thinking",
+            json!({"delta": format!("Stations first. {}", "Q".repeat(300))}),
+        ),
         e("text", json!({"delta": text})),
-        e("done", json!({"stop": if more { "max_tokens" } else { "end_turn" }, "more": more})),
+        e(
+            "done",
+            json!({"stop": if more { "max_tokens" } else { "end_turn" }, "more": more}),
+        ),
     ]
     .concat()
 }

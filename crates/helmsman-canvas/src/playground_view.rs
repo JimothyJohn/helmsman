@@ -259,8 +259,6 @@ pub struct PlaygroundView {
     pub design: crate::design_step::Designer,
     /// Its way to the relay's design entry.
     pub design_link: Link,
-    /// The design entry was asked for its status.
-    design_asked: bool,
     /// The batch of the kept design the Agent is building: the project
     /// and how many steps it holds.
     design_building: Option<(String, usize)>,
@@ -364,7 +362,6 @@ impl PlaygroundView {
             spec_review: None,
             design: crate::design_step::Designer::page(),
             design_link: Link::default(),
-            design_asked: false,
             design_building: None,
             design_built: std::collections::BTreeMap::new(),
             design_cache: crate::design_step::KeptCache::default(),
@@ -1685,10 +1682,7 @@ impl PlaygroundView {
     /// Each frame: the design entry's status when it is not known, what
     /// the transport brought, and a batch that ended.
     fn design_tick(&mut self, ctx: &egui::Context) {
-        if !self.design_asked
-            && let Some(base) = self.design.to_ask().map(str::to_string)
-        {
-            self.design_asked = true;
+        if let Some(base) = self.design.ask_status() {
             self.design_link.check_design(&base, ctx);
         }
         let now = ctx.input(|i| i.time);

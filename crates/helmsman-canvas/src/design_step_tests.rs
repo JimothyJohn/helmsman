@@ -160,13 +160,13 @@ fn the_status_decides_whether_the_entry_is_shown() {
     }
     let mut d = Designer::page();
     assert!(!d.visible(), "no address built in: no entry");
-    assert_eq!(d.to_ask(), None);
+    assert_eq!(d.ask_status(), None);
     d.set_base(BASE);
     assert!(!d.visible(), "not asked yet: no entry");
-    assert_eq!(d.to_ask(), Some(BASE));
+    assert_eq!(d.ask_status().as_deref(), Some(BASE));
     d.status_body(OPEN);
     assert!(d.visible());
-    assert_eq!(d.to_ask(), None, "asked once");
+    assert_eq!(d.ask_status(), None, "asked once");
     d.status_body("");
     assert!(!d.visible());
 }
@@ -861,7 +861,7 @@ fn box_turn(session: &str, text: &str, more: bool) -> String {
 #[test]
 fn on_a_box_a_cut_turn_is_continued_by_session_until_done_says_no_more() {
     let mut d = Designer::boxed();
-    assert!(d.visible() && d.to_ask().is_none());
+    assert!(d.visible() && d.ask_status().is_none());
     let req = d.start_box("  A bottling line.  ", 0.0).unwrap();
     assert_eq!(req.url, "/api/design");
     assert_eq!(body(&req), json!({"description": "A bottling line."}));

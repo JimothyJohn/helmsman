@@ -74,6 +74,8 @@ pub enum Place {
 pub enum Avail {
     /// Not asked yet.
     Unknown,
+    /// Asked; no answer yet.
+    Asking,
     /// Not served here (no address, the relay does not serve it, or it
     /// could not be asked): the page shows no entry.
     Hidden,
@@ -689,10 +691,15 @@ impl Designer {
         self.avail = Avail::Unknown;
     }
 
-    /// The address to ask for the status, while it is not known.
-    #[must_use]
-    pub fn to_ask(&self) -> Option<&str> {
-        self.base.as_deref().filter(|_| self.avail == Avail::Unknown)
+    /// The address to ask for the status, once: the status is then
+    /// being asked for until [`Self::status_body`] hears it.
+    pub fn ask_status(&mut self) -> Option<String> {
+        if self.avail != Avail::Unknown {
+            return None;
+        }
+        let base = self.base.clone()?;
+        self.avail = Avail::Asking;
+        Some(base)
     }
 
     /// The status reply came.

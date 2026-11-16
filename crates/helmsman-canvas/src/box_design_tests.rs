@@ -213,7 +213,7 @@ fn keeping_the_design_makes_a_copy_of_the_project_with_design_md_in_one_atomic_r
 fn a_taken_name_unsaved_edits_and_a_refused_project_keep_nothing_and_leave_the_design_to_try_again() {
     let b = Bench::new();
     let jar = Jar::default();
-    let (mut v, ctx) = with_project(&b, &jar);
+    let (mut v, _ctx) = with_project(&b, &jar);
     let read = || crate::design_step::Read::new(LAMP_DESIGN.into(), 1, "A lamp.".into());
     // Unsaved edits are not in what the box holds: say so, send nothing.
     v.projects.current_mut().unwrap().text.push_str("(* edit *)\n");
@@ -340,7 +340,7 @@ fn an_operator_a_missing_project_and_a_busy_agent_each_say_why_and_ask_nothing()
     );
     v.design.description = "A lamp.".into();
     v.send_design(&ctx);
-    assert!(v.design_sent.is_empty());
+    assert_eq!(v.design_sent.len(), 0);
     assert!(v.design.error.is_some());
     // An operator.
     let mut v = page(&b, &jar, Some(("bob", BOB)));
@@ -352,7 +352,7 @@ fn an_operator_a_missing_project_and_a_busy_agent_each_say_why_and_ask_nothing()
     );
     v.design.description = "A lamp.".into();
     v.send_design(&ctx);
-    assert!(v.design_sent.is_empty());
+    assert_eq!(v.design_sent.len(), 0);
     // An instruction under way.
     let (mut v, ctx) = with_project(&b, &jar);
     v.instruct.draft = "make the lamp blink".into();
@@ -361,7 +361,7 @@ fn an_operator_a_missing_project_and_a_busy_agent_each_say_why_and_ask_nothing()
     assert!(v.design_blocked().unwrap().contains("still working"));
     v.design.description = "A lamp.".into();
     v.send_design(&ctx);
-    assert!(v.design_sent.is_empty());
+    assert_eq!(v.design_sent.len(), 0);
 }
 
 #[test]

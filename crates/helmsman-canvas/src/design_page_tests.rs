@@ -416,7 +416,7 @@ fn a_design_entry_the_relay_does_not_serve_shows_nothing_and_the_chat_works() {
                 &crate::instruct_tests::LAMP.replace("lamp := start;\n", "lamp := start OR lamp;\n")
             )],
         );
-        assert!(!bodies.is_empty());
+        assert_ne!(bodies.len(), 0);
         assert!(v.design_link.sent.is_empty(), "no design request was made");
     }
 }
