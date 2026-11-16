@@ -5,7 +5,7 @@ use eframe::egui::{self, Event, PointerButton, Pos2, RawInput, Rect, Vec2};
 use helmsman_diagram::fold::{Fold, FoldKind};
 use helmsman_diagram::{NodeId, NodeKind};
 
-use super::{Pick, Scan, Viewer};
+use super::{Cam, Pick, Scan, Viewer};
 use crate::playground::Session;
 
 const SRC: &str = "PROGRAM line
@@ -534,6 +534,136 @@ fn a_tap_on_a_state_opens_the_sequence_on_that_state() {
     h.press(h.chip("ELSE"), 1);
     let last = h.view.diagram().stmts[0].arms[3];
     assert_eq!(h.view.pick, Some(Pick::Region(last)));
+}
+
+/// Where the view is going after a tap: the arm's box on screen and the
+/// zoom, at the end of the glide.
+fn aimed(h: &Harness, arm: helmsman_diagram::RegionId) -> (Rect, f32, Option<Rect>) {
+    let g = h.view.glide.as_ref().expect("the view eases over to the arm");
+    let cam = Cam {
+        offset: g.to.0,
+        zoom: g.to.1,
+        ..h.view.cams[h.view.scope]
+    };
+    let shown = h.view.view().map_or(Some(arm), |v| v.region_shown(arm)).unwrap();
+    let rect = cam.rect(&h.view.shown().region(shown).rect);
+    let tab = h.view.opened_tabs(cam).into_iter().next().map(|(.., tab)| tab);
+    (rect, g.to.1, tab)
+}
+
+/// The part of the view the diagram is drawn in.
+fn visible(h: &Harness) -> Rect {
+    let cam = h.view.cams[h.view.scope];
+    Rect::from_min_size(cam.origin, cam.area)
+}
+
+#[test]
+fn after_a_tap_the_arm_is_whole_on_screen_with_the_tab_and_no_closer_than_before() {
+    for zoom in [0.8, 1.0, 1.6] {
+        let mut h = Harness::of(SEQ);
+        h.view.cams[h.view.scope].zoom = zoom;
+        h.frame(vec![]);
+        let before = h.view.cams[h.view.scope].zoom;
+        let arm = h.view.diagram().stmts[0].arms[2];
+        let at = h.chip("3..5");
+        h.press(at, 1);
+        // Read the aim before the glide ends (a press ends with idle frames).
+        let (rect, to, tab) = aimed_or_arrived(&h, arm);
+        let view = visible(&h);
+        assert!(to <= before + 1e-3, "zoom {to} after a tap at {before}");
+        assert!(view.contains_rect(rect), "{rect:?} not in {view:?} at {before}");
+        let tab = tab.expect("the fold's tab");
+        assert!(view.contains_rect(tab), "{tab:?} not in {view:?} at {before}");
+        // Centred: the middle of the arm is near the middle of the view.
+        let off = (rect.center() - view.center()).abs();
+        // (the frame centres the arm and its tab together).
+        assert!(
+            off.x < view.width() / 4.0 && off.y < view.height() / 2.0,
+            "{off:?}"
+        );
+    }
+}
+
+/// The aim of the last tap, whether the glide is still going or arrived.
+fn aimed_or_arrived(h: &Harness, arm: helmsman_diagram::RegionId) -> (Rect, f32, Option<Rect>) {
+    if h.view.glide.is_some() {
+        return aimed(h, arm);
+    }
+    let cam = h.view.cams[h.view.scope];
+    let shown = h.view.view().map_or(Some(arm), |v| v.region_shown(arm)).unwrap();
+    let tab = h.view.opened_tabs(cam).into_iter().next().map(|(.., t)| t);
+    (cam.rect(&h.view.shown().region(shown).rect), cam.zoom, tab)
+}
+
+#[test]
+fn the_last_of_thirty_states_is_framed_whole_and_not_zoomed_in() {
+    use std::fmt::Write as _;
+    let mut src = String::from("PROGRAM seq\nVAR step : INT; y : BOOL; END_VAR\nCASE step OF\n");
+    for i in 0..30 {
+        writeln!(src, "  {i}: y := {};", i % 2 == 0).unwrap();
+    }
+    src.push_str("END_CASE;\nEND_PROGRAM\n");
+    let mut h = Harness::of(&src);
+    let before = h.view.cams[h.view.scope].zoom;
+    let arm = h.view.diagram().stmts[0].arms[29];
+    let at = h.chip("29");
+    h.press(at, 1);
+    let (rect, to, _) = aimed_or_arrived(&h, arm);
+    let view = visible(&h);
+    assert!(to <= before + 1e-3, "{to} vs {before}");
+    assert!(view.contains_rect(rect), "{rect:?} not in {view:?}");
+    assert_eq!(h.view.pick, Some(Pick::Region(arm)));
+}
+
+#[test]
+fn an_arm_wider_than_the_view_is_zoomed_out_to_the_legible_floor_and_shown_from_its_corner() {
+    use std::fmt::Write as _;
+    let mut src = String::from(
+        "PROGRAM seq\nVAR step : INT; y : ARRAY[0..59] OF BOOL; END_VAR\nCASE step OF\n 0: step := 1;\n 1:\n",
+    );
+    for i in 0..60 {
+        writeln!(src, "  y[{i}] := step > {i};").unwrap();
+    }
+    src.push_str("END_CASE;\nEND_PROGRAM\n");
+    let mut h = Harness::of(&src);
+    h.view.cams[h.view.scope].zoom = 2.0;
+    h.frame(vec![]);
+    let arm = h.view.diagram().stmts[0].arms[1];
+    let at = h.chip("1");
+    h.press(at, 1);
+    let (rect, to, _) = aimed_or_arrived(&h, arm);
+    let view = visible(&h);
+    assert!(to < 2.0 && to >= super::LEGIBLE - 1e-3, "{to}");
+    // Whole when it fits at that zoom, else its top left corner in view.
+    assert!(
+        view.contains_rect(rect) || view.contains(rect.min),
+        "{rect:?} not in {view:?}"
+    );
+}
+
+#[test]
+fn a_frame_is_never_closer_than_asked_and_says_whether_it_fits() {
+    let area = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+    let small = helmsman_diagram::Rect {
+        x: 10.0,
+        y: 10.0,
+        w: 100.0,
+        h: 50.0,
+    };
+    let mut cam = Cam::default();
+    assert!(cam.frame_within(area, &small, 1.0));
+    assert!((cam.zoom - 1.0).abs() < 1e-6, "{}", cam.zoom);
+    let huge = helmsman_diagram::Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 5000.0,
+        h: 300.0,
+    };
+    assert!(!cam.frame_within(area, &huge, 1.0));
+    assert!((cam.zoom - super::LEGIBLE).abs() < 1e-6);
+    // Asked for less than the floor, it gives no more than asked.
+    cam.frame_within(area, &small, 0.5);
+    assert!((cam.zoom - 0.5).abs() < 1e-6);
 }
 
 #[test]
