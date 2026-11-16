@@ -591,6 +591,9 @@ pub enum DeviceAct {
     /// The quick form's Add: the profile file into the project, then the
     /// device into io.map.
     Quick(QuickAdd),
+    /// Assign a program port to a device channel, or put it back on
+    /// simulated I/O (`crate::assign`): the view writes io.map.
+    Assign(crate::assign::AssignAct),
     /// A device's + Add I/O: open the picker on it (`device_io.rs`). The
     /// view copies a read-only example first (the playground).
     AddIo(String),
@@ -1002,6 +1005,8 @@ pub struct DevicesUi {
     /// The picker on a point: what is wired to it, by its label number
     /// (`wired.rs`).
     pub picking: Option<crate::wired::Pick>,
+    /// The question "assign it to what?" (`assign_ui.rs`), while open.
+    pub assigning: Option<crate::assign_ui::Ask>,
     /// The device profile the agent proposed (`device_proposal.rs`).
     pub proposal: crate::device_proposal::ProposalUi,
     /// The vendor's file for the agent, beside a found device the library
@@ -1139,7 +1144,7 @@ impl DevicesUi {
 }
 
 /// A right-click menu's item; `tip` shows enabled or not (disabled: why).
-fn menu_item(
+pub(crate) fn menu_item(
     ui: &mut egui::Ui,
     chrome: &mut Chrome,
     key: &str,
@@ -1364,6 +1369,24 @@ impl DevicesUi {
                     self.renaming = Some((p.signal.clone(), p.signal.clone()));
                 }
                 let (mut renamed, mut pick) = (false, false);
+                // What the Devices tab can do with the point beside the
+                // program's ports: which port it feeds, and which could.
+                let feeds = declared
+                    .then(|| crate::assign::port_on(&self.map, &self.program, &n.name, &p.point))
+                    .flatten()
+                    .map(|q| q.name.clone());
+                let takers = if declared && feeds.is_none() {
+                    crate::assign::ports_for(
+                        &self.map,
+                        &self.program,
+                        &|d| self.channels_of(d),
+                        &n.name,
+                        &p.point,
+                    )
+                } else {
+                    Vec::new()
+                };
+                let (mut assign_asked, mut back_asked) = (false, false);
                 r.context_menu(|ui| {
                     if menu_item(
                         ui,
@@ -1400,7 +1423,57 @@ impl DevicesUi {
                             String::as_str,
                         ),
                     );
+                    if declared {
+                        let word = if p.dir == "in" { "input" } else { "output" };
+                        let (ok, tip) = match (write, &feeds) {
+                            (Err(why), _) => (false, why.clone()),
+                            (Ok(()), Some(q)) => (false, format!("This channel already feeds {q}.")),
+                            (Ok(()), None) if takers.is_empty() => (
+                                false,
+                                format!(
+                                    "No program {word} of type {} is waiting for a device. Add one to the program, or put one back on simulated I/O.",
+                                    p.ty
+                                ),
+                            ),
+                            (Ok(()), None) => (
+                                true,
+                                format!("Pick the program {word} this channel feeds. This line in io.map takes its name."),
+                            ),
+                        };
+                        assign_asked = menu_item(
+                            ui,
+                            chrome,
+                            "menu assign channel",
+                            &format!("Assign to program {word}…"),
+                            ok,
+                            &tip,
+                        );
+                        if feeds.is_some() {
+                            back_asked = menu_item(
+                                ui,
+                                chrome,
+                                "menu back channel",
+                                "Back to simulated I/O",
+                                write.is_ok(),
+                                write.as_ref().err().map_or(
+                                    "Puts the program's variable back on a simulated channel. This point is removed, and the channel is back under + Add I/O.",
+                                    String::as_str,
+                                ),
+                            );
+                        }
+                    }
                 });
+                if assign_asked {
+                    self.assigning = Some(crate::assign_ui::Ask::Channel {
+                        device: n.name.clone(),
+                        point: p.point.clone(),
+                    });
+                }
+                if back_asked && let Some(q) = &feeds {
+                    act = Some(DeviceAct::Assign(crate::assign::AssignAct::Back {
+                        port: q.clone(),
+                    }));
+                }
                 if renamed {
                     self.renaming = Some((p.signal.clone(), p.signal.clone()));
                 }
@@ -1418,7 +1491,7 @@ impl DevicesUi {
                     hover.push_str("\nforced by an engineer");
                 }
                 hover.push_str(
-                    "\nDouble-click to rename it; right-click to rename it, remove it or say what is wired to it.",
+                    "\nDouble-click to rename it; right-click to rename it, remove it, say what is wired to it, or assign it to a program input or output.",
                 );
                 r.tip(hover);
                 // What is wired to the point, one wrapped line under it.

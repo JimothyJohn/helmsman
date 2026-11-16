@@ -330,6 +330,48 @@ this; change it here first when a decision changes.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
+- **Assign to device I/O (2026-11-15, `assign.rs`, `assign_ui.rs`):** a
+  program's inputs and outputs start on simulated or on-screen I/O
+  (`in start bool box di:0`, `out speed int screen speed safe=0`). A device
+  is added alone, and its channels join the project one at a time under
+  + Add I/O (`device_io.rs`); the box binds a program port to the map signal
+  of the same name. So assigning a port to a channel is a change of io.map
+  lines, and every other line stays as typed. A channel with no line yet
+  (one the device has and + Add I/O still lists) gets its line from the
+  same code the picker's *For* uses (`device_io::add`: the options of that
+  channel, its place after the device's other lines), named for the port,
+  and the port's simulated line is removed. A channel that has a line no
+  port is named after (a point added earlier under a generated name) is
+  renamed to the port's name, keeping its type, point, options and comment.
+  Three places, in the simulation and on a box alike. (1) The I/O tab: a
+  right-click on a program input's or output's row offers *Assign to device
+  I/O…*, which lists the free channels of that direction and type, those
+  with a line and those without. (2) The diagram: a right-click on the Read
+  block of an input or the Write block of an output offers the same item,
+  whatever the diagram's edit gate says: it changes io.map and not the
+  code, so on a box, or while the code is ahead of the diagram, the menu
+  holds only it and says why the code's own items are off. On an input's
+  block the click reaches the menu through the switch (or the box's force
+  button) drawn over it. (3) The Devices tab: a right-click on a point
+  already in the project offers *Assign to program input…* or *…output…*,
+  which lists the unassigned ports (no map line, or one on the box or the
+  screen) of its direction and type. A channel without a line is not on
+  that tab, so there the picker's *For* is the way and this item is for the
+  point that is. A port that is on a device offers *Back to simulated I/O*
+  (also on the point that feeds it): as Remove does, the channel's line goes
+  out of io.map and the channel is under + Add I/O again, and the port gets a
+  box line as a new project's map writes it at the end of the file (a bool
+  the box's next free `di:N` or `do:N`, an output of another type a `screen`
+  line). An int or real input gets no line: a box accepts none for a
+  simulated one, and the simulation shows its control. An item that cannot
+  work is shown off with the reason in its tooltip: no free channel (add a
+  device in the Devices tab first), the port or channel already assigned, a
+  read-only example, or no engineer signed in on a box. A refusal that is
+  reached anyway is a sentence in the notice and changes nothing. In the
+  simulation the new text goes into the project's io.map and the project is
+  unsaved; on a box into the open project's io.map buffer, which goes to the
+  box with Save or Deploy. An I/O tab row's tooltip says where the point is:
+  "On rio, DI-04" or "Simulated: not assigned to a device yet".
 - **Inputs on the diagram:** in the simulation, an input's block switches
   or presses it, or takes a typed number (written on Enter). On a Pi, the same click **forces** the input, for an
   engineer only: the block shows FORCED in the warning colour, a banner

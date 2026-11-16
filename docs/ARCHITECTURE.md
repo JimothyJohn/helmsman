@@ -413,6 +413,24 @@ scan; the scheduler bounds how often.
   `?q=`, the playground's `Index::search`), offers only records with
   no protocol, and writes or clears `wired=` on that one line
   (`wired::set_wired`);
+  **Assigning a program port to a device channel** is `assign.rs` (plain
+  data and text, no egui, unit tests): `place_of`, `free_channels`,
+  `channels_for` and `ports_for` read an `iomap::skim` and the program's
+  ports (`device_form::ports_of`), `menus` says what each port's menu
+  offers and why an item is off, and `assign` / `unassign` rewrite io.map
+  line by line (a channel's line takes the port's name, or a channel with
+  no line gets the one `device_io::add` writes, placed by
+  `device_form::insert_signals`; the port's simulated line goes; the rest
+  is byte for byte; going back removes the line as Remove does). `assign_ui.rs` draws
+  it: the menu items, `row_menu` for a row of the I/O tab, and the
+  question (`DevicesUi::assigning`, `assign_ui`) both views call each
+  frame. The Devices tab's point row opens it, or returns
+  `DeviceAct::Assign`; the diagram's menu (`diagram_edit.rs`, `Entries::
+  assign`, `Viewer::assign`) offers it on a port's Read or Write block
+  whatever `edit_gate` says, and `Viewer::secondary_on_controls` carries
+  a right-click made on the switch or force button over a Read block.
+  The simulation writes `proj.files["io.map"]` (`assign_act`); a box
+  writes the open project's `io.map` buffer, as `wire_in` does;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
   screen TILE` an output no device takes (the retired floor screen's
   tiles, below). Older maps read unchanged;

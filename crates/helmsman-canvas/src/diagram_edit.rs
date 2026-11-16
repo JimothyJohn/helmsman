@@ -108,6 +108,47 @@ impl Viewer {
             .map(Hit::Block)
     }
 
+    /// What io.map can do with the program port `node` reads (an input's
+    /// Read block) or writes (an output's Write block), on the program's
+    /// own diagram.
+    pub(crate) fn port_block(&self, node: NodeId) -> Option<&crate::assign::PortMenu> {
+        use crate::device_form::Dir;
+        if !self.scopes[self.scope].prefix.is_empty() {
+            return None;
+        }
+        let (path, dir) = match &self.diagram().node(node).kind {
+            NodeKind::Read { path } => (path, Dir::In),
+            NodeKind::Write { path } => (path, Dir::Out),
+            _ => return None,
+        };
+        self.assign
+            .iter()
+            .find(|m| m.dir == dir && m.port.eq_ignore_ascii_case(path.trim()))
+    }
+
+    /// A right-click on an on-diagram control (an input's switch or force
+    /// button sits over its Read block, so the diagram never sees the
+    /// click) is a gesture on that block all the same.
+    pub(crate) fn secondary_on_controls(&mut self, ui: &egui::Ui, controls: &[(String, Rect)]) {
+        let Some(p) = ui.input(|i| {
+            i.pointer
+                .button_clicked(egui::PointerButton::Secondary)
+                .then(|| i.pointer.interact_pos())
+                .flatten()
+        }) else {
+            return;
+        };
+        if !controls.iter().any(|(_, r)| r.contains(p)) {
+            return;
+        }
+        let cam = self.cams[self.scope];
+        if let Some(hit) = self.hit_at(cam, p) {
+            let (Hit::Block(n) | Hit::Pin { node: n, .. }) = hit;
+            self.pick = Some(crate::st_view::Pick::Node(n));
+            self.gesture_at(p, hit, false);
+        }
+    }
+
     /// The constant block under `p`.
     pub(crate) fn const_at(&self, cam: Cam, p: Pos2) -> Option<NodeId> {
         let (x, y) = cam.to_world(p);
@@ -118,7 +159,14 @@ impl Viewer {
     /// Takes a gesture made at `at`: for the host when gestures are on,
     /// else a note of why they are not.
     pub(crate) fn gesture_at(&mut self, at: Pos2, hit: Hit, in_place: bool) {
+        // A program port's block has its io.map items whatever the gate
+        // says: the menu then shows the code's items off, with the reason.
+        let port = !in_place && matches!(hit, Hit::Block(n) if self.port_block(n).is_some());
         match &self.edit_gate {
+            Gate::Off(_) if port => {
+                self.off_note = None;
+                self.gesture = Some(Gesture { at, hit, in_place });
+            }
             Gate::On => {
                 self.off_note = None;
                 self.gesture = Some(Gesture { at, hit, in_place });
@@ -286,11 +334,17 @@ struct Entries {
     /// The variable a rename is about.
     rename: Option<String>,
     delete: Option<Edit>,
+    /// The port this block is, with what io.map offers on it.
+    assign: Option<crate::assign::PortMenu>,
+    /// Why the code's own items are off, when they are and the menu is
+    /// only here for `assign`.
+    off: Option<String>,
 }
 
 impl Entries {
     fn is_empty(&self) -> bool {
-        self.operators.is_empty()
+        self.assign.is_none()
+            && self.operators.is_empty()
             && self.negate.is_empty()
             && self.connect.is_none()
             && self.value.is_none()
@@ -482,7 +536,15 @@ fn entries(v: &Viewer, hit: Hit) -> Entries {
                 _ => {}
             }
             out.delete = delete_of(node).filter(|e| applies(v, e));
+            out.assign = v.port_block(node).cloned();
         }
+    }
+    if let (Gate::Off(why), Some(_)) = (&v.edit_gate, &out.assign) {
+        out = Entries {
+            assign: out.assign.take(),
+            off: Some(why.clone()),
+            ..Entries::default()
+        };
     }
     out
 }
@@ -525,6 +587,8 @@ struct Open {
 #[derive(Default)]
 pub struct EditUi {
     open: Option<Open>,
+    /// A port's assignment asked for in the menu, for the host to take.
+    assign: Option<(String, crate::assign_ui::PortAsk)>,
 }
 
 impl std::fmt::Debug for EditUi {
@@ -583,6 +647,12 @@ impl EditUi {
         self.open = None;
     }
 
+    /// The port the menu asked to assign (or put back on simulated I/O),
+    /// once; the menu is closed then.
+    pub fn take_assign(&mut self) -> Option<(String, crate::assign_ui::PortAsk)> {
+        self.assign.take()
+    }
+
     /// The host could not make the edit: say why and keep the popup.
     pub fn fail(&mut self, why: String) {
         if let Some(o) = &mut self.open {
@@ -597,6 +667,7 @@ impl EditUi {
         let pou = v.module.pous[v.scopes[v.scope].pou].name.clone();
         let mut asked: Option<Edit> = None;
         let mut close = false;
+        let mut assign: Option<(String, crate::assign_ui::PortAsk)> = None;
         let vars = if matches!(o.stage, Stage::Connect(_)) {
             variables(v)
         } else {
@@ -615,6 +686,39 @@ impl EditUi {
                         Stage::Menu => {
                             let e = &o.entries;
                             let mut next: Option<Stage> = None;
+                            if let Some(why) = &e.off {
+                                ui.label(RichText::new(why).size(BODY));
+                            }
+                            if let Some(m) = &e.assign {
+                                if row_on(
+                                    ui,
+                                    chrome,
+                                    "diagram menu assign",
+                                    "Assign to device I/O…",
+                                    m.assign.is_ok(),
+                                    m.assign.as_ref().err().map_or(
+                                        "Pick a free channel of a device, of the same direction and type, added to the project or not yet. Its line in io.map is named for this variable.",
+                                        String::as_str,
+                                    ),
+                                ) {
+                                    assign = Some((m.port.clone(), crate::assign_ui::PortAsk::Assign));
+                                }
+                                if let Some(back) = &m.back
+                                    && row_on(
+                                        ui,
+                                        chrome,
+                                        "diagram menu back to simulated",
+                                        "Back to simulated I/O",
+                                        back.is_ok(),
+                                        back.as_ref().err().map_or(
+                                            "Puts this back on a simulated input or output. The device channel goes back under + Add I/O, as Remove leaves it.",
+                                            String::as_str,
+                                        ),
+                                    )
+                                {
+                                    assign = Some((m.port.clone(), crate::assign_ui::PortAsk::Back));
+                                }
+                            }
                             if e.is_empty() {
                                 ui.label(RichText::new("Nothing here can be changed from the diagram.").size(BODY));
                             }
@@ -895,6 +999,10 @@ Stage::Operators => {
                 });
             });
         chrome.hit("diagram popup", r.response.rect);
+        if assign.is_some() {
+            self.assign = assign;
+            return None;
+        }
         if close || crate::theme::dismissed(ctx, "diagram-edit-popup", &[r.response.rect]) {
             return None;
         }
@@ -923,6 +1031,19 @@ fn row(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, tip: &str)
     let w = ui.available_width();
     let r = ui
         .add(egui::Button::new(RichText::new(text).size(BODY)).min_size(Vec2::new(w, TAP)))
+        .tip(tip);
+    chrome.hit(key, r.rect);
+    r.clicked()
+}
+
+/// `row`, off when `on` is false.
+fn row_on(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, on: bool, tip: &str) -> bool {
+    let w = ui.available_width();
+    let r = ui
+        .add_enabled(
+            on,
+            egui::Button::new(RichText::new(text).size(BODY)).min_size(Vec2::new(w, TAP)),
+        )
         .tip(tip);
     chrome.hit(key, r.rect);
     r.clicked()
