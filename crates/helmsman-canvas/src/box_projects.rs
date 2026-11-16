@@ -472,6 +472,45 @@ fn has_ext(file: &str, ext: &str) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
+/// The ports a box's refusal says have no signal (`port LEVEL: no signal of
+/// that name`, `BindError::UnknownSignal` on the box), lower case as
+/// `io.map` names them, each once.
+fn unbound_ports(text: &str) -> Vec<String> {
+    const SAYS: &str = ": no signal of that name";
+    let mut out: Vec<String> = Vec::new();
+    for (at, _) in text.match_indices(SAYS) {
+        let before = &text[..at];
+        let name: String = before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let named_a_port = before[..before.len() - name.len()].ends_with("port ");
+        let name = name.to_ascii_lowercase();
+        if named_a_port && !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// `why`, a box's refusal of a deploy, with what to do about an input that
+/// has no signal added: the box's check is as it was, only the words
+/// after it say how to go on.
+fn deploy_words(why: String) -> String {
+    let ports = unbound_ports(&why);
+    if ports.is_empty() {
+        return why;
+    }
+    let (names, verb) = (ports.join(", "), if ports.len() == 1 { "has" } else { "have" });
+    format!(
+        "{why}. Input {names} {verb} no signal on this box: assign each to a device channel (Assign to device I/O in the I/O tab), then deploy again."
+    )
+}
+
 fn short(s: &str) -> &str {
     s.get(..8).unwrap_or(s)
 }
@@ -1762,7 +1801,10 @@ impl BoxProjects {
             PCall::Replay(name) => match j["replay"].as_u64().filter(|_| a.status == 201) {
                 Some(n) => self.deploy_now(&name, Some(n)),
                 None => {
-                    self.deploy = Deploy::Failed(format!("the sim replay did not run: {}", error_of(a)));
+                    self.deploy = Deploy::Failed(deploy_words(format!(
+                        "the sim replay did not run: {}",
+                        error_of(a)
+                    )));
                 }
             },
             PCall::Deploy { project, replay } => {
@@ -1797,11 +1839,14 @@ impl BoxProjects {
                 } else if a.status == 428 && replay.is_none() {
                     // The policy wants a replay the check did not say.
                     self.replay(&project);
-                } else if a.status == 422 {
-                    self.diags = diags_of(&j);
-                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 } else {
-                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
+                    if a.status == 422 {
+                        self.diags = diags_of(&j);
+                    }
+                    self.deploy = Deploy::Failed(deploy_words(format!(
+                        "{project} was not deployed: {}",
+                        error_of(a)
+                    )));
                 }
             }
             PCall::Upload(project) => {

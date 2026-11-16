@@ -941,11 +941,21 @@ impl BoxView {
         self.log_agent();
     }
 
+    /// Stop: the answer under way is dropped and nothing is written; a
+    /// spec run leaves no draft.
+    pub fn stop_run(&mut self) {
+        self.agent.stop();
+        #[cfg(target_arch = "wasm32")]
+        self.chat.abort();
+        self.spec.drop_run();
+        self.instruct.failed("stopped");
+    }
+
     // ---- spec mode (`crate::box_spec`) ----
 
     /// Why "From a spec…" is off, if it is: the reasons the Agent tab's
     /// other controls give.
-    fn spec_entry_blocked(&self) -> Option<String> {
+    pub fn spec_entry_blocked(&self) -> Option<String> {
         if let Err(why) = is_engineer(self.session.as_ref()) {
             return Some(why);
         }
@@ -1310,13 +1320,7 @@ impl BoxView {
         }
         match act {
             Some(Act::Send) => self.send_instruction(&ctx),
-            Some(Act::Stop) => {
-                self.agent.stop();
-                #[cfg(target_arch = "wasm32")]
-                self.chat.abort();
-                self.spec.drop_run();
-                self.instruct.failed("stopped");
-            }
+            Some(Act::Stop) => self.stop_run(),
             Some(Act::Undo) => self.undo_change(),
             Some(Act::Review(id)) => self.wants_review = Some(id),
             // A box's change goes through a deploy: no arrows here.

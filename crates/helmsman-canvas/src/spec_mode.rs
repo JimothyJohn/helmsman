@@ -1367,4 +1367,4 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "spec_mode_tests.rs"]
-mod tests;
+pub(crate) mod tests;

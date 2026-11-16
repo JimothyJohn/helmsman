@@ -357,27 +357,27 @@ fn a_requirements_block_does_not_trouble_the_checks() {
 
 // ---- the draft ----
 
-const MOTOR: &str = "PROGRAM conveyor\nVAR_INPUT\n  start_pb : BOOL; (* on while the start button is pressed *)\n  stop_pb : BOOL;\nEND_VAR\nVAR_OUTPUT\n  motor : BOOL; (* runs the belt motor when on *)\nEND_VAR\nmotor := (start_pb OR motor) AND NOT stop_pb;\nEND_PROGRAM\n";
+pub(crate) const MOTOR: &str = "PROGRAM conveyor\nVAR_INPUT\n  start_pb : BOOL; (* on while the start button is pressed *)\n  stop_pb : BOOL;\nEND_VAR\nVAR_OUTPUT\n  motor : BOOL; (* runs the belt motor when on *)\nEND_VAR\nmotor := (start_pb OR motor) AND NOT stop_pb;\nEND_PROGRAM\n";
 
 fn settings() -> helmsman_iec::spec::Settings {
     helmsman_iec::spec::Settings::new(crate::playground::SIZES)
 }
 
-fn motor_latches() -> String {
+pub(crate) fn motor_latches() -> String {
     "(* The motor keeps running after start is released. *)\nPROGRAM test_motor_latches\nVAR_INPUT motor : BOOL; END_VAR\nVAR_OUTPUT start_pb : BOOL; done : BOOL; END_VAR\nVAR n : INT; stays_on : ASSERT; END_VAR\nn := n + 1;\nstart_pb := n < 3;\nIF n > 8 THEN stays_on(COND := motor); done := TRUE; END_IF;\nEND_PROGRAM".into()
 }
 
-fn motor_stops() -> String {
+pub(crate) fn motor_stops() -> String {
     "(* The motor stops when stop is pressed. *)\nPROGRAM test_motor_stops\nVAR_INPUT motor : BOOL; END_VAR\nVAR_OUTPUT start_pb : BOOL; stop_pb : BOOL; done : BOOL; END_VAR\nVAR n : INT; is_off : ASSERT; END_VAR\nn := n + 1;\nstart_pb := n < 3;\nstop_pb := n > 5;\nIF n > 12 THEN is_off(COND := NOT motor); done := TRUE; END_IF;\nEND_PROGRAM".into()
 }
 
 /// A scenario that cannot pass on `MOTOR`: stop is held and the motor must run.
-fn motor_ignores_stop() -> String {
+pub(crate) fn motor_ignores_stop() -> String {
     "(* The motor keeps running while stop is held. *)\nPROGRAM test_motor_ignores_stop\nVAR_INPUT motor : BOOL; END_VAR\nVAR_OUTPUT start_pb : BOOL; stop_pb : BOOL; done : BOOL; END_VAR\nVAR n : INT; stays_on : ASSERT; END_VAR\nn := n + 1;\nstart_pb := n < 3;\nstop_pb := n > 5;\nIF n > 12 THEN stays_on(COND := motor); done := TRUE; END_IF;\nEND_PROGRAM".into()
 }
 
 /// An answer: the reason, `MOTOR`, the scenarios and `extra` (a requirements block).
-fn answer(scenarios: &[&str], extra: &str) -> String {
+pub(crate) fn answer(scenarios: &[&str], extra: &str) -> String {
     let mut a = format!("Why: the belt motor latches on start and drops on stop.\n\n```st\n{MOTOR}```\n");
     for s in scenarios {
         let _ = write!(a, "\n```st scenario\n{s}\n```\n");
@@ -386,7 +386,7 @@ fn answer(scenarios: &[&str], extra: &str) -> String {
     a
 }
 
-const REQUIREMENTS: &str = "\n```requirements\n- The belt stops when the guard door opens.\n- The motor draws no more than 10 A.\n```\n";
+pub(crate) const REQUIREMENTS: &str = "\n```requirements\n- The belt stops when the guard door opens.\n- The motor draws no more than 10 A.\n```\n";
 
 fn draft_of(answer_text: &str, docs: Vec<Doc>) -> Draft {
     let files = crate::scope::Files::new();

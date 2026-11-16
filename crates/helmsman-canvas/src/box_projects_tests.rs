@@ -45,8 +45,8 @@ use crate::remote::{Cmd, Msg, Stream};
 use crate::review::Session;
 use crate::review_view::ReviewView;
 
-const ALICE: &str = "alice-engineer-pw";
-const BOB: &str = "bob-operator-pw";
+pub(crate) const ALICE: &str = "alice-engineer-pw";
+pub(crate) const BOB: &str = "bob-operator-pw";
 
 const MANIFEST: &str = "\
 name     conveyor
@@ -337,7 +337,9 @@ impl Bench {
         let mut s = TcpStream::connect(self.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
         s.write_all(head.as_bytes()).unwrap();
-        s.write_all(body).unwrap();
+        // A box that refuses a body too large for it may answer and close
+        // before the whole body is sent: the answer is still read.
+        let _ = s.write_all(body);
         let mut out = Vec::new();
         let _ = s.read_to_end(&mut out);
         let split = out.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(out.len());
@@ -501,7 +503,7 @@ pub fn settle(b: &Bench, jar: &Jar, p: &mut BoxProjects) {
 }
 
 /// A page with projects open, signed in as `who` (`None`: signed out).
-fn page(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> BoxView {
+pub(crate) fn page(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> BoxView {
     let mut v = BoxView::new();
     v.session = who.map(|(u, p)| b.login(jar, u, p));
     settle(b, jar, &mut v.projects);
@@ -510,7 +512,7 @@ fn page(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> BoxView {
 
 /// One request queue of `v` (state and projects) carried out, as the
 /// browser's transports would, at page time `now`.
-fn pump(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context, now: f64) {
+pub(crate) fn pump(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context, now: f64) {
     let cmds = std::mem::take(&mut v.sent);
     let reqs = std::mem::take(&mut v.psent);
     let mut msgs = Vec::new();
@@ -566,7 +568,7 @@ fn files(p: &BoxProjects) -> Vec<String> {
 }
 
 /// Makes project `name` with `files` through the page, as an engineer.
-fn make(b: &Bench, jar: &Jar, p: &mut BoxProjects, name: &str, with: &[(&str, &str)]) {
+pub(crate) fn make(b: &Bench, jar: &Jar, p: &mut BoxProjects, name: &str, with: &[(&str, &str)]) {
     p.create(name, None);
     settle(b, jar, p);
     assert_eq!(
