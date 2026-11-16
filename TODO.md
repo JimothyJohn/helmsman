@@ -460,6 +460,14 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-14
   by: claude-session
 
+- [ ] **The browser smoke run shows a found device the library does not know** — Why it matters: the Devices tab's row for such a device, with its "Build from vendor file…" button, the notes beside it and the Add it offers after a profile is saved (#452, 2026-11-15), has only ever been drawn by the headless UI tests, which check geometry and text and not what a browser shows. `scripts/canvas-smoke.py` never scans a device the library lacks, so no screenshot holds that row. Give the box page's smoke run (`make canvas-smoke BOX=1`) a found device with no library profile (a scripted scan answer or a loopback device the smoke box can find, never a bench device), and take a screenshot of the row, of the note after a file is picked, and of the row once a profile is saved.
+  result: the vendor-file path is looked at in a real browser on every smoke run, at the panel's default width
+  est: 3h
+  difficulty: low
+  id: smoke-unknown-device
+  asked: 2026-11-15
+  by: claude-session (board run)
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
