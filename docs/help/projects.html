@@ -183,10 +183,12 @@ stays the test's until the test makes it misbehave.</p>
 <p>The page runs the tests whenever the project's build changes; a box
 runs them when a project opens, after each save and before every deploy
 (<code>POST /api/projects/{p}/tests</code> runs them on demand).
-<strong>A red test refuses Deploy and the Agent's "Use this
-code"</strong>, naming the requirement, so a change cannot land past a
-requirement it breaks. The Agent writes the tests with each change; edit
-them like any file.</p>
+<strong>A red test never stops a deploy or a change from the
+Agent.</strong> The deploy goes ahead and the note beside it names the
+test and why it failed; on a box the same line is written to the audit
+trail. The Agent writes the tests with each change and fixes what fails
+before it answers; a check it could not get to pass is listed with its
+answer. Edit the tests like any file.</p>
 <h2 id="upload-and-download">Upload and download</h2>
 <p><strong>Download</strong> (the glyph, File › Download) gives you the
 project as a <code>.zip</code>. <strong>Upload</strong> takes a
