@@ -208,6 +208,11 @@ pub struct Viewer {
     /// Why a gesture did nothing, and where it was made: shown until the
     /// next click or Escape.
     pub off_note: Option<(Pos2, String)>,
+    /// What io.map can do with each of the program's inputs and outputs
+    /// (the host sets it each frame): the diagram's menu on the block of a
+    /// port offers "Assign to device I/O…" whatever `edit_gate` says,
+    /// since it changes io.map and not the code.
+    pub assign: Vec<crate::assign::PortMenu>,
 }
 
 /// One row of the program tree.
@@ -450,6 +455,7 @@ impl Viewer {
             edit_gate: crate::diagram_edit::Gate::Off(crate::diagram_edit::BOX_REASON.into()),
             gesture: None,
             off_note: None,
+            assign: Vec::new(),
         }
     }
 

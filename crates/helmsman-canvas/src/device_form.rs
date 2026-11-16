@@ -102,8 +102,13 @@ pub struct Port {
 /// The program's inputs and outputs a map signal can bind, from its ST.
 #[must_use]
 pub fn ports_of(src: &str) -> Vec<Port> {
+    ports_in(&crate::playground::Session::new(src))
+}
+
+/// [`ports_of`] for a program already compiled.
+#[must_use]
+pub fn ports_in(s: &crate::playground::Session) -> Vec<Port> {
     use crate::playground::{Dir as PDir, Place};
-    let s = crate::playground::Session::new(src);
     s.inputs()
         .chain(s.outputs())
         .filter(|p| p.place == Place::Port)

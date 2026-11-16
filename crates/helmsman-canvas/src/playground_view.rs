@@ -1818,6 +1818,12 @@ impl PlaygroundView {
                 .note(format!("Renamed {} to {}.", plan.old, plan.new), false);
             self.edited(f64::NEG_INFINITY);
         }
+        if self.devices_ui.assigning.is_some() {
+            self.assign_context();
+        }
+        if let Some(a) = self.devices_ui.assign_ui(&ui.ctx().clone(), chrome) {
+            self.assign_act(&a);
+        }
         match self.devices_ui.pick_ui(&ui.ctx().clone(), chrome) {
             Some(crate::wired::PickAct::Search(_)) => self.wired_lib.search(&mut self.devices_ui),
             Some(crate::wired::PickAct::Set { signal, wired }) => self.set_wired(&signal, wired.as_deref()),
@@ -2549,6 +2555,7 @@ impl Body for PlaygroundView {
                 | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
+            Some(crate::devices::DeviceAct::Assign(a)) => self.assign_act(&a),
         }
     }
 
@@ -2576,8 +2583,10 @@ impl Body for PlaygroundView {
         self.noticed_ui(ui, chrome);
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         let gate = self.edit_gate();
+        let menus = self.assign_menus();
         if let Some(v) = &mut self.viewer {
             v.edit_gate = gate;
+            v.assign = menus;
             v.icons
                 .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
             v.crumbs_ui(ui, &[]);
@@ -2589,10 +2598,14 @@ impl Body for PlaygroundView {
                 v.saw(t, now);
             }
             v.canvas(ui, scan);
+            let reads = v.reads_on_screen();
+            // The switches over the Read blocks take the right-click first.
+            v.secondary_on_controls(ui, &reads);
             if let Some(g) = v.gesture.take() {
                 self.dedit.open(v, g);
             }
             let asked = self.dedit.show(ui.ctx(), chrome, area, v);
+
             let mut jump = None;
             if v.pick != self.last_pick {
                 self.last_pick = v.pick;
@@ -2602,7 +2615,9 @@ impl Body for PlaygroundView {
                     self.selection = None;
                 }
             }
-            let reads = v.reads_on_screen();
+            if let Some((port, ask)) = self.dedit.take_assign() {
+                self.assign_ask(port, ask);
+            }
             self.map_inputs(ui, area, &reads);
             if let Some(line) = jump {
                 match self.proj.locate(line) {
@@ -2655,6 +2670,12 @@ impl PlaygroundView {
         );
         self.want_wired();
         let wired = crate::wired::by_signal(&self.devices_ui.map);
+        // Where each port is, and what a right-click on its row offers.
+        let ports = crate::device_form::ports_in(&self.session);
+        let menus = crate::assign::menus(&self.devices_ui.map, &ports, &self.assign_write());
+        self.devices_ui.program = ports;
+        let map = self.devices_ui.map.clone();
+        let mut asks: Vec<(String, crate::assign_ui::PortAsk)> = Vec::new();
         let off_map: Vec<&Point> = inputs
             .iter()
             .filter(|p| !on_map.iter().any(|r| r.eq_ignore_ascii_case(&p.name)))
@@ -2683,10 +2704,13 @@ impl PlaygroundView {
                         // A column: the line saying what is wired goes under the control.
                         ui.vertical(|ui| {
                             ui.set_max_width(col);
-                            let r = ui.scope(|ui| input_ui(ui, p));
-                            if let Some(v) = r.inner {
+                            let place = crate::assign::place_of(&map, &p.name).describe();
+                            let r = ui.scope(|ui| input_ui(ui, p, &place));
+                            let (value, anchor) = r.inner;
+                            if let Some(v) = value {
                                 set.push((p.name.clone(), v));
                             }
+                            crate::assign_ui::row_menu(&anchor, chrome, &menus, &p.name, &mut asks);
                             if let Some(w) = wired.get(&p.name.to_ascii_lowercase()) {
                                 crate::wired::show_line(
                                     ui,
@@ -2740,9 +2764,12 @@ impl PlaygroundView {
                     for p in pair {
                         ui.vertical(|ui| {
                             ui.set_max_width(col);
-                            if output_ui(ui, p) {
+                            let place = crate::assign::place_of(&map, &p.name).describe();
+                            let (clicked, anchor) = output_ui(ui, p, &place);
+                            if clicked {
                                 picked = Some(p.name.clone());
                             }
+                            crate::assign_ui::row_menu(&anchor, chrome, &menus, &p.name, &mut asks);
                             if let Some(w) = wired.get(&p.name.to_ascii_lowercase()) {
                                 crate::wired::show_line(
                                     ui,
@@ -2765,6 +2792,9 @@ impl PlaygroundView {
                 self.pick(&name);
             }
         });
+        for (port, ask) in asks {
+            self.assign_ask(port, ask);
+        }
     }
 
     /// The signals to trend (outputs, then inputs) and the chart.
@@ -3656,6 +3686,80 @@ impl PlaygroundView {
         self.edited(f64::NEG_INFINITY);
     }
 
+    /// Why io.map cannot be written, when it cannot.
+    fn assign_write(&self) -> Result<(), String> {
+        if self.proj.is_example() {
+            Err("The examples are read-only: copy the project first (File › Copy project).".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// What a menu on `port` asked for: the question of which channel, or
+    /// the port back on simulated I/O at once.
+    fn assign_ask(&mut self, port: String, ask: crate::assign_ui::PortAsk) {
+        match ask {
+            crate::assign_ui::PortAsk::Assign => {
+                self.devices_ui.assigning = Some(crate::assign_ui::Ask::Port(port));
+            }
+            crate::assign_ui::PortAsk::Back => self.assign_act(&crate::assign::AssignAct::Back { port }),
+        }
+    }
+
+    /// Writes an assignment (or its undoing) into io.map: refused, with
+    /// nothing changed and the reason in a note, when it cannot be made.
+    fn assign_act(&mut self, a: &crate::assign::AssignAct) {
+        if let Err(why) = self.assign_write() {
+            self.proj.note(why, true);
+            return;
+        }
+        let text = self
+            .proj
+            .files
+            .get(helmsman_project::IO_MAP)
+            .cloned()
+            .unwrap_or_default();
+        let ports = crate::device_form::ports_of(&self.proj.build_src());
+        match a.run(&text, &ports) {
+            Ok(c) => {
+                match self.proj.files.get_mut(helmsman_project::IO_MAP) {
+                    Some(t) => *t = c.text,
+                    None => self.proj.add_file(helmsman_project::IO_MAP, c.text),
+                }
+                self.proj.note(c.summary, false);
+                self.edited(f64::NEG_INFINITY);
+            }
+            Err(why) => self.proj.note(why, true),
+        }
+    }
+
+    /// What a right-click on each port's block in the diagram offers.
+    fn assign_menus(&self) -> Vec<crate::assign::PortMenu> {
+        let map = helmsman_project::iomap::skim(
+            self.proj
+                .files
+                .get(helmsman_project::IO_MAP)
+                .map_or("", String::as_str),
+        );
+        crate::assign::menus(
+            &map,
+            &crate::device_form::ports_in(&self.session),
+            &self.assign_write(),
+        )
+    }
+
+    /// The map and the program's ports, as the question about an
+    /// assignment reads them this frame.
+    fn assign_context(&mut self) {
+        self.devices_ui.map = helmsman_project::iomap::skim(
+            self.proj
+                .files
+                .get(helmsman_project::IO_MAP)
+                .map_or("", String::as_str),
+        );
+        self.devices_ui.program = crate::device_form::ports_in(&self.session);
+    }
+
     /// The inputs the diagram shows a control for.
     /// Every `wired=` value of the map not looked up yet, queued for the
     /// library (the Devices and I/O tabs' line under a point).
@@ -4030,13 +4134,16 @@ fn columns(ui: &egui::Ui) -> (usize, f32) {
     }
 }
 
-fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
+/// One input: its control, and the response a right-click on its row
+/// opens a menu from. `place` is where the point is now, in its tooltip.
+fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::Response) {
     let t = theme(ui);
     let label = match p.address() {
         Some(a) => format!("{}  {a}", p.name.to_ascii_lowercase()),
         None => p.name.to_ascii_lowercase(),
     };
     let mut out = None;
+    let mut anchor: Option<egui::Response> = None;
     // Wrapped, with a slider that fits: a row wider than the panel grows it.
     ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(40.0, 100.0);
     let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
@@ -4055,10 +4162,11 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                     .sense(Sense::click_and_drag())
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-                let r = ui
-                    .add(b)
-                    .tip("Push button: on while held. Double-click to simulate it as a device.");
+                let r = ui.add(b).tip(format!(
+                    "Push button: on while held. Double-click to simulate it as a device.\n{place}"
+                ));
                 out = Some(Value::Bool(r.is_pointer_button_down_on()));
+                anchor = Some(r);
             }
             Some(Widget::Toggle) => {
                 let on = p.value == Value::Bool(true);
@@ -4070,16 +4178,16 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 .fill(if on { YELLOW } else { t.rule })
                 .wrap_mode(egui::TextWrapMode::Truncate)
                 .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-                if ui
-                    .add(b)
-                    .tip("Switch: click to flip. Double-click to simulate it as a device.")
-                    .clicked()
-                {
+                let r = ui.add(b).tip(format!(
+                    "Switch: click to flip. Double-click to simulate it as a device.\n{place}"
+                ));
+                if r.clicked() {
                     out = Some(Value::Bool(!on));
                 }
+                anchor = Some(r);
             }
             Some(Widget::Int { min, max }) => {
-                ui.label(&label);
+                anchor = Some(row_label(ui, &label, place));
                 let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
                 let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
                 let (slo, shi) = (lo.max(-1000), hi.min(1000));
@@ -4115,7 +4223,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 }
             }
             Some(Widget::Real) => {
-                ui.label(&label);
+                anchor = Some(row_label(ui, &label, place));
                 let mut v = match p.value {
                     Value::Real(r) => r,
                     _ => 0.0,
@@ -4146,7 +4254,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 }
             }
             Some(Widget::Time) => {
-                ui.label(&label);
+                anchor = Some(row_label(ui, &label, place));
                 let mut ms = match p.value {
                     Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
                     _ => 0,
@@ -4164,14 +4272,23 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                     out = Some(Value::Int(i128::from(ms) * 1_000_000));
                 }
             }
-            None => {}
+            None => anchor = Some(row_label(ui, &label, place)),
         }
     });
-    out
+    let anchor = anchor.unwrap_or_else(|| row_label(ui, &label, place));
+    (out, anchor)
 }
 
-/// One output: a lamp (BOOL) or a readout. Returns whether it was clicked.
-fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
+/// A row's name, where a right-click lands, saying where the point is.
+fn row_label(ui: &mut egui::Ui, label: &str, place: &str) -> egui::Response {
+    ui.add(egui::Label::new(label).sense(Sense::click()))
+        .tip(place.to_string())
+}
+
+/// One output: a lamp (BOOL) or a readout. Returns whether it was clicked,
+/// and the response a right-click on its row opens a menu from. `place` is
+/// where the point is now, in its tooltip.
+fn output_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (bool, egui::Response) {
     let t = theme(ui);
     let on = p.value == Value::Bool(true);
     let name = match p.address() {
@@ -4202,7 +4319,10 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
         )
         .wrap_mode(egui::TextWrapMode::Truncate)
         .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
-        ui.add(b).tip("Click to pick its block in the diagram.").clicked()
+        let r = ui
+            .add(b)
+            .tip(format!("Click to pick its block in the diagram.\n{place}"));
+        (r.clicked(), r)
     })
     .inner
 }
