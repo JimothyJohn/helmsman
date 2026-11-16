@@ -315,18 +315,21 @@ impl Writer {
 
     /// Hands the runtime's RETAIN values to the writer if [`EVERY`] has
     /// passed since the last offer, without waiting: when the writer holds
-    /// the slot, the next call tries again.
-    pub fn offer(&mut self, now: Duration, rt: &Runtime) {
+    /// the slot, the next call tries again. Whether they were handed over
+    /// (the scan loop need not care; a caller that must know they were
+    /// does).
+    pub fn offer(&mut self, now: Duration, rt: &Runtime) -> bool {
         if self.last.is_some_and(|l| now.saturating_sub(l) < EVERY) {
-            return;
+            return false;
         }
         let inner = match self.shared.inner.try_lock() {
             Ok(g) => g,
             Err(TryLockError::Poisoned(p)) => p.into_inner(),
-            Err(TryLockError::WouldBlock) => return,
+            Err(TryLockError::WouldBlock) => return false,
         };
         hand_over(&self.shared, inner, rt);
         self.last = Some(now);
+        true
     }
 
     /// [`Writer::offer`] without the [`EVERY`] bound, waiting for the slot

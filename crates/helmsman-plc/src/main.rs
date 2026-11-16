@@ -1813,7 +1813,7 @@ fn run(o: &Opts) -> Result<(), String> {
             eprintln!("helmsman-plc: {name}: {said}");
             return Ok(());
         }
-        retainer.offer(start.elapsed(), &rt);
+        let _ = retainer.offer(start.elapsed(), &rt);
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
         sleep_to(start, rt.next_deadline(), cap(scene.calendar.as_ref()), &mut said);
     }

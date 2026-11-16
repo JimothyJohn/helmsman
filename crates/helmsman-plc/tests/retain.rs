@@ -55,8 +55,21 @@ fn saved_after(dir: &Path, name: &str, src: &str, scans: u64) {
         rt.tick(Duration::from_millis(k * 10), &[]);
     }
     let mut w = Writer::start_with(dir.to_path_buf(), |l| panic!("{l}"));
-    w.offer(Duration::ZERO, &rt);
+    hand(&mut w, Duration::ZERO, &rt);
     assert!(w.flush(Duration::from_secs(10)));
+}
+
+/// Offers until the writer takes it. `Writer::offer` never waits: while
+/// the writer thread holds the slot (as it does for a moment when it
+/// starts and after each write) the offer is not taken, and a `flush`
+/// after an offer that was not taken has nothing to wait for. A test that
+/// offered once and read the files failed about one run in many.
+fn hand(w: &mut Writer, now: Duration, rt: &Runtime) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !w.offer(now, rt) {
+        assert!(Instant::now() < deadline, "the writer never took the offer");
+        std::thread::yield_now();
+    }
 }
 
 const COUNTER: &str = "PROGRAM c
@@ -183,7 +196,7 @@ fn the_writer_writes_on_change_at_a_bounded_rate_and_removes_stale_files() {
     let log = Arc::clone(&said);
     let mut w = Writer::start_with(dir.clone(), move |l| log.lock().unwrap().push(l.to_string()));
     rt.tick(Duration::ZERO, &[]);
-    w.offer(Duration::ZERO, &rt);
+    hand(&mut w, Duration::ZERO, &rt);
     assert!(w.flush(Duration::from_secs(10)));
     let read = |m| retain::read(&dir, m).unwrap().unwrap();
     assert_eq!(int(&read("c"), "N"), 1);
@@ -191,14 +204,14 @@ fn the_writer_writes_on_change_at_a_bounded_rate_and_removes_stale_files() {
 
     // Within EVERY of the last offer: nothing is handed over.
     rt.tick(Duration::from_millis(10), &[]);
-    w.offer(Duration::from_millis(500), &rt);
+    assert!(!w.offer(Duration::from_millis(500), &rt));
     assert!(w.flush(Duration::from_secs(10)));
     assert_eq!(int(&read("c"), "N"), 1);
 
     // After it: the changed module is written, the still one is not (its
     // file, removed behind the writer's back, stays gone).
     std::fs::remove_file(dir.join("s.ret")).unwrap();
-    w.offer(retain::EVERY, &rt);
+    hand(&mut w, retain::EVERY, &rt);
     assert!(w.flush(Duration::from_secs(10)));
     assert_eq!(int(&read("c"), "N"), 2);
     assert!(
@@ -214,7 +227,7 @@ fn the_writer_writes_on_change_at_a_bounded_rate_and_removes_stale_files() {
     )
     .unwrap();
     std::fs::write(dir.join("s.ret"), b"x").unwrap();
-    w.offer(retain::EVERY * 2, &rt);
+    hand(&mut w, retain::EVERY * 2, &rt);
     assert!(w.flush(Duration::from_secs(10)));
     assert!(!dir.join("c.ret").exists(), "no RETAIN, no file");
     assert!(!dir.join("s.ret").exists(), "a removed module's file goes");
@@ -235,7 +248,7 @@ fn a_failing_write_is_reported_once() {
     let mut w = Writer::start_with(dir, move |l| log.lock().unwrap().push(l.to_string()));
     for k in 0..3 {
         rt.tick(Duration::from_millis(k * 10), &[]);
-        w.offer(retain::EVERY * u32::try_from(k).unwrap(), &rt);
+        hand(&mut w, retain::EVERY * u32::try_from(k).unwrap(), &rt);
         assert!(w.flush(Duration::from_secs(10)));
     }
     let said = said.lock().unwrap();
