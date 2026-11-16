@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 607ae925dd777822d1d0fa587fd45b8700b96382f98af952aa46de0c57cc601f # an IF and ELSIF on one earlier write: the view of no folds lost the repeated root
+cc d48074c3145ec5e04bbaa3dc0d60bcf70d517bbb1394da98ccf80240053f1db1 # the same inside a WHILE

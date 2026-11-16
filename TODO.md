@@ -163,15 +163,6 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Next to build
 
-- [ ] **A fold changes the diagram of a nested IF: a property test fails now and then** — `any_folds_give_a_well_formed_laid_out_view_with_the_same_values` (crates/helmsman-diagram/tests/fold.rs:363) failed once in a full workspace run on dev at d75dbe6 (2026-11-16) and passed three reruns: its cases are random, so the suite is not deterministic and CI can go red on any PR. The case it shrank to: body `IF a > 0 THEN a := a + 0; ELSIF a > 0 THEN x := a > 0; IF x THEN a := a + 0; ELSIF x THEN a := a + 0; END_IF; END_IF;`, seeds `[]`, inputs 0 (proptest seed `cc 607ae925dd777822d1d0fa587fd45b8700b96382f98af952aa46de0c57cc601f`): two diagrams the test holds equal differ. Hold that body as a fixed regression test, fix what the fold does to it, and give the property a fixed seed or check in its regressions file so a failure repeats.
-  needs: nothing
-  result: the fold keeps that diagram as the test says, and the suite gives the same answer every run
-  est: 3h
-  difficulty: med
-  id: diagram-fold-property-flake
-  asked: 2026-11-16
-  by: claude-session
-
 - [ ] **A spec run into the project that is open** — spec mode (#471, #475) always makes a new project; Nick's ask was to "parse and add it". Left out because a kept file (`spec.md`) cannot be saved one at a time: `Projects::save` on a box and `SimProjects::add_file` in the page take only names `file_name` knows, and a box has no atomic write of several files short of a whole-project zip. Shape: the same window with a project open offers "Add to this project"; the spec goes in as an instruction on the open program file (`Scope::File`), the review shows what changes (I/O added, requirements added or replaced), and Accept writes the file, the tests and the new section of `spec.md` together.
   needs: nothing
   result: more documentation dumped in later lands in the same project, with its spec kept beside the first
