@@ -1449,7 +1449,7 @@ impl DevicesUi {
                     hover.push_str("\nforced by an engineer");
                 }
                 hover.push_str(
-                    "\nDouble-click to rename it; right-click to rename it or say what is wired to it.",
+                    "\nDouble-click to rename it; right-click to rename it, say what is wired to it, or assign it to a program input or output.",
                 );
                 r.tip(hover);
                 // What is wired to the point, one wrapped line under it.

@@ -522,7 +522,10 @@ pub fn unassign(text: &str, ports: &[Port], port: &str) -> Result<Change, String
         .filter(|x| x.device == "box")
         .filter_map(|x| x.point.strip_prefix(kind)?.split(':').next()?.parse().ok())
         .collect();
-    let free = (0..).find(|i| !used.contains(i)).unwrap_or(0);
+    let mut free = 0;
+    while used.contains(&free) {
+        free += 1;
+    }
     let line = match (p.dir, p.ty) {
         (Dir::In, SigTy::Bool) => format!("in  {} bool box di:{free}", p.name),
         (Dir::Out, SigTy::Bool) => format!("out {} bool box do:{free} safe=false", p.name),
@@ -643,11 +646,11 @@ out speed int screen speed safe=0
 
     #[test]
     fn a_port_without_a_line_is_assigned_by_renaming_only() {
-        let bare: String = MAP
-            .lines()
-            .filter(|l| !l.contains(" start "))
-            .map(|l| format!("{l}\n"))
-            .collect();
+        let mut bare = String::new();
+        for l in MAP.lines().filter(|l| !l.contains(" start ")) {
+            bare.push_str(l);
+            bare.push('\n');
+        }
         let c = assign(&bare, &ports(), "start", "rio", "ch:DI-04").unwrap();
         assert_eq!(c.text, bare.replace("rio_di_04 bool", "start bool"));
         loads(&c.text);
@@ -784,7 +787,7 @@ in  start_button bool rio ch:DI-05
                 .iter()
                 .all(|p| p.name == "level")
         );
-        assert!(ports_for(&map, &p, "rio", "nope").is_empty());
+        assert_eq!(ports_for(&map, &p, "rio", "nope").len(), 0);
         assert!(
             ports_for(&map, &p, "box", "di:1").is_empty(),
             "a box line is not a device channel"

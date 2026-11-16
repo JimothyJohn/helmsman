@@ -622,7 +622,11 @@ fn a_red_requirement_test_leaves_the_edit_in_the_code_and_the_program_as_it_was(
         .expect("a note says why");
     assert!(note.contains("lamp"), "{note}");
     // The diagram is behind the code now: the next gesture says so.
+    // On the block of a program output the menu still opens, for io.map's
+    // assignment, and says why the code's own items are off.
     let at = h.block(|k, _| matches!(k, NodeKind::Write { .. }));
     h.right_click(at);
-    assert!(h.off_note().is_some_and(|n| n.contains("Deploy first")));
+    assert!(h.has("diagram menu assign"));
+    assert!(!h.has("diagram menu negate"), "the code's items stay off");
+    assert!(h.drew("Deploy first"), "and the menu says why");
 }

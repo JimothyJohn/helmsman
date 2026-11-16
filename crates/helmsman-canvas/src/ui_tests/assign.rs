@@ -119,8 +119,11 @@ fn an_input_row_assigns_to_a_free_channel_of_its_direction_and_type() {
     h.press("assign channel rio ch:DI-05");
     h.wait(0.3);
     assert!(!h.has("assign form"));
-    let want = with("in  rio_di_05 bool rio ch:DI-05\n", "in  spare bool rio ch:DI-05\n")
-        .replace("in  spare bool box di:2\n", "");
+    let want = with(
+        "in  rio_di_05 bool rio ch:DI-05\n",
+        "in  spare bool rio ch:DI-05\n",
+    )
+    .replace("in  spare bool box di:2\n", "");
     assert_eq!(map(&h), want);
     assert!(dirty(&h), "the project has an edit to save");
     let (said, is_error) = note(&h).expect("a note");
@@ -156,7 +159,10 @@ fn an_output_row_assigns_and_goes_back_to_simulated_io() {
     h.press("menu back to simulated");
     h.wait(0.3);
     let back = map(&h);
-    assert!(back.contains("out rio_do_00 bool rio ch:DO-00 safe=true"), "{back}");
+    assert!(
+        back.contains("out rio_do_00 bool rio ch:DO-00 safe=true"),
+        "{back}"
+    );
     assert!(back.ends_with("out motor bool box do:0 safe=false\n"), "{back}");
     let (said, _) = note(&h).unwrap();
     assert!(said.contains("motor is back on simulated I/O"), "{said}");
@@ -352,6 +358,13 @@ fn the_diagram_menu_assigns_while_the_code_is_ahead_of_the_diagram_and_says_why_
     };
     h.right_click(and);
     assert!(!h.has("diagram menu assign"));
+    assert!(
+        sim_view(&h)
+            .off_note
+            .as_ref()
+            .is_some_and(|(_, t)| t.contains("Deploy first")),
+        "the note says why nothing opened"
+    );
 }
 
 #[test]
@@ -372,7 +385,10 @@ fn the_io_rows_and_the_devices_rows_stay_inside_the_panels_default_width() {
     // Assigned, the rows are the same width: the place is in a tooltip.
     menu(&mut h, "io row spare", "menu assign port");
     let form = h.rect("assign form");
-    assert!(form.right() <= h.size.x && form.left() >= 0.0, "{form:?} on the screen");
+    assert!(
+        form.right() <= h.size.x && form.left() >= 0.0,
+        "{form:?} on the screen"
+    );
     h.press("assign channel rio ch:DI-05");
     h.wait(0.3);
     menu(&mut h, "io row motor", "menu assign port");
@@ -380,7 +396,10 @@ fn the_io_rows_and_the_devices_rows_stay_inside_the_panels_default_width() {
     h.wait(0.3);
     inside(&h, "io row spare");
     inside(&h, "io row motor");
-    assert!((h.rect("tab io").left() - tab.left()).abs() <= 1.0, "the pane grew");
+    assert!(
+        (h.rect("tab io").left() - tab.left()).abs() <= 1.0,
+        "the pane grew"
+    );
     // The Cancel of the question changes nothing.
     h.right_click(h.rect("io row spare").center());
     h.press("menu back to simulated");
@@ -404,5 +423,8 @@ fn the_io_rows_and_the_devices_rows_stay_inside_the_panels_default_width() {
     h.wait(0.2);
     h.press("assign cancel");
     h.wait(0.2);
-    assert!((h.rect("pane devices").left() - left.left()).abs() <= 1.0, "the pane moved");
+    assert!(
+        (h.rect("pane devices").left() - left.left()).abs() <= 1.0,
+        "the pane moved"
+    );
 }
