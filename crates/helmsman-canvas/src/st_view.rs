@@ -807,6 +807,11 @@ impl Viewer {
         match *v.origin.get(n.0 as usize)? {
             Origin::Node(o) => Some((o, input)),
             Origin::Fold(f) => {
+                // A table's pin feeds several rows, each with its own bubble:
+                // there is no one pin of its gates to change.
+                if v.folds[f].kind == FoldKind::Table {
+                    return None;
+                }
                 let helmsman_diagram::fold::Input::Wire { from, negated } = v.ins[f].get(input)? else {
                     return None;
                 };
@@ -864,10 +869,11 @@ impl Viewer {
                 let Origin::Fold(f) = v.origin[s.0 as usize] else {
                     return None;
                 };
+                let table = v.folds[f].kind == FoldKind::Table;
                 v.ins[f].iter().position(|i| {
                     *i == helmsman_diagram::fold::Input::Wire {
                         from: (w.from, w.out),
-                        negated: w.negated,
+                        negated: w.negated && !table,
                     }
                 })?
             }
@@ -1030,6 +1036,85 @@ impl Viewer {
                 Some((n.id, rows))
             })
             .collect()
+    }
+
+    /// The rows of each table block drawn, read off `live` (the scan of
+    /// the diagram underneath): a row holds when each of its cells is
+    /// satisfied, and while the table's output is FALSE a cell that is not
+    /// satisfied is what stops its row.
+    fn table_rows(&self, live: Option<&Live>) -> Vec<(NodeId, Vec<TableRow>)> {
+        let Some(v) = self.view() else {
+            return Vec::new();
+        };
+        let value = |(n, out): (NodeId, usize)| -> Option<bool> {
+            match live?.values.get(n.0 as usize)?.get(out).copied().flatten()? {
+                Value::Bool(b) => Some(b),
+                _ => None,
+            }
+        };
+        v.diagram
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let table = v.fold_at(n.id)?.table.as_ref()?;
+                let off = value((table.out, 0)) == Some(false);
+                let rows = table
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let cells: Vec<TableCell> = row
+                            .iter()
+                            .map(|c| {
+                                let now = value(c.from);
+                                let met = now.map(|b| b != c.negated);
+                                let need = if c.negated { "off" } else { "on" };
+                                let state = match now {
+                                    Some(true) => "TRUE",
+                                    Some(false) => "FALSE",
+                                    None => "unknown",
+                                };
+                                let verdict = match met {
+                                    Some(true) => "It is as the row needs it.",
+                                    Some(false) if off => "This is what stops the row.",
+                                    Some(false) => "The row does not hold.",
+                                    None => "",
+                                };
+                                TableCell {
+                                    label: c.label.clone(),
+                                    must_be_on: !c.negated,
+                                    stops: off && met == Some(false),
+                                    tip: format!(
+                                        "{}: this row needs it {need}. It is {state} now. {verdict}",
+                                        c.label
+                                    )
+                                    .trim_end()
+                                    .to_string(),
+                                }
+                            })
+                            .collect();
+                        let holds = live
+                            .is_some()
+                            .then(|| row.iter().all(|c| value(c.from).is_some_and(|b| b != c.negated)));
+                        TableRow { cells, holds }
+                    })
+                    .collect();
+                Some((n.id, rows))
+            })
+            .collect()
+    }
+
+    /// The hover text of the table cell under screen point `p`.
+    fn cell_tip<'a>(&self, cam: Cam, p: Pos2, tables: &'a [(NodeId, Vec<TableRow>)]) -> Option<&'a str> {
+        let (x, y) = cam.to_world(p);
+        let d = self.shown();
+        let node = d.node(d.node_at(x, y)?);
+        let (_, rows) = tables.iter().find(|(id, _)| *id == node.id)?;
+        rows.iter().enumerate().find_map(|(k, row)| {
+            row.cells.iter().enumerate().find_map(|(j, c)| {
+                let r = layout::body_cell(node, k, j, row.cells.len());
+                (x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom()).then_some(c.tip.as_str())
+            })
+        })
     }
 
     /// Each opened fold of the POU shown with the box around its blocks
@@ -2453,10 +2538,13 @@ impl Viewer {
         );
         let tabs = self.opened_tabs(cam);
         let rows = self.state_rows(live.as_ref());
+        let tables = self.table_rows(live.as_ref());
         if response.hovered()
             && let Some(p) = hover
         {
-            if self.chip_at(cam, p).is_some() {
+            if let Some(tip) = self.cell_tip(cam, p, &tables) {
+                response.clone().on_hover_text_at_pointer(tip);
+            } else if self.chip_at(cam, p).is_some() {
                 response
                     .clone()
                     .on_hover_text_at_pointer("A state of this sequence. Click to see what it does.");
@@ -2513,6 +2601,7 @@ impl Viewer {
                 opens: &opens,
                 ghosts: old.map(|o| (o, removed.as_slice())),
                 rows: &rows,
+                tables: &tables,
             },
         );
         for (_, title, around, tab) in &tabs {
@@ -2715,6 +2804,29 @@ struct Marks<'a> {
     ghosts: Option<(&'a Diagram, &'a [NodeId])>,
     /// The rows of the state blocks drawn, by block ([`Viewer::state_rows`]).
     rows: &'a [(NodeId, Vec<StateRow>)],
+    /// The rows of the table blocks drawn, by block ([`Viewer::table_rows`]).
+    tables: &'a [(NodeId, Vec<TableRow>)],
+}
+
+/// One row of a table block, as [`draw`] paints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRow {
+    pub cells: Vec<TableCell>,
+    /// Whether every cell is satisfied in the scan drawn; `None` with no
+    /// scan.
+    pub holds: Option<bool>,
+}
+
+/// One condition of a table row, as [`draw`] paints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableCell {
+    pub label: String,
+    /// The row needs the signal on (a filled mark); off is the bubble.
+    pub must_be_on: bool,
+    /// The table's output is FALSE and this cell is not satisfied.
+    pub stops: bool,
+    /// What the hover says.
+    pub tip: String,
 }
 
 /// One state of a state block, as [`draw`] paints it.
@@ -2724,6 +2836,61 @@ pub struct StateRow {
     pub label: String,
     /// Whether the arm ran in the scan drawn; `None` with no scan.
     pub on: Option<bool>,
+}
+
+/// Row `k` of table block `n`: a chip per cell, the signal and a mark of
+/// what the row needs of it (a filled dot on, the bubble off). A row that
+/// holds is lit as a state is; while the output is FALSE the cells that
+/// stop their rows are red. `look` is whether text is drawn and how
+/// faded the block is.
+fn draw_table_row(
+    painter: &egui::Painter,
+    t: &Theme,
+    cam: Cam,
+    n: &helmsman_diagram::Node,
+    k: usize,
+    row: &TableRow,
+    (text, fade): (bool, f32),
+) {
+    let z = cam.zoom;
+    let chip = CornerRadius::same(3);
+    let lit = row.holds == Some(true);
+    for (j, cell) in row.cells.iter().enumerate() {
+        let c = cam.rect(&layout::body_cell(n, k, j, row.cells.len()));
+        let (fill, ink, edge) = if cell.stops {
+            (brand::OFF_RED, t.ink(brand::RED), brand::RED)
+        } else if lit {
+            (YELLOW, BLACK, YELLOW)
+        } else {
+            (t.shade, t.fg, t.edge)
+        };
+        painter.rect_filled(c, chip, fill.gamma_multiply(fade));
+        painter.rect_stroke(c, chip, Stroke::new(1.0 * z.max(0.6), edge), StrokeKind::Inside);
+        let mark = Pos2::new(c.left() + 6.0 * z, c.center().y);
+        if cell.must_be_on {
+            painter.circle_filled(mark, 2.5 * z, ink.gamma_multiply(fade));
+        } else {
+            painter.circle_stroke(
+                mark,
+                2.5 * z,
+                Stroke::new(1.3 * z.max(0.6), ink.gamma_multiply(fade)),
+            );
+        }
+        if text {
+            let g = fitted(
+                painter,
+                &cell.label,
+                font(11.0 * z),
+                ink.gamma_multiply(fade),
+                c.width() - 14.0 * z,
+            );
+            painter.galley(
+                Pos2::new(c.left() + 11.0 * z, c.center().y - g.size().y / 2.0),
+                g,
+                ink,
+            );
+        }
+    }
 }
 
 /// Where a statement is marked on the diagram: the blocks it ends in, or
@@ -2855,6 +3022,7 @@ fn draw(
         opens,
         ghosts,
         rows,
+        tables,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -3099,8 +3267,12 @@ fn draw(
         // A standard block takes its picture from the glyph library
         // instead of its character (`Icons::glyph`).
         let states = rows.iter().find(|(id, _)| *id == n.id).map(|(_, r)| r.as_slice());
-        let glyph = icons.glyph(n).filter(|_| states.is_none());
-        let icon = if glyph.is_some() || states.is_some() {
+        let grid = tables
+            .iter()
+            .find(|(id, _)| *id == n.id)
+            .map(|(_, r)| r.as_slice());
+        let glyph = icons.glyph(n).filter(|_| states.is_none() && grid.is_none());
+        let icon = if glyph.is_some() || states.is_some() || grid.is_some() {
             None
         } else {
             icons.of(n)
@@ -3156,6 +3328,9 @@ fn draw(
                     ink,
                 );
             }
+        }
+        for (k, row) in grid.into_iter().flatten().enumerate() {
+            draw_table_row(painter, t, cam, n, k, row, (text, fade));
         }
         if text {
             let band = if two_tone { h } else { r };

@@ -709,6 +709,233 @@ fn a_sequence_of_many_states_grows_the_block_down_not_across() {
     assert!(h.view.chip_at(cam, h.chip("0")).is_some());
 }
 
+// ---- an interlock as a table ----
+
+/// An interlock: `run` as three ways, and the signals at `on`.
+fn permissive([guard, estop, auto, manual, jog]: [bool; 5]) -> String {
+    format!(
+        "PROGRAM cell
+VAR
+  guard : BOOL := {guard};
+  estop : BOOL := {estop};
+  auto : BOOL := {auto};
+  manual : BOOL := {manual};
+  jog : BOOL := {jog};
+  run : BOOL;
+END_VAR
+run := guard AND NOT estop AND auto OR manual AND NOT estop OR jog;
+END_PROGRAM
+"
+    )
+    .to_uppercase()
+}
+
+/// A table block's rows: per row, each cell's label and whether it stops
+/// the row, and whether the row holds.
+type Grid = Vec<(Vec<(String, bool)>, Option<bool>)>;
+
+impl Harness {
+    fn table(&self, live: bool) -> Option<(NodeId, Grid)> {
+        let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
+        let live = if live { self.view.live(scan) } else { None };
+        let (n, rows) = self.view.table_rows(live.as_ref()).into_iter().next()?;
+        let grid = rows
+            .into_iter()
+            .map(|r| (r.cells.into_iter().map(|c| (c.label, c.stops)).collect(), r.holds))
+            .collect();
+        Some((n, grid))
+    }
+
+    /// The middle of cell `j` of row `k` of the table block, on screen.
+    fn cell(&self, k: usize, j: usize) -> Pos2 {
+        let (n, grid) = self.table(true).expect("a table block is drawn");
+        let node = self.view.shown().node(n);
+        let cam = self.view.cams[self.view.scope];
+        cam.rect(&helmsman_diagram::layout::body_cell(node, k, j, grid[k].0.len()))
+            .center()
+    }
+}
+
+fn stopping(grid: &Grid) -> Vec<Vec<&str>> {
+    grid.iter()
+        .map(|(cells, _)| {
+            cells
+                .iter()
+                .filter(|(_, s)| *s)
+                .map(|(l, _)| l.as_str())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn an_or_of_ands_is_drawn_as_one_block_of_rows_of_cells() {
+    let h = Harness::of(&permissive([true, false, true, false, false]));
+    assert_eq!(h.folded(), ["RUN"]);
+    let (n, grid) = h.table(true).unwrap();
+    let shape: Vec<Vec<&str>> = grid
+        .iter()
+        .map(|(c, _)| c.iter().map(|(l, _)| l.as_str()).collect())
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            vec!["GUARD", "ESTOP", "AUTO"],
+            vec!["MANUAL", "ESTOP"],
+            vec!["JOG"]
+        ]
+    );
+    // One pin per signal, ESTOP once though two rows need it off.
+    let block = h.view.shown().node(n);
+    assert_eq!(block.ins, ["GUARD", "ESTOP", "AUTO", "MANUAL", "JOG"]);
+    // The signals keep their blocks, and the gates are inside.
+    assert!(
+        !h.view
+            .shown()
+            .nodes
+            .iter()
+            .any(|n| matches!(&n.kind, NodeKind::Op { op } if op == "AND" || op == "OR"))
+    );
+}
+
+#[test]
+fn the_row_that_holds_is_lit_and_nothing_is_marked_while_the_output_is_on() {
+    let h = Harness::of(&permissive([true, false, true, false, false]));
+    let (_, grid) = h.table(true).unwrap();
+    let holds: Vec<Option<bool>> = grid.iter().map(|(_, h)| *h).collect();
+    assert_eq!(holds, [Some(true), Some(false), Some(false)]);
+    assert!(stopping(&grid).iter().all(Vec::is_empty), "{grid:?}");
+}
+
+#[test]
+fn with_the_output_off_each_row_marks_exactly_the_cells_that_stop_it() {
+    let h = Harness::of(&permissive([false, true, true, true, false]));
+    let (_, grid) = h.table(true).unwrap();
+    assert!(grid.iter().all(|(_, holds)| *holds == Some(false)));
+    assert_eq!(
+        stopping(&grid),
+        [vec!["GUARD", "ESTOP"], vec!["ESTOP"], vec!["JOG"]],
+        "AUTO and MANUAL are as their rows need them"
+    );
+    // One missing cell per row: each says which.
+    let h = Harness::of(&permissive([true, false, false, false, false]));
+    let (_, grid) = h.table(true).unwrap();
+    assert_eq!(stopping(&grid), [vec!["AUTO"], vec!["MANUAL"], vec!["JOG"]]);
+}
+
+#[test]
+fn a_row_that_holds_beside_one_that_does_not_marks_nothing() {
+    let h = Harness::of(&permissive([false, false, true, true, false]));
+    let (_, grid) = h.table(true).unwrap();
+    let holds: Vec<Option<bool>> = grid.iter().map(|(_, h)| *h).collect();
+    assert_eq!(holds, [Some(false), Some(true), Some(false)]);
+    assert!(stopping(&grid).iter().all(Vec::is_empty));
+}
+
+#[test]
+fn with_no_scan_nothing_is_lit_and_nothing_marked() {
+    let h = Harness::of(&permissive([false, true, true, true, false]));
+    let (_, grid) = h.table(false).unwrap();
+    assert!(grid.iter().all(|(_, holds)| holds.is_none()));
+    assert!(stopping(&grid).iter().all(Vec::is_empty));
+}
+
+#[test]
+fn the_values_on_a_table_block_are_the_diagrams_own() {
+    let h = Harness::of(&permissive([true, false, true, false, false]));
+    let live = h
+        .view
+        .live(h.session.trace.as_ref().map(|t| t as &dyn Scan))
+        .unwrap();
+    let v = h.view.view().unwrap();
+    let seen = v.live(&live);
+    let d = h.view.diagram();
+    let mut checked = 0;
+    for n in &d.nodes {
+        for (out, value) in live.values[n.id.0 as usize].iter().enumerate() {
+            if let Some((to, k)) = v.port(n.id, out) {
+                assert_eq!(seen.values[to.0 as usize][k], *value, "{}", n.text);
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0);
+}
+
+#[test]
+fn a_double_click_opens_the_table_into_its_gates_and_its_tab_folds_it_back() {
+    let mut h = Harness::of(&permissive([true, false, true, false, false]));
+    h.press(h.header("RUN"), 2);
+    assert_eq!(h.folded(), Vec::<String>::new());
+    assert_eq!(h.view.table_rows(None).len(), 0);
+    assert!(
+        h.view
+            .shown()
+            .nodes
+            .iter()
+            .any(|n| matches!(&n.kind, NodeKind::Op { op } if op == "OR"))
+    );
+    assert_eq!(h.view.shown(), h.view.diagram());
+    let tabs = h.view.opened_tabs(h.view.cams[h.view.scope]);
+    assert_eq!(tabs.len(), 1);
+    h.press(tabs[0].3.center(), 2);
+    assert_eq!(h.folded(), ["RUN"]);
+}
+
+#[test]
+fn a_cell_says_what_its_row_needs_and_what_the_signal_is() {
+    let h = Harness::of(&permissive([false, true, true, true, false]));
+    let scan = h.session.trace.as_ref().map(|t| t as &dyn Scan);
+    let live = h.view.live(scan);
+    let tables = h.view.table_rows(live.as_ref());
+    let cam = h.view.cams[h.view.scope];
+    let tip = |k, j| h.view.cell_tip(cam, h.cell(k, j), &tables).unwrap().to_string();
+    assert_eq!(
+        tip(0, 1),
+        "ESTOP: this row needs it off. It is TRUE now. This is what stops the row."
+    );
+    assert_eq!(
+        tip(1, 0),
+        "MANUAL: this row needs it on. It is TRUE now. It is as the row needs it."
+    );
+    // Beside the cells, the block says what it is.
+    let block = h.view.shown().nodes.iter().find(|n| n.label == "RUN").unwrap();
+    let corner = cam.rect(&block.rect).left_top() + Vec2::new(2.0, 2.0);
+    assert_eq!(h.view.cell_tip(cam, corner, &tables), None);
+}
+
+#[test]
+fn the_jump_keys_frame_a_condition_that_is_a_table_and_a_tap_on_a_cell_only_picks() {
+    let src = permissive([true, false, true, false, false]).replace(
+        "RUN := GUARD AND NOT ESTOP AND AUTO OR MANUAL AND NOT ESTOP OR JOG;",
+        "IF GUARD AND NOT ESTOP AND AUTO OR MANUAL AND NOT ESTOP OR JOG THEN RUN := TRUE; AUTO := NOT AUTO; END_IF;",
+    );
+    let mut h = Harness::of(&src);
+    assert_eq!(h.folded(), ["permissive"]);
+    let stops = h.view.stops();
+    assert_eq!(stops.len(), 1);
+    let (n, _) = h.table(true).unwrap();
+    let (block, r) = (h.view.shown().node(n).rect, stops[0].rect);
+    assert!(
+        r.x <= block.x && r.y <= block.y && r.right() >= block.right() && r.bottom() >= block.bottom(),
+        "{r:?} does not frame {block:?}"
+    );
+    // A tap on a cell is a tap on the block: it picks, it never opens.
+    h.press(h.cell(0, 0), 1);
+    assert_eq!(h.folded(), ["permissive"]);
+    assert!(h.view.pick.is_some());
+}
+
+#[test]
+fn a_gesture_on_a_table_pin_is_refused_not_mapped_to_a_gate() {
+    let h = Harness::of(&permissive([true, false, true, false, false]));
+    let (n, _) = h.table(true).unwrap();
+    for k in 0..h.view.shown().node(n).ins.len() {
+        assert_eq!(h.view.base_pin(n, k), None, "pin {k}");
+    }
+    assert_eq!(h.view.base_block(n), None);
+}
+
 // ---- fold state kept in `diagram.layout` ----
 
 fn key_of(h: &Harness, kind: FoldKind) -> String {

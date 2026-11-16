@@ -750,15 +750,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   status: ready
 
 
-- [ ] **Permissive table: an OR of ANDs as rows of conditions** — one row per term, one cell per signal (must be on, must be off). Live: the row that holds is lit, and when the output is off each row marks the cell that stops it. `FoldKind::Table` exists and nothing makes or draws one. The rule is a fold within a statement over an n-input OR and the n-input ANDs that feed it; drawn as a plain fold it would lose which signal belongs to which row, so it needs its own drawing and its own size, as the state block does (build the sizing once for both).
-  result: an interlock reads as a table and says what is missing
-  est: 1d
-  difficulty: high
-  id: diagram-permissive-table
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
 - [ ] **Zoom picks the level of detail** — far: every section and arm drawn as one block with its live state; middle: a statement as one line; near: the blocks. Sections and arms fold on request today (`Viewer::set_fold`); this folds them by zoom instead and opens nothing the reader folded by hand. The middle level is new: one fold per statement titled with its text.
   result: a large program is readable at any zoom
   est: 6h
