@@ -249,6 +249,10 @@ fn the_check_runs_the_scenarios_and_the_projects_tests_on_a_copy() {
         p.contains("Scenario The lamp stays off while start is not pressed. (test_lamp_off.st) failed: lamp off failed"),
         "{p}"
     );
+    // It does not stop the code, and a scenario that failed is no test.
+    assert!(!c.blocked(), "{c:?}");
+    assert_eq!(c.warnings().len(), 1, "{c:?}");
+    assert!(c.add.is_empty(), "{c:?}");
     // A scenario with no ASSERT checks nothing: red.
     let idle =
         "(* Nothing. *)\nPROGRAM test_idle\nVAR_OUTPUT done : BOOL; END_VAR\ndone := TRUE;\nEND_PROGRAM"
@@ -258,7 +262,10 @@ fn the_check_runs_the_scenarios_and_the_projects_tests_on_a_copy() {
     // The project's own test goes red with the code: named.
     let invert = LAMP.replace("lamp := start;", "lamp := NOT start;");
     let c = check(&file(), &files, &answer_with(&invert, &[]), settings());
-    assert!(c.failures.iter().any(|f| f.contains("test_lamp is red")), "{c:?}");
+    assert!(c.tests.iter().any(|f| f.contains("test_lamp is red")), "{c:?}");
+    // What the tests say is a warning: the code can still be written.
+    assert!(c.red() && !c.blocked(), "{c:?}");
+    assert_eq!(c.warnings(), c.problems());
     // Code that does not compile, with or without tests.
     let broken = LAMP.replace("lamp := start;", "lamp := strat;");
     let c = check(
