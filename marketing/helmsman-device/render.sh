@@ -13,6 +13,8 @@ HF="npx --yes hyperframes@0.9.37"
 quality="${1:-delivery}"
 cuts="${2:-a b c}"
 python3 build.py
+# The 60 fps footage is built from footage/clips/ (about nine minutes, once).
+[ -f assets/footage/plug.mp4 ] || python3 footage/shots.py install
 case "$quality" in
 preview)
     cd "cut-${2:-a}"

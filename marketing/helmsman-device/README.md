@@ -1,10 +1,12 @@
-# Helmsman device film, three rough cuts (1920x1080, 30 fps)
+# Helmsman device film, three rough cuts (1920x1080, 60 fps)
 
 The second ad (`../helmsman-ad-v2`) with the controller as an object in a
 real plant: it is clipped onto a rail, one Ethernet cable goes in and its
 light comes on. Same palette, faces, 120 BPM grid, slash and end card; the
-pictures are live action instead of type on a ground. The device's look is
-specified in `docs/brand/index.html#device`.
+pictures are footage instead of type on a ground, in one look of their own:
+painterly realism, a plant in graphite grays with the brand yellow as the
+only saturated colour. The device and that look are specified in
+`docs/brand/index.html#device`.
 
     ./render.sh              # build, check and render all three
     ./render.sh draft b      # a fast pass of one cut while editing
@@ -29,29 +31,40 @@ there first.
 
 ## The footage
 
-`assets/footage/*.mp4` are generated: one composed still per shot
-(Seedream 4.5), then that still animated as the first frame of a 4 to 6 s
-clip (MiniMax H3, the 768P draft model) through the `storyboard` CLI in
-`~/github/storyboard`. `footage/shots.py` holds every prompt and is the
-record of how each shot was made:
+Every shot is generated in three steps through the `storyboard` CLI in
+`~/github/storyboard`, and `footage/shots.py` holds every prompt:
 
-    footage/shots.py stills [name ...]   # about $0.04 a still
-    footage/shots.py clips  [name ...]   # about $0.02 a second
-    footage/shots.py sheet
+    footage/shots.py stills [name ...]   # a composed photographic still, about $0.04
+    footage/shots.py paint  [name ...]   # that still repainted in the film's look, $0.04
+    footage/shots.py clips  [name ...]   # the painting animated, about $0.02 a second
+    footage/shots.py sheet               # every painted still on one page
 
-then copy `footage/outputs/box/clip-<name>.mp4` to
-`assets/footage/<name>.mp4`. The device stays the same object from shot to
-shot because every device still is composed from the same three reference
-pictures (`docs/brand/helmsman-device*.jpg`). Look at every clip before it
-goes in a cut: the first plug-in take grew a second socket for the cable.
+The still fixes what is in the frame, the repaint fixes the look, and the
+painting is the first frame of a 4 to 6 s clip (MiniMax H3, the 768P draft
+model). The device stays the same object from shot to shot because every
+device still is composed from the same three reference pictures
+(`docs/brand/helmsman-device*.jpg`).
+
+Look at every still and clip before it goes in a cut. The first plug-in
+take grew a second socket for the cable, and a repaint prompt that names
+something to leave out paints it in: say what is there, never what is not.
+
+The take that is kept is copied from `footage/outputs/box/clip-<name>.mp4`
+to `footage/clips/<name>.mp4` and committed. The model renders 24 fps and
+the film is 60, so `footage/shots.py install` interpolates each clip
+(FFmpeg `minterpolate`, about nine minutes for all fifteen) into
+`assets/footage/`; `render.sh` runs it when that folder is empty. It holds
+up because every move in the clips is slow.
 
 These are drafts at 1344x768, scaled up. A cut that is kept gets its shots
-rendered once more at 2K on the full model (`--resolution 2K`, about $0.13
-a second) before it ships.
+rendered once more at 2K on the full model (`--resolution 2K` in
+`shots.py`, about $0.13 a second, near $11 for all fifteen) before it
+ships.
 
 The moments the cuts land on a beat were measured in the clips and are the
 constants at the top of `build.py`: the light bar coming on, the stack
-light turning green, the rail click, the rack's thud, the door's clunk.
+light changing, the block seated on the rail, the rack's thud, the door's
+clunk. New takes need new numbers.
 
 ## Sound
 

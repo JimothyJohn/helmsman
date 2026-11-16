@@ -6,7 +6,7 @@ repainted in the film's style, then that painting animated as the first frame of
     ./shots.py paint  [name ...]     # outputs/box/<name>-oil.jpg, the still in the film's style
     ./shots.py clips  [name ...]     # outputs/box/clip-<name>.mp4, about $0.02 a second
     ./shots.py sheet                 # outputs/box/sheet.jpg, every painted still on one page
-    ./shots.py install [name ...]    # the clips into ../assets/, interpolated to 60 fps
+    ./shots.py install [name ...]    # clips/<name>.mp4 into ../assets/, interpolated to 60 fps
 
 It drives the storyboard CLI (~/github/storyboard), which bounds-checks each
 request, retries, and writes a costed record per run under outputs/box/runs/.
@@ -488,9 +488,9 @@ REAL_SOUND = ("plug", "mount", "rackout", "walkaway", "dongles", "linestart")
 
 
 def install(name: str) -> int:
-    """outputs/box/clip-<name>.mp4 -> ../assets/footage/<name>.mp4 at 60 fps, and for
-    the shots the cuts play with their own sound, ../assets/real/<name>.mp3."""
-    src = OUT / f"clip-{name}.mp4"
+    """clips/<name>.mp4 (the take that was kept, committed) -> ../assets/footage/<name>.mp4
+    at 60 fps, and for the shots the cuts play with their own sound, ../assets/real/<name>.mp3."""
+    src = HERE / "clips" / f"{name}.mp4"
     assets = HERE.parent / "assets"
     (assets / "footage").mkdir(parents=True, exist_ok=True)
     (assets / "real").mkdir(parents=True, exist_ok=True)

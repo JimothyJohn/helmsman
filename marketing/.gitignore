@@ -7,3 +7,6 @@ helmsman-device/footage/outputs/
 helmsman-device/footage/prompts/
 helmsman-device/footage/MEDIA-INDEX.md
 __pycache__/
+# Built from helmsman-device/footage/clips/ by footage/shots.py install.
+helmsman-device/assets/footage/
+helmsman-device/assets/real/
