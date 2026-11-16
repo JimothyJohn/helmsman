@@ -1,15 +1,13 @@
 //! Drawing the "New device" form and the Rename question (the model is
 //! `device_form.rs`): a box in the middle of the screen, whichever tab is
 //! up (the view draws it each frame after the Editor, as the Files tab's
-//! confirmations are).
-
-use std::fmt::Write as _;
+//! confirmations are). The forms hold a device's settings and none of its
+//! inputs and outputs: those are added one at a time under the device on
+//! the Devices tab (`device_io.rs`; Nick, 2026-11-15).
 
 use eframe::egui::{self, RichText, Vec2};
 
-use crate::device_form::{
-    self, Dir, Kind, PROFILES, PointRow, SigTy, Use, check_settings, param, schema, set_param,
-};
+use crate::device_form::{self, Kind, PROFILES, check_settings, param, schema, set_param};
 use crate::devices::{DeviceAct, DevicesUi, NewDevice, PROTOCOLS, QuickAdd};
 use crate::editor::Chrome;
 use crate::st_view::TAP;
@@ -17,14 +15,12 @@ use crate::theme::theme;
 use crate::tips::Tip;
 
 const RED: egui::Color32 = egui::Color32::from_rgb(255, 110, 100);
-/// The form's width: room for a point row's five columns.
-const WIDTH: f32 = 640.0;
+/// The form's width: room for the longest setting and its unit.
+const WIDTH: f32 = 520.0;
 
 impl DevicesUi {
-    /// Opens the form on `d`, a known device's channels bound to the
-    /// program's inputs and outputs that are on the box's own channels.
-    pub fn open(&mut self, mut d: NewDevice) {
-        device_form::prebind(&mut d.points, &self.program, &self.map);
+    /// Opens the form on `d`.
+    pub fn open(&mut self, d: NewDevice) {
         self.adding = Some(d);
     }
 
@@ -47,11 +43,18 @@ impl DevicesUi {
             };
             ui.label(RichText::new(title).strong().size(20.0));
             ui.add_space(8.0);
-            fields(ui, chrome, &mut d, &eds_files);
-            ui.add_space(10.0);
-            // Small enough that the whole form fits on a laptop's screen.
-            let rows_h = (ctx.content_rect().height() * 0.28).clamp(160.0, 320.0);
-            points(ui, chrome, &mut d, &program, rows_h);
+            let simple = d.editing.is_some() && !chrome.advanced;
+            fields(ui, chrome, &mut d, &eds_files, simple);
+            if d.editing.is_none() {
+                ui.add_space(6.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Its inputs and outputs are added under it on the Devices tab, with + Add I/O.")
+                            .color(theme(ui).muted),
+                    )
+                    .wrap(),
+                );
+            }
             if let Some(err) = &d.error {
                 ui.add_space(4.0);
                 ui.add(egui::Label::new(RichText::new(err).color(crate::theme::theme(ui).ink(RED))).wrap());
@@ -60,9 +63,9 @@ impl DevicesUi {
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
                 let (word, tip) = if d.editing.is_some() {
-                    ("Save", "Replaces the device's line and its inputs and outputs in io.map with these, and adds any new variables to the program.")
+                    ("Save", "Writes these settings on the device's line in io.map. Its inputs and outputs stay as they are, under its new name if it got one.")
                 } else {
-                    ("Add", "Adds the device and the ticked inputs and outputs to io.map, and any new variables to the program.")
+                    ("Add", "Adds the device to io.map. Its inputs and outputs are added under it on the Devices tab.")
                 };
                 let ok = ui
                     .add(egui::Button::new(RichText::new(word).strong()).min_size(tall))
@@ -127,7 +130,7 @@ impl DevicesUi {
             ui.label(RichText::new(format!("Add {what}")).strong().size(20.0));
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
-                ui.label("Name").tip("What the program calls the device. Each channel becomes a signal named after it: rio and DI-04 give rio_di_04.");
+                ui.label("Name").tip("What the program calls the device. A channel you add is named after it: rio and DI-04 give rio_di_04.");
                 let r = ui
                     .add(egui::TextEdit::singleline(&mut q.name).desired_width(200.0))
                     .tip("The device's name in the program: a letter, then letters, digits or _.");
@@ -148,26 +151,16 @@ impl DevicesUi {
                     } else {
                         format!(" over {}", skim.transports.join(", then "))
                     };
-                    ui.label(RichText::new(format!("{n} channel(s){over}:")).color(theme(ui).muted))
-                        .tip("Every channel the device has, as a signal of the project. The box picks the protocol from the list, best first, and falls back by itself.");
-                    let rows_h = (ctx.content_rect().height() * 0.3).clamp(120.0, 320.0);
-                    egui::ScrollArea::vertical()
-                        .max_height(rows_h)
-                        .show(ui, |ui| {
-                            let dev = if q.name.trim().is_empty() { "device" } else { q.name.trim() };
-                            for c in &skim.channels {
-                                let mut line = format!(
-                                    "{:<3} {}  {}",
-                                    c.dir,
-                                    helmsman_project::profile_skim::signal_name(dev, &c.name),
-                                    c.ty
-                                );
-                                if let Some(u) = &c.unit {
-                                    let _ = write!(line, " {u}");
-                                }
-                                ui.add(egui::Label::new(RichText::new(line).monospace()).truncate());
-                            }
-                        });
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "{n} channel(s){over}. All of them are yours to use: add the ones the project needs under the device, with + Add I/O."
+                            ))
+                            .color(theme(ui).muted),
+                        )
+                        .wrap(),
+                    )
+                    .tip("Nothing is listed in the project until you add it. The box picks the protocol from the list, best first, and falls back by itself.");
                 }
             }
             if let Some(err) = &q.error {
@@ -180,7 +173,7 @@ impl DevicesUi {
                 let ready = matches!(q.profile, Some(Ok(_)));
                 let ok = ui
                     .add_enabled(ready, egui::Button::new(RichText::new("Add").strong()).min_size(tall))
-                    .tip("Copies the device's profile into the project and adds the device and every channel to io.map.");
+                    .tip("Copies the device's profile into the project and adds the device to io.map. Its channels are added under it, one click each.");
                 chrome.hit("quick ok", ok.rect);
                 let no = ui
                     .add(egui::Button::new("Cancel").min_size(tall))
@@ -330,8 +323,10 @@ impl DevicesUi {
 }
 
 /// Name, protocol, address, then the protocol's settings: one grid,
-/// labels on the left, and the device's io.map line under it.
-fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: &[String]) {
+/// labels on the left, and the device's io.map line under it. `simple`
+/// (an edit with Advanced off): the name alone; how the device is
+/// reached stays as it is.
+fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: &[String], simple: bool) {
     let t = theme(ui);
     egui::Grid::new("device-fields")
         .num_columns(2)
@@ -344,6 +339,9 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
                 .tip(name_tip);
             chrome.hit("device name", n.rect);
             ui.end_row();
+            if simple {
+                return;
+            }
             ui.label("Protocol").tip("How the controller talks to the device.");
             ui.horizontal_wrapped(|ui| {
                 for (k, (driver, title, _, _)) in PROTOCOLS.iter().enumerate() {
@@ -415,6 +413,18 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
                 ui.end_row();
             }
         });
+    if simple {
+        ui.add(
+            egui::Label::new(
+                RichText::new(
+                    "How it is reached (protocol, address, timing) is under Advanced on the Devices tab.",
+                )
+                .color(t.muted),
+            )
+            .wrap(),
+        );
+        return;
+    }
     if let Err(e) = check_settings(d.driver(), &d.params) {
         ui.add(egui::Label::new(RichText::new(e).color(crate::theme::theme(ui).ink(RED))).wrap());
     }
@@ -429,186 +439,11 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
         ));
 }
 
-/// The inputs and outputs: tick, name, type, point, what the program does
-/// with it.
-fn points(
-    ui: &mut egui::Ui,
-    chrome: &mut Chrome,
-    d: &mut NewDevice,
-    program: &[device_form::Port],
-    rows_h: f32,
-) {
-    let t = theme(ui);
-    ui.label(RichText::new("Inputs and outputs").strong())
-        .tip("The device's points to wire. Tick the ones the program uses and name them.");
-    match d.catalog {
-        Some(c) => {
-            ui.add(egui::Label::new(RichText::new(c.title()).color(t.muted)).wrap());
-        }
-        None => {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "Add each input and output the program uses, with its point on the device.",
-                    )
-                    .color(t.muted),
-                )
-                .wrap(),
-            );
-        }
-    }
-    let driver = d.driver();
-    let mut gone = None;
-    egui::ScrollArea::vertical().id_salt("device-points-scroll").max_height(rows_h).show(ui, |ui| {
-    egui::Grid::new("device-points")
-        .num_columns(6)
-        .spacing([8.0, 4.0])
-        .striped(true)
-        .show(ui, |ui| {
-            for h in ["", "Name", "Type", "Point", "Program", ""] {
-                ui.label(RichText::new(h).color(t.muted));
-            }
-            ui.end_row();
-            for (i, r) in d.points.iter_mut().enumerate() {
-                let c = ui.checkbox(&mut r.on, r.dir.word()).tip(if r.dir == Dir::In {
-                    "An input: the program reads it. Tick it to wire it."
-                } else {
-                    "An output: the program drives it. Tick it to wire it."
-                });
-                chrome.hit(format!("point {i} on"), c.rect);
-                let fixed_name = matches!(r.use_, Use::Existing(_));
-                let n = ui
-                    .add_enabled(
-                        !fixed_name,
-                        egui::TextEdit::singleline(&mut r.name)
-                            .desired_width(130.0)
-                            .min_size(egui::vec2(130.0, 0.0)),
-                    )
-                    .tip(if fixed_name {
-                        "The program's own variable: pick New variable to name it yourself."
-                    } else {
-                        "Its name in io.map and in the program."
-                    });
-                chrome.hit(format!("point {i} name"), n.rect);
-                if n.changed() {
-                    r.on = true;
-                }
-                if r.fixed {
-                    ui.label(r.ty.word()).tip("The channel's type.");
-                    ui.label(RichText::new(&r.point).monospace())
-                        .tip("The channel on the device, in its protocol's address syntax.");
-                } else {
-                    egui::ComboBox::from_id_salt(("point-ty", i))
-                        .width(64.0)
-                        .selected_text(r.ty.word())
-                        .show_ui(ui, |ui| {
-                            for ty in SigTy::ALL {
-                                ui.selectable_value(&mut r.ty, ty, ty.word())
-                                    .tip("The signal's type in io.map.");
-                            }
-                        })
-                        .response
-                        .tip("bool for a contact or a coil, int for a count or a register, real for a measurement.");
-                    let hint = match r.dir {
-                        Dir::In => "di:0".to_string(),
-                        Dir::Out => format!("{}:0", device_form::out_bit(driver)),
-                    };
-                    let p = ui
-                        .add(
-                            egui::TextEdit::singleline(&mut r.point)
-                                .hint_text(hint)
-                                .desired_width(90.0)
-                                .min_size(egui::vec2(90.0, 0.0)),
-                        )
-                        .tip("The point on the device: di:N, coil:N, hr:N:i16 on Modbus; di:N, do:N, in:OFFSET:FMT on EtherNet/IP.");
-                    chrome.hit(format!("point {i} point"), p.rect);
-                }
-                use_combo(ui, chrome, i, r, program);
-                if r.fixed {
-                    ui.label("");
-                } else {
-                    let x = ui.button("✕").tip("Takes this row out.");
-                    chrome.hit(format!("point {i} remove"), x.rect);
-                    if x.clicked() {
-                        gone = Some(i);
-                    }
-                }
-                ui.end_row();
-            }
-        });
-    });
-    if let Some(i) = gone {
-        d.points.remove(i);
-    }
-    ui.horizontal_wrapped(|ui| {
-        for dir in [Dir::In, Dir::Out] {
-            let label = if dir == Dir::In { "+ Input" } else { "+ Output" };
-            let b = ui.button(label).tip("Adds a row to name and wire.");
-            chrome.hit(format!("device add {}", dir.word()), b.rect);
-            if b.clicked() {
-                let n = d.points.iter().filter(|r| r.dir == dir && !r.fixed).count();
-                d.points.push(PointRow::custom(dir, n));
-            }
-        }
-    });
-    let new: Vec<&str> = d
-        .points
-        .iter()
-        .filter(|r| r.on && r.use_ == Use::Declare)
-        .map(|r| r.name.as_str())
-        .collect();
-    // Always one line, so ticking a row never changes the form's height.
-    let new = if new.is_empty() {
-        "none".to_string()
-    } else {
-        new.join(", ")
-    };
-    let line = format!("New variables in the program: {new}");
-    ui.add(egui::Label::new(RichText::new(&line).color(t.muted)).truncate())
-        .tip(line);
-}
-
-/// What the program does with row `i`: wiring only, a new variable, or
-/// one of its own of the row's direction and type.
-fn use_combo(
-    ui: &mut egui::Ui,
-    chrome: &mut Chrome,
-    i: usize,
-    r: &mut PointRow,
-    program: &[device_form::Port],
-) {
-    let text = match &r.use_ {
-        Use::Wiring => "wiring only".to_string(),
-        Use::Declare => "new variable".to_string(),
-        Use::Existing(v) => v.clone(),
-    };
-    let before = r.use_.clone();
-    let c = egui::ComboBox::from_id_salt(("point-use", i))
-        .width(150.0)
-        .selected_text(text)
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut r.use_, Use::Declare, "new variable")
-                .tip("Adds a variable of this name to the program.");
-            ui.selectable_value(&mut r.use_, Use::Wiring, "wiring only")
-                .tip("Only the line in io.map: the program does not use it yet.");
-            for p in program.iter().filter(|p| p.dir == r.dir && p.ty == r.ty) {
-                ui.selectable_value(&mut r.use_, Use::Existing(p.name.clone()), &p.name)
-                    .tip("The program's own variable, moved onto this point.");
-            }
-        });
-    let c = c.response.tip("What the program does with it.");
-    chrome.hit(format!("point {i} use"), c.rect);
-    if r.use_ != before {
-        if let Use::Existing(v) = &r.use_ {
-            r.name.clone_from(v);
-        }
-        r.on = true;
-    }
-}
-
 /// What the quick form's Add writes, or why not: the name an identifier
-/// the map does not have yet, the profile as a project file, the device
-/// line `device NAME device:PROFILE IDENTITY`, and one signal a channel.
+/// the map does not have yet, the profile as a project file, and the
+/// device line `device NAME device:PROFILE IDENTITY`. No signal: every
+/// channel is in the profile, and joins io.map when it is added under the
+/// device (`device_io.rs`).
 ///
 /// # Errors
 /// The name, in words.
@@ -625,38 +460,24 @@ pub fn quick_add(
     if map.devices.iter().any(|d| d.name.eq_ignore_ascii_case(name)) {
         return Err(format!("A device called {name} is in io.map already."));
     }
-    let Some(Ok((text, skim))) = &q.profile else {
+    let Some(Ok((text, _))) = &q.profile else {
         return Err("The device's channels have not come yet.".into());
     };
     let stem = q
         .file
         .strip_suffix(helmsman_project::DEVICE_EXT)
         .ok_or_else(|| format!("{}: not a profile file name", q.file))?;
-    let mut signals = Vec::with_capacity(skim.channels.len());
-    for c in &skim.channels {
-        let signal = helmsman_project::profile_skim::signal_name(name, &c.name);
-        if map.signals.iter().any(|s| s.name.eq_ignore_ascii_case(&signal)) {
-            return Err(format!("{signal} is wired already in io.map: pick another name."));
-        }
-        let mut line = format!("{:<3} {signal} {} {name} ch:{}", c.dir, c.ty, c.name);
-        if let Some(u) = &c.unit {
-            let _ = write!(line, " unit={u}");
-        }
-        if let Some(v) = &c.safe {
-            let _ = write!(line, " safe={v}");
-        }
-        signals.push(line);
-    }
     Ok(QuickAdd {
         file: q.file.clone(),
         text: text.clone(),
         wiring: device_form::Wiring {
             device: name.to_string(),
             device_line: format!("device {name} device:{stem} {}", q.identity),
-            signals,
+            signals: Vec::new(),
             replace: Vec::new(),
             declare: Vec::new(),
             replaces: None,
+            extend: false,
         },
     })
 }

@@ -1748,8 +1748,23 @@ impl BoxProjects {
                     } else {
                         self.modules.join(", ")
                     };
-                    self.deploy =
-                        Deploy::Done(format!("{project} is running: {mods} (snapshot {})", short(snap)));
+                    // A red requirement test refuses nothing: the box
+                    // names it in its answer, said after what runs.
+                    let red: Vec<&str> = j["red"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Json::as_str)
+                        .collect();
+                    let red = match red.len() {
+                        0 => String::new(),
+                        1 => format!(". Requirement test {} is red", red[0]),
+                        n => format!(". {n} requirement tests are red: {}", red.join("; ")),
+                    };
+                    self.deploy = Deploy::Done(format!(
+                        "{project} is running: {mods} (snapshot {}){red}",
+                        short(snap)
+                    ));
                     self.running = Some(project);
                     self.deployed = true;
                     self.relist();
@@ -1759,10 +1774,6 @@ impl BoxProjects {
                     self.replay(&project);
                 } else if a.status == 422 {
                     self.diags = diags_of(&j);
-                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
-                } else if a.status == 409 && j["tests"].is_array() {
-                    // A red requirement test: the tab shows which.
-                    self.tests = crate::requirements::Results::from_json(&j);
                     self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 } else {
                     self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));

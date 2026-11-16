@@ -242,6 +242,7 @@ fn leaf(d: &Diagram, from: NodeId) -> Result<(), Refusal> {
         NodeKind::Func { name } => Err(Refusal::NotALeaf(format!("the call of {name}"))),
         NodeKind::Access { path } => Err(Refusal::NotALeaf(format!("the element {path}"))),
         NodeKind::Jump => Err(Refusal::NotALeaf("a jump".into())),
+        NodeKind::Fold { .. } => Err(Refusal::NotALeaf("several blocks shown as one".into())),
     }
 }
 
@@ -687,7 +688,7 @@ fn blank_kind(k: &NodeKind, f: &dyn Fn(&str) -> String) -> NodeKind {
         NodeKind::Access { path } => NodeKind::Access { path: f(path) },
         NodeKind::Write { path } => NodeKind::Write { path: f(path) },
         NodeKind::For { var } => NodeKind::For { var: f(var) },
-        NodeKind::Const { .. } | NodeKind::Jump => k.clone(),
+        NodeKind::Const { .. } | NodeKind::Jump | NodeKind::Fold { .. } => k.clone(),
     }
 }
 

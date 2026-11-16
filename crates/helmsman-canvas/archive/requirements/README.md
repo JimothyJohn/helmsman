@@ -12,11 +12,12 @@ for the agent to write its test. Last whole in the tree at commit dc8f47e
 Nothing in this directory is compiled. What stayed in `src/`:
 
 - `requirements.rs`: `State`, `Row`, `Results` (the test results),
-  `refusal` and `name_for` (verify.rs names the Agent's scenario tests with
+  `warning`, `refusal` (of a requirement's words) and `name_for` (verify.rs names the Agent's scenario tests with
   them).
-- The gate: a red `test_*.st` still refuses Deploy and "Use this code", in
-  the simulation (`PlaygroundView::tests_refuse`) and on the box (the box's
-  own check). The refusal names the test in the deploy error.
+- The tests still run before Deploy and "Use this code"; since 2026-11-15
+  a red `test_*.st` warns and refuses neither (it used to refuse both), in
+  the simulation (`PlaygroundView::tests_warn`) and on the box (the box's
+  own check). The deploy's note names the test.
 - The box API: `POST /api/projects/{p}/tests` (the box and the CLI runner
   use it) and `POST /api/projects/{p}/requirements` (`api::requirements`,
   now without a caller in the canvas).

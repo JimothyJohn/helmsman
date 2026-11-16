@@ -78,7 +78,7 @@ use helmsman_iec::trace::StmtId;
 use helmsman_iec::{ImageSizes, Value, compile};
 
 use crate::diff;
-use crate::lower::{Module, Pou, lower};
+use crate::lower::{Module, Pou, chain, chains, lower, parenthesised};
 use crate::model::{Diagram, NodeId, NodeKind, Rect, RegionId, Span, Wire};
 use crate::text::{UNARY, level, prec};
 
@@ -214,6 +214,13 @@ pub enum Refusal {
     NotBoolean,
     NotAnOperator,
     NotSwappable(String),
+    /// A block with more than two inputs asked to become an operator that
+    /// is drawn with two (`a + b + c` to `-`).
+    ManyInputs {
+        from: String,
+        to: String,
+        inputs: usize,
+    },
     WrongFamily {
         from: String,
         to: String,
@@ -301,7 +308,12 @@ impl fmt::Display for Refusal {
                 "that input is not a boolean: NOT on a number is a bitwise complement, \
                  a block of its own, not a bubble"
             ),
-            Self::NotAnOperator => write!(f, "that block is not a two-input operator"),
+            Self::NotAnOperator => write!(f, "that block is not an operator with two or more inputs"),
+            Self::ManyInputs { from, to, inputs } => write!(
+                f,
+                "this {from} has {inputs} inputs and {to} takes two: a run of {from} can only become \
+                 another operator that takes any number of inputs"
+            ),
             Self::NotSwappable(op) => write!(
                 f,
                 "{op} cannot be swapped here: only AND and OR, the comparisons and + - * / can"
@@ -604,12 +616,6 @@ impl Reparsed {
     }
 }
 
-/// A binary expression written in parentheses: its text starts before its
-/// left operand's does.
-fn parenthesised(e: &Expr) -> bool {
-    matches!(&e.kind, ExprKind::Binary(_, l, _) if e.start != l.start)
-}
-
 const ALL_OPS: [BinOp; 15] = [
     BinOp::Or,
     BinOp::Xor,
@@ -651,7 +657,7 @@ fn family(op: BinOp) -> &'static [BinOp] {
 fn context(d: &Diagram, node: NodeId, input: usize) -> u8 {
     match &d.node(node).kind {
         NodeKind::Op { op } => match binop(op) {
-            Some(b) => prec(b) + u8::from(input == 1),
+            Some(b) => prec(b) + u8::from(input >= 1),
             None if op == "NOT" || op == "-" => UNARY,
             None => 0,
         },
@@ -933,45 +939,84 @@ fn swap_op(src: &str, module: &Module, pou: &str, node: NodeId, to: BinOp) -> Re
     let whole = *d.ops.get(&node).ok_or(Refusal::NotAnOperator)?;
     let text = slice(src, whole)?;
     let r = Reparsed::of(text)?;
-    let ExprKind::Binary(bop, l, rhs) = &r.expr.kind else {
+    let ExprKind::Binary(bop, ..) = &r.expr.kind else {
         return Err(Refusal::Unreadable);
     };
     if *bop != from {
         return Err(Refusal::StaleDiagram);
     }
-    // The operator token.
-    let at = offset_in(src, n.pos)
-        .checked_sub(whole.start)
-        .filter(|&a| a < text.len())
-        .ok_or(Refusal::StaleDiagram)?;
-    let tok_len = if text.as_bytes()[at] == b'&' {
-        1
-    } else {
-        from.symbol().len()
-    };
-    let old_tok = text.get(at..at + tok_len).ok_or(Refusal::StaleDiagram)?;
-    if old_tok != "&" && !old_tok.eq_ignore_ascii_case(from.symbol()) {
+    // Its operands, and the operator between each pair: a run of one
+    // operator is one block, and every operator of the run changes.
+    let operands = chain(&r.expr);
+    if operands.len() != n.ins.len() {
         return Err(Refusal::StaleDiagram);
     }
-    let mut new_tok = to.symbol().to_string();
-    if old_tok
-        .bytes()
-        .all(|c| !c.is_ascii_alphabetic() || c.is_ascii_lowercase())
-        && old_tok.bytes().any(|c| c.is_ascii_alphabetic())
-    {
-        new_tok = new_tok.to_ascii_lowercase();
+    if operands.len() > 2 && !chains(to) {
+        return Err(Refusal::ManyInputs {
+            from: from.symbol().into(),
+            to: to.symbol().into(),
+            inputs: operands.len(),
+        });
+    }
+    let mut op_at = Vec::with_capacity(operands.len() - 1);
+    let mut at_expr = &r.expr;
+    for _ in 1..operands.len() {
+        let ExprKind::Binary(_, l, _) = &at_expr.kind else {
+            return Err(Refusal::StaleDiagram);
+        };
+        op_at.push(r.at(at_expr.pos));
+        at_expr = l;
+    }
+    // The block's own position is its last operator.
+    let own = offset_in(src, n.pos).checked_sub(whole.start);
+    if own != op_at.first().copied() {
+        return Err(Refusal::StaleDiagram);
+    }
+    let mut tokens = Vec::with_capacity(op_at.len());
+    for at in op_at {
+        let tok_len = if text.as_bytes().get(at) == Some(&b'&') {
+            1
+        } else {
+            from.symbol().len()
+        };
+        let old_tok = text.get(at..at + tok_len).ok_or(Refusal::StaleDiagram)?;
+        if old_tok != "&" && !old_tok.eq_ignore_ascii_case(from.symbol()) {
+            return Err(Refusal::StaleDiagram);
+        }
+        let mut new_tok = to.symbol().to_string();
+        if old_tok
+            .bytes()
+            .all(|c| !c.is_ascii_alphabetic() || c.is_ascii_lowercase())
+            && old_tok.bytes().any(|c| c.is_ascii_alphabetic())
+        {
+            new_tok = new_tok.to_ascii_lowercase();
+        }
+        tokens.push(Splice {
+            at,
+            del: tok_len,
+            ins: new_tok,
+        });
     }
 
     let p = prec(to);
     let mut open = Vec::new();
     let mut kids = Vec::new();
     let mut close = Vec::new();
-    // The expression in its context: does it still group as it did?
-    let ctx = d.wires.iter().find(|w| w.from == node).map_or(0, |w| {
+    // The expression in its context: does it still group as it did? A
+    // run of `to` it would otherwise join (as that run's first operand)
+    // gets brackets too, so it stays the block it is.
+    let ctx = d.wires.iter().find(|w| w.from == node).map_or((0, false), |w| {
         let direct = d.pins.get(&(w.to, w.inp)) == Some(&whole);
-        if direct { context(d, w.to, w.inp) } else { UNARY }
+        if direct {
+            let joins = chains(to)
+                && w.inp == 0
+                && matches!(&d.node(w.to).kind, NodeKind::Op { op } if op == to.symbol());
+            (context(d, w.to, w.inp), joins)
+        } else {
+            (UNARY, false)
+        }
     });
-    if p < ctx && !parenthesised(&r.expr) {
+    if (p < ctx.0 || ctx.1) && !parenthesised(&r.expr) {
         open.push(Splice {
             at: 0,
             del: 0,
@@ -983,9 +1028,12 @@ fn swap_op(src: &str, module: &Module, pou: &str, node: NodeId, to: BinOp) -> Re
             ins: ")".into(),
         });
     }
-    // Its operands: left needs level `p`, right `p + 1`.
-    for (child, min) in [(&**l, p), (&**rhs, p + 1)] {
-        if level(child) < min && !parenthesised(child) {
+    // Its operands: the first needs level `p`, the others `p + 1`. A
+    // first operand that is itself a run of `to` would join this block.
+    for (k, child) in operands.iter().enumerate() {
+        let min = p + u8::from(k > 0);
+        let joins = k == 0 && chains(to) && matches!(&child.kind, ExprKind::Binary(o, ..) if *o == to);
+        if (level(child) < min || joins) && !parenthesised(child) {
             kids.push(Splice {
                 at: r.at(child.start),
                 del: 0,
@@ -1000,11 +1048,7 @@ fn swap_op(src: &str, module: &Module, pou: &str, node: NodeId, to: BinOp) -> Re
     }
     let mut splices = open;
     splices.extend(kids);
-    splices.push(Splice {
-        at,
-        del: tok_len,
-        ins: new_tok,
-    });
+    splices.extend(tokens);
     splices.extend(close);
     Ok(Plan {
         span: whole,

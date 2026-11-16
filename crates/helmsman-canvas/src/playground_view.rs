@@ -334,11 +334,12 @@ impl PlaygroundView {
         self.tests = crate::requirements::Results::from_verdicts(&v);
     }
 
-    /// The gate "Use this code" and Deploy share: why the project (with
-    /// `extra` added or replacing a file, for a candidate) must not land,
-    /// if a requirement test is red. Runs the tests on the candidate and,
-    /// when it is the project as it stands, keeps the results.
-    fn tests_refuse(&mut self, extra: Option<(&str, &str)>) -> Option<String> {
+    /// What "Use this code" and Deploy say of the project's requirement
+    /// tests (with `extra` added or replacing a file, for a candidate):
+    /// the red ones, named. A warning, never a refusal. Runs the tests on
+    /// the candidate and, when it is the project as it stands, keeps the
+    /// results.
+    fn tests_warn(&mut self, extra: Option<(&str, &str)>) -> Option<String> {
         let settings = self.test_settings();
         let results = match extra {
             None => {
@@ -367,7 +368,7 @@ impl PlaygroundView {
                 ))
             }
         };
-        results.refusal()
+        results.warning()
     }
 
     /// Checks a PROGRAM answer (`text`) landing as `main.st` of the saved
@@ -375,15 +376,18 @@ impl PlaygroundView {
     /// own files with them, compiled and its requirement tests run, as the
     /// project will stand. The scenarios come back named free among the
     /// project's files (they were named free among the files of the open
-    /// example the answer was checked against). Why not, if it must not land.
+    /// example the answer was checked against), with what there is to say
+    /// of a red test (a warning). `Err`: it does not compile there, so it
+    /// must not land.
+    #[allow(clippy::type_complexity)]
     fn program_into(
         &self,
         name: &str,
         text: &str,
         scenarios: &[(String, String)],
-    ) -> Result<Vec<(String, String)>, String> {
+    ) -> Result<(Vec<(String, String)>, Option<String>), String> {
         let Some(target) = self.proj.saved.get(name) else {
-            return Ok(scenarios.to_vec());
+            return Ok((scenarios.to_vec(), None));
         };
         let mut files = target.0.clone();
         files.insert(helmsman_project::MAIN.to_string(), text.to_string());
@@ -416,10 +420,10 @@ impl PlaygroundView {
         }
         let plant = files.get(helmsman_project::PLANT).map_or("", String::as_str);
         let verdicts = helmsman_sim::iec::run_all(&plan, self.test_settings(), plant);
-        match crate::requirements::Results::from_verdicts(&verdicts).refusal() {
-            Some(why) => Err(format!("{why} (the program would replace main.st of {name})")),
-            None => Ok(named),
-        }
+        Ok((
+            named,
+            crate::requirements::Results::from_verdicts(&verdicts).warning(),
+        ))
     }
 
     /// Loads the open project's build into the session, compiled and
@@ -503,26 +507,25 @@ impl PlaygroundView {
         match a {
             Act::UseAnswer { name, text, save } => {
                 // A block answer lands in the open project: the project's
-                // requirement tests must stay green with it in. (A PROGRAM
-                // answer opens a new project, which has no tests yet.)
+                // requirement tests run with it in, and a red one is said.
+                // (A PROGRAM answer opens a new project, which has no
+                // tests yet.)
+                let mut red = None;
                 if !text.to_ascii_uppercase().contains("PROGRAM ") {
                     let file = self.proj.free_file(&format!("{name}.st"));
-                    if let Some(why) = self.tests_refuse(Some((&file, &text))) {
-                        self.notice = Some(why.clone());
-                        self.log.error(
-                            self.session.now_ms as f64 / 1000.0,
-                            format!("Use this code: {why}"),
-                        );
-                        return;
-                    }
+                    red = self.tests_warn(Some((&file, &text)));
                 }
                 // A PROGRAM answer into a project that exists replaces its
-                // main.st: that project's own tests must hold with it, and
-                // the scenarios take names free there.
+                // main.st: it must compile with that project's files, its
+                // tests run with it, and the scenarios take names free
+                // there.
                 let mut scenarios = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
                 if text.to_ascii_uppercase().contains("PROGRAM ") && self.proj.saved.contains_key(&name) {
                     match self.program_into(&name, &text, &scenarios) {
-                        Ok(named) => scenarios = named,
+                        Ok((named, warn)) => {
+                            scenarios = named;
+                            red = warn;
+                        }
                         Err(why) => {
                             self.notice = Some(why.clone());
                             self.log.error(
@@ -573,8 +576,15 @@ impl PlaygroundView {
                 } else {
                     String::new()
                 };
+                let red = red.map_or_else(String::new, |why| {
+                    self.log.warning(
+                        self.session.now_ms as f64 / 1000.0,
+                        format!("Use this code: {why}"),
+                    );
+                    format!(" {why}")
+                });
                 self.notice = Some(format!(
-                    "{} opened from the Agent's answer; Deploy runs it.{size}",
+                    "{} opened from the Agent's answer; Deploy runs it.{size}{red}",
                     self.proj.current
                 ));
             }
@@ -638,15 +648,8 @@ impl PlaygroundView {
     /// first put in the one layout. A diagram edit deploys unformatted,
     /// so the file holds the splice and nothing else.
     fn deploy_as(&mut self, format: bool) {
-        // A red requirement test refuses the deploy, naming it.
-        if let Some(why) = self.tests_refuse(None) {
-            self.notice = Some(why.clone());
-            self.log.error(
-                self.session.now_ms as f64 / 1000.0,
-                format!("Deploy of {} refused. {why}", self.proj.open),
-            );
-            return;
-        }
+        // A red requirement test is said with the deploy, which goes on.
+        let red = self.tests_warn(None);
         // What runs is what the files say, in the one layout.
         if format && self.proj.format() > 0 {
             self.edited(f64::NEG_INFINITY);
@@ -671,11 +674,20 @@ impl PlaygroundView {
                 carried.describe()
             );
             self.running_notice = Some(note.clone());
-            self.notice = Some(note);
+            self.notice = Some(
+                red.as_ref()
+                    .map_or_else(|| note.clone(), |why| format!("{note} {why}")),
+            );
             self.log.info(
                 self.session.now_ms as f64 / 1000.0,
                 format!("Deployed {}: running in this page{program}.", self.proj.open),
             );
+            if let Some(why) = red {
+                self.log.warning(
+                    self.session.now_ms as f64 / 1000.0,
+                    format!("Deployed {} with a test red. {why}", self.proj.open),
+                );
+            }
         } else {
             self.notice = Some(format!(
                 "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
@@ -886,6 +898,9 @@ impl PlaygroundView {
         };
         let mut text = crate::devices::describe(&crate::devices::tree(&map, &live, &|_| {
             crate::devices::LinkState::Simulated
+        }));
+        text.push_str(&crate::device_io::describe_free(&map, &|f| {
+            self.proj.files.get(f).cloned()
         }));
         text.push_str(&crate::devices::describe_found(&self.devices_ui.found));
         text.push_str(&crate::plant::describe(&self.plant_states(&map)));
@@ -1440,6 +1455,8 @@ impl PlaygroundView {
         // A refusal is an error: the Messages count it in red and open
         // (Nick, 2026-11-13: errors go there, not in the Agent tab).
         match o.kind {
+            // An update with checks that did not pass is a warning.
+            Kind::Applied if !o.problems.is_empty() => self.log.warning(at, line),
             Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
             Kind::Refused | Kind::Failed => self.log.error(at, line),
         }
@@ -1785,6 +1802,24 @@ impl PlaygroundView {
         {
             self.proj.add_file(&q.file, q.text.clone());
             self.apply_wiring(&q.wiring);
+        }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.add_io_ui(&ui.ctx().clone(), chrome)
+        {
+            self.apply_wiring(&w);
+        }
+        if let Some(crate::devices::DeviceAct::Remove(names)) =
+            self.devices_ui.remove_ui(&ui.ctx().clone(), chrome)
+            && let Some(t) = self.proj.files.get_mut(helmsman_project::IO_MAP)
+        {
+            *t = crate::device_form::remove_signals(t, &names);
+            self.proj.note(
+                match names.as_slice() {
+                    [one] => format!("{one} removed from io.map."),
+                    _ => format!("{} points removed from io.map.", names.len()),
+                },
+                false,
+            );
+            self.edited(f64::NEG_INFINITY);
         }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
@@ -2521,6 +2556,16 @@ impl Body for PlaygroundView {
         self.devices_ui.plant.simulated = true;
         self.devices_ui.copy_first = self.proj.is_example();
         self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
+        self.devices_ui.can_declare =
+            crate::device_form::program_file(self.proj.files.iter().map(|(n, t)| (n.as_str(), t.as_str())))
+                .is_some();
+        self.devices_ui.set_profiles(
+            self.proj
+                .files
+                .iter()
+                .filter(|(n, _)| n.ends_with(helmsman_project::DEVICE_EXT))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
         self.devices_ui.map = map.clone();
         self.devices_ui.eds_files = self
             .proj
@@ -2536,6 +2581,13 @@ impl Body for PlaygroundView {
                 self.wired_lib.scan(&mut self.devices_ui);
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
+            Some(crate::devices::DeviceAct::AddIo(device)) => {
+                // A read-only example is copied first; the copy keeps the
+                // device's name.
+                if self.own_project() {
+                    self.devices_ui.open_add_io(&device);
+                }
+            }
             Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
             Some(crate::devices::DeviceAct::OpenMap) => {
                 self.proj.open_file(helmsman_project::IO_MAP);
@@ -2545,6 +2597,7 @@ impl Body for PlaygroundView {
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
                 | crate::devices::DeviceAct::Delete(_)
+                | crate::devices::DeviceAct::Remove(_)
                 | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
