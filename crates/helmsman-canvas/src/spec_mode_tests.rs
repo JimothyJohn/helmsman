@@ -14,9 +14,9 @@ use crate::playground_view::PlaygroundView;
 use crate::sim_projects::Storage;
 use crate::sim_projects_tests::Shared;
 use crate::spec_mode::{
-    ACCEPT, ANSWER_ROOM, BOX_DROPINS, BOX_FIXED, BOX_HISTORY, BOX_MESSAGE, BOX_PDF, BOX_PDFS, base64_len,
-    pick_refusal_box, sha256_hex, Doc, Draft, MAX_DOCS, MAX_NAME, MAX_SPEC, MAX_UNTESTED, PASTED, RETRY, RULES,
-    SPEC_FILE, Spec, doc_name, pick_refusal, spec_md, untested,
+    ACCEPT, ANSWER_ROOM, BOX_DROPINS, BOX_FIXED, BOX_HISTORY, BOX_MESSAGE, BOX_PDF, BOX_PDFS, Doc, Draft,
+    MAX_DOCS, MAX_NAME, MAX_SPEC, MAX_UNTESTED, PASTED, RETRY, RULES, SPEC_FILE, Spec, base64_len, doc_name,
+    pick_refusal, pick_refusal_box, sha256_hex, spec_md, untested,
 };
 use crate::verify::MAX_SCENARIOS;
 
@@ -915,7 +915,7 @@ fn a_spec_run_is_refused_with_the_reason_when_it_cannot_start() {
         "{:?}",
         v.spec.error
     );
-    assert!(!v.instruct.busy() && v.link.sent.is_empty());
+    assert!(!v.instruct.busy() && v.link.sent.is_empty(), "{:?}", v.link.sent);
     // Over the cap.
     v.spec.pasted = "a".repeat(MAX_SPEC + 1);
     v.send_spec(&egui::Context::default());
@@ -952,7 +952,10 @@ fn a_scenario_that_did_not_pass_leaves_its_requirement_as_a_placeholder_counted_
     // The failed scenario's requirement is also listed in the requirements
     // block with the same words: one placeholder.
     let extra = "\n```requirements\nThe motor keeps running while stop is held.\nThe belt stops when the guard door opens.\n```\n";
-    let d = draft_of(&answer(&[&motor_latches(), &motor_ignores_stop()], extra), Vec::new());
+    let d = draft_of(
+        &answer(&[&motor_latches(), &motor_ignores_stop()], extra),
+        Vec::new(),
+    );
     assert_eq!(d.tested.len(), 2);
     assert!(!d.tested[1].passed);
     assert_eq!(
@@ -976,7 +979,10 @@ fn a_scenario_that_did_not_pass_leaves_its_requirement_as_a_placeholder_counted_
     // A scenario with no requirement words has nothing to keep.
     let mut blank = d.clone();
     blank.tested[1].requirement = "  ".into();
-    assert_eq!(blank.placeholders(), ["The belt stops when the guard door opens."]);
+    assert_eq!(
+        blank.placeholders(),
+        ["The belt stops when the guard door opens."]
+    );
 }
 
 // ---- PDFs on a box ----
@@ -999,7 +1005,7 @@ fn the_simulation_never_takes_a_pdf() {
     let mut s = Spec::default();
     let why = s.add_file("manual.pdf", &pdf_bytes(100)).unwrap_err();
     assert!(why.contains(".md or .txt"), "{why}");
-    assert!(s.pdfs.is_empty());
+    assert!(s.pdfs.is_empty(), "{:?}", s.pdfs);
     assert_eq!(ACCEPT, ".md,.txt");
     assert!(pick_refusal("manual.pdf", 10.0).unwrap().contains(".md or .txt"));
     assert!(Spec::default().meters().iter().all(|m| m.key == "spec total"));
@@ -1018,7 +1024,11 @@ fn a_box_takes_a_pdf_and_refuses_what_is_not_one_with_the_reason() {
         ("b.pdf", b" %PDF-1.4".to_vec(), "not a PDF"),
         ("c.pdf", b"%pdf-1.4".to_vec(), "not a PDF"),
         ("d.pdf", Vec::new(), "empty"),
-        ("e.md", b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n1 0 obj".to_vec(), "was not added"),
+        (
+            "e.md",
+            b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n1 0 obj".to_vec(),
+            "was not added",
+        ),
         ("f.txt", b"%PDF-1.4\n\x00\x01\x02".to_vec(), "was not added"),
         ("g.exe", pdf_bytes(300), ".md or .txt"),
     ] {
@@ -1027,7 +1037,8 @@ fn a_box_takes_a_pdf_and_refuses_what_is_not_one_with_the_reason() {
     }
     assert_eq!((s.pdfs.len(), s.docs.len()), (1, 0));
     // Path separators: only the last component is kept.
-    s.add_file("../../etc/passwd/Spec Sheet.pdf", &pdf_bytes(100)).unwrap();
+    s.add_file("../../etc/passwd/Spec Sheet.pdf", &pdf_bytes(100))
+        .unwrap();
     assert_eq!(s.pdfs[1].name, "Spec Sheet.pdf");
     s.add_file("C:\\x\\Spec Sheet.pdf", &pdf_bytes(100)).unwrap();
     assert_eq!(s.pdfs[2].name, "Spec Sheet.pdf (2)", "told apart, not dropped");
@@ -1044,7 +1055,11 @@ fn a_pdf_is_held_to_the_boxs_size_and_count() {
     let why = s.add_file("over.pdf", &pdf_bytes(BOX_PDF + 1)).unwrap_err();
     assert!(why.contains("2 MiB") && why.contains("over.pdf"), "{why}");
     assert_eq!(pick_refusal_box("x.pdf", BOX_PDF as f64), None);
-    assert!(pick_refusal_box("x.pdf", BOX_PDF as f64 + 1.0).unwrap().contains("2 MiB"));
+    assert!(
+        pick_refusal_box("x.pdf", BOX_PDF as f64 + 1.0)
+            .unwrap()
+            .contains("2 MiB")
+    );
     assert_eq!(pick_refusal_box("x.md", 10.0), None);
     assert!(pick_refusal_box("x.exe", 10.0).is_some());
     // Five PDFs at most, and 8 files in all.
@@ -1134,7 +1149,11 @@ fn text_on_a_box_is_held_to_the_message_cap_with_the_rules_beside_it() {
     assert!(big.size() > MAX_SPEC);
     assert_eq!(big.refusal(), None);
     let message = format!("{}\n\n{}", crate::instruct::BOX_NEW_RULES, big.message());
-    assert!(message.chars().count() < BOX_MESSAGE, "{}", message.chars().count());
+    assert!(
+        message.chars().count() < BOX_MESSAGE,
+        "{}",
+        message.chars().count()
+    );
     // Nothing to send; a PDF alone is a specification.
     assert!(on_box().refusal().unwrap().contains("Paste"));
     let mut only = on_box();
@@ -1193,7 +1212,7 @@ fn spec_md_records_a_pdf_by_name_size_and_sha256_and_never_its_bytes() {
         name: PASTED.into(),
         text: "Words.".into(),
     }];
-    let md = crate::spec_mode::spec_md_with(&docs, &[rec.clone()]);
+    let md = crate::spec_mode::spec_md_with(&docs, std::slice::from_ref(&rec));
     assert!(
         md.starts_with("# Pasted\n\nWords.\n\n# m.pdf\n\nA PDF of 300 bytes, SHA-256 "),
         "{md}"

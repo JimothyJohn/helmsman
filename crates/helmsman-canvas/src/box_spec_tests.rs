@@ -186,7 +186,11 @@ fn a_text_spec_makes_a_project_on_the_box_from_one_zip() {
     let note = v.projects.notice.clone().unwrap();
     assert!(note.0.contains("Deploy runs it") && !note.1, "{note:?}");
     // The window starts empty next time and still means a box.
-    assert!(v.spec.spec.on_box && v.spec.spec.pasted.is_empty());
+    assert!(
+        v.spec.spec.on_box && v.spec.spec.pasted.is_empty(),
+        "{:?}",
+        v.spec.spec
+    );
 }
 
 #[test]
@@ -303,7 +307,7 @@ fn the_boxs_own_refusal_of_a_pdf_is_said_beside_it_and_the_agent_is_not_asked() 
     run(&b, &jar, &mut v, &ctx);
     let why = v.spec.spec.pdfs[0].refused.clone().expect("refused");
     assert!(why.contains("huge.pdf") && why.contains("too large"), "{why}");
-    assert!(v.chat_sent.is_empty());
+    assert!(v.chat_sent.is_empty(), "{:?}", v.chat_sent);
 }
 
 #[test]
@@ -328,7 +332,7 @@ fn a_taken_name_is_refused_beside_the_field_and_nothing_is_written() {
     // The page knows the name is taken: refused without a request.
     v.spec.review.as_mut().unwrap().name = "Conveyor".into();
     v.accept_spec();
-    assert!(v.psent.is_empty());
+    assert!(v.psent.is_empty(), "{:?}", v.psent);
     let e = v.spec.review.as_ref().unwrap().error.clone().unwrap();
     assert!(e.contains("already on the box"), "{e}");
     // A stale list: the box says 409 and writes nothing.
@@ -386,9 +390,11 @@ fn an_operator_cannot_start_a_spec_run_and_nothing_goes_to_the_agent() {
     assert!(off.contains("only an engineer"), "{off}");
     v.spec.spec.pasted = SPEC_TEXT.into();
     v.send_spec(&ctx);
-    assert!(v.chat_sent.is_empty());
+    assert!(v.chat_sent.is_empty(), "{:?}", v.chat_sent);
     assert!(
-        v.psent.iter().all(|r| !matches!(r.call, PCall::SpecPdf(_) | PCall::SpecProject(_))),
+        v.psent
+            .iter()
+            .all(|r| !matches!(r.call, PCall::SpecPdf(_) | PCall::SpecProject(_))),
         "{:?}",
         v.psent
     );
@@ -397,7 +403,7 @@ fn an_operator_cannot_start_a_spec_run_and_nothing_goes_to_the_agent() {
     let mut v = page(&b, &jar, None);
     v.spec.spec.pasted = SPEC_TEXT.into();
     v.send_spec(&ctx);
-    assert!(v.chat_sent.is_empty());
+    assert!(v.chat_sent.is_empty(), "{:?}", v.chat_sent);
     assert!(v.spec.spec.error.as_deref().unwrap().contains("Sign in"));
 }
 
@@ -415,7 +421,7 @@ fn stop_and_a_failed_run_leave_no_draft_and_discard_writes_nothing() {
     assert!(v.spec.review.is_none() && !v.instruct.busy());
     let o = v.instruct.outcome.as_ref().unwrap();
     assert_eq!(o.status, "Discarded the draft from the spec. Nothing was made.");
-    assert!(project_names(&b).is_empty());
+    assert!(project_names(&b).is_empty(), "{:?}", project_names(&b));
     // A run the agent could not answer: no draft.
     v.spec.spec.pasted = SPEC_TEXT.into();
     v.send_spec(&ctx);
@@ -432,7 +438,7 @@ fn stop_and_a_failed_run_leave_no_draft_and_discard_writes_nothing() {
         "{:?}",
         v.instruct.outcome
     );
-    assert!(project_names(&b).is_empty());
+    assert!(project_names(&b).is_empty(), "{:?}", project_names(&b));
     // An answer with no code: said, no draft.
     v.spec.spec.pasted = SPEC_TEXT.into();
     v.send_spec(&ctx);
@@ -503,7 +509,11 @@ fn a_bool_only_spec_deploys_and_runs_on_the_box() {
     v.send_spec(&ctx);
     answer(&mut v, &good());
     run(&b, &jar, &mut v, &ctx);
-    assert!(v.spec.review.as_ref().unwrap().draft.needs_device().is_empty());
+    assert!(
+        v.spec.review.as_ref().unwrap().draft.needs_device().is_empty(),
+        "{:?}",
+        v.spec.review.as_ref().unwrap().draft.needs_device()
+    );
     v.accept_spec();
     run(&b, &jar, &mut v, &ctx);
     v.projects.deploy();
@@ -544,9 +554,16 @@ fn a_pdf_answer_for_nothing_in_flight_changes_nothing_and_a_refusal_is_in_words(
         reqs.iter()
             .all(|r| r.url.starts_with("/api/dropins?name=") && r.url.ends_with("&kind=pdf"))
     );
-    assert!(reqs.iter().all(|r| r.ctype == "application/pdf" && r.method == "POST"));
+    assert!(
+        reqs.iter()
+            .all(|r| r.ctype == "application/pdf" && r.method == "POST")
+    );
     assert!(s.uploading);
-    assert_eq!(s.pdf_answer("a.pdf", 201, "{\"id\":4}"), None, "b is still on its way");
+    assert_eq!(
+        s.pdf_answer("a.pdf", 201, "{\"id\":4}"),
+        None,
+        "b is still on its way"
+    );
     // A 201 that names no id is not kept.
     assert_eq!(s.pdf_answer("b.pdf", 201, "{}"), Some(false));
     let why = s.spec.pdfs[1].refused.clone().unwrap();
@@ -633,7 +650,8 @@ fn a_draft_waits_for_its_run_and_accept_refuses_twice_in_a_row() {
 #[test]
 fn the_words_after_a_refused_deploy_name_every_input_with_no_signal_and_change_nothing_else() {
     use crate::box_projects::deploy_words;
-    let one = "x was not deployed: modules do not fit together: tank: port LEVEL: no signal of that name".to_string();
+    let one = "x was not deployed: modules do not fit together: tank: port LEVEL: no signal of that name"
+        .to_string();
     let said = deploy_words(one.clone());
     assert!(said.starts_with(&one), "the box's own words stay first: {said}");
     assert!(said.contains("Input level has no signal on this box"), "{said}");

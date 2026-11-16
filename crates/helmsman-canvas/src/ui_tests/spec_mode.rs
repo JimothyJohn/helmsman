@@ -353,7 +353,10 @@ fn the_box_entry_leaves_the_panel_its_width_and_is_off_for_an_operator_with_the_
         let grew = h.rect("left").right() - left.right();
         assert!((0.0..=8.0).contains(&grew), "{k}: the panel grew {grew} pt");
     }
-    assert!(h.rect("spec open").right() <= h.rect("left").right() + 0.5, "inside its panel");
+    assert!(
+        h.rect("spec open").right() <= h.rect("left").right() + 0.5,
+        "inside its panel"
+    );
     assert!(h.small_text().is_empty(), "{:?}", h.small_text());
     h.press("spec open");
     h.wait(0.3);
@@ -411,7 +414,10 @@ fn the_box_window_lists_pdfs_with_sizes_and_totals_and_stays_inside_a_narrow_pag
         );
         assert!(h.rect("spec form").width() <= w, "{w}");
         assert!(h.small_text().is_empty(), "{w}: {:?}", h.small_text());
-        assert!(h.drew("PDF 2.9 KiB") && h.drew("characters"), "{w}: size and totals");
+        assert!(
+            h.drew("PDF 2.9 KiB") && h.drew("characters"),
+            "{w}: size and totals"
+        );
         assert!(h.drew("PDFs 2 of 5; conversation"), "{w}");
         // A PDF the box refused blocks Build and says which.
         assert!(h.has("spec error"), "{w}");
@@ -434,7 +440,12 @@ fn the_box_review_lists_the_inputs_that_need_a_device_and_points_at_assign() {
         assert!(
             h.has("spec needs device"),
             "{w}: {:?}",
-            h.app.chrome.hits.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>()
+            h.app
+                .chrome
+                .hits
+                .iter()
+                .map(|(k, _)| k.clone())
+                .collect::<Vec<_>>()
         );
         assert!(
             h.drew("Needs a device before it can run on the controller: tank_level")

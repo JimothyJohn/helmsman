@@ -917,6 +917,7 @@ const fn plural(n: usize) -> &'static str {
 
 /// [`SPEC_FILE`]'s text: each document under a `# NAME` heading, in order.
 #[must_use]
+#[cfg(test)]
 pub fn spec_md(docs: &[Doc]) -> String {
     spec_md_with(docs, &[])
 }

@@ -106,9 +106,7 @@ impl BoxSpec {
     /// The box's answer to the upload of PDF `name`. `Some(ready)` once
     /// every upload is answered: `ready` when every PDF is kept.
     pub fn pdf_answer(&mut self, name: &str, status: u16, body: &str) -> Option<bool> {
-        let Some(p) = self.spec.pdfs.iter_mut().find(|p| p.name == name && p.sending) else {
-            return None;
-        };
+        let p = self.spec.pdfs.iter_mut().find(|p| p.name == name && p.sending)?;
         p.sending = false;
         let id = serde_json::from_str::<serde_json::Value>(body)
             .ok()
