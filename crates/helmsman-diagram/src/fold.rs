@@ -27,6 +27,7 @@
 
 pub mod chips;
 pub mod idioms;
+pub mod structure;
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
