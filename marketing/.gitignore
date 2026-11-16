@@ -1,3 +1,8 @@
 # Renders are rebuilt by <project>/render.sh; HyperFrames keeps its history and snapshots in .hyperframes.
 /*.mp4
 .hyperframes/
+# Each cut-*/ is written by helmsman-device/build.py; the footage is made by footage/shots.py.
+helmsman-device/cut-*/
+helmsman-device/footage/outputs/
+helmsman-device/footage/prompts/
+helmsman-device/footage/MEDIA-INDEX.md

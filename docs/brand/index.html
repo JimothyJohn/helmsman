@@ -121,6 +121,13 @@ table.cr td:nth-child(3){text-align:right;white-space:nowrap;padding-left:8px}
 .crate{background-color:#C49A5E;background-image:repeating-linear-gradient(0deg,rgba(0,0,0,.07) 0 3px,transparent 3px 11px),repeating-linear-gradient(0deg,transparent 0 96px,rgba(0,0,0,.35) 96px 99px);color:#141414}
 .crate .wm{text-shadow:0 0 5px rgba(20,20,20,.4)}
 .cap2{font:13px var(--mono);color:#A8A8A8;margin-top:10px;display:block}
+.dev figure{margin:0;display:flex;flex-direction:column;gap:10px}
+.dev img{display:block;width:100%;height:auto;border:1px solid #333}
+.dev figcaption{font:13px/1.5 var(--mono);color:#A8A8A8}
+.spec{margin:28px 0 0;display:grid;gap:12px 32px;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));font-size:15px;line-height:1.5}
+.spec div{border-top:1px solid #333;padding-top:12px}
+.spec dt{font:13px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--yellow)}
+.spec dd{margin:6px 0 0;color:#D8D8D8}
 .dl{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))}
 .dl a{display:flex;flex-direction:column;gap:10px;text-decoration:none;font:12px/1.4 var(--mono);color:#C8C8C8}
 .dl a span.tile{height:120px;display:flex;align-items:center;justify-content:center;gap:16px;border:1px solid #333}
@@ -142,6 +149,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
       <a href="#wordmarks">Wordmarks</a>
       <a href="#themes">Themes</a>
       <a href="#field">In the field</a>
+      <a href="#device">Device</a>
       <a href="#files">SVG files</a>
       <a href="../">Home</a>
     </nav>
@@ -372,6 +380,26 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
       </div>
     </div>
     <p class="note">These mockups predate the final mark and use round-1 marks (Bridge H, Helm gear, Rung H, Flyball). Bracketed fields are placeholders on the canvas too.</p>
+  </div>
+</section>
+
+<section class="board dark" id="device">
+  <div class="wrap">
+    <div class="bhead"><h2 class="st" style="color:#FFC20E">The device</h2><p>Concept renders · the controller as an object · not yet built</p></div>
+    <div class="grid dev" style="--min:340px">
+      <figure><img src="helmsman-device.jpg" width="1400" height="788" loading="lazy" alt="A flat matte black aluminium block the size of a deck of cards with a single Ethernet socket on one narrow face"><figcaption>Off. One block, one socket, one light bar.</figcaption></figure>
+      <figure><img src="helmsman-device-lit.jpg" width="1400" height="788" loading="lazy" alt="The same block seen from the socket end, the light bar under the socket glowing yellow"><figcaption>Running. The light bar is the only colour on it.</figcaption></figure>
+      <figure><img src="helmsman-device-rail.jpg" width="1400" height="788" loading="lazy" alt="The block clipped upright on a DIN rail in a control cabinet between terminal blocks and circuit breakers"><figcaption>In a cabinet, upright on the rail with the socket facing out.</figcaption></figure>
+    </div>
+    <dl class="spec">
+      <div><dt>Form</dt><dd>One solid rectangular block about the size of a deck of cards (roughly 110 × 70 × 30 mm) with softly radiused edges. It should read as a small network switch, something a controls engineer has clipped onto a rail a hundred times.</dd></div>
+      <div><dt>Finish</dt><dd>Bead-blasted anodised aluminium in matte black, close to the brand black #141414. No gloss, no second colour, no visible screws or seams.</dd></div>
+      <div><dt>Front face</dt><dd>One RJ45 Ethernet socket in a thin dark metal surround, centred on a narrow face. It is the only opening on the device.</dd></div>
+      <div><dt>Light</dt><dd>One thin horizontal light bar under the socket. Dark when off, steady brand yellow #FFC20E when the controller is running. The socket's own green link light is the only other light.</dd></div>
+      <div><dt>Leave off</dt><dd>Screen, buttons, vents, antenna, extra ports, stickers and printed text. The mark, if it appears, is debossed tone on tone on the top face and never printed in yellow.</dd></div>
+      <div><dt>In pictures</dt><dd>Show it in a real plant: on a DIN rail between terminal blocks and breakers, in a hand, on a steel bench. The cable is a yellow Ethernet patch cable. The device is the only black object in the cabinet and the yellow cable and light are the only brand colour in the frame.</dd></div>
+    </dl>
+    <p class="note">These pictures are generated concept renders, the reference for film and photo work (marketing/helmsman-device). They show a design intent. No enclosure has been built, and power over the Ethernet cable is not yet proven on a bench, so the single cable is the design goal until a bench run shows it.</p>
   </div>
 </section>
 
