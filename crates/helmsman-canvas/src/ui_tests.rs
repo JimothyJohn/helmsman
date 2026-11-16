@@ -273,11 +273,9 @@ fn sim_view(h: &Harness) -> &Viewer {
 /// Screen centre and on-screen width of the first node matching `f`.
 fn node(v: &Viewer, f: impl Fn(&NodeKind) -> bool) -> (Pos2, f32) {
     let n = v.diagram().nodes.iter().find(|n| f(&n.kind)).expect("the node");
-    let cam = v.cams[v.scope];
-    (
-        cam.to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0),
-        n.rect.w * cam.zoom,
-    )
+    // Where it is drawn (inside a fold: the fold's box).
+    let r = v.block_on_screen(n.id).expect("the node is drawn");
+    (r.center(), r.width())
 }
 
 /// The bounds of the line and path strokes the last frame drew inside

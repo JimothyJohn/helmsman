@@ -690,15 +690,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   by: claude-session
   status: ready
 
-- [ ] **Deleting a statement that made lowering forget a variable is refused, and the property test fails on it** — `x := a; CASE … f(q => x) … END_CASE; REPEAT … UNTIL x END_REPEAT;`: with the CASE there, `UNTIL x` is a fresh read of `x` (an arm wrote it); without it, the same `UNTIL x` is wired from the write before the CASE. `edit::DeleteStmt` sees a statement that stays change and refuses with "the statements that stay", and `every_offered_rewire_argument_delete_and_rename_is_exact_checked_and_undoable` does not count that refusal as honest. Present on dev before the n-input blocks; CI's gate failed on it once on #456 (run 43799804478) and passed on a rerun. Repro: add `cc befa1eaf242960c577f6a3d948482297221b7f6a44ec5d42b068865b22962259` to tests/props.proptest-regressions. Decide which is right: the delete is allowed (a read that only changes where it is wired from is not a change), or the refusal is honest and gets its own reason.
-  result: the gate cannot fail on a random seed for this, and the delete does what the decision says
-  est: 3h
-  difficulty: med
-  id: delete-stmt-forgotten-write
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
   result: building new logic from the diagram, not only changing it
   notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
@@ -712,24 +703,24 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
 
 ### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
 
-Order: chips, then the fold layer, then everything that folds. Gates,
+Built: n-input gates, the fold layer (`helmsman_diagram::fold`) with the canvas drawing it, and the comparison with its literal. Each card below is a rule that makes folds, or a renderer for one. Gates,
 chips and idioms are on as the diagram opens; arms, sections and output
 cards fold on request and the choice is kept in `diagram.layout`.
 
-- [ ] **Condition chips: a comparison against a constant is one block** — `level > 80.0` is three blocks today (read, constant, operator). One block labelled with the comparison, lit when true; `x >= lo AND x <= hi` on one variable reads as one range block.
-  result: a condition reads as the sentence the engineer would say, and takes one block
-  est: 5h
+- [ ] **Range block: one variable between two bounds** — `x >= lo AND x <= hi` on one variable as one block (`lo .. hi`), a rule beside `fold::chips` (the comparison with a literal is built: `> 80.0`, edited in place).
+  result: a window on a value reads as one condition
+  est: 3h
   difficulty: med
-  id: diagram-chips
+  id: diagram-range
   asked: 2026-11-15
   by: claude-session
   status: ready
 
-- [ ] **The fold layer: a set of blocks shown as one, opened in place** — a view over `Diagram` (lowering, the trace mapping and the edit spans untouched): a fold names its blocks, the pins are the wires that cross its edge, its title and live state come from what it holds. The canvas draws a folded set as one block, opens it by a double click and shows where you are in the breadcrumb the function block instances use. Folded or open is kept per fold in the arrangement.
-  result: one mechanism every card below uses to hide detail
-  est: 1d
-  difficulty: high
-  id: diagram-fold
+- [ ] **Keep opened folds and moved folds in `diagram.layout`** — the canvas carries them across a redeploy only; a reload forgets them. Fold keys (`Fold::key`) are the names to store.
+  result: a diagram opens the way it was left
+  est: 3h
+  difficulty: low
+  id: diagram-fold-persist
   asked: 2026-11-15
   by: claude-session
   status: ready
@@ -738,7 +729,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: a long IF reads as its conditions and what each one sets
   est: 4h
   difficulty: med
-  depends: diagram-fold
   id: diagram-fold-arms
   asked: 2026-11-15
   by: claude-session
@@ -748,7 +738,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the author's own names for the parts of a program are the top level of its diagram
   est: 5h
   difficulty: med
-  depends: diagram-fold
   id: diagram-fold-sections
   asked: 2026-11-15
   by: claude-session
@@ -758,7 +747,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the standard circuits show under their names
   est: 1d
   difficulty: high
-  depends: diagram-fold
   id: diagram-idioms
   asked: 2026-11-15
   by: claude-session
@@ -778,7 +766,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the top of a program's diagram answers "what drives each output"
   est: 6h
   difficulty: med
-  depends: diagram-fold
   id: diagram-output-cards
   asked: 2026-11-15
   by: claude-session
@@ -788,7 +775,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: an interlock reads as a table and says what is missing
   est: 1d
   difficulty: high
-  depends: diagram-fold
   id: diagram-permissive-table
   asked: 2026-11-15
   by: claude-session

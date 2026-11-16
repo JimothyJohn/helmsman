@@ -2693,6 +2693,27 @@ canvas" at the end of this section.
   every operator of the run, refuses an operator drawn with two inputs
   (`ManyInputs`), and brackets whatever would otherwise join a
   neighbouring run, so an edit never changes the number of blocks.
+- **Folds: several blocks drawn as one** (`helmsman_diagram::fold`). A
+  `Fold` names blocks the reader would rather see as one thing; `view`
+  gives the diagram with each fold as one block (`NodeKind::Fold`) whose
+  pins are the wires that crossed its edge, laid out by the same layout.
+  Two shapes: blocks within one statement (convex), or consecutive whole
+  statements of one block with all that is nested in them (the variables
+  read and written become named pins). A fold that is neither, or shares
+  a block with an earlier one, is left out and the view says why. The
+  view maps its blocks, ports, wires and regions back (`View::live`,
+  `View::drivers`, `View::original`), so lowering, the trace mapping and
+  the edit spans are those of the diagram underneath. The rules that
+  make folds: `fold::chips` (a comparison with a literal is one block,
+  `> 80.0`, fed by the variable, which keeps its own block), on as the
+  diagram opens (`fold::auto`). On the canvas (`Viewer::shown`, tests in
+  `st_view_fold_tests.rs`) the viewer keeps everything in the diagram's
+  own numbers and draws the view: a click on a fold picks a block under
+  it, a double click opens it into its blocks (outlined, with a tab that
+  folds them back), a folded comparison is edited in place (double click
+  its value, right click for the operator), a dragged fold keeps its
+  place. Opened folds are carried across a redeploy; they are not yet in
+  `diagram.layout`.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label

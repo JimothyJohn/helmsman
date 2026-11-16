@@ -1727,3 +1727,24 @@ fn a_rename_never_splits_a_global_from_its_declaration() {
         );
     }
 }
+
+/// Found by the property test (2026-11-15, seed befa1eaf… on #456's
+/// gate): an arm that writes `x` makes lowering forget `x`, so the loop
+/// condition after it is a fresh read. With the IF gone the same
+/// condition is wired from the write before it. Nothing that stays
+/// changed, and a condition is checked like any other read.
+#[test]
+fn deleting_what_hid_an_earlier_write_from_a_condition_is_allowed() {
+    let s = src("x := y;\nIF y THEN x := z; END_IF;\nWHILE x DO x := FALSE; END_WHILE;");
+    assert_eq!(
+        delete(&s, "IF y THEN x := z; END_IF;").unwrap(),
+        src("x := y;\nWHILE x DO x := FALSE; END_WHILE;")
+    );
+    let s = src(
+        "x := y;\nIF y THEN x := z; END_IF;\nIF x THEN a := 1; END_IF;\nREPEAT x := a > 4; UNTIL x END_REPEAT;",
+    );
+    assert_eq!(
+        delete(&s, "IF y THEN x := z; END_IF;").unwrap(),
+        src("x := y;\nIF x THEN a := 1; END_IF;\nREPEAT x := a > 4; UNTIL x END_REPEAT;")
+    );
+}
