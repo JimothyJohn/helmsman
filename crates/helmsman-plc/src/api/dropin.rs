@@ -301,7 +301,8 @@ fn read_body(body: &[u8], kind: Option<Kind>) -> Result<(String, Kind, Option<Pr
             "the document carries control characters (only line breaks and tabs are taken)".into(),
         ));
     }
-    let text = text.replace("\r\n", "\n");
+    // Every line break is kept as a line feed: CR LF, and a CR alone.
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let kind = kind.unwrap_or_else(|| sniff(&text));
     let plc = match kind {
         Kind::Prose => None,
@@ -972,6 +973,23 @@ mod tests {
             for kind in [None, Some(Kind::L5x), Some(Kind::Plcopen), Some(Kind::St)] {
                 let _ = read_body(s.as_bytes(), kind);
             }
+        }
+    }
+
+    /// A carriage return alone is a line break too (old Mac files, mixed
+    /// endings): the kept text has line feeds only. The property above
+    /// found the one-byte body; it failed about one run in many.
+    #[test]
+    fn every_kind_of_line_break_is_kept_as_a_line_feed() {
+        for (body, kept) in [
+            ("\r", "\n"),
+            ("a\rb", "a\nb"),
+            ("a\r\nb\rc\nd", "a\nb\nc\nd"),
+            ("a\r\r\nb", "a\n\nb"),
+            ("a\n\rb", "a\n\nb"),
+        ] {
+            let (text, _, _) = read_body(body.as_bytes(), Some(Kind::Prose)).unwrap();
+            assert_eq!(text, kept, "{body:?}");
         }
     }
 

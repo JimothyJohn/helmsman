@@ -6,12 +6,6 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Open questions for Nick
 
-- [ ] **How should `diagram.layout` hold what was opened and folded on the diagram?** — the diagram now draws several blocks as one (a latch, a selector, a section under its comment, an arm). What the reader opened or folded, and where a folded block was dragged, is kept across a redeploy but forgotten on reload. `diagram.layout` is the place, and its reader refuses any line that is not a `move` (`helmsman_project::layout::parse`), so a file with a new `fold` line is refused whole by a page or box built before the change: it would show the automatic arrangement and say why, losing the moves too. My pick is a new line kind under a new header (`helmsman-layout 2`), with the new reader taking both versions and writing version 1 whenever there is no fold state to store, so a project that never folds anything stays readable everywhere.
-  options: version 2 header, write 1 when no fold state | new line under version 1 (old readers refuse such files) | keep fold state in the browser only, not in the project
-  result: a diagram opens the way it was left, with a known cost for older boxes
-  id: diagram-layout-fold-format
-  asked: 2026-11-16
-  by: claude-session
 
 - [ ] **Keep `sha2` in the canvas for the spec's PDF fingerprint?** — #475 (spec mode on a box) records each PDF in `spec.md` by name, size and SHA-256, since a project file is text and cannot hold the PDF. Nothing in the canvas computed SHA-256, so it added `sha2` 0.11.1 with default features off: the version the box, its agent and the I/O crate already build, no new crate in Cargo.lock, and `wasm_deps` is green. Dropping it leaves name and size only, so two different PDFs of one name and size could not be told apart later.
   options: keep | drop, name and size only
@@ -141,15 +135,6 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 ## Next to build
-
-- [ ] **A fold changes the diagram of a nested IF: a property test fails now and then** — `any_folds_give_a_well_formed_laid_out_view_with_the_same_values` (crates/helmsman-diagram/tests/fold.rs:363) failed once in a full workspace run on dev at d75dbe6 (2026-11-16) and passed three reruns: its cases are random, so the suite is not deterministic and CI can go red on any PR. The case it shrank to: body `IF a > 0 THEN a := a + 0; ELSIF a > 0 THEN x := a > 0; IF x THEN a := a + 0; ELSIF x THEN a := a + 0; END_IF; END_IF;`, seeds `[]`, inputs 0 (proptest seed `cc 607ae925dd777822d1d0fa587fd45b8700b96382f98af952aa46de0c57cc601f`): two diagrams the test holds equal differ. Hold that body as a fixed regression test, fix what the fold does to it, and give the property a fixed seed or check in its regressions file so a failure repeats.
-  needs: nothing
-  result: the fold keeps that diagram as the test says, and the suite gives the same answer every run
-  est: 3h
-  difficulty: med
-  id: diagram-fold-property-flake
-  asked: 2026-11-16
-  by: claude-session
 
 - [ ] **A spec run into the project that is open** — spec mode (#471, #475) always makes a new project; Nick's ask was to "parse and add it". Left out because a kept file (`spec.md`) cannot be saved one at a time: `Projects::save` on a box and `SimProjects::add_file` in the page take only names `file_name` knows, and a box has no atomic write of several files short of a whole-project zip. Shape: the same window with a project open offers "Add to this project"; the spec goes in as an instruction on the open program file (`Scope::File`), the review shows what changes (I/O added, requirements added or replaced), and Accept writes the file, the tests and the new section of `spec.md` together.
   needs: nothing
@@ -754,15 +739,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   by: claude-session
   status: ready
 
-- [ ] **Keep opened folds and moved folds in `diagram.layout`** — the canvas carries them across a redeploy only (`Viewer::opened`, `collapsed`, `fold_moved`); a reload forgets them. Fold keys (`Fold::key`) are the names to store. The file format is a question (`diagram-layout-fold-format`): the reader refuses unknown lines.
-  result: a diagram opens the way it was left
-  est: 5h
-  difficulty: med
-  depends: diagram-layout-fold-format
-  id: diagram-fold-persist
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
 
 - [ ] **State block: a CASE on a state variable as one block of states** — the states as chips, the active one lit, a tap on a chip opens that state's arm. `FoldKind::State` exists and nothing makes or draws one. Needs a rule (a CASE whose selector is one plain variable: `Fold::over_stmts` on it) and its own drawing in `st_view::draw`: a fold block is sized by its pins (`layout::size`), so a block with a row per state needs the layout to size it from the fold. The arm labels and which arm ran are in the diagram underneath (`Region::label`, `Live::gates`).
   result: a sequence shows which step it is in at a glance

@@ -5,7 +5,7 @@ use eframe::egui::{self, Event, PointerButton, Pos2, RawInput, Rect, Vec2};
 use helmsman_diagram::fold::{Fold, FoldKind};
 use helmsman_diagram::{NodeId, NodeKind};
 
-use super::{Pick, Scan, Viewer};
+use super::{Arrangement, Pick, Scan, Viewer};
 use crate::playground::Session;
 
 const SRC: &str = "PROGRAM line
@@ -389,4 +389,177 @@ fn a_comment_over_the_whole_program_outlines_nothing() {
     let h = Harness::of(&src);
     assert_eq!(h.view.opened_tabs(h.view.cams[h.view.scope]).len(), 0);
     assert_eq!(h.folded(), ["MOTOR"]);
+}
+
+// ---- fold state kept in `diagram.layout` ----
+
+fn key_of(h: &Harness, kind: FoldKind) -> String {
+    h.view.folds[0]
+        .iter()
+        .find(|f| f.kind == kind)
+        .unwrap()
+        .key
+        .clone()
+}
+
+fn pou(h: &Harness) -> String {
+    h.view.module.pous[0].name.clone()
+}
+
+/// What a reader does to PLANT: opens the latch, folds the Cooling
+/// section and drags it.
+fn leave_it_changed(h: &mut Harness) {
+    h.view.set_fold(&key_of(h, FoldKind::Latch), true);
+    let section = h.view.folds[0]
+        .iter()
+        .find(|f| f.kind == FoldKind::Section && f.title == "Cooling")
+        .unwrap()
+        .key
+        .clone();
+    h.view.set_fold(&section, false);
+    let shown = h
+        .view
+        .shown()
+        .nodes
+        .iter()
+        .find(|n| n.label == "Cooling")
+        .unwrap()
+        .id;
+    h.view.move_shown(shown, Vec2::new(30.0, 12.0));
+}
+
+fn cooling(h: &Harness) -> (f32, f32) {
+    let r = h
+        .view
+        .shown()
+        .nodes
+        .iter()
+        .find(|n| n.label == "Cooling")
+        .unwrap()
+        .rect;
+    (r.x, r.y)
+}
+
+#[test]
+fn a_fresh_viewer_shows_the_folds_the_last_one_left() {
+    let mut a = Harness::of(PLANT);
+    // Where the folded section sits when only folded.
+    let before = {
+        let mut h = Harness::of(PLANT);
+        let key = key_of(&h, FoldKind::Section);
+        let title = h.view.folds[0]
+            .iter()
+            .find(|f| f.key == key)
+            .unwrap()
+            .title
+            .clone();
+        assert_eq!(title, "Cooling");
+        h.view.set_fold(&key, false);
+        h.view.set_fold(&key_of(&h, FoldKind::Latch), true);
+        cooling(&h)
+    };
+    leave_it_changed(&mut a);
+    let text = a.view.arrangement().to_text();
+    assert!(text.starts_with("helmsman-layout 2\n"), "{text}");
+    let p = pou(&a);
+    assert!(text.contains(&format!("open\t{p}\t")), "{text}");
+    assert!(text.contains(&format!("collapse\t{p}\t")), "{text}");
+    assert!(text.contains(&format!("foldmove\t{p}\t")), "{text}");
+
+    let mut b = Harness::of(PLANT);
+    b.view.arrange(&Arrangement::from_text(&text).unwrap());
+    b.frame(vec![]);
+    assert_eq!(b.folded(), a.folded());
+    assert!(labels(&b).contains(&"OR".to_string()), "the latch is open");
+    let (x, y) = (cooling(&b).0 - before.0, cooling(&b).1 - before.1);
+    assert!((x - 30.0).abs() < 0.01 && (y - 12.0).abs() < 0.01, "{x} {y}");
+    assert_eq!(cooling(&b), cooling(&a));
+    assert_eq!(
+        b.view.arrangement().to_text(),
+        text,
+        "and it writes the same back"
+    );
+}
+
+#[test]
+fn a_viewer_nobody_folded_writes_a_version_1_file() {
+    let mut h = Harness::of(PLANT);
+    assert_eq!(h.view.arrangement().to_text(), "helmsman-layout 1\n");
+    let latch = key_of(&h, FoldKind::Latch);
+    h.view.set_fold(&latch, true);
+    h.view.set_fold(&latch, false);
+    assert_eq!(
+        h.view.arrangement().to_text(),
+        "helmsman-layout 1\n",
+        "back where it started"
+    );
+}
+
+#[test]
+fn a_fold_key_the_program_lacks_is_dropped_on_load_and_not_written_back() {
+    let h = Harness::of(PLANT);
+    let p = pou(&h);
+    let (latch, section) = (key_of(&h, FoldKind::Latch), key_of(&h, FoldKind::Section));
+    let file = format!(
+        "helmsman-layout 2\nopen\t{p}\tgone\nopen\tNOPE\t{latch}\ncollapse\t{p}\tgone\nfoldmove\t{p}\tgone\t5\t5\nopen\t{p}\t{section}\ncollapse\t{p}\t{latch}\n"
+    );
+    let a = Arrangement::from_text(&file).unwrap();
+    let mut b = Harness::of(PLANT);
+    b.view.arrange(&a);
+    b.frame(vec![]);
+    assert_eq!(
+        b.view.arrangement().to_text(),
+        "helmsman-layout 1\n",
+        "unknown keys, another POU, and a state the fold does not have"
+    );
+    assert_eq!(b.folded(), Harness::of(PLANT).folded());
+}
+
+/// A browser's storage two page loads share.
+#[derive(Clone, Default)]
+struct Kept(std::rc::Rc<std::cell::RefCell<Option<String>>>);
+
+impl crate::sim_projects::Storage for Kept {
+    fn load(&self) -> Result<Option<String>, String> {
+        Ok(self.0.borrow().clone())
+    }
+
+    fn save(&mut self, text: &str) -> Result<(), String> {
+        *self.0.borrow_mut() = Some(text.to_string());
+        Ok(())
+    }
+}
+
+#[test]
+fn folds_survive_a_reload_as_tweaks_and_a_save_as_the_shared_default() {
+    let store = Kept::default();
+    let mut a = Harness::of(PLANT);
+    let mut layers = crate::arrange::Layers::load(Box::new(store.clone()));
+    layers.show(&mut a.view, "k", "", true);
+    leave_it_changed(&mut a);
+    layers.track(&a.view);
+    assert!(layers.tweaked());
+
+    // A page load later: the same tweaks, no shared default.
+    let mut b = Harness::of(PLANT);
+    let mut again = crate::arrange::Layers::load(Box::new(store));
+    again.show(&mut b.view, "k", "", true);
+    b.frame(vec![]);
+    assert_eq!(b.folded(), a.folded());
+    assert_eq!(cooling(&b), cooling(&a));
+
+    // Saved as the default, a third page starts there with no tweaks, and
+    // a reader who folds the latch back leaves only that as a tweak.
+    let default = a.view.arrangement().to_text();
+    let mut c = Harness::of(PLANT);
+    let mut third = crate::arrange::Layers::load(Box::new(Kept::default()));
+    third.show(&mut c.view, "k", &default, true);
+    c.frame(vec![]);
+    assert_eq!(c.folded(), a.folded());
+    assert_eq!(cooling(&c), cooling(&a));
+    assert!(!third.tweaked());
+    c.view.set_fold(&key_of(&c, FoldKind::Latch), false);
+    third.track(&c.view);
+    assert!(third.tweaked());
+    assert!(c.folded().contains(&"MOTOR".to_string()));
 }
