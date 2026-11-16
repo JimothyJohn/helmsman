@@ -88,9 +88,11 @@ fn hostile_text_neither_panics_nor_hangs() {
     let many = "**a ".repeat(5_000);
     let stars = "*".repeat(20_000);
     let ticks = "`a".repeat(10_000);
-    let deep: String = (0..20)
-        .map(|k| format!("{}- level {k}\n", " ".repeat(k * 2)))
-        .collect();
+    let mut deep = String::new();
+    for k in 0..20 {
+        deep += &" ".repeat(k * 2);
+        deep += "- level x\n";
+    }
     let wide = format!(
         "|{}|\n|{}|\n|{}|\n",
         "a|".repeat(400),
