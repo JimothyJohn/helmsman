@@ -1807,6 +1807,27 @@ L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
 so it becomes the same `.st` the box makes, or is refused whole with the
 box's list of reasons (`sim_projects_tests.rs`).
 
+**Pane layouts** (`pane_layout.rs` in the canvas, `api/pane_layouts.rs`
+on the box; contract in `pane_layout_tests.rs`, `ui_tests/layouts.rs`,
+`box_projects_tests.rs`, and the box's `tests/pane_layouts.rs` and
+`tests/accounts.rs`). A layout is where the editor's side tabs sit (left,
+right or hidden, in order), which tab each side shows, which panes are
+open, the bottom panel's tab and the three pane sizes. One text holds a
+list of them, `{"format": "helmsman-pane-layouts 1", "layouts": [...]}`:
+it is what the browser stores (`helmsman-canvas/pane-layouts`, at most
+32), what Export downloads and Import reads, and what the box answers.
+The box keeps one list for everyone in the state directory's
+`pane-layouts.json` (written atomically; a file that does not read is
+none): `GET /api/pane-layouts`, `PUT /api/pane-layouts` (one layout, kept
+under its name, 4 KiB at most, 413 past it) and `DELETE
+/api/pane-layouts/{name}`. A change needs an engineer's login session
+(403 for an operator or the box token) and is audited. The box refuses a
+layout that breaks a rule whole (400: the name, an unknown tab, a tab
+placed twice, a shown tab not in its pane, a size outside 120 to 1600
+pt) and keeps only a layout's fields; past 32 a new name is 507. The
+page reads the box's answer as it reads a file, as hostile. Names match
+without regard to the case of ASCII letters, on both sides.
+
 **The diagram's arrangement** (`arrangement-persist`; `arrange.rs` in
 the canvas, the file format in `helmsman_project::layout`; contract in
 `arrange_tests.rs`, `box_projects_tests.rs` and `sim_projects_tests.rs`).

@@ -1417,19 +1417,50 @@ impl App {
     /// View › Pane layouts…: the popup, and the browser's side of its
     /// Export and Import.
     fn layouts_ui(&mut self, ctx: &egui::Context, hits: &mut Vec<(String, Rect)>) {
-        let act = self.layouts.popup(ctx, &mut self.chrome, hits);
-        #[cfg(target_arch = "wasm32")]
+        use crate::pane_layout::{Act, BoxSide};
+        // On a box's page the popup also lists what the box keeps.
+        let boxv = match self.source {
+            Source::Box => self.boxv.as_mut(),
+            Source::Sim => None,
+        };
+        let side = boxv.map(|b| {
+            b.pane_layouts.want();
+            BoxSide {
+                list: &b.pane_layouts.list,
+                note: b.pane_layouts.note.as_ref(),
+                can: is_engineer(b.session.as_ref()),
+            }
+        });
+        let act = self.layouts.popup(ctx, &mut self.chrome, hits, side);
+        let boxv = self.boxv.as_mut();
         match act {
-            Some(crate::pane_layout::Act::Export) => crate::web::download_bytes(
+            Some(Act::Keep(name)) => {
+                if let (Some(b), Some(l)) = (boxv, self.layouts.get(&name)) {
+                    b.pane_layouts.keep(&name, l);
+                }
+            }
+            Some(Act::Forget(name)) => {
+                if let Some(b) = boxv {
+                    b.pane_layouts.forget(&name);
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            Some(Act::Export) => crate::web::download_bytes(
                 crate::pane_layout::FILE,
                 &self.layouts.export(),
                 "application/json",
             ),
-            Some(crate::pane_layout::Act::Import) => crate::web::pick_layouts_file(ctx),
+            #[cfg(target_arch = "wasm32")]
+            Some(Act::Import) => crate::web::pick_layouts_file(ctx),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(Act::Export | Act::Import) => {}
             None => {}
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let _ = act;
+        if !self.layouts.open
+            && let Some(b) = self.boxv.as_mut()
+        {
+            b.pane_layouts.shut();
+        }
     }
 
     /// Help › About: the product, its version and build, the licence, the site.
