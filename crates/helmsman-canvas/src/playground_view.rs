@@ -1706,16 +1706,7 @@ impl PlaygroundView {
         if apply.scope == crate::scope::Scope::NewProject
             && let Some(docs) = self.spec_docs.take()
         {
-            let draft = crate::spec_mode::Draft::read(
-                &apply.text,
-                &apply.answer,
-                apply.why.as_deref(),
-                &apply.ran,
-                &apply.tests,
-                &apply.warnings,
-                docs,
-                apply.instruction.clone(),
-            );
+            let draft = crate::spec_mode::Draft::read(&apply, docs);
             let want = answer_name(&apply.text);
             let name = if self.proj.exists(&want) {
                 self.proj.free(&want)

@@ -4,6 +4,8 @@
 //! answers: a draft on review, Accept, Discard, a red scenario, a program
 //! that does not compile, a refused name.
 
+use std::fmt::Write as _;
+
 use eframe::egui;
 
 use crate::claude::{Exchange, FREE_MAX_BODY, Incoming, Model, Route};
@@ -202,7 +204,7 @@ fn control_characters_and_bidi_overrides_are_refused_with_the_reason_never_strip
             why.starts_with("x.md was not added: line 1: character U+"),
             "{why}"
         );
-        assert!(s.docs.is_empty());
+        assert!(s.docs.is_empty(), "{:?}", s.docs);
         let why = pasted(bad).refusal().expect("pasted text too");
         assert!(why.starts_with("The pasted text: line 1: character U+"), "{why}");
     }
@@ -234,7 +236,7 @@ fn a_file_that_is_empty_not_text_or_the_wrong_kind_is_refused_with_its_name() {
     assert!(s.add_file("noext", b"x").is_err());
     let big = vec![b'a'; helmsman_project::MAX_FILE + 1];
     assert!(s.add_file("big.md", &big).unwrap_err().contains("larger than"));
-    assert!(s.docs.is_empty());
+    assert!(s.docs.is_empty(), "{:?}", s.docs);
     for k in 0..MAX_DOCS {
         s.add_file(&format!("f{k}.md"), b"x").unwrap();
     }
@@ -299,13 +301,14 @@ fn the_requirements_block_is_read_bounded_and_clean() {
     let u = untested(a, &["the guard door stops the belt.".into()]);
     assert_eq!(u.lines.len(), 2);
     // An unclosed block is a cut-off answer: nothing is read from it.
-    assert!(untested("```requirements\nOne.\nTwo.", &[]).lines.is_empty());
-    // Other fences and another language are not requirements.
     assert!(
-        untested("```st\nOne.\n```\n```text\nTwo.\n```", &[])
-            .lines
-            .is_empty()
+        untested("```requirements\nOne.\nTwo.", &[]).lines.is_empty(),
+        "{:?}",
+        untested("```requirements\nOne.\nTwo.", &[]).lines
     );
+    // Other fences and another language are not requirements.
+    let other = untested("```st\nOne.\n```\n```text\nTwo.\n```", &[]);
+    assert!(other.lines.is_empty(), "{other:?}");
     assert_eq!(untested("```Requirements extra\nOne.\n```", &[]).lines, ["One."]);
     // Two blocks are both read.
     assert_eq!(
@@ -316,9 +319,10 @@ fn the_requirements_block_is_read_bounded_and_clean() {
 
 #[test]
 fn the_requirements_block_cannot_flood_or_smuggle_control_characters() {
-    let many: String = (0..MAX_UNTESTED + 25)
-        .map(|k| format!("Requirement number {k}.\n"))
-        .collect();
+    let mut many = String::new();
+    for k in 0..MAX_UNTESTED + 25 {
+        let _ = writeln!(many, "Requirement number {k}.");
+    }
     let u = untested(&format!("```requirements\n{many}```"), &[]);
     assert_eq!(u.lines.len(), MAX_UNTESTED);
     assert_eq!(u.left_out, 25);
@@ -376,7 +380,7 @@ fn motor_ignores_stop() -> String {
 fn answer(scenarios: &[&str], extra: &str) -> String {
     let mut a = format!("Why: the belt motor latches on start and drops on stop.\n\n```st\n{MOTOR}```\n");
     for s in scenarios {
-        a.push_str(&format!("\n```st scenario\n{s}\n```\n"));
+        let _ = write!(a, "\n```st scenario\n{s}\n```\n");
     }
     a.push_str(extra);
     a
@@ -387,16 +391,23 @@ const REQUIREMENTS: &str = "\n```requirements\n- The belt stops when the guard d
 fn draft_of(answer_text: &str, docs: Vec<Doc>) -> Draft {
     let files = crate::scope::Files::new();
     let c = crate::verify::check(&crate::scope::Scope::NewProject, &files, answer_text, settings());
-    Draft::read(
-        MOTOR,
-        answer_text,
-        crate::instruct::reason(answer_text).as_deref(),
-        &c.scenarios,
-        &c.add,
-        &c.warnings(),
-        docs,
-        "From a spec: Pasted".into(),
-    )
+    let apply = crate::instruct::Apply {
+        project: "blink".into(),
+        scope: crate::scope::Scope::NewProject,
+        file: "main.st".into(),
+        text: MOTOR.into(),
+        tests: c.add.clone(),
+        warnings: c.warnings(),
+        record: String::new(),
+        status: String::new(),
+        why: crate::instruct::reason(answer_text),
+        instruction: "From a spec: Pasted".into(),
+        evidence: Box::new(crate::instruct::Evidence {
+            answer: answer_text.into(),
+            ran: c.scenarios.clone(),
+        }),
+    };
+    Draft::read(&apply, docs)
 }
 
 #[test]
@@ -439,7 +450,7 @@ fn the_draft_reads_the_io_from_the_declarations_with_and_without_comments() {
         d.why.as_deref(),
         Some("the belt motor latches on start and drops on stop.")
     );
-    assert!(d.warnings.is_empty());
+    assert!(d.warnings.is_empty(), "{:?}", d.warnings);
 }
 
 #[test]
@@ -502,7 +513,9 @@ fn the_drafts_files_are_the_program_the_passed_tests_the_placeholders_the_map_an
     assert!(
         ran.iter().all(|v| !v.red()),
         "{:?}",
-        ran.iter().map(|v| v.why()).collect::<Vec<_>>()
+        ran.iter()
+            .map(helmsman_iec::spec::Verdict::why)
+            .collect::<Vec<_>>()
     );
     // spec.md is a kept file: it passes the project's rules and a zip carries it.
     assert!(helmsman_project::kept_name(SPEC_FILE));
@@ -650,7 +663,7 @@ fn a_spec_builds_a_draft_and_nothing_is_written_until_accept() {
     assert_eq!(r.draft.ports.len(), 3);
     assert_eq!(r.draft.tested.len(), 2);
     assert_eq!(r.draft.untested.len(), 2);
-    assert!(r.draft.warnings.is_empty());
+    assert!(r.draft.warnings.is_empty(), "{:?}", r.draft.warnings);
     assert_eq!(r.draft.label, "From a spec: Pasted");
     assert_eq!(v.proj.saved.keys().cloned().collect::<Vec<_>>(), saved);
     assert_eq!(v.proj.history, revisions);
@@ -886,7 +899,7 @@ fn a_spec_run_is_refused_with_the_reason_when_it_cannot_start() {
     v.spec.pasted = "a".repeat(MAX_SPEC + 1);
     v.send_spec(&egui::Context::default());
     assert!(v.spec.error.as_deref().unwrap().contains("KiB"));
-    assert!(v.link.sent.is_empty());
+    assert!(v.link.sent.is_empty(), "{:?}", v.link.sent);
     // Not a new project's scope: a spec makes a new project.
     v.spec.pasted = SPEC_TEXT.into();
     v.open_project("mine");
@@ -896,7 +909,7 @@ fn a_spec_run_is_refused_with_the_reason_when_it_cannot_start() {
         "{:?}",
         v.spec.error
     );
-    assert!(v.link.sent.is_empty());
+    assert!(v.link.sent.is_empty(), "{:?}", v.link.sent);
 }
 
 #[test]

@@ -235,10 +235,15 @@ pub struct Apply {
     pub status: String,
     pub why: Option<String>,
     pub instruction: String,
-    /// The Agent's whole answer (a spec run reads its requirements list
-    /// from it).
+    /// What the draft of a spec run is read from.
+    pub evidence: Box<Evidence>,
+}
+
+/// The Agent's whole answer and the scenarios it ran, passed or not: a
+/// spec run reads its review screen from them ([`crate::spec_mode::Draft`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Evidence {
     pub answer: String,
-    /// The scenarios it ran, passed or not.
     pub ran: Vec<verify::Ran>,
 }
 
@@ -777,8 +782,10 @@ impl Instruct {
             status,
             why,
             instruction: run.instruction.clone(),
-            answer: answer.to_string(),
-            ran: check.scenarios.clone(),
+            evidence: Box::new(Evidence {
+                answer: answer.to_string(),
+                ran: check.scenarios.clone(),
+            }),
         };
         run.mode = Mode::Steps(plan);
         self.run = Some(run);
@@ -851,8 +858,10 @@ impl Instruct {
             status,
             why,
             instruction: run.instruction,
-            answer: answer.to_string(),
-            ran: check.scenarios.clone(),
+            evidence: Box::new(Evidence {
+                answer: answer.to_string(),
+                ran: check.scenarios.clone(),
+            }),
         })
     }
 

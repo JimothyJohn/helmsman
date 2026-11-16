@@ -29,6 +29,7 @@ use std::fmt::Write as _;
 use eframe::egui::{self, RichText};
 
 use crate::editor::Chrome;
+use crate::instruct::Apply;
 use crate::st_view::brand::{GREEN, RED};
 use crate::tips::Tip;
 use crate::verify::Ran;
@@ -53,8 +54,10 @@ const _: () = assert!(
     "a specification and two retries must fit the free route's request"
 );
 /// Most documents in one specification.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub const MAX_DOCS: usize = 8;
 /// Longest document name kept, in characters.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub const MAX_NAME: usize = 60;
 /// Most requirements listed as untested.
 pub const MAX_UNTESTED: usize = 40;
@@ -111,6 +114,7 @@ pub struct Spec {
 /// `_`), runs of space as one, at most [`MAX_NAME`] characters; `document`
 /// when nothing is left.
 #[must_use]
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub fn doc_name(raw: &str) -> String {
     let base = raw.rsplit(['/', '\\']).next().unwrap_or("");
     let mut out = String::new();
@@ -139,14 +143,17 @@ pub fn doc_name(raw: &str) -> String {
 }
 
 /// Whether `name` is a kind of file a specification can be in.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 fn text_kind(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with(".md") || lower.ends_with(".txt")
+    std::path::Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("txt"))
 }
 
 /// Why a picked file of `size` bytes is not read at all, if it is not:
 /// checked in the page before the file is read into memory.
 #[must_use]
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
     let shown = doc_name(name);
     if !text_kind(name) {
@@ -223,6 +230,7 @@ impl Spec {
     ///
     /// # Errors
     /// Why it was not added, naming the file.
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
     pub fn add_file(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
         let shown = doc_name(name);
         if !text_kind(name) {
@@ -459,21 +467,14 @@ pub struct Draft {
 }
 
 impl Draft {
-    /// The draft the checked `answer` makes: its program, the scenarios
-    /// that `ran` (`kept` is those that passed, as test files) and its
-    /// requirements block, for the specification `docs` (`label` is how
-    /// History names it).
+    /// The draft the checked run `apply` made, for the specification
+    /// `docs`: its program, the scenarios it ran, the requirements block
+    /// of its answer, its reason and warnings; `apply.instruction` is how
+    /// History names it.
     #[must_use]
-    pub fn read(
-        program: &str,
-        answer: &str,
-        why: Option<&str>,
-        ran: &[Ran],
-        kept: &[(String, String)],
-        warnings: &[String],
-        docs: Vec<Doc>,
-        label: String,
-    ) -> Self {
+    pub fn read(apply: &Apply, docs: Vec<Doc>) -> Self {
+        let (program, answer) = (apply.text.as_str(), apply.evidence.answer.as_str());
+        let (ran, kept) = (&apply.evidence.ran, &apply.tests);
         // The runs come in file-name order; the engineer reads them in the
         // order the Agent gave them, most important first.
         let order: Vec<String> = crate::verify::scenarios(answer, &[helmsman_project::MAIN.to_string()])
@@ -506,13 +507,13 @@ impl Draft {
             program: program.to_string(),
             ports,
             tested,
-            kept: kept.to_vec(),
+            kept: kept.clone(),
             untested: rest.lines,
             left_out: rest.left_out,
-            why: why.map(str::to_string),
-            warnings: warnings.to_vec(),
+            why: apply.why.clone(),
+            warnings: apply.warnings.clone(),
             docs,
-            label,
+            label: apply.instruction.clone(),
         }
     }
 
@@ -640,7 +641,7 @@ pub fn form_ui(
                             .desired_width(f32::INFINITY),
                     )
                     .tip("The specification, as text. Everything here and in the added files goes to the Agent as data to read.");
-                chrome.hit("spec text", r.rect);
+                chrome.hit("spec text", r.rect.intersect(ui.clip_rect()));
             });
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
@@ -680,7 +681,7 @@ pub fn form_ui(
             }))
             .tip("The specification as the request carries it, against what one request takes with the Agent's answer and a retry beside it.");
         chrome.hit("spec total", r.rect);
-        let why = blocked.map(str::to_string).or_else(|| spec.refusal());
+        let why = spec.refusal().or_else(|| blocked.map(str::to_string));
         if let Some(e) = spec.error.as_ref().or(why.as_ref()) {
             let r = ui
                 .add(egui::Label::new(RichText::new(e).size(size).color(t.ink(RED))).wrap())
