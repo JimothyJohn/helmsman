@@ -96,13 +96,32 @@ this; change it here first when a decision changes.
   then by vendor and model text; `--devices-index` points a box at
   another). **Add by click** (2026-11-12, PROTOCOLS.md step 3): a device
   the library knows, whose entry names a profile (`NAME.device`), offers
-  Add: a small form asks one thing, the device's name, and lists the
-  channels it will get; Add copies the profile into the project as
+  Add: a small form asks one thing, the device's name, and says how many
+  channels it has; Add copies the profile into the project as
   `NAME.device` (the box fetches and checks it, `GET
-  /api/devices/library`; the simulation carries its E1213's), writes
-  `device NAME device:PROFILE IDENTITY` with the identity the scan saw,
-  and one `ch:` signal per channel named `NAME_channel`. No protocol,
-  address, byte order or cycle time is asked. A device the library does
+  /api/devices/library`; the simulation carries its E1213's) and writes
+  `device NAME device:PROFILE IDENTITY` with the identity the scan saw.
+  No signal is written and no protocol, address, byte order or cycle
+  time is asked. **A device's I/O is added one point at a time**
+  (`device_io.rs`, Nick, 2026-11-15: every channel is available, and
+  none shows in the project until it is added). Under a device's name a
+  row offers **+ Add I/O** with the count of channels left, known from
+  the profile the project holds (or the form's catalog for an E1213 on a
+  typed protocol). The picker lists them as Inputs and Outputs, narrowed
+  by a search field (every word in the channel's name, direction or
+  type); a click writes one `ch:` signal after the device's lines, named
+  `NAME_channel`, and declares that variable in the program, and the
+  picker stays open. "For" gives the next channel to a program variable
+  that is on no device or on the box's own channels (its old line goes).
+  A device nobody knows the channels of, and any device under Advanced,
+  takes a point by its address. A point's right-click has Remove… (asks;
+  the variable stays). A device with signals the program has no variable
+  for (every channel, as Add wrote them until 2026-11-15) offers Remove N
+  unused, which asks first. The New device and Edit forms hold settings
+  only: Edit is the name alone unless Advanced is on, and Save writes
+  the device's signals back as they were. The agent's listing in the
+  playground names the channels not added (`device_io::describe_free`);
+  the box's `list_devices` does not yet. A device the library does
   not know says so and offers Advanced, and, on a box with an agent, a
   button **Build from vendor file…** (`device_vendor.rs`, Nick,
   2026-11-15). It picks the vendor's file (an EDS, an IODD, a PDF manual
