@@ -184,6 +184,36 @@ rest of the project stays exactly as it was.</p>
 made in it, even for a few selected lines or a block. Nothing may be
 left out: an answer that skips part of the file, or writes "rest
 unchanged" where code should be, is sent back.</p>
+<h2 id="from-a-spec">From a spec</h2>
+<p>To start a project from a written scope of work or product
+documentation, open the <strong>Agent</strong> tab with a built-in
+example open and press <strong>From a spec…</strong>. A window opens
+with a box to paste into and <strong>Add file…</strong> for
+<code>.md</code> and <code>.txt</code> files (up to eight). The window
+lists each file with its size and a × to take it out, and shows the
+total against the most one request takes (120 KiB), because the Agent's
+answer and a second try travel in the same request. A file that is
+empty, is not UTF-8 text, or holds control characters is refused with
+the reason and nothing of it is changed. Press
+<strong>Build</strong>.</p>
+<p>The Agent reads the specification, finds the inputs and outputs,
+names them, writes the program and one check for each requirement it can
+test. Each check runs against the program on a copy, with the same
+second tries as any instruction. What it comes back with is a draft on a
+review screen: the project's name, one row for each input and output
+(its type and what it is, from the comment on its declaration), one row
+for each requirement with <strong>passed</strong> or <strong>did not
+pass</strong>, then the requirements the specification states that have
+no check yet, the Agent's reason and anything that did not pass. Nothing
+is made until <strong>Accept</strong>; <strong>Discard</strong> drops
+the draft.</p>
+<p>Accept makes the project as one version in History, called "From a
+spec" and the names of the documents. It holds <code>main.st</code>, a
+test for each check that passed, an empty test for each requirement with
+no check (shown as untested, never red), an <code>io.map</code> that
+puts every input and output on simulated I/O, and <code>spec.md</code>,
+your documents under a heading each. A check that did not pass is not
+kept. Deploy runs it as for any project.</p>
 <h2 id="in-the-simulation">In the simulation</h2>
 <p>In the playground the Agent is free to try during the early release,
 with no key and no account. What you type is sent to a hosted model

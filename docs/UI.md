@@ -79,7 +79,13 @@ this; change it here first when a decision changes.
   (`helmsman-pane-layouts 1`); Import reads such a file as hostile (64 KB
   at most, unknown tabs dropped, sizes held to 120..1600 pt, a name
   already kept replaced, a ready-made layout's name taken in as "NAME
-  (imported)"). Not built yet: the same list kept on a box.
+  (imported)"). Names match without regard to the case of ASCII letters.
+  On a box's page the popup has a third list, On this box: the layouts
+  the box keeps (`GET /api/pane-layouts`, read when the popup opens and
+  after each change, and read as a file is), so any browser that opens
+  the box offers them. An engineer puts one of their own there with To
+  box and deletes one with Delete; for anyone else both are greyed and
+  say why.
 - **Panes collapse** from their chevron, their Alt key, or a double click
   on any of their tabs (Nick, 2026-11-07), on either side.
 - **The tabs (left pane 320 pt):** Files (the projects, the
@@ -243,7 +249,12 @@ this; change it here first when a decision changes.
   2026-11-13) the box takes the tab's height and scrolls past it; Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
-  instruction sent, greyed. A change that lands
+  instruction sent, greyed. On a new project (a built-in example
+  open) "From a spec…" opens a window (Nick, 2026-11-15, `crate::spec_mode`):
+  paste a scope of work or add `.md` and `.txt` files, with the total
+  against the one request's cap, and Build; the draft comes back on a
+  review screen (the name, the I/O, each requirement passed or not, the
+  untested ones, the reason) and nothing is made until Accept. A change that lands
   runs at once and is seen on the canvas, marked, with nothing written in
   the tab (its reason goes to the Messages). One that does not is an
   error in the Messages (their red count, and they open), the box is

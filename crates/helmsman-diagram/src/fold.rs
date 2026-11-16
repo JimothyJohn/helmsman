@@ -26,6 +26,7 @@
 //! With no folds the view is the diagram itself, block for block.
 
 pub mod chips;
+pub mod idioms;
 pub mod structure;
 
 use std::cmp::Reverse;

@@ -109,6 +109,9 @@ TAB_MESSAGES = (385, 600)
 # ready-made layouts.
 VIEW_MENU = (235, 26)
 VIEW_PANE_LAYOUTS = (279, 479)
+# On a box's page the menu has two more rows above it (Proposals, Simulate
+# in this browser).
+VIEW_PANE_LAYOUTS_BOX = (279, 553)
 LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
 HEADER_RIGHT = (1150, 8, 200, 36)
@@ -163,6 +166,11 @@ class Run:
         ]
 
 
+# "From a spec..." in the Agent tab of a new project, and the box its window
+# draws in the middle of the page, in points.
+AGENT_SPEC = (78, 308)
+SPEC_WINDOW = (380, 285, 640, 330)
+
 # The front door's "Fail the high switch" and "Open the editor", in points
 # at the smoke's 1400 x 860 window (crates/helmsman-canvas/src/front.rs).
 FRONT_FAIL_HIGH = (596, 688)
@@ -195,6 +203,11 @@ def playground(ctx, base, out):
     r.step("folded", lambda: r.click(*FOLD_LINE_2), LEFT)
     r.click(*FOLD_LINE_2); r.wait(300)
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
+    # Spec mode (2026-11-15): "From a spec..." opens its window; text typed
+    # into it shows; Escape shuts it with the text kept.
+    r.step("spec-window", lambda: r.click(*AGENT_SPEC), SPEC_WINDOW)
+    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), SPEC_WINDOW)
+    r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
     for x, name in ((137, "file-menu"), (190, "edit-menu"), (235, "view-menu"), (283, "help-menu")):
@@ -314,6 +327,21 @@ def box(ctx, base, out):
     r.wait(4500); r.shot("devices-proposal")
     r.click(*TAB_AGENT); r.wait(800); r.shot("agent-tab")
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
+    # A pane layout kept on the box (this page's engineer session puts it
+    # there), then View › Pane layouts…: the popup lists it under "On
+    # this box".
+    kept = r.page.request.put(
+        base + "/api/pane-layouts",
+        data=json.dumps({"name": "Commissioning line 3", "left": ["devices", "files", "claude", "code", "history"], "right": ["io"], "left_shows": "devices", "right_shows": "io", "left_open": True, "right_open": True, "bottom_open": True, "bottom_shows": "trend"}),
+        headers={"Content-Type": "application/json", "X-Helmsman-Request": "1", "Origin": base},
+    )
+    if kept.status != 200:
+        extra.append(f"the pane layout was refused: {kept.status} {kept.text()[:200]}")
+    def layouts():
+        r.click(*VIEW_MENU); r.wait(1500)
+        r.click(*VIEW_PANE_LAYOUTS_BOX)
+    r.step("pane-layouts", layouts, LEFT, 2500)
+    r.key("Escape"); r.wait(400)
     problems = extra + r.problems()
     r.page.close()
     # The Monitor by its URL: the header's switch sits elsewhere once
