@@ -5,3 +5,5 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc d2e8cfe9c7c5c46393bc67b7ca6ed9ae6535a05ca2171af0f46f10d080f1be21 # shrinks to body = ["IF a > 0 THEN\na := a + 0;\nELSE\nf(in := y, q => x);\nEND_IF;"], early_return = false, inputs = [0]
+cc cc7122724c302336bc2816be84ebdac9d9a102b96376844d815b79450d9ad484 # shrinks to body = ["y := NOT (a > 0);", "CASE a OF\n0, 1: CASE a OF\n0, 1: IF a > 0 THEN\nc := b MOD 7;\nELSIF a > 0 THEN\ny := NOT (y AND a < -4);\nwd := NOT wd AND 16#FF;\nEND_IF;\n2..5: f(in := y, q => x);\ny := NOT y;\nx := NOT bs[a MOD 4] OR NOT bs[1] OR NOT TRUE;\nELSE\nc := c + 1;\nEND_CASE;\n2..5: arr[c MOD 4] := 2;\nELSE\nc := c + 1;\nEND_CASE;"], early_return = true, noisy = true
+cc befa1eaf242960c577f6a3d948482297221b7f6a44ec5d42b068865b22962259 # a delete that stops hiding an earlier write from a loop condition (2026-11-15)
