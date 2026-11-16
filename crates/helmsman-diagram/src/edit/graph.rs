@@ -175,12 +175,22 @@ impl Build<'_> {
                 .roots
                 .iter()
                 .map(|&r| {
+                    // A condition that is one variable (`WHILE x`) is a
+                    // variable like any read inside an expression: from
+                    // memory, or from the earlier write it is wired to,
+                    // which a removed statement may have been hiding.
+                    let root = self.d.node(r);
                     if self.stmt_of(r) == i {
-                        self.node(r).0
+                        match &root.kind {
+                            NodeKind::Read { path } => Tree::Var(path.clone(), Origin::Memory),
+                            _ => self.node(r).0,
+                        }
                     } else if (self.remap)(self.stmt_of(r)).is_none() {
                         Tree::Any
+                    } else if let NodeKind::Write { path } = &root.kind {
+                        Tree::Var(path.clone(), self.earlier(r))
                     } else {
-                        Tree::Leaf(format!("the block {}", self.d.node(r).label))
+                        Tree::Leaf(format!("the block {}", root.label))
                     }
                 })
                 .collect();
