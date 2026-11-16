@@ -39,6 +39,7 @@
 //! | Find in the Structured Text | Ctrl/⌘ F | (a key of our own) |
 //! | Next / previous match | Ctrl/⌘ G, Ctrl/⌘ Shift G | (a key of our own) |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
+//! | Next / previous function block call, IF, CASE or loop, framed | E, Q | (`jump`; keys of our own beside W A S D, read by the diagram while the pointer is over it and nothing is typed in) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
 //! has had its say: a text editor with the focus keeps its own Ctrl+Z.
@@ -499,6 +500,10 @@ pub fn markdown() -> String {
         let _ = writeln!(out, "| {keys} | {d} | {codesys} |");
     }
     out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
+    out.push_str(
+        "| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, \
+         zoomed in and framed (with the pointer over the diagram) | |\n",
+    );
     out.push_str("\nReserved, not built yet: F2 / Shift F2 for the Agent.\n");
     out
 }
