@@ -1707,6 +1707,9 @@ fn pane_layout_names(addr: SocketAddr) -> Vec<String> {
 /// engineer changes: an operator, the box token and a signed-out caller
 /// are refused, a body that breaks a rule is refused whole, and every
 /// change and refusal is audited with the person.
+// One story from the first layout to the audit log: split, each half
+// would rebuild the other's state.
+#[allow(clippy::too_many_lines)]
 #[test]
 fn pane_layouts_are_read_by_anyone_and_changed_by_an_engineer_only() {
     use helmsman_plc::api::pane_layouts::{MAX_BODY, MAX_LAYOUTS};
@@ -1717,7 +1720,11 @@ fn pane_layouts_are_read_by_anyone_and_changed_by_an_engineer_only() {
 
     let put = |who: Option<&str>, body: &str| request(b.addr, "PUT", "/api/pane-layouts", who, body);
     let r = put(Some(&alice), &pane_layout("Line 3 start-up").to_string());
-    assert_eq!((r.status, &r.json()["name"]), (200, &json!("Line 3 start-up")), "{r:?}");
+    assert_eq!(
+        (r.status, &r.json()["name"]),
+        (200, &json!("Line 3 start-up")),
+        "{r:?}"
+    );
     // The operator reads it, as it was sent, and cannot change it.
     let r = request(b.addr, "GET", "/api/pane-layouts", Some(&bob), "");
     assert_eq!(r.status, 200, "{r:?}");
@@ -1767,7 +1774,10 @@ fn pane_layouts_are_read_by_anyone_and_changed_by_an_engineer_only() {
     // Only a layout's fields are kept: nothing else comes back.
     assert_eq!(put(Some(&alice), &secret.to_string()).status, 200);
     let back = get(b.addr, "/api/pane-layouts");
-    assert!(!back.body.contains("password") && !back.body.contains(ALICE), "{back:?}");
+    assert!(
+        !back.body.contains("password") && !back.body.contains(ALICE),
+        "{back:?}"
+    );
 
     // The same name in another case replaces; the list is bounded.
     let mut again = pane_layout("LINE 3 START-UP");
@@ -1775,7 +1785,10 @@ fn pane_layouts_are_read_by_anyone_and_changed_by_an_engineer_only() {
     assert_eq!(put(Some(&alice), &again.to_string()).status, 200);
     assert_eq!(pane_layout_names(b.addr), ["LINE 3 START-UP", "With extras"]);
     for k in 2..MAX_LAYOUTS {
-        assert_eq!(put(Some(&alice), &pane_layout(&format!("n{k}")).to_string()).status, 200);
+        assert_eq!(
+            put(Some(&alice), &pane_layout(&format!("n{k}")).to_string()).status,
+            200
+        );
     }
     let r = put(Some(&alice), &pane_layout("one too many").to_string());
     assert_eq!(r.status, 507, "{r:?}");
@@ -1801,11 +1814,24 @@ fn pane_layouts_are_read_by_anyone_and_changed_by_an_engineer_only() {
     let log = audit(b.addr);
     let mine: Vec<&Json> = log
         .iter()
-        .filter(|e| e["path"].as_str().is_some_and(|p| p.starts_with("/api/pane-layouts")))
+        .filter(|e| {
+            e["path"]
+                .as_str()
+                .is_some_and(|p| p.starts_with("/api/pane-layouts"))
+        })
         .collect();
-    assert!(mine.iter().any(|e| e["user"] == "alice" && e["method"] == "PUT" && e["status"] == 200));
-    assert!(mine.iter().any(|e| e["user"] == "alice" && e["method"] == "DELETE" && e["status"] == 200));
-    assert!(mine.iter().any(|e| e["user"] == "bob" && e["status"] == 403), "{mine:?}");
+    assert!(
+        mine.iter()
+            .any(|e| e["user"] == "alice" && e["method"] == "PUT" && e["status"] == 200)
+    );
+    assert!(
+        mine.iter()
+            .any(|e| e["user"] == "alice" && e["method"] == "DELETE" && e["status"] == 200)
+    );
+    assert!(
+        mine.iter().any(|e| e["user"] == "bob" && e["status"] == 403),
+        "{mine:?}"
+    );
     assert!(mine.iter().any(|e| e["status"] == 400) && mine.iter().any(|e| e["status"] == 507));
     assert_secrets_kept(&b, &[&alice, &bob]);
 }

@@ -125,7 +125,6 @@ pub mod catalog;
 pub mod chat;
 mod control;
 pub mod desk;
-pub mod pane_layouts;
 #[cfg(feature = "box")]
 pub mod devconf;
 mod device_profile;
@@ -140,6 +139,7 @@ pub mod live;
 pub mod login;
 pub mod market;
 pub mod mcp;
+pub mod pane_layouts;
 pub mod pdf;
 pub mod photo;
 pub mod projects;
@@ -424,9 +424,7 @@ impl Ctx {
     }
 
     fn pane_layouts(&self) -> MutexGuard<'_, pane_layouts::Kept> {
-        self.pane_layouts
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.pane_layouts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn device_profile(&self) -> MutexGuard<'_, device_profile::Held> {
@@ -1488,13 +1486,12 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
     }
     match path {
         ["api", "forces"] => return Some("GET, POST, DELETE"),
-        ["api", "forces", _] => return Some("DELETE"),
+        ["api", "forces" | "pane-layouts", _] => return Some("DELETE"),
         ["api", "modules", _, "stop" | "run" | "restart"] => return Some("POST"),
         ["api", "drivers" | "trends"] => return Some("GET"),
         ["api", "devices", _, "config", "password"] => return Some("PUT, DELETE, POST"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
-        ["api", "trends", "pins"] | ["api", "desk"] | ["api", "pane-layouts"] => return Some("GET, PUT"),
-        ["api", "pane-layouts", _] => return Some("DELETE"),
+        ["api", "trends", "pins"] | ["api", "desk" | "pane-layouts"] => return Some("GET, PUT"),
         _ => {}
     }
     match path {

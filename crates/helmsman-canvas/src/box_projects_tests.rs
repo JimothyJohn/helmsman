@@ -4283,7 +4283,9 @@ fn a_boxs_pane_layouts_answer_is_read_as_hostile() {
     o.want();
     o.want();
     assert_eq!(o.poll().len(), 1, "asked once while the popup is open");
-    let good = format!(r#"{{"format":"{FORMAT}","layouts":[{{"name":"A"}},{{"name":"a"}},{{"name":"B","left":["nope","code"]}}]}}"#);
+    let good = format!(
+        r#"{{"format":"{FORMAT}","layouts":[{{"name":"A"}},{{"name":"a"}},{{"name":"B","left":["nope","code"]}}]}}"#
+    );
     o.answer(&PCall::PaneLayouts, &answer(200, &good));
     let names: Vec<&str> = o.list.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["A", "B"], "a name once");
@@ -4299,7 +4301,9 @@ fn a_boxs_pane_layouts_answer_is_read_as_hostile() {
         assert!(o.note.take().is_some_and(|(_, bad)| bad), "{status} {body}");
         assert_eq!(o.list.len(), 2, "the last good list stays");
     }
-    let many: Vec<String> = (0..MAX_LAYOUTS + 9).map(|k| format!(r#"{{"name":"n{k}"}}"#)).collect();
+    let many: Vec<String> = (0..MAX_LAYOUTS + 9)
+        .map(|k| format!(r#"{{"name":"n{k}"}}"#))
+        .collect();
     let body = format!(r#"{{"format":"{FORMAT}","layouts":[{}]}}"#, many.join(","));
     o.answer(&PCall::PaneLayouts, &answer(200, &body));
     assert_eq!(o.list.len(), MAX_LAYOUTS);
@@ -4308,7 +4312,13 @@ fn a_boxs_pane_layouts_answer_is_read_as_hostile() {
     o.answer(&PCall::KeepPaneLayout("A".into()), &answer(200, "{}"));
     o.want();
     assert_eq!(o.poll().len(), 1);
-    o.answer(&PCall::KeepPaneLayout("A".into()), &answer(507, r#"{"error":"the box keeps at most 32"}"#));
+    o.answer(
+        &PCall::KeepPaneLayout("A".into()),
+        &answer(507, r#"{"error":"the box keeps at most 32"}"#),
+    );
     let (note, bad) = o.note.clone().unwrap();
-    assert!(bad && note.contains("at most 32") && note.starts_with("A was not kept"), "{note}");
+    assert!(
+        bad && note.contains("at most 32") && note.starts_with("A was not kept"),
+        "{note}"
+    );
 }

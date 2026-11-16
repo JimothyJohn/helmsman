@@ -599,7 +599,7 @@ impl Layouts {
         ctx: &egui::Context,
         chrome: &mut Chrome,
         hits: &mut Vec<(String, Rect)>,
-        on_box: Option<BoxSide<'_>>,
+        on_box: Option<&BoxSide<'_>>,
     ) -> Option<Act> {
         let mut act = None;
         let mut shut = false;
@@ -652,7 +652,7 @@ impl Layouts {
                             if d.clicked() {
                                 gone = Some(name.clone());
                             }
-                            if let Some(b) = &on_box {
+                            if let Some(b) = on_box {
                                 let k = ui
                                     .add_enabled(b.can.is_ok(), egui::Button::new("To box"))
                                     .tip(match &b.can {
@@ -673,7 +673,7 @@ impl Layouts {
                 self.remove(&name);
                 self.note = Some((format!("Deleted {name}."), false));
             }
-            if let Some(b) = &on_box {
+            if let Some(b) = on_box {
                 ui.add_space(6.0);
                 ui.label(RichText::new("On this box").color(t.muted))
                     .tip("Layouts this box keeps: any browser that opens it offers them. An engineer adds and deletes them.");

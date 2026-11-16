@@ -259,6 +259,10 @@ fn the_panes_as_they_are_save_by_name_and_come_back() {
     assert!(!h.app.layouts.open);
 }
 
+fn boxv(h: &mut Harness) -> &mut crate::box_view::BoxView {
+    h.app.boxv.as_mut().expect("the box view")
+}
+
 /// On a box's page the popup lists what the box keeps: one click arranges
 /// the panes, and only an engineer is offered To box and Delete.
 #[test]
@@ -267,9 +271,6 @@ fn on_a_box_the_popup_offers_the_boxs_layouts_and_an_engineer_keeps_one_there() 
     use crate::review::Session;
     let mut h = Harness::new(App::boxed());
     h.wait(0.3);
-    fn boxv(h: &mut Harness) -> &mut crate::box_view::BoxView {
-        h.app.boxv.as_mut().expect("the box view")
-    }
     boxv(&mut h).psent.clear();
     open_popup(&mut h);
     h.wait(0.2);
@@ -279,7 +280,11 @@ fn on_a_box_the_popup_offers_the_boxs_layouts_and_an_engineer_keeps_one_there() 
         .filter(|q| q.call == PCall::PaneLayouts)
         .map(|q| (q.method, q.url.clone()))
         .collect();
-    assert_eq!(asked, [("GET", "/api/pane-layouts".to_string())], "read once on opening");
+    assert_eq!(
+        asked,
+        [("GET", "/api/pane-layouts".to_string())],
+        "read once on opening"
+    );
     assert!(!h.has("layouts box Wall screen"));
     // The box's answer, and a layout of one's own.
     let wall = presets()[3].layout.clone();
@@ -308,7 +313,12 @@ fn on_a_box_the_popup_offers_the_boxs_layouts_and_an_engineer_keeps_one_there() 
         }
     }
     // An engineer: To box sends the layout, Delete names it in the path.
-    h.app.review.as_mut().expect("a box page has its review").state.session = Some(Session {
+    h.app
+        .review
+        .as_mut()
+        .expect("a box page has its review")
+        .state
+        .session = Some(Session {
         user: Some("alice".into()),
         role: "engineer".into(),
     });
@@ -331,7 +341,12 @@ fn on_a_box_the_popup_offers_the_boxs_layouts_and_an_engineer_keeps_one_there() 
             ("DELETE", "/api/pane-layouts/Wall%20screen".to_string())
         ]
     );
-    let put = boxv(&mut h).psent.iter().find(|q| q.method == "PUT").unwrap().clone();
+    let put = boxv(&mut h)
+        .psent
+        .iter()
+        .find(|q| q.method == "PUT")
+        .unwrap()
+        .clone();
     let body: serde_json::Value = serde_json::from_slice(put.body.as_ref().unwrap()).unwrap();
     assert_eq!(body["name"], "Mine");
     assert_eq!(body["right"], serde_json::json!(["code", "io", "devices"]));

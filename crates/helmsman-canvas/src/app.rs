@@ -1431,7 +1431,7 @@ impl App {
                 can: is_engineer(b.session.as_ref()),
             }
         });
-        let act = self.layouts.popup(ctx, &mut self.chrome, hits, side);
+        let act = self.layouts.popup(ctx, &mut self.chrome, hits, side.as_ref());
         let boxv = self.boxv.as_mut();
         match act {
             Some(Act::Keep(name)) => {

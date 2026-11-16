@@ -109,6 +109,9 @@ TAB_MESSAGES = (385, 600)
 # ready-made layouts.
 VIEW_MENU = (235, 26)
 VIEW_PANE_LAYOUTS = (279, 479)
+# On a box's page the menu has two more rows above it (Proposals, Simulate
+# in this browser).
+VIEW_PANE_LAYOUTS_BOX = (279, 553)
 LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
 HEADER_RIGHT = (1150, 8, 200, 36)
@@ -314,6 +317,21 @@ def box(ctx, base, out):
     r.wait(4500); r.shot("devices-proposal")
     r.click(*TAB_AGENT); r.wait(800); r.shot("agent-tab")
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
+    # A pane layout kept on the box (this page's engineer session puts it
+    # there), then View › Pane layouts…: the popup lists it under "On
+    # this box".
+    kept = r.page.request.put(
+        base + "/api/pane-layouts",
+        data=json.dumps({"name": "Commissioning line 3", "left": ["devices", "files", "claude", "code", "history"], "right": ["io"], "left_shows": "devices", "right_shows": "io", "left_open": True, "right_open": True, "bottom_open": True, "bottom_shows": "trend"}),
+        headers={"Content-Type": "application/json", "X-Helmsman-Request": "1", "Origin": base},
+    )
+    if kept.status != 200:
+        extra.append(f"the pane layout was refused: {kept.status} {kept.text()[:200]}")
+    def layouts():
+        r.click(*VIEW_MENU); r.wait(1500)
+        r.click(*VIEW_PANE_LAYOUTS_BOX)
+    r.step("pane-layouts", layouts, LEFT, 2500)
+    r.key("Escape"); r.wait(400)
     problems = extra + r.problems()
     r.page.close()
     # The Monitor by its URL: the header's switch sits elsewhere once
