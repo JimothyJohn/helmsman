@@ -1749,6 +1749,7 @@ END_PROGRAM",
             retries: 1,
             asked_scenarios: false,
             mode: crate::instruct::Mode::Direct,
+            spec: false,
             attempts: vec![Attempt {
                 asked: String::new(),
                 answer: String::new(),

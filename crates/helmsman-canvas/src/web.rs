@@ -849,6 +849,10 @@ thread_local! {
     static VENDOR_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// Why that file was not read, said beside its button.
     static VENDOR_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// A file picked for a specification (`spec_mode.rs`).
+    static SPEC_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why that file was not read, said in the specification's window.
+    static SPEC_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 type Sink = &'static std::thread::LocalKey<RefCell<Vec<(String, Vec<u8>)>>>;
@@ -871,6 +875,30 @@ pub fn pick_vendor_file(ctx: &egui::Context) {
         &VENDOR_PICKED,
         &VENDOR_ERRORS,
     );
+}
+
+/// Opens the picker for a specification's `.md` or `.txt` file; a file
+/// too large is refused before it is read ([`crate::spec_mode::pick_refusal`]).
+pub fn pick_spec_file(ctx: &egui::Context) {
+    pick_into(
+        crate::spec_mode::ACCEPT,
+        ctx,
+        crate::spec_mode::pick_refusal,
+        &SPEC_PICKED,
+        &SPEC_ERRORS,
+    );
+}
+
+/// The specification's files picked since the last call: name and bytes.
+#[must_use]
+pub fn take_spec_picked() -> Vec<(String, Vec<u8>)> {
+    SPEC_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Why the specification's files picked since the last call were not read.
+#[must_use]
+pub fn take_spec_errors() -> Vec<String> {
+    SPEC_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
 /// The vendor's files picked since the last call: name and bytes.
