@@ -3,15 +3,17 @@
 repainted in the film's style, then that painting animated as the first frame of a short clip (MiniMax H3).
 
     ./shots.py stills [name ...]     # outputs/box/<name>.jpg, about $0.04 each
-    ./shots.py paint  [name ...]     # outputs/box/<name>-oil.jpg, the still in the film's style
-    ./shots.py clips  [name ...]     # outputs/box/clip-<name>.mp4, about $0.02 a second
+    ./shots.py paint  [name ...]     # outputs/box/<name>-fine.jpg, the still in the film's look
+    ./shots.py clips  [name ...]     # outputs/box/clip-<name>.mp4, a 768P draft, $0.02 a second
+    ./shots.py finals [name ...]     # outputs/box/final-<name>.mp4, 2K on the full model, $0.13 a second
     ./shots.py sheet                 # outputs/box/sheet.jpg, every painted still on one page
     ./shots.py install [name ...]    # clips/<name>.mp4 into ../assets/, interpolated to 60 fps
 
 It drives the storyboard CLI (~/github/storyboard), which bounds-checks each
 request, retries, and writes a costed record per run under outputs/box/runs/.
 768P goes to the draft model; that routing is on storyboard's dev branch, so
-STORYBOARD points at a checkout of it. Needs REPLICATE_API_TOKEN, uv, ffmpeg.
+STORYBOARD points at a checkout of it. Needs REPLICATE_API_TOKEN, uv, ffmpeg, and
+H3_ASSET_BUCKET with the aws CLI for any run more than two hours after its stills.
 Media is not committed: this table is the record of how each shot was made.
 """
 
@@ -72,18 +74,27 @@ PAINT = (
     "moody: deep charcoal, graphite and steel grays with warm off-white highlights for "
     "everything, and one single saturated colour, a strong industrial yellow: whatever is yellow "
     "in the reference stays yellow, and whatever is pink, blue, orange, red or green there "
-    "becomes gray or that yellow. Skin is a natural muted tone."
+    "becomes gray or that yellow. Skin is a natural muted tone. Machine guards and "
+    "fences are yellow. Paint it at very high detail, with fine brushwork that resolves small "
+    "things: the sandy grain of blasted metal, weld seams and bolt heads, roller bearings, "
+    "cable ties, single wire strands and ferrules, the weave of fabric, pores and knuckle "
+    "creases in skin, tape and print on cartons, reflections in glass. The plant is clean, "
+    "modern and well kept. The subject is in crisp focus."
 )
 # Said only for the shots the device is in: naming it elsewhere paints one in.
 PAINT_DEVICE = (
     "The small black block keeps its exact shape, with its single Ethernet socket and single "
-    "light bar."
+    "light bar; it is brand new, its matte black finish even and flawless, with a soft clean "
+    "highlight along its edges."
 )
 LOOK = (
     "painterly realism: it moves like live-action film with real depth of field and light, and "
     "every surface is hand-painted in thick oil paint with visible brushstrokes, in graphite "
     "grays with industrial yellow as the only saturated colour, exactly as in the first frame; "
-    "the painted texture stays stable and never turns photographic"
+    "the painted texture stays stable and never turns photographic. Fine detail holds in every "
+    "frame: the grain of metal, weld seams and bolt heads, fabric weave, skin creases, single "
+    "wires, dust in the light; light and reflections shift subtly as things move, and nothing "
+    "smears, flickers or loses its edges"
 )
 
 # name: refs (earlier stills this one is composed from), still, then the clip:
@@ -434,9 +445,22 @@ None.
 
 
 def url_of(name: str) -> str:
-    """The hosted URL of a still this script made (they last a few hours)."""
-    record = json.loads((OUT / "runs" / f"{name}.json").read_text())
-    return record["urls"][0]
+    """A URL the models can fetch outputs/box/<name>.jpg from. Replicate's own delivery
+    URLs die after about two hours, so with H3_ASSET_BUCKET set (storyboard's reference
+    bucket, public read) the file is copied there once and that URL is used."""
+    bucket = os.environ.get("H3_ASSET_BUCKET")
+    if not bucket:
+        record = json.loads((OUT / "runs" / f"{name}.json").read_text())
+        return record["urls"][0]
+    local = OUT / f"{name}.jpg"
+    stamp = f"{int(local.stat().st_mtime)}"
+    key = f"helmsman-box/{name}-{stamp}.jpg"
+    marker = OUT / "runs" / f"{name}.s3"
+    if not marker.exists() or marker.read_text() != key:
+        subprocess.run(["aws", "s3", "cp", "--only-show-errors", str(local), f"s3://{bucket}/{key}"], check=True)
+        marker.write_text(key)
+    region = os.environ.get("AWS_REGION", "us-east-1")
+    return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
 
 
 def run(args: list[str]) -> int:
@@ -454,11 +478,18 @@ def still(name: str) -> int:
 def paint(name: str) -> int:
     shot = SHOTS[name]
     words = [PAINT, PAINT_DEVICE if shot["refs"] else "", shot.get("paint", "")]
-    args = ["still", " ".join(w for w in words if w), "--project", "box", "--name", f"{name}-oil"]
+    old = OUT / f"{name}-fine.jpg"
+    if old.exists():  # the CLI never overwrites; a new take replaces the old one here
+        old.unlink()
+    args = ["still", " ".join(w for w in words if w), "--project", "box", "--name", f"{name}-fine"]
     return run(args + ["--aspect", "16:9", "--size", "2K", "--ref", url_of(name)])
 
 
-def clip(name: str) -> int:
+def final(name: str) -> int:
+    return clip(name, resolution="2K", prefix="final")
+
+
+def clip(name: str, resolution: str = "768P", prefix: str = "clip") -> int:
     shot = SHOTS[name]
     prompts = HERE / "prompts" / "box"
     prompts.mkdir(parents=True, exist_ok=True)
@@ -476,8 +507,9 @@ def clip(name: str) -> int:
     if run(["validate", str(prompt)]) != 0:
         return 1
     return run(
-        ["generate", str(prompts), "--prompt-file", str(prompt), "--first-frame", url_of(f"{name}-oil")]
-        + ["--duration", str(shot["seconds"]), "--resolution", "768P", "--ratio", "16:9", "--name", f"clip-{name}"]
+        ["generate", str(prompts), "--prompt-file", str(prompt), "--first-frame", url_of(f"{name}-fine")]
+        + ["--duration", str(shot["seconds"]), "--resolution", resolution, "--ratio", "16:9"]
+        + ["--name", f"{prefix}-{name}"]
     )
 
 
@@ -504,7 +536,7 @@ def install(name: str) -> int:
 
 
 def sheet() -> int:
-    names = [f"{n}-oil" for n in SHOTS if (OUT / f"{n}-oil.jpg").exists()]
+    names = [f"{n}-fine" for n in SHOTS if (OUT / f"{n}-fine.jpg").exists()]
     cols = 4
     rows = -(-len(names) // cols)
     args = ["ffmpeg", "-v", "error", "-y"]
@@ -520,7 +552,7 @@ def sheet() -> int:
 
 
 def main() -> int:
-    if len(sys.argv) < 2 or sys.argv[1] not in ("stills", "paint", "clips", "sheet", "install"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("stills", "paint", "clips", "finals", "sheet", "install"):
         print(__doc__)
         return 2
     if sys.argv[1] == "sheet":
@@ -530,9 +562,9 @@ def main() -> int:
     if unknown:
         print("unknown shot:", ", ".join(unknown), file=sys.stderr)
         return 2
-    job = {"stills": still, "paint": paint, "clips": clip, "install": install}[sys.argv[1]]
+    job = {"stills": still, "paint": paint, "clips": clip, "finals": final, "install": install}[sys.argv[1]]
     prompts = HERE / "prompts" / "box"
-    if job is clip and not (prompts / "manifest.json").exists():
+    if job in (clip, final) and not (prompts / "manifest.json").exists():
         # generate reads a project manifest even when a first frame is the only picture
         prompts.mkdir(parents=True, exist_ok=True)
         if run(["scan", str(prompts)]) != 0:
