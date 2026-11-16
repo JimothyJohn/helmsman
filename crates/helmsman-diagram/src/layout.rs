@@ -38,27 +38,75 @@ const MIN_BOX_W: f32 = 120.0;
 /// Vertical padding of a headerless block, above and below its port rows.
 const BARE_PAD: f32 = 4.0;
 
+/// What a block carries between its pins, beside their names: `rows`
+/// lines of text, none longer than `chars` characters. A fold that is more
+/// than its pins (a row per state, a row per condition) asks for it, and
+/// the block grows in height by its rows and in width by the longest. See
+/// [`layout_with`] and [`body_row`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Body {
+    pub rows: usize,
+    pub chars: usize,
+}
+
+/// Room for a pin's dot and a gap, on each side of a block's body.
+const BODY_GAP: f32 = 12.0;
+
+/// The width a pin side's names take, in diagram units.
+fn names_w(names: &[String]) -> f32 {
+    names
+        .iter()
+        .map(String::len)
+        .max()
+        .map_or(0.0, |c| c as f32 * CHAR_W)
+        + BODY_GAP
+}
+
 /// A block's box: wide enough for its label and port names, one row per
-/// port; a headed block adds its header band, a bare one (an operator)
-/// is its port rows alone, so its height follows the larger side's count.
-fn size(n: &Node) -> (f32, f32) {
+/// port (or per row of its body, when that is more); a headed block adds
+/// its header band, a bare one (an operator) is its port rows alone, so
+/// its height follows the larger side's count.
+fn size(n: &Node, body: Body) -> (f32, f32) {
     let (label, ins, outs) = (&n.label, &n.ins, &n.outs);
     let port_chars =
         ins.iter().map(String::len).max().unwrap_or(0) + outs.iter().map(String::len).max().unwrap_or(0);
     let chars = label.chars().count().max(port_chars + 2) as f32;
-    let rows = ins.len().max(outs.len()).max(1) as f32;
+    let rows = ins.len().max(outs.len()).max(body.rows).max(1) as f32;
     let h = if n.kind.headed() {
         HEADER + rows * PORT_ROW + 4.0
     } else {
         rows * PORT_ROW + 2.0 * BARE_PAD
     };
-    ((chars * CHAR_W + 20.0).max(56.0), h)
+    let mut w = (chars * CHAR_W + 20.0).max(56.0);
+    if body.rows > 0 {
+        w = w.max(names_w(ins) + body.chars as f32 * CHAR_W + 2.0 * BODY_GAP + names_w(outs));
+    }
+    (w, h)
+}
+
+/// Row `k` of the body of fold block `n` (laid out with [`layout_with`]):
+/// level with pin row `k`, between the input names and the output names.
+#[must_use]
+pub fn body_row(n: &Node, k: usize) -> Rect {
+    let (left, right) = (names_w(&n.ins), names_w(&n.outs));
+    let mid = port_y(&n.rect, n.kind.headed(), k);
+    Rect {
+        x: n.rect.x + left,
+        y: mid - PORT_ROW / 2.0 + 1.0,
+        w: (n.rect.w - left - right).max(0.0),
+        h: PORT_ROW - 2.0,
+    }
 }
 
 /// Lays out every node and region of `d` in place.
 pub fn layout(d: &mut Diagram) {
+    layout_with(d, &|_| Body::default());
+}
+
+/// [`layout`], with the body each block carries asked of `body`.
+pub fn layout_with(d: &mut Diagram, body: &dyn Fn(&Node) -> Body) {
     for n in &mut d.nodes {
-        let (w, h) = size(n);
+        let (w, h) = size(n, body(n));
         n.rect = Rect { x: 0.0, y: 0.0, w, h };
     }
     let mut l = Layout {
