@@ -305,7 +305,7 @@ fn a_project_with_rejected_constructs_still_opens_and_lists_them() {
     let built = build::build("other-layout", &files, None, &shape()).expect("builds anyway");
     assert_eq!(built.problems.len(), 1, "{:#?}", built.problems);
     assert!(
-        built.problems[0].file == "diagram.layout" && built.problems[0].message.contains("helmsman-layout 2"),
+        built.problems[0].file == "diagram.layout" && built.problems[0].message.contains("helmsman-layout 3"),
         "{:#?}",
         built.problems
     );
