@@ -63,6 +63,7 @@
 //! GET  /api/running                       the project deployed last, and whether it is what runs
 //! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
 //! GET  /api/desk                        a session: that person's desk; PUT sets it (see [`desk`])
+//! GET  /api/pane-layouts                the box's named pane layouts; PUT and DELETE need an engineer session (see [`pane_layouts`])
 //! GET  /api/drivers ...                   the box's WASM driver files; list, PUT and DELETE need an engineer session (see [`drivers`])
 //! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
@@ -140,6 +141,7 @@ pub mod live;
 pub mod login;
 pub mod market;
 pub mod mcp;
+pub mod pane_layouts;
 pub mod pdf;
 pub mod photo;
 pub mod projects;
@@ -283,6 +285,10 @@ pub struct More {
     /// (`<state-dir>/desks/`, [`desk::Desks::in_dir`]). `None`: memory
     /// only.
     pub desks: Option<std::path::PathBuf>,
+    /// Where the box's pane layouts are kept across restarts
+    /// (`<state-dir>/pane-layouts.json`, [`pane_layouts::Kept::in_file`]).
+    /// `None`: memory only.
+    pub pane_layouts: Option<std::path::PathBuf>,
     /// Configuring devices through their own protocols
     /// ([`devconf`]); `None`: those routes answer 404.
     pub devconf: Option<devconf::Setup>,
@@ -396,6 +402,8 @@ struct Ctx {
     trends: Mutex<trend::Trends>,
     /// Each person's desk ([`desk`]).
     desks: Mutex<desk::Desks>,
+    /// The box's pane layouts ([`pane_layouts`]).
+    pane_layouts: Mutex<pane_layouts::Kept>,
     /// The box's HTTPS ([`Api::start_secure`]); `None`: plain HTTP only.
     tls: Option<Tls>,
     /// Device configuration (see [`devconf`]); `None`: 404.
@@ -415,6 +423,10 @@ impl Ctx {
 
     fn desks(&self) -> MutexGuard<'_, desk::Desks> {
         self.desks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn pane_layouts(&self) -> MutexGuard<'_, pane_layouts::Kept> {
+        self.pane_layouts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn device_profile(&self) -> MutexGuard<'_, device_profile::Held> {
@@ -668,6 +680,7 @@ impl Api {
             running_drivers,
             trend_pins,
             desks,
+            pane_layouts,
             devconf,
             dhcp,
             discovery,
@@ -714,6 +727,9 @@ impl Api {
             running_drivers: Mutex::new(running_drivers),
             trends: Mutex::new(trend_pins.map_or_else(trend::Trends::default, trend::Trends::in_file)),
             desks: Mutex::new(desks.map_or_else(desk::Desks::default, desk::Desks::in_dir)),
+            pane_layouts: Mutex::new(
+                pane_layouts.map_or_else(pane_layouts::Kept::default, pane_layouts::Kept::in_file),
+            ),
             tls,
             devconf: devconf.map(devconf::State::new),
             dhcp,
@@ -1463,6 +1479,8 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         (_, ["api", "device-profile", ..]) => return device_profile::mutate(req, ctx, &segs[2..]),
         ("PUT", ["api", "trends", "pins"]) => return trend::put_pins(req, ctx),
         ("PUT", ["api", "desk"]) => return desk::put(req, ctx),
+        ("PUT", ["api", "pane-layouts"]) => return pane_layouts::put(req, ctx),
+        ("DELETE", ["api", "pane-layouts", name]) => return pane_layouts::delete(req, ctx, name),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1510,12 +1528,12 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
     }
     match path {
         ["api", "forces"] => return Some("GET, POST, DELETE"),
-        ["api", "forces", _] => return Some("DELETE"),
+        ["api", "forces" | "pane-layouts", _] => return Some("DELETE"),
         ["api", "modules", _, "stop" | "run" | "restart"] => return Some("POST"),
         ["api", "drivers" | "trends"] => return Some("GET"),
         ["api", "devices", _, "config", "password"] => return Some("PUT, DELETE, POST"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
-        ["api", "trends", "pins"] | ["api", "desk"] => return Some("GET, PUT"),
+        ["api", "trends", "pins"] | ["api", "desk" | "pane-layouts"] => return Some("GET, PUT"),
         _ => {}
     }
     match path {
@@ -1924,6 +1942,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "drivers"] => drivers::list(req, ctx),
         ["api", "trends", rest @ ..] => trend::get(req, ctx, rest),
         ["api", "desk"] => desk::get(req, ctx),
+        ["api", "pane-layouts"] => pane_layouts::get(ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "site"] => site_route(ctx, c, &view),
@@ -2099,6 +2118,9 @@ fn index(agent: bool) -> Json {
             e("PUT", "/api/trends/pins", true, "a login session: {signals: [...]} (at most 16), that person's pins"),
             e("GET", "/api/desk", true, "the signed-in person's desk (open project and file, unsaved edits, inputs), or null"),
             e("PUT", "/api/desk", true, "a login session: that person's desk (at most 512 KiB; an older saved_at than the box's is refused, 409)"),
+            e("GET", "/api/pane-layouts", true, "the box's named pane layouts (the editor's side tabs and panes): {format, layouts}"),
+            e("PUT", "/api/pane-layouts", true, "engineer session: one pane layout, kept under its name (at most 32; 4 KiB each)"),
+            e("DELETE", "/api/pane-layouts/{name}", true, "engineer session: drop a pane layout"),
             e("GET", "/api/forces", true, "active forced inputs: {id, signal | address, value, by, at}"),
             e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
             e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),

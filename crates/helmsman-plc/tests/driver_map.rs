@@ -385,6 +385,7 @@ impl Bench {
             running_drivers: found.drivers,
             trend_pins: None,
             desks: None,
+            pane_layouts: None,
             devconf: None,
             dhcp: None,
             discovery: helmsman_plc::api::discover::Discovery::default(),
