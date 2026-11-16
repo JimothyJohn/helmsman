@@ -14,7 +14,7 @@
 //! POST   /api/projects/{p}/tests              token or session: run its requirement tests (test_*.st) in the simulation; nothing changes
 //! POST   /api/projects/{p}/requirements       engineer: {text, name?}: one requirement; the agent writes its test (an event stream, see [`super::requirements`])
 //! POST   /api/projects/{p}/replay             engineer: sim replay of deploying it (evidence a deploy can cite)
-//! POST   /api/projects/{p}/deploy             engineer: {replay?}: tests, build, apply through the approval policy, commit, hot-swap; a red test refuses (409)
+//! POST   /api/projects/{p}/deploy             engineer: {replay?}: tests, build, apply through the approval policy, commit, hot-swap; a red test is named in the answer (`red`) and the audit trail, and refuses nothing
 //! GET    /api/projects/{p}/zip                the project as a .zip
 //! POST   /api/projects/{p}/zip[?replace=true] engineer: a .zip as project p (new, or in place of it)
 //! POST   /api/projects/{p}/import?file=F[&replace=true]   (.st, .xml, .L5X as ST; .eds kept as NAME.eds)
@@ -727,7 +727,7 @@ pub(super) fn verdict_json(v: &spec::Verdict) -> Json {
 
 /// `POST /api/projects/{p}/tests`: every requirement test of the project,
 /// green, red or untested, with why. `ok` and `red` count only the red
-/// ones: an untested requirement never refuses a deploy. Nothing changes.
+/// ones. Nothing changes.
 fn tests(req: &Request, ctx: &Ctx, name: &str) -> Response {
     let what = format!("project {}", clean(name));
     match run_tests(ctx, name) {
@@ -751,26 +751,12 @@ fn tests(req: &Request, ctx: &Ctx, name: &str) -> Response {
     }
 }
 
-/// The deploy gate: `Ok` when every requirement test of project `name` is
-/// green or untested (or it has none); else 409 naming each red one,
-/// nothing changed.
-pub(super) fn red_tests(ctx: &Ctx, name: &str) -> Result<(), (u16, Json, String)> {
-    let v = run_tests(ctx, name)?;
-    let red = spec::red(&v);
-    if red.is_empty() {
-        return Ok(());
-    }
-    let why = format!("{} requirement test(s) red: {}", red.len(), red.join("; "));
-    Err((
-        409,
-        json!({
-            "error": format!("not deployed: {why}"),
-            "changed": false,
-            "tests": v.iter().map(verdict_json).collect::<Vec<_>>(),
-            "red": red,
-        }),
-        why,
-    ))
+/// The red requirement tests of project `name`, one line each, as a deploy
+/// finds them. A red test never refuses a deploy (Nick, 2026-11-15: tests
+/// warn): the lines go into the deploy's answer and the audit trail. `Err`
+/// only when the project cannot be read.
+pub(super) fn red_tests(ctx: &Ctx, name: &str) -> Result<Vec<String>, (u16, Json, String)> {
+    Ok(spec::red(&run_tests(ctx, name)?))
 }
 
 /// Project `name` built against what runs: its change set, or the status,

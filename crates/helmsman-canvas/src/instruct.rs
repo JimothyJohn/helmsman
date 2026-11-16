@@ -161,6 +161,8 @@ pub struct Plan {
     pub whys: Vec<String>,
     /// How many scenarios the steps passed.
     pub scenarios: usize,
+    /// The checks the steps did not pass ([`Check::warnings`]).
+    pub warnings: Vec<String>,
     /// The engineer's earlier instructions it went with.
     pub diagnostics: Vec<String>,
     /// Splits the plan made by itself since a step last passed or the
@@ -222,6 +224,9 @@ pub struct Apply {
     pub text: String,
     /// The scenarios it passed, as test files (name, text).
     pub tests: Vec<(String, String)>,
+    /// The checks it did not pass, one line each: said with the status,
+    /// refusing nothing ([`Check::warnings`]).
+    pub warnings: Vec<String>,
     /// The History entry of its revision ([`record`]).
     pub record: String,
     pub status: String,
@@ -278,7 +283,8 @@ pub struct Outcome {
     pub status: String,
     /// The Agent's one-sentence reason (an update).
     pub why: Option<String>,
-    /// What failed (a refusal), one line each.
+    /// What failed, one line each: why nothing was written (a refusal),
+    /// or the checks an update did not pass.
     pub problems: Vec<String>,
     pub undo: Option<Undo>,
     /// Proposals the box's agent stored instead of answering with the file.
@@ -454,6 +460,7 @@ impl Instruct {
             tests: Vec::new(),
             whys: Vec::new(),
             scenarios: 0,
+            warnings: Vec::new(),
             diagnostics: env.diagnostics.to_vec(),
             splits: 0,
         }));
@@ -639,7 +646,7 @@ impl Instruct {
                 s if s.is_empty() => "The Agent sent no code for this step.".to_string(),
                 s => format!("The Agent sent no code for this step. It says: {s}"),
             }])
-        } else if check.red() {
+        } else if check.blocked() {
             Err(check.problems())
         } else {
             crate::scope::apply(&run.scope, &plan.files, answer).map_err(|r| vec![r.why])
@@ -664,7 +671,8 @@ impl Instruct {
             plan.tests.retain(|(g, _)| g != f);
             plan.tests.push((f.clone(), t.clone()));
         }
-        plan.scenarios += check.scenarios.len();
+        plan.scenarios += check.add.len();
+        plan.warnings.extend(check.warnings());
         plan.whys.push(reason(answer).unwrap_or_default());
         plan.written = Some(written.clone());
         plan.done += 1;
@@ -691,6 +699,7 @@ impl Instruct {
             1 => format!("Updated {written} in {n} steps: 1 scenario passed, kept as a test"),
             k => format!("Updated {written} in {n} steps: {k} scenarios passed, kept as tests"),
         };
+        status.push_str(&not_passed(plan.warnings.len()));
         status.push('.');
         let why = plan.whys.last().filter(|w| !w.is_empty()).cloned();
         let mut record = record(&run, &written, why.as_deref(), &status, check, answer);
@@ -723,6 +732,7 @@ impl Instruct {
             file: written,
             text,
             tests: plan.tests.clone(),
+            warnings: plan.warnings.clone(),
             record,
             status,
             why,
@@ -747,7 +757,7 @@ impl Instruct {
             ));
             return Step::Done;
         }
-        if check.red() {
+        if check.blocked() {
             let tries = run.retries + 1;
             let mut o = Outcome::new(
                 Kind::Refused,
@@ -794,6 +804,7 @@ impl Instruct {
             file: written,
             text,
             tests: check.add.clone(),
+            warnings: check.warnings(),
             record,
             status,
             why,
@@ -807,6 +818,7 @@ impl Instruct {
         self.run = None;
         let mut o = Outcome::new(Kind::Applied, apply.status.clone());
         o.why.clone_from(&apply.why);
+        o.problems.clone_from(&apply.warnings);
         o.undo = undo;
         self.outcome = Some(o);
     }
@@ -913,10 +925,20 @@ fn too_big(k: usize) -> String {
     )
 }
 
-/// The status line of a green answer for `file`.
+/// What a status says of `n` checks an update did not pass.
+fn not_passed(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1 => "; 1 check did not pass".into(),
+        n => format!("; {n} checks did not pass"),
+    }
+}
+
+/// The status line of an answer written to `file`: what passed, and how
+/// many checks did not.
 #[must_use]
 pub fn status(file: &str, check: &Check) -> String {
-    let passed = check.scenarios.len();
+    let passed = check.scenarios.iter().filter(|s| s.passed).count();
     let mut s = match passed {
         0 => format!("Updated {file}. No scenario checks this change"),
         1 => format!("Updated {file}: 1 scenario passed, kept as a test"),
@@ -941,6 +963,7 @@ pub fn status(file: &str, check: &Check) -> String {
     if check.unchanged {
         s.push_str("; behaviour unchanged (the Agent's claim)");
     }
+    s.push_str(&not_passed(check.warnings().len()));
     s.push('.');
     s
 }

@@ -615,3 +615,90 @@ fn a_read_and_a_write_of_a_global_are_in_the_diagram() {
 "
     );
 }
+
+#[test]
+fn a_run_of_one_operator_is_one_block_with_an_input_each() {
+    assert_eq!(
+        lowered("a, b, c, d, y : BOOL;", "y := a AND NOT b AND c AND d;"),
+        "\
+#0 read A
+#1 read B
+#2 read C
+#3 read D
+#4 op AND <- #0 !#1 #2 #3
+#5 write Y := <- #4
+"
+    );
+    // AND binds tighter: each run is its own block under the OR.
+    assert_eq!(
+        lowered("a, b, c, d, y : BOOL;", "y := a AND b AND c OR d OR a AND d;"),
+        "\
+#0 read A
+#1 read B
+#2 read C
+#3 op AND <- #0 #1 #2
+#4 read D
+#5 op AND <- #0 #4
+#6 op OR <- #3 #4 #5
+#7 write Y := <- #6
+"
+    );
+    assert_eq!(
+        lowered("a, b, c : INT;", "c := a + b + c + 1;\nc := a * b * c;"),
+        "\
+#0 read A
+#1 read B
+#2 read C
+#3 const 1
+#4 op + <- #0 #1 #2 #3
+#5 write C := <- #4
+#6 read A
+#7 read B
+#8 op * <- #6 #7 #5
+#9 write C := <- #8
+"
+    );
+}
+
+#[test]
+fn only_a_run_as_written_is_joined() {
+    // The author's brackets keep their own block, on either side.
+    assert_eq!(
+        lowered(
+            "a, b, c, y : BOOL;",
+            "y := (a AND b) AND c;\ny := a AND (b AND c);"
+        ),
+        "\
+#0 read A
+#1 read B
+#2 op AND <- #0 #1
+#3 read C
+#4 op AND <- #2 #3
+#5 write Y := <- #4
+#6 read A
+#7 read B
+#8 read C
+#9 op AND <- #7 #8
+#10 op AND <- #6 #9
+#11 write Y := <- #10
+"
+    );
+    // `-` and `/` do not regroup, and a comparison takes two inputs.
+    assert_eq!(
+        lowered("a, b, c : INT;", "c := a - b - c;\nc := a + b - c + a;"),
+        "\
+#0 read A
+#1 read B
+#2 op - <- #0 #1
+#3 read C
+#4 op - <- #2 #3
+#5 write C := <- #4
+#6 read A
+#7 read B
+#8 op + <- #6 #7
+#9 op - <- #8 #5
+#10 op + <- #9 #6
+#11 write C := <- #10
+"
+    );
+}

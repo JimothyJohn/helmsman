@@ -147,7 +147,8 @@ pub fn gate(t: &dyn Scan, r: &Region) -> Gate {
 #[must_use]
 pub fn annotate(d: &Diagram, t: &dyn Scan, prefix: &str) -> Live {
     let get = |path: &str| t.get(&format!("{prefix}{path}"));
-    let mut srcs: Vec<[Option<(usize, usize, bool)>; 2]> = vec![[None; 2]; d.nodes.len()];
+    let mut srcs: Vec<Vec<Option<(usize, usize, bool)>>> =
+        d.nodes.iter().map(|n| vec![None; n.ins.len()]).collect();
     for w in &d.wires {
         if let Some(slot) = srcs[w.to.0 as usize].get_mut(w.inp) {
             *slot = Some((w.from.0 as usize, w.out, w.negated));
@@ -157,7 +158,7 @@ pub fn annotate(d: &Diagram, t: &dyn Scan, prefix: &str) -> Live {
     for n in &d.nodes {
         // Inputs come from nodes created earlier, so already valued.
         let input = |k: usize| -> Option<Value> {
-            let (from, out, neg) = srcs[n.id.0 as usize][k]?;
+            let (from, out, neg) = srcs[n.id.0 as usize].get(k).copied().flatten()?;
             let v = values.get(from)?.get(out).copied().flatten()?;
             if neg { not(v) } else { Some(v) }
         };
@@ -166,7 +167,11 @@ pub fn annotate(d: &Diagram, t: &dyn Scan, prefix: &str) -> Live {
             NodeKind::For { var } => vec![get(var)],
             NodeKind::Const { value } => vec![*value],
             NodeKind::Fb { instance, .. } => n.outs.iter().map(|o| get(&format!("{instance}.{o}"))).collect(),
-            NodeKind::Op { op } => vec![eval(op, input(0), input(1))],
+            NodeKind::Op { op } => {
+                // A run of one operator is one block: left to right.
+                let first = eval_one(op, input(0), n.ins.len());
+                vec![(1..n.ins.len()).fold(first, |acc, k| eval(op, acc, input(k)))]
+            }
             NodeKind::Func { .. } | NodeKind::Access { .. } | NodeKind::Jump => vec![None; n.outs.len()],
         };
         values.push(out);
@@ -187,16 +192,22 @@ fn num(v: Value) -> Option<f64> {
     }
 }
 
+/// The first input of an operator with `inputs` of them: the value itself,
+/// or for the one-input NOT block its result.
+fn eval_one(op: &str, a: Option<Value>, inputs: usize) -> Option<Value> {
+    if inputs == 1 {
+        return match (op, a?) {
+            ("NOT", Value::Bool(x)) => Some(Value::Bool(!x)),
+            _ => None,
+        };
+    }
+    a
+}
+
 /// Logic and comparisons only; see the module docs.
 fn eval(op: &str, a: Option<Value>, b: Option<Value>) -> Option<Value> {
     use Value::{Bool, Int};
     let a = a?;
-    if op == "NOT" {
-        return match a {
-            Bool(x) => Some(Bool(!x)),
-            _ => None,
-        };
-    }
     let b = b?;
     Some(match (op, a, b) {
         ("AND", Bool(x), Bool(y)) => Bool(x && y),

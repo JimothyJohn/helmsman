@@ -937,6 +937,8 @@ impl BoxView {
         }
         let at = self.agent_at;
         match o.kind {
+            // An update with checks that did not pass is a warning.
+            Kind::Applied if !o.problems.is_empty() => self.log.warning(at, line),
             Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
             Kind::Refused | Kind::Failed => self.log.error(at, line),
         }

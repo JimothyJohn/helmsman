@@ -25,7 +25,7 @@
 //! - **Requirement tests never deploy.** A `test_NAME.st` file
 //!   (`helmsman_iec::spec::is_test`) is left out of every module: the
 //!   tests run in the simulation ([`crate::api::projects`]' `tests` route,
-//!   and before a deploy, which a red test refuses).
+//!   and before a deploy, which names a red test and goes ahead).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
