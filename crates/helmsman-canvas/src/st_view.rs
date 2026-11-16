@@ -343,9 +343,55 @@ enum Grab {
 
 /// Where the operator moved blocks, by what they are rather than their
 /// ids, so it survives an edit that renumbers them: (POU, the block's
-/// label and source text, which of the same, offset).
+/// of the same, offset), and which folds the reader opened or folded and
+/// moved, by (POU, fold key) ([`FoldState`]).
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Arrangement(Vec<(String, String, String, usize, Vec2)>);
+pub struct Arrangement(Vec<(String, String, String, usize, Vec2)>, FoldState);
+
+/// What the reader did to the folds, as a layer over the automatic
+/// diagram. `opened` and `collapsed` are the folds whose state is not the
+/// one they start in (see [`on_request`]), so two layers add by toggling:
+/// the shared default, then a tweak that flips some of it back.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct FoldState {
+    opened: std::collections::BTreeSet<(String, String)>,
+    collapsed: std::collections::BTreeSet<(String, String)>,
+    moved: Vec<(String, String, Vec2)>,
+}
+
+impl FoldState {
+    fn is_empty(&self) -> bool {
+        self.opened.is_empty() && self.collapsed.is_empty() && self.moved.is_empty()
+    }
+
+    /// What `base` plus the result gives `self`: the sets toggled against
+    /// each other, the moves subtracted.
+    fn minus(&self, base: &Self) -> Self {
+        let mut moved: Vec<(String, String, Vec2)> = Vec::new();
+        for (p, k, v) in &self.moved {
+            let mut by = *v;
+            for (_, _, b) in base.moved.iter().filter(|(bp, bk, _)| bp == p && bk == k) {
+                by -= *b;
+            }
+            moved.push((p.clone(), k.clone(), by));
+        }
+        for (p, k, b) in &base.moved {
+            if !self.moved.iter().any(|(sp, sk, _)| sp == p && sk == k) {
+                moved.push((p.clone(), k.clone(), -*b));
+            }
+        }
+        moved.retain(|(_, _, v)| v.x.abs() >= STILL || v.y.abs() >= STILL);
+        Self {
+            opened: self.opened.symmetric_difference(&base.opened).cloned().collect(),
+            collapsed: self
+                .collapsed
+                .symmetric_difference(&base.collapsed)
+                .cloned()
+                .collect(),
+            moved,
+        }
+    }
+}
 
 /// A block as an [`Arrangement`] names it: POU, label, source text, which
 /// of the same.
@@ -357,7 +403,7 @@ const STILL: f32 = 0.01;
 impl Arrangement {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.0.is_empty() && self.1.is_empty()
     }
 
     /// How many blocks it moves.
@@ -369,13 +415,24 @@ impl Arrangement {
     /// Read from a project's `diagram.layout` ([`helmsman_project::layout`]).
     ///
     /// # Errors
-    /// What [`helmsman_project::layout::parse`] refuses.
+    /// What [`helmsman_project::layout::parse_all`] refuses.
     pub fn from_text(text: &str) -> Result<Self, Vec<String>> {
+        let l = helmsman_project::layout::parse_all(text)?;
+        let set = |v: Vec<helmsman_project::layout::FoldRef>| v.into_iter().map(|r| (r.pou, r.key)).collect();
         Ok(Self(
-            helmsman_project::layout::parse(text)?
+            l.moves
                 .into_iter()
                 .map(|m| (m.pou, m.label, m.text, m.k, Vec2::new(m.dx, m.dy)))
                 .collect(),
+            FoldState {
+                opened: set(l.opened),
+                collapsed: set(l.collapsed),
+                moved: l
+                    .fold_moves
+                    .into_iter()
+                    .map(|m| (m.pou, m.key, Vec2::new(m.dx, m.dy)))
+                    .collect(),
+            },
         ))
     }
 
@@ -395,7 +452,41 @@ impl Arrangement {
             })
             .collect();
         moves.sort_by(|a, b| (&a.pou, &a.label, &a.text, a.k).cmp(&(&b.pou, &b.label, &b.text, b.k)));
-        helmsman_project::layout::render(&moves)
+        let refs =
+            |s: &std::collections::BTreeSet<(String, String)>| -> Vec<helmsman_project::layout::FoldRef> {
+                s.iter()
+                    .map(|(pou, key)| helmsman_project::layout::FoldRef {
+                        pou: pou.clone(),
+                        key: key.clone(),
+                    })
+                    .collect()
+            };
+        let mut fold_moves: Vec<helmsman_project::layout::FoldMove> = self
+            .1
+            .moved
+            .iter()
+            .map(|(pou, key, v)| helmsman_project::layout::FoldMove {
+                pou: pou.clone(),
+                key: key.clone(),
+                dx: v.x,
+                dy: v.y,
+            })
+            .collect();
+        fold_moves.sort_by(|a, b| (&a.pou, &a.key).cmp(&(&b.pou, &b.key)));
+        // A file past its bound is refused whole, so the writer stops at it.
+        let cap = helmsman_project::layout::MAX_FOLDS;
+        let mut layout = helmsman_project::layout::Layout {
+            moves,
+            opened: refs(&self.1.opened),
+            collapsed: refs(&self.1.collapsed),
+            fold_moves,
+        };
+        layout.opened.truncate(cap);
+        layout.collapsed.truncate(cap - layout.opened.len());
+        layout
+            .fold_moves
+            .truncate(cap - layout.opened.len() - layout.collapsed.len());
+        helmsman_project::layout::render_all(&layout)
     }
 
     /// The offset `self` gives each block, less what `base` gives it: the
@@ -418,6 +509,7 @@ impl Arrangement {
                 .filter(|(_, v)| v.x.abs() >= STILL || v.y.abs() >= STILL)
                 .map(|((p, l, t, k), v)| (p, l, t, k, v))
                 .collect(),
+            self.1.minus(&base.1),
         )
     }
 
@@ -437,7 +529,8 @@ impl Arrangement {
         let room = helmsman_project::layout::MAX_MOVES.saturating_sub(newer.len());
         out.drain(..out.len().saturating_sub(room));
         out.extend(newer.0.iter().cloned());
-        Self(out)
+        // Fold keys the program lacks are not kept: `newer` is read off it.
+        Self(out, newer.1.clone())
     }
 
     /// The moves of the blocks `pairs` name as old, now under the new name
@@ -464,7 +557,7 @@ impl Arrangement {
             }
             out.push((new.0.clone(), new.1.clone(), new.2.clone(), new.3, by));
         }
-        Self(out)
+        Self(out, FoldState::default())
     }
 
     /// `self` with `more` added: a move of `more` replaces one of `self`
@@ -483,7 +576,7 @@ impl Arrangement {
             .cloned()
             .collect();
         out.extend(more.0.iter().cloned());
-        Self(out)
+        Self(out, self.1.clone())
     }
 
     /// Only the moves of blocks `v` has.
@@ -495,6 +588,7 @@ impl Arrangement {
                 .filter(|(p, l, t, k, _)| v.block(p, l, t, *k).is_some())
                 .cloned()
                 .collect(),
+            v.known_folds(&self.1),
         )
     }
 }
@@ -825,6 +919,7 @@ impl Viewer {
             set.remove(&entry);
         }
         self.pick = None;
+        self.edits += 1;
         self.reshow();
     }
 
@@ -1354,6 +1449,8 @@ impl Viewer {
     pub fn rearranged(&self) -> bool {
         self.moved.iter().any(|m| m.iter().any(|(_, v)| *v != Vec2::ZERO))
             || self.fold_moved.iter().any(|(_, _, v)| *v != Vec2::ZERO)
+            || !self.opened.is_empty()
+            || !self.collapsed.is_empty()
     }
 
     /// Every block back where the layout put it.
@@ -1369,6 +1466,16 @@ impl Viewer {
             helmsman_diagram::layout::refit(&mut self.module.pous[pou].diagram);
         }
         self.fold_moved.clear();
+        self.reshow();
+    }
+
+    /// Every fold as the program starts it (what [`Self::reset_arrangement`]
+    /// leaves alone): the layers of [`crate::arrange`] lay folds out from
+    /// here, as they lay blocks out from the automatic layout.
+    pub fn reset_folds(&mut self) {
+        self.edits += 1;
+        self.opened.clear();
+        self.collapsed.clear();
         self.reshow();
     }
 
@@ -1389,7 +1496,48 @@ impl Viewer {
                 out.push((pou.name.clone(), node.label.clone(), node.text.clone(), k, v));
             }
         }
-        Arrangement(out)
+        Arrangement(
+            out,
+            self.known_folds(&FoldState {
+                opened: self.opened.clone(),
+                collapsed: self.collapsed.clone(),
+                moved: self
+                    .fold_moved
+                    .iter()
+                    .filter_map(|(p, k, v)| Some((self.module.pous.get(*p)?.name.clone(), k.clone(), *v)))
+                    .collect(),
+            }),
+        )
+    }
+
+    /// `s` less the folds this program does not have (a key from an older
+    /// version of the source, or a file from another program), and less
+    /// opened ones that start open and collapsed ones that start closed.
+    fn known_folds(&self, s: &FoldState) -> FoldState {
+        let kind = |pou: &str, key: &str| {
+            let p = self.module.pous.iter().position(|q| q.name == pou)?;
+            self.folds[p].iter().find(|f| f.key == key).map(|f| f.kind)
+        };
+        FoldState {
+            opened: s
+                .opened
+                .iter()
+                .filter(|(p, k)| kind(p, k).is_some_and(|f| !on_request(f)))
+                .cloned()
+                .collect(),
+            collapsed: s
+                .collapsed
+                .iter()
+                .filter(|(p, k)| kind(p, k).is_some_and(on_request))
+                .cloned()
+                .collect(),
+            moved: s
+                .moved
+                .iter()
+                .filter(|(p, k, _)| kind(p, k).is_some())
+                .cloned()
+                .collect(),
+        }
     }
 
     /// Moves the blocks `a` names, wherever they still are; the rest stay
@@ -1399,6 +1547,32 @@ impl Viewer {
         for (name, label, text, k, v) in &a.0 {
             if let Some((pou, n)) = self.block(name, label, text, *k) {
                 self.shift(pou, &[n], *v);
+            }
+        }
+        // Folds a layer lists toggle (see [`FoldState`]); ones the program
+        // lacks are dropped.
+        let known = self.known_folds(&a.1);
+        for (set, from) in [
+            (&mut self.opened, &known.opened),
+            (&mut self.collapsed, &known.collapsed),
+        ] {
+            for e in from {
+                if !set.remove(e) {
+                    set.insert(e.clone());
+                }
+            }
+        }
+        for (name, key, by) in known.moved {
+            let Some(pou) = self.module.pous.iter().position(|q| q.name == name) else {
+                continue;
+            };
+            match self
+                .fold_moved
+                .iter_mut()
+                .find(|(p, k, _)| *p == pou && *k == key)
+            {
+                Some((_, _, total)) => *total += by,
+                None => self.fold_moved.push((pou, key, by)),
             }
         }
         for p in &mut self.module.pous {

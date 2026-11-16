@@ -1901,7 +1901,16 @@ Two layers. The shared default is the project's `diagram.layout`
 (`helmsman-layout 1`, one tab-separated `move` line per block: POU, which
 of the blocks with that label and text, offset, label, text; at most 4096
 moves, offsets within ±10⁶, refused whole when it does not read, on a
-save and in an upload). On a box it is the running project's, read with
+save and in an upload). The same file holds the folds the reader opened
+(`open`), the on-request folds (sections, arms) the reader folded
+(`collapse`) and where a folded block was dragged (`foldmove`), each by
+POU and `Fold::key`, under `helmsman-layout 2` (at most 4096 such lines).
+Readers take both versions; the writer writes version 1 unless there is
+fold state, so a project that never folds stays readable by older pages
+and boxes, and a version 1 file with a fold line is refused. A key the
+program no longer has is dropped on load and not written back. The
+tweaks carry the same lines (fold state toggles against the default:
+`FoldState` in `st_view.rs`). On a box it is the running project's, read with
 the project list and saved by Save as default as an ordinary file write
 (engineer only, with the version read: a stale save is 409 and read
 again); in the simulation it is a file of the browser-stored project
