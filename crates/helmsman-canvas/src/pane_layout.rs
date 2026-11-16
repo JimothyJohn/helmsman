@@ -17,6 +17,7 @@
 use eframe::egui::{self, Rect, RichText, Vec2};
 use serde_json::{Value as Json, json};
 
+use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::{BOTTOM_H, Bottom, Chrome, LEFT_W, Pane, RIGHT_W};
 use crate::st_view::TAP;
 use crate::theme::theme;
@@ -230,7 +231,7 @@ fn size(v: &Json) -> Option<f32> {
 }
 
 impl PaneLayout {
-    fn to_json(&self, name: &str) -> Json {
+    pub(crate) fn to_json(&self, name: &str) -> Json {
         let mut v = json!({
             "name": name,
             "left": keys(&self.lefts),
@@ -326,11 +327,124 @@ fn render(list: &[(String, PaneLayout)]) -> String {
 }
 
 /// What the popup asks the app to do: the browser's download and file
-/// picker are the app's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// picker are the app's, and so is the box.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Act {
     Export,
     Import,
+    /// Keep the layout of yours of this name on the box too.
+    Keep(String),
+    /// Delete the box's layout of this name.
+    Forget(String),
+}
+
+/// The box's side of the popup, on a page a box serves.
+pub struct BoxSide<'a> {
+    /// The layouts the box keeps.
+    pub list: &'a [(String, PaneLayout)],
+    /// What the box last answered, and whether it is an error.
+    pub note: Option<&'a (String, bool)>,
+    /// Whether whoever is signed in may change the box's list (why not).
+    pub can: Result<(), String>,
+}
+
+const BOX_URL: &str = "/api/pane-layouts";
+
+/// The pane layouts the box keeps (`GET` and `PUT /api/pane-layouts`,
+/// `DELETE /api/pane-layouts/{name}`; helmsman-plc `api::pane_layouts`):
+/// one list for the box, so any browser that opens it offers them. Read
+/// when the popup opens and after each change; read as a file is, as
+/// hostile.
+#[derive(Debug, Default)]
+pub struct OnBox {
+    pub list: Vec<(String, PaneLayout)>,
+    /// What the box last answered, for the popup, and whether it is an
+    /// error.
+    pub note: Option<(String, bool)>,
+    /// Asked for since the popup opened.
+    asked: bool,
+    queue: Vec<PReq>,
+}
+
+impl OnBox {
+    /// What to send now.
+    pub fn poll(&mut self) -> Vec<PReq> {
+        std::mem::take(&mut self.queue)
+    }
+
+    /// The popup is open: the list is read, once.
+    pub fn want(&mut self) {
+        if !self.asked {
+            self.asked = true;
+            self.queue.push(PReq::get(PCall::PaneLayouts, BOX_URL.into()));
+        }
+    }
+
+    /// The popup shut: the next opening reads the list again.
+    pub fn shut(&mut self) {
+        self.asked = false;
+        self.note = None;
+    }
+
+    /// Keeps `layout` on the box as `name`.
+    pub fn keep(&mut self, name: &str, layout: &PaneLayout) {
+        self.queue.push(PReq::json(
+            PCall::KeepPaneLayout(name.to_string()),
+            "PUT",
+            BOX_URL.into(),
+            &layout.to_json(name),
+        ));
+    }
+
+    /// Deletes the box's layout `name`.
+    pub fn forget(&mut self, name: &str) {
+        self.queue.push(PReq::delete(
+            PCall::DropPaneLayout(name.to_string()),
+            format!("{BOX_URL}/{}", crate::remote::segment(name)),
+        ));
+    }
+
+    /// Takes in the box's answer to `call`.
+    pub fn answer(&mut self, call: &PCall, a: &Answer) {
+        let ok = (200..300).contains(&a.status);
+        let why = || crate::box_projects::error_of(a);
+        match call {
+            PCall::PaneLayouts if ok => match parse(&a.body) {
+                Ok(list) => {
+                    // The box's own rules again, on what it sent.
+                    let mut read = Layouts::default();
+                    for (name, layout) in list {
+                        if read.find(&name).is_none() && read.mine.len() < MAX_LAYOUTS {
+                            read.mine.push((name, layout));
+                        }
+                    }
+                    self.list = read.mine;
+                }
+                Err(why) => {
+                    self.note = Some((format!("The box's layouts were not read: {why}."), true));
+                }
+            },
+            PCall::PaneLayouts => {
+                self.note = Some((format!("The box's layouts were not read: {}", why()), true));
+            }
+            PCall::KeepPaneLayout(name) if ok => {
+                self.note = Some((format!("{name} is kept on the box."), false));
+                self.asked = false;
+            }
+            PCall::KeepPaneLayout(name) => {
+                self.note = Some((format!("{name} was not kept on the box: {}", why()), true));
+            }
+            // Gone already (someone else deleted it) is gone.
+            PCall::DropPaneLayout(name) if ok || a.status == 404 => {
+                self.note = Some((format!("Deleted {name} from the box."), false));
+                self.asked = false;
+            }
+            PCall::DropPaneLayout(name) => {
+                self.note = Some((format!("{name} was not deleted from the box: {}", why()), true));
+            }
+            _ => {}
+        }
+    }
 }
 
 /// This browser's named layouts, and the popup that lists them.
@@ -371,7 +485,6 @@ impl Layouts {
     }
 
     /// The layout saved as `name`.
-    #[cfg(test)]
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&PaneLayout> {
         self.find(name).map(|k| &self.mine[k].1)
@@ -477,16 +590,23 @@ impl Layouts {
 
     /// The popup: the ready-made layouts and yours, each a button that
     /// arranges the panes; a name and Save for the panes as they are;
-    /// Export and Import. What it leaves to the app, if anything.
+    /// Export and Import. On a box's page (`on_box`), the layouts the box
+    /// keeps too, with To box on each of yours. What it leaves to the
+    /// app, if anything.
+    #[allow(clippy::too_many_lines)]
     pub fn popup(
         &mut self,
         ctx: &egui::Context,
         chrome: &mut Chrome,
         hits: &mut Vec<(String, Rect)>,
+        on_box: Option<&BoxSide<'_>>,
     ) -> Option<Act> {
         let mut act = None;
         let mut shut = false;
         let wide = Vec2::new(220.0, TAP * 0.7);
+        // With To box beside Delete, a row of yours has less for the name.
+        let mine_wide = Vec2::new(if on_box.is_some() { 150.0 } else { wide.x }, wide.y);
+        let list_h = if on_box.is_some() { 150.0 } else { 240.0 };
         let m = egui::Modal::new(egui::Id::unique("pane-layouts")).show(ctx, |ui| {
             let t = theme(ui);
             ui.set_max_width(360.0);
@@ -513,12 +633,12 @@ impl Layouts {
             let mut gone = None;
             egui::ScrollArea::vertical()
                 .id_salt("pane-layouts-mine")
-                .max_height(240.0)
+                .max_height(list_h)
                 .show(ui, |ui| {
                     for (name, layout) in &self.mine {
                         ui.horizontal(|ui| {
                             let r = ui
-                                .add(egui::Button::new(name.as_str()).min_size(wide).truncate())
+                                .add_sized(mine_wide, egui::Button::new(name.as_str()).truncate())
                                 .tip(format!("Arranges the panes as {name} has them."));
                             hits.push((format!("layouts mine {name}"), r.rect));
                             if r.clicked() {
@@ -532,12 +652,71 @@ impl Layouts {
                             if d.clicked() {
                                 gone = Some(name.clone());
                             }
+                            if let Some(b) = on_box {
+                                let k = ui
+                                    .add_enabled(b.can.is_ok(), egui::Button::new("To box"))
+                                    .tip(match &b.can {
+                                        Ok(()) => format!(
+                                            "Keeps {name} on this box too: any browser that opens the box offers it."
+                                        ),
+                                        Err(why) => why.clone(),
+                                    });
+                                hits.push((format!("layouts keep {name}"), k.rect));
+                                if k.clicked() {
+                                    act = Some(Act::Keep(name.clone()));
+                                }
+                            }
                         });
                     }
                 });
             if let Some(name) = gone {
                 self.remove(&name);
                 self.note = Some((format!("Deleted {name}."), false));
+            }
+            if let Some(b) = on_box {
+                ui.add_space(6.0);
+                ui.label(RichText::new("On this box").color(t.muted))
+                    .tip("Layouts this box keeps: any browser that opens it offers them. An engineer adds and deletes them.");
+                if b.list.is_empty() {
+                    ui.label("None kept yet.")
+                        .tip("Save a layout of yours, then press To box beside it.");
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("pane-layouts-box")
+                    .max_height(list_h)
+                    .show(ui, |ui| {
+                        for (name, layout) in b.list {
+                            ui.horizontal(|ui| {
+                                let r = ui
+                                    .add_sized(wide, egui::Button::new(name.as_str()).truncate())
+                                    .tip(format!("Arranges the panes as the box's {name} has them."));
+                                hits.push((format!("layouts box {name}"), r.rect));
+                                if r.clicked() {
+                                    chrome.apply(layout);
+                                    shut = true;
+                                }
+                                let d = ui
+                                    .add_enabled(b.can.is_ok(), egui::Button::new("Delete"))
+                                    .tip(match &b.can {
+                                        Ok(()) => format!("Deletes {name} from this box, for everyone."),
+                                        Err(why) => why.clone(),
+                                    });
+                                hits.push((format!("layouts forget {name}"), d.rect));
+                                if d.clicked() {
+                                    act = Some(Act::Forget(name.clone()));
+                                }
+                            });
+                        }
+                    });
+                if let Some((text, bad)) = b.note {
+                    let ink = if *bad {
+                        t.ink(crate::st_view::brand::RED)
+                    } else {
+                        t.muted
+                    };
+                    let r = ui.label(RichText::new(text).color(ink));
+                    hits.push(("layouts box note".to_string(), r.rect));
+                }
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {

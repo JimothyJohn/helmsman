@@ -4186,3 +4186,141 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
     });
     assert!(h.bv().chat_sent.is_empty(), "the agent was not asked");
 }
+
+/// Nick, 2026-11-15: "a box also keeps layouts, so any browser that opens
+/// it offers them". An engineer keeps a layout of theirs on the box; an
+/// operator on another screen is offered it, exactly as it was (tabs,
+/// hidden ones, sizes), and is refused a change of the box's list; the
+/// engineer deletes it and it is gone for both.
+#[test]
+fn a_pane_layout_kept_on_the_box_is_offered_on_another_screen() {
+    use crate::editor::{Chrome, Pane};
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let (jar_a, jar_b) = (Jar::default(), Jar::default());
+    let mut alice = page(&b, &jar_a, Some(("alice", ALICE)));
+    let mut bob = page(&b, &jar_b, Some(("bob", BOB)));
+    let now = std::cell::Cell::new(0.0);
+    let tick = || {
+        now.set(now.get() + 0.5);
+        now.get()
+    };
+    // What the popup does while it is open, until the box has answered.
+    let read = |v: &mut BoxView, jar: &Jar| {
+        v.pane_layouts.shut();
+        for _ in 0..6 {
+            v.pane_layouts.want();
+            pump(&b, jar, v, &ctx, tick());
+        }
+    };
+    read(&mut alice, &jar_a);
+    assert_eq!(alice.pane_layouts.list, []);
+    assert_eq!(alice.pane_layouts.note, None, "an empty list is no problem");
+
+    let mut c = Chrome::default();
+    c.dock(Pane::Io, true);
+    c.hide(Pane::History);
+    c.place(Pane::Devices, false, Some(Pane::Claude));
+    c.sizes.left = Some(400.0);
+    c.sizes.bottom = Some(200.0);
+    let mine = c.layout();
+    let name = "Line 3 start-up / é";
+    alice.pane_layouts.keep(name, &mine);
+    read(&mut alice, &jar_a);
+    assert_eq!(alice.pane_layouts.list, [(name.to_string(), mine.clone())]);
+
+    // The operator's screen: offered, the same; a change is refused and
+    // says why; the box's list stands.
+    read(&mut bob, &jar_b);
+    assert_eq!(bob.pane_layouts.list, [(name.to_string(), mine.clone())]);
+    bob.pane_layouts.keep("Bob's", &mine);
+    bob.pane_layouts.forget(name);
+    for _ in 0..4 {
+        pump(&b, &jar_b, &mut bob, &ctx, tick());
+    }
+    let (note, bad) = bob.pane_layouts.note.clone().expect("the refusal is said");
+    assert!(bad && note.contains("engineer"), "{note}");
+    read(&mut bob, &jar_b);
+    assert_eq!(bob.pane_layouts.list.len(), 1);
+
+    // Signed out: the box's reads need a sign-in, and the popup says so.
+    let jar_c = Jar::default();
+    let mut nobody = page(&b, &jar_c, None);
+    read(&mut nobody, &jar_c);
+    assert_eq!(nobody.pane_layouts.list, []);
+    assert!(nobody.pane_layouts.note.clone().is_some_and(|(_, bad)| bad));
+
+    // The same name again replaces; a name with a slash deletes by its path.
+    let mut other = mine.clone();
+    other.trend = !other.trend;
+    // (Names match without regard to the case of ASCII letters.)
+    alice.pane_layouts.keep(&name.to_ascii_uppercase(), &other);
+    read(&mut alice, &jar_a);
+    assert_eq!(alice.pane_layouts.list, [(name.to_ascii_uppercase(), other)]);
+    alice.pane_layouts.forget(name);
+    read(&mut alice, &jar_a);
+    assert_eq!(alice.pane_layouts.list, []);
+    read(&mut bob, &jar_b);
+    assert_eq!(bob.pane_layouts.list, []);
+    // Deleting what is gone already is no error.
+    alice.pane_layouts.forget(name);
+    for _ in 0..4 {
+        pump(&b, &jar_a, &mut alice, &ctx, tick());
+    }
+    assert!(alice.pane_layouts.note.clone().is_some_and(|(_, bad)| !bad));
+}
+
+/// What a box answers is read as a file is: a list that is not one says
+/// so and keeps the last good one, and a hostile one is held to the rules.
+#[test]
+fn a_boxs_pane_layouts_answer_is_read_as_hostile() {
+    use crate::box_projects::{Answer, PCall};
+    use crate::pane_layout::{FORMAT, MAX_LAYOUTS, OnBox};
+    let answer = |status: u16, body: &str| Answer {
+        status,
+        retry_after: None,
+        body: body.into(),
+    };
+    let mut o = OnBox::default();
+    o.want();
+    o.want();
+    assert_eq!(o.poll().len(), 1, "asked once while the popup is open");
+    let good = format!(
+        r#"{{"format":"{FORMAT}","layouts":[{{"name":"A"}},{{"name":"a"}},{{"name":"B","left":["nope","code"]}}]}}"#
+    );
+    o.answer(&PCall::PaneLayouts, &answer(200, &good));
+    let names: Vec<&str> = o.list.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["A", "B"], "a name once");
+    assert_eq!(o.note, None);
+    for (status, body) in [
+        (200, "<html>a proxy's page</html>"),
+        (200, r#"{"format":"helmsman-pane-layouts 9","layouts":[]}"#),
+        (500, "oops"),
+        (0, "connection refused"),
+        (401, r#"{"error":"sign in"}"#),
+    ] {
+        o.answer(&PCall::PaneLayouts, &answer(status, body));
+        assert!(o.note.take().is_some_and(|(_, bad)| bad), "{status} {body}");
+        assert_eq!(o.list.len(), 2, "the last good list stays");
+    }
+    let many: Vec<String> = (0..MAX_LAYOUTS + 9)
+        .map(|k| format!(r#"{{"name":"n{k}"}}"#))
+        .collect();
+    let body = format!(r#"{{"format":"{FORMAT}","layouts":[{}]}}"#, many.join(","));
+    o.answer(&PCall::PaneLayouts, &answer(200, &body));
+    assert_eq!(o.list.len(), MAX_LAYOUTS);
+    // A change answered: the list is read again; a refusal is said.
+    let _ = o.poll();
+    o.answer(&PCall::KeepPaneLayout("A".into()), &answer(200, "{}"));
+    o.want();
+    assert_eq!(o.poll().len(), 1);
+    o.answer(
+        &PCall::KeepPaneLayout("A".into()),
+        &answer(507, r#"{"error":"the box keeps at most 32"}"#),
+    );
+    let (note, bad) = o.note.clone().unwrap();
+    assert!(
+        bad && note.contains("at most 32") && note.starts_with("A was not kept"),
+        "{note}"
+    );
+}

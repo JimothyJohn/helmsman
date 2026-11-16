@@ -95,6 +95,8 @@ pub struct BoxView {
     desk: crate::desk::Keeper,
     /// Keeps it on the box too, for whoever is signed in.
     pub on_box: crate::desk::OnBox,
+    /// The pane layouts the box keeps (`crate::pane_layout`).
+    pub pane_layouts: crate::pane_layout::OnBox,
     /// The desk as it was before the page loaded, for the App to take
     /// the screen and the sign-in name from (once).
     pub restored: Option<crate::desk::Desk>,
@@ -361,6 +363,7 @@ impl BoxView {
             decided: std::collections::BTreeMap::new(),
             desk: crate::desk::Keeper::load(Box::new(crate::sim_projects::MemStorage::default())).0,
             on_box: crate::desk::OnBox::default(),
+            pane_layouts: crate::pane_layout::OnBox::default(),
             restored: None,
             desk_screen: None,
             desk_user: String::new(),
@@ -395,6 +398,9 @@ impl BoxView {
                     if let Some(d) = self.on_box.answer(&call, &a, self.desk.saved_at()) {
                         self.adopt(d);
                     }
+                }
+                call @ (PCall::PaneLayouts | PCall::KeepPaneLayout(_) | PCall::DropPaneLayout(_)) => {
+                    self.pane_layouts.answer(&call, &a);
                 }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
@@ -441,6 +447,7 @@ impl BoxView {
         let mut reqs = self.projects.poll();
         reqs.extend(self.trend.poll());
         reqs.extend(self.on_box.poll());
+        reqs.extend(self.pane_layouts.poll());
         self.send(ctx, reqs);
         self.downloads();
         let mut fresh = false;

@@ -156,6 +156,13 @@ pub enum PCall {
     /// `POST /api/projects/{name}/zip`: the project a spec makes, whole;
     /// answered by the view (`box_spec.rs`).
     SpecProject(String),
+    /// `GET /api/pane-layouts`: the pane layouts the box keeps (answered
+    /// by `pane_layout::OnBox`).
+    PaneLayouts,
+    /// `PUT /api/pane-layouts`: one of them kept, by name.
+    KeepPaneLayout(String),
+    /// `DELETE /api/pane-layouts/{name}`.
+    DropPaneLayout(String),
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -420,7 +427,7 @@ pub struct Restore {
     pub drafts: BTreeMap<String, BTreeMap<String, crate::desk::Draft>>,
 }
 
-fn error_of(a: &Answer) -> String {
+pub(crate) fn error_of(a: &Answer) -> String {
     serde_json::from_str::<Json>(&a.body)
         .ok()
         .and_then(|j| j["error"].as_str().map(str::to_string))
@@ -1922,6 +1929,9 @@ impl BoxProjects {
             | PCall::VendorFile
             | PCall::SpecPdf(_)
             | PCall::SpecProject(_)
+            | PCall::PaneLayouts
+            | PCall::KeepPaneLayout(_)
+            | PCall::DropPaneLayout(_)
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {
