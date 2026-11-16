@@ -6,6 +6,13 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Open questions for Nick
 
+- [ ] **Does the playground's design step get a key of its own?** — your interview answer on 2026-11-15 put the design step on the playground too, capped. Measured that night: one large design is about 78,000 output tokens on Opus 5.5, about $1.60, and the free chat's key is capped near $2 a day. On that key a single stranger's design uses up the day and the free chat then answers as closed for everyone until the cap resets (the 15-minute pause, again and again). Recommended: a second key for the design entry alone with its own daily cap (say $3: two large designs or many small ones), checked by `put-demo-key.sh` like the first, plus an allowance per address (6 design turns an hour; a large design is 2 or 3 turns). When the design key is spent only the design entry says so and the chat carries on. The other way is one key with a higher cap, which leaves the chat exposed to the same starvation. Either way two more things come with it, both in the relay: the free chat's function allows 120 s a turn and a design turn ran 472 s, so its Timeout rises (deploy chain, a draft PR); and a design that continues over several turns sends the model's reasoning back, which the free chat's text-only requests cannot carry, so the design entry gets its own request shape and a larger body cap. Nothing of the playground's design entry is built until this is answered; boxes do not depend on it.
+  options: own key, $3 a day (recommended) | own key, another cap | one key, higher cap | no design step on the playground for now
+  result: the playground's design entry is built on that key, or the card is dropped
+  id: design-step-playground-key
+  asked: 2026-11-15
+  by: design-step session
+
 ## Needs your hands
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — Why it matters: a node in a cabinet is powered by its Ethernet cable alone, and today no run has proven that. The PoE module turns the cable's 48 V into the board's supply; if its output is not isolated from the cable side, a USB cable plugged in at the same time ties the laptop's ground to the PoE supply's return, and current can flow through the laptop's USB port. Nobody knows yet which it is, so `scripts/node-flash.sh` makes you pull Ethernet before every USB flash. One measurement settles it: the prompt goes away, or becomes a hard rule. the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
@@ -386,7 +393,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **The design step: a strong model designs the system, the everyday agent builds it** — Nick, 2026-11-15: "I need Opus 5.5 equivalent jumping in for hardcore system designs in one-shot for you to build from. Something so absurd that more abstraction will need to be added." Interview the same day: a design step the engineer asks for (not an escalation the cheap model decides, not the whole chat on the strong model); Opus 5.5 on the Anthropic key behind the relay's `best` tier; reachable from boxes with a token and, capped, from the playground. The session's own call: the playground runs it on the free chat's own capped key, never the Anthropic key, so the hard bound on public spend stays. Built: the relay profile `helmsman/design-v1` (agent-relay #39). It answers with no program: Machine, Signals, Parts (each with its ST interface and state table), Faults, numbered testable Requirements, a Build order whose steps name the requirements they must pass, Open questions with the value assumed. The dialect, the project, its I/O and its requirement tests go in the request as `<dialect>`, `<project>`, `<io_devices>`, `<requirement_tests>`. A big design takes several turns: after an answer that stopped at max_tokens the client sends the one word `Continue` with the assistant turn (its thinking block included) and the answer carries on from the exact character. Measured on a bottling line: 472 s for the first turn, 230 s for the second, about 78,000 output tokens, 11 parts, 81 requirements, 19 build steps. Left, each its own card below: the canvas and the box (`design-step-canvas`, `design-step-box`), the playground's capped profile and a daily budget per box (relay), the deploy (`design-step-deploy`).
+- [ ] **The design step: a strong model designs the system, the everyday agent builds it** — Nick, 2026-11-15: "I need Opus 5.5 equivalent jumping in for hardcore system designs in one-shot for you to build from. Something so absurd that more abstraction will need to be added." Interview the same day: a design step the engineer asks for (not an escalation the cheap model decides, not the whole chat on the strong model); Opus 5.5 on the Anthropic key behind the relay's `best` tier; reachable from boxes with a token and, capped, from the playground. The session's own call: the playground runs it on the free chat's own capped key, never the Anthropic key, so the hard bound on public spend stays. Built: the relay profile `helmsman/design-v1` (agent-relay #39). It answers with no program: Machine, Signals, Parts (each with its ST interface and state table), Faults, numbered testable Requirements, a Build order whose steps name the requirements they must pass, Open questions with the value assumed. The dialect, the project, its I/O and its requirement tests go in the request as `<dialect>`, `<project>`, `<io_devices>`, `<requirement_tests>`. A big design takes several turns: after an answer that stopped at max_tokens the client sends the one word `Continue` with the assistant turn (its thinking block included) and the answer carries on from the exact character. Measured on a bottling line: 472 s for the first turn, 230 s for the second, about 78,000 output tokens, 11 parts, 81 requirements, 19 build steps. Since built: the page's half of the contract (`crates/helmsman-canvas/src/design.rs`, #465: the request, Continue and join, the reader, the brief for one build step, tested against the recorded bottling line and lamp), the box route (`POST /api/design`, #467) and the relay's tier grant (agent-relay #41: a token needs `--tier-daily-tokens N --tiers best` to be served a profile off the default tier, refused past that many tokens a day; `agent-relay-admin grant <client> ...` amends a live token in place). Left: the Agent tab entry (`design-step-canvas`), the playground (`design-step-playground-key`), the deploy (`design-step-deploy`).
   result: an engineer describes a whole machine, reads its design, and the Agent builds it step by step against the design's requirements
   est: 4d
   difficulty: high
@@ -394,7 +401,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-15
   by: design-step session
 
-- [ ] **Design step on the canvas: ask for a design, read it, build from it** — a new `crates/helmsman-canvas/src/design.rs` (instruct.rs, claude.rs and agent_ladder_tests.rs belong to the agent-speed session until its PRs land): the request with the four tagged blocks, the `Continue` loop on a max_tokens stop (keep the assistant turn's blocks as they came, thinking included), a parser for the answer's headings (tolerant: a missing heading is shown as it is, never guessed), the design kept with the project as `design.md` and shown readable at the panel's default width, and its Build order handed to the steps run (`steps.rs`), each step carrying its part's section and the requirements it names. Today a plan is at most 6 steps on one file (`MAX_STEPS`) and the bottling line's design has 19 steps over 11 parts: that limit, and one PROGRAM per project, are what the abstraction work has to lift; until then the step run takes the design in batches and says so. The page hides the design entry when the relay does not serve it.
+- [ ] **Design step on the canvas: ask for a design, read it, build from it** — done in #465: `crates/helmsman-canvas/src/design.rs` (`request`, `CONTINUE`, `join`, `parse`, `Design::problems`, `Design::step_brief`), registered with an expect on dead_code because nothing calls it yet. Left, once the agent-speed work on instruct.rs and claude.rs has landed: the Agent tab entry (on a box it posts to `POST /api/design` and posts `{"session"}` again while `done.more` is true; on the page it needs the playground's design entry, card `design-step-playground-key`), the thinking summary shown while a turn runs (a turn can take 8 minutes), the design kept with the project as `design.md` and shown readable at the panel's default width, `Design::problems` shown before Build is offered, and its Build order handed to the steps run (`steps.rs`) with `step_brief` as each step's instruction. Today a plan is at most 6 steps on one file (`MAX_STEPS`) and the bottling line's design has 19 steps over 11 parts: that limit, and one PROGRAM per project, are what the abstraction work has to lift; until then the step run takes the design in batches and says so. The page hides the design entry when the relay does not serve it.
   needs: the relay serving design-v1 (`design-step-deploy`) to try it live; fixtures of the bottling-line turns for tests (the session's scratchpad has them; hold them as test data)
   result: the Agent tab has a design entry; a design is a project file; Build runs its steps
   depends: design-step
@@ -404,7 +411,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-15
   by: design-step session
 
-- [ ] **Design step on a box: the box asks the relay for the design profile** — `POST /api/chat` reaches one agent profile today (`--relay-agent`, default v7). A design request goes to `helmsman/design-v1` with the box's dialect, its project files, `list_devices` output (wired devices included) and its requirement tests as the tagged blocks; the stream is forwarded as it is, and a `Continue` is one more request. An unknown-profile answer from the relay (it has no `best` tier) reaches the page as "the design step is not available on this relay", not as an error. The relay's function allows 600 s a turn: the box's own request timeout must not be shorter.
+- [x] **Design step on a box: the box asks the relay for the design profile** — `POST /api/chat` reaches one agent profile today (`--relay-agent`, default v7). A design request goes to `helmsman/design-v1` with the box's dialect, its project files, `list_devices` output (wired devices included) and its requirement tests as the tagged blocks; the stream is forwarded as it is, and a `Continue` is one more request. An unknown-profile answer from the relay (it has no `best` tier) reaches the page as "the design step is not available on this relay", not as an error. The relay's function allows 600 s a turn: the box's own request timeout must not be shorter.
   needs: nothing to build; the relay deployed with a `best` tier to try it
   result: `--relay-design-agent design-v1` (or the default once deployed) and a design route the box page uses
   depends: design-step
@@ -414,7 +421,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-15
   by: design-step session
 
-- [ ] **Deploy the relay with a `best` tier** — the live relay (stack `agent-relay`, checked 2026-11-15 with `aws cloudformation describe-stacks`) has one model, `deepseek/deepseek-v4.1-flash`, and no `Tiers` parameter; its `main` is 29 commits behind `dev` (tiers, #24 on, are not on it). The Anthropic key is in Secrets Manager already (`agent-relay/anthropic-api-key`, 2026-11-04). Order: agent-relay #39 lands on dev; your merge of the relay's dev into main; then from the deploy checkout `SECOND_UPSTREAM_SECRET=agent-relay/anthropic-api-key RELAY_TIERS='{"upstreams":{"or":{"kind":"openrouter"},"ant":{"kind":"anthropic"}},"tiers":{"default":{"upstream":"or","model":"deepseek/deepseek-v4.1-flash"},"best":{"upstream":"ant","model":"claude-opus-5-5"}}}' ./scripts/deploy.sh`. Without the tiers the same build still starts and leaves design-v1 out (it says so in its log). A design turn ran 472 s against the function's 600 s Timeout; the free chat's function allows 120 s, which no design turn fits, so its Timeout rises with the playground's design profile (a draft PR in the relay, deploy chain). Cost seen: about 78,000 output tokens for a large design, $20 a million on Opus 5.5.
+- [ ] **Deploy the relay with a `best` tier** — the live relay (stack `agent-relay`, checked 2026-11-15 with `aws cloudformation describe-stacks`) has one model, `deepseek/deepseek-v4.1-flash`, and no `Tiers` parameter; its `main` is 29 commits behind `dev` (tiers, #24 on, are not on it). The Anthropic key is in Secrets Manager already (`agent-relay/anthropic-api-key`, 2026-11-04). Order: agent-relay #39 lands on dev; your merge of the relay's dev into main; then from the deploy checkout `SECOND_UPSTREAM_SECRET=agent-relay/anthropic-api-key RELAY_TIERS='{"upstreams":{"or":{"kind":"openrouter"},"ant":{"kind":"anthropic"}},"tiers":{"default":{"upstream":"or","model":"deepseek/deepseek-v4.1-flash"},"best":{"upstream":"ant","model":"claude-opus-5-5"}}}' ./scripts/deploy.sh`. Then each box that should have the design step gets the grant on its live token, no new token: `RELAY_TABLE=agent-relay cargo run -q -p agent-relay-aws --bin agent-relay-admin -- grant <client> --tier-daily-tokens 2000000 --tiers best` (agent-relay #41; 2,000,000 tokens a day is about 25 large designs, at most about $40). Without the tiers the same build still starts and leaves design-v1 out (it says so in its log). First live turn: watch that the stream does not go silent while the model thinks (summarized thinking is there to prevent it; the trials ran through OpenRouter, never Anthropic's own API), and the DynamoDB path of `grant` has only been read, not run (no Docker for `make test-integration` that night). A design turn ran 472 s against the function's 600 s Timeout; the free chat's function allows 120 s, which no design turn fits, so its Timeout rises with the playground's design profile (a draft PR in the relay, deploy chain). Cost seen: about 78,000 output tokens for a large design, $20 a million on Opus 5.5.
   needs: your merge of agent-relay dev into main, then the deploy (a hand-off script will carry the one line)
   result: `GET /v1/agents` on the live relay lists helmsman/design-v1 served by claude-opus-5-5
   depends: design-step
@@ -683,15 +690,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   by: claude-session
   status: ready
 
-- [ ] **Deleting a statement that made lowering forget a variable is refused, and the property test fails on it** — `x := a; CASE … f(q => x) … END_CASE; REPEAT … UNTIL x END_REPEAT;`: with the CASE there, `UNTIL x` is a fresh read of `x` (an arm wrote it); without it, the same `UNTIL x` is wired from the write before the CASE. `edit::DeleteStmt` sees a statement that stays change and refuses with "the statements that stay", and `every_offered_rewire_argument_delete_and_rename_is_exact_checked_and_undoable` does not count that refusal as honest. Present on dev before the n-input blocks; CI's gate failed on it once on #456 (run 43799804478) and passed on a rerun. Repro: add `cc befa1eaf242960c577f6a3d948482297221b7f6a44ec5d42b068865b22962259` to tests/props.proptest-regressions. Decide which is right: the delete is allowed (a read that only changes where it is wired from is not a change), or the refusal is honest and gets its own reason.
-  result: the gate cannot fail on a random seed for this, and the delete does what the decision says
-  est: 3h
-  difficulty: med
-  id: delete-stmt-forgotten-write
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
   result: building new logic from the diagram, not only changing it
   notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
@@ -705,24 +703,24 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
 
 ### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
 
-Order: chips, then the fold layer, then everything that folds. Gates,
+Built: n-input gates, the fold layer (`helmsman_diagram::fold`) with the canvas drawing it, and the comparison with its literal. Each card below is a rule that makes folds, or a renderer for one. Gates,
 chips and idioms are on as the diagram opens; arms, sections and output
 cards fold on request and the choice is kept in `diagram.layout`.
 
-- [ ] **Condition chips: a comparison against a constant is one block** — `level > 80.0` is three blocks today (read, constant, operator). One block labelled with the comparison, lit when true; `x >= lo AND x <= hi` on one variable reads as one range block.
-  result: a condition reads as the sentence the engineer would say, and takes one block
-  est: 5h
+- [ ] **Range block: one variable between two bounds** — `x >= lo AND x <= hi` on one variable as one block (`lo .. hi`), a rule beside `fold::chips` (the comparison with a literal is built: `> 80.0`, edited in place).
+  result: a window on a value reads as one condition
+  est: 3h
   difficulty: med
-  id: diagram-chips
+  id: diagram-range
   asked: 2026-11-15
   by: claude-session
   status: ready
 
-- [ ] **The fold layer: a set of blocks shown as one, opened in place** — a view over `Diagram` (lowering, the trace mapping and the edit spans untouched): a fold names its blocks, the pins are the wires that cross its edge, its title and live state come from what it holds. The canvas draws a folded set as one block, opens it by a double click and shows where you are in the breadcrumb the function block instances use. Folded or open is kept per fold in the arrangement.
-  result: one mechanism every card below uses to hide detail
-  est: 1d
-  difficulty: high
-  id: diagram-fold
+- [ ] **Keep opened folds and moved folds in `diagram.layout`** — the canvas carries them across a redeploy only; a reload forgets them. Fold keys (`Fold::key`) are the names to store.
+  result: a diagram opens the way it was left
+  est: 3h
+  difficulty: low
+  id: diagram-fold-persist
   asked: 2026-11-15
   by: claude-session
   status: ready
@@ -731,7 +729,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: a long IF reads as its conditions and what each one sets
   est: 4h
   difficulty: med
-  depends: diagram-fold
   id: diagram-fold-arms
   asked: 2026-11-15
   by: claude-session
@@ -741,7 +738,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the author's own names for the parts of a program are the top level of its diagram
   est: 5h
   difficulty: med
-  depends: diagram-fold
   id: diagram-fold-sections
   asked: 2026-11-15
   by: claude-session
@@ -751,7 +747,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the standard circuits show under their names
   est: 1d
   difficulty: high
-  depends: diagram-fold
   id: diagram-idioms
   asked: 2026-11-15
   by: claude-session
@@ -771,7 +766,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: the top of a program's diagram answers "what drives each output"
   est: 6h
   difficulty: med
-  depends: diagram-fold
   id: diagram-output-cards
   asked: 2026-11-15
   by: claude-session
@@ -781,7 +775,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   result: an interlock reads as a table and says what is missing
   est: 1d
   difficulty: high
-  depends: diagram-fold
   id: diagram-permissive-table
   asked: 2026-11-15
   by: claude-session

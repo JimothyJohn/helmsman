@@ -55,7 +55,13 @@ impl Harness {
             .iter()
             .find(|n| f(&n.kind, &n.text))
             .expect("the block");
-        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+        // Where it is drawn (a literal folded into its comparison is that
+        // one block), in its header: an input's control sits under it.
+        let r = v.block_on_screen(n.id).expect("the block is drawn");
+        Pos2::new(
+            r.center().x,
+            r.min.y + (r.height() / 2.0).min(10.0 * v.cams[v.scope].zoom),
+        )
     }
 
     /// The screen position of input `k` of the first block computing `text`.
@@ -67,8 +73,7 @@ impl Harness {
             .iter()
             .find(|n| n.text == text && !matches!(n.kind, NodeKind::Write { .. }))
             .unwrap_or_else(|| panic!("no block computing {text}"));
-        let (x, y) = in_port(n, k);
-        v.cams[v.scope].to_screen(x, y)
+        v.pin_on_screen(n.id, k).expect("the pin is drawn")
     }
 
     fn op(&self, op: &str) -> Pos2 {
@@ -528,13 +533,22 @@ fn a_project_of_several_program_files_is_not_edited_from_the_diagram() {
 
 #[test]
 fn the_menu_offers_only_what_applies() {
-    let mut h = Harness::editing(SRC);
     // A constant has no operator, no rename and no bubble.
-    let at = h.constant("10");
+    let mut h = Harness::editing(&SRC.replace("lamp := count > 10;", "lamp := count > 10;\nlimit := 7;"));
+    let at = h.constant("7");
     h.right_click(at);
     assert!(h.has("diagram menu value"));
     assert!(h.has("diagram menu connect"));
     assert!(!h.has("diagram menu operator"));
+    assert!(!h.has("diagram menu rename"));
+    // A literal compared against is one block with its comparison
+    // (`> 10`): the value, a variable in its place, and the operator.
+    let mut h = Harness::editing(SRC);
+    let at = h.constant("10");
+    h.right_click(at);
+    assert!(h.has("diagram menu value"));
+    assert!(h.has("diagram menu connect"));
+    assert!(h.has("diagram menu operator"));
     assert!(!h.has("diagram menu rename"));
     // A variable has a rename and no operator.
     let at = h.block(|k, _| matches!(k, NodeKind::Read { path } if path == "COUNT"));
