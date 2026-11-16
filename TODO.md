@@ -634,6 +634,15 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   by: claude-session
   status: ready
 
+- [ ] **Deleting a statement that made lowering forget a variable is refused, and the property test fails on it** — `x := a; CASE … f(q => x) … END_CASE; REPEAT … UNTIL x END_REPEAT;`: with the CASE there, `UNTIL x` is a fresh read of `x` (an arm wrote it); without it, the same `UNTIL x` is wired from the write before the CASE. `edit::DeleteStmt` sees a statement that stays change and refuses with "the statements that stay", and `every_offered_rewire_argument_delete_and_rename_is_exact_checked_and_undoable` does not count that refusal as honest. Present on dev before the n-input blocks; CI's gate failed on it once on #456 (run 43799804478) and passed on a rerun. Repro: add `cc befa1eaf242960c577f6a3d948482297221b7f6a44ec5d42b068865b22962259` to tests/props.proptest-regressions. Decide which is right: the delete is allowed (a read that only changes where it is wired from is not a change), or the refusal is honest and gets its own reason.
+  result: the gate cannot fail on a random seed for this, and the delete does what the decision says
+  est: 3h
+  difficulty: med
+  id: delete-stmt-forgotten-write
+  asked: 2026-11-15
+  by: claude-session
+  status: ready
+
 - [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
   result: building new logic from the diagram, not only changing it
   notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
