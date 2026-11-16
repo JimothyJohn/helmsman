@@ -334,11 +334,12 @@ impl PlaygroundView {
         self.tests = crate::requirements::Results::from_verdicts(&v);
     }
 
-    /// The gate "Use this code" and Deploy share: why the project (with
-    /// `extra` added or replacing a file, for a candidate) must not land,
-    /// if a requirement test is red. Runs the tests on the candidate and,
-    /// when it is the project as it stands, keeps the results.
-    fn tests_refuse(&mut self, extra: Option<(&str, &str)>) -> Option<String> {
+    /// What "Use this code" and Deploy say of the project's requirement
+    /// tests (with `extra` added or replacing a file, for a candidate):
+    /// the red ones, named. A warning, never a refusal. Runs the tests on
+    /// the candidate and, when it is the project as it stands, keeps the
+    /// results.
+    fn tests_warn(&mut self, extra: Option<(&str, &str)>) -> Option<String> {
         let settings = self.test_settings();
         let results = match extra {
             None => {
@@ -367,7 +368,7 @@ impl PlaygroundView {
                 ))
             }
         };
-        results.refusal()
+        results.warning()
     }
 
     /// Checks a PROGRAM answer (`text`) landing as `main.st` of the saved
@@ -375,15 +376,18 @@ impl PlaygroundView {
     /// own files with them, compiled and its requirement tests run, as the
     /// project will stand. The scenarios come back named free among the
     /// project's files (they were named free among the files of the open
-    /// example the answer was checked against). Why not, if it must not land.
+    /// example the answer was checked against), with what there is to say
+    /// of a red test (a warning). `Err`: it does not compile there, so it
+    /// must not land.
+    #[allow(clippy::type_complexity)]
     fn program_into(
         &self,
         name: &str,
         text: &str,
         scenarios: &[(String, String)],
-    ) -> Result<Vec<(String, String)>, String> {
+    ) -> Result<(Vec<(String, String)>, Option<String>), String> {
         let Some(target) = self.proj.saved.get(name) else {
-            return Ok(scenarios.to_vec());
+            return Ok((scenarios.to_vec(), None));
         };
         let mut files = target.0.clone();
         files.insert(helmsman_project::MAIN.to_string(), text.to_string());
@@ -416,10 +420,10 @@ impl PlaygroundView {
         }
         let plant = files.get(helmsman_project::PLANT).map_or("", String::as_str);
         let verdicts = helmsman_sim::iec::run_all(&plan, self.test_settings(), plant);
-        match crate::requirements::Results::from_verdicts(&verdicts).refusal() {
-            Some(why) => Err(format!("{why} (the program would replace main.st of {name})")),
-            None => Ok(named),
-        }
+        Ok((
+            named,
+            crate::requirements::Results::from_verdicts(&verdicts).warning(),
+        ))
     }
 
     /// Loads the open project's build into the session, compiled and
@@ -503,26 +507,25 @@ impl PlaygroundView {
         match a {
             Act::UseAnswer { name, text, save } => {
                 // A block answer lands in the open project: the project's
-                // requirement tests must stay green with it in. (A PROGRAM
-                // answer opens a new project, which has no tests yet.)
+                // requirement tests run with it in, and a red one is said.
+                // (A PROGRAM answer opens a new project, which has no
+                // tests yet.)
+                let mut red = None;
                 if !text.to_ascii_uppercase().contains("PROGRAM ") {
                     let file = self.proj.free_file(&format!("{name}.st"));
-                    if let Some(why) = self.tests_refuse(Some((&file, &text))) {
-                        self.notice = Some(why.clone());
-                        self.log.error(
-                            self.session.now_ms as f64 / 1000.0,
-                            format!("Use this code: {why}"),
-                        );
-                        return;
-                    }
+                    red = self.tests_warn(Some((&file, &text)));
                 }
                 // A PROGRAM answer into a project that exists replaces its
-                // main.st: that project's own tests must hold with it, and
-                // the scenarios take names free there.
+                // main.st: it must compile with that project's files, its
+                // tests run with it, and the scenarios take names free
+                // there.
                 let mut scenarios = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
                 if text.to_ascii_uppercase().contains("PROGRAM ") && self.proj.saved.contains_key(&name) {
                     match self.program_into(&name, &text, &scenarios) {
-                        Ok(named) => scenarios = named,
+                        Ok((named, warn)) => {
+                            scenarios = named;
+                            red = warn;
+                        }
                         Err(why) => {
                             self.notice = Some(why.clone());
                             self.log.error(
@@ -573,8 +576,15 @@ impl PlaygroundView {
                 } else {
                     String::new()
                 };
+                let red = red.map_or_else(String::new, |why| {
+                    self.log.warning(
+                        self.session.now_ms as f64 / 1000.0,
+                        format!("Use this code: {why}"),
+                    );
+                    format!(" {why}")
+                });
                 self.notice = Some(format!(
-                    "{} opened from the Agent's answer; Deploy runs it.{size}",
+                    "{} opened from the Agent's answer; Deploy runs it.{size}{red}",
                     self.proj.current
                 ));
             }
@@ -638,15 +648,8 @@ impl PlaygroundView {
     /// first put in the one layout. A diagram edit deploys unformatted,
     /// so the file holds the splice and nothing else.
     fn deploy_as(&mut self, format: bool) {
-        // A red requirement test refuses the deploy, naming it.
-        if let Some(why) = self.tests_refuse(None) {
-            self.notice = Some(why.clone());
-            self.log.error(
-                self.session.now_ms as f64 / 1000.0,
-                format!("Deploy of {} refused. {why}", self.proj.open),
-            );
-            return;
-        }
+        // A red requirement test is said with the deploy, which goes on.
+        let red = self.tests_warn(None);
         // What runs is what the files say, in the one layout.
         if format && self.proj.format() > 0 {
             self.edited(f64::NEG_INFINITY);
@@ -671,11 +674,17 @@ impl PlaygroundView {
                 carried.describe()
             );
             self.running_notice = Some(note.clone());
-            self.notice = Some(note);
+            self.notice = Some(red.as_ref().map_or_else(|| note.clone(), |why| format!("{note} {why}")));
             self.log.info(
                 self.session.now_ms as f64 / 1000.0,
                 format!("Deployed {}: running in this page{program}.", self.proj.open),
             );
+            if let Some(why) = red {
+                self.log.warning(
+                    self.session.now_ms as f64 / 1000.0,
+                    format!("Deployed {} with a test red. {why}", self.proj.open),
+                );
+            }
         } else {
             self.notice = Some(format!(
                 "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
@@ -1440,6 +1449,8 @@ impl PlaygroundView {
         // A refusal is an error: the Messages count it in red and open
         // (Nick, 2026-11-13: errors go there, not in the Agent tab).
         match o.kind {
+            // An update with checks that did not pass is a warning.
+            Kind::Applied if !o.problems.is_empty() => self.log.warning(at, line),
             Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
             Kind::Refused | Kind::Failed => self.log.error(at, line),
         }

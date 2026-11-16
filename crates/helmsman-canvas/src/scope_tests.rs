@@ -591,16 +591,21 @@ mod in_the_page {
             v.confirm_program_name();
         };
 
-        // A program that breaks mine's test_lamp is refused, mine untouched.
+        // A program that breaks mine's test_lamp lands (a red test refuses
+        // nothing), and the note names the test.
         let mut v = mine();
-        let before = v.proj.saved["mine"].0.clone();
         name_it(
             &mut v,
             &LAMP.replace("lamp := start;", "lamp := start AND NOT start;"),
         );
         let why = v.notice.clone().unwrap_or_default();
-        assert!(why.contains("test_lamp") && why.contains("mine"), "{why}");
-        assert_eq!(v.proj.saved["mine"].0, before, "mine's files are as they were");
+        assert!(
+            why.contains("opened") && why.contains("Requirement test test_lamp") && why.contains("is red"),
+            "{why}"
+        );
+        assert_eq!(v.proj.open, "mine");
+        assert!(v.proj.files["main.st"].contains("start AND NOT start"));
+        assert_eq!(v.proj.files["test_lamp.st"], FOLLOWS, "mine's own test is intact");
 
         // One that keeps them green lands; the scenario does not overwrite mine's test_lamp.
         let mut v = mine();
@@ -710,15 +715,15 @@ mod in_the_page {
         assert!(v.log.iter().any(|m| m.text.contains("main.st is unchanged")));
         assert_eq!(v.proj.files, before);
         assert_eq!(v.proj.revisions().len(), revs);
-        // A red requirement test refuses it too, naming the test.
+        // Code that does not compile is refused too.
         instruct(
             &mut v,
             "invert",
-            &[&st(&LAMP.replace("lamp := start;", "lamp := NOT start;"))],
+            &[&st(&LAMP.replace("lamp := start;", "lamp := NOT strat;"))],
         );
         let o = v.instruct.outcome.clone().unwrap();
         assert_eq!(o.kind, Kind::Refused);
-        assert!(o.problems.join(" ").contains("test_lamp"), "{o:?}");
+        assert!(o.problems.join(" ").contains("does not compile"), "{o:?}");
         assert_eq!(v.proj.files, before);
         assert_eq!(v.proj.revisions().len(), revs);
         // Another project opened while the Agent worked: not written there.
@@ -737,6 +742,28 @@ mod in_the_page {
         assert_eq!(o.kind, Kind::Failed, "{o:?}");
         assert!(o.status.contains("project changed"), "{o:?}");
         assert_eq!(v.proj.files, other);
+    }
+
+    /// A requirement test the change turns red refuses nothing (Nick,
+    /// 2026-11-15): after the retries the change is written, one revision,
+    /// and the outcome names the test.
+    #[test]
+    fn a_change_that_turns_a_requirement_test_red_is_written_and_names_the_test() {
+        let mut v = mine();
+        let revs = v.proj.revisions().len();
+        instruct(
+            &mut v,
+            "invert",
+            &[&st(&LAMP.replace("lamp := start;", "lamp := NOT start;"))],
+        );
+        let o = v.instruct.outcome.clone().unwrap();
+        assert_eq!(o.kind, Kind::Applied, "{o:?}");
+        assert!(o.status.ends_with("2 checks did not pass."), "the test and the scenario: {o:?}");
+        assert!(o.problems.join(" ").contains("test_lamp is red"), "{o:?}");
+        assert!(v.proj.files["main.st"].contains("lamp := NOT start;"));
+        assert_eq!(v.proj.files["test_lamp.st"], FOLLOWS, "the test is kept as it was");
+        assert_eq!(v.proj.revisions().len(), revs + 1);
+        assert_eq!(v.tests.red().len(), 1, "and it shows red: {:?}", v.tests);
     }
 
     /// The block picked in the diagram is the scope while the diagram is

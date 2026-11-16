@@ -342,7 +342,7 @@ fn an_instruction_updates_the_open_file_keeps_a_revision_and_says_so() {
 }
 
 #[test]
-fn a_red_answer_is_never_written_and_the_tab_says_why() {
+fn an_answer_still_red_after_its_retries_is_written_and_the_tab_says_what_did_not_pass() {
     let mut v = mine();
     let before = v.proj.files.clone();
     let revs = v.proj.revisions().len();
@@ -379,16 +379,49 @@ fn a_red_answer_is_never_written_and_the_tab_says_why() {
     assert_eq!(messages(&v).len(), 5, "both failed answers went back");
     assert!(!v.instruct.busy());
     let o = v.instruct.outcome.clone().unwrap();
-    assert_eq!(o.kind, Kind::Refused);
+    // A red test refuses nothing (Nick, 2026-11-15): the code is written,
+    // the scenario that failed is said and not kept as a test.
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(
+        o.status,
+        "Updated main.st. No scenario checks this change; the requirement test still passes; 1 check did not pass."
+    );
+    assert!(o.problems.iter().any(|p| p.contains("lamp off failed")), "{o:?}");
+    assert!(o.undo.is_some(), "Undo is offered");
+    assert_eq!(v.proj.files.get("main.st"), Some(&commented()));
+    assert!(!v.proj.files.contains_key("test_lamp_off.st"), "a failed scenario is no test");
+    assert_eq!(
+        v.proj.files.len(),
+        before.len(),
+        "nothing but main.st changed: {:?}",
+        v.proj.files.keys()
+    );
+    assert_eq!(v.proj.revisions().len(), revs + 1, "one revision");
+    assert!(v.log.iter().any(|m| m.text.contains("1 check did not pass")));
+}
+
+/// What is still refused: an answer that cannot be taken at all, whatever
+/// its tests say. Code that does not compile is never written.
+#[test]
+fn an_answer_that_does_not_compile_is_never_written() {
+    let mut v = mine();
+    let before = v.proj.files.clone();
+    let revs = v.proj.revisions().len();
+    let broken = st(&commented().replace("lamp := start;", "lamp := start +;"));
+    v.instruct.draft = "say why the lamp is on".into();
+    v.send_instruction(&egui::Context::default());
+    reply(&mut v, &broken);
+    reply(&mut v, &broken);
+    reply(&mut v, &broken);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Refused, "{o:?}");
     assert_eq!(
         o.status,
         "main.st is unchanged: the Agent's answer did not pass its checks in 3 tries."
     );
-    assert!(o.problems.iter().any(|p| p.contains("lamp off failed")), "{o:?}");
-    assert!(o.undo.is_none() && o.why.is_none());
+    assert!(o.problems.iter().any(|p| p.contains("does not compile")), "{o:?}");
     assert_eq!(v.proj.files, before);
     assert_eq!(v.proj.revisions().len(), revs, "no revision");
-    assert!(v.log.iter().any(|m| m.text.contains("main.st is unchanged")));
 }
 
 #[test]
