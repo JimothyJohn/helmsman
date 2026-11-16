@@ -2844,6 +2844,36 @@ canvas" at the end of this section.
   Contract: `tests/live.rs` (the latch's MOTOR is start, stop and the
   seal-in, nothing else), a property that the path holds the assignment
   `explain` names, and a headless canvas test in `st_view.rs`.
+- **Sources of an output** (`signals`, no scan): what a variable finally
+  depends on, for the outputs view. It walks back from every assignment
+  through operators, functions, block calls (their arguments), earlier
+  assignments, other program variables (their assignments in turn) and
+  the gates around each, and names each once: `Input` (nothing sets it:
+  an input, a located bit, a struct field), `Kept` (state the program
+  carries between scans: a variable read before the scan sets it or that
+  reads itself, such as a latch or a step counter; the walk goes on
+  through what sets it) and `Block` (a function block instance whose
+  output is read, named by the instance, with its type; the walk goes on
+  through its arguments). Literals, `VAR CONSTANT`s and loop variables
+  are not sources. Inputs, then kept, then blocks, each in source order
+  of first read; each variable is visited once, so cycles end. Contract:
+  `tests/signals.rs`.
+- **Output cards** (`output_cards.rs`, `Viewer::output_cards`): one card
+  per `VAR_OUTPUT` (set or not) and located output the program sets, in
+  declaration order. A card is a framed block, one to a row at the
+  panel's width: the lamp or value and the name, then wrapped chips in
+  three groups (driven by: signals read from outside; kept: state the
+  program carries; timer, counter: block instances), each chip with its
+  own tooltip. The whole card is the tap target and the tapped one is
+  shown selected while its path is lit. They are the outputs of the I/O
+  tab, in the simulation and on a box. A tap calls `Viewer::show_output`: the program's diagram opens,
+  the "because" variable is the output (what a click on its write
+  gives) and the next frame eases the view (`Cam::frame_within`, the Q/E
+  jump's padding, never closer than the current zoom) to frame the lit
+  blocks of the diagram shown, so a write inside a closed fold frames and
+  lights the fold, which stays closed. Cards never widen the panel: rows
+  wrap, widths are capped, 12 pt for the scroll bar
+  (`ui_tests/outputs.rs`, 50 outputs with long names).
 - **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from

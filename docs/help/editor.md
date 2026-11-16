@@ -222,7 +222,15 @@ redrawn.
   scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
   **I/O**: every input and output with its value and a control for each
-  input the diagram does not show. Hover a row to see where its point is,
+  input the diagram does not show. Each output is a card: its name and
+  value, and under them what it finally depends on, through every
+  statement that sets it: the signals read from outside (driven by), the
+  values the program keeps from one scan to the next (kept) and the
+  timers and counters it reads. An output nothing sets says so.
+  Tap a card and the diagram goes to that output's write with the path
+  that sets it lit, framed with room around it and no closer than you
+  were; a write inside a closed fold lights the fold and leaves it
+  closed. Hover a row to see where its point is,
   on a device or still simulated; right-click it, or the input's or
   output's block in the diagram, for **Assign to device I/O…**, which lists
   the channels of the project's devices with the same direction and type,
