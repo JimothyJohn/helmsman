@@ -677,7 +677,7 @@ impl EditUi {
                                     "Assign to device I/O…",
                                     m.assign.is_ok(),
                                     m.assign.as_ref().err().map_or(
-                                        "Pick a free device channel of the same direction and type. Its line in io.map takes this name.",
+                                        "Pick a free channel of a device, of the same direction and type, added to the project or not yet. Its line in io.map is named for this variable.",
                                         String::as_str,
                                     ),
                                 ) {
@@ -691,7 +691,7 @@ impl EditUi {
                                         "Back to simulated I/O",
                                         back.is_ok(),
                                         back.as_ref().err().map_or(
-                                            "Puts this back on a simulated input or output, and gives the device channel its own name again.",
+                                            "Puts this back on a simulated input or output. The device channel goes back under + Add I/O, as Remove leaves it.",
                                             String::as_str,
                                         ),
                                     )

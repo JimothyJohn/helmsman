@@ -3141,7 +3141,10 @@ fn the_conversation_and_the_device_form_follow_the_person_to_another_screen() {
     let mut studio = mid_conversation(&b, &studio_jar, &ctx);
     let mut f = NewDevice::from_eds("e1213.eds", "[Device]\nProdName = \"E1213\";\n");
     f.endpoint = "192.168.1.60".into();
-    f.points[2].on = true;
+    f.points.push(crate::device_form::PointRow::custom(
+        crate::device_form::Dir::In,
+        2,
+    ));
     f.params = format!("{} password=hunter2-device", f.params);
     studio.devices_ui.adding = Some(f.clone());
 
@@ -4352,8 +4355,8 @@ fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
     h.wait(0.3);
     let back = buffer(&mut h);
     assert!(
-        back.contains("out rio_coil_0 bool rio coil:0 safe=false"),
-        "{back}"
+        !back.contains("coil:0"),
+        "the line goes, as Remove takes it: {back}"
     );
     assert!(back.ends_with("out lamp bool box do:0 safe=false\n"), "{back}");
     assert!(h.bv().projects.dirty());
@@ -4428,4 +4431,98 @@ fn an_operator_sees_the_items_off_and_nothing_is_written() {
     // The reason is the neighbouring items' own: why this person cannot write.
     let why = h.bv().writable().unwrap_err();
     assert!(why.contains("only an engineer"), "{why}");
+}
+
+/// A device added alone: its line and its profile, no signal on it.
+const FRESH_MAP: &str = "\
+device rio device:moxa-iologik-e1213 127.0.0.1
+in  start bool box di:0
+out lamp  bool box do:0 safe=false
+out horn  bool box do:1 safe=false
+";
+
+const E1213: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
+
+#[test]
+fn a_port_goes_to_a_channel_with_no_line_on_the_box_and_the_box_binds_it() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut v = drawn(&b, &jar);
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", SOURCE),
+            ("io.map", FRESH_MAP),
+            ("moxa-iologik-e1213.device", E1213),
+        ],
+    );
+    values(&b, &mut v, 0.0);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.app.chrome.dock(crate::editor::Pane::Io, true);
+    h.wait(0.3);
+    h.press("tab io");
+    h.wait(0.3);
+    // The I/O tab's row: the device has channels though the map has no line.
+    h.right_click(h.rect("io row start").center());
+    h.press("menu assign port");
+    h.wait(0.2);
+    assert!(
+        h.app.chrome.rect("assign channel rio ch:DI-04").is_some(),
+        "a channel with no line"
+    );
+    assert!(
+        h.app.chrome.rect("assign channel rio ch:DO-00").is_none(),
+        "wrong direction"
+    );
+    h.press("assign channel rio ch:DI-04");
+    h.wait(0.3);
+    let got = buffer(&mut h);
+    assert!(got.contains(" start bool rio ch:DI-04"), "{got}");
+    assert!(!got.contains("start bool box"), "{got}");
+    crate::assign::testing::loads_with(&got, E1213);
+    // The lamp, from the diagram's block.
+    let at = {
+        let v = h.bv().view.as_ref().expect("the diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, helmsman_diagram::NodeKind::Write { path } if path.eq_ignore_ascii_case("lamp"))
+            })
+            .expect("the lamp's block");
+        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    };
+    h.right_click(at);
+    h.press("diagram menu assign");
+    h.wait(0.2);
+    h.press("assign channel rio ch:DO-02");
+    h.wait(0.3);
+    let both = buffer(&mut h);
+    assert!(
+        both.contains(" lamp bool rio ch:DO-02") && both.contains("safe=false"),
+        "{both}"
+    );
+    assert!(!both.contains("out lamp  bool box"), "{both}");
+    crate::assign::testing::loads_with(&both, E1213);
+    // Save: the box holds what the page showed; deploy: its signals say so.
+    h.bv().projects.save();
+    settle(&b, &jar, &mut h.bv().projects);
+    assert_eq!(b.json("/api/projects/line/files/io.map")["text"], both.as_str());
+    h.bv().projects.deploy();
+    settle(&b, &jar, &mut h.bv().projects);
+    let deployed = h.bv().projects.deploy.clone();
+    assert!(
+        matches!(deployed, Deploy::Done(_)),
+        "{deployed:?} {:?}",
+        h.bv().projects.diags
+    );
+    wait("start and lamp bound to rio on the box", || {
+        binding_of(&b, "start") == Some(("device".into(), "rio".into(), "ch:DI-04".into()))
+            && binding_of(&b, "lamp") == Some(("device".into(), "rio".into(), "ch:DO-02".into()))
+    });
 }

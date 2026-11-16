@@ -1177,6 +1177,21 @@ impl BoxView {
         {
             self.quick_add(&q);
         }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.add_io_ui(&ui.ctx().clone(), chrome)
+        {
+            self.apply_wiring(&w);
+        }
+        if let Some(crate::devices::DeviceAct::Remove(names)) =
+            self.devices_ui.remove_ui(&ui.ctx().clone(), chrome)
+            && let Some(b) = self
+                .projects
+                .open
+                .as_mut()
+                .and_then(|o| o.bufs.get_mut(helmsman_project::IO_MAP))
+                .filter(|b| b.loaded)
+        {
+            b.text = crate::device_form::remove_signals(&b.text, &names);
+        }
         if self.devices_ui.renaming.is_some() {
             let files = self.loaded_files();
             self.devices_ui.plan_rename(&files);
@@ -1437,6 +1452,7 @@ impl BoxView {
             self.projects.note(why, true);
             return;
         }
+        self.assign_context();
         let ports = self.program_ports();
         let Some(o) = &mut self.projects.open else {
             self.projects.note("Open a project first.", true);
@@ -1453,7 +1469,7 @@ impl BoxView {
             self.projects.note("io.map is not loaded yet.", true);
             return;
         }
-        match a.run(&b.text, &ports) {
+        match a.run(&b.text, &ports, &|d| self.devices_ui.channels_of(d)) {
             Ok(c) => {
                 b.text = c.text;
                 self.projects.note(c.summary, false);
@@ -1467,6 +1483,13 @@ impl BoxView {
     fn assign_context(&mut self) {
         self.devices_ui.map = helmsman_project::iomap::skim(&self.map_text().0);
         self.devices_ui.program = self.program_ports();
+        let files = self.loaded_files();
+        self.devices_ui.set_profiles(
+            files
+                .iter()
+                .filter(|(n, _)| n.ends_with(helmsman_project::DEVICE_EXT))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
     }
 
     fn add_device_line(&mut self, line: &str) {
@@ -2261,7 +2284,16 @@ impl Body for BoxView {
             .as_ref()
             .and_then(|a| a.listening())
             .map(str::to_string);
+        let program = crate::device_form::program_file(refs.iter().copied())
+            .and_then(|f| files.iter().find(|(n, _)| *n == f).map(|(_, t)| t.clone()))
+            .unwrap_or_default();
         self.devices_ui.program = self.program_ports();
+        self.devices_ui.can_declare = !program.is_empty();
+        self.devices_ui.set_profiles(
+            refs.iter()
+                .copied()
+                .filter(|(n, _)| n.ends_with(helmsman_project::DEVICE_EXT)),
+        );
         self.devices_ui.map = map.clone();
         self.devices_ui.eds_files = files
             .iter()
@@ -2317,6 +2349,7 @@ impl Body for BoxView {
                 self.projects.discover();
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.open(d),
+            Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),
             Some(crate::devices::DeviceAct::OpenMap) => {
                 self.projects.open_file(helmsman_project::IO_MAP);
                 chrome.show_code();
@@ -2328,6 +2361,7 @@ impl Body for BoxView {
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
                 | crate::devices::DeviceAct::Delete(_)
+                | crate::devices::DeviceAct::Remove(_)
                 | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
@@ -2474,6 +2508,7 @@ impl Body for BoxView {
             return;
         }
         let t = theme(ui);
+        self.assign_context();
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         // What is wired to each signal, from the map and the library.
         self.devices_ui.map = helmsman_project::iomap::skim(&self.map_text().0);
@@ -2483,8 +2518,7 @@ impl Body for BoxView {
         let wired = crate::wired::by_signal(&self.devices_ui.map);
         // Which signals are the open project's program ports, where each
         // is, and what a right-click on its row offers.
-        let ports = self.program_ports();
-        let menus = crate::assign::menus(&self.devices_ui.map, &ports, &self.assign_write());
+        let menus = self.devices_ui.port_menus(&self.assign_write());
         let map = self.devices_ui.map.clone();
         let mut asks: Vec<(String, crate::assign_ui::PortAsk)> = Vec::new();
         let known = &self.devices_ui.wired;
@@ -2568,6 +2602,7 @@ impl Body for BoxView {
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         self.banner(ui, chrome);
+        self.assign_context();
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         let mut jump = None;
         let mut reads = Vec::new();
@@ -2579,11 +2614,7 @@ impl Body for BoxView {
             .and_then(|o| o.bufs.get(crate::icons::FILE))
             .filter(|b| b.loaded)
             .map(|b| b.text.clone());
-        let menus = crate::assign::menus(
-            &helmsman_project::iomap::skim(&self.map_text().0),
-            &self.program_ports(),
-            &self.assign_write(),
-        );
+        let menus = self.devices_ui.port_menus(&self.assign_write());
         match &mut self.view {
             Some(v) if v.drawable() => {
                 v.icons.update(icons.as_deref());

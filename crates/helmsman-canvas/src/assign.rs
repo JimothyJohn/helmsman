@@ -46,22 +46,30 @@ pub fn point_label(point: &str) -> &str {
     point.strip_prefix("ch:").unwrap_or(point)
 }
 
-/// One signal of a device, as the map lists it.
+/// What names the channels a device has (`DevicesUi::channels_of`: its
+/// profile, or the catalog), as `device_io` reads them; `None` when
+/// nobody knows.
+pub type Chans<'a> = &'a dyn Fn(&str) -> Option<Vec<crate::device_io::Channel>>;
+
+/// A channel of a declared device a port could take: a signal the map
+/// already has on it, or a channel of the device no signal is on yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Channel {
     pub dir: Dir,
-    /// The signal's name now.
-    pub name: String,
+    /// The signal's name now; `None` when the channel has no line yet.
+    pub name: Option<String>,
     pub ty: Option<SigTy>,
     pub device: String,
     pub point: String,
+    /// What the device calls it (`DI-04`).
+    pub what: String,
 }
 
 impl Channel {
     /// `rio, DI-04`.
     #[must_use]
     pub fn label(&self) -> String {
-        format!("{}, {}", self.device, point_label(&self.point))
+        format!("{}, {}", self.device, self.what)
     }
 }
 
@@ -108,28 +116,51 @@ pub fn place_of(map: &MapText, port: &str) -> Place {
     Place::Simulated
 }
 
-/// Every signal of a declared device that no program port names.
+/// Every channel of a declared device a port could take: the signals on
+/// it that no program port names, and the channels it has that no signal
+/// is on yet (`device_io::free`, the Add I/O picker's list).
 #[must_use]
-pub fn free_channels(map: &MapText, ports: &[Port]) -> Vec<Channel> {
-    map.signals
+pub fn free_channels(map: &MapText, ports: &[Port], chans: Chans<'_>) -> Vec<Channel> {
+    let mut out: Vec<Channel> = map
+        .signals
         .iter()
         .filter(|s| !reserved(&s.device))
         .filter(|s| map.devices.iter().any(|d| d.name == s.device))
         .filter(|s| port_named(ports, &s.name).is_none())
         .map(|s| Channel {
             dir: dir_of(&s.dir),
-            name: s.name.clone(),
+            name: Some(s.name.clone()),
             ty: ty_of(&s.ty),
             device: s.device.clone(),
             point: s.point.clone(),
+            what: point_label(&s.point).to_string(),
         })
-        .collect()
+        .collect();
+    for d in &map.devices {
+        if reserved(&d.name) {
+            continue;
+        }
+        let Some(all) = chans(&d.name) else { continue };
+        out.extend(
+            crate::device_io::free(&all, map, &d.name)
+                .into_iter()
+                .map(|c| Channel {
+                    dir: c.dir,
+                    name: None,
+                    ty: Some(c.ty),
+                    device: d.name.clone(),
+                    point: c.point,
+                    what: c.label,
+                }),
+        );
+    }
+    out
 }
 
 /// The free channels `port` can take: the same direction and type.
 #[must_use]
-pub fn channels_for(map: &MapText, ports: &[Port], port: &Port) -> Vec<Channel> {
-    free_channels(map, ports)
+pub fn channels_for(map: &MapText, ports: &[Port], chans: Chans<'_>, port: &Port) -> Vec<Channel> {
+    free_channels(map, ports, chans)
         .into_iter()
         .filter(|c| c.dir == port.dir && c.ty == Some(port.ty))
         .collect()
@@ -143,8 +174,8 @@ fn unassigned(map: &MapText, port: &Port) -> bool {
 /// The program ports that can take the channel on (`device`, `point`):
 /// unassigned, of the channel's direction and type.
 #[must_use]
-pub fn ports_for(map: &MapText, ports: &[Port], device: &str, point: &str) -> Vec<Port> {
-    let Some(c) = free_channels(map, ports)
+pub fn ports_for(map: &MapText, ports: &[Port], chans: Chans<'_>, device: &str, point: &str) -> Vec<Port> {
+    let Some(c) = free_channels(map, ports, chans)
         .into_iter()
         .find(|c| c.device == device && c.point == point)
     else {
@@ -186,12 +217,12 @@ pub struct PortMenu {
 /// The menu of every port. `write` is why the map cannot be written, when
 /// it cannot.
 #[must_use]
-pub fn menus(map: &MapText, ports: &[Port], write: &Result<(), String>) -> Vec<PortMenu> {
+pub fn menus(map: &MapText, ports: &[Port], chans: Chans<'_>, write: &Result<(), String>) -> Vec<PortMenu> {
     ports
         .iter()
         .map(|p| {
             let place = place_of(map, &p.name);
-            let free = channels_for(map, ports, p).len();
+            let free = channels_for(map, ports, chans, p).len();
             let assign = match (&place, write) {
                 (_, Err(why)) => Err(why.clone()),
                 (Place::Device { device, point }, _) => Err(format!(
@@ -248,9 +279,9 @@ impl AssignAct {
     ///
     /// # Errors
     /// A sentence saying why nothing was changed.
-    pub fn run(&self, text: &str, ports: &[Port]) -> Result<Change, String> {
+    pub fn run(&self, text: &str, ports: &[Port], chans: Chans<'_>) -> Result<Change, String> {
         match self {
-            Self::Assign { port, device, point } => assign(text, ports, port, device, point),
+            Self::Assign { port, device, point } => assign(text, ports, chans, port, device, point),
             Self::Back { port } => unassign(text, ports, port),
         }
     }
@@ -341,13 +372,25 @@ fn is_port_line(r: &Row<'_>, port: &Port) -> bool {
         .is_some_and(|s| s.name.eq_ignore_ascii_case(&port.name) && dir_of(s.dir) == port.dir)
 }
 
-/// Assigns `port` to the channel on (`device`, `point`).
+/// Assigns `port` to the channel on (`device`, `point`). A channel the map
+/// has a line for takes the port's name on that line, the rest of the
+/// line as it was. A channel of the device no signal is on yet gets its
+/// line from `device_io::add`, named for the port, after the device's
+/// other lines (`device_form::insert_signals`). The port's simulated line
+/// goes either way.
 ///
 /// # Errors
 /// A sentence saying why nothing was changed: the port or channel is not
 /// there, the direction or type differ, the channel feeds another port, or
 /// the port is on a device already.
-pub fn assign(text: &str, ports: &[Port], port: &str, device: &str, point: &str) -> Result<Change, String> {
+pub fn assign(
+    text: &str,
+    ports: &[Port],
+    chans: Chans<'_>,
+    port: &str,
+    device: &str,
+    point: &str,
+) -> Result<Change, String> {
     let nothing = "Nothing was changed.";
     let p = port_named(ports, port)
         .ok_or_else(|| format!("{port} is not an input or output of the program. {nothing}"))?;
@@ -357,79 +400,107 @@ pub fn assign(text: &str, ports: &[Port], port: &str, device: &str, point: &str)
         ));
     }
     let map = iomap::skim(text);
-    if !map.devices.iter().any(|d| d.name == device) {
+    let Some(dev) = map.devices.iter().find(|d| d.name == device) else {
         return Err(format!("io.map declares no device {device}. {nothing}"));
-    }
+    };
     let all = rows(text);
-    let target = all
-        .iter()
-        .position(|r| {
-            r.sig
-                .as_ref()
-                .is_some_and(|s| s.device == device && s.point == point)
-        })
-        .ok_or_else(|| {
-            format!(
+    let target = all.iter().position(|r| {
+        r.sig
+            .as_ref()
+            .is_some_and(|s| s.device == device && s.point == point)
+    });
+    let new = if target.is_none() {
+        chans(device).and_then(|l| l.into_iter().find(|c| c.point.eq_ignore_ascii_case(point)))
+    } else {
+        None
+    };
+    // The channel's direction, type and label, whichever way it is found.
+    let (cdir, cty, what, line_name) = match (target, &new) {
+        (Some(t), _) => {
+            let ch = all[t].sig.as_ref().expect("a signal row");
+            (
+                dir_of(ch.dir),
+                ch.ty.to_string(),
+                point_label(point).to_string(),
+                Some(ch.name),
+            )
+        }
+        (None, Some(c)) => (c.dir, c.ty.word().to_string(), c.label.clone(), None),
+        (None, None) => {
+            return Err(format!(
                 "{device} has no channel {} in io.map. {nothing}",
                 point_label(point)
-            )
-        })?;
-    let ch = all[target].sig.as_ref().expect("a signal row");
-    let label = format!("{}, {}", device, point_label(point));
-    if dir_of(ch.dir) != p.dir {
-        return Err(format!(
-            "{} is an {} and {label} is an {}. {nothing}",
-            p.name,
-            word(p.dir),
-            word(dir_of(ch.dir))
-        ));
-    }
-    if ty_of(ch.ty) != Some(p.ty) {
+            ));
+        }
+    };
+    let label = format!("{device}, {what}");
+    if cdir != p.dir {
         return Err(format!(
             "{} is {} {} and {label} is {} {}. {nothing}",
             p.name,
+            article(word(p.dir)),
+            word(p.dir),
+            article(word(cdir)),
+            word(cdir)
+        ));
+    }
+    if ty_of(&cty) != Some(p.ty) {
+        return Err(format!(
+            "{} is {} {} and {label} is {} {cty}. {nothing}",
+            p.name,
             article(p.ty.word()),
             p.ty.word(),
-            article(ch.ty),
-            ch.ty
+            article(&cty),
         ));
     }
-    if let Some(other) = port_named(ports, ch.name) {
-        return Err(if other.name == p.name {
-            format!("{label} already feeds {}. {nothing}", p.name)
-        } else {
-            format!("{label} already feeds {}. {nothing}", other.name)
-        });
+    if let Some(other) = line_name.and_then(|n| port_named(ports, n)) {
+        return Err(format!("{label} already feeds {}. {nothing}", other.name));
     }
-    if let Place::Device { device: d, point: pt } = place_of(&map, &p.name) {
-        return Err(format!(
-            "{} is on {d}, {} already: put it back on simulated I/O first. {nothing}",
-            p.name,
-            point_label(&pt)
-        ));
-    }
-    if let Place::Module(m) = place_of(&map, &p.name) {
-        return Err(format!(
-            "{} reads an output of module {m}, not a device channel. {nothing}",
-            p.name
-        ));
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut dropped = 0;
-    for (i, r) in all.iter().enumerate() {
-        if i == target {
-            out.push_str(&renamed(r, &p.name));
-        } else if is_port_line(r, p) {
-            dropped += 1;
-        } else {
-            out.push_str(r.raw);
+    match place_of(&map, &p.name) {
+        Place::Device { device: d, point: pt } => {
+            return Err(format!(
+                "{} is on {d}, {} already: put it back on simulated I/O first. {nothing}",
+                p.name,
+                point_label(&pt)
+            ));
         }
+        Place::Module(m) => {
+            return Err(format!(
+                "{} reads an output of module {m}, not a device channel. {nothing}",
+                p.name
+            ));
+        }
+        Place::Simulated => {}
     }
+    let dropped = all.iter().filter(|r| is_port_line(r, p)).count();
     let tail = if dropped > 0 {
         " Its simulated line is gone."
     } else {
         ""
     };
+    if let (Some(c), None) = (&new, target) {
+        let w = crate::device_io::add(dev, c, Some(&p.name), false, ports, &map)
+            .map_err(|e| format!("{e} {nothing}"))?;
+        let eol = if text.contains("\r\n") { "\r" } else { "" };
+        let signals: Vec<String> = w.signals.iter().map(|l| format!("{l}{eol}")).collect();
+        let kept = crate::device_form::remove_signals(text, &w.replace);
+        return Ok(Change {
+            text: crate::device_form::insert_signals(&kept, device, &signals),
+            summary: format!(
+                "{} is now {label}: a new line after {device}'s in io.map.{tail}",
+                p.name
+            ),
+        });
+    }
+    let target = target.expect("a line, or a channel without one");
+    let mut out = String::with_capacity(text.len());
+    for (i, r) in all.iter().enumerate() {
+        if i == target {
+            out.push_str(&renamed(r, &p.name));
+        } else if !is_port_line(r, p) {
+            out.push_str(r.raw);
+        }
+    }
     Ok(Change {
         text: out,
         summary: format!("{} is now {label} in io.map.{tail}", p.name),
@@ -444,31 +515,11 @@ fn article(word: &str) -> &'static str {
     }
 }
 
-/// The name a channel gets when its port lets go of it: a profile's
-/// channel (`ch:DI-04` on `rio`) is `rio_di_04`, the generated name of
-/// `helmsman_project::profile_skim::signal_name`; any other point is the
-/// device and the point with each run of other characters as one `_`.
-fn generated_name(device: &str, point: &str) -> String {
-    match point.strip_prefix("ch:") {
-        Some(ch) if !ch.is_empty() => helmsman_project::profile_skim::signal_name(device, ch),
-        _ => {
-            let mut s = format!("{device}_");
-            for c in point.chars() {
-                let c = c.to_ascii_lowercase();
-                if c.is_ascii_alphanumeric() {
-                    s.push(c);
-                } else if !s.ends_with('_') {
-                    s.push('_');
-                }
-            }
-            s.trim_end_matches('_').to_string()
-        }
-    }
-}
-
-/// Puts `port` back on simulated I/O: its channel's line gets the generated
-/// name again and the port gets a `box di:N` / `box do:N` line (a bool) or
-/// a `screen` line, as a new project's map writes it, at the end.
+/// Puts `port` back on simulated I/O: its line on the device goes, as
+/// Remove on a point does (the channel is back in the Add I/O list and the
+/// program's variable stays), and the port gets a `box di:N` / `box do:N`
+/// line (a bool) or a `screen` line, as a new project's map writes it, at
+/// the end.
 ///
 /// # Errors
 /// A sentence saying why nothing was changed.
@@ -496,21 +547,6 @@ pub fn unassign(text: &str, ports: &[Port], port: &str) -> Result<Change, String
         .ok_or_else(|| format!("{} has no line on a device. {nothing}", p.name))?;
     let s = all[target].sig.as_ref().expect("a signal row");
     let (device, point) = (s.device, s.point);
-    // A name no other signal or port has.
-    let taken = |n: &str| {
-        ports.iter().any(|q| q.name.eq_ignore_ascii_case(n))
-            || map
-                .signals
-                .iter()
-                .any(|x| x.name.eq_ignore_ascii_case(n) && !x.name.eq_ignore_ascii_case(&p.name))
-    };
-    let base = generated_name(device, point);
-    let mut name = base.clone();
-    let mut n = 2;
-    while taken(&name) {
-        name = format!("{base}_{n}");
-        n += 1;
-    }
     // The next free index among the box's own channels of that kind.
     let kind = match p.dir {
         Dir::In => "di:",
@@ -526,56 +562,92 @@ pub fn unassign(text: &str, ports: &[Port], port: &str) -> Result<Change, String
     while used.contains(&free) {
         free += 1;
     }
+    // An int or real input has no simulated line a box accepts (`screen`
+    // is for outputs, `box` channels are bits): the port has no line, which
+    // the simulation reads as its on-screen control.
     let line = match (p.dir, p.ty) {
-        (Dir::In, SigTy::Bool) => format!("in  {} bool box di:{free}", p.name),
-        (Dir::Out, SigTy::Bool) => format!("out {} bool box do:{free} safe=false", p.name),
-        (Dir::In, t) => format!("in  {} {} screen {}", p.name, t.word(), p.name),
-        (Dir::Out, t) => format!("out {} {} screen {} safe=0", p.name, t.word(), p.name),
+        (Dir::In, SigTy::Bool) => Some(format!("in  {} bool box di:{free}", p.name)),
+        (Dir::Out, SigTy::Bool) => Some(format!("out {} bool box do:{free} safe=false", p.name)),
+        (Dir::In, _) => None,
+        (Dir::Out, t) => Some(format!("out {} {} screen {} safe=0", p.name, t.word(), p.name)),
     };
     let eol = if all[target].raw.ends_with("\r\n") || text.contains("\r\n") {
         "\r\n"
     } else {
         "\n"
     };
-    let mut out = String::with_capacity(text.len() + line.len() + 2);
+    let mut out = String::with_capacity(text.len() + 64);
     for (i, r) in all.iter().enumerate() {
-        if i == target {
-            out.push_str(&renamed(r, &name));
-        } else {
+        if i != target {
             out.push_str(r.raw);
         }
     }
-    if !out.is_empty() && !out.ends_with('\n') {
+    if let Some(line) = &line {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str(eol);
+        }
+        out.push_str(line);
         out.push_str(eol);
     }
-    out.push_str(&line);
-    out.push_str(eol);
     Ok(Change {
         text: out,
         summary: format!(
-            "{} is back on simulated I/O; {device}, {} is {name} again in io.map.",
+            "{} is back on simulated I/O; {device}, {} is free again.",
             p.name,
             point_label(point)
         ),
     })
 }
 
+/// What the tests share: a map has to load the way a box loads it.
+#[cfg(test)]
+pub(crate) mod testing {
+    /// `text` parses and validates as a map with no device profile.
+    pub fn loads(text: &str) {
+        let parsed = helmsman_io::text::parse(text).unwrap_or_else(|e| panic!("{e:?}\n{text}"));
+        if let Err(e) = parsed.map.validate() {
+            panic!("{e:?}\n{text}");
+        }
+    }
+
+    /// `text` parses and validates, a `device:` device's points read on
+    /// `profile` (its text), as the box does.
+    pub fn loads_with(text: &str, profile: &str) {
+        use helmsman_io::Driver as _;
+        let parsed = helmsman_io::text::parse(text).unwrap_or_else(|e| panic!("{e:?}\n{text}"));
+        let prof = helmsman_io::profile::Profile::parse(profile).unwrap_or_else(|e| panic!("{e:?}"));
+        let mut parse = |dev: &helmsman_io::Device, addr: &str| {
+            if helmsman_io::profile_driver::profile_name(&dev.driver).is_some() {
+                let refuse: helmsman_io::profile_driver::Open =
+                    Box::new(|_| Err(helmsman_io::Error::UnknownDriver("not opened".into())));
+                helmsman_io::profile_driver::ProfileDriver::new(prof.clone(), dev, refuse)?.parse(addr)
+            } else {
+                helmsman_io::driver::parse_point_on(dev, addr)
+            }
+        };
+        if let Err(e) = parsed.map.validate_with(&mut parse) {
+            panic!("{e:?}\n{text}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// No device's channels known: only the signals the map has.
+    const NONE: Chans<'static> = &|_| None;
+
     const MAP: &str = "\
 # the bench
-device rio modbus-tcp 192.168.3.50:502 unit=1 poll_ms=50
+device rio device:moxa-iologik-e1213 cip=991:515:0x00e12130 poll_ms=50
 in  rio_di_04 bool rio ch:DI-04 poll_ms=20  # the E-stop contact
 in  rio_di_05 bool rio ch:DI-05
-in  rio_ai_0  int  rio hr:5:i16 unit=mm
+in  rio_cnt   int  rio ch:DI-00-count unit=mm
 out rio_do_00 bool rio ch:DO-00 safe=true
-out rio_ao_0  int  rio hr:9:i16 safe=0
 
 in  start bool box di:0   # the button
 in  stop bool box di:1
-in  level int screen level
 out motor bool box do:0 safe=false
 out speed int screen speed safe=0
 ";
@@ -595,9 +667,15 @@ out speed int screen speed safe=0
         ]
     }
 
+    use super::testing::loads_with;
+
+    /// A map loads: the E1213's profile for a `device:` device.
     fn loads(text: &str) {
-        let parsed = helmsman_io::text::parse(text).unwrap_or_else(|e| panic!("{e:?}\n{text}"));
-        let _ = parsed;
+        if text.contains("device:moxa") {
+            loads_with(text, PROFILE);
+        } else {
+            super::testing::loads(text);
+        }
     }
 
     #[test]
@@ -607,7 +685,7 @@ out speed int screen speed safe=0
 
     #[test]
     fn assigning_renames_the_channels_line_and_removes_the_ports_old_one() {
-        let c = assign(MAP, &ports(), "start", "rio", "ch:DI-04").unwrap();
+        let c = assign(MAP, &ports(), NONE, "start", "rio", "ch:DI-04").unwrap();
         let expect = MAP
             .replace(
                 "in  rio_di_04 bool rio ch:DI-04 poll_ms=20  # the E-stop contact",
@@ -628,15 +706,15 @@ out speed int screen speed safe=0
 
     #[test]
     fn names_are_case_blind_and_the_ports_spelling_is_written() {
-        let c = assign(MAP, &ports(), "START", "rio", "ch:DI-04").unwrap();
+        let c = assign(MAP, &ports(), NONE, "START", "rio", "ch:DI-04").unwrap();
         assert!(c.text.contains("in  start bool rio ch:DI-04"), "{}", c.text);
         let shouted = MAP.replace("in  start bool box di:0", "IN  START bool box di:0");
         // `IN` is not a keyword of the format: the line is not a signal, so
         // nothing of the port's is removed and the rename still lands.
-        let c = assign(&shouted, &ports(), "start", "rio", "ch:DI-04").unwrap();
+        let c = assign(&shouted, &ports(), NONE, "start", "rio", "ch:DI-04").unwrap();
         assert!(c.text.contains("IN  START bool box di:0"));
         let upper = MAP.replace("in  start bool box di:0", "in  START bool box di:0");
-        let c = assign(&upper, &ports(), "start", "rio", "ch:DI-04").unwrap();
+        let c = assign(&upper, &ports(), NONE, "start", "rio", "ch:DI-04").unwrap();
         assert!(
             !c.text.contains("START"),
             "the port's line goes whatever its case: {}",
@@ -651,7 +729,7 @@ out speed int screen speed safe=0
             bare.push_str(l);
             bare.push('\n');
         }
-        let c = assign(&bare, &ports(), "start", "rio", "ch:DI-04").unwrap();
+        let c = assign(&bare, &ports(), NONE, "start", "rio", "ch:DI-04").unwrap();
         assert_eq!(c.text, bare.replace("rio_di_04 bool", "start bool"));
         loads(&c.text);
     }
@@ -659,7 +737,7 @@ out speed int screen speed safe=0
     #[test]
     fn every_other_line_stays_byte_for_byte_with_crlf_and_no_final_newline() {
         let crlf = MAP.replace('\n', "\r\n");
-        let c = assign(&crlf, &ports(), "stop", "rio", "ch:DI-05").unwrap();
+        let c = assign(&crlf, &ports(), NONE, "stop", "rio", "ch:DI-05").unwrap();
         assert!(!c.text.contains('\n') || c.text.matches('\n').count() == c.text.matches("\r\n").count());
         let expect = crlf
             .replace("in  rio_di_05 bool", "in  stop bool")
@@ -667,9 +745,9 @@ out speed int screen speed safe=0
         assert_eq!(c.text, expect);
         loads(&c.text);
         let no_end = MAP.trim_end().to_string();
-        let c = assign(&no_end, &ports(), "speed", "rio", "hr:9:i16").unwrap();
+        let c = assign(&no_end, &ports(), NONE, "motor", "rio", "ch:DO-00").unwrap();
         assert!(c.text.starts_with("# the bench\n"));
-        assert!(!c.text.contains("screen speed"));
+        assert!(!c.text.contains("out motor bool box"));
         loads(&c.text);
     }
 
@@ -694,7 +772,7 @@ in  start_button bool rio ch:DI-05
                 ty: SigTy::Bool,
             },
         ];
-        let c = assign(map, &ports, "start", "rio", "ch:DI-04").unwrap();
+        let c = assign(map, &ports, NONE, "start", "rio", "ch:DI-04").unwrap();
         assert_eq!(
             c.text,
             "\
@@ -735,7 +813,7 @@ in  start_button bool rio ch:DI-05
             ("start", "module", "x", "not a device"),
             ("start", "nodev", "ch:DI-04", "declares no device nodev"),
         ] {
-            let e = assign(MAP, &p, port, device, point).unwrap_err();
+            let e = assign(MAP, &p, NONE, port, device, point).unwrap_err();
             assert!(e.contains(needle), "{port} {device} {point}: {e}");
             assert!(e.contains("Nothing was changed."), "{e}");
         }
@@ -743,13 +821,13 @@ in  start_button bool rio ch:DI-05
 
     #[test]
     fn a_channel_that_feeds_a_port_is_taken() {
-        let c = assign(MAP, &ports(), "start", "rio", "ch:DI-04").unwrap();
-        let e = assign(&c.text, &ports(), "stop", "rio", "ch:DI-04").unwrap_err();
+        let c = assign(MAP, &ports(), NONE, "start", "rio", "ch:DI-04").unwrap();
+        let e = assign(&c.text, &ports(), NONE, "stop", "rio", "ch:DI-04").unwrap_err();
         assert!(e.contains("rio, DI-04 already feeds start"), "{e}");
-        let e = assign(&c.text, &ports(), "start", "rio", "ch:DI-05").unwrap_err();
+        let e = assign(&c.text, &ports(), NONE, "start", "rio", "ch:DI-05").unwrap_err();
         assert!(e.contains("start is on rio, DI-04 already"), "{e}");
         assert!(
-            free_channels(&iomap::skim(&c.text), &ports())
+            free_channels(&iomap::skim(&c.text), &ports(), NONE)
                 .iter()
                 .all(|c| c.point != "ch:DI-04")
         );
@@ -759,7 +837,7 @@ in  start_button bool rio ch:DI-05
     fn a_port_on_a_module_is_not_assigned_over() {
         let map =
             "device rio modbus-tcp 1.2.3.4:502\nin x bool rio ch:DI-00\nin start bool module conveyor\n";
-        let e = assign(map, &ports(), "start", "rio", "ch:DI-00").unwrap_err();
+        let e = assign(map, &ports(), NONE, "start", "rio", "ch:DI-00").unwrap_err();
         assert!(e.contains("module conveyor"), "{e}");
     }
 
@@ -768,86 +846,98 @@ in  start_button bool rio ch:DI-05
         let map = iomap::skim(MAP);
         let p = ports();
         let start = port_named(&p, "start").unwrap();
-        let names: Vec<String> = channels_for(&map, &p, start).iter().map(Channel::label).collect();
+        let names: Vec<String> = channels_for(&map, &p, NONE, start)
+            .iter()
+            .map(Channel::label)
+            .collect();
         assert_eq!(names, ["rio, DI-04", "rio, DI-05"]);
         let speed = port_named(&p, "speed").unwrap();
-        assert_eq!(channels_for(&map, &p, speed).len(), 1);
-        let rev: Vec<String> = ports_for(&map, &p, "rio", "ch:DI-05")
+        assert_eq!(
+            channels_for(&map, &p, NONE, speed).len(),
+            0,
+            "the E1213 has no int output"
+        );
+        let rev: Vec<String> = ports_for(&map, &p, NONE, "rio", "ch:DI-05")
             .iter()
             .map(|p| p.name.clone())
             .collect();
         assert_eq!(rev, ["start", "stop"], "unassigned bool inputs");
         assert!(
-            ports_for(&map, &p, "rio", "ch:DO-00")
+            ports_for(&map, &p, NONE, "rio", "ch:DO-00")
                 .iter()
                 .all(|p| p.name == "motor")
         );
         assert!(
-            ports_for(&map, &p, "rio", "hr:5:i16")
+            ports_for(&map, &p, NONE, "rio", "ch:DI-00-count")
                 .iter()
                 .all(|p| p.name == "level")
         );
-        assert_eq!(ports_for(&map, &p, "rio", "nope").len(), 0);
+        assert_eq!(ports_for(&map, &p, NONE, "rio", "nope").len(), 0);
         assert!(
-            ports_for(&map, &p, "box", "di:1").is_empty(),
+            ports_for(&map, &p, NONE, "box", "di:1").is_empty(),
             "a box line is not a device channel"
         );
     }
 
     #[test]
-    fn back_to_simulated_round_trips_to_a_map_the_box_loads() {
-        let a = assign(MAP, &ports(), "start", "rio", "ch:DI-04").unwrap();
+    fn back_to_simulated_takes_the_channels_line_out_as_remove_does() {
+        let a = assign(MAP, &ports(), NONE, "start", "rio", "ch:DI-04").unwrap();
         let b = unassign(&a.text, &ports(), "start").unwrap();
         loads(&b.text);
+        // The channel's line is gone (the channel is the Add I/O list's
+        // again, no line under a made-up name) and the port is on a box channel.
+        let want = MAP
+            .replace(
+                "in  rio_di_04 bool rio ch:DI-04 poll_ms=20  # the E-stop contact\n",
+                "",
+            )
+            .replace("in  start bool box di:0   # the button\n", "")
+            + "in  start bool box di:0\n";
+        assert_eq!(b.text, want);
         let m = iomap::skim(&b.text);
-        let back = m.signals.iter().find(|s| s.name == "start").unwrap();
-        assert_eq!(
-            (back.device.as_str(), back.point.as_str(), back.ty.as_str()),
-            ("box", "di:0", "bool")
-        );
-        let ch = m.signals.iter().find(|s| s.point == "ch:DI-04").unwrap();
-        assert_eq!(ch.name, "rio_di_04", "the generated name again");
-        assert!(ch.tail.contains(&"poll_ms=20".to_string()));
-        assert!(b.text.contains("# the E-stop contact"));
         assert_eq!(place_of(&m, "start"), Place::Simulated);
-        // And forward again.
-        let again = assign(&b.text, &ports(), "start", "rio", "ch:DI-04").unwrap();
-        loads(&again.text);
+        assert!(m.signals.iter().all(|s| s.point != "ch:DI-04"));
+        // And forward again, to the same channel, now with no line.
+        let again = assign(&b.text, &ports(), NONE, "start", "rio", "ch:DI-04");
+        assert!(
+            again.unwrap_err().contains("no channel DI-04"),
+            "NONE knows no channels"
+        );
     }
 
     #[test]
     fn back_writes_outputs_and_numbers_as_a_new_projects_map_does() {
-        let a = assign(MAP, &ports(), "motor", "rio", "ch:DO-00").unwrap();
+        let a = assign(MAP, &ports(), NONE, "motor", "rio", "ch:DO-00").unwrap();
         let b = unassign(&a.text, &ports(), "motor").unwrap();
         assert!(
             b.text.ends_with("out motor bool box do:0 safe=false\n"),
             "{}",
             b.text
         );
+        assert!(!b.text.contains("rio_do_00"), "the line is gone: {}", b.text);
         loads(&b.text);
-        let a = assign(MAP, &ports(), "speed", "rio", "hr:9:i16").unwrap();
-        let b = unassign(&a.text, &ports(), "speed").unwrap();
+        let map = "device rio modbus-tcp 1.2.3.4:502\nout speed int rio hr:9:i16 safe=0\n";
+        let b = unassign(map, &ports(), "speed").unwrap();
+        assert_eq!(
+            b.text,
+            "device rio modbus-tcp 1.2.3.4:502\nout speed int screen speed safe=0\n"
+        );
+        loads(&b.text);
+        let a = assign(MAP, &ports(), NONE, "level", "rio", "ch:DI-00-count").unwrap();
+        let b = unassign(&a.text, &ports(), "level").unwrap();
+        // No line a box accepts for a simulated int input: it has none.
         assert!(
-            b.text.ends_with("out speed int screen speed safe=0\n"),
+            !b.text.contains("level") && !b.text.contains("ch:DI-00-count"),
             "{}",
             b.text
         );
-        assert!(
-            b.text.contains("rio_hr_9_i16"),
-            "the generated name is back: {}",
-            b.text
-        );
-        loads(&b.text);
-        let a = assign(MAP, &ports(), "level", "rio", "hr:5:i16").unwrap();
-        let b = unassign(&a.text, &ports(), "level").unwrap();
-        assert!(b.text.ends_with("in  level int screen level\n"), "{}", b.text);
-        assert!(b.text.contains("rio_hr_5_i16"), "{}", b.text);
+        assert_eq!(place_of(&iomap::skim(&b.text), "level"), Place::Simulated);
         loads(&b.text);
     }
 
     #[test]
-    fn back_names_the_channel_uniquely_and_keeps_line_endings() {
-        let map = "device rio modbus-tcp 1.2.3.4:502\r\nin start bool rio ch:DI-04\r\nin rio_di_04 bool rio ch:DI-05\r\n";
+    fn back_keeps_line_endings_and_refuses_what_is_not_on_a_device() {
+        let map = "device rio modbus-tcp 1.2.3.4:502\r\nin start bool rio di:4\r\nin x bool rio di:5\r\n";
         let p = vec![Port {
             dir: Dir::In,
             name: "start".into(),
@@ -856,7 +946,7 @@ in  start_button bool rio ch:DI-05
         let b = unassign(map, &p, "start").unwrap();
         assert_eq!(
             b.text,
-            "device rio modbus-tcp 1.2.3.4:502\r\nin rio_di_04_2 bool rio ch:DI-04\r\nin rio_di_04 bool rio ch:DI-05\r\nin  start bool box di:0\r\n"
+            "device rio modbus-tcp 1.2.3.4:502\r\nin x bool rio di:5\r\nin  start bool box di:0\r\n"
         );
         loads(&b.text);
         let e = unassign(MAP, &ports(), "start").unwrap_err();
@@ -865,23 +955,165 @@ in  start_button bool rio ch:DI-05
         assert!(e.contains("not an input or output"), "{e}");
     }
 
+    /// The E1213's own profile, as a project holds it.
+    const PROFILE: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
+    /// A fresh device: its line and no signal on it, beside simulated ports.
+    const FRESH: &str = "\
+# the cell
+in  start bool box di:0  # the button
+in  stop bool box di:1
+out motor bool box do:0 safe=false
+out lamp bool box do:1 safe=false
+
+device rio device:moxa-iologik-e1213 cip=991:515:0x00e12130  # the block
+in  part bool rio ch:DI-02
+
+device other modbus-tcp 10.0.0.9:502 unit=1
+";
+
+    /// The channels of the map's devices, from the E1213's profile.
+    fn profiled(map: &str) -> impl Fn(&str) -> Option<Vec<crate::device_io::Channel>> {
+        let m = iomap::skim(map);
+        move |name: &str| {
+            let d = m.devices.iter().find(|d| d.name == name)?;
+            crate::device_io::channels(d, Some(PROFILE))
+        }
+    }
+
     #[test]
-    fn a_point_that_is_not_a_profile_channel_gets_a_name_from_its_address() {
-        assert_eq!(generated_name("plc", "hr:5:i16"), "plc_hr_5_i16");
-        assert_eq!(generated_name("e1213", "ch:DI-04-count"), "e1213_di_04_count");
-        assert_eq!(generated_name("m", "Coil:0"), "m_coil_0");
+    fn a_channel_with_no_line_gets_one_named_for_the_port_after_its_device() {
+        let c = profiled(FRESH);
+        let a = assign(FRESH, &ports(), &c, "start", "rio", "ch:DI-04").unwrap();
+        let want = FRESH
+            .replace("in  start bool box di:0  # the button\n", "")
+            .replace(
+                "in  part bool rio ch:DI-02\n",
+                "in  part bool rio ch:DI-02\nin  start bool rio ch:DI-04\n",
+            );
+        // The line is the one the Add I/O picker writes, wherever it puts it.
+        let line = a
+            .text
+            .lines()
+            .find(|l| l.contains("ch:DI-04"))
+            .unwrap()
+            .to_string();
+        assert!(
+            line.starts_with("in") && line.contains(" start bool rio ch:DI-04"),
+            "{line}"
+        );
+        assert_eq!(a.text.replace(&line, "in  start bool rio ch:DI-04"), want);
+        assert!(!a.text.contains("box di:0"), "the simulated line is gone");
+        loads_with(&a.text, PROFILE);
+        // An output carries the options the picker writes for that channel.
+        let o = assign(FRESH, &ports(), &c, "motor", "rio", "ch:DO-00").unwrap();
+        let line = o.text.lines().find(|l| l.contains("ch:DO-00")).unwrap();
+        assert!(
+            line.contains(" motor bool rio ch:DO-00") && line.contains("safe=false"),
+            "{line}"
+        );
+        assert!(!o.text.contains("out motor bool box"), "{}", o.text);
+        loads_with(&o.text, PROFILE);
+        // The other lines, comments and blanks are as they were.
+        assert!(
+            o.text
+                .starts_with("# the cell\nin  start bool box di:0  # the button\n")
+        );
+        assert!(o.text.contains("device other modbus-tcp 10.0.0.9:502 unit=1\n"));
+    }
+
+    #[test]
+    fn a_port_with_no_line_at_all_gets_the_new_line_too_and_crlf_is_kept() {
+        let map = FRESH
+            .replace("in  start bool box di:0  # the button\n", "")
+            .replace('\n', "\r\n");
+        let c = profiled(&map);
+        let a = assign(&map, &ports(), &c, "start", "rio", "ch:DI-04").unwrap();
+        assert_eq!(
+            a.text.matches('\n').count(),
+            a.text.matches("\r\n").count(),
+            "{:?}",
+            a.text
+        );
+        assert!(a.text.contains("ch:DI-04"));
+        loads_with(&a.text, PROFILE);
+    }
+
+    #[test]
+    fn the_free_channels_are_the_lines_no_port_names_and_the_channels_without_one() {
+        let c = profiled(FRESH);
+        let map = iomap::skim(FRESH);
+        let p = ports();
+        let start = port_named(&p, "start").unwrap();
+        let list = channels_for(&map, &p, &c, start);
+        let labels: Vec<String> = list.iter().map(Channel::label).collect();
+        assert!(labels.contains(&"rio, DI-02".to_string()), "the line the map has");
+        assert!(
+            labels.contains(&"rio, DI-04".to_string()),
+            "a channel with no line"
+        );
+        assert!(
+            !labels.contains(&"rio, DO-00".to_string()),
+            "an output is not offered an input"
+        );
+        assert!(
+            !labels.contains(&"rio, DI-00-count".to_string()),
+            "an int is not offered a bool"
+        );
+        assert!(list.iter().find(|c| c.what == "DI-04").unwrap().name.is_none());
+        assert!(
+            list.iter().all(|c| c.device == "rio"),
+            "no channels are known for `other`"
+        );
+        // Once assigned the channel is no longer free; the others stay.
+        let a = assign(FRESH, &p, &c, "start", "rio", "ch:DI-04").unwrap();
+        let after = iomap::skim(&a.text);
+        let c2 = profiled(&a.text);
+        let again = channels_for(&after, &p, &c2, port_named(&p, "stop").unwrap());
+        assert!(again.iter().all(|c| c.point != "ch:DI-04"));
+        assert!(again.iter().any(|c| c.point == "ch:DI-05"));
+    }
+
+    #[test]
+    fn a_fresh_device_makes_the_menus_offer_not_say_add_a_device() {
+        let map = iomap::skim(FRESH);
+        let c = profiled(FRESH);
+        let m = menus(&map, &ports(), &c, &Ok(()));
+        assert!(m.iter().find(|m| m.port == "start").unwrap().assign.is_ok());
+        assert!(m.iter().find(|m| m.port == "motor").unwrap().assign.is_ok());
+        // `speed` is an int output: the E1213 has none.
+        let speed = m.iter().find(|m| m.port == "speed").unwrap();
+        assert!(
+            speed.assign.as_ref().unwrap_err().contains("No free int output"),
+            "{speed:?}"
+        );
+    }
+
+    #[test]
+    fn going_back_returns_a_new_line_to_the_picker_as_remove_does() {
+        let c = profiled(FRESH);
+        let a = assign(FRESH, &ports(), &c, "start", "rio", "ch:DI-04").unwrap();
+        let b = unassign(&a.text, &ports(), "start").unwrap();
+        loads_with(&b.text, PROFILE);
+        let m = iomap::skim(&b.text);
+        assert!(m.signals.iter().all(|s| s.point != "ch:DI-04"), "no stray line");
+        let c2 = profiled(&b.text);
+        let free = crate::device_io::free(&c2("rio").unwrap(), &m, "rio");
+        assert!(
+            free.iter().any(|c| c.point == "ch:DI-04"),
+            "back in the picker's list"
+        );
     }
 
     #[test]
     fn the_menus_say_where_a_port_is_and_why_an_item_is_off() {
         let map = iomap::skim(MAP);
-        let m = menus(&map, &ports(), &Ok(()));
+        let m = menus(&map, &ports(), NONE, &Ok(()));
         let start = m.iter().find(|m| m.port == "start").unwrap();
         assert_eq!(start.place.describe(), "Simulated: not assigned to a device yet");
         assert!(start.assign.is_ok() && start.back.is_none());
-        let a = assign(MAP, &ports(), "start", "rio", "ch:DI-04").unwrap();
+        let a = assign(MAP, &ports(), NONE, "start", "rio", "ch:DI-04").unwrap();
         let map = iomap::skim(&a.text);
-        let m = menus(&map, &ports(), &Ok(()));
+        let m = menus(&map, &ports(), NONE, &Ok(()));
         let start = m.iter().find(|m| m.port == "start").unwrap();
         assert_eq!(start.place.describe(), "On rio, DI-04");
         assert!(
@@ -894,11 +1126,11 @@ in  start_button bool rio ch:DI-05
         assert_eq!(start.back, Some(Ok(())));
         // No device at all: the reason says to add one.
         let none = iomap::skim("in start bool box di:0\n");
-        let m = menus(&none, &ports(), &Ok(()));
+        let m = menus(&none, &ports(), NONE, &Ok(()));
         let why = m[0].assign.as_ref().unwrap_err();
         assert!(why.contains("Add a device in the Devices tab first"), "{why}");
         // Read-only: every item says why.
-        let ro = menus(&map, &ports(), &Err("The examples are read-only.".into()));
+        let ro = menus(&map, &ports(), NONE, &Err("The examples are read-only.".into()));
         assert!(
             ro.iter()
                 .all(|m| m.assign == Err("The examples are read-only.".into()))

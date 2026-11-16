@@ -36,7 +36,7 @@ pub enum PortAsk {
 pub fn port_items(ui: &mut egui::Ui, chrome: &mut Chrome, m: &PortMenu) -> Option<PortAsk> {
     let mut asked = None;
     let tip = m.assign.as_ref().err().map_or(
-        "Pick a free device channel of the same direction and type. Its line in io.map takes this name.",
+        "Pick a free channel of a device, of the same direction and type, added to the project or not yet. Its line in io.map is named for this variable.",
         String::as_str,
     );
     if crate::devices::menu_item(
@@ -51,7 +51,7 @@ pub fn port_items(ui: &mut egui::Ui, chrome: &mut Chrome, m: &PortMenu) -> Optio
     }
     if let Some(back) = &m.back {
         let tip = back.as_ref().err().map_or(
-            "Puts this back on a simulated input or output, and gives the device channel its own name again.",
+            "Puts this back on a simulated input or output. The device channel goes back under + Add I/O, as Remove leaves it.",
             String::as_str,
         );
         if crate::devices::menu_item(
@@ -91,6 +91,13 @@ pub fn row_menu(
 }
 
 impl DevicesUi {
+    /// What a right-click on each program port offers, from the map, the
+    /// program and the devices' channels as the tab holds them now.
+    #[must_use]
+    pub fn port_menus(&self, write: &Result<(), String>) -> Vec<PortMenu> {
+        crate::assign::menus(&self.map, &self.program, &|d| self.channels_of(d), write)
+    }
+
     /// The question, while one is open: a box where the pointer was, with
     /// a button for each choice. Returns what to write, once one is picked.
     pub fn assign_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<AssignAct> {
@@ -100,18 +107,25 @@ impl DevicesUi {
         let (title, choices): (String, Vec<(String, String, String, AssignAct)>) = match &ask {
             Ask::Port(port) => {
                 let p = self.program.iter().find(|p| p.name.eq_ignore_ascii_case(port));
-                let list = p.map_or_else(Vec::new, |p| channels_for(&self.map, &self.program, p));
+                let list = p.map_or_else(Vec::new, |p| {
+                    channels_for(&self.map, &self.program, &|d| self.channels_of(d), p)
+                });
                 (
                     format!("Assign {port} to a device channel"),
                     list.into_iter()
                         .map(|c| {
-                            let tip = format!(
-                                "Renames {}'s line in io.map to {port} and takes {port}'s simulated line out.",
-                                c.name
-                            );
+                            let tip = match &c.name {
+                                Some(n) => format!(
+                                    "Renames {n}'s line in io.map to {port} and takes {port}'s simulated line out."
+                                ),
+                                None => format!(
+                                    "Adds this channel to io.map as {port}, after {}'s other lines, and takes {port}'s simulated line out.",
+                                    c.device
+                                ),
+                            };
                             (
                                 format!("assign channel {} {}", c.device, c.point),
-                                format!("{}   {}", c.label(), c.name),
+                                format!("{}   {}", c.label(), c.name.as_deref().unwrap_or("not added yet")),
                                 tip,
                                 AssignAct::Assign {
                                     port: port.clone(),
@@ -124,7 +138,7 @@ impl DevicesUi {
                 )
             }
             Ask::Channel { device, point } => {
-                let list = ports_for(&self.map, &self.program, device, point);
+                let list = ports_for(&self.map, &self.program, &|d| self.channels_of(d), device, point);
                 let dir = list.first().map_or("input or output", |p| match p.dir {
                     Dir::In => "input",
                     Dir::Out => "output",

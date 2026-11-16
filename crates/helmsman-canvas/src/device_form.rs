@@ -212,13 +212,6 @@ impl Catalog {
             .then_some(Self::E1213)
     }
 
-    #[must_use]
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::E1213 => "ioLogik E1213: 12 inputs (DI-00..11) and 8 outputs (DO-00..07)",
-        }
-    }
-
     /// Every channel as a row, off, named `di0`.., `do0`.., on `driver`.
     #[must_use]
     pub fn rows(self, driver: &str) -> Vec<PointRow> {
@@ -434,27 +427,6 @@ pub fn name_ok(s: &str) -> bool {
         && s.len() <= 48
 }
 
-/// Binds the program's inputs and outputs to a known device's channels,
-/// in order: a BOOL port that the map has nowhere, or on the box's own
-/// channels, takes the next free channel of its direction (the program
-/// moves onto the device as a whole; the visitor can untick any).
-pub fn prebind(rows: &mut [PointRow], ports: &[Port], map: &MapText) {
-    for p in ports.iter().filter(|p| p.ty == SigTy::Bool) {
-        let wired = map.signals.iter().find(|s| s.name.eq_ignore_ascii_case(&p.name));
-        if wired.is_some_and(|s| s.device != "box") {
-            continue;
-        }
-        if let Some(r) = rows
-            .iter_mut()
-            .find(|r| r.fixed && !r.on && r.dir == p.dir && r.ty == SigTy::Bool)
-        {
-            r.on = true;
-            r.name.clone_from(&p.name);
-            r.use_ = Use::Existing(p.name.clone());
-        }
-    }
-}
-
 /// Whether `point` is an address `driver` reads (the drivers' own
 /// syntax, helmsman-io's `modbus::Point::parse` and `enip::Point::parse`,
 /// which the page cannot link): `coil:N`, `di:N`, `hr:N[:FMT]`,
@@ -534,13 +506,28 @@ pub struct Wiring {
     pub declare: Vec<(Dir, String, SigTy)>,
     /// Edit: the device this one replaces, its line and its signals'.
     pub replaces: Option<String>,
+    /// The device is in the map already and stays as it is: the signals
+    /// join it, after the last line it has (`device_io.rs`).
+    pub extend: bool,
 }
 
 impl Wiring {
     /// What it changes, in a line, for the notice.
     #[must_use]
     pub fn summary(&self) -> String {
-        let mut s = format!("{} added with {} point(s)", self.device, self.signals.len());
+        let names: Vec<&str> = self
+            .signals
+            .iter()
+            .filter_map(|l| l.split_whitespace().nth(1))
+            .collect();
+        let mut s = match (self.extend, self.signals.len()) {
+            (true, _) => format!("{} added to {}", names.join(", "), self.device),
+            (false, 0) => format!(
+                "{} added. Its inputs and outputs are under it on the Devices tab: + Add I/O",
+                self.device
+            ),
+            (false, n) => format!("{} added with {n} point(s)", self.device),
+        };
         if !self.replace.is_empty() {
             let _ = write!(s, "; {} moved onto it", self.replace.join(", "));
         }
@@ -573,6 +560,7 @@ pub fn wiring(
         replace: Vec::new(),
         declare: Vec::new(),
         replaces: None,
+        extend: false,
     };
     let driver = w.device_line.split_whitespace().nth(2).unwrap_or("").to_string();
     let mut seen: Vec<String> = Vec::new();
@@ -663,6 +651,9 @@ pub fn apply_map(map: &str, w: &Wiring) -> String {
             out.push('\n');
         }
     }
+    if w.extend {
+        return insert_signals(&out, &w.device, &w.signals);
+    }
     if let Some(old) = &w.replaces
         && let Some(edited) = edit_device(&out, old, w)
     {
@@ -679,6 +670,55 @@ pub fn apply_map(map: &str, w: &Wiring) -> String {
     for s in &w.signals {
         out.push_str(s);
         out.push('\n');
+    }
+    out
+}
+
+/// `map` with `signals` after the last line device `device` has (its own
+/// line, or the last signal on it); at the end when the map has no such
+/// device. Every other line stays as it was.
+pub(crate) fn insert_signals(map: &str, device: &str, signals: &[String]) -> String {
+    let mut out = String::with_capacity(map.len() + 64 * signals.len());
+    let mut at = None;
+    for line in map.split_inclusive('\n') {
+        out.push_str(line);
+        let t: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        let own = match t.as_slice() {
+            ["device", d, ..] => *d == device,
+            [dir, _, _, d, ..] if *dir == "in" || *dir == "out" => *d == device,
+            _ => false,
+        };
+        if own {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            at = Some(out.len());
+        }
+    }
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    let mut added = String::new();
+    for s in signals {
+        added.push_str(s);
+        added.push('\n');
+    }
+    out.insert_str(at.unwrap_or(out.len()), &added);
+    out
+}
+
+/// `map` without the `in`/`out` lines of the signals `names` (ST names
+/// ignore case). The devices, the comments and every other line stay.
+#[must_use]
+pub fn remove_signals(map: &str, names: &[String]) -> String {
+    let mut out = String::with_capacity(map.len());
+    for line in map.split_inclusive('\n') {
+        let t: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        let gone = matches!(t.as_slice(), [dir, name, ..]
+            if (*dir == "in" || *dir == "out") && names.iter().any(|n| n.eq_ignore_ascii_case(name)));
+        if !gone {
+            out.push_str(line);
+        }
     }
     out
 }
@@ -773,11 +813,12 @@ pub fn map_without(map: &MapText, device: &str) -> MapText {
 }
 
 impl crate::devices::NewDevice {
-    /// The form for device `name` as `map` has it, to edit: its settings,
-    /// and its signals as rows (on a known device, ticked on their
-    /// channels; else rows of their own), each the program's variable
-    /// when it has one of that name. `None` for a driver the form does not
-    /// offer (edit those in io.map) or a device the map does not declare.
+    /// The form for device `name` as `map` has it, to edit: its settings.
+    /// Its signals ride along as rows the form does not show (Save writes
+    /// them back as they were, under the device's new name if it got
+    /// one); they are added and removed on the Devices tab. `None` for a
+    /// driver the form does not offer (edit those in io.map) or a device
+    /// the map does not declare.
     #[must_use]
     pub fn from_map(map: &MapText, name: &str, ports: &[Port]) -> Option<Self> {
         use crate::devices::PROTOCOLS;
@@ -806,8 +847,7 @@ impl crate::devices::NewDevice {
         {
             params = set_param(&params, "profile", "moxa-e1213");
         }
-        let mut points = catalog.map(|c| c.rows(&dev.driver)).unwrap_or_default();
-        let mut extra = 0;
+        let mut points = Vec::new();
         for s in map.signals.iter().filter(|s| s.device == dev.name) {
             let dir = if s.dir == "out" { Dir::Out } else { Dir::In };
             let ty = match s.ty.to_ascii_lowercase().as_str() {
@@ -820,24 +860,13 @@ impl crate::devices::NewDevice {
             } else {
                 Use::Wiring
             };
-            if let Some(r) = points
-                .iter_mut()
-                .find(|r| r.fixed && !r.on && r.dir == dir && r.point == s.point)
-            {
-                r.on = true;
-                r.name.clone_from(&s.name);
-                r.use_ = use_;
-                r.tail = Some(s.tail.join(" "));
-            } else {
-                let mut r = PointRow::custom(dir, extra);
-                extra += 1;
-                r.name.clone_from(&s.name);
-                r.ty = ty;
-                r.point.clone_from(&s.point);
-                r.use_ = use_;
-                r.tail = Some(s.tail.join(" "));
-                points.push(r);
-            }
+            let mut r = PointRow::custom(dir, points.len());
+            r.name.clone_from(&s.name);
+            r.ty = ty;
+            r.point.clone_from(&s.point);
+            r.use_ = use_;
+            r.tail = Some(s.tail.join(" "));
+            points.push(r);
         }
         Some(Self {
             name: dev.name.clone(),
@@ -1070,49 +1099,6 @@ mod tests {
     }
 
     #[test]
-    fn the_e1213_lists_its_channels_and_takes_the_programs_box_io() {
-        let mut rows = Catalog::E1213.rows("enip-io");
-        assert_eq!(rows.iter().filter(|r| r.dir == Dir::In).count(), 12);
-        assert_eq!(rows.iter().filter(|r| r.dir == Dir::Out).count(), 8);
-        assert_eq!(Catalog::E1213.rows("modbus-tcp")[12].point, "coil:0");
-        let ports = ports_of(LATCH);
-        assert_eq!(ports.len(), 3, "{ports:?}");
-        prebind(&mut rows, &ports, &skim(BOX_MAP));
-        let on: Vec<(&str, &str)> = rows
-            .iter()
-            .filter(|r| r.on)
-            .map(|r| (r.name.as_str(), r.point.as_str()))
-            .collect();
-        assert_eq!(on, [("start", "di:0"), ("stop", "di:1"), ("motor", "do:0")]);
-        let w = wiring(
-            "e1213",
-            "device e1213 enip-io cip=991:515 profile=moxa-e1213\n".into(),
-            &rows,
-            &ports,
-            &skim(BOX_MAP),
-        )
-        .unwrap();
-        assert_eq!(w.replace, ["start", "stop", "motor"]);
-        assert_eq!(w.declare, []);
-        let map = apply_map(BOX_MAP, &w);
-        assert!(!map.contains(" box "), "{map}");
-        assert!(
-            map.contains("device e1213 enip-io cip=991:515 profile=moxa-e1213\nin  start bool e1213 di:0\n"),
-            "{map}"
-        );
-        assert!(map.contains("out motor bool e1213 do:0 safe=false\n"), "{map}");
-        assert_eq!(skim(&map).odd, 0, "{map}");
-    }
-
-    #[test]
-    fn a_program_wired_elsewhere_is_left_where_it_is() {
-        let mut rows = Catalog::E1213.rows("enip-io");
-        prebind(&mut rows, &ports_of(LATCH), &skim("in start bool rio di:4\n"));
-        let on: Vec<&str> = rows.iter().filter(|r| r.on).map(|r| r.name.as_str()).collect();
-        assert_eq!(on, ["stop", "motor"]);
-    }
-
-    #[test]
     fn rows_that_will_not_do_are_refused_by_name() {
         let ports = ports_of(LATCH);
         let map = skim(BOX_MAP);
@@ -1263,11 +1249,9 @@ mod tests {
             Use::Wiring,
             "parts is not a program variable"
         );
-        // Save: rename it and add stop; the old lines go, the new ones come.
-        let mut rows = d.points.clone();
-        rows[1].on = true;
-        rows[1].name = "stop".into();
-        rows[1].use_ = Use::Existing("stop".into());
+        assert_eq!(d.points.len(), 2, "the map's own signals, no unused channel");
+        // Save under a new name: the old lines go, the new ones come.
+        let rows = d.points.clone();
         let mut w = wiring(
             "rio",
             "device rio enip-io 10.0.0.57 profile=moxa-e1213\n".into(),
@@ -1279,8 +1263,11 @@ mod tests {
         w.replaces = Some("e1213".into());
         let out = apply_map(text, &w);
         assert!(!out.contains("device e1213") && !out.contains(" e1213 "), "{out}");
-        assert!(out.contains("device rio enip-io 10.0.0.57 profile=moxa-e1213\nin  start bool rio di:0\nin  parts int rio in:2:u32\nin  stop bool rio di:1\n"), "{out}");
-        assert!(!out.contains("box di:1"), "stop moved off the box: {out}");
+        assert!(out.contains("device rio enip-io 10.0.0.57 profile=moxa-e1213\nin  start bool rio di:0\nin  parts int rio in:2:u32\n"), "{out}");
+        assert!(
+            out.contains("in  stop bool box di:1\n"),
+            "the box's own line stays: {out}"
+        );
         assert!(out.contains("in  parts int rio in:2:u32\n"), "{out}");
         assert_eq!(skim(&out).odd, 0, "{out}");
         // A driver the form does not offer is not edited here.

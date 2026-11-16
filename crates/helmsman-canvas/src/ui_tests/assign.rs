@@ -26,18 +26,20 @@ speed := level;
 END_PROGRAM
 ";
 
+/// The profile of the device the map names, as the project holds it.
+const PROFILE: &str = include_str!("../../../../docs/devices/moxa-iologik-e1213.device");
+
 const MAP: &str = "\
 # the line's wiring
-device rio device:rio-io 10.0.0.57
+device rio device:moxa-iologik-e1213 cip=991:515:0x00e12130
 in  rio_di_04 bool rio ch:DI-04 poll_ms=20  # the E-stop contact
 in  rio_di_05 bool rio ch:DI-05
 out rio_do_00 bool rio ch:DO-00 safe=true
-in  rio_ai_0  int  rio ch:AI-0 unit=mm
+in  rio_cnt   int  rio ch:DI-00-count unit=mm
 
 in  start bool box di:0  # the button
 in  stop bool box di:1
 in  spare bool box di:2
-in  level int screen level
 out motor bool box do:0 safe=false
 out speed int screen speed safe=0
 ";
@@ -50,6 +52,7 @@ fn project(map: &str) -> Harness {
         let v = h.app.sim.as_mut().unwrap();
         v.proj.create("line", None);
         v.proj.files.insert("main.st".into(), PROGRAM.into());
+        v.proj.add_file("moxa-iologik-e1213.device", PROFILE.into());
         if !map.is_empty() {
             v.proj.add_file(helmsman_project::IO_MAP, map.into());
         }
@@ -113,7 +116,7 @@ fn an_input_row_assigns_to_a_free_channel_of_its_direction_and_type() {
         "an output is not offered an input"
     );
     assert!(
-        !h.has("assign channel rio ch:AI-0"),
+        !h.has("assign channel rio ch:DI-00-count"),
         "an int is not offered a bool"
     );
     h.press("assign channel rio ch:DI-05");
@@ -125,6 +128,7 @@ fn an_input_row_assigns_to_a_free_channel_of_its_direction_and_type() {
     )
     .replace("in  spare bool box di:2\n", "");
     assert_eq!(map(&h), want);
+    crate::assign::testing::loads_with(&map(&h), PROFILE);
     assert!(dirty(&h), "the project has an edit to save");
     let (said, is_error) = note(&h).expect("a note");
     assert!(!is_error && said.contains("spare is now rio, DI-05"), "{said}");
@@ -160,10 +164,11 @@ fn an_output_row_assigns_and_goes_back_to_simulated_io() {
     h.wait(0.3);
     let back = map(&h);
     assert!(
-        back.contains("out rio_do_00 bool rio ch:DO-00 safe=true"),
-        "{back}"
+        !back.contains("ch:DO-00"),
+        "the line goes, as Remove takes it: {back}"
     );
     assert!(back.ends_with("out motor bool box do:0 safe=false\n"), "{back}");
+    crate::assign::testing::loads_with(&back, PROFILE);
     let (said, _) = note(&h).unwrap();
     assert!(said.contains("motor is back on simulated I/O"), "{said}");
 }
@@ -240,8 +245,8 @@ fn the_devices_tab_row_feeds_an_unassigned_port_and_the_reverse_is_there_too() {
     h.wait(0.3);
     let back = map(&h);
     assert!(
-        back.contains("in  rio_di_04 bool rio ch:DI-04 poll_ms=20  # the E-stop contact"),
-        "{back}"
+        !back.contains("ch:DI-04"),
+        "the line goes, as Remove takes it: {back}"
     );
     assert!(
         back.contains("in  start bool box di:0"),
@@ -252,9 +257,9 @@ fn the_devices_tab_row_feeds_an_unassigned_port_and_the_reverse_is_there_too() {
 #[test]
 fn a_channel_with_no_port_waiting_says_what_to_do() {
     // Every int input is assigned already: the analogue channel has nobody.
-    let mut h = project(&with("in  level int screen level\n", "").replace(
-        "in  rio_ai_0  int  rio ch:AI-0 unit=mm\n",
-        "in  level int rio ch:AI-0 unit=mm\nin  rio_ai_1 int rio ch:AI-1\n",
+    let mut h = project(&MAP.replace(
+        "in  rio_cnt   int  rio ch:DI-00-count unit=mm\n",
+        "in  level int rio ch:DI-00-count unit=mm\nin  rio_ai_1 int rio ch:DI-01-count\n",
     ));
     h.press("pane devices");
     h.wait(0.3);
@@ -308,11 +313,8 @@ fn the_diagram_blocks_of_a_port_assign_it_with_the_code_menu_on() {
     assert!(h.has("diagram menu back to simulated"));
     h.press("diagram menu back to simulated");
     h.wait(0.3);
-    assert!(
-        map(&h).contains("in  rio_di_04 bool rio ch:DI-04 poll_ms=20"),
-        "{}",
-        map(&h)
-    );
+    assert!(!map(&h).contains("ch:DI-04"), "{}", map(&h));
+    crate::assign::testing::loads_with(&map(&h), PROFILE);
 }
 
 #[test]
@@ -427,4 +429,81 @@ fn the_io_rows_and_the_devices_rows_stay_inside_the_panels_default_width() {
         (h.rect("pane devices").left() - left.left()).abs() <= 1.0,
         "the pane moved"
     );
+}
+
+#[test]
+fn a_channel_with_no_line_yet_is_offered_and_gets_one_named_for_the_port() {
+    // The map has the device and four of its signals; DI-06 and DO-03 have none.
+    let mut h = project(MAP);
+    menu(&mut h, "io row spare", "menu assign port");
+    assert!(
+        h.has("assign channel rio ch:DI-06"),
+        "a channel of the profile with no line"
+    );
+    assert!(h.has("assign channel rio ch:DI-04"), "and one that has");
+    h.press("assign channel rio ch:DI-06");
+    h.wait(0.3);
+    let got = map(&h);
+    let line = got.lines().find(|l| l.contains("ch:DI-06")).expect("a new line");
+    assert!(
+        line.starts_with("in") && line.contains(" spare bool rio ch:DI-06"),
+        "{line}"
+    );
+    assert!(
+        !got.contains("spare bool box"),
+        "the simulated line is gone: {got}"
+    );
+    let at = |needle: &str| got.find(needle).unwrap();
+    assert!(
+        at("ch:DI-06") > at("ch:DO-00") && at("ch:DI-06") < at("in  start"),
+        "after the device's other lines: {got}"
+    );
+    crate::assign::testing::loads_with(&got, PROFILE);
+    assert!(dirty(&h));
+    assert!(says(&mut h, "io row spare", "On rio, DI-06"));
+    // An output, from its row: the line carries the profile's safe value.
+    menu(&mut h, "io row motor", "menu assign port");
+    h.press("assign channel rio ch:DO-03");
+    h.wait(0.3);
+    let got = map(&h);
+    let line = got.lines().find(|l| l.contains("ch:DO-03")).expect("a new line");
+    assert!(
+        line.starts_with("out") && line.contains(" motor bool rio ch:DO-03") && line.contains("safe=false"),
+        "{line}"
+    );
+    crate::assign::testing::loads_with(&got, PROFILE);
+    // Back: the line is gone and the channel is the picker's again.
+    h.right_click(h.rect("io row motor").center());
+    h.press("menu back to simulated");
+    h.wait(0.3);
+    assert!(!map(&h).contains("ch:DO-03"), "{}", map(&h));
+    assert!(map(&h).contains("out motor bool box do:0 safe=false"));
+    crate::assign::testing::loads_with(&map(&h), PROFILE);
+}
+
+#[test]
+fn a_device_added_alone_is_offered_to_the_diagram_and_the_io_tab_and_not_called_missing() {
+    // Only the device's line: nothing on it yet.
+    let mut h = project(
+        "device rio device:moxa-iologik-e1213 cip=991:515:0x00e12130\nin  start bool box di:0\nin  spare bool box di:1\nout motor bool box do:0 safe=false\n",
+    );
+    h.right_click(block(&h, "start"));
+    assert!(h.has("diagram menu assign"));
+    h.press("diagram menu assign");
+    h.wait(0.2);
+    assert!(h.has("assign channel rio ch:DI-00") && h.has("assign channel rio ch:DI-11"));
+    h.press("assign channel rio ch:DI-02");
+    h.wait(0.3);
+    let got = map(&h);
+    assert!(got.contains(" start bool rio ch:DI-02"), "{got}");
+    assert!(!got.contains("start bool box"), "{got}");
+    crate::assign::testing::loads_with(&got, PROFILE);
+    // And from the I/O tab's row.
+    menu(&mut h, "io row spare", "menu assign port");
+    assert!(!h.has("assign channel rio ch:DI-02"), "taken now");
+    h.press("assign channel rio ch:DI-03");
+    h.wait(0.3);
+    let got = map(&h);
+    assert!(got.contains(" spare bool rio ch:DI-03"), "{got}");
+    crate::assign::testing::loads_with(&got, PROFILE);
 }

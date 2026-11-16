@@ -21,10 +21,12 @@
 //!
 //! Add by click (PROTOCOLS.md step 3): a found device the library knows
 //! (its entry names a profile, `NAME.device`) is listed by vendor and
-//! model and offers **Add**: one field, the device's name, and the
-//! channels it will get; Add copies the profile into the project, writes
-//! `device NAME device:PROFILE IDENTITY` and a `ch:` signal per channel.
-//! The protocol, the address and the points are the profile's business.
+//! model and offers **Add**: one field, the device's name; Add copies
+//! the profile into the project and writes `device NAME device:PROFILE
+//! IDENTITY`. The protocol, the address and the points are the profile's
+//! business. No channel is written: each device's row offers + Add I/O,
+//! and a point is in the map and under the device once it is added
+//! there (`device_io.rs`; Nick, 2026-11-15).
 //! A device the library does not know says so and offers Advanced: the
 //! New device form with its protocols and typed points, which, with
 //! Import device… and Use this device, sits behind the **Advanced**
@@ -500,7 +502,7 @@ impl NewDevice {
             params: format!("eds={file} rpi_ms=100 poll_ms=20"),
             error: None,
             eds: Some(file.to_string()),
-            points: catalog.map(|c| c.rows("enip-io")).unwrap_or_default(),
+            points: Vec::new(),
             catalog,
             editing: None,
         }
@@ -587,11 +589,16 @@ pub enum DeviceAct {
     /// answers with its own E1213's) into the quick form that just opened.
     Library { vendor: u16, product: u16 },
     /// The quick form's Add: the profile file into the project, then the
-    /// device and its channels into io.map.
+    /// device into io.map.
     Quick(QuickAdd),
     /// Assign a program port to a device channel, or put it back on
     /// simulated I/O (`crate::assign`): the view writes io.map.
     Assign(crate::assign::AssignAct),
+    /// A device's + Add I/O: open the picker on it (`device_io.rs`). The
+    /// view copies a read-only example first (the playground).
+    AddIo(String),
+    /// Take these signals' lines out of io.map.
+    Remove(Vec<String>),
 }
 
 /// What the quick form's Add does: the profile as a project file, and
@@ -909,7 +916,7 @@ impl NewDevice {
             params,
             error: None,
             eds: None,
-            points: catalog.map(|c| c.rows("enip-io")).unwrap_or_default(),
+            points: Vec::new(),
             catalog,
             editing: None,
         }
@@ -1009,6 +1016,16 @@ pub struct DevicesUi {
     /// (file name and text): the view fills it in each frame, and Add
     /// offers it.
     pub mine: BTreeMap<String, (String, String)>,
+    /// The project's device profiles and the channels each lists
+    /// ([`DevicesUi::set_profiles`], each frame).
+    pub profiles: crate::device_io::Profiles,
+    /// The project has a program a new variable can be declared in: the
+    /// view fills it in each frame with `program`.
+    pub can_declare: bool,
+    /// The + Add I/O picker, while open (`device_io.rs`).
+    pub adding_io: Option<crate::device_io::AddIo>,
+    /// The Remove question on a point, or on a device's unused points.
+    pub removing: Option<crate::device_io::Removal>,
 }
 
 /// Most `wired=` values one tab looks up.
@@ -1260,7 +1277,7 @@ impl DevicesUi {
                     let edit_tip = match (write, &editable) {
                         (Err(why), _) => why.clone(),
                         (Ok(()), None) => "This form edits Modbus TCP and EtherNet/IP devices: change this one in io.map.".to_string(),
-                        (Ok(()), Some(_)) => "Opens the device's form: its settings, and its inputs and outputs to tick, name or add.".to_string(),
+                        (Ok(()), Some(_)) => "Opens the device's settings: its name, and under Advanced how it is reached. Its inputs and outputs are added and removed here, under it.".to_string(),
                     };
                     let d = ui
                         .add_enabled(write.is_ok(), egui::Button::new("Delete").small())
@@ -1288,7 +1305,7 @@ impl DevicesUi {
                         "menu edit device",
                         "Edit device…",
                         write.is_ok() && editable.is_some(),
-                        "Opens the device's form.",
+                        "Opens the device's settings.",
                     );
                     asked.1 |= menu_item(
                         ui,
@@ -1310,7 +1327,7 @@ impl DevicesUi {
             }
             let params: Vec<String> = n.params.iter().map(|(k, v)| format!("{k}={v}")).collect();
             let mut hover = format!(
-                "{}\n{}\n{} point(s). Click to fold or unfold them; right-click to edit or delete.",
+                "{}\n{}\n{} point(s) in the project. Click to fold or unfold them; right-click to edit or delete.",
                 state_text(&n.state),
                 if params.is_empty() {
                     "no settings".to_string()
@@ -1329,6 +1346,12 @@ impl DevicesUi {
                 continue;
             }
             self.config.section(ui, chrome, &n.name);
+            // What the device has beyond the points under it: one row, not
+            // a list, and above them so a long list never hides it.
+            if declared && let Some(a) = self.io_row(ui, chrome, &n.name, write) {
+                act = Some(a);
+            }
+            let mut removed = None;
             for p in &n.points {
                 let value = p.value.map_or(String::new(), |v| format!(" = {}", show(Some(v))));
                 let text = format!("{:<3} {}  {}{value}", p.dir, p.signal, p.point);
@@ -1353,12 +1376,31 @@ impl DevicesUi {
                     .flatten()
                     .map(|q| q.name.clone());
                 let takers = if declared && feeds.is_none() {
-                    crate::assign::ports_for(&self.map, &self.program, &n.name, &p.point)
+                    crate::assign::ports_for(
+                        &self.map,
+                        &self.program,
+                        &|d| self.channels_of(d),
+                        &n.name,
+                        &p.point,
+                    )
                 } else {
                     Vec::new()
                 };
                 let (mut assign_asked, mut back_asked) = (false, false);
                 r.context_menu(|ui| {
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu remove point",
+                        "Remove…",
+                        write.is_ok(),
+                        write.as_ref().err().map_or(
+                            "Takes this point out of the project. Asks first; the program's variable stays.",
+                            String::as_str,
+                        ),
+                    ) {
+                        removed = Some(p.signal.clone());
+                    }
                     renamed = menu_item(
                         ui,
                         chrome,
@@ -1414,7 +1456,7 @@ impl DevicesUi {
                                 "Back to simulated I/O",
                                 write.is_ok(),
                                 write.as_ref().err().map_or(
-                                    "Puts the program's variable back on a simulated channel and gives this channel its own name again.",
+                                    "Puts the program's variable back on a simulated channel. This point is removed, and the channel is back under + Add I/O.",
                                     String::as_str,
                                 ),
                             );
@@ -1449,13 +1491,20 @@ impl DevicesUi {
                     hover.push_str("\nforced by an engineer");
                 }
                 hover.push_str(
-                    "\nDouble-click to rename it; right-click to rename it, say what is wired to it, or assign it to a program input or output.",
+                    "\nDouble-click to rename it; right-click to rename it, remove it, say what is wired to it, or assign it to a program input or output.",
                 );
                 r.tip(hover);
                 // What is wired to the point, one wrapped line under it.
                 if let Some(w) = &p.wired {
                     crate::wired::show_line(ui, chrome, &p.signal, w, self.wired.get(w), 44.0);
                 }
+            }
+            if let Some(signal) = removed {
+                self.removing = Some(crate::device_io::Removal {
+                    device: n.name.clone(),
+                    signals: vec![signal],
+                    unused: false,
+                });
             }
         }
         if let Some(name) = flip
@@ -1555,7 +1604,7 @@ impl DevicesUi {
                 Some(l) => {
                     let _ = write!(hover, "\nlibrary: {} {} ({})", l.vendor, l.model, l.folder);
                     if l.profile_file.is_some() {
-                        hover.push_str("\nAdd puts it in the project with its channels named.");
+                        hover.push_str("\nAdd puts it in the project by name; its channels are then one click each.");
                     }
                 }
                 None => hover.push_str(
@@ -1575,17 +1624,17 @@ impl DevicesUi {
                 }
                 (None, Err(why)) => why.clone(),
                 (None, Ok(())) => {
-                    "Adds this device to the project's I/O wiring (io.map), its address filled in. Then offers to move the program's inputs and outputs onto it.".to_string()
+                    "Adds this device to the project's I/O wiring (io.map), its address filled in. Its inputs and outputs are added under it afterwards.".to_string()
                 }
             };
             let add_tip = match (&f.mapped, write) {
                 (Some(n), _) => format!("Already in the project as {n}."),
                 (None, Err(_)) if self.copy_first => {
-                    "Copies this example into a project of your own, then adds the device by name with every channel it has.".to_string()
+                    "Copies this example into a project of your own, then adds the device by name. Every channel it has is then there to add, one click each.".to_string()
                 }
                 (None, Err(why)) => why.clone(),
                 (None, Ok(())) => {
-                    "Adds the device to the project by name, with every channel it has. The protocol and the addresses are the device's own.".to_string()
+                    "Adds the device to the project by name. Every channel it has is then there to add, one click each; the protocol and the addresses are the device's own.".to_string()
                 }
             };
             let own = self
@@ -1639,7 +1688,7 @@ impl DevicesUi {
                         let b = ui
                             .add_enabled(can_own, egui::Button::new(RichText::new("Add").strong()))
                             .tip(format!(
-                                "Adds the device to the project by name, with the channels of {file}: the profile saved from the vendor's file you gave for this device. Check the names in the next window."
+                                "Adds the device to the project by name, with {file} as its profile: the one saved from the vendor's file you gave for this device. Its channels are then there to add, one click each."
                             ));
                         chrome.hit(format!("add network {}", f.address), b.rect);
                         own_added |= b.clicked();

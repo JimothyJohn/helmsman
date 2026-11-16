@@ -418,8 +418,10 @@ scan; the scheduler bounds how often.
   `channels_for` and `ports_for` read an `iomap::skim` and the program's
   ports (`device_form::ports_of`), `menus` says what each port's menu
   offers and why an item is off, and `assign` / `unassign` rewrite io.map
-  line by line (the channel's line takes the port's name, the port's
-  simulated line goes, the rest is byte for byte). `assign_ui.rs` draws
+  line by line (a channel's line takes the port's name, or a channel with
+  no line gets the one `device_io::add` writes, placed by
+  `device_form::insert_signals`; the port's simulated line goes; the rest
+  is byte for byte; going back removes the line as Remove does). `assign_ui.rs` draws
   it: the menu items, `row_menu` for a row of the I/O tab, and the
   question (`DevicesUi::assigning`, `assign_ui`) both views call each
   frame. The Devices tab's point row opens it, or returns

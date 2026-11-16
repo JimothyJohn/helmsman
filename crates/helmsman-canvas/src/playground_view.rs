@@ -152,6 +152,9 @@ pub struct PlaygroundView {
     /// The popup a right click or double click on the diagram opened
     /// (`crate::diagram_edit`).
     pub dedit: crate::diagram_edit::EditUi,
+    /// The program's ports as last read, by the source they came from:
+    /// the I/O tab and the diagram ask every frame.
+    ports_memo: std::cell::RefCell<Option<(String, Vec<crate::device_form::Port>)>>,
     /// What a diagram edit asks of the rebuild and of Undo.
     dstate: crate::diagram_edit::Follow,
     viewer_of: String,
@@ -267,6 +270,7 @@ impl PlaygroundView {
             layers: Layers::load(tweaks),
             fresh: false,
             dedit: crate::diagram_edit::EditUi::default(),
+            ports_memo: std::cell::RefCell::new(None),
             dstate: crate::diagram_edit::Follow::default(),
             viewer_of: String::new(),
             pending: None,
@@ -898,6 +902,9 @@ impl PlaygroundView {
         };
         let mut text = crate::devices::describe(&crate::devices::tree(&map, &live, &|_| {
             crate::devices::LinkState::Simulated
+        }));
+        text.push_str(&crate::device_io::describe_free(&map, &|f| {
+            self.proj.files.get(f).cloned()
         }));
         text.push_str(&crate::devices::describe_found(&self.devices_ui.found));
         text.push_str(&crate::plant::describe(&self.plant_states(&map)));
@@ -1800,6 +1807,24 @@ impl PlaygroundView {
             self.proj.add_file(&q.file, q.text.clone());
             self.apply_wiring(&q.wiring);
         }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.add_io_ui(&ui.ctx().clone(), chrome)
+        {
+            self.apply_wiring(&w);
+        }
+        if let Some(crate::devices::DeviceAct::Remove(names)) =
+            self.devices_ui.remove_ui(&ui.ctx().clone(), chrome)
+            && let Some(t) = self.proj.files.get_mut(helmsman_project::IO_MAP)
+        {
+            *t = crate::device_form::remove_signals(t, &names);
+            self.proj.note(
+                match names.as_slice() {
+                    [one] => format!("{one} removed from io.map."),
+                    _ => format!("{} points removed from io.map.", names.len()),
+                },
+                false,
+            );
+            self.edited(f64::NEG_INFINITY);
+        }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
         }
@@ -2542,6 +2567,16 @@ impl Body for PlaygroundView {
         self.devices_ui.plant.simulated = true;
         self.devices_ui.copy_first = self.proj.is_example();
         self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
+        self.devices_ui.can_declare =
+            crate::device_form::program_file(self.proj.files.iter().map(|(n, t)| (n.as_str(), t.as_str())))
+                .is_some();
+        self.devices_ui.set_profiles(
+            self.proj
+                .files
+                .iter()
+                .filter(|(n, _)| n.ends_with(helmsman_project::DEVICE_EXT))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
         self.devices_ui.map = map.clone();
         self.devices_ui.eds_files = self
             .proj
@@ -2557,6 +2592,13 @@ impl Body for PlaygroundView {
                 self.wired_lib.scan(&mut self.devices_ui);
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
+            Some(crate::devices::DeviceAct::AddIo(device)) => {
+                // A read-only example is copied first; the copy keeps the
+                // device's name.
+                if self.own_project() {
+                    self.devices_ui.open_add_io(&device);
+                }
+            }
             Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
             Some(crate::devices::DeviceAct::OpenMap) => {
                 self.proj.open_file(helmsman_project::IO_MAP);
@@ -2566,6 +2608,7 @@ impl Body for PlaygroundView {
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
                 | crate::devices::DeviceAct::Delete(_)
+                | crate::devices::DeviceAct::Remove(_)
                 | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}
@@ -2595,9 +2638,9 @@ impl Body for PlaygroundView {
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         self.noticed_ui(ui, chrome);
+        let menus = self.assign_menus();
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         let gate = self.edit_gate();
-        let menus = self.assign_menus();
         if let Some(v) = &mut self.viewer {
             v.edit_gate = gate;
             v.assign = menus;
@@ -2675,19 +2718,12 @@ impl PlaygroundView {
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
         let outputs: Vec<Point> = self.session.outputs().cloned().collect();
         let on_map = self.on_map();
-        // What is wired to each point, from io.map and the library.
-        self.devices_ui.map = helmsman_project::iomap::skim(
-            self.proj
-                .files
-                .get(helmsman_project::IO_MAP)
-                .map_or("", String::as_str),
-        );
+        // What is wired to each point, from io.map and the library; where
+        // each port is, and what a right-click on its row offers.
+        self.assign_context();
         self.want_wired();
         let wired = crate::wired::by_signal(&self.devices_ui.map);
-        // Where each port is, and what a right-click on its row offers.
-        let ports = crate::device_form::ports_in(&self.session);
-        let menus = crate::assign::menus(&self.devices_ui.map, &ports, &self.assign_write());
-        self.devices_ui.program = ports;
+        let menus = self.devices_ui.port_menus(&self.assign_write());
         let map = self.devices_ui.map.clone();
         let mut asks: Vec<(String, crate::assign_ui::PortAsk)> = Vec::new();
         let off_map: Vec<&Point> = inputs
@@ -3733,8 +3769,9 @@ impl PlaygroundView {
             .get(helmsman_project::IO_MAP)
             .cloned()
             .unwrap_or_default();
+        self.assign_context();
         let ports = crate::device_form::ports_of(&self.proj.build_src());
-        match a.run(&text, &ports) {
+        match a.run(&text, &ports, &|d| self.devices_ui.channels_of(d)) {
             Ok(c) => {
                 match self.proj.files.get_mut(helmsman_project::IO_MAP) {
                     Some(t) => *t = c.text,
@@ -3748,18 +3785,24 @@ impl PlaygroundView {
     }
 
     /// What a right-click on each port's block in the diagram offers.
-    fn assign_menus(&self) -> Vec<crate::assign::PortMenu> {
-        let map = helmsman_project::iomap::skim(
-            self.proj
-                .files
-                .get(helmsman_project::IO_MAP)
-                .map_or("", String::as_str),
-        );
-        crate::assign::menus(
-            &map,
-            &crate::device_form::ports_in(&self.session),
-            &self.assign_write(),
-        )
+    fn assign_menus(&mut self) -> Vec<crate::assign::PortMenu> {
+        self.assign_context();
+        self.devices_ui.port_menus(&self.assign_write())
+    }
+
+    /// The open project's program's inputs and outputs, as its files stand
+    /// now (a compile only when they changed).
+    fn program_ports(&self) -> Vec<crate::device_form::Port> {
+        let src = self.proj.build_src();
+        let mut memo = self.ports_memo.borrow_mut();
+        if let Some((text, ports)) = memo.as_ref()
+            && *text == src
+        {
+            return ports.clone();
+        }
+        let ports = crate::device_form::ports_of(&src);
+        *memo = Some((src, ports.clone()));
+        ports
     }
 
     /// The map and the program's ports, as the question about an
@@ -3771,7 +3814,14 @@ impl PlaygroundView {
                 .get(helmsman_project::IO_MAP)
                 .map_or("", String::as_str),
         );
-        self.devices_ui.program = crate::device_form::ports_in(&self.session);
+        self.devices_ui.program = self.program_ports();
+        self.devices_ui.set_profiles(
+            self.proj
+                .files
+                .iter()
+                .filter(|(n, _)| n.ends_with(helmsman_project::DEVICE_EXT))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
     }
 
     /// The inputs the diagram shows a control for.
