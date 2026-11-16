@@ -63,6 +63,23 @@ this; change it here first when a decision changes.
   The tabs shrink to share one row with the chevron (24 pt at the least,
   then they wrap). Kept per browser (`dock=2` in the layout text; a
   layout from before is read with its panes reset).
+- **Tabs reorder, hide, and the arrangement saves by name** (Nick,
+  2026-11-15; `pane_layout.rs`). A tab's glyph dragged along a row of
+  tabs takes the place marked there (in its own pane a reorder, in the
+  other pane a dock at that place). A tab's right-click menu hides it
+  (`hidden=` in the layout text); its View item, or anything that opens
+  the tab, brings it back at the end of the left pane. View › Pane
+  layouts… lists four ready-made layouts (Default, Programming,
+  Commissioning, Monitoring) and the browser's own (at most 32, names up
+  to 40 characters, `helmsman-canvas/pane-layouts`): each is where every
+  tab sits, which tab each side shows, which panes are open, the bottom
+  panel's tab, and the three pane sizes. Light mode, word wrap, trend
+  colours and the diagram's arrangement are not part of one. Export
+  downloads the browser's own as `helmsman-pane-layouts.json`
+  (`helmsman-pane-layouts 1`); Import reads such a file as hostile (64 KB
+  at most, unknown tabs dropped, sizes held to 120..1600 pt, a name
+  already kept replaced, a ready-made layout's name taken in as "NAME
+  (imported)"). Not built yet: the same list kept on a box.
 - **Panes collapse** from their chevron, their Alt key, or a double click
   on any of their tabs (Nick, 2026-11-07), on either side.
 - **The tabs (left pane 320 pt):** Files (the projects, the

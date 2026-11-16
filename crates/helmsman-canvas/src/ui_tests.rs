@@ -6786,6 +6786,7 @@ mod device_io;
 mod diagram_edit;
 mod front;
 mod io_names;
+mod layouts;
 mod proposal;
 mod shell;
 mod sim_popup;

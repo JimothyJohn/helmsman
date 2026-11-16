@@ -90,6 +90,9 @@ mod monitor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod node_api_tests;
 mod node_token;
+mod pane_layout;
+#[cfg(test)]
+mod pane_layout_tests;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
