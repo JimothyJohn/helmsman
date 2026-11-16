@@ -421,6 +421,77 @@ END_IF;
 END_PROGRAM
 ";
 
+/// How many zones the long program has: about 250 lines, so a rung on
+/// it shows what an answer costs when the file is long and the change
+/// is one line (`agent-edits-not-files`).
+const ZONES: u32 = 60;
+
+/// A conveyor line of [`ZONES`] zones, each running while its eye sees
+/// a box and for `hold17` (zone 17) or 2 s (the others) after.
+fn long_program(hold17: &str) -> &'static str {
+    let mut s = String::from("PROGRAM line\nVAR_INPUT\n  start : BOOL;\n  stop : BOOL;\n");
+    for k in 1..=ZONES {
+        let _ = writeln!(s, "  eye{k} : BOOL;");
+    }
+    s.push_str("END_VAR\nVAR_OUTPUT\n  run : BOOL;\n");
+    for k in 1..=ZONES {
+        let _ = writeln!(s, "  zone{k} : BOOL;");
+    }
+    s.push_str("END_VAR\nVAR\n");
+    for k in 1..=ZONES {
+        let _ = writeln!(s, "  hold{k} : TOF;");
+    }
+    s.push_str("END_VAR\n(* Start runs the line and it stays running; stop halts it. *)\n");
+    s.push_str("run := (start OR run) AND NOT stop;\n");
+    s.push_str("(* A zone runs while its eye sees a box, and a little after it has passed. *)\n");
+    for k in 1..=ZONES {
+        let pt = if k == 17 { hold17 } else { "T#2s" };
+        let _ = writeln!(
+            s,
+            "hold{k}(IN := eye{k}, PT := {pt});\nzone{k} := run AND hold{k}.Q;"
+        );
+    }
+    s.push_str("END_PROGRAM\n");
+    Box::leak(s.into_boxed_str())
+}
+
+const LONG: &str = "(* Zone 17 runs on for 5 s after its box has passed; zone 16 still for 2 s. *)
+PROGRAM test_hidden
+VAR_INPUT
+  zone16 : BOOL;
+  zone17 : BOOL;
+END_VAR
+VAR_OUTPUT
+  start : BOOL;
+  eye16 : BOOL;
+  eye17 : BOOL;
+  done : BOOL;
+END_VAR
+VAR
+  n : INT;
+  both_run : ASSERT;
+  z17_runs_on : ASSERT;
+  z16_stopped : ASSERT;
+  z17_stops : ASSERT;
+END_VAR
+n := n + 1;
+start := n >= 2 AND n <= 5;
+eye16 := n >= 20 AND n <= 50;
+eye17 := n >= 20 AND n <= 50;
+IF n = 40 THEN
+  both_run(COND := zone16 AND zone17);
+END_IF;
+IF n = 400 THEN
+  z17_runs_on(COND := zone17);
+  z16_stopped(COND := NOT zone16);
+END_IF;
+IF n = 600 THEN
+  z17_stops(COND := NOT zone17);
+  done := TRUE;
+END_IF;
+END_PROGRAM
+";
+
 fn rungs() -> Vec<Rung> {
     vec![
         Rung {
@@ -504,6 +575,18 @@ fn rungs() -> Vec<Rung> {
                 instruction: "Add an output horn that sounds for 1 s each time the motor starts.",
                 hidden: HORN,
                 expect: &["horn"],
+                forbid: &[],
+            }],
+        },
+        Rung {
+            name: "long",
+            base: long_program("T#2s"),
+            tests: &[],
+            scope: Where::File,
+            asks: &[Ask {
+                instruction: "Zone 17 runs on for 5 s after its box has passed, not 2 s.",
+                hidden: LONG,
+                expect: &["zone60", "hold60"],
                 forbid: &[],
             }],
         },
@@ -637,6 +720,20 @@ struct Setup {
     only: Vec<String>,
     runs: u32,
     out: PathBuf,
+    /// `HELMSMAN_LADDER_QUICK=all`: every first request is asked without
+    /// extended thinking, which the page never does. Measured on
+    /// 2026-11-15 (three runs a rung, the relay's default model): a first
+    /// answer then comes in 1 to 3 s, not 6 to 10, but about six in ten
+    /// fail their checks (mostly a scenario's timing) and go round again
+    /// with thinking, so the mean is no better, and 3 of some 105 such
+    /// instructions failed where none of 140 with thinking did. The
+    /// switch stays to measure another model the same way.
+    quick: bool,
+    /// `HELMSMAN_LADDER_AGENT`: `chat` asks the relay's chat (whole
+    /// files); unset, the agent the page asks (`crate::instruct::AGENT`).
+    agent: Option<&'static str>,
+    /// What the relay's status says a turn may ask for.
+    takes: crate::claude::Takes,
 }
 
 impl Setup {
@@ -649,10 +746,20 @@ impl Setup {
             |_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/agent-ladder"),
             PathBuf::from,
         );
+        let url = url.trim().trim_end_matches('/').to_string();
+        let origin =
+            std::env::var("HELMSMAN_LADDER_ORIGIN").unwrap_or_else(|_| "http://localhost:8790".into());
+        let takes = status(&url, &origin);
+        println!("the relay takes: {takes:?}");
         Self {
-            url: url.trim().trim_end_matches('/').to_string(),
-            origin: std::env::var("HELMSMAN_LADDER_ORIGIN")
-                .unwrap_or_else(|_| "http://localhost:8790".into()),
+            url,
+            origin,
+            quick: std::env::var("HELMSMAN_LADDER_QUICK").as_deref() == Ok("all"),
+            agent: match std::env::var("HELMSMAN_LADDER_AGENT").as_deref() {
+                Ok("chat") => None,
+                _ => Some(crate::instruct::AGENT),
+            },
+            takes,
             only: std::env::var("HELMSMAN_LADDER_ONLY")
                 .map(|s| {
                     s.split(',')
@@ -670,15 +777,38 @@ impl Setup {
     }
 }
 
+/// What the free chat at `url` says a turn may ask for, as the page reads
+/// it when it opens (`GET /demo/v1/status`).
+fn status(url: &str, origin: &str) -> crate::claude::Takes {
+    let url = Url::parse(&format!("{url}/demo/v1/status")).expect("HELMSMAN_LADDER_URL");
+    let headers = [("origin", origin)];
+    let http = Request {
+        method: "GET",
+        path: &url.prefix,
+        headers: &headers,
+        json: None,
+        raw: None,
+    };
+    let timeouts = Timeouts {
+        connect: Duration::from_secs(10),
+        idle: Duration::from_secs(30),
+        total: Duration::from_secs(30),
+    };
+    let body = send(&url, &http, timeouts)
+        .and_then(|r| r.read_body(1 << 16))
+        .expect("the relay's status");
+    crate::claude::Takes::from_status(&String::from_utf8_lossy(&body))
+}
+
 /// One request to the model: the body as the page builds it, the answer
 /// as the page assembles it.
-fn turn(
-    setup: &Setup,
-    chat: &mut Chat,
-    message: &str,
-    context: &[crate::claude::Exchange],
-) -> Result<(String, f64), String> {
-    let (seq, req) = chat.send(message, context)?;
+fn turn(setup: &Setup, chat: &mut Chat, ask: &crate::instruct::Ask) -> Result<(String, f64), String> {
+    let (message, context) = (&ask.message, &ask.context);
+    let turn = crate::claude::Turn {
+        agent: setup.agent,
+        quick: !ask.retry && setup.quick,
+    };
+    let (seq, req) = chat.send_turn(message, context, turn)?;
     let url = Url::parse(&req.url).map_err(|e| format!("{}: {e}", req.url))?;
     let path = if url.prefix.is_empty() {
         "/".to_string()
@@ -827,6 +957,7 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
     let mut chat = Chat::new(Box::new(NoStore));
     chat.receive(Incoming::Proxy(false));
     chat.set_free_base(&setup.url);
+    chat.receive(Incoming::Takes(setup.takes.clone()));
     chat.receive(Incoming::Free(Free::Open));
     let mut earlier: Vec<String> = Vec::new();
     let mut outcomes = Vec::new();
@@ -855,9 +986,11 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
         let mut calls = 0;
         let mut cost = 0.0;
         let mut applied = None;
-        // As the page does: a big ask is planned in steps first.
+        // As the page does: a big ask is planned in steps first, and an
+        // agent that sends the lines that change is asked for those.
         let lines = scope.file().and_then(|f| files.get(f)).map(|t| t.lines().count());
-        let plan = crate::steps::big_ask(ask.instruction, lines);
+        ins.edits = chat.serves(crate::instruct::AGENT) && setup.agent.is_some();
+        let plan = crate::steps::big_ask(ask.instruction, lines.filter(|_| !ins.edits));
         let mut next = match ins.start_with(&env, &earlier, plan) {
             Ok(a) => Some(a),
             Err(why) => {
@@ -873,7 +1006,7 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
                 if a.retry { " (retry)" } else { "" },
                 a.message
             );
-            match turn(setup, &mut chat, &a.message, &a.context) {
+            match turn(setup, &mut chat, &a) {
                 Ok((answer, c)) => {
                     cost += c;
                     let _ = writeln!(log, "### answer {calls}\n\n{answer}\n");
@@ -1086,7 +1219,7 @@ fn front_door_recording() {
     while let Some(a) = next.take() {
         calls += 1;
         let _ = writeln!(log, "### request {calls}\n\n```text\n{}\n```\n", a.message);
-        match turn(&setup, &mut chat, &a.message, &a.context) {
+        match turn(&setup, &mut chat, &a) {
             Ok((answer, _)) => {
                 let _ = writeln!(log, "### answer {calls}\n\n{answer}\n");
                 match ins.answered(&answer, &env) {
@@ -1144,6 +1277,7 @@ fn front_door_recording() {
 /// must accept.
 fn reference(rung: &str) -> &'static str {
     match rung {
+        "long" => long_program("T#5s"),
         "rename" | "chain" => {
             "PROGRAM blink
 VAR_OUTPUT

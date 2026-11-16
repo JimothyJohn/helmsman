@@ -30,6 +30,9 @@ mod app;
 mod arrange;
 #[cfg(test)]
 mod arrange_tests;
+mod ask;
+#[cfg(test)]
+mod ask_tests;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;
@@ -64,6 +67,9 @@ mod devices;
 mod diagram_edit;
 mod diff_ui;
 mod editor;
+mod edits;
+#[cfg(test)]
+mod edits_tests;
 mod find;
 mod front;
 #[cfg(test)]

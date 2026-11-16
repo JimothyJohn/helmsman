@@ -6,6 +6,13 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Open questions for Nick
 
+- [ ] **Which model answers the Agent on the relay's default tier?** — the agent ladder compared four on 2026-11-15 (16 rungs, three runs each, through a local relay on OpenRouter; card `agent-faster-model`). `deepseek/deepseek-v4.1-flash` (today's): 45 of 45, median 8 s, mean 11.1 s, $0.072 for the 45. `deepseek/deepseek-v4.1-flash-1017` (its October snapshot): 45 of 45, median 6 s, mean 7.3 s, $0.042. `anthropic/claude-haiku-5.5`: 45 of 45, median 7 s, mean 9.6 s, $0.052. `qwen/qwen3.8-flash`: stopped after six instructions that took 54 to 118 s each. The runs shared one machine and ran at the same time, so read the seconds as a ranking, not as absolutes. My pick is the 1017 snapshot: fastest and cheapest here, same pass rate, and a dated snapshot does not change under you. It is your deployment setting (`RELAY_MODEL`, or the `default` tier's model).
+  options: deepseek-v4.1-flash-1017 | claude-haiku-5.5 | keep deepseek-v4.1-flash
+  result: a model choice backed by the ladder's numbers
+  id: agent-model-choice
+  asked: 2026-11-15
+  by: claude-session
+
 - [ ] **Does the playground's design step get a key of its own?** — your interview answer on 2026-11-15 put the design step on the playground too, capped. Measured that night: one large design is about 78,000 output tokens on Opus 5.5, about $1.60, and the free chat's key is capped near $2 a day. On that key a single stranger's design uses up the day and the free chat then answers as closed for everyone until the cap resets (the 15-minute pause, again and again). Recommended: a second key for the design entry alone with its own daily cap (say $3: two large designs or many small ones), checked by `put-demo-key.sh` like the first, plus an allowance per address (6 design turns an hour; a large design is 2 or 3 turns). When the design key is spent only the design entry says so and the chat carries on. The other way is one key with a higher cap, which leaves the chat exposed to the same starvation. Either way two more things come with it, both in the relay: the free chat's function allows 120 s a turn and a design turn ran 472 s, so its Timeout rises (deploy chain, a draft PR); and a design that continues over several turns sends the model's reasoning back, which the free chat's text-only requests cannot carry, so the design entry gets its own request shape and a larger body cap. Nothing of the playground's design entry is built until this is answered; boxes do not depend on it.
   options: own key, $3 a day (recommended) | own key, another cap | one key, higher cap | no design step on the playground for now
   result: the playground's design entry is built on that key, or the card is dropped
@@ -14,6 +21,13 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: design-step session
 
 ## Needs your hands
+
+- [ ] **Deploy the relay so the Agent's edits and its one question go live** — Why it matters: the page on dev answers a long program with only the lines that change and asks one question while it works, but only where the relay serves those agents; the deployed relay does not yet, so the published page behaves as before. agent-relay #40 (merged to its dev when green) adds the demo's `edits`, `ask` and `check` agents; nothing in template.yaml changes. Steps: (1) promote agent-relay dev to its default branch; (2) deploy as usual (`scripts/deploy.sh`) with `DemoAddressTurnsPerHour` raised from 40 to about 120: one instruction is now up to three turns (the question, the change, the check), so the old limit closes the free chat for everyone about three times sooner; (3) `curl -s -H "Origin: <the page's origin>" <demo url>/demo/v1/status` should list `"agents":["ask","check","edits"]`; (4) tell a session, which then runs the ladder against the deployed demo and looks at the card in a browser.
+  needs: agent-relay #40 merged, your promote and deploy
+  result: the published playground answers a one-line change to a long program in about a third of the time, and asks its question
+  id: agent-edits-deploy
+  asked: 2026-11-15
+  by: claude-session
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — Why it matters: a node in a cabinet is powered by its Ethernet cable alone, and today no run has proven that. The PoE module turns the cable's 48 V into the board's supply; if its output is not isolated from the cable side, a USB cable plugged in at the same time ties the laptop's ground to the PoE supply's return, and current can flow through the laptop's USB port. Nobody knows yet which it is, so `scripts/node-flash.sh` makes you pull Ethernet before every USB flash. One measurement settles it: the prompt goes away, or becomes a hard rule. the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
   needs: the PoE module on the board, a meter, a PoE port
@@ -431,45 +445,15 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-15
   by: design-step session
 
-- [ ] **Agent speed: less thinking on small asks** — Nick, 2026-11-13: the Agent is slow; approved lever. Measured on the free chat: on a simple instruction the model thinks for 5 to 10 s and writes the whole file in 1 to 2 s, so thinking is most of the wait. A new relay profile (a served profile never changes): thinking off or at its lowest for one-line changes (a rename, a time, a constant) and kept for new logic, chosen by the page from the instruction and the scope, or by the relay from the request. Kept only if the agent ladder still passes 14 of 14 (`cargo test -p helmsman-canvas agent_ladder -- --ignored`, against a relay serving the profile); the ladder's seconds before and after go in the PR.
-  needs: a session in ../agent-relay for the profile, your deploy
-  result: small instructions answer in a few seconds instead of 8 to 20
-  est: 1d
-  difficulty: med
-  id: agent-less-thinking
-  asked: 2026-11-13
-  by: claude-session
-
-- [ ] **Agent speed: edits instead of the whole file** — Nick, 2026-11-13: approved lever. The model rewrites the whole file every time; for a long program that is most of the output. A new relay profile whose answer is anchored edits (the lines replaced and the text they become, refused when the anchor no longer matches), applied by the page and checked as today; the draft then shows the edit in place. Also the first step of `agent-acceptance-signal` (edits anchored to a base hash). Ladder before and after, as above, plus a long-program rung.
-  needs: a session in ../agent-relay for the profile, your deploy
-  result: an instruction on a 300-line program answers about as fast as one on 20 lines
-  depends: agent-less-thinking
-  est: 2d
-  difficulty: high
-  id: agent-edits-not-files
-  asked: 2026-11-13
-  by: claude-session
-  status: ready
-
-- [ ] **Agent speed: compare faster models on the ladder** — Nick, 2026-11-13: approved lever. Two or three candidates through OpenRouter, each on the ladder for seconds, pass rate and cost, the table in the PR; the one picked is the relay's `RELAY_MODEL`, a deployment setting you change.
-  needs: a relay serving each candidate (a local relay, or a test stage); your deploy for the one picked
-  result: a model choice backed by the ladder's numbers
-  est: 4h
-  difficulty: low
-  id: agent-faster-model
-  asked: 2026-11-13
-  by: claude-session
-
-- [ ] **Agent wait: one question while the Agent works** — Nick, 2026-11-15: the waiting time is the worst part of the Agent; use it. Interview and prototype that day. When an instruction is sent, a second relay profile on a small fast model gets the instruction and the program and returns at most one question about how the machine should behave, with two or three answers to click, or nothing (a rename, a time, a constant must draw nothing). The card shows under the progress line while the main turn runs. Decided: (1) the turn keeps running: an answer that arrives before any draft text resends the instruction with the answer added; later, the answer is compared with the result, an agreeing answer ticks as covered and a differing one starts one follow-up turn on the draft; (2) an answer guides this turn and is recorded on its History page, it creates no lasting requirement test; (3) no chat thread. Prototype (16 instructions, one run each, 2026-11-15): a small model with thinking off answered in 2.1 s median, 3.5 s max, asked on 8 of 8 underspecified instructions and its first question was the useful one (restart after an emergency stop is released, a pending start cancelled by stop, an alarm until reset); the second and third were filler, hence the cap of one; it asked once about something the program already answered. The relay's default model took 5.0 s median, 10.2 s max and 4 of 16 replies held no answer, so the profile needs a model of its own (`RELAY_MODEL` serves every profile with one). Order of work: the relay profile and its per-profile model; the question card on the page; the answer check against the result; a ladder rung per behaviour (no question on the clear rungs, the answer honoured on an open one). The page first, a box after `agent-progress-box`.
-  needs: a session in ../agent-relay for the profile and the per-profile model, your deploy
-  result: an engineer answers one question about the machine while the Agent writes, and the result is checked against it
-  depends: agent-edits-not-files
+- [ ] **The Agent's edits and its question, where they are not yet** — built for the page on the free chat (2026-11-15: `crate::edits`, `crate::ask`, agent-relay #40). Measured on the ladder: a one-line change to a 250-line program in 7.3 s and one call, was 23.7 s and two; no difference on short programs; 48 of 48 either way. Asking without extended thinking was measured too and left out (`HELMSMAN_LADDER_QUICK` in agent_ladder_tests.rs says why). Left: (1) a box: `instruct::BOX_RULES` still asks for the whole file and the box's Agent tab shows no question (after `agent-progress-box`; needs a served relay profile for each, which is a new id and a deploy); (2) a visitor's own key and the local proxy still get whole files (`claude::SYSTEM`); (3) while an answer streams as edit blocks the Code tab keeps showing the file as it is, and the tab says "Writing main.st" with no draft: show the edits in place; (4) the question card has not been seen in a browser (the smoke run has no relay that serves `ask`); (5) the ladder has no rung for the question (no question on a clear instruction, the answer honoured on an open one): the page-level tests in ask_tests.rs script the relay.
+  needs: `agent-edits-deploy` for (4); `agent-progress-box` for (1)
+  result: the same speed and the same question on a box and with a key
+  depends: agent-progress-box
   est: 3d
   difficulty: high
-  id: agent-wait-questions
+  id: agent-edits-everywhere
   asked: 2026-11-15
   by: claude-session
-  status: ready
 
 - [ ] **The box's Agent tab shows its progress too** — the page shows the time, the latest thought and the draft as it streams (feat/agent-progress); the box's Agent tab goes through `POST /api/chat` and still shows only a spinner (`instruct::View::progress` is `None` there). Needs the thinking and text deltas through the box's chat stream to the canvas, then the same `Progress`.
   needs: nothing

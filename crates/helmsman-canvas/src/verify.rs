@@ -727,6 +727,13 @@ fn indistinct(
     ))
 }
 
+/// How a retry asks for the code again, from an agent that sends whole
+/// files; one that sends the lines that change is asked in its own form
+/// (`crate::edits::retry_words`).
+pub const FIXED_FILE: &str = "the whole file with the fix made in it, in one ```st block,";
+/// [`FIXED_FILE`], when the code itself was not what failed.
+pub const SAME_FILE: &str = "the same whole file in one ```st block,";
+
 /// What the page does with a checked answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Next {
@@ -756,16 +763,15 @@ pub fn next(check: &Check, retries: u8, asked: bool) -> Next {
                 "A failed scenario lists, in brackets, the values it held at the failing scan: the inputs it drove then and the outputs it read. If those inputs are not the case the check is about, the scenario's timing is wrong, so fix the scenario; if they are, fix the code.\n",
             );
         }
-        m.push_str(
-            "Answer again in full: the whole file with the fix made in it, in one ```st block, and the ```st scenario blocks that check it.",
-        );
+        m.push_str("Answer again in full: ");
+        m.push_str(FIXED_FILE);
+        m.push_str(" and the ```st scenario blocks that check it.");
         return Next::Retry(m);
     }
     if check.unchecked() && !asked {
-        return Next::Retry(
-            "Your answer gives code but no scenario to check it. Answer again in full: the same whole file in one ```st block, and one or more ```st scenario blocks that prove it does what was asked."
-                .into(),
-        );
+        return Next::Retry(format!(
+            "Your answer gives code but no scenario to check it. Answer again in full: {SAME_FILE} and one or more ```st scenario blocks that prove it does what was asked."
+        ));
     }
     Next::Show
 }
