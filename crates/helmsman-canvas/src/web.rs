@@ -855,6 +855,10 @@ thread_local! {
     static VENDOR_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// Why that file was not read, said beside its button.
     static VENDOR_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The pane layout file picked for View › Pane layouts… › Import.
+    static LAYOUTS_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why that file was not read, said in the popup.
+    static LAYOUTS_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 type Sink = &'static std::thread::LocalKey<RefCell<Vec<(String, Vec<u8>)>>>;
@@ -877,6 +881,31 @@ pub fn pick_vendor_file(ctx: &egui::Context) {
         &VENDOR_PICKED,
         &VENDOR_ERRORS,
     );
+}
+
+/// Opens the picker for a pane layout file (`crate::pane_layout`); the
+/// file arrives through [`take_layouts_picked`], its refusal through
+/// [`take_layouts_errors`].
+pub fn pick_layouts_file(ctx: &egui::Context) {
+    pick_into(
+        crate::pane_layout::ACCEPT,
+        ctx,
+        crate::pane_layout::pick_refusal,
+        &LAYOUTS_PICKED,
+        &LAYOUTS_ERRORS,
+    );
+}
+
+/// The pane layout files picked since the last call: name and bytes.
+#[must_use]
+pub fn take_layouts_picked() -> Vec<(String, Vec<u8>)> {
+    LAYOUTS_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Why the pane layout files picked since the last call were not read.
+#[must_use]
+pub fn take_layouts_errors() -> Vec<String> {
+    LAYOUTS_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
 /// The vendor's files picked since the last call: name and bytes.

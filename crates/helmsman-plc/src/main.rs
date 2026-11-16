@@ -118,6 +118,11 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        the agent version POST /api/explain asks for (an
                        explain profile; default explain-v2). The box runs
                        only read-only tools for it either way.
+  --relay-design-agent V
+                       the agent version POST /api/design asks for (the
+                       design profile, which has no tools; default
+                       helmsman/design-v1). A relay that does not serve it
+                       answers the design step as not available.
   --relay-tests-agent V
                        the agent version POST /api/projects/{p}/requirements
                        asks for (a tests profile; default tests-v1). The box
@@ -215,6 +220,7 @@ struct Opts {
     relay_token: Option<PathBuf>,
     relay_agent: String,
     relay_explain_agent: Option<String>,
+    relay_design_agent: Option<String>,
     relay_tests_agent: Option<String>,
     relay_help_agent: Option<String>,
     ui: Option<PathBuf>,
@@ -242,6 +248,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
 }
 
 /// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`,
+/// `--relay-design-agent`,
 /// `--relay-tests-agent`, `--relay-help-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
@@ -252,6 +259,7 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
         "--relay-token" => once(&mut o.relay_token, flag, v)?,
         _ if !relay::version_ok(v) => return Err(format!("{flag}: not an agent version: {v:?}")),
         "--relay-explain-agent" => o.relay_explain_agent = Some(v.to_string()),
+        "--relay-design-agent" => o.relay_design_agent = Some(v.to_string()),
         "--relay-tests-agent" => o.relay_tests_agent = Some(v.to_string()),
         "--relay-help-agent" => o.relay_help_agent = Some(v.to_string()),
         _ => v.clone_into(&mut o.relay_agent),
@@ -282,6 +290,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_token: None,
         relay_agent: "v7".into(),
         relay_explain_agent: None,
+        relay_design_agent: None,
         relay_tests_agent: None,
         relay_help_agent: None,
         ui: None,
@@ -373,6 +382,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             | "--relay-token"
             | "--relay-agent"
             | "--relay-explain-agent"
+            | "--relay-design-agent"
             | "--relay-tests-agent"
             | "--relay-help-agent" => {
                 relay_flag(&mut o, flag, v)?;
@@ -1417,6 +1427,9 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
             .clone()
             .unwrap_or_else(|| "explain-v2".into()),
     );
+    if let Some(v) = &o.relay_design_agent {
+        setup.design_agent.clone_from(v);
+    }
     setup.tests_agent = Some(o.relay_tests_agent.clone().unwrap_or_else(|| "tests-v1".into()));
     if let Some(v) = &o.relay_help_agent {
         setup.help_agent.clone_from(v);

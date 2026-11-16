@@ -244,6 +244,9 @@ pub struct App {
     routed: bool,
     /// Help › About is open.
     pub about: bool,
+    /// This browser's named pane layouts and their popup (View › Pane
+    /// layouts…).
+    pub layouts: crate::pane_layout::Layouts,
     /// The page fell back to the simulation by itself (no box answered);
     /// once, so ⋯ › Back to this box is not undone.
     fell_back: bool,
@@ -304,6 +307,12 @@ impl App {
         if let Some(saved) = cc.storage.and_then(|s| s.get_string(CHROME_KEY)) {
             app.chrome = Chrome::restored(&saved);
         }
+        if let Some(saved) = cc
+            .storage
+            .and_then(|s| s.get_string(crate::pane_layout::LAYOUTS_KEY))
+        {
+            app.layouts = crate::pane_layout::Layouts::restored(&saved);
+        }
         // Dark by default; the light mode this browser chose, from the
         // first frame.
         theme::apply(&cc.egui_ctx, app.chrome.light);
@@ -346,6 +355,7 @@ impl App {
             monitor: Monitor::default(),
             routed: false,
             about: false,
+            layouts: crate::pane_layout::Layouts::default(),
             fell_back: false,
             asking: crate::box_popup::Asking::None,
             found_shown: false,
@@ -572,6 +582,12 @@ impl App {
         {
             self.uploaded(crate::web::take_picked());
             self.pick_failed(crate::web::take_pick_errors(), ctx.input(|i| i.time));
+            for (name, bytes) in crate::web::take_layouts_picked() {
+                self.layouts.imported(&name, &bytes);
+            }
+            if let Some(why) = crate::web::take_layouts_errors().pop() {
+                self.layouts.note = Some((why, true));
+            }
         }
         let session = self.session();
         let engineer = is_engineer(session.as_ref()).is_ok();
@@ -1066,6 +1082,9 @@ impl App {
         if self.about {
             self.about_ui(ui.ctx(), &mut hits);
         }
+        if self.layouts.open && self.screen == Screen::Editor {
+            self.layouts_ui(ui.ctx(), &mut hits);
+        }
         hits
     }
 
@@ -1393,6 +1412,24 @@ impl App {
             }
         }
         self.chrome.hits.extend(hits);
+    }
+
+    /// View › Pane layouts…: the popup, and the browser's side of its
+    /// Export and Import.
+    fn layouts_ui(&mut self, ctx: &egui::Context, hits: &mut Vec<(String, Rect)>) {
+        let act = self.layouts.popup(ctx, &mut self.chrome, hits);
+        #[cfg(target_arch = "wasm32")]
+        match act {
+            Some(crate::pane_layout::Act::Export) => crate::web::download_bytes(
+                crate::pane_layout::FILE,
+                &self.layouts.export(),
+                "application/json",
+            ),
+            Some(crate::pane_layout::Act::Import) => crate::web::pick_layouts_file(ctx),
+            None => {}
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = act;
     }
 
     /// Help › About: the product, its version and build, the licence, the site.
@@ -1752,6 +1789,17 @@ impl App {
                     Source::Sim => self.sim.as_ref().map_or(&[], |s| s.tabs()),
                 };
                 crate::editor::view_menu(ui, &mut chrome, tabs);
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "view layouts",
+                    "Pane layouts…",
+                    false,
+                    "Ready-made arrangements of the side tabs and panes, and your own: save the panes as they are by name, export them to a file, import them in another browser.",
+                ) {
+                    self.screen = Screen::Editor;
+                    self.layouts.open = true;
+                }
                 ui.separator();
                 if menu_item(
                     ui,
@@ -2012,6 +2060,7 @@ impl eframe::App for App {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(CHROME_KEY, self.chrome.saved());
+        storage.set_string(crate::pane_layout::LAYOUTS_KEY, self.layouts.saved());
         if self.front_seen {
             storage.set_string(FRONT_KEY, "seen".into());
         }

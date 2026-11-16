@@ -2858,6 +2858,49 @@ path that drives an output).
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.
 
+## Design step (`design-step-box`, built; the relay side is the `helmsman/design-v1` profile)
+
+`POST /api/design` (token or session, audited, behind the `box` feature
+like the rest of the API) is the chat route's sibling for a machine that
+is not built yet. The relay's design profile has no tools: the engineer
+describes a machine and it answers with a control system design in
+Markdown. `--relay-design-agent V` names the profile (default
+`helmsman/design-v1`, checked with the same `version_ok`).
+
+- **Request:** `{"description": "..."}` starts a design (trimmed, 1 to
+  `chat::MAX_MESSAGE` characters, no control characters), `{"session":
+  "d1"}` continues one. Exactly one of the two.
+- **First message** (built by the box, `api/design.rs`): the description,
+  then four tagged blocks: `<dialect>` (a constant text on what
+  helmsman-iec accepts and how modules share signals), `<project>` (the
+  running modules' sources under `== module NAME ==`, at most 200 KiB;
+  what does not fit is named in a `[left out: ...]` line), `<io_devices>`
+  (what the agent's `list_devices` tool returns, as JSON text, at most
+  100 KiB) and `<requirement_tests>` (the running project's `test_*.st`
+  files, empty without a project). A `<` that would start or end one of
+  those four tags inside the data is written `&lt;`, so data cannot close
+  its block or open another.
+- **Events:** `session {id}`, `thinking {delta}` (summarized thinking as
+  it streams), `text {delta}`, then `done {stop, output_tokens, turns,
+  more}` or `error {kind, message, retryable}`. `more` is true exactly
+  when the stop reason is `max_tokens`. A relay answer 404
+  `unknown_agent_version` is the error kind `design_unavailable`.
+- **One request, one relay turn.** The box never loops: while `more` is
+  true the page posts `{"session"}` again, and the box sends the stored
+  conversation with the assistant turn exactly as it came (thinking blocks
+  and signatures included) and a user message `Continue`. The relay
+  client's timeouts for this route are at least 180 s idle and 660 s total
+  (chat's are unchanged).
+- **Sessions:** in memory, at most 4, each used by one request at a time,
+  dropped after the chat's idle time (the least recently used idle one goes
+  when full). A continue for an unknown or expired session is 404; for one
+  still answering, or whose last turn did not stop at `max_tokens`, 409. A
+  turn that fails leaves a continued design as it was (post it again) and
+  drops a first turn's design.
+- **Offline:** the route does not use the rule-based fallback and does not
+  change the chat's online or offline state; an unreachable relay is an
+  `error` event with `relay::Error::kind()`.
+
 ## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
 
 For someone in trouble who did not write the program (Nick, 2026-11-07,
