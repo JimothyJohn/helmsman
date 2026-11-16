@@ -60,6 +60,9 @@ pub struct Turn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Delta<'a> {
     Text(&'a str),
+    /// Summarized thinking, as it streams (the block itself, signature
+    /// included, is kept in [`Turn::content`]).
+    Thinking(&'a str),
     /// A tool call began (its input is still streaming).
     ToolStart {
         id: &'a str,
@@ -247,6 +250,7 @@ impl Builder {
                     .as_str()
                     .ok_or_else(|| bad("thinking_delta without thinking"))?;
                 append(b, "thinking", s);
+                on(Delta::Thinking(s));
             }
             "signature_delta" => {
                 let s = delta["signature"]

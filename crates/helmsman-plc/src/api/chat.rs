@@ -96,6 +96,9 @@ pub struct Setup {
     pub help_agent: String,
     /// What one help request may cost.
     pub help_budget: Budget,
+    /// The agent version `POST /api/design` asks the relay for (a design
+    /// profile: no tools). See [`super::design`].
+    pub design_agent: String,
     /// How often the relay is probed while the agent is not online.
     pub probe_every: Duration,
 }
@@ -117,6 +120,7 @@ impl Setup {
             tests_budget: super::requirements::budget(),
             help_agent: super::help::PROFILE.into(),
             help_budget: super::help::budget(),
+            design_agent: super::design::PROFILE.into(),
             probe_every: Duration::from_secs(15),
         }
     }
@@ -174,6 +178,7 @@ pub struct Chat {
     next: AtomicU64,
     running: AtomicUsize,
     link: Arc<Mutex<Link>>,
+    designs: super::design::Designs,
 }
 
 impl Chat {
@@ -310,6 +315,7 @@ impl Chat {
                 reason: None,
                 seq: 0,
             })),
+            designs: super::design::Designs::default(),
         }
     }
 
@@ -644,6 +650,41 @@ impl Chat {
             retry: self.setup.retry,
             limits: self.setup.limits,
         }
+    }
+
+    /// The design step's conversations.
+    pub(super) fn designs(&self) -> &super::design::Designs {
+        &self.designs
+    }
+
+    /// How long an unused conversation (chat or design) is kept.
+    pub(super) fn idle(&self) -> Duration {
+        self.setup.idle
+    }
+
+    /// The relay as the design route uses it: the design profile, and
+    /// timeouts for a turn that thinks for minutes.
+    pub(super) fn design_relay(&self) -> relay::Config {
+        let mut cfg = self.setup.relay.clone();
+        cfg.version.clone_from(&self.setup.design_agent);
+        cfg.timeouts.idle = cfg.timeouts.idle.max(super::design::IDLE);
+        cfg.timeouts.total = cfg.timeouts.total.max(super::design::TOTAL);
+        cfg
+    }
+
+    /// The history limit of one conversation, bytes.
+    pub(super) fn history_bytes(&self) -> usize {
+        self.setup.limits.history_bytes
+    }
+
+    /// What the agent's `list_devices` tool returns, run on this box.
+    pub(super) fn list_devices(&self) -> helmsman_agent::tools::Outcome {
+        helmsman_agent::tools::run(
+            &self.api,
+            &mut helmsman_agent::tools::Drafts::default(),
+            "list_devices",
+            &json!({}),
+        )
     }
 
     /// Probes the relay once when the agent is offline; whether it is
