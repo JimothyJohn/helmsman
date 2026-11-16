@@ -26,10 +26,20 @@
 html,
 body,
 #root {
-  width: 1920px;
-  height: 1080px;
+  width: 2560px;
+  height: 1440px;
   overflow: hidden;
   background: var(--black);
+}
+/* Everything is laid out on a 1920 x 1080 stage, scaled to the 2560 x 1440 frame. */
+#stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  transform: scale(1.3333333333);
+  transform-origin: 0 0;
 }
 #root {
   position: relative;

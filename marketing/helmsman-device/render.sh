@@ -25,7 +25,7 @@ draft | looks | delivery)
         (
             cd "cut-$cut"
             $HF check
-            $HF render --quality "$quality" --fps 60 --resolution landscape-1440p -o "../../helmsman-device-$cut.mp4"
+            $HF render --quality "$quality" --fps 60 -o "../../helmsman-device-$cut.mp4"
             ffprobe -v error -show_entries format=duration,size -of default=nw=1 "../../helmsman-device-$cut.mp4"
         )
     done

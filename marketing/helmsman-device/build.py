@@ -300,17 +300,18 @@ PAGE = """<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=1920, height=1080" />
+    <meta name="viewport" content="width=2560, height=1440" />
     <title>{title}</title>
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
     <link rel="stylesheet" href="film.css" />
   </head>
   <body>
     <!-- Written by build.py: edit the cut's table there, not this file. -->
-    <div id="root" data-composition-id="main" data-start="0" data-duration="{dur}" data-width="1920" data-height="1080" data-motion-blur="on">
-      <div id="shake">
+    <div id="root" data-composition-id="main" data-start="0" data-duration="{dur}" data-width="2560" data-height="1440" data-motion-blur="on">
+      <!-- Laid out at 1920 x 1080 and scaled by 4/3: the film is 2560 x 1440. -->
+      <div id="stage"><div id="shake">
         {body}
-      </div>
+      </div></div>
       {audio}
     </div>
     <script>
