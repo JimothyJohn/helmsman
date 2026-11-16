@@ -1187,7 +1187,7 @@ impl PlaygroundView {
             Some(crate::spec_mode::FormAct::Build) => self.send_spec(ctx),
             Some(crate::spec_mode::FormAct::AddFile) => {
                 #[cfg(target_arch = "wasm32")]
-                crate::web::pick_spec_file(ctx);
+                crate::web::pick_spec_file(ctx, false);
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.spec.error = Some("Files are added in the browser page.".into());

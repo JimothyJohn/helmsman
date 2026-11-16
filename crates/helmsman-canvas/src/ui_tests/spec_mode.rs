@@ -58,6 +58,8 @@ fn long_draft() -> Draft {
             name: "Pasted".into(),
             text: "The belt.".into(),
         }],
+        pdfs: Vec::new(),
+        on_box: false,
         label: "From a spec: Pasted".into(),
     }
 }
@@ -206,13 +208,13 @@ fn the_windows_stay_inside_a_narrow_page() {
 }
 
 #[test]
-fn the_review_shows_the_io_the_requirements_and_what_did_not_pass() {
+fn the_review_shows_the_io_the_requirements_and_what_is_not_tested_yet() {
     let mut h = page();
     h.app.sim.as_mut().unwrap().spec_review = Some(Review::new(long_draft(), "belt".into()));
     h.wait(0.4);
     assert!(h.drew("I/O (2)") && h.drew("Requirements (3)"));
     assert!(h.drew("conveyor_jam_photo_eye_upstream") && h.drew("on while a carton blocks the eye"));
-    assert!(h.drew("passed") && h.drew("did not pass") && h.drew("untested"));
+    assert!(h.drew("passed") && h.drew("not tested yet") && h.drew("untested"));
     assert!(h.drew("Why: the belt motor latches"));
     assert!(h.drew("2 line(s) of the Agent's list were left out"));
     // A click on the page behind leaves the draft where it is.

@@ -883,14 +883,13 @@ pub fn pick_vendor_file(ctx: &egui::Context) {
 
 /// Opens the picker for a specification's `.md` or `.txt` file; a file
 /// too large is refused before it is read ([`crate::spec_mode::pick_refusal`]).
-pub fn pick_spec_file(ctx: &egui::Context) {
-    pick_into(
-        crate::spec_mode::ACCEPT,
-        ctx,
-        crate::spec_mode::pick_refusal,
-        &SPEC_PICKED,
-        &SPEC_ERRORS,
-    );
+pub fn pick_spec_file(ctx: &egui::Context, pdf: bool) {
+    let (accept, refusal): (&str, fn(&str, f64) -> Option<String>) = if pdf {
+        (crate::spec_mode::ACCEPT_BOX, crate::spec_mode::pick_refusal_box)
+    } else {
+        (crate::spec_mode::ACCEPT, crate::spec_mode::pick_refusal)
+    };
+    pick_into(accept, ctx, refusal, &SPEC_PICKED, &SPEC_ERRORS);
 }
 
 /// The specification's files picked since the last call: name and bytes.

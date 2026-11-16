@@ -132,6 +132,102 @@ pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
     })
 }
 
+/// What the box's refusal of an upload (`status`, its `body`) says, in
+/// words for the engineer, naming `name`: the same sentences for the
+/// vendor's file and for a PDF of a specification.
+#[must_use]
+pub fn refusal_words(status: u16, body: &str, name: &str) -> String {
+    let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
+    let why = clean(j["error"].as_str().unwrap_or_default(), 200, false);
+    let none = "Nothing was sent to the agent.";
+    let (_, text) = match status {
+        0 => (
+            Tone::Error,
+            format!("The box did not answer ({}). {none}", clean(body, 120, false)),
+        ),
+        401 => (
+            Tone::Error,
+            format!("The box no longer knows this page's session. Sign in again. {none}"),
+        ),
+        403 => (
+            Tone::Error,
+            format!(
+                "The box refused the file (403){}. {none}",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {why}")
+                }
+            ),
+        ),
+        413 => (
+            Tone::Error,
+            format!(
+                "{name} is too large for the box{}. {none} Send the pages that matter, or the EDS.",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({why})")
+                }
+            ),
+        ),
+        415 => (
+            Tone::Error,
+            format!(
+                "The box does not take {name} as that kind of file{}. {none}",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({why})")
+                }
+            ),
+        ),
+        422 => (
+            Tone::Error,
+            format!(
+                "The box could not read {name}{}. {none}",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {why}")
+                }
+            ),
+        ),
+        s => (
+            Tone::Error,
+            format!(
+                "The box refused {name} ({s}){}. {none}",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {why}")
+                }
+            ),
+        ),
+    };
+    text
+}
+
+/// The request that keeps `bytes` on the box as a drop-in of `kind`
+/// under the safe form of `name`; `call` says who is answered.
+#[must_use]
+pub fn upload_request(call: PCall, name: &str, bytes: Vec<u8>, kind: File) -> PReq {
+    let (kind_word, ctype) = match kind {
+        File::Pdf => ("pdf", "application/pdf"),
+        File::Text => ("prose", "text/plain"),
+    };
+    PReq {
+        call,
+        method: "POST",
+        url: format!(
+            "{URL}?name={}&kind={kind_word}",
+            crate::remote::segment(&safe_name(name))
+        ),
+        body: Some(bytes),
+        ctype,
+    }
+}
+
 /// The found device the file is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
@@ -383,21 +479,8 @@ impl VendorUi {
             self.stage = Stage::Idle;
             return self.say(Tone::Error, why);
         }
-        let (kind_word, ctype) = match kind {
-            File::Pdf => ("pdf", "application/pdf"),
-            File::Text => ("prose", "text/plain"),
-        };
-        let url = format!(
-            "{URL}?name={}&kind={kind_word}",
-            crate::remote::segment(&safe_name(name))
-        );
-        self.queue.push(PReq {
-            call: PCall::VendorFile,
-            method: "POST",
-            url,
-            body: Some(bytes),
-            ctype,
-        });
+        self.queue
+            .push(upload_request(PCall::VendorFile, name, bytes, kind));
         self.sent_name.clone_from(&shown);
         self.stage = Stage::Uploading(kind);
         self.say(Tone::Info, format!("Sending {shown} to the box…"));
@@ -415,7 +498,6 @@ impl VendorUi {
             return;
         };
         let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
-        let why = clean(j["error"].as_str().unwrap_or_default(), 200, false);
         let name = self.sent_name.clone();
         let none = "Nothing was sent to the agent.";
         let (tone, text) = match status {
@@ -438,69 +520,7 @@ impl VendorUi {
                 self.say(Tone::Info, format!("The box has {name}. Asking the agent…"));
                 return;
             }
-            0 => (
-                Tone::Error,
-                format!("The box did not answer ({}). {none}", clean(body, 120, false)),
-            ),
-            401 => (
-                Tone::Error,
-                format!("The box no longer knows this page's session. Sign in again. {none}"),
-            ),
-            403 => (
-                Tone::Error,
-                format!(
-                    "The box refused the file (403){}. {none}",
-                    if why.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {why}")
-                    }
-                ),
-            ),
-            413 => (
-                Tone::Error,
-                format!(
-                    "{name} is too large for the box{}. {none} Send the pages that matter, or the EDS.",
-                    if why.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({why})")
-                    }
-                ),
-            ),
-            415 => (
-                Tone::Error,
-                format!(
-                    "The box does not take {name} as that kind of file{}. {none}",
-                    if why.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({why})")
-                    }
-                ),
-            ),
-            422 => (
-                Tone::Error,
-                format!(
-                    "The box could not read {name}{}. {none}",
-                    if why.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {why}")
-                    }
-                ),
-            ),
-            s => (
-                Tone::Error,
-                format!(
-                    "The box refused {name} ({s}){}. {none}",
-                    if why.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {why}")
-                    }
-                ),
-            ),
+            _ => (Tone::Error, refusal_words(status, body, &name)),
         };
         self.stage = Stage::Idle;
         self.asked_for = None;

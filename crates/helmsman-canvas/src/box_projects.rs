@@ -150,6 +150,12 @@ pub enum PCall {
     /// `POST /api/dropins`: the vendor's file for the agent
     /// (answered by the Devices tab, `device_vendor.rs`).
     VendorFile,
+    /// `POST /api/dropins`: a PDF of a specification (the name it was
+    /// sent under); answered by the view (`box_spec.rs`).
+    SpecPdf(String),
+    /// `POST /api/projects/{name}/zip`: the project a spec makes, whole;
+    /// answered by the view (`box_spec.rs`).
+    SpecProject(String),
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -384,6 +390,10 @@ pub struct BoxProjects {
     saving_layout: Option<String>,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
+    /// How the box would check a project made now (its image sizes and
+    /// scan period), from the project list: what a spec run is checked
+    /// against before there is a project to ask.
+    pub new_runs: Option<Runs>,
     /// The open project's requirement tests as the box last ran them
     /// (`crate::requirements`): asked when the project opens, after each
     /// save, on Run, and reported by a refused deploy.
@@ -1187,6 +1197,27 @@ impl BoxProjects {
         });
     }
 
+    /// The project a spec makes, as one zip (the one atomic write of many
+    /// files): a name the box has is refused (409) and nothing is written.
+    /// The answer goes to the view ([`PCall::SpecProject`]).
+    pub fn spec_project(&mut self, name: &str, zip: Vec<u8>) {
+        self.queue.push(PReq {
+            call: PCall::SpecProject(name.into()),
+            method: "POST",
+            url: format!("{}/zip", project_url(name)),
+            body: Some(zip),
+            ctype: "application/zip",
+        });
+    }
+
+    /// The box made project `name` from a spec: it opens, and the list is
+    /// read again.
+    pub fn spec_made(&mut self, name: &str) {
+        self.note(format!("Made {name} on the box."), false);
+        self.open_keeping_edits(name);
+        self.relist();
+    }
+
     /// Sends the upload the box refused as taken again, replacing.
     pub fn replace(&mut self) {
         let Some(p) = self.pending.take() else { return };
@@ -1331,6 +1362,7 @@ impl BoxProjects {
                     return;
                 }
                 self.available = Some(true);
+                self.new_runs = Runs::parse(&j["tests"]);
                 let current = j["running"]["current"].as_bool() == Some(true);
                 self.running = j["running"]["project"]
                     .as_str()
@@ -1843,6 +1875,8 @@ impl BoxProjects {
             | PCall::ProposalAccept
             | PCall::ProposalDiscard
             | PCall::VendorFile
+            | PCall::SpecPdf(_)
+            | PCall::SpecProject(_)
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {

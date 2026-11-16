@@ -70,6 +70,8 @@ pub struct BoxView {
     pub agent: crate::box_agent::BoxAgent,
     /// The Agent tab (`crate::instruct`, as in the page).
     pub instruct: crate::instruct::Instruct,
+    /// Spec mode on this box (`crate::box_spec`).
+    pub spec: crate::box_spec::BoxSpec,
     /// The Agent tab's Help mode (`POST /api/help`).
     pub help: crate::help::HelpUi,
     help_seq: u64,
@@ -346,6 +348,7 @@ impl BoxView {
             chat_sent: Vec::new(),
             agent: crate::box_agent::BoxAgent::new(),
             instruct: crate::instruct::Instruct::default(),
+            spec: crate::box_spec::BoxSpec::new(),
             help: crate::help::HelpUi::default(),
             help_seq: 0,
             #[cfg(target_arch = "wasm32")]
@@ -406,6 +409,8 @@ impl BoxView {
                     self.devices_ui.proposal.answer(&call, a.status, &a.body);
                 }
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
+                PCall::SpecPdf(name) => self.spec_pdf_answer(ctx, &name, &a),
+                PCall::SpecProject(name) => self.spec_project_answer(&name, &a),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
         }
@@ -644,6 +649,9 @@ impl BoxView {
         scope: Option<crate::scope::Scope>,
         f: impl FnOnce(&mut crate::instruct::Instruct, &crate::instruct::Env<'_>) -> R,
     ) -> Option<R> {
+        if scope == Some(crate::scope::Scope::NewProject) {
+            return Some(self.with_new_env(f));
+        }
         let (project, open_scope, files) = self.agent_files()?;
         // Checked the way the box will run it: its image sizes and scan
         // period, as it reported them for this project (the page's
@@ -792,6 +800,10 @@ impl BoxView {
         use crate::box_agent::End;
         use crate::instruct::Step;
         if !self.instruct.busy() {
+            // A run that ended (stopped, failed) leaves no draft behind.
+            if !self.spec.uploading && !self.spec.accepting {
+                self.spec.drop_run();
+            }
             return;
         }
         // An instruction belongs to the project it was typed in: another
@@ -802,7 +814,7 @@ impl BoxView {
             .instruct
             .run
             .as_ref()
-            .is_some_and(|r| Some(r.project.as_str()) != open)
+            .is_some_and(|r| !r.spec && Some(r.project.as_str()) != open)
         {
             self.agent.stop();
             #[cfg(target_arch = "wasm32")]
@@ -846,6 +858,9 @@ impl BoxView {
         let step = self.with_env(scope, |i, env| i.answered(&turn.text, env));
         match step {
             Some(Step::Ask(ask)) => self.agent_send(&ask.text, false, ctx),
+            Some(Step::Apply(apply)) if apply.scope == crate::scope::Scope::NewProject => {
+                self.spec_drafted(apply);
+            }
             Some(Step::Apply(apply)) => self.agent_write(&apply),
             // A box never asks for a plan (`steps` is the page's).
             Some(Step::Done | Step::Wait) => {
@@ -924,6 +939,211 @@ impl BoxView {
         });
         self.instruct.applied(apply, undo);
         self.log_agent();
+    }
+
+    // ---- spec mode (`crate::box_spec`) ----
+
+    /// Why "From a spec…" is off, if it is: the reasons the Agent tab's
+    /// other controls give.
+    fn spec_entry_blocked(&self) -> Option<String> {
+        if let Err(why) = is_engineer(self.session.as_ref()) {
+            return Some(why);
+        }
+        if self.projects.available != Some(true) {
+            return Some(
+                "This box runs without projects (helmsman-plc --projects): a spec makes a project, and there is none to make it in.".into(),
+            );
+        }
+        if !self.agent.status.can_send() {
+            return Some(self.agent.status.line());
+        }
+        if self.instruct.busy() {
+            return Some("The Agent is still working on the last instruction.".into());
+        }
+        None
+    }
+
+    /// Why Build cannot go now, if it cannot.
+    fn spec_blocked(&self) -> Option<String> {
+        if self.spec.uploading {
+            return Some("The PDFs are going to the box.".into());
+        }
+        if self.spec.review.is_some() {
+            return Some("A draft is waiting for Accept or Discard.".into());
+        }
+        if let Some(why) = self.spec_entry_blocked() {
+            return Some(why);
+        }
+        if self.projects.new_runs.is_none() {
+            return Some("Reading what this box checks a project against…".into());
+        }
+        None
+    }
+
+    /// The project as the Agent sees it for a new one: nothing yet, and the
+    /// settings the box reports for a project made now.
+    fn with_new_env<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::instruct::Instruct, &crate::instruct::Env<'_>) -> R,
+    ) -> R {
+        let settings = self.projects.new_runs.map_or_else(
+            || helmsman_iec::spec::Settings::new(crate::playground::SIZES),
+            |r| helmsman_iec::spec::Settings::new(r.sizes).period(r.period),
+        );
+        let files = crate::scope::Files::new();
+        let env = crate::instruct::Env {
+            project: "",
+            scope: crate::scope::Scope::NewProject,
+            files: &files,
+            source: "",
+            diagnostics: &[],
+            devices: "",
+            settings,
+        };
+        f(&mut self.instruct, &env)
+    }
+
+    /// Build: the PDFs are kept on the box first, then the Agent is asked.
+    pub fn send_spec(&mut self, ctx: &egui::Context) {
+        if let Some(why) = self.spec_blocked().or_else(|| self.spec.spec.refusal()) {
+            self.spec.spec.error = Some(why);
+            return;
+        }
+        let reqs = self.spec.upload_requests();
+        if reqs.is_empty() {
+            return self.spec_start(ctx);
+        }
+        self.spec.spec.error = None;
+        for r in reqs {
+            self.projects.enqueue(r);
+        }
+        ctx.request_repaint();
+    }
+
+    /// The box's answer to a PDF's upload: once every PDF is kept the
+    /// Agent is asked; one the box refused is said beside it.
+    fn spec_pdf_answer(&mut self, ctx: &egui::Context, name: &str, a: &Answer) {
+        if self.spec.pdf_answer(name, a.status, &a.body) == Some(true) {
+            self.spec_start(ctx);
+        }
+    }
+
+    /// Asks the Agent for the project: the box rules for a new project,
+    /// the specification's rules and the documents, the PDFs by drop-in id.
+    fn spec_start(&mut self, ctx: &egui::Context) {
+        let label = self.spec.spec.label();
+        let text = self.spec.spec.message();
+        let started = self.with_env(Some(crate::scope::Scope::NewProject), |i, env| {
+            i.start_spec(env, &label, &text)
+        });
+        match started {
+            Some(Ok(ask)) => {
+                let message = format!("{}\n\n{}", crate::instruct::BOX_NEW_RULES, ask.message);
+                let ids = self.spec.dropins();
+                if let Err(why) = self.agent_send_with(&message, &ids, true, ctx) {
+                    self.instruct.failed(&why);
+                    self.spec.spec.error = Some(why);
+                    self.spec.spec.open = true;
+                    return;
+                }
+                self.spec.begin_run();
+            }
+            Some(Err(why)) => self.spec.spec.error = Some(why),
+            None => {}
+        }
+    }
+
+    /// The run's answer passed its checks: the draft is on review.
+    fn spec_drafted(&mut self, apply: crate::instruct::Apply) {
+        let taken: Vec<String> = self.projects.projects.iter().map(|p| p.name.clone()).collect();
+        if !self.spec.drafted(apply, &taken) {
+            self.instruct.failed("the specification's documents were lost");
+            self.log_agent();
+        }
+    }
+
+    /// Accept: the project goes to the box whole, in one request.
+    pub fn accept_spec(&mut self) {
+        let taken: Vec<String> = self.projects.projects.iter().map(|p| p.name.clone()).collect();
+        if let Some((name, zip)) = self.spec.accept(&taken) {
+            self.projects.spec_project(&name, zip);
+        }
+    }
+
+    /// Discard: nothing was written.
+    pub fn discard_spec(&mut self) {
+        if !self.spec.drop_run() {
+            return;
+        }
+        self.instruct
+            .discarded("Discarded the draft from the spec. Nothing was made.");
+        self.log_agent();
+    }
+
+    /// The box's answer to the project's zip.
+    fn spec_project_answer(&mut self, name: &str, a: &Answer) {
+        if a.status != 201 {
+            self.spec.refused(name, a.status, &a.body);
+            return;
+        }
+        self.projects.spec_made(name);
+        let Some((mut apply, draft)) = self.spec.made() else {
+            return;
+        };
+        let said = draft.summary(name);
+        apply.status.clone_from(&said);
+        apply.why.clone_from(&draft.why);
+        let needs = draft.needs_device();
+        let note = if needs.is_empty() {
+            format!("{said} Deploy runs it.")
+        } else {
+            format!(
+                "{said} {} need{} a device before Deploy: use Assign to device I/O in the I/O tab.",
+                needs.join(", "),
+                if needs.len() == 1 { "s" } else { "" }
+            )
+        };
+        self.projects.note(note, false);
+        self.instruct.applied(&apply, None);
+        self.log_agent();
+    }
+
+    /// The specification's window and the review of its draft.
+    fn spec_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            for e in crate::web::take_spec_errors() {
+                self.spec.spec.error = Some(e);
+            }
+            for (name, bytes) in crate::web::take_spec_picked() {
+                if let Err(e) = self.spec.spec.add_file(&name, &bytes) {
+                    self.spec.spec.error = Some(e);
+                }
+            }
+        }
+        let blocked = self.spec_blocked();
+        match crate::spec_mode::form_ui(ctx, chrome, &mut self.spec.spec, blocked.as_deref()) {
+            Some(crate::spec_mode::FormAct::Build) => self.send_spec(ctx),
+            Some(crate::spec_mode::FormAct::AddFile) => {
+                #[cfg(target_arch = "wasm32")]
+                crate::web::pick_spec_file(ctx, true);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.spec.spec.error = Some("Files are added in the browser page.".into());
+                }
+            }
+            None => {}
+        }
+        let act = self
+            .spec
+            .review
+            .as_mut()
+            .and_then(|r| crate::spec_mode::review_ui(ctx, chrome, r));
+        match act {
+            Some(crate::spec_mode::ReviewAct::Accept) => self.accept_spec(),
+            Some(crate::spec_mode::ReviewAct::Discard) => self.discard_spec(),
+            None => {}
+        }
     }
 
     /// The outcome of the last instruction, in Messages.
@@ -1039,6 +1259,7 @@ impl BoxView {
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
         };
+        let spec_off = self.spec_entry_blocked();
         let (act, help_act) = egui::ScrollArea::vertical()
             .id_salt("box-agent")
             .show(ui, |ui| {
@@ -1054,7 +1275,24 @@ impl BoxView {
                 );
                 ui.add_space(4.0);
                 match self.help.mode {
-                    Mode::Code => (crate::instruct::ui(ui, chrome, &mut self.instruct, &view), None),
+                    Mode::Code => {
+                        let act = crate::instruct::ui(ui, chrome, &mut self.instruct, &view);
+                        ui.horizontal_wrapped(|ui| {
+                            let r = ui
+                                .add_enabled(
+                                    spec_off.is_none(),
+                                    egui::Button::new(RichText::new("From a spec…").size(crate::theme::BODY)),
+                                )
+                                .tip(spec_off.clone().unwrap_or_else(|| {
+                                    "Opens a window to paste a scope of work or product documentation, or add .md, .txt and .pdf files. The Agent drafts a new project on this box from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.".into()
+                                }));
+                            chrome.hit("spec open", r.rect);
+                            if r.clicked() {
+                                self.spec.spec.open = true;
+                            }
+                        });
+                        (act, None)
+                    }
                     Mode::Help => (None, crate::help::ui(ui, chrome, &mut self.help, &help_view)),
                 }
             })
@@ -1076,6 +1314,7 @@ impl BoxView {
                 self.agent.stop();
                 #[cfg(target_arch = "wasm32")]
                 self.chat.abort();
+                self.spec.drop_run();
                 self.instruct.failed("stopped");
             }
             Some(Act::Undo) => self.undo_change(),
@@ -1162,6 +1401,7 @@ impl BoxView {
             ui.ctx().request_repaint();
         }
         self.vendor_file(&ui.ctx().clone());
+        self.spec_ui(&ui.ctx().clone(), chrome);
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
         }

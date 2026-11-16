@@ -627,6 +627,14 @@ fn projects_and_files_are_made_saved_read_and_deleted_by_an_engineer() {
     let list = get(b.addr, "/api/projects").json();
     assert_eq!(list["projects"][0]["name"], "line3", "{list}");
     let p = get(b.addr, "/api/projects/line3").json();
+    // The list says how a project made now would be checked, the same as
+    // a project's own answer does (a page with no project yet learns it
+    // here).
+    assert_eq!(list["tests"], p["tests"], "{list}");
+    assert!(
+        list["tests"]["scan_ms"].as_u64().is_some_and(|ms| ms > 0),
+        "{list}"
+    );
     let names: Vec<&str> = p["files"]
         .as_array()
         .unwrap()
