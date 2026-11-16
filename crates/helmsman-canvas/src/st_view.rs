@@ -531,7 +531,11 @@ impl Viewer {
             .iter()
             .map(|p| {
                 let d = &p.diagram;
-                let by_request = structure::sections(d, src).into_iter().chain(structure::arms(d));
+                // A section that is the whole body names nothing.
+                let sections = structure::sections(d, src)
+                    .into_iter()
+                    .filter(|f| f.stmts.len() < d.top.len());
+                let by_request = sections.chain(structure::arms(d));
                 helmsman_diagram::fold::auto(d)
                     .into_iter()
                     .chain(by_request.map(Fold::with_blocks))

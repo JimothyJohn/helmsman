@@ -376,3 +376,17 @@ fn an_arm_folds_from_its_label_and_opens_from_its_block() {
     assert_eq!(h.folded(), ["MOTOR"]);
     assert_eq!(h.view.shown().regions.len(), 1);
 }
+
+#[test]
+fn a_comment_over_the_whole_program_outlines_nothing() {
+    let src = PLANT
+        .replace("(* Cooling *)\n", "")
+        .replace("(* Counting *)\n", "")
+        .replace(
+            "motor := (start OR motor)",
+            "(* The plant *)\nmotor := (start OR motor)",
+        );
+    let h = Harness::of(&src);
+    assert_eq!(h.view.opened_tabs(h.view.cams[h.view.scope]).len(), 0);
+    assert_eq!(h.folded(), ["MOTOR"]);
+}
