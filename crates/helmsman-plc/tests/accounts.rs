@@ -1675,6 +1675,141 @@ fn a_persons_desk_is_never_anyone_elses() {
     assert_secrets_kept(&b, &[&alice, &bob]);
 }
 
+fn pane_layout(name: &str) -> Json {
+    json!({
+        "name": name,
+        "left": ["devices", "files", "claude", "code", "history"],
+        "right": ["io"],
+        "hidden": [],
+        "left_shows": "devices",
+        "right_shows": "io",
+        "left_open": true,
+        "right_open": true,
+        "bottom_open": true,
+        "bottom_shows": "trend",
+        "right_width": 300.0,
+    })
+}
+
+fn pane_layout_names(addr: SocketAddr) -> Vec<String> {
+    let r = get(addr, "/api/pane-layouts");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["format"], "helmsman-pane-layouts 1");
+    r.json()["layouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The box's pane layouts are one list anyone signed in reads and only an
+/// engineer changes: an operator, the box token and a signed-out caller
+/// are refused, a body that breaks a rule is refused whole, and every
+/// change and refusal is audited with the person.
+#[test]
+fn pane_layouts_are_read_by_anyone_and_changed_by_an_engineer_only() {
+    use helmsman_plc::api::pane_layouts::{MAX_BODY, MAX_LAYOUTS};
+    let b = Bench::with_accounts(Some(accounts()));
+    let alice = token_of(&login(b.addr, "alice", ALICE));
+    let bob = token_of(&login(b.addr, "bob", BOB));
+    assert_eq!(pane_layout_names(b.addr), Vec::<String>::new());
+
+    let put = |who: Option<&str>, body: &str| request(b.addr, "PUT", "/api/pane-layouts", who, body);
+    let r = put(Some(&alice), &pane_layout("Line 3 start-up").to_string());
+    assert_eq!((r.status, &r.json()["name"]), (200, &json!("Line 3 start-up")), "{r:?}");
+    // The operator reads it, as it was sent, and cannot change it.
+    let r = request(b.addr, "GET", "/api/pane-layouts", Some(&bob), "");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["layouts"][0], pane_layout("Line 3 start-up"));
+    for who in [Some(bob.as_str()), Some(TOKEN)] {
+        let r = put(who, &pane_layout("Mine").to_string());
+        assert_eq!(r.status, 403, "{who:?}: {r:?}");
+        let r = request(b.addr, "DELETE", "/api/pane-layouts/Line%203%20start-up", who, "");
+        assert_eq!(r.status, 403, "{who:?}: {r:?}");
+    }
+    for who in [None, Some("not-a-session")] {
+        assert_eq!(put(who, &pane_layout("Mine").to_string()).status, 401, "{who:?}");
+        let r = request(b.addr, "DELETE", "/api/pane-layouts/Line%203%20start-up", who, "");
+        assert_eq!(r.status, 401, "{who:?}");
+    }
+    assert_eq!(pane_layout_names(b.addr), ["Line 3 start-up"]);
+
+    // Hostile bodies from an engineer: refused whole, nothing changes.
+    let mut secret = pane_layout("With extras");
+    secret["password"] = json!(ALICE);
+    let big = json!({ "name": "Big", "bottom_shows": "trend", "pad": "x".repeat(MAX_BODY) }).to_string();
+    assert_eq!(put(Some(&alice), &big).status, 413);
+    let mut odd_tab = pane_layout("Odd");
+    odd_tab["left"] = json!(["../../etc/passwd"]);
+    let mut twice = pane_layout("Twice");
+    twice["hidden"] = json!(["io"]);
+    let mut wide = pane_layout("Wide");
+    wide["right_width"] = json!(1e30);
+    for bad in [
+        String::new(),
+        "{".into(),
+        "[]".into(),
+        "null".into(),
+        r#"{"name":7}"#.into(),
+        pane_layout("").to_string(),
+        pane_layout(" padded ").to_string(),
+        pane_layout("line\nbreak").to_string().replace("\\n", "\n"),
+        pane_layout(&"x".repeat(41)).to_string(),
+        odd_tab.to_string(),
+        twice.to_string(),
+        wide.to_string(),
+    ] {
+        let r = put(Some(&alice), &bad);
+        assert_eq!(r.status, 400, "{bad:?}: {r:?}");
+    }
+    assert_eq!(pane_layout_names(b.addr), ["Line 3 start-up"]);
+    // Only a layout's fields are kept: nothing else comes back.
+    assert_eq!(put(Some(&alice), &secret.to_string()).status, 200);
+    let back = get(b.addr, "/api/pane-layouts");
+    assert!(!back.body.contains("password") && !back.body.contains(ALICE), "{back:?}");
+
+    // The same name in another case replaces; the list is bounded.
+    let mut again = pane_layout("LINE 3 START-UP");
+    again["bottom_open"] = json!(false);
+    assert_eq!(put(Some(&alice), &again.to_string()).status, 200);
+    assert_eq!(pane_layout_names(b.addr), ["LINE 3 START-UP", "With extras"]);
+    for k in 2..MAX_LAYOUTS {
+        assert_eq!(put(Some(&alice), &pane_layout(&format!("n{k}")).to_string()).status, 200);
+    }
+    let r = put(Some(&alice), &pane_layout("one too many").to_string());
+    assert_eq!(r.status, 507, "{r:?}");
+    assert_eq!(pane_layout_names(b.addr).len(), MAX_LAYOUTS);
+
+    // Delete by name (percent-encoded in the path), once.
+    let del = |path: &str| request(b.addr, "DELETE", path, Some(&alice), "");
+    assert_eq!(del("/api/pane-layouts/line%203%20start-up").status, 200);
+    assert_eq!(del("/api/pane-layouts/line%203%20start-up").status, 404);
+    for path in [
+        "/api/pane-layouts/..%2F..%2Fetc%2Fpasswd",
+        "/api/pane-layouts/%00",
+        "/api/pane-layouts/nobody",
+    ] {
+        assert_eq!(del(path).status, 404, "{path}");
+    }
+    assert!(matches!(del("/api/pane-layouts").status, 404 | 405));
+    let r = request(b.addr, "POST", "/api/pane-layouts", Some(&alice), "{}");
+    assert_eq!(r.status, 405, "{r:?}");
+    assert_eq!(pane_layout_names(b.addr).len(), MAX_LAYOUTS - 1);
+
+    // Each change and refusal is in the audit log, with the person.
+    let log = audit(b.addr);
+    let mine: Vec<&Json> = log
+        .iter()
+        .filter(|e| e["path"].as_str().is_some_and(|p| p.starts_with("/api/pane-layouts")))
+        .collect();
+    assert!(mine.iter().any(|e| e["user"] == "alice" && e["method"] == "PUT" && e["status"] == 200));
+    assert!(mine.iter().any(|e| e["user"] == "alice" && e["method"] == "DELETE" && e["status"] == 200));
+    assert!(mine.iter().any(|e| e["user"] == "bob" && e["status"] == 403), "{mine:?}");
+    assert!(mine.iter().any(|e| e["status"] == 400) && mine.iter().any(|e| e["status"] == 507));
+    assert_secrets_kept(&b, &[&alice, &bob]);
+}
+
 /// The box keeps the desk's fields and nothing else: a password or PIN in
 /// the body is dropped, never stored or answered back. Oversized and
 /// malformed bodies are refused and audited; an older desk does not write

@@ -1218,6 +1218,7 @@ fn start_api(
         running_drivers,
         trend_pins: Some(dir.join("trend-pins")),
         desks: Some(dir.join("desks")),
+        pane_layouts: Some(dir.join("pane-layouts.json")),
         devconf: Some(api::devconf::Setup::in_state_dir(&dir)),
         dhcp,
         discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {

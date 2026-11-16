@@ -238,6 +238,10 @@ name = "desk"
 required-features = ["box"]
 
 [[test]]
+name = "pane_layouts"
+required-features = ["box"]
+
+[[test]]
 name = "https"
 required-features = ["box", "https"]
 
