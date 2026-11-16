@@ -871,7 +871,10 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         };
         for r in from {
             let to = shown[r.0 as usize];
-            if !roots.contains(&to) {
+            // Roots that went into one fold are one root. A block the
+            // diagram itself names twice (two conditions fed by one
+            // earlier write) stays twice.
+            if fold_of(r).is_none() || !roots.contains(&to) {
                 roots.push(to);
             }
         }

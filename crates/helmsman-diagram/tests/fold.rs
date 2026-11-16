@@ -613,3 +613,42 @@ fn the_folds_a_diagram_opens_with_all_apply_and_the_larger_shape_wins() {
         );
     }
 }
+
+/// Two conditions of one IF that read a variable an earlier statement
+/// wrote are fed by the same block, so the statement names that block
+/// twice among its roots. The view of no folds is the diagram itself,
+/// repeats included (the property above failed on these two bodies, about
+/// one run in several).
+#[test]
+fn a_block_that_is_two_conditions_of_one_statement_stays_two_roots() {
+    for body in [
+        "IF a > 0 THEN a := a + 0; ELSIF a > 0 THEN x := a > 0; IF x THEN a := a + 0; \
+         ELSIF x THEN a := a + 0; END_IF; END_IF;",
+        "n := 0;\nWHILE n < 3 AND NOT (a > 0) DO\nn := n + 1;\nf(in := y, q => x);\n\
+         IF a > 0 THEN\nIF x THEN\na := a + 0;\nELSIF x THEN\na := a + 0;\nEND_IF;\n\
+         ELSIF a > 0 THEN\na := a + 0;\nEND_IF;\nIF n = 2 THEN CONTINUE; END_IF;\nEND_WHILE;",
+    ] {
+        let src = common::programs::program(&[body.to_string()], false);
+        let p = compile(&src, SIZES).unwrap();
+        let m = helmsman_diagram::lower(&src, &p.trace_map()).unwrap();
+        let d = &m.program().unwrap().diagram;
+        let twice = d
+            .stmts
+            .iter()
+            .any(|s| s.roots.iter().enumerate().any(|(i, r)| s.roots[..i].contains(r)));
+        assert!(twice, "the case needs a statement with a repeated root:\n{src}");
+        let v = view(d, &[]);
+        assert_eq!(v.diagram.stmts, d.stmts);
+        assert_eq!(&v.diagram, d);
+        // Folded, the blocks of one fold are still one root.
+        let all: Vec<usize> = d.top.clone();
+        let whole = Fold::over_stmts(d, "all", FoldKind::Section, "all", &all);
+        let v = view(d, &[whole]);
+        assert!(v.skipped.is_empty(), "{:?}", v.skipped);
+        for s in &v.diagram.stmts {
+            let fold_roots = s.roots.iter().filter(|r| v.original(**r).is_none()).count();
+            assert!(fold_roots <= 1, "{:?}", s.roots);
+        }
+        check(&v.diagram);
+    }
+}
