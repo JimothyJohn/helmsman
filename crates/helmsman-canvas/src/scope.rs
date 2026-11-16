@@ -154,6 +154,7 @@ impl Scope {
     /// scope, its rule, and the whole file as it is now, after the lines
     /// of a selection or a block as `section:` (the claude module
     /// neutralizes it).
+    #[cfg(test)]
     #[must_use]
     pub fn envelope(&self, project: &str, files: &Files) -> String {
         self.envelope_for(project, files, false)
@@ -173,7 +174,12 @@ impl Scope {
             Self::File(f) => {
                 m.push_str(&["file: ", f].concat());
                 m.push_str(&if edits {
-                    ["\nanswer with the lines of ", f, " that change, as ```st edit blocks\ntext:\n"].concat()
+                    [
+                        "\nanswer with the lines of ",
+                        f,
+                        " that change, as ```st edit blocks\ntext:\n",
+                    ]
+                    .concat()
                 } else {
                     [
                         "\nanswer with the whole of ",

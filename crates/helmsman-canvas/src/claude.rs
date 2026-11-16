@@ -362,7 +362,9 @@ fn finish(route: &Route, model: Model, mut body: Json) -> Request {
 pub struct Turn<'a> {
     /// Which of the relay's agents answers; `None`: the chat.
     pub agent: Option<&'a str>,
-    /// A small change: answer without extended thinking.
+    /// Answer without extended thinking. The page never asks for it (the
+    /// agent ladder measured no gain, `agent_ladder_tests`); the ladder
+    /// does, to measure it.
     pub quick: bool,
 }
 
@@ -423,6 +425,7 @@ pub fn survey_request(base: &str, choice: &str, other: &str) -> Request {
 /// The Messages API request for the user message `user`, after the
 /// earlier turns ([`context_pages`]), streamed, with the fixed system
 /// prompt cached.
+#[cfg(test)]
 #[must_use]
 pub fn request(route: &Route, model: Model, history: &[Exchange], user: &str) -> Request {
     request_turn(route, model, history, user, Turn::default())
@@ -1139,6 +1142,66 @@ pub enum Incoming {
     },
 }
 
+/// A second answer beside the Agent's, for the question card's requests
+/// (`crate::ask`): assembled the way the Agent's is, shown only once it
+/// is whole.
+#[derive(Default)]
+pub struct Side {
+    seq: u64,
+    sse: Sse,
+    answer: Option<Answer>,
+}
+
+impl Side {
+    /// A new request: its number, for the transport.
+    pub fn start(&mut self) -> u64 {
+        self.seq += 1;
+        self.sse = Sse::default();
+        self.answer = Some(Answer::default());
+        self.seq
+    }
+
+    /// Stops listening: what still arrives for the request is dropped.
+    pub fn stop(&mut self) {
+        self.seq += 1;
+        self.answer = None;
+    }
+
+    /// Applies what the transport brought for the request under way.
+    pub fn receive(&mut self, msg: Incoming) {
+        let now = self.seq;
+        let Some(a) = &mut self.answer else { return };
+        match msg {
+            Incoming::Status { seq, status, body } if seq == now => a.refused(status, &body),
+            Incoming::Chunk { seq, text } if seq == now => match self.sse.push(&text) {
+                Ok(events) => {
+                    for e in &events {
+                        a.apply(e);
+                    }
+                }
+                Err(e) => a.phase = Phase::Failed(e),
+            },
+            Incoming::End { seq } if seq == now => a.end(),
+            Incoming::Unreachable { seq, why } if seq == now => a.unreachable(&why),
+            _ => {}
+        }
+    }
+
+    /// The request's whole answer, once it has ended: its text, or why it
+    /// failed. `None` while it runs or when there is none.
+    pub fn take(&mut self) -> Option<Result<String, String>> {
+        match &self.answer.as_ref()?.phase {
+            Phase::Waiting | Phase::Streaming => None,
+            Phase::Done => self.answer.take().map(|a| Ok(a.text)),
+            Phase::Failed(why) => {
+                let why = why.clone();
+                self.answer = None;
+                Some(Err(why))
+            }
+        }
+    }
+}
+
 /// The way to the model for the Agent tab: the
 /// key, the model, the route, and the one answer under way.
 pub struct Chat {
@@ -1337,6 +1400,7 @@ impl Chat {
     ///
     /// # Errors
     /// No route, or an answer still running.
+    #[cfg(test)]
     pub fn send(&mut self, message: &str, context: &[Exchange]) -> Result<(u64, Request), String> {
         self.send_turn(message, context, Turn::default())
     }

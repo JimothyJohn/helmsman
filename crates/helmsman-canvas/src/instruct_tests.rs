@@ -835,52 +835,6 @@ fn the_estimate_is_a_range_that_grows_with_the_file_and_the_clock_says_when_it_i
     assert_eq!(clock(3, None), "3 s");
 }
 
-/// A small change is asked without extended thinking (card
-/// agent-less-thinking): the ladder's own instructions, sorted the way
-/// its measurements say pays.
-#[test]
-fn only_a_short_change_of_a_name_or_a_value_is_small() {
-    use crate::instruct::small;
-    use crate::scope::Scope;
-    let file = Scope::File("main.st".into());
-    for yes in [
-        "Rename the output lamp to pilot.",
-        "Make the lamp flip every second instead of every 500 ms.",
-        "Count to 5 instead of 10.",
-        "Fix the compile error.",
-        "Make it flip every second.",
-        "  set the delay to T#3s  ",
-        "CHANGE PT to T#250ms",
-    ] {
-        assert!(small(yes, &file), "{yes}");
-    }
-    for no in [
-        // New behaviour, or a condition to get right.
-        "Add an input estop. While estop is on the motor is off and start does nothing.",
-        "Add an output named one that is on when exactly one of a and b is on.",
-        "Turn the lamp on 2 s after the switch goes on, and off as soon as the switch goes off.",
-        "Add an output horn that sounds for 1 s each time the motor starts.",
-        "Make either mean exactly one of them: off when both are on.",
-        "Run the motor only while start is held; it must not latch.",
-        "Make the lamp blink while the switch is on.",
-        "Change the latch so stop wins if both are pressed.",
-        // Not a change to what is there.
-        "What does this program do?",
-        "",
-        "   ",
-        // More than one line, or long.
-        "Rename lamp to pilot.\nRename pulse to tick.",
-        &format!("Rename the output lamp to {}.", "x".repeat(100)),
-    ] {
-        assert!(!small(no, &file), "{no}");
-    }
-    // Never for a new project, whatever the words.
-    assert!(!small("Rename the output lamp to pilot.", &Scope::NewProject));
-    // A word that only contains one of the condition words is not one.
-    assert!(small("Rename the output lamp to notify.", &file));
-    assert!(small("Set whenlit to TRUE.", &file));
-}
-
 /// The free chat is sent only what its status said it takes: an older
 /// relay refuses a body with any field but the messages.
 #[test]

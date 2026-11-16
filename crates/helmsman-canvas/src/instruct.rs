@@ -106,41 +106,6 @@ impl Env<'_> {
 /// it is asked for its chat, which sends whole files.
 pub const AGENT: &str = "edits";
 
-/// Whether `instruction` is a small change to what is there, one the
-/// Agent answers as well without extended thinking and several seconds
-/// sooner.
-///
-/// Measured on the agent ladder (2026-11-15, three runs of each rung
-/// with and without thinking): without it a first answer comes in 1 to
-/// 3 s, not 6 to 10, but its scenarios are wrong more often, so about
-/// six in ten go round once more, with thinking. That pays for a change
-/// of a name or a value, where there is little to get wrong (the ladder's
-/// five such instructions took 78 s in all, not 125), and not for new
-/// behaviour, where the retry eats the gain; a new project without
-/// thinking failed outright once. So: one short line on a file that
-/// exists, that opens with a word for changing what is there and names
-/// no condition.
-#[must_use]
-pub fn small(instruction: &str, scope: &Scope) -> bool {
-    const OPENS: [&str; 15] = [
-        "rename", "change", "set", "make", "count", "use", "increase", "decrease", "raise", "lower",
-        "shorten", "lengthen", "swap", "invert", "fix",
-    ];
-    const CONDITIONS: [&str; 12] = [
-        "when", "while", "if", "after", "until", "unless", "then", "before", "once", "whenever", "only",
-        "add",
-    ];
-    let text = instruction.trim();
-    if *scope == Scope::NewProject || text.contains('\n') || text.chars().count() > 100 {
-        return false;
-    }
-    let lower = text.to_lowercase();
-    let mut words = lower
-        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '#')
-        .filter(|w| !w.is_empty());
-    words.next().is_some_and(|first| OPENS.contains(&first)) && !words.any(|w| CONDITIONS.contains(&w))
-}
-
 /// One answer that did not pass its checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attempt {
@@ -249,10 +214,6 @@ pub struct Ask {
     pub context: Vec<Exchange>,
     /// It is a retry of the instruction under way.
     pub retry: bool,
-    /// A small change ([`small`]), asked without extended thinking where
-    /// the Agent's service takes that. Never a retry, a plan or a step:
-    /// an answer that failed its checks gets the thinking back.
-    pub quick: bool,
 }
 
 /// A checked answer to write.
@@ -405,7 +366,6 @@ impl Instruct {
             instruction.clone()
         };
         let message = env.message(&text, &earlier, self.edits);
-        let quick = !plan && small(&instruction, &env.scope);
         self.outcome = None;
         self.run = Some(Run {
             instruction: instruction.clone(),
@@ -427,7 +387,6 @@ impl Instruct {
             message,
             context: Vec::new(),
             retry: false,
-            quick,
         })
     }
 
@@ -492,7 +451,6 @@ impl Instruct {
                 message,
                 context: Vec::new(),
                 retry: false,
-                quick: false,
             });
         }
         run.mode = Mode::Steps(Box::new(Plan {
@@ -509,6 +467,68 @@ impl Instruct {
             splits: 0,
         }));
         Step::Ask(Self::step_ask(self.run.insert(run), env, self.edits))
+    }
+
+    /// The instruction under way, sent again as `text` (the instruction
+    /// with the engineer's answer in it, `crate::ask::with_answer`): only
+    /// while its first request is still out, in one go. `None` otherwise.
+    pub fn resend(&mut self, env: &Env<'_>, text: &str) -> Option<Ask> {
+        let edits = self.edits;
+        let run = self.run.as_mut()?;
+        if run.mode != Mode::Direct || run.retries > 0 || !run.attempts.is_empty() {
+            return None;
+        }
+        let env = Env {
+            scope: run.scope.clone(),
+            ..env.clone()
+        };
+        let message = env.message(text, &run.earlier, edits);
+        run.asked.clone_from(&message);
+        Some(Ask {
+            text: text.to_string(),
+            message,
+            context: Vec::new(),
+            retry: false,
+        })
+    }
+
+    /// A change that passed its checks ([`Step::Apply`]) but does not do
+    /// what the engineer answered meanwhile (`crate::ask`): `answer`, the
+    /// Agent's own words, goes back to it with `text`, as a failed check
+    /// does. `None` when no such change is waiting, or it was not made
+    /// in one go.
+    pub fn amend(&mut self, env: &Env<'_>, answer: &str, text: &str) -> Option<Ask> {
+        let edits = self.edits;
+        let run = self.run.as_mut()?;
+        if run.mode != Mode::Direct {
+            return None;
+        }
+        run.attempts.push(Attempt {
+            asked: std::mem::take(&mut run.asked),
+            answer: answer.to_string(),
+            problems: vec![text.to_string()],
+        });
+        run.retries += 1;
+        let env = Env {
+            scope: run.scope.clone(),
+            ..env.clone()
+        };
+        let message = env.message(text, &run.earlier, edits);
+        run.asked.clone_from(&message);
+        let context = run
+            .attempts
+            .iter()
+            .map(|a| Exchange {
+                asked: a.asked.clone(),
+                answer: a.answer.clone(),
+            })
+            .collect();
+        Some(Ask {
+            text: text.to_string(),
+            message,
+            context,
+            retry: true,
+        })
     }
 
     /// The paused plan: try its step again. `None` when no plan is
@@ -563,7 +583,6 @@ impl Instruct {
             message,
             context: Vec::new(),
             retry: false,
-            quick: false,
         }
     }
 
@@ -592,7 +611,6 @@ impl Instruct {
                     message,
                     context: Vec::new(),
                     retry: false,
-                    quick: false,
                 })
             }
             Mode::Steps(plan) => {
@@ -696,7 +714,6 @@ impl Instruct {
                     message,
                     context,
                     retry: true,
-                    quick: false,
                 })
             }
             Next::Show if matches!(run.mode, Mode::Steps(_)) => self.step_done(run, answer, &check, env),
@@ -1168,6 +1185,8 @@ pub enum Act {
     Revision(u32),
     /// Open this proposal under Proposals (a box).
     Review(u64),
+    /// This answer to the question on show (`crate::ask`).
+    Answer(usize),
 }
 
 /// What the owner tells the tab.
@@ -1191,6 +1210,9 @@ pub struct View {
     /// How the answer under way is coming along, when the owner can see
     /// it stream (the page); `None`: only the spinner and the words.
     pub progress: Option<Progress>,
+    /// The question that goes with the instruction under way or just
+    /// done (`crate::ask`), when there is one.
+    pub card: Option<crate::ask::Card>,
 }
 
 /// Where the arrows go: the revision before and after the one shown,
@@ -1286,9 +1308,14 @@ pub enum Stage {
 #[must_use]
 pub fn stage(thinking: bool, text: &str) -> Stage {
     let checks = text.matches("```st scenario").count();
+    // An answer given as the lines that change (`crate::edits`) has no
+    // whole file to count the lines of.
+    let edits = text.contains("```st edit");
     match partial_code(text) {
         Some(_) if checks > 0 => Stage::Checks(checks),
         Some(code) => Stage::Writing(code.lines().count()),
+        None if edits && checks > 0 => Stage::Checks(checks),
+        None if edits => Stage::Writing(0),
         None if thinking || !text.trim().is_empty() => Stage::Planning,
         None => Stage::Waiting,
     }
@@ -1741,6 +1768,14 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             }
         }
     });
+    // The question goes right under the box, above the progress and the
+    // draft: it is the one thing here that waits for the engineer, so it
+    // is never what a long draft pushes off the screen.
+    if let Some(card) = &v.card
+        && let Some(k) = crate::ask::ui(ui, chrome, card)
+    {
+        act = Some(Act::Answer(k));
+    }
     let plan = s.run.as_ref().and_then(|r| match &r.mode {
         Mode::Steps(p) => Some(p),
         _ => None,

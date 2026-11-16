@@ -24,7 +24,10 @@
 //! This module is the words and the state; the page sends the requests
 //! (`crate::playground_view`).
 
+use eframe::egui;
+
 use crate::claude::{Segment, segments};
+use crate::tips::Tip;
 
 /// The relay's agent that asks.
 pub const AGENT: &str = "ask";
@@ -33,8 +36,8 @@ pub const CHECK_AGENT: &str = "check";
 /// Fewest and most answers a question offers.
 pub const ANSWERS: std::ops::RangeInclusive<usize> = 2..=3;
 /// Longest question and longest answer shown, in characters.
-pub const MAX_QUESTION: usize = 200;
-pub const MAX_ANSWER: usize = 100;
+pub const MAX_QUESTION: usize = 160;
+pub const MAX_ANSWER: usize = 80;
 /// How long the page waits for the comparison before it writes the
 /// change anyway, in seconds: the check must never be what the engineer
 /// waits for.
@@ -48,7 +51,13 @@ pub struct Question {
 }
 
 /// The tags the two messages use.
-const TAGS: [&str; 5] = ["instruction", "current_program", "question", "answer", "result_program"];
+const TAGS: [&str; 5] = [
+    "instruction",
+    "current_program",
+    "question",
+    "answer",
+    "result_program",
+];
 
 /// `text` between `<tag>` and `</tag>`. A closing tag of any of [`TAGS`]
 /// inside it is defanged (`<\/tag>`), white space inside the tag and
@@ -136,7 +145,7 @@ pub fn parse(answer: &str) -> Option<Question> {
     let mut answers: Vec<String> = Vec::new();
     for line in &lines[at + 1..] {
         // Anything after the answers that is not one ends the card.
-        let Some(a) = field(line, "A:") else { return None };
+        let a = field(line, "A:")?;
         let a = one_line(&a, MAX_ANSWER);
         if a.is_empty() || answers.iter().any(|b| b.eq_ignore_ascii_case(&a)) {
             return None;
@@ -231,6 +240,12 @@ pub enum State {
     Covered,
     /// It did not: the Agent has been sent round again with the answer.
     Amending,
+    /// The Agent could not make it do that: the change is written as it
+    /// first passed its checks.
+    Kept,
+    /// The comparison gave no verdict in time: the change is written as
+    /// it is.
+    Unchecked,
 }
 
 /// The question that goes with the instruction under way.
@@ -298,9 +313,12 @@ impl Card {
     /// compared with, for its History page ([`record`]).
     #[must_use]
     pub fn answered(&self) -> Option<(&Question, usize)> {
-        matches!(self.state, State::Sent | State::Covered | State::Amending)
-            .then(|| self.question.as_ref().zip(self.picked))
-            .flatten()
+        matches!(
+            self.state,
+            State::Sent | State::Covered | State::Amending | State::Kept | State::Unchecked
+        )
+        .then(|| self.question.as_ref().zip(self.picked))
+        .flatten()
     }
 
     /// One line under the question, once it is answered.
@@ -313,6 +331,74 @@ impl Card {
             State::Checking => Some("Checking the change against your answer…"),
             State::Covered => Some("The change does what you answered."),
             State::Amending => Some("The change did not do that yet: the Agent is correcting it."),
+            State::Unchecked => {
+                Some("The change is written. Your answer could not be compared with it in time.")
+            }
+            State::Kept => Some(
+                "The Agent could not make the change do that. It is written as it first passed its checks.",
+            ),
         }
     }
+}
+
+/// The card: the question, then a button for each answer; once one is
+/// picked, that answer and what became of it. Returns the answer clicked.
+/// Every row wraps inside the tab's width (a row that does not would
+/// widen the panel every frame), and the card is never taller than the
+/// room left in the tab: a long question scrolls inside it, so an answer
+/// is never pushed off the screen.
+pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, card: &Card) -> Option<usize> {
+    use egui::RichText;
+    let q = card.shown()?;
+    let t = crate::theme::theme(ui);
+    let mut clicked = None;
+    let frame = egui::Frame::new()
+        .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
+        .corner_radius(4.0)
+        .inner_margin(6.0);
+    let room = (ui.available_height() - 16.0).max(120.0);
+    let r = frame
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical()
+                .id_salt("agent-card")
+                .max_height(room)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    // Room for the scroll bar.
+                    ui.set_max_width(ui.available_width() - 12.0);
+                    let r = ui
+                        .add(egui::Label::new(RichText::new(&q.text).strong()).wrap())
+                        .tip("A question about how the machine should behave, asked while the Agent works. Answer it with one click, or leave it: the Agent goes on either way.");
+                    chrome.hit("agent question", r.rect);
+                    match card.picked {
+                        None => {
+                            for (k, answer) in q.answers.iter().enumerate() {
+                                let r = ui
+                                    .add(egui::Button::new(RichText::new(answer)).wrap())
+                                    .tip("Pick this answer. The Agent's change is checked against it before it is written.");
+                                chrome.hit(format!("agent answer {k}"), r.rect);
+                                if r.clicked() {
+                                    clicked = Some(k);
+                                }
+                            }
+                        }
+                        Some(k) => {
+                            let r = ui
+                                .add(egui::Label::new(RichText::new(format!("You answered: {}", q.answers[k]))).wrap())
+                                .tip("Your answer to the question above. It guides this change and is kept on its History page.");
+                            chrome.hit("agent answered", r.rect);
+                            if let Some(status) = card.status() {
+                                let r = ui
+                                    .add(egui::Label::new(RichText::new(status).color(t.muted)).wrap())
+                                    .tip("What became of your answer.");
+                                chrome.hit("agent answer status", r.rect);
+                            }
+                        }
+                    }
+                });
+        })
+        .response;
+    chrome.hit("agent card", r.rect);
+    clicked
 }

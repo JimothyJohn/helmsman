@@ -202,6 +202,19 @@ pub struct PlaygroundView {
     pub instruct: crate::instruct::Instruct,
     /// The Agent's answer [`Self::settle`] last took.
     answered_seq: u64,
+    /// A second way to the relay, for the question card's requests
+    /// (`crate::ask`): they run beside the Agent's answer.
+    pub side: Link,
+    side_answer: crate::claude::Side,
+    /// The question that goes with the instruction under way or just
+    /// done.
+    pub card: Option<crate::ask::Card>,
+    /// A change that passed its checks and waits to be compared with the
+    /// engineer's answer, and when that was asked (page time, s).
+    held: Option<(crate::instruct::Apply, f64)>,
+    /// That change, kept while the Agent corrects it to do what was
+    /// answered: written after all if the correction does not pass.
+    fallback: Option<crate::instruct::Apply>,
     /// When the request in flight went (page time, s): the Agent tab's clock.
     asked_at: f64,
     /// What the program does once a change of the Agent's lands
@@ -295,6 +308,11 @@ impl PlaygroundView {
             new_program: None,
             instruct: crate::instruct::Instruct::default(),
             answered_seq: 0,
+            side: Link::default(),
+            side_answer: crate::claude::Side::default(),
+            card: None,
+            held: None,
+            fallback: None,
             asked_at: 0.0,
             after_change: AfterChange::default(),
             to_name: None,
@@ -1029,8 +1047,254 @@ impl PlaygroundView {
             Ok(ask) => {
                 self.asked_at = ctx.input(|i| i.time);
                 self.send_ask(&ask, ctx);
+                self.ask_question(plan, ctx);
             }
             Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// Beside the instruction just sent: asks the relay's `ask` agent for
+    /// one question about it (`crate::ask`). Not for one planned in
+    /// steps.
+    fn ask_question(&mut self, plan: bool, ctx: &egui::Context) {
+        self.drop_question();
+        if plan || !self.chat.serves(crate::ask::AGENT) {
+            return;
+        }
+        let Some(run) = &self.instruct.run else { return };
+        let program = if run.scope == crate::scope::Scope::NewProject {
+            ""
+        } else {
+            self.session.src.as_str()
+        };
+        let message = crate::ask::message(&run.instruction, program);
+        self.side_send(crate::ask::AGENT, &message, ctx);
+        self.card = Some(crate::ask::Card::default());
+    }
+
+    /// One request to `agent` on the second link.
+    fn side_send(&mut self, agent: &str, message: &str, ctx: &egui::Context) {
+        let Ok(route) = self.chat.route() else { return };
+        let turn = self.chat.takes.allow(crate::claude::Turn {
+            agent: Some(agent),
+            quick: false,
+        });
+        let req = crate::claude::request_turn(&route, self.chat.model, &[], message, turn);
+        let seq = self.side_answer.start();
+        self.side.send(seq, req, ctx);
+    }
+
+    /// The question and everything waiting on it are dropped.
+    fn drop_question(&mut self) {
+        self.side_answer.stop();
+        self.side.abort();
+        self.card = None;
+        self.held = None;
+        self.fallback = None;
+    }
+
+    /// The instruction's environment for the run under way, as
+    /// [`Self::settle`] builds it.
+    fn with_env<T>(
+        &mut self,
+        f: impl FnOnce(&mut crate::instruct::Instruct, &crate::instruct::Env<'_>) -> T,
+    ) -> Option<T> {
+        let scope = self.instruct.run.as_ref().map(|r| r.scope.clone())?;
+        let (diags, devices, settings) = self.agent_env();
+        let env = crate::instruct::Env {
+            project: &self.proj.open,
+            scope,
+            files: &self.proj.files,
+            source: &self.session.src,
+            diagnostics: &diags,
+            devices: &devices,
+            settings,
+        };
+        Some(f(&mut self.instruct, &env))
+    }
+
+    /// The engineer clicked answer `k` of the question on show. Before
+    /// the Agent has written anything the instruction goes out again with
+    /// the answer in it; later the answer waits for the change
+    /// ([`Self::landed`]).
+    fn answer_question(&mut self, k: usize, ctx: &egui::Context) {
+        let drafted = self.held.is_some()
+            || self
+                .chat
+                .answer
+                .as_ref()
+                .is_none_or(|a| !a.running() || !a.text.trim().is_empty());
+        let Some(card) = &mut self.card else { return };
+        if !card.pick(k, drafted) {
+            return;
+        }
+        let Some((q, k)) = card.question.clone().zip(card.picked) else {
+            return;
+        };
+        let Some(text) = self
+            .instruct
+            .run
+            .as_ref()
+            .map(|r| crate::ask::with_answer(&r.instruction, &q, k))
+        else {
+            return;
+        };
+        match self.with_env(|ins, env| ins.resend(env, &text)).flatten() {
+            Some(ask) => {
+                self.chat.stop();
+                self.link.abort();
+                self.asked_at = ctx.input(|i| i.time);
+                self.send_ask(&ask, ctx);
+            }
+            // It cannot go out again (a retry is under way): compared
+            // with the change instead.
+            None => {
+                if let Some(card) = &mut self.card {
+                    card.state = crate::ask::State::Waiting;
+                }
+            }
+        }
+    }
+
+    /// A click on answer `k`, for the tests.
+    #[cfg(test)]
+    pub fn answer_question_for_test(&mut self, k: usize) {
+        self.answer_question(k, &egui::Context::default());
+    }
+
+    /// A change passed its checks. With an answer still to compare it
+    /// with, it is held while the relay's `check` agent looks
+    /// ([`Self::verdict`]); else it is written.
+    fn landed(&mut self, apply: crate::instruct::Apply, ctx: &egui::Context) {
+        use crate::ask::State;
+        if self.fallback.take().is_some()
+            && let Some(card) = &mut self.card
+        {
+            // The Agent's correction passed.
+            card.state = State::Covered;
+        }
+        let direct = self
+            .instruct
+            .run
+            .as_ref()
+            .is_some_and(|r| r.mode == crate::instruct::Mode::Direct);
+        let to_check = self
+            .card
+            .as_ref()
+            .and_then(|c| c.to_check())
+            .map(|(q, k)| crate::ask::check_message(&apply.instruction, q, k, &apply.text));
+        match to_check {
+            Some(message) if direct && self.chat.serves(crate::ask::CHECK_AGENT) => {
+                self.side_answer.stop();
+                self.side.abort();
+                self.side_send(crate::ask::CHECK_AGENT, &message, ctx);
+                if let Some(card) = &mut self.card {
+                    card.state = State::Checking;
+                }
+                self.held = Some((apply, ctx.input(|i| i.time)));
+            }
+            Some(_) => {
+                if let Some(card) = &mut self.card {
+                    card.state = State::Unchecked;
+                }
+                self.write_answered(apply);
+            }
+            None => self.write_answered(apply),
+        }
+    }
+
+    /// Writes `apply`, with the question and the answer it was made or
+    /// compared with on its History page.
+    fn write_answered(&mut self, mut apply: crate::instruct::Apply) {
+        if let Some((q, k)) = self.card.as_ref().and_then(|c| c.answered()) {
+            if !apply.record.ends_with('\n') {
+                apply.record.push('\n');
+            }
+            apply.record.push_str(&crate::ask::record(q, k));
+            apply.record.push('\n');
+        }
+        self.write(apply);
+    }
+
+    /// What the `check` agent found for the change on hold: one that
+    /// differs from the answer goes back to the Agent once; anything else
+    /// (it agrees, no clear verdict, no answer in time) is written.
+    fn verdict(&mut self, verdict: Option<crate::ask::Verdict>, ctx: &egui::Context) {
+        use crate::ask::{State, Verdict};
+        let Some((apply, _)) = self.held.take() else {
+            return;
+        };
+        let picked = self.card.as_ref().and_then(|c| c.question.clone().zip(c.picked));
+        if verdict == Some(Verdict::Differs)
+            && let Some((q, k)) = picked
+        {
+            let answer = self
+                .chat
+                .answer
+                .as_ref()
+                .map(|a| a.text.clone())
+                .unwrap_or_default();
+            let text = crate::ask::differs(&q, k);
+            if let Some(ask) = self.with_env(|ins, env| ins.amend(env, &answer, &text)).flatten() {
+                if let Some(card) = &mut self.card {
+                    card.state = State::Amending;
+                }
+                self.fallback = Some(apply);
+                self.send_ask(&ask, ctx);
+                return;
+            }
+        }
+        if let Some(card) = &mut self.card {
+            card.state = match verdict {
+                Some(Verdict::Agrees) => State::Covered,
+                Some(Verdict::Differs) => State::Kept,
+                None => State::Unchecked,
+            };
+        }
+        self.write_answered(apply);
+    }
+
+    /// The question card's requests, each frame: the question when it
+    /// arrives, the verdict when it does (or when it has taken too long:
+    /// the check is never what the engineer waits for), and a question
+    /// nobody answered goes with its instruction.
+    fn side_settle(&mut self, ctx: &egui::Context) {
+        for m in self.side.drain() {
+            self.side_answer.receive(m);
+        }
+        let now = ctx.input(|i| i.time);
+        let done = self.side_answer.take();
+        if let Some((_, since)) = &self.held {
+            if let Some(text) = done {
+                self.verdict(text.ok().as_deref().and_then(crate::ask::verdict), ctx);
+            } else if now - since > crate::ask::CHECK_PATIENCE {
+                self.side_answer.stop();
+                self.side.abort();
+                self.verdict(None, ctx);
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+        } else if let Some(text) = done
+            && let Some(card) = &mut self.card
+        {
+            match text {
+                Ok(text) => card.asked(&text),
+                Err(_) => self.card = None,
+            }
+        }
+        self.tidy_question();
+    }
+
+    /// A card with nothing on it, and one nobody answered once its
+    /// instruction is over, go.
+    fn tidy_question(&mut self) {
+        let unanswered = self.card.as_ref().is_some_and(|c| c.picked.is_none());
+        let no_question = self
+            .card
+            .as_ref()
+            .is_some_and(|c| c.state != crate::ask::State::Asking && c.shown().is_none());
+        if no_question || (unanswered && !self.instruct.busy()) {
+            self.drop_question();
         }
     }
 
@@ -1059,7 +1323,7 @@ impl PlaygroundView {
     fn send_ask(&mut self, ask: &crate::instruct::Ask, ctx: &egui::Context) {
         let turn = crate::claude::Turn {
             agent: Some(crate::instruct::AGENT),
-            quick: ask.quick,
+            quick: false,
         };
         match self.chat.send_turn(&ask.message, &ask.context, turn) {
             Ok((seq, req)) => self.link.send(seq, req, ctx),
@@ -1074,6 +1338,7 @@ impl PlaygroundView {
 
     /// [`Self::stop_answer`], saying `why` in the instruction's outcome.
     fn stop_answer_with(&mut self, why: &str) {
+        self.drop_question();
         self.chat.stop();
         self.link.abort();
         if self.instruct.busy() {
@@ -1426,8 +1691,25 @@ impl PlaygroundView {
                 }
                 self.send_ask(&ask, ctx);
             }
-            Step::Apply(apply) => self.write(apply),
-            Step::Done => self.log_outcome(),
+            Step::Apply(apply) => self.landed(apply, ctx),
+            Step::Done => {
+                // The Agent's correction did not pass: the change that
+                // did is written after all.
+                if let Some(apply) = self.fallback.take()
+                    && self
+                        .instruct
+                        .outcome
+                        .as_ref()
+                        .is_some_and(|o| o.kind == crate::instruct::Kind::Refused)
+                {
+                    if let Some(card) = &mut self.card {
+                        card.state = crate::ask::State::Kept;
+                    }
+                    self.write_answered(apply);
+                } else {
+                    self.log_outcome();
+                }
+            }
             Step::Wait => {}
         }
     }
@@ -2069,7 +2351,9 @@ impl PlaygroundView {
             self.chat.receive(m);
         }
         self.drop_run_of_another_project();
+        self.side_settle(ctx);
         self.settle(ctx);
+        self.tidy_question();
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
         self.arrange();
@@ -2870,6 +3154,7 @@ impl PlaygroundView {
                 steps: self.steps(),
                 room_below: Some(0.0),
                 progress: self.progress(ctx.input(|i| i.time)),
+                card: self.card.clone(),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
@@ -2877,6 +3162,7 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
                 Some(crate::instruct::Act::RunSteps) => self.run_steps(&ctx),
                 Some(crate::instruct::Act::Revision(n)) => self.show_revision(n),
+                Some(crate::instruct::Act::Answer(k)) => self.answer_question(k, &ctx),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });

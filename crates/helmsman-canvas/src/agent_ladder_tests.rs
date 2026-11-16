@@ -720,10 +720,15 @@ struct Setup {
     only: Vec<String>,
     runs: u32,
     out: PathBuf,
-    /// `HELMSMAN_LADDER_QUICK`: `all` asks every first request without
-    /// thinking, `none` asks none so; unset, the page's own choice
-    /// (`crate::instruct::small`).
-    quick: Option<bool>,
+    /// `HELMSMAN_LADDER_QUICK=all`: every first request is asked without
+    /// extended thinking, which the page never does. Measured on
+    /// 2026-11-15 (three runs a rung, the relay's default model): a first
+    /// answer then comes in 1 to 3 s, not 6 to 10, but about six in ten
+    /// fail their checks (mostly a scenario's timing) and go round again
+    /// with thinking, so the mean is no better, and 3 of some 105 such
+    /// instructions failed where none of 140 with thinking did. The
+    /// switch stays to measure another model the same way.
+    quick: bool,
     /// `HELMSMAN_LADDER_AGENT`: `chat` asks the relay's chat (whole
     /// files); unset, the agent the page asks (`crate::instruct::AGENT`).
     agent: Option<&'static str>,
@@ -749,11 +754,7 @@ impl Setup {
         Self {
             url,
             origin,
-            quick: match std::env::var("HELMSMAN_LADDER_QUICK").as_deref() {
-                Ok("all") => Some(true),
-                Ok("none") => Some(false),
-                _ => None,
-            },
+            quick: std::env::var("HELMSMAN_LADDER_QUICK").as_deref() == Ok("all"),
             agent: match std::env::var("HELMSMAN_LADDER_AGENT").as_deref() {
                 Ok("chat") => None,
                 _ => Some(crate::instruct::AGENT),
@@ -805,7 +806,7 @@ fn turn(setup: &Setup, chat: &mut Chat, ask: &crate::instruct::Ask) -> Result<(S
     let (message, context) = (&ask.message, &ask.context);
     let turn = crate::claude::Turn {
         agent: setup.agent,
-        quick: !ask.retry && setup.quick.unwrap_or(ask.quick),
+        quick: !ask.retry && setup.quick,
     };
     let (seq, req) = chat.send_turn(message, context, turn)?;
     let url = Url::parse(&req.url).map_err(|e| format!("{}: {e}", req.url))?;

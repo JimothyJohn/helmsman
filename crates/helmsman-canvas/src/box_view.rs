@@ -1033,6 +1033,9 @@ impl BoxView {
             steps: None,
             room_below: None,
             progress: None,
+            // The question card is the page's for now (TODO.md
+            // `agent-wait-questions`: a box after `agent-progress-box`).
+            card: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
@@ -1080,7 +1083,7 @@ impl BoxView {
             Some(Act::Review(id)) => self.wants_review = Some(id),
             // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
-            Some(Act::Revision(_) | Act::RunSteps) | None => {}
+            Some(Act::Revision(_) | Act::RunSteps | Act::Answer(_)) | None => {}
         }
     }
 

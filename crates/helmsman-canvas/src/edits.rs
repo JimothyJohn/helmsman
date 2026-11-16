@@ -233,7 +233,7 @@ pub fn expand(scope: &Scope, files: &Files, answer: &str) -> Result<String, Stri
             Segment::Prose(p) => out.push(p),
             Segment::Code { info, .. } if is_edit(&info) => {
                 if !placed {
-                    out.push(format!("```st\n{}```", file));
+                    out.push(format!("```st\n{file}```"));
                     placed = true;
                 }
             }
