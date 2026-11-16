@@ -346,11 +346,17 @@ impl ClaudeLink {
         let url = format!("{base}/demo/v1/status");
         let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
-            let state = match plain("GET", &url, None).await {
-                Ok(body) => crate::claude::Free::from_status(&body),
-                Err(_) => crate::claude::Free::Unreachable,
+            let (state, takes) = match plain("GET", &url, None).await {
+                Ok(body) => (
+                    crate::claude::Free::from_status(&body),
+                    crate::claude::Takes::from_status(&body),
+                ),
+                Err(_) => (crate::claude::Free::Unreachable, crate::claude::Takes::default()),
             };
-            inbox.borrow_mut().push(Incoming::Free(state));
+            let mut inbox = inbox.borrow_mut();
+            inbox.push(Incoming::Takes(takes));
+            inbox.push(Incoming::Free(state));
+            drop(inbox);
             ctx.request_repaint();
         });
     }

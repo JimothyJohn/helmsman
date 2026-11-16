@@ -1052,7 +1052,11 @@ impl PlaygroundView {
 
     /// One request of the instruction under way, to the Agent.
     fn send_ask(&mut self, ask: &crate::instruct::Ask, ctx: &egui::Context) {
-        match self.chat.send(&ask.message, &ask.context) {
+        let turn = crate::claude::Turn {
+            agent: Some(crate::instruct::AGENT),
+            quick: ask.quick,
+        };
+        match self.chat.send_turn(&ask.message, &ask.context, turn) {
             Ok((seq, req)) => self.link.send(seq, req, ctx),
             Err(why) => self.instruct.failed(&why),
         }

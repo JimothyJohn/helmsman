@@ -637,6 +637,15 @@ struct Setup {
     only: Vec<String>,
     runs: u32,
     out: PathBuf,
+    /// `HELMSMAN_LADDER_QUICK`: `all` asks every first request without
+    /// thinking, `none` asks none so; unset, the page's own choice
+    /// (`crate::instruct::small`).
+    quick: Option<bool>,
+    /// `HELMSMAN_LADDER_AGENT`: `chat` asks the relay's chat (whole
+    /// files); unset, the agent the page asks (`crate::instruct::AGENT`).
+    agent: Option<&'static str>,
+    /// What the relay's status says a turn may ask for.
+    takes: crate::claude::Takes,
 }
 
 impl Setup {
@@ -649,10 +658,24 @@ impl Setup {
             |_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/agent-ladder"),
             PathBuf::from,
         );
+        let url = url.trim().trim_end_matches('/').to_string();
+        let origin =
+            std::env::var("HELMSMAN_LADDER_ORIGIN").unwrap_or_else(|_| "http://localhost:8790".into());
+        let takes = status(&url, &origin);
+        println!("the relay takes: {takes:?}");
         Self {
-            url: url.trim().trim_end_matches('/').to_string(),
-            origin: std::env::var("HELMSMAN_LADDER_ORIGIN")
-                .unwrap_or_else(|_| "http://localhost:8790".into()),
+            url,
+            origin,
+            quick: match std::env::var("HELMSMAN_LADDER_QUICK").as_deref() {
+                Ok("all") => Some(true),
+                Ok("none") => Some(false),
+                _ => None,
+            },
+            agent: match std::env::var("HELMSMAN_LADDER_AGENT").as_deref() {
+                Ok("chat") => None,
+                _ => Some(crate::instruct::AGENT),
+            },
+            takes,
             only: std::env::var("HELMSMAN_LADDER_ONLY")
                 .map(|s| {
                     s.split(',')
@@ -670,15 +693,38 @@ impl Setup {
     }
 }
 
+/// What the free chat at `url` says a turn may ask for, as the page reads
+/// it when it opens (`GET /demo/v1/status`).
+fn status(url: &str, origin: &str) -> crate::claude::Takes {
+    let url = Url::parse(&format!("{url}/demo/v1/status")).expect("HELMSMAN_LADDER_URL");
+    let headers = [("origin", origin)];
+    let http = Request {
+        method: "GET",
+        path: &url.prefix,
+        headers: &headers,
+        json: None,
+        raw: None,
+    };
+    let timeouts = Timeouts {
+        connect: Duration::from_secs(10),
+        idle: Duration::from_secs(30),
+        total: Duration::from_secs(30),
+    };
+    let body = send(&url, &http, timeouts)
+        .and_then(|r| r.read_body(1 << 16))
+        .expect("the relay's status");
+    crate::claude::Takes::from_status(&String::from_utf8_lossy(&body))
+}
+
 /// One request to the model: the body as the page builds it, the answer
 /// as the page assembles it.
-fn turn(
-    setup: &Setup,
-    chat: &mut Chat,
-    message: &str,
-    context: &[crate::claude::Exchange],
-) -> Result<(String, f64), String> {
-    let (seq, req) = chat.send(message, context)?;
+fn turn(setup: &Setup, chat: &mut Chat, ask: &crate::instruct::Ask) -> Result<(String, f64), String> {
+    let (message, context) = (&ask.message, &ask.context);
+    let turn = crate::claude::Turn {
+        agent: setup.agent,
+        quick: !ask.retry && setup.quick.unwrap_or(ask.quick),
+    };
+    let (seq, req) = chat.send_turn(message, context, turn)?;
     let url = Url::parse(&req.url).map_err(|e| format!("{}: {e}", req.url))?;
     let path = if url.prefix.is_empty() {
         "/".to_string()
@@ -827,6 +873,7 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
     let mut chat = Chat::new(Box::new(NoStore));
     chat.receive(Incoming::Proxy(false));
     chat.set_free_base(&setup.url);
+    chat.receive(Incoming::Takes(setup.takes.clone()));
     chat.receive(Incoming::Free(Free::Open));
     let mut earlier: Vec<String> = Vec::new();
     let mut outcomes = Vec::new();
@@ -873,7 +920,7 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
                 if a.retry { " (retry)" } else { "" },
                 a.message
             );
-            match turn(setup, &mut chat, &a.message, &a.context) {
+            match turn(setup, &mut chat, &a) {
                 Ok((answer, c)) => {
                     cost += c;
                     let _ = writeln!(log, "### answer {calls}\n\n{answer}\n");
@@ -1086,7 +1133,7 @@ fn front_door_recording() {
     while let Some(a) = next.take() {
         calls += 1;
         let _ = writeln!(log, "### request {calls}\n\n```text\n{}\n```\n", a.message);
-        match turn(&setup, &mut chat, &a.message, &a.context) {
+        match turn(&setup, &mut chat, &a) {
             Ok((answer, _)) => {
                 let _ = writeln!(log, "### answer {calls}\n\n{answer}\n");
                 match ins.answered(&answer, &env) {

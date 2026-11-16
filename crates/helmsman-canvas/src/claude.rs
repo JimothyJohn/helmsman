@@ -356,11 +356,22 @@ fn finish(route: &Route, model: Model, mut body: Json) -> Request {
     }
 }
 
-/// The free chat's request: the turns and nothing else. The relay there
-/// pins the prompt, the model and the output cap, and refuses a body that
-/// names any of them. Earlier turns are dropped, oldest first, until the
-/// body fits [`FREE_MAX_BODY`] and [`FREE_MAX_MESSAGES`].
-fn free_request(base: &str, history: &[Exchange], user: &str) -> Request {
+/// How one turn is asked of the free chat, beside its messages. Each is
+/// sent only where the relay's status said it takes it ([`Takes`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Turn<'a> {
+    /// Which of the relay's agents answers; `None`: the chat.
+    pub agent: Option<&'a str>,
+    /// A small change: answer without extended thinking.
+    pub quick: bool,
+}
+
+/// The free chat's request: the turns, and what `turn` asks beside them.
+/// The relay there pins the prompt, the model and the output cap, and
+/// refuses a body that names any of them. Earlier turns are dropped,
+/// oldest first, until the body fits [`FREE_MAX_BODY`] and
+/// [`FREE_MAX_MESSAGES`].
+fn free_request(base: &str, history: &[Exchange], user: &str, turn: Turn<'_>) -> Request {
     // Measured as sent: JSON escaping makes a program longer than it is.
     let body_from = |from: usize| {
         let mut messages = Vec::new();
@@ -369,7 +380,14 @@ fn free_request(base: &str, history: &[Exchange], user: &str) -> Request {
             messages.push(json!({"role": "assistant", "content": e.answer}));
         }
         messages.push(json!({"role": "user", "content": user}));
-        json!({"messages": messages}).to_string()
+        let mut body = json!({"messages": messages});
+        if let Some(agent) = turn.agent {
+            body["agent"] = json!(agent);
+        }
+        if turn.quick {
+            body["thinking"] = json!("off");
+        }
+        body.to_string()
     };
     let mut from = history.len().saturating_sub((FREE_MAX_MESSAGES - 1) / 2);
     let mut body = body_from(from);
@@ -407,8 +425,21 @@ pub fn survey_request(base: &str, choice: &str, other: &str) -> Request {
 /// prompt cached.
 #[must_use]
 pub fn request(route: &Route, model: Model, history: &[Exchange], user: &str) -> Request {
+    request_turn(route, model, history, user, Turn::default())
+}
+
+/// [`request`], asked as `turn` says where the route is the free chat (a
+/// key or the proxy answers every turn the same way).
+#[must_use]
+pub fn request_turn(
+    route: &Route,
+    model: Model,
+    history: &[Exchange],
+    user: &str,
+    turn: Turn<'_>,
+) -> Request {
     if let Route::Free(base) = route {
-        return free_request(base, history, user);
+        return free_request(base, history, user, turn);
     }
     let mut messages = Vec::new();
     for e in context_pages(history) {
@@ -1039,6 +1070,45 @@ impl Free {
     }
 }
 
+/// What the free chat takes in a turn's body beside the messages: its
+/// status lists it, and a relay that lists nothing is sent nothing (an
+/// older one refuses a body with any other field).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Takes {
+    /// `"thinking": "off"`.
+    pub thinking_off: bool,
+    /// The agents it serves beside the chat, by the key a turn names.
+    pub agents: Vec<String>,
+}
+
+impl Takes {
+    /// From the status reply's body (`"thinking": ["off"]`, `"agents":
+    /// ["ask", ...]`); anything else reads as nothing.
+    #[must_use]
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn from_status(body: &str) -> Self {
+        let v = serde_json::from_str::<Json>(body).unwrap_or(Json::Null);
+        let strings = |v: &Json| -> Vec<String> {
+            v.as_array()
+                .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+                .unwrap_or_default()
+        };
+        Self {
+            thinking_off: strings(&v["thinking"]).iter().any(|t| t == "off"),
+            agents: strings(&v["agents"]),
+        }
+    }
+
+    /// `turn` with what this relay does not take left out.
+    #[must_use]
+    pub fn allow<'a>(&self, turn: Turn<'a>) -> Turn<'a> {
+        Turn {
+            agent: turn.agent.filter(|a| self.agents.iter().any(|s| s == a)),
+            quick: turn.quick && self.thinking_off,
+        }
+    }
+}
+
 /// What the transport hands back. `seq` ties a reply to its question, so
 /// a stopped or superseded one is dropped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1048,6 +1118,8 @@ pub enum Incoming {
     /// What the free chat said about itself (`GET /demo/v1/status`), or
     /// that it could not be asked.
     Free(Free),
+    /// What its status said a turn may ask for.
+    Takes(Takes),
     /// A non-200 answer and its body.
     Status {
         seq: u64,
@@ -1085,6 +1157,8 @@ pub struct Chat {
     free_base: Option<String>,
     /// What the free chat last said about itself.
     pub free: Free,
+    /// What it last said a turn may ask for.
+    pub takes: Takes,
     /// The survey answer went out (it is asked once).
     pub surveyed: bool,
     seq: u64,
@@ -1128,6 +1202,7 @@ impl Chat {
                 .map(|u| u.trim().trim_end_matches('/').to_string())
                 .filter(|u| !u.is_empty()),
             free: Free::Checking,
+            takes: Takes::default(),
             surveyed: false,
             seq: 0,
             sse: Sse::default(),
@@ -1263,11 +1338,25 @@ impl Chat {
     /// # Errors
     /// No route, or an answer still running.
     pub fn send(&mut self, message: &str, context: &[Exchange]) -> Result<(u64, Request), String> {
+        self.send_turn(message, context, Turn::default())
+    }
+
+    /// [`Self::send`], asked as `turn` says, as far as the free chat takes
+    /// it ([`Takes::allow`]).
+    ///
+    /// # Errors
+    /// No route, or an answer still running.
+    pub fn send_turn(
+        &mut self,
+        message: &str,
+        context: &[Exchange],
+        turn: Turn<'_>,
+    ) -> Result<(u64, Request), String> {
         if self.busy() {
             return Err("Wait for the answer, or stop it.".into());
         }
         let route = self.route()?;
-        let req = request(&route, self.model, context, message);
+        let req = request_turn(&route, self.model, context, message, self.takes.allow(turn));
         self.seq += 1;
         self.sse = Sse::default();
         self.answer = Some(Answer::default());
@@ -1296,6 +1385,7 @@ impl Chat {
         match msg {
             Incoming::Proxy(yes) => self.proxy = if yes { Proxy::Yes } else { Proxy::No },
             Incoming::Free(state) => self.free = state,
+            Incoming::Takes(takes) => self.takes = takes,
             Incoming::Status { seq, status, body } if seq == now => {
                 // A turn the free chat turned away because it closed
                 // meanwhile: the tab shows the closed message from here on.

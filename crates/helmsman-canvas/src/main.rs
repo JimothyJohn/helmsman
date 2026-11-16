@@ -55,6 +55,9 @@ mod devices;
 mod diagram_edit;
 mod diff_ui;
 mod editor;
+mod edits;
+#[cfg(test)]
+mod edits_tests;
 mod find;
 mod front;
 #[cfg(test)]

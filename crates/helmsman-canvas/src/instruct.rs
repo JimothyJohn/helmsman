@@ -101,6 +101,20 @@ impl Env<'_> {
     }
 }
 
+/// The free chat's agent the Agent tab asks: the one that answers with
+/// the lines that change (`crate::edits`). A relay that does not serve
+/// it is asked for its chat, which sends whole files.
+pub const AGENT: &str = "edits";
+
+/// Whether `instruction` is a small change to what is there, one the
+/// Agent answers as well without extended thinking and several seconds
+/// sooner.
+#[must_use]
+pub fn small(instruction: &str, scope: &Scope) -> bool {
+    let _ = (instruction, scope);
+    false
+}
+
 /// One answer that did not pass its checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attempt {
@@ -209,6 +223,10 @@ pub struct Ask {
     pub context: Vec<Exchange>,
     /// It is a retry of the instruction under way.
     pub retry: bool,
+    /// A small change ([`small`]), asked without extended thinking where
+    /// the Agent's service takes that. Never a retry, a plan or a step:
+    /// an answer that failed its checks gets the thinking back.
+    pub quick: bool,
 }
 
 /// A checked answer to write.
@@ -357,6 +375,7 @@ impl Instruct {
             instruction.clone()
         };
         let message = env.message(&text, &earlier);
+        let quick = !plan && small(&instruction, &env.scope);
         self.outcome = None;
         self.run = Some(Run {
             instruction: instruction.clone(),
@@ -378,6 +397,7 @@ impl Instruct {
             message,
             context: Vec::new(),
             retry: false,
+            quick,
         })
     }
 
@@ -442,6 +462,7 @@ impl Instruct {
                 message,
                 context: Vec::new(),
                 retry: false,
+                quick: false,
             });
         }
         run.mode = Mode::Steps(Box::new(Plan {
@@ -512,6 +533,7 @@ impl Instruct {
             message,
             context: Vec::new(),
             retry: false,
+            quick: false,
         }
     }
 
@@ -540,6 +562,7 @@ impl Instruct {
                     message,
                     context: Vec::new(),
                     retry: false,
+                    quick: false,
                 })
             }
             Mode::Steps(plan) => {
@@ -586,12 +609,30 @@ impl Instruct {
     /// retries are left, else shown (in steps: kept in the working copy,
     /// the next step asked, or the plan paused).
     fn checked(&mut self, mut run: Run, answer: &str, env: &Env<'_>) -> Step {
-        let check = verify::check(&run.scope, env.files, answer, env.settings);
+        // An answer given as the lines that change is checked, shown and
+        // written as the whole file it makes (`crate::edits`); what goes
+        // back to the Agent after a failure is its own answer.
+        let raw = answer;
+        let (answer, check) = match crate::edits::expand(&run.scope, env.files, raw) {
+            Ok(whole) => {
+                let check = verify::check(&run.scope, env.files, &whole, env.settings);
+                (whole, check)
+            }
+            Err(why) => (
+                raw.to_string(),
+                Check {
+                    code: true,
+                    failures: vec![why],
+                    ..Check::default()
+                },
+            ),
+        };
+        let answer = answer.as_str();
         match verify::next(&check, run.retries, run.asked_scenarios) {
             Next::Retry(text) => {
                 run.attempts.push(Attempt {
                     asked: std::mem::take(&mut run.asked),
-                    answer: answer.to_string(),
+                    answer: raw.to_string(),
                     problems: if check.unchecked() {
                         vec!["The answer gave code but no scenario to check it.".into()]
                     } else {
@@ -620,6 +661,7 @@ impl Instruct {
                     message,
                     context,
                     retry: true,
+                    quick: false,
                 })
             }
             Next::Show if matches!(run.mode, Mode::Steps(_)) => self.step_done(run, answer, &check, env),
