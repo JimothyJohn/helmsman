@@ -3528,7 +3528,7 @@ END_PROGRAM
         let cards = Viewer::new(src, module).output_cards();
         assert_eq!(cards.len(), 2);
         assert_eq!((cards[0].name.as_str(), cards[0].driven), ("Y", false));
-        assert!(cards[0].signals.is_empty());
+        assert_eq!(cards[0].signals.len(), 0);
         assert_eq!((cards[1].name.as_str(), cards[1].driven), ("Z", true));
     }
 

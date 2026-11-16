@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::fmt::Write as _;
+
 use common::{build, prog};
 use helmsman_diagram::signals;
 
@@ -108,8 +110,8 @@ fn a_function_block_output_brings_the_blocks_arguments() {
 
 #[test]
 fn an_output_nothing_writes_has_no_signals() {
-    assert!(of("a : BOOL; y : BOOL;", "a := a;", "y").is_empty());
-    assert!(of("a : BOOL; y : BOOL;", "a := a;", "NOPE").is_empty());
+    assert_eq!(of("a : BOOL; y : BOOL;", "a := a;", "y").len(), 0);
+    assert_eq!(of("a : BOOL; y : BOOL;", "a := a;", "NOPE").len(), 0);
 }
 
 #[test]
@@ -125,20 +127,24 @@ fn a_write_inside_a_loop_does_not_list_the_loop_variable() {
 #[test]
 fn a_bad_pou_number_is_empty() {
     let (_, m) = build(&prog("a, y : BOOL;", "y := a;"));
-    assert!(signals(&m, 9, "y").is_empty());
+    assert_eq!(signals(&m, 9, "y").len(), 0);
 }
 
 #[test]
 fn hostile_deep_nesting_ends() {
     let mut body = String::new();
     for k in 0..40 {
-        body.push_str(&format!("IF a{k} THEN\n"));
+        writeln!(body, "IF a{k} THEN").unwrap();
     }
     body.push_str("y := TRUE;\n");
     for _ in 0..40 {
         body.push_str("END_IF;\n");
     }
-    let vars: String = (0..40).map(|k| format!("a{k} : BOOL; ")).collect::<String>() + "y : BOOL;";
+    let mut vars = String::new();
+    for k in 0..40 {
+        write!(vars, "a{k} : BOOL; ").unwrap();
+    }
+    vars.push_str("y : BOOL;");
     let got = of(&vars, &body, "y");
     assert_eq!(got.len(), 40);
 }
@@ -148,8 +154,8 @@ fn two_hundred_outputs_each_get_their_own_answer() {
     let mut vars = String::from("a, b : BOOL; ");
     let mut body = String::new();
     for k in 0..200 {
-        vars.push_str(&format!("y{k} : BOOL; "));
-        body.push_str(&format!("y{k} := {};\n", if k % 2 == 0 { "a" } else { "b" }));
+        write!(vars, "y{k} : BOOL; ").unwrap();
+        writeln!(body, "y{k} := {};", if k % 2 == 0 { "a" } else { "b" }).unwrap();
     }
     let (_, m) = build(&prog(&vars, &body));
     for k in 0..200 {

@@ -2,6 +2,8 @@
 //! pane's default width however many there are and however long their
 //! names, and a tap lights the output's path on the diagram.
 
+use std::fmt::Write as _;
+
 use super::{App, Harness};
 use crate::editor::{Pane, RIGHT_W};
 
@@ -12,12 +14,16 @@ fn many(n: usize) -> String {
     );
     let mut body = String::new();
     for k in 0..n {
-        vars.push_str(&format!(
-            "  conveyor_section_{k}_motor_contactor_with_a_long_name : BOOL;\n"
-        ));
-        body.push_str(&format!(
-            "conveyor_section_{k}_motor_contactor_with_a_long_name := a_rather_long_input_name_for_the_first_switch AND second_input_that_is_also_long_to_wrap;\n"
-        ));
+        writeln!(
+            vars,
+            "  conveyor_section_{k}_motor_contactor_with_a_long_name : BOOL;"
+        )
+        .unwrap();
+        writeln!(
+            body,
+            "conveyor_section_{k}_motor_contactor_with_a_long_name := a_rather_long_input_name_for_the_first_switch AND second_input_that_is_also_long_to_wrap;"
+        )
+        .unwrap();
     }
     vars.push_str("END_VAR\n");
     format!("PROGRAM wide\n{vars}{body}END_PROGRAM\n")
