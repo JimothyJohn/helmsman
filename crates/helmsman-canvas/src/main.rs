@@ -38,6 +38,8 @@ mod assign_ui;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod box_design_tests;
 mod box_popup;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -52,6 +54,8 @@ mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
 mod design;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod design_page_tests;
 mod design_step;
 mod design_ui;
 mod desk;

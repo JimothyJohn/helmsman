@@ -1615,6 +1615,19 @@ impl PlaygroundView {
         Some(crate::design_step::kept_view(d, problems, built, blocked))
     }
 
+    /// [`Self::kept_design`], for the tests.
+    #[cfg(test)]
+    pub fn kept_design_for_test(&mut self) -> Option<crate::design_ui::Kept> {
+        self.kept_design()
+    }
+
+    /// Sets how many steps of the open project's design are built, for
+    /// the tests.
+    #[cfg(test)]
+    pub fn design_built_for_test(&mut self, n: usize) {
+        self.design_built.insert(self.proj.open.clone(), n);
+    }
+
     /// Build: the next batch of the kept design's build order goes to the
     /// steps run, `Design::step_brief` as each step's instruction.
     pub fn build_design(&mut self, ctx: &egui::Context) {
@@ -1688,20 +1701,26 @@ impl PlaygroundView {
                 self.design_link.send(req.seq, req.for_page(), ctx);
             }
         }
-        if self.design_building.is_some() && !self.instruct.busy() {
-            let applied = self
-                .instruct
-                .outcome
-                .as_ref()
-                .is_some_and(|o| o.kind == crate::instruct::Kind::Applied);
-            if let Some((project, n)) = self.design_building.take()
-                && applied
-            {
-                *self.design_built.entry(project).or_default() += n;
-            }
-        }
         if self.design.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
+    /// A batch of the design that was written counts its steps; one that
+    /// was stopped or refused counts none.
+    fn design_count(&mut self) {
+        if self.design_building.is_none() || self.instruct.busy() {
+            return;
+        }
+        let applied = self
+            .instruct
+            .outcome
+            .as_ref()
+            .is_some_and(|o| o.kind == crate::instruct::Kind::Applied);
+        if let Some((project, n)) = self.design_building.take()
+            && applied
+        {
+            *self.design_built.entry(project).or_default() += n;
         }
     }
 
@@ -2894,6 +2913,7 @@ impl PlaygroundView {
         self.drop_run_of_another_project();
         self.side_settle(ctx);
         self.settle(ctx);
+        self.design_count();
         self.tidy_question();
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);

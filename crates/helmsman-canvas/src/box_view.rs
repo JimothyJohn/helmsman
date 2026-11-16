@@ -446,6 +446,7 @@ impl BoxView {
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
                 PCall::SpecPdf(name) => self.spec_pdf_answer(ctx, &name, &a),
                 PCall::SpecProject(name) => self.spec_project_answer(&name, &a),
+                PCall::DesignProject(name) => self.design_project_answer(&name, &a),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
         }
@@ -1231,7 +1232,11 @@ impl BoxView {
         self.design_http.abort();
     }
 
-    /// Keep: the design is saved into the open project as `design.md`.
+    /// Keep: the box takes a kept file in a whole project only (the file
+    /// route writes the files a project uses), as the specification's
+    /// `spec.md` does. The design is kept in a copy of the open project, as
+    /// the box holds it, under a free name: one atomic request, nothing
+    /// written over, and the engineer's project as it was.
     pub fn keep_design(&mut self) {
         let Some(read) = self.design.read.clone() else {
             return;
@@ -1244,28 +1249,65 @@ impl BoxView {
                     .busy()
                     .then(|| "The Agent is still working on the last instruction.".into())
             })
+            .or_else(|| {
+                self.projects.dirty().then(|| {
+                    "Save your edits first: the design is kept in a copy of the project as the box holds it."
+                        .into()
+                })
+            })
             .or_else(|| read.keep_refusal());
         if let Some(why) = why {
             self.design.notice = Some(why);
             return;
         }
-        self.projects
-            .save_kept(crate::design_step::DESIGN_FILE, &read.text);
-        let project = self
+        let taken: Vec<String> = self.projects.projects.iter().map(|p| p.name.clone()).collect();
+        let name = crate::box_spec::free_name(&crate::design_step::project_slug(&read.description), &taken);
+        let files = self
             .projects
-            .open
-            .as_ref()
-            .map(|o| o.name.clone())
-            .unwrap_or_default();
-        self.design.discard();
-        self.design_built.remove(&project);
+            .saved_files((crate::design_step::DESIGN_FILE, &read.text));
+        let zip = helmsman_project::Files(files).to_zip();
+        match zip {
+            Ok(zip) => {
+                self.design.notice = None;
+                self.projects.design_project(&name, zip);
+            }
+            Err(e) => self.design.notice = Some(format!("The project could not be packed: {e}")),
+        }
+    }
+
+    /// The box's answer to the project the kept design makes.
+    fn design_project_answer(&mut self, name: &str, a: &Answer) {
+        if a.status != 201 {
+            let why = serde_json::from_str::<serde_json::Value>(&a.body)
+                .ok()
+                .and_then(|j| j["error"].as_str().map(str::to_string))
+                .unwrap_or_default();
+            let why = crate::device_proposal::clean(&why, 200, false);
+            self.design.notice = Some(match a.status {
+                409 => format!(
+                    "A project named {name} is already on the box. Keep it again for another name. Nothing was written."
+                ),
+                401 => {
+                    "The box no longer knows this page's session. Sign in again. Nothing was written.".into()
+                }
+                403 => "Only an engineer makes a project on the box. Nothing was written.".into(),
+                0 => {
+                    format!("The box did not answer. Nothing was written. Keep it again to try again. {why}")
+                }
+                s => format!("The box refused the project ({s}): {why}. Nothing was written."),
+            });
+            return;
+        }
+        self.projects.spec_made(name);
         self.projects.note(
             format!(
-                "Kept the design as {} in {project}.",
+                "Kept the design as {} in {name}, a copy of the project. Build runs in it.",
                 crate::design_step::DESIGN_FILE
             ),
             false,
         );
+        self.design.discard();
+        self.design_built.remove(name);
     }
 
     /// The open project's kept design, as the tab shows it.
@@ -1330,6 +1372,18 @@ impl BoxView {
             Some(Err(why)) => self.instruct.failed(&why),
             None => {}
         }
+    }
+
+    /// [`Self::kept_design`], for the tests.
+    #[cfg(test)]
+    pub fn kept_design_for_test(&mut self) -> Option<crate::design_ui::Kept> {
+        self.kept_design()
+    }
+
+    /// [`Self::design_act`], for the tests.
+    #[cfg(test)]
+    pub fn design_act_for_test(&mut self, act: crate::design_ui::Act, ctx: &egui::Context) {
+        self.design_act(act, ctx);
     }
 
     /// A batch that ended counts its steps when it was written.

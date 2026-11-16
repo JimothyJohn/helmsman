@@ -220,7 +220,7 @@ fn read_card(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut Designer, v: &Entry
                 egui::Button::new(RichText::new("Keep").strong().size(size)),
             )
             .tip(v.keep_blocked.clone().or_else(|| read.keep_refusal()).unwrap_or_else(|| {
-                "Keeps the design in the project as design.md, as one revision. The Agent builds from it a few steps at a time.".into()
+                "Keeps the design with the project as design.md, as one revision. On a box a project's files are written as a whole, so it goes into a copy of the project, in one request. The Agent builds from it a few steps at a time.".into()
             }));
         chrome.hit("design keep", r.rect);
         if r.clicked() {
@@ -427,18 +427,12 @@ pub fn read_window(
         ui.set_width(width);
         ui.label(RichText::new("The design").strong().size(size))
             .tip("What the strong model wrote. Nothing is kept until Keep.");
-        if !read.design.summary.is_empty() {
-            let r = ui
-                .add(egui::Label::new(RichText::new(&read.design.summary).size(size)).wrap())
-                .tip("The design's one-sentence summary.");
-            chrome.hit("design window summary", r.rect);
-        }
-        problems_ui(ui, chrome, &read.problems, "design window problem");
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             for (k, (name, _)) in parts.iter().enumerate() {
                 let on = read.section == k;
-                let r = crate::theme::tab(ui, on, name, egui::Vec2::ZERO)
+                let r = ui
+                    .add(egui::Button::new(RichText::new(name).size(size)).selected(on))
                     .tip(format!("Shows the {name} section."));
                 chrome.hit(format!("design section {}", k + 1), r.rect);
                 if r.clicked() {
@@ -446,18 +440,28 @@ pub fn read_window(
                 }
             }
         });
+        // The summary and what is wrong with the design go with the text
+        // under one scroll bar: a window taller than a phone's page has no
+        // buttons in reach.
         egui::ScrollArea::vertical()
             .id_salt("design-read-scroll")
             .max_height(tall)
             .show(ui, |ui| {
                 ui.set_max_width(width - 14.0);
+                if !read.design.summary.is_empty() {
+                    let r = ui
+                        .add(egui::Label::new(RichText::new(&read.design.summary).strong().size(size)).wrap())
+                        .tip("The design's one-sentence summary.");
+                    chrome.hit("design window summary", r.rect.intersect(ui.clip_rect()));
+                }
+                problems_ui(ui, chrome, &read.problems, "design window problem");
                 let body = parts
                     .get(read.section)
                     .map_or("The design has no sections the page knows.", |(_, b)| b.as_str());
                 let r = ui
                     .add(egui::Label::new(RichText::new(body).size(size).color(t.fg)).wrap())
                     .tip("The section as the model wrote it.");
-                chrome.hit("design body", r.rect);
+                chrome.hit("design body", r.rect.intersect(ui.clip_rect()));
             });
         ui.add_space(8.0);
         let why = keep_blocked.map(str::to_string).or_else(|| read.keep_refusal());
@@ -474,7 +478,7 @@ pub fn read_window(
                     egui::Button::new(RichText::new("Keep").strong().size(size)),
                 )
                 .tip(why.clone().unwrap_or_else(|| {
-                    "Keeps the design in the project as design.md, as one revision.".into()
+                    "Keeps the design with the project as design.md. On a box it goes into a copy of the project, in one request.".into()
                 }));
             chrome.hit("design window keep", r.rect);
             if r.clicked() {
