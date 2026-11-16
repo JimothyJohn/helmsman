@@ -31,5 +31,6 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | Alt Shift 4 | The Devices tab (the I/O map's devices and points) |  |
 | Alt Shift 5 | The left pane's tab to a pane on the right, the next one shown on the left |  |
 | Alt ↑ | Up one level in the diagram | |
+| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (with the pointer over the diagram) | |
 
 Reserved, not built yet: F2 / Shift F2 for the Agent.

@@ -1015,11 +1015,11 @@ END_PROGRAM
 
 /// Requirement tests on a box (TODO.md spec-tests): opening a project runs
 /// its `test_*.st` files on the box, red or green with why; a red one
-/// refuses the deploy, saying which; a save runs them again, and green,
-/// the deploy goes through. (The tab that listed them is archived,
-/// 2026-11-08; the gate stays.)
+/// refuses no deploy (Nick, 2026-11-15) and is named beside what runs; a
+/// save runs them again, and green, the deploy says nothing of them. (The
+/// tab that listed them is archived, 2026-11-08.)
 #[test]
-fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
+fn requirement_tests_show_on_the_box_and_a_red_one_is_named_by_the_deploy_it_does_not_refuse() {
     let b = Bench::new();
     let jar = Jar::default();
     let mut v = page(&b, &jar, Some(("alice", ALICE)));
@@ -1051,17 +1051,19 @@ fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
     );
     assert_eq!(p.tests.red().len(), 1);
 
-    // Deploy: refused by the box, naming the test; nothing runs from it.
+    // Deploy: it runs, and what is said of it names the red test.
     p.deploy();
     settle(&b, &jar, p);
-    let Deploy::Failed(why) = &p.deploy else {
-        panic!("deployed past a red test: {:?}", p.deploy);
+    let Deploy::Done(what) = &p.deploy else {
+        panic!("a red test refused the deploy: {:?}", p.deploy);
     };
     assert!(
-        why.contains("requirement test") && why.contains("test_lamp"),
-        "{why}"
+        what.contains("line is running")
+            && what.contains("Requirement test test_lamp")
+            && what.contains("is red"),
+        "{what}"
     );
-    assert!(p.running.is_none());
+    assert_eq!(p.running.as_deref(), Some("line"));
 
     // Fixed and saved: the box runs them again, green, and deploys.
     let p = &mut v.projects;
@@ -1072,12 +1074,10 @@ fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
     assert!(p.tests.rows[0].passed(), "{:?}", p.tests);
     p.deploy();
     settle(&b, &jar, p);
-    assert!(
-        matches!(p.deploy, Deploy::Done(_)),
-        "{:?} {:?}",
-        p.deploy,
-        p.tests
-    );
+    let Deploy::Done(what) = &p.deploy else {
+        panic!("{:?} {:?}", p.deploy, p.tests);
+    };
+    assert!(!what.contains("red"), "green says nothing of tests: {what}");
     assert_eq!(p.running.as_deref(), Some("line"));
 }
 
@@ -2033,7 +2033,8 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     );
 
     // A follow-up: the earlier instruction comes from the box's History;
-    // a red answer goes back in the same conversation, then is refused.
+    // a red answer goes back in the same conversation; still red after
+    // the retries, it is written with what did not pass said.
     run(&b, &jar, &mut v, &ctx);
     v.instruct.draft = "now invert it".into();
     v.send_instruction(&ctx);
@@ -2064,12 +2065,15 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     answer(&mut v, &red);
     run(&b, &jar, &mut v, &ctx);
     let o = v.instruct.outcome.clone().unwrap();
-    assert_eq!(o.kind, Kind::Refused, "{o:?}");
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert!(o.status.contains("did not pass"), "{o:?}");
     assert!(o.problems.iter().any(|p| p.contains("lamp on failed")), "{o:?}");
-    assert_eq!(
-        b.json("/api/projects/line/files/main.st")["text"],
-        LAMP,
-        "never written"
+    assert!(
+        b.json("/api/projects/line/files/main.st")["text"]
+            .as_str()
+            .unwrap()
+            .contains("lamp := NOT start;"),
+        "written: a red test refuses nothing"
     );
 }
 
@@ -3137,7 +3141,10 @@ fn the_conversation_and_the_device_form_follow_the_person_to_another_screen() {
     let mut studio = mid_conversation(&b, &studio_jar, &ctx);
     let mut f = NewDevice::from_eds("e1213.eds", "[Device]\nProdName = \"E1213\";\n");
     f.endpoint = "192.168.1.60".into();
-    f.points[2].on = true;
+    f.points.push(crate::device_form::PointRow::custom(
+        crate::device_form::Dir::In,
+        2,
+    ));
     f.params = format!("{} password=hunter2-device", f.params);
     studio.devices_ui.adding = Some(f.clone());
 

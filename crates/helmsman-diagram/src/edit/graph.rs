@@ -77,6 +77,7 @@ fn variant(k: &NodeKind) -> &'static str {
         NodeKind::Write { .. } => "write",
         NodeKind::For { .. } => "for",
         NodeKind::Jump => "jump",
+        NodeKind::Fold { .. } => "fold",
     }
 }
 

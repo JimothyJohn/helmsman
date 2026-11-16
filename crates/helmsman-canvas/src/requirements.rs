@@ -3,7 +3,7 @@
 //! grey (its requirement written, no test yet). The simulation runs them
 //! whenever the project's build changes and before Deploy and "Use this
 //! code"; a box runs them when a project opens, after each save and
-//! before a deploy (`POST /api/projects/{p}/tests`). A red test refuses
+//! before a deploy (`POST /api/projects/{p}/tests`). A red test is said beside
 //! Deploy and "Use this code", naming the test; a grey one does not.
 //!
 //! The Requirements tab that listed these rows and took a requirement in
@@ -135,18 +135,16 @@ impl Results {
             .collect()
     }
 
-    /// Why a deploy or a "Use this code" is refused, in one line; `None`
-    /// when no test is red (grey ones never refuse).
+    /// What a deploy or a "Use this code" says of the red tests, in one
+    /// line; `None` when no test is red (grey ones are not). A warning:
+    /// a red test refuses nothing (Nick, 2026-11-15).
     #[must_use]
-    pub fn refusal(&self) -> Option<String> {
+    pub fn warning(&self) -> Option<String> {
         let red = self.red();
         match red.len() {
             0 => None,
-            1 => Some(format!("Refused: requirement test {} is red.", red[0])),
-            n => Some(format!(
-                "Refused: {n} requirement tests are red: {}.",
-                red.join("; ")
-            )),
+            1 => Some(format!("Requirement test {} is red.", red[0])),
+            n => Some(format!("{n} requirement tests are red: {}.", red.join("; "))),
         }
     }
 }

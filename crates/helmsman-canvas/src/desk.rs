@@ -1268,8 +1268,14 @@ mod tests {
     fn form() -> NewDevice {
         let mut f = NewDevice::from_eds("e1213.eds", "[Device]\nProdName = \"E1213\";\n");
         f.endpoint = "192.168.1.60".into();
-        f.points[0].on = true;
-        f.points[0].name = "start_pb".into();
+        f.points.push(crate::device_form::PointRow {
+            name: "start_pb".into(),
+            point: "di:0".into(),
+            ..crate::device_form::PointRow::custom(crate::device_form::Dir::In, 0)
+        });
+        // A device being edited carries the points it has: twenty here.
+        f.points
+            .extend((1..19).map(|n| crate::device_form::PointRow::custom(crate::device_form::Dir::In, n)));
         f.points.push(crate::device_form::PointRow {
             use_: crate::device_form::Use::Existing("motor".into()),
             ..crate::device_form::PointRow::custom(crate::device_form::Dir::Out, 1)

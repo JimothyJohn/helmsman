@@ -872,11 +872,20 @@ page's build both skip `spec::is_test` files. The page runs the tests
 after every build change and before Deploy and "Use this code" (a block
 answer is tested with the candidate file in place); a box runs them when a
 project opens, after each save (`POST /api/projects/{p}/tests`, token or
-session, nothing changes) and inside the deploy's approval path, where a
-red test refuses with 409 before anything builds (`projects::red_tests`).
+session, nothing changes) and inside the deploy's approval path
+(`projects::red_tests`).
+
+**A red test warns and refuses nothing** (Nick, 2026-11-15: "just do
+automated testing and don't let random requirements get in the way of the
+flow"; before that a red test refused Deploy and "Use this code", 409 on
+a box). The page deploys and names the red tests after what runs, in the
+note and as a warning in Messages. A box deploys, lists them in the
+answer's `red` (one line a test, empty when none) and in the audit
+detail of the approval and of the apply (`deployed with N requirement
+test(s) red: ...`). `helmsman-plc test` keeps its exit status 1 for a red
+test: a project's own CI still fails on one.
 The Requirements tab of the right panel (archived 2026-11-08) showed one row per test, green or
-red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
-same gate.
+red with why.
 
 The Agent tab is one path in the page and on a box (`agent-instruct`,
 crates/helmsman-canvas/src/instruct.rs; Nick 2026-11-05: no chat). The
@@ -903,8 +912,14 @@ once: when the program is that one file, `<current_program>` points at the
 scan period the box reports for the project (`tests` in `GET
 /api/projects/{p}`), and an instruction ends if another project is opened
 before its answer is in. A failure goes back with what failed, up to two
-retries (`verify::next`); still red, nothing is written and the tab says
-why. Green is written into the file at once and saved as one revision
+retries (`verify::next`). After them only an answer that cannot be taken
+is refused (`Check::blocked`: cut off, outside its scope, not the whole
+file, code that does not compile): nothing is written and the tab says
+why. What the tests say (`Check::warnings`: a scenario that failed, a
+requirement test the code turns red, scenarios that pass on the old file
+too) refuses nothing: the file is written, the status counts the checks
+that did not pass and Messages lists them as a warning; a scenario that
+failed is not kept as a test. Green is written into the file at once and saved as one revision
 whose Agent page is `instruct::record` (instruction, reason, scenarios,
 failed attempts, the Agent's words), the scenarios kept as test files;
 Undo restores the revision before it. The tab shows only the instruction
@@ -2685,6 +2700,14 @@ canvas" at the end of this section.
   does NOT on an operand whose type the declarations do not give.
   Properties over generated programs: every negated wire carries a BOOL
   (by the compiled program's types), and no NOT block has a BOOL input.
+- **A run of one operator is one block** (`lower::chain`): `a AND b AND
+  c AND d` is one AND with four inputs, the FBD convention, for AND, OR,
+  XOR, `+` and `*`. Only a run as written is joined, so the inputs are
+  evaluated in the source's order and an operand in the author's
+  parentheses keeps its own block. `edit::SwapOp` on such a block changes
+  every operator of the run, refuses an operator drawn with two inputs
+  (`ManyInputs`), and brackets whatever would otherwise join a
+  neighbouring run, so an edit never changes the number of blocks.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label

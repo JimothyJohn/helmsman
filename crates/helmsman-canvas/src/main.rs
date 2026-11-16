@@ -52,6 +52,7 @@ mod desk;
 mod device_config;
 mod device_form;
 mod device_form_ui;
+mod device_io;
 mod device_proposal;
 mod device_vendor;
 mod devices;
@@ -75,6 +76,7 @@ mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;
 mod io_names;
+mod jump;
 mod lamps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod link_tests;
