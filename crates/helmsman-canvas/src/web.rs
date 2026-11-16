@@ -361,6 +361,18 @@ impl ClaudeLink {
         });
     }
 
+    /// Asks the design entry at `base` for its status; the body goes to
+    /// the page as it is (empty when it could not be asked).
+    pub fn check_design(&mut self, base: &str, ctx: &egui::Context) {
+        let url = format!("{base}/demo/v1/status");
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let body = plain("GET", &url, None).await.unwrap_or_default();
+            inbox.borrow_mut().push(Incoming::DesignStatus(body));
+            ctx.request_repaint();
+        });
+    }
+
     /// Stops the answer in flight.
     pub fn abort(&mut self) {
         if let Some(a) = self.abort.take() {

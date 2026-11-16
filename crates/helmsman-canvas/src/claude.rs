@@ -186,6 +186,17 @@ pub struct Context<'a> {
     pub earlier: &'a [String],
 }
 
+/// A `POST` of JSON to `url` with nothing else in it: no key, no other
+/// header (the design entry, `crate::design_step`).
+#[must_use]
+pub fn json_post(url: String, body: String) -> Request {
+    Request {
+        url,
+        headers: vec![("content-type", "application/json".to_string())],
+        body,
+    }
+}
+
 /// An HTTP request ready for `fetch`. `Debug` hides the key.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Request {
@@ -1123,6 +1134,9 @@ pub enum Incoming {
     Free(Free),
     /// What its status said a turn may ask for.
     Takes(Takes),
+    /// The design entry's status reply, as the relay sent it (empty when
+    /// it could not be asked): `crate::design_step::Avail::from_status`.
+    DesignStatus(String),
     /// A non-200 answer and its body.
     Status {
         seq: u64,

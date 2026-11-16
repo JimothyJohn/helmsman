@@ -197,6 +197,13 @@ pub struct Plan {
     /// Splits the plan made by itself since a step last passed or the
     /// engineer last started it ([`crate::steps::MAX_SPLITS`]).
     pub splits: u8,
+    /// A design's steps ([`crate::design_step`]): what is asked for each
+    /// step, in place of the plan's own wording. Empty for a plan the
+    /// Agent made.
+    pub briefs: Vec<String>,
+    /// For a design's batch: how many of its steps came before this
+    /// batch, and how many it has in all.
+    pub of: Option<(usize, usize)>,
 }
 
 /// Where a plan is.
@@ -533,8 +540,64 @@ impl Instruct {
             warnings: Vec::new(),
             diagnostics: env.diagnostics.to_vec(),
             splits: 0,
+            briefs: Vec::new(),
+            of: None,
         }));
         Step::Ask(Self::step_ask(self.run.insert(run), env, self.edits))
+    }
+
+    /// Starts a batch of a design's build order ([`crate::design_step`]):
+    /// `steps` is how each is shown, `briefs` what the Agent is asked for
+    /// it, one for one; the batch starts after `offset` of the design's
+    /// `total` steps. It runs as a plan does, on a working copy, and the
+    /// file changes once, when every step of the batch has passed.
+    ///
+    /// # Errors
+    /// The Agent is busy, or there is nothing to build.
+    pub fn start_design_steps(
+        &mut self,
+        env: &Env<'_>,
+        label: &str,
+        (steps, briefs): (Vec<String>, Vec<String>),
+        (offset, total): (usize, usize),
+    ) -> Result<Ask, String> {
+        if self.busy() {
+            return Err("The Agent is still working on the last instruction.".into());
+        }
+        if steps.is_empty() || steps.len() != briefs.len() {
+            return Err("The design has no steps to build.".into());
+        }
+        self.outcome = None;
+        let mut run = Run {
+            instruction: label.to_string(),
+            project: env.project.to_string(),
+            scope: env.scope.clone(),
+            earlier: Vec::new(),
+            asked: String::new(),
+            retries: 0,
+            asked_scenarios: false,
+            attempts: Vec::new(),
+            mode: Mode::Steps(Box::new(Plan {
+                steps,
+                done: 0,
+                state: PlanState::Running,
+                files: env.files.clone(),
+                scope: env.scope.clone(),
+                written: None,
+                tests: Vec::new(),
+                whys: Vec::new(),
+                scenarios: 0,
+                warnings: Vec::new(),
+                diagnostics: env.diagnostics.to_vec(),
+                splits: 0,
+                briefs,
+                of: Some((offset, total)),
+            })),
+            spec: false,
+        };
+        let ask = Self::step_ask(&mut run, env, self.edits);
+        self.run = Some(run);
+        Ok(ask)
     }
 
     /// The instruction under way, sent again as `text` (the instruction
@@ -622,7 +685,11 @@ impl Instruct {
         let Mode::Steps(plan) = &run.mode else {
             unreachable!("only a plan has steps")
         };
-        let text = crate::steps::step_request(&run.instruction, &plan.steps, plan.done);
+        let text = plan
+            .briefs
+            .get(plan.done)
+            .cloned()
+            .unwrap_or_else(|| crate::steps::step_request(&run.instruction, &plan.steps, plan.done));
         Self::plan_ask(run, env, text, edits)
     }
 
@@ -682,7 +749,12 @@ impl Instruct {
                 })
             }
             Mode::Steps(plan) => {
-                if plan.state == PlanState::Splitting || plan.splits >= crate::steps::MAX_SPLITS {
+                // A design's step is not split: its brief names the parts
+                // and requirements, and a smaller step would lose them.
+                if plan.state == PlanState::Splitting
+                    || plan.splits >= crate::steps::MAX_SPLITS
+                    || !plan.briefs.is_empty()
+                {
                     plan.state = PlanState::Paused(vec![too_big(plan.done)]);
                     return Step::Wait;
                 }
@@ -865,7 +937,8 @@ impl Instruct {
         let mut record = record(&run, &written, why.as_deref(), &status, check, answer);
         let mut steps = String::from("\nDone in steps, each checked:\n");
         for (k, s) in plan.steps.iter().enumerate() {
-            let _ = write!(steps, "{}. {}", k + 1, clean(s, MAX_REASON));
+            let before = plan.of.map_or(0, |(offset, _)| offset);
+            let _ = write!(steps, "{}. {}", before + k + 1, clean(s, MAX_REASON));
             match plan.whys.get(k).filter(|w| !w.is_empty()) {
                 Some(w) => {
                     let _ = writeln!(steps, " Why: {w}");
@@ -1722,23 +1795,37 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
     use crate::st_view::brand::{GREEN, RED};
     let t = crate::theme::theme(ui);
     let n = p.steps.len();
-    let head = match &p.state {
-        PlanState::Running => format!("Doing this in {n} steps. Step {} of {n}:", (p.done + 1).min(n)),
-        PlanState::Splitting => format!(
+    // A design's batch: the numbers are the design's own.
+    let (before, total) = p.of.unwrap_or((0, n));
+    let head = match (&p.state, p.of) {
+        (PlanState::Running, Some(_)) => format!(
+            "Building steps {} to {} of {total} of the design. Now step {}:",
+            before + 1,
+            before + n,
+            before + (p.done + 1).min(n)
+        ),
+        (PlanState::Paused(_), Some(_)) => {
+            format!("Paused at step {} of {total} of the design", before + p.done + 1)
+        }
+        (PlanState::Running, None) => {
+            format!("Doing this in {n} steps. Step {} of {n}:", (p.done + 1).min(n))
+        }
+        (PlanState::Splitting, _) => format!(
             "Step {} of {n} is being split into smaller steps.",
             (p.done + 1).min(n)
         ),
-        PlanState::Paused(_) => format!("Paused at step {} of {n}", p.done + 1),
+        (PlanState::Paused(_), None) => format!("Paused at step {} of {n}", p.done + 1),
     };
     let r = ui
         .add(egui::Label::new(RichText::new(head).color(t.fg)).wrap())
         .tip("A big change goes in steps, one after the other. Each step is checked like any answer, on a copy; the file is written once, at the end, as one version in History. Stop drops the steps and leaves the file as it is.");
     chrome.hit("agent plan steps", r.rect);
     for (k, step) in p.steps.iter().enumerate() {
+        let num = before + k + 1;
         let (text, ink) = match k.cmp(&p.done) {
-            std::cmp::Ordering::Less => (format!("{}. {step} (passed)", k + 1), t.ink(GREEN)),
-            std::cmp::Ordering::Equal => (format!("{}. {step}", k + 1), t.fg),
-            std::cmp::Ordering::Greater => (format!("{}. {step}", k + 1), t.muted),
+            std::cmp::Ordering::Less => (format!("{num}. {step} (passed)"), t.ink(GREEN)),
+            std::cmp::Ordering::Equal => (format!("{num}. {step}"), t.fg),
+            std::cmp::Ordering::Greater => (format!("{num}. {step}"), t.muted),
         };
         let mut rt = RichText::new(text).color(ink);
         if k == p.done {

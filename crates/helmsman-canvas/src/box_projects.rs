@@ -1023,6 +1023,29 @@ impl BoxProjects {
         ));
     }
 
+    /// A file the project keeps (`crate::design_step::DESIGN_FILE`) saved
+    /// with the version it was read as, `None` for a new one, and the file
+    /// in the editor left as it is. The box makes the save a revision.
+    pub fn save_kept(&mut self, file: &str, text: &str) {
+        let Some(o) = &mut self.open else { return };
+        let project = o.name.clone();
+        let b = o.bufs.entry(file.to_string()).or_default();
+        let version = b.version.clone();
+        b.text = text.to_string();
+        b.saving = Some(text.to_string());
+        b.loaded = true;
+        self.queue.push(PReq::json(
+            PCall::Save {
+                project: project.clone(),
+                file: file.to_string(),
+            },
+            "PUT",
+            file_url(&project, file),
+            &json!({ "text": text, "version": version }),
+        ));
+        self.conflict = None;
+    }
+
     /// The Agent's checked change (`crate::instruct`): `text` into `file`,
     /// saved with the version it was read as and with `page`, the change's
     /// History entry; then each scenario it passed as a requirement test
