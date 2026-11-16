@@ -1167,6 +1167,21 @@ impl BoxView {
         {
             self.quick_add(&q);
         }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.add_io_ui(&ui.ctx().clone(), chrome)
+        {
+            self.apply_wiring(&w);
+        }
+        if let Some(crate::devices::DeviceAct::Remove(names)) =
+            self.devices_ui.remove_ui(&ui.ctx().clone(), chrome)
+            && let Some(b) = self
+                .projects
+                .open
+                .as_mut()
+                .and_then(|o| o.bufs.get_mut(helmsman_project::IO_MAP))
+                .filter(|b| b.loaded)
+        {
+            b.text = crate::device_form::remove_signals(&b.text, &names);
+        }
         if self.devices_ui.renaming.is_some() {
             let files = self.loaded_files();
             self.devices_ui.plan_rename(&files);
@@ -2170,6 +2185,12 @@ impl Body for BoxView {
             .and_then(|f| files.iter().find(|(n, _)| *n == f).map(|(_, t)| t.clone()))
             .unwrap_or_default();
         self.devices_ui.program = crate::device_form::ports_of(&program);
+        self.devices_ui.can_declare = !program.is_empty();
+        self.devices_ui.set_profiles(
+            refs.iter()
+                .copied()
+                .filter(|(n, _)| n.ends_with(helmsman_project::DEVICE_EXT)),
+        );
         self.devices_ui.map = map.clone();
         self.devices_ui.eds_files = files
             .iter()
@@ -2225,6 +2246,7 @@ impl Body for BoxView {
                 self.projects.discover();
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.open(d),
+            Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),
             Some(crate::devices::DeviceAct::OpenMap) => {
                 self.projects.open_file(helmsman_project::IO_MAP);
                 chrome.show_code();
@@ -2236,6 +2258,7 @@ impl Body for BoxView {
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
                 | crate::devices::DeviceAct::Delete(_)
+                | crate::devices::DeviceAct::Remove(_)
                 | crate::devices::DeviceAct::Quick(_),
             )
             | None => {}

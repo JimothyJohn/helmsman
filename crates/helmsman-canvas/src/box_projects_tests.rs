@@ -3137,7 +3137,10 @@ fn the_conversation_and_the_device_form_follow_the_person_to_another_screen() {
     let mut studio = mid_conversation(&b, &studio_jar, &ctx);
     let mut f = NewDevice::from_eds("e1213.eds", "[Device]\nProdName = \"E1213\";\n");
     f.endpoint = "192.168.1.60".into();
-    f.points[2].on = true;
+    f.points.push(crate::device_form::PointRow::custom(
+        crate::device_form::Dir::In,
+        2,
+    ));
     f.params = format!("{} password=hunter2-device", f.params);
     studio.devices_ui.adding = Some(f.clone());
 

@@ -514,17 +514,33 @@ fn a_profile_saved_after_the_request_is_offered_by_the_devices_add() {
         "{map}"
     );
     assert!(
-        map.contains("in  acme_rio_di_00 bool acme_rio ch:DI-00\n"),
-        "{map}"
-    );
-    assert!(
-        map.contains("out acme_rio_do_00 bool acme_rio ch:DO-00 safe=false\n"),
-        "{map}"
+        !map.contains(" acme_rio ch:"),
+        "the device alone: no channel is in the project until it is added: {map}"
     );
     assert_eq!(
         o.bufs["acme-rio.device"].text, PROFILE,
         "the saved file is as it was"
     );
+    // Its channels are one click each, from the profile the project holds.
+    h.wait(0.3);
+    assert!(h.has("add io acme_rio"), "+ Add I/O under the device");
+    h.press("add io acme_rio");
+    h.wait(0.3);
+    assert!(h.has("io form") && h.has("io add DI-00") && h.has("io add DO-00"));
+    h.press("io add DO-00");
+    h.wait(0.3);
+    assert!(h.has("io form"), "the list stays open for the next");
+    assert!(!h.has("io add DO-00"), "an added channel leaves the list");
+    h.press("io done");
+    h.wait(0.3);
+    assert!(!h.has("io form"));
+    let o = h.app.boxv.as_ref().unwrap().projects.open.as_ref().unwrap();
+    let map = &o.bufs["io.map"].text;
+    assert!(
+        map.contains("out acme_rio_do_00 bool acme_rio ch:DO-00 safe=false\n"),
+        "{map}"
+    );
+    assert_eq!(map.matches(" acme_rio ch:").count(), 1, "{map}");
 }
 
 #[test]

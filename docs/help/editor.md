@@ -162,17 +162,25 @@ redrawn.
   read-only example it copies the project first. The form has a field
   for each of the protocol's settings, filled in with the usual values
   and checked against the driver's ranges, with the device's io.map line
-  under them. Below that are its inputs and outputs: a known device (the
-  ioLogik E1213) lists every channel, and the program's inputs and
-  outputs that were on the box's own channels are already ticked on the
-  first free ones. Tick any other channel and name it, or add rows with
-  + Input and + Output for any other device. For each row, Program picks
-  what the program does with it: one of its own variables, a new
-  variable (declared in the program's `VAR_INPUT` or `VAR_OUTPUT`), or
-  wiring only. **Edit** beside a device opens the same form on it, its
-  settings and wired points filled in, and Save replaces it in io.map;
-  **Delete** asks, then takes the device and its inputs and outputs out
-  (the program's variables stay). Double-click or right-click a wired signal to rename it:
+  under them. Adding a device adds the device alone. Every channel it
+  has is available from then on, and the project lists a channel only
+  once you add it. **+ Add I/O** under the device opens the list of
+  channels the project does not use yet; type part of a name (`DI-0`,
+  `out`, `int`) to narrow it, and click a channel to add it. The channel
+  gets a signal named after the device and the channel (`rio_di_04`)
+  and a variable of that name in the program's `VAR_INPUT` or
+  `VAR_OUTPUT`. To wire a variable the program already has, pick it
+  under **For** first; the list then shows the channels of its direction
+  and type. A device whose channels are not known takes a point by its
+  address in the same window. Right-click a point and choose **Remove…**
+  to take it out of the project; the program's variable stays and the
+  channel returns to the list. A device that holds points the program
+  has no variable for offers **Remove unused**, which asks before it
+  removes them. **Edit** beside a device opens its name, and with
+  Advanced on its protocol, address and timing; Save keeps its points
+  as they are. **Delete** asks, then takes the device and its inputs
+  and outputs out (the program's variables stay). Double-click or
+  right-click a wired signal to rename it:
   the io.map line and every use in the program change together, listed
   before you confirm. One map may mix Modbus
   TCP and EtherNet/IP devices. The agent reads the same listing, network
