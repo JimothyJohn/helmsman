@@ -199,6 +199,11 @@ pub struct PlaygroundView {
     /// Where each input's control was drawn last frame, by name (the
     /// diagram's blocks, then the I/O panel's rows): what a test clicks.
     input_rects: Vec<(String, Rect)>,
+    /// The push buttons drawn this frame and whether each is held
+    /// ([`Self::hold`]).
+    pushed: Vec<(String, bool)>,
+    /// The points whose details are open in the I/O tab, lower case.
+    io_open: std::collections::BTreeSet<String>,
     /// The project the Agent's new programs land in, once named.
     pub new_program: Option<String>,
     /// The Agent tab (`crate::instruct`).
@@ -316,6 +321,8 @@ impl PlaygroundView {
             program_name: None,
             sim_popup: None,
             input_rects: Vec::new(),
+            pushed: Vec::new(),
+            io_open: std::collections::BTreeSet::new(),
             new_program: None,
             instruct: crate::instruct::Instruct::default(),
             answered_seq: 0,
@@ -2356,6 +2363,11 @@ impl PlaygroundView {
         for (name, r) in std::mem::take(&mut self.input_rects) {
             chrome.hit(format!("input {name}"), r);
         }
+        // Every push button of this frame has spoken (the diagram's and
+        // the I/O tab's): an input is on while any of its buttons is held.
+        for (name, on) in std::mem::take(&mut self.pushed) {
+            self.session.set_input(&name, Value::Bool(on));
+        }
         self.sim_popup_ui(&ui.ctx().clone(), chrome);
     }
 
@@ -3191,6 +3203,7 @@ impl Body for PlaygroundView {
 
 impl PlaygroundView {
     fn io(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        use crate::io_cards::{Form, Links, Row};
         let t = theme(ui);
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
@@ -3198,7 +3211,6 @@ impl PlaygroundView {
         }
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
         let outputs: Vec<Point> = self.session.outputs().cloned().collect();
-        let on_map = self.on_map();
         // What is wired to each point, from io.map and the library; where
         // each port is, and what a right-click on its row offers.
         self.assign_context();
@@ -3207,138 +3219,215 @@ impl PlaygroundView {
         let menus = self.devices_ui.port_menus(&self.assign_write());
         let map = self.devices_ui.map.clone();
         let mut asks: Vec<(String, crate::assign_ui::PortAsk)> = Vec::new();
-        let off_map: Vec<&Point> = inputs
-            .iter()
-            .filter(|p| !on_map.iter().any(|r| r.eq_ignore_ascii_case(&p.name)))
-            .collect();
+        // What the diagram says of each point; nothing while there is none.
+        let cards = self.viewer.as_ref().map(crate::st_view::Viewer::output_cards);
+        let lit = self
+            .viewer
+            .as_ref()
+            .and_then(|v| v.because.clone())
+            .unwrap_or_default();
+        let src = self.viewer.as_ref().map(|v| v.src.clone());
+        let uses = |name: &str| src.as_ref().map(|s| crate::find::names(s, name).len());
+        let open: Vec<String> = self.io_open.iter().cloned().collect();
+        let is_open = |name: &str| open.iter().any(|o| o.eq_ignore_ascii_case(name));
+        // What the library says is wired to `name`, as a card's line.
+        let known = &self.devices_ui.wired;
+        let real = |name: &str, place: &crate::assign::Place| {
+            let line = wired
+                .get(&name.to_ascii_lowercase())
+                .map(|w| crate::wired::line(w, known.get(w)));
+            crate::io_cards::real(line, place)
+        };
+        let plant = self.session.plant.as_ref();
+        let mut asked: Vec<(String, bool, crate::io_cards::Asked)> = Vec::new();
+        let mut set = Vec::new();
+        let mut held = Vec::new();
+        let mut rects = Vec::new();
         egui::ScrollArea::vertical().id_salt("pg-io").show(ui, |ui| {
             let inputs_tip = if inputs.is_empty() {
                 "No VAR_INPUT or %IX bit: add one to get a control."
-            } else if off_map.len() < inputs.len() {
-                "Switch, press or drag the inputs here, or on their blocks in the diagram."
             } else {
-                "Switch, press or drag the inputs here."
+                "Switch, press or drag the inputs here, or on their blocks in the diagram."
             };
-            ui.label(RichText::new("Inputs").strong()).tip(inputs_tip);
-            if inputs.is_empty() {
-                ui.label(RichText::new("none").color(t.muted)).tip(inputs_tip);
-            }
-            // Two columns when the panel is wide enough for them (Nick,
-            // 2026-11-01: denser); each cell capped at its column's width,
-            // or the row overflows and the resizable panel grows to fit.
-            let (cols, col) = columns(ui);
-            let mut set = Vec::new();
-            let mut open_row = None;
-            egui::Grid::new("pg-io-in").num_columns(cols).show(ui, |ui| {
-                for pair in off_map.chunks(cols) {
-                    for p in pair {
-                        // A column: the line saying what is wired goes under the control.
-                        ui.vertical(|ui| {
-                            ui.set_max_width(col);
-                            let place = crate::assign::place_of(&map, &p.name).describe();
-                            let r = ui.scope(|ui| input_ui(ui, p, &place));
-                            let (value, anchor) = r.inner;
-                            if let Some(v) = value {
-                                set.push((p.name.clone(), v));
+            crate::io_cards::heading(ui, chrome, "Inputs", inputs.len(), true, inputs_tip, true);
+            if !chrome.io_fold_in {
+                if inputs.is_empty() {
+                    ui.label(RichText::new("none").color(t.muted)).tip(inputs_tip);
+                }
+                crate::io_cards::lay(
+                    ui,
+                    "pg-io-in",
+                    inputs.len(),
+                    chrome.io_grid,
+                    &|k| is_open(&inputs[k].name),
+                    &mut |ui, k, form| {
+                        let p = &inputs[k];
+                        let place = crate::assign::place_of(&map, &p.name);
+                        let said = place.describe();
+                        let open = is_open(&p.name);
+                        let row = Row {
+                            key: &p.name,
+                            input: true,
+                            place: &said,
+                            real: real(&p.name, &place),
+                            links: Links::Input(cards.as_ref().map(|c| crate::io_cards::affects(c, &p.name))),
+                            selected: form == Form::Tile && open,
+                            open: form == Form::Detail || (form == Form::Row && open),
+                            tile: form == Form::Tile,
+                            uses: uses(&p.name),
+                            simulate: true,
+                        };
+                        let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
+                            if form == Form::Detail {
+                                // Its control is on its tile.
+                                let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
+                                let text =
+                                    format!("{} = {}", p.name.to_ascii_lowercase(), show(p.ty, p.value));
+                                crate::io_cards::value(ui, Some(glyph), t.fg, &text);
+                                return None;
+                            }
+                            let r = ui.scope(|ui| input_ui(ui, p, &said));
+                            Some((r.inner.0, r.inner.1, r.response.rect))
+                        });
+                        if let Some((value, anchor, rect)) = control {
+                            match (p.widget, value) {
+                                (Some(Widget::Push), Some(Value::Bool(on))) => {
+                                    held.push((p.name.clone(), on));
+                                }
+                                (_, Some(v)) => set.push((p.name.clone(), v)),
+                                (_, None) => {}
                             }
                             crate::assign_ui::row_menu(&anchor, chrome, &menus, &p.name, &mut asks);
-                            if let Some(w) = wired.get(&p.name.to_ascii_lowercase()) {
-                                crate::wired::show_line(
-                                    ui,
-                                    chrome,
-                                    &p.name,
-                                    w,
-                                    self.devices_ui.wired.get(w),
-                                    0.0,
-                                );
-                            }
-                            self.input_rects
-                                .push((p.name.to_ascii_lowercase(), r.response.rect));
+                            rects.push((p.name.to_ascii_lowercase(), rect));
                             mark_mode(
                                 ui,
-                                r.response.rect,
-                                self.session
-                                    .plant
-                                    .as_ref()
-                                    .map_or(helmsman_sim::Mode::Normal, |pl| pl.mode(&p.name)),
+                                rect,
+                                plant.map_or(helmsman_sim::Mode::Normal, |pl| pl.mode(&p.name)),
                             );
-                            if double_clicked(ui, r.response.rect) {
-                                open_row = Some(p.name.clone());
-                            }
-                        });
-                    }
-                    ui.end_row();
-                }
-            });
-            for (name, v) in set {
-                if let Err(why) = self.session.try_input(&name, v) {
-                    self.notice = Some(why);
-                }
-            }
-            if let Some(name) = open_row {
-                self.open_sim_popup(&name);
+                        }
+                        crate::assign_ui::row_menu(&card, chrome, &menus, &p.name, &mut asks);
+                        asked.push((p.name.clone(), true, a));
+                    },
+                );
             }
             ui.add_space(8.0);
             let outputs_tip = if outputs.is_empty() {
                 "No VAR_OUTPUT or %QX bit: add one to get a lamp."
             } else {
-                "Click an output to pick its block in the diagram."
+                "Click an output to light what drives it in the diagram."
             };
-            ui.label(RichText::new("Outputs").strong()).tip(outputs_tip);
+            crate::io_cards::heading(ui, chrome, "Outputs", outputs.len(), false, outputs_tip, false);
+            if chrome.io_fold_out {
+                return;
+            }
             if outputs.is_empty() {
                 ui.label(RichText::new("none").color(t.muted)).tip(outputs_tip);
+                return;
             }
-            let mut picked = None;
-            let cards = self
-                .viewer
-                .as_ref()
-                .map(crate::st_view::Viewer::output_cards)
-                .unwrap_or_default();
-            let lit = self
-                .viewer
-                .as_ref()
-                .and_then(|v| v.because.clone())
-                .unwrap_or_default();
-            // One card to a row, at the pane's width.
-            let (cols, col) = (1, ui.available_width());
-            let grid = egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
-                for pair in outputs.chunks(cols) {
-                    for p in pair {
-                        ui.vertical(|ui| {
-                            ui.set_max_width(col);
-                            let place = crate::assign::place_of(&map, &p.name).describe();
-                            let card = cards.iter().find(|c| c.name.eq_ignore_ascii_case(&p.name));
-                            let selected = lit.eq_ignore_ascii_case(&p.name);
-                            let (clicked, anchor) = output_ui(ui, p, &place, card, selected);
-                            if clicked {
-                                picked = Some(p.name.clone());
-                            }
-                            crate::assign_ui::row_menu(&anchor, chrome, &menus, &p.name, &mut asks);
-                            if let Some(w) = wired.get(&p.name.to_ascii_lowercase()) {
-                                crate::wired::show_line(
-                                    ui,
-                                    chrome,
-                                    &p.name,
-                                    w,
-                                    self.devices_ui.wired.get(w),
-                                    0.0,
-                                );
-                            }
+            let section = ui.vertical(|ui| {
+                crate::io_cards::lay(
+                    ui,
+                    "pg-io-out",
+                    outputs.len(),
+                    chrome.io_grid,
+                    &|k| is_open(&outputs[k].name),
+                    &mut |ui, k, form| {
+                        let p = &outputs[k];
+                        let place = crate::assign::place_of(&map, &p.name);
+                        let said = place.describe();
+                        let open = is_open(&p.name);
+                        let card = cards
+                            .as_ref()
+                            .and_then(|c| c.iter().find(|c| c.name.eq_ignore_ascii_case(&p.name)));
+                        let row = Row {
+                            key: &p.name,
+                            input: false,
+                            place: &said,
+                            real: real(&p.name, &place),
+                            links: Links::Output(card),
+                            selected: lit.eq_ignore_ascii_case(&p.name) || (form == Form::Tile && open),
+                            open: form == Form::Detail || (form == Form::Row && open),
+                            tile: form == Form::Tile,
+                            uses: uses(&p.name),
+                            simulate: false,
+                        };
+                        let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
+                            output_ui(ui, p, form == Form::Tile);
                         });
-                    }
-                    ui.end_row();
-                }
+                        crate::assign_ui::row_menu(&card, chrome, &menus, &p.name, &mut asks);
+                        asked.push((p.name.clone(), false, a));
+                    },
+                );
             });
-            if !outputs.is_empty() {
-                chrome.hit("io outputs", grid.response.rect);
-            }
-            if let Some(name) = picked {
-                self.pick(&name);
-            }
+            chrome.hit("io outputs", section.response.rect);
         });
+        self.input_rects.extend(rects);
+        for (name, v) in set {
+            if let Err(why) = self.session.try_input(&name, v) {
+                self.notice = Some(why);
+            }
+        }
+        for (name, on) in held {
+            self.hold(&name, on);
+        }
+        for (name, input, a) in asked {
+            self.io_asked(&name, input, a, chrome);
+        }
         for (port, ask) in asks {
             self.assign_ask(port, ask);
         }
+    }
+
+    /// A push button, on the diagram or in the I/O tab, says whether it
+    /// is held this frame. The input is on while either is: both are
+    /// drawn for one input, and the one not held must not release it.
+    fn hold(&mut self, name: &str, on: bool) {
+        match self.pushed.iter_mut().find(|(n, _)| n == name) {
+            Some((_, h)) => *h |= on,
+            None => self.pushed.push((name.to_string(), on)),
+        }
+    }
+
+    /// What a card of the I/O tab asked for.
+    fn io_asked(&mut self, name: &str, input: bool, a: crate::io_cards::Asked, chrome: &mut Chrome) {
+        if a.details {
+            let key = name.to_ascii_lowercase();
+            if !self.io_open.remove(&key) {
+                self.io_open.insert(key);
+            }
+        }
+        if a.simulate {
+            self.open_sim_popup(name);
+        }
+        if a.code {
+            self.find_in_code(name, chrome);
+        }
+        if a.diagram
+            && let Some(v) = &mut self.viewer
+        {
+            v.show_signal(name);
+        }
+        if a.tapped && !input {
+            self.pick(name);
+        }
+    }
+
+    /// The `< >` glyph of a point's card: the file that declares it
+    /// opens in the Code tab with the find box on its name, the first
+    /// place it is named selected. Asked again, the next place.
+    fn find_in_code(&mut self, name: &str, chrome: &mut Chrome) {
+        let again = chrome
+            .find
+            .as_ref()
+            .is_some_and(|f| f.word && f.query.eq_ignore_ascii_case(name));
+        if !again
+            && let Some(line) = self.viewer.as_ref().and_then(|v| v.declared_line(name))
+            && let Some((file, _)) = self.proj.locate(line)
+        {
+            self.proj.open_file(&file);
+        }
+        chrome.show_code();
+        crate::find::Find::name(&mut chrome.find, &name.to_ascii_lowercase());
     }
 
     /// The signals to trend (outputs, then inputs) and the chart.
@@ -4089,7 +4178,7 @@ impl PlaygroundView {
             }
         }
         for (name, on) in held {
-            self.session.set_input(&name, Value::Bool(on));
+            self.hold(&name, on);
         }
         if let Some(name) = open {
             self.open_sim_popup(&name);
@@ -4363,6 +4452,7 @@ impl PlaygroundView {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn on_map(&self) -> Vec<String> {
         let Some(v) = &self.viewer else { return Vec::new() };
         v.reads_on_screen().into_iter().map(|(path, _)| path).collect()
@@ -4692,20 +4782,6 @@ impl Default for PlaygroundView {
     }
 }
 
-/// One input's control; the value it sets, if it changed (a push button
-/// reports every frame).
-/// How many columns an I/O grid gets in `ui`, and each one's width: two
-/// once the panel is wide enough for two controls, else one.
-fn columns(ui: &egui::Ui) -> (usize, f32) {
-    let avail = ui.available_width();
-    let gap = ui.spacing().item_spacing.x;
-    if avail >= 2.0 * TAP * 3.0 + gap {
-        (2, (avail - gap) / 2.0)
-    } else {
-        (1, avail)
-    }
-}
-
 /// One input: its control, and the response a right-click on its row
 /// opens a menu from. `place` is where the point is now, in its tooltip.
 fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::Response) {
@@ -4719,6 +4795,13 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
     // Wrapped, with a slider that fits: a row wider than the panel grows it.
     ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(40.0, 100.0);
     let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
+    // What a button gets beside the glyph: any wider and it wraps under it.
+    let beside = (ui.available_width() - crate::glyphs::ROW - ui.spacing().item_spacing.x - 1.0).max(40.0);
+    // A button is that wide and no wider: its name is cut, never the row.
+    let size = Vec2::new(beside.min(TAP * 3.0), TAP * 0.8);
+    // A tile is too narrow for a slider beside the box: the box alone.
+    let slider = ui.available_width() >= 150.0;
+    let boxed = Vec2::new((ui.available_width() - 2.0).clamp(40.0, 84.0), TAP * 0.6);
     ui.horizontal_wrapped(|ui| {
         crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, t.fg, crate::glyph_lib::tip(glyph));
         match p.widget {
@@ -4732,10 +4815,9 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                     )
                     .fill(if on { YELLOW } else { t.rule })
                     .sense(Sense::click_and_drag())
-                    .wrap_mode(egui::TextWrapMode::Truncate)
-                    .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-                let r = ui.add(b).tip(format!(
-                    "Push button: on while held. Double-click to simulate it as a device.\n{place}"
+                    .wrap_mode(egui::TextWrapMode::Truncate);
+                let r = ui.add_sized(size, b).tip(format!(
+                    "Push button: on while held. Double-click for its details.\n{place}"
                 ));
                 out = Some(Value::Bool(r.is_pointer_button_down_on()));
                 anchor = Some(r);
@@ -4748,10 +4830,9 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                         .color(if on { BLACK } else { t.fg }),
                 )
                 .fill(if on { YELLOW } else { t.rule })
-                .wrap_mode(egui::TextWrapMode::Truncate)
-                .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-                let r = ui.add(b).tip(format!(
-                    "Switch: click to flip. Double-click to simulate it as a device.\n{place}"
+                .wrap_mode(egui::TextWrapMode::Truncate);
+                let r = ui.add_sized(size, b).tip(format!(
+                    "Switch: click to flip. Double-click for its details.\n{place}"
                 ));
                 if r.clicked() {
                     out = Some(Value::Bool(!on));
@@ -4768,26 +4849,21 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                     _ => 0,
                 };
                 let before = v;
-                ui.add(
-                    egui::Slider::new(&mut v, slo..=shi)
-                        .clamping(egui::SliderClamping::Edits)
-                        .show_value(false),
-                )
-                .tip(format!(
-                    "Drag to set the input, {slo} to {shi}. Type any value in the box."
-                ));
+                if slider {
+                    ui.add(
+                        egui::Slider::new(&mut v, slo..=shi)
+                            .clamping(egui::SliderClamping::Edits)
+                            .show_value(false),
+                    )
+                    .tip(format!(
+                        "Drag to set the input, {slo} to {shi}. Type any value in the box."
+                    ));
+                }
                 if v != before {
                     out = Some(Value::Int(i128::from(v)));
                 }
                 let id = egui::Id::unique(("io-int", &p.name));
-                let c = crate::commit::number(
-                    ui,
-                    id,
-                    &before.to_string(),
-                    "",
-                    Vec2::new(84.0, TAP * 0.6),
-                    TYPE_HINT,
-                );
+                let c = crate::commit::number(ui, id, &before.to_string(), "", boxed, TYPE_HINT);
                 if let Some(n) = crate::commit::int(&c, lo, hi)
                     && n != before
                 {
@@ -4801,24 +4877,19 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                     _ => 0.0,
                 };
                 let before = v;
-                ui.add(
-                    egui::Slider::new(&mut v, -100.0..=100.0)
-                        .clamping(egui::SliderClamping::Edits)
-                        .show_value(false),
-                )
-                .tip("Drag to set the input, -100 to 100. Type any value in the box.");
+                if slider {
+                    ui.add(
+                        egui::Slider::new(&mut v, -100.0..=100.0)
+                            .clamping(egui::SliderClamping::Edits)
+                            .show_value(false),
+                    )
+                    .tip("Drag to set the input, -100 to 100. Type any value in the box.");
+                }
                 if v.to_bits() != before.to_bits() && v.is_finite() {
                     out = Some(Value::Real(v));
                 }
                 let id = egui::Id::unique(("io-real", &p.name));
-                let c = crate::commit::number(
-                    ui,
-                    id,
-                    &before.to_string(),
-                    "",
-                    Vec2::new(84.0, TAP * 0.6),
-                    TYPE_HINT,
-                );
+                let c = crate::commit::number(ui, id, &before.to_string(), "", boxed, TYPE_HINT);
                 if let Some(x) = crate::commit::real(&c)
                     && x.to_bits() != before.to_bits()
                 {
@@ -4832,12 +4903,14 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                     _ => 0,
                 };
                 let before = ms;
-                ui.add(
-                    egui::Slider::new(&mut ms, 0..=10_000)
-                        .clamping(egui::SliderClamping::Edits)
-                        .show_value(false),
-                )
-                .tip("Drag to set the time, up to 10 s.");
+                if slider {
+                    ui.add(
+                        egui::Slider::new(&mut ms, 0..=10_000)
+                            .clamping(egui::SliderClamping::Edits)
+                            .show_value(false),
+                    )
+                    .tip("Drag to set the time, up to 10 s.");
+                }
                 ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
                     .tip("The time in ms. Drag, or double-click to type it, up to a day.");
                 if ms != before {
@@ -4857,16 +4930,8 @@ fn row_label(ui: &mut egui::Ui, label: &str, place: &str) -> egui::Response {
         .tip(place.to_string())
 }
 
-/// One output: a lamp (BOOL) or a readout. Returns whether it was clicked,
-/// and the response a right-click on its row opens a menu from. `place` is
-/// where the point is now, in its tooltip.
-fn output_ui(
-    ui: &mut egui::Ui,
-    p: &Point,
-    place: &str,
-    card: Option<&crate::output_cards::OutputCard>,
-    selected: bool,
-) -> (bool, egui::Response) {
+/// One output's first line on its card: a lamp (BOOL) or a readout.
+fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
     let t = theme(ui);
     let on = p.value == Value::Bool(true);
     let name = match p.address() {
@@ -4886,16 +4951,9 @@ fn output_ui(
     } else {
         t.fg
     };
-    let row = crate::output_cards::Row {
-        key: &p.name,
-        text,
-        color,
-        glyph: crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool),
-        place,
-        selected,
-        card,
-    };
-    crate::output_cards::show(ui, &row)
+    // A tile has the lamp and the name; the glyph would take half of it.
+    let glyph = (!tile).then(|| crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
+    crate::io_cards::value(ui, glyph, color, &text);
 }
 
 /// A value for a readout (TIME in ms).

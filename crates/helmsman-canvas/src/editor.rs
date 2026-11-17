@@ -315,6 +315,13 @@ pub struct Chrome {
     /// the program stopped with every variable at its initial value, to
     /// be run from scratch; off, it runs at once. Remembered per browser.
     pub agent_resets: bool,
+    /// The I/O tab shows its points as tiles, not one to a row
+    /// ([`crate::io_cards`]). Remembered.
+    pub io_grid: bool,
+    /// The I/O tab's Inputs are folded away. Remembered.
+    pub io_fold_in: bool,
+    /// The I/O tab's Outputs are folded away. Remembered.
+    pub io_fold_out: bool,
 }
 
 impl Default for Chrome {
@@ -346,6 +353,9 @@ impl Default for Chrome {
             folds: crate::st_fold::Folds::default(),
             advanced: false,
             agent_resets: true,
+            io_grid: false,
+            io_fold_in: false,
+            io_fold_out: false,
         }
     }
 }
@@ -374,7 +384,7 @@ impl Chrome {
             format!(" hidden={}", list(&self.hidden))
         };
         format!(
-            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={}{colors}",
+            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={} iogrid={} iofold={}{}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             list(&self.lefts),
@@ -385,7 +395,10 @@ impl Chrome {
             u8::from(self.light),
             u8::from(self.wrap),
             u8::from(self.advanced),
-            u8::from(self.agent_resets)
+            u8::from(self.agent_resets),
+            u8::from(self.io_grid),
+            u8::from(self.io_fold_in),
+            u8::from(self.io_fold_out)
         )
     }
 
@@ -410,6 +423,11 @@ impl Chrome {
                 Some(("wrap", v)) => c.wrap = v == "1",
                 Some(("advanced", v)) => c.advanced = v == "1",
                 Some(("reset", v)) => c.agent_resets = v == "1",
+                Some(("iogrid", v)) => c.io_grid = v == "1",
+                Some(("iofold", v)) => {
+                    c.io_fold_in = v.starts_with('1');
+                    c.io_fold_out = v.ends_with('1') && v.len() == 2;
+                }
                 Some(("colors", v)) => {
                     c.colors = v
                         .split(',')

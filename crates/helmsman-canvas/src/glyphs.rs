@@ -74,6 +74,13 @@ pub enum Icon {
     Back,
     /// → , thin: on to the revision after the one shown.
     Forward,
+    /// Two blocks joined by a wire: where a signal is on the diagram
+    /// (a card of the I/O tab; Nick, 2026-11-16).
+    Diagram,
+    /// Three full-width lines: the I/O tab's cards one to a row.
+    List,
+    /// Four squares: the I/O tab's cards as tiles.
+    Grid,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -440,6 +447,39 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             let dir = if up { -1.0 } else { 1.0 };
             p.line_segment([z, z + Vec2::new(-head, -dir * head)], stroke);
             p.line_segment([z, z + Vec2::new(head, -dir * head)], stroke);
+        }
+        Icon::Diagram => {
+            // A block low on the left, one high on the right, a wire
+            // stepping between them.
+            let side = b.width() * 0.36;
+            let a = Rect::from_min_size(Pos2::new(l, bt - side), Vec2::splat(side));
+            let z = Rect::from_min_size(Pos2::new(r - side, t), Vec2::splat(side));
+            for q in [a, z] {
+                p.rect_stroke(q, CornerRadius::same(1), stroke, egui::StrokeKind::Inside);
+            }
+            let mid = c.x;
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(a.right(), a.center().y),
+                    Pos2::new(mid, a.center().y),
+                    Pos2::new(mid, z.center().y),
+                    Pos2::new(z.left(), z.center().y),
+                ],
+                stroke,
+            ));
+        }
+        Icon::List => {
+            for k in [0.14, 0.5, 0.86] {
+                let y = t + b.height() * k;
+                p.line_segment([Pos2::new(l, y), Pos2::new(r, y)], stroke);
+            }
+        }
+        Icon::Grid => {
+            let side = b.width() * 0.4;
+            for (x, y) in [(l, t), (r - side, t), (l, bt - side), (r - side, bt - side)] {
+                let q = Rect::from_min_size(Pos2::new(x, y), Vec2::splat(side));
+                p.rect_stroke(q, CornerRadius::same(1), stroke, egui::StrokeKind::Inside);
+            }
         }
         Icon::Back | Icon::Forward => {
             // A shaft across the middle, an open arrowhead at one end.

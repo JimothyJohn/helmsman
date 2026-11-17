@@ -24,6 +24,10 @@ pub struct Find {
     focus: bool,
     /// The current match is to be selected and scrolled to.
     reveal: bool,
+    /// Only whole names match (`start`, never the `start` in
+    /// `start_button`): the query came from a signal's card, not from
+    /// typing. Typing in the box ends it.
+    pub word: bool,
 }
 
 impl Find {
@@ -44,6 +48,47 @@ impl Find {
             None => Self::open(find),
         }
     }
+
+    /// A signal's card asks where `name` is in the code: the box opens on
+    /// it as a whole name with the first match current; asked again for
+    /// the same name, it moves to the next match.
+    pub fn name(find: &mut Option<Self>, name: &str) {
+        match find {
+            Some(f) if f.word && f.query.eq_ignore_ascii_case(name) => {
+                f.step += 1;
+                f.reveal = true;
+            }
+            _ => {
+                *find = Some(Self {
+                    query: name.to_string(),
+                    reveal: true,
+                    word: true,
+                    ..Self::default()
+                });
+            }
+        }
+    }
+
+    /// Where this box's query occurs in `text`.
+    #[must_use]
+    pub fn all(&self, text: &str) -> Vec<Range<usize>> {
+        if self.word {
+            names(text, &self.query)
+        } else {
+            matches(text, &self.query)
+        }
+    }
+}
+
+/// [`matches`] kept to whole names: a match with a letter, a digit or an
+/// underscore right before or after it is part of a longer name.
+#[must_use]
+pub fn names(text: &str, query: &str) -> Vec<Range<usize>> {
+    let part = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    matches(text, query)
+        .into_iter()
+        .filter(|r| !part(text[..r.start].chars().next_back()) && !part(text[r.end..].chars().next()))
+        .collect()
 }
 
 /// Where `query` occurs in `text`, as byte ranges, left to right, none
@@ -151,6 +196,7 @@ pub fn row(ui: &mut egui::Ui, find: &mut Option<Find>, id: egui::Id, text: &str)
         }
         if r.changed() {
             changed = true;
+            f.word = false;
         }
         if r.lost_focus() {
             let (enter, shift, esc) = ui.input(|i| (i.key_pressed(Key::Enter), i.modifiers.shift, i.key_pressed(Key::Escape)));
@@ -164,7 +210,7 @@ pub fn row(ui: &mut egui::Ui, find: &mut Option<Find>, id: egui::Id, text: &str)
         } else if r.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
             close = true;
         }
-        let ranges = matches(text, &f.query);
+        let ranges = f.all(text);
         let n = ranges.len();
         if changed {
             f.current = 0;
@@ -207,7 +253,7 @@ pub fn row(ui: &mut egui::Ui, find: &mut Option<Find>, id: egui::Id, text: &str)
     if close {
         // The editor takes the keyboard with the current match selected,
         // so typing replaces it (an unfocused editor keeps only a caret).
-        let ranges = matches(text, &f.query);
+        let ranges = f.all(text);
         if let Some(r) = ranges.get(f.current.min(ranges.len().saturating_sub(1))) {
             select(ui.ctx(), id, text, r.clone(), false);
             ui.ctx().memory_mut(|m| m.request_focus(id));
@@ -217,7 +263,7 @@ pub fn row(ui: &mut egui::Ui, find: &mut Option<Find>, id: egui::Id, text: &str)
     }
     let f = find.as_mut()?;
     // A button's step lands on the next frame's count; resolve it now.
-    let ranges = matches(text, &f.query);
+    let ranges = f.all(text);
     let n = ranges.len();
     if n > 0 && f.step != 0 {
         #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
@@ -240,7 +286,7 @@ mod tests {
     use eframe::egui::{Color32, FontId, TextFormat, text::LayoutJob};
     use proptest::prelude::*;
 
-    use super::{Find, mark, matches};
+    use super::{Find, mark, matches, names};
 
     #[test]
     fn matches_ignore_ascii_case_and_never_overlap() {
@@ -263,6 +309,35 @@ mod tests {
             1,
             "a non-ASCII letter matches exactly"
         );
+    }
+
+    #[test]
+    fn names_are_whole_and_a_card_asking_again_steps() {
+        let t = "start := start_button AND NOT restart; (* START *) x.start := start;";
+        let m = names(t, "start");
+        assert_eq!(
+            m.iter().map(|r| r.start).collect::<Vec<_>>(),
+            [0, 42, 53, 62],
+            "not start_button, not restart; a field and a comment count"
+        );
+        assert_eq!(names("größe_start start", "start").len(), 1);
+        assert_eq!(
+            names("éstart", "start").len(),
+            0,
+            "a non-ASCII letter is part of a name"
+        );
+        assert_eq!(names(t, "").len(), 0);
+        assert_eq!(names("%IX0.1 %IX0.10", "%IX0.1").len(), 1);
+        let mut f = None;
+        Find::name(&mut f, "start");
+        let g = f.clone().unwrap();
+        assert!(g.word && g.reveal && g.step == 0 && g.current == 0);
+        assert_eq!(g.all(t).len(), 4);
+        Find::name(&mut f, "START");
+        assert_eq!(f.as_ref().unwrap().step, 1, "the same name again: the next match");
+        Find::name(&mut f, "stop");
+        let g = f.unwrap();
+        assert_eq!((g.query.as_str(), g.step, g.current), ("stop", 0, 0));
     }
 
     #[test]

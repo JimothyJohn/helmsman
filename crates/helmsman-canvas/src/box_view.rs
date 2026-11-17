@@ -114,6 +114,8 @@ pub struct BoxView {
     pub wants_sim: bool,
     /// The diagram's pick last frame (a new one sends the ST there).
     last_pick: Option<Pick>,
+    /// The points whose details are open in the I/O tab, lower case.
+    io_open: std::collections::BTreeSet<String>,
     /// The diagram's menu: on a box it offers only what io.map can take
     /// (`crate::assign`), as the code is changed in the editor.
     pub dedit: crate::diagram_edit::EditUi,
@@ -345,6 +347,7 @@ impl BoxView {
             generation: 0,
             wants_sim: false,
             last_pick: None,
+            io_open: std::collections::BTreeSet::new(),
             dedit: crate::diagram_edit::EditUi::default(),
             ports_memo: std::cell::RefCell::new(None),
             open_at: None,
@@ -1911,6 +1914,50 @@ impl BoxView {
         }
     }
 
+    /// What a card of the I/O tab asked for.
+    fn io_asked(&mut self, name: &str, input: bool, a: crate::io_cards::Asked, chrome: &mut Chrome) {
+        if a.details {
+            let key = name.to_ascii_lowercase();
+            if !self.io_open.remove(&key) {
+                self.io_open.insert(key);
+            }
+        }
+        if a.code {
+            self.find_in_code(name, chrome);
+        }
+        if let Some(v) = &mut self.view {
+            if a.diagram {
+                v.show_signal(name);
+            }
+            if a.tapped && !input {
+                v.show_output(name);
+            }
+        }
+    }
+
+    /// The `< >` glyph of a point's card: the Code tab with the find box
+    /// on its name, the first place it is named selected; asked again,
+    /// the next place. The file that declares it opens first when the
+    /// project open is the one running.
+    fn find_in_code(&mut self, name: &str, chrome: &mut Chrome) {
+        let again = chrome
+            .find
+            .as_ref()
+            .is_some_and(|f| f.word && f.query.eq_ignore_ascii_case(name));
+        let running = self.has_projects()
+            && self.projects.open.as_ref().map(|o| &o.name) == self.projects.running.as_ref();
+        if !again
+            && running
+            && let Some(v) = &self.view
+            && let Some(line) = v.declared_line(name)
+            && let Some((file, _)) = projects::file_line(&v.src, line)
+        {
+            self.projects.open_file(&file);
+        }
+        chrome.show_code();
+        crate::find::Find::name(&mut chrome.find, &name.to_ascii_lowercase());
+    }
+
     /// Over each input's block: FORCED in the warning colour when forced,
     /// and for an engineer a control that forces it.
     fn input_controls(
@@ -2776,78 +2823,166 @@ impl Body for BoxView {
         let map = self.devices_ui.map.clone();
         let mut asks: Vec<(String, crate::assign_ui::PortAsk)> = Vec::new();
         let known = &self.devices_ui.wired;
+        // What the diagram says of each point; nothing while there is none.
+        let cards = self.view.as_ref().map(Viewer::output_cards);
+        let lit = self
+            .view
+            .as_ref()
+            .and_then(|v| v.because.clone())
+            .unwrap_or_default();
+        let src = self.view.as_ref().map(|v| v.src.clone());
+        let open: Vec<String> = self.io_open.iter().cloned().collect();
+        let is_open = |name: &str| open.iter().any(|o| o.eq_ignore_ascii_case(name));
+        let signals = &self.state.signals;
+        let mut asked: Vec<(String, bool, crate::io_cards::Asked)> = Vec::new();
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
-            if let Some(v) = &mut self.view {
-                v.outputs_ui(ui, scan);
-                ui.separator();
-            }
+            use crate::io_cards::{Form, Links, Row};
             // Inputs, then Outputs: the simulation's I/O tab has the same
-            // two headings (one "Signals" list here until 2026-11-10).
-            for (head, dir, tip) in [
-                ("Inputs", "in", "What the box reads from its devices."),
-                ("Outputs", "out", "What the box writes to its devices."),
+            // two headings and the same cards (`crate::io_cards`).
+            for (head, dir, tip, id) in [
+                (
+                    "Inputs",
+                    "in",
+                    "What the box reads from its devices.",
+                    "box-io-in",
+                ),
+                (
+                    "Outputs",
+                    "out",
+                    "What the box writes to its devices.",
+                    "box-io-out",
+                ),
             ] {
-                ui.label(RichText::new(head).strong()).tip(tip);
-                let rows: Vec<&crate::remote::SignalRow> =
-                    self.state.signals.iter().filter(|s| s.dir == dir).collect();
+                let input = dir == "in";
+                // The box's signals of this direction; before them, among
+                // the outputs, every output of the program (a signal of
+                // the map or not), valued from the scan when no signal is.
+                let of_dir = || signals.iter().filter(|s| s.dir == dir);
+                let mut rows: Vec<(String, Option<&crate::remote::SignalRow>)> = Vec::new();
+                if !input {
+                    for c in cards.iter().flatten() {
+                        let sig = of_dir().find(|s| s.name.eq_ignore_ascii_case(&c.name));
+                        rows.push((
+                            sig.map_or_else(|| c.name.to_ascii_lowercase(), |s| s.name.clone()),
+                            sig,
+                        ));
+                    }
+                }
+                for s in of_dir() {
+                    if !rows.iter().any(|(n, _)| n.eq_ignore_ascii_case(&s.name)) {
+                        rows.push((s.name.clone(), Some(s)));
+                    }
+                }
+                crate::io_cards::heading(ui, chrome, head, rows.len(), input, tip, input);
+                if if input {
+                    chrome.io_fold_in
+                } else {
+                    chrome.io_fold_out
+                } {
+                    continue;
+                }
                 if rows.is_empty() {
                     ui.label(RichText::new("none").color(t.muted)).tip(tip);
                 }
-                // Two columns (Nick, 2026-11-01: denser).
-                egui::Grid::new(("box-io-signals", dir))
-                    .num_columns(2)
-                    .show(ui, |ui| {
-                        for pair in rows.chunks(2) {
-                            for s in pair {
-                                let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
-                                let forced = if s.forced { "  FORCED" } else { "" };
-                                let text = format!("{} = {}{unit}{forced}", s.name, show(s.value));
-                                let color = match s.quality.as_str() {
-                                    _ if s.forced => t.ink(WARN),
-                                    "missing" => t.ink(RED),
-                                    _ if s.value == Some(helmsman_iec::Value::Bool(true)) => t.ink(GREEN),
-                                    _ => t.fg,
-                                };
-                                let bool_ty = matches!(s.value, Some(helmsman_iec::Value::Bool(_)));
-                                let glyph = crate::glyph_lib::for_point(&s.name, dir == "in", bool_ty);
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        crate::glyph_lib::show(
-                                            ui,
-                                            glyph,
-                                            crate::glyphs::ROW,
-                                            color,
-                                            crate::glyph_lib::tip(glyph),
-                                        );
-                                        let is_port =
-                                            menus.iter().any(|m| m.port.eq_ignore_ascii_case(&s.name));
-                                        let l = ui.add(
-                                            egui::Label::new(RichText::new(text).monospace().color(color))
-                                                .sense(egui::Sense::click()),
-                                        );
-                                        let mut hover = if is_port {
-                                            crate::assign::place_of(&map, &s.name).describe()
-                                        } else {
-                                            tip.to_string()
-                                        };
-                                        if let Some(e) = &s.point_error {
-                                            hover.push('\n');
-                                            hover.push_str(e);
-                                        }
-                                        l.clone().tip(hover);
-                                        crate::assign_ui::row_menu(&l, chrome, &menus, &s.name, &mut asks);
-                                    });
-                                    if let Some(w) = wired.get(&s.name.to_ascii_lowercase()) {
-                                        crate::wired::show_line(ui, chrome, &s.name, w, known.get(w), 0.0);
-                                    }
-                                });
+                let section = ui.vertical(|ui| {
+                    crate::io_cards::lay(
+                        ui,
+                        id,
+                        rows.len(),
+                        chrome.io_grid,
+                        &|k| is_open(&rows[k].0),
+                        &mut |ui, k, form| {
+                            let (name, sig) = (&rows[k].0, rows[k].1);
+                            let value = match sig {
+                                Some(s) => s.value,
+                                None => scan.and_then(|s| s.get(&name.to_ascii_uppercase())),
+                            };
+                            let unit = sig
+                                .and_then(|s| s.unit.as_deref())
+                                .map_or(String::new(), |u| format!(" {u}"));
+                            let is_forced = sig.is_some_and(|s| s.forced);
+                            let forced = if is_forced { "  FORCED" } else { "" };
+                            let text = format!("{name} = {}{unit}{forced}", show(value));
+                            let on = value == Some(helmsman_iec::Value::Bool(true));
+                            let color = match sig.map(|s| s.quality.as_str()) {
+                                _ if is_forced => t.ink(WARN),
+                                Some("missing") => t.ink(RED),
+                                _ if on && !input => t.ink(crate::lamps::colour(name).unwrap_or(GREEN)),
+                                _ if on => t.ink(GREEN),
+                                _ => t.fg,
+                            };
+                            let bool_ty = matches!(value, Some(helmsman_iec::Value::Bool(_)));
+                            let glyph = crate::glyph_lib::for_point(name, input, bool_ty);
+                            // A signal the open project's program has as
+                            // a port: the map says where it is, and the
+                            // diagram what it drives.
+                            let is_port = menus.iter().any(|m| m.port.eq_ignore_ascii_case(name));
+                            let place = if is_port {
+                                crate::assign::place_of(&map, name)
+                            } else {
+                                crate::assign::Place::Simulated
+                            };
+                            let mut said = if is_port {
+                                place.describe()
+                            } else {
+                                tip.to_string()
+                            };
+                            if let Some(e) = sig.and_then(|s| s.point_error.as_ref()) {
+                                said.push('\n');
+                                said.push_str(e);
                             }
-                            ui.end_row();
-                        }
-                    });
+                            let line = wired
+                                .get(&name.to_ascii_lowercase())
+                                .map(|w| crate::wired::line(w, known.get(w)));
+                            let card = cards
+                                .as_ref()
+                                .and_then(|c| c.iter().find(|c| c.name.eq_ignore_ascii_case(name)));
+                            let links = if input {
+                                Links::Input(
+                                    cards
+                                        .as_ref()
+                                        .filter(|_| is_port)
+                                        .map(|c| crate::io_cards::affects(c, name)),
+                                )
+                            } else {
+                                Links::Output(card)
+                            };
+                            let open = is_open(name);
+                            let row = Row {
+                                key: name,
+                                input,
+                                place: &said,
+                                real: crate::io_cards::real(line, &place),
+                                links,
+                                selected: (!input && lit.eq_ignore_ascii_case(name))
+                                    || (form == Form::Tile && open),
+                                open: form == Form::Detail || (form == Form::Row && open),
+                                tile: form == Form::Tile,
+                                uses: src.as_ref().map(|c| crate::find::names(c, name).len()),
+                                simulate: false,
+                            };
+                            let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
+                                crate::io_cards::value(
+                                    ui,
+                                    (form != Form::Tile).then_some(glyph),
+                                    color,
+                                    &text,
+                                );
+                            });
+                            crate::assign_ui::row_menu(&card, chrome, &menus, name, &mut asks);
+                            asked.push((name.clone(), input, a));
+                        },
+                    );
+                });
+                if !input && !rows.is_empty() {
+                    chrome.hit("io outputs", section.response.rect);
+                }
                 ui.add_space(6.0);
             }
         });
+        for (name, input, a) in asked {
+            self.io_asked(&name, input, a, chrome);
+        }
         for (port, ask) in asks {
             self.assign_ask(port, ask);
         }
