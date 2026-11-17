@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman · Is yours here?</title>
+<meta name="description" content="Every device in the Helmsman device library, with its picture. Type what is on the label of the unit you have and see whether it is already in the library.">
+<link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
+<style>
+:root{--yellow:#FFC20E;--black:#141414;--header-fg:#C8C8C8;
+--stencil:'Saira Stencil One',Impact,sans-serif;--cond:'Barlow Condensed','Arial Narrow',sans-serif;
+--mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif;
+color-scheme:dark;
+--bg:#141414;--fg:#F0F0F0;--muted:#A3A3A3;--rule:#3A3A3A;--rule-strong:#F0F0F0;--panel:#1E1E1E;--field:#0C0C0C;
+--well:#ECECEA;--well-ink:#8C8C8C;--ok:#62D391;--on-chip:#141414;--shadow:rgba(0,0,0,.45)}
+:root[data-theme="light"]{color-scheme:light;
+--bg:#FFFFFF;--fg:#141414;--muted:#555555;--rule:#CFCFCC;--rule-strong:#141414;--panel:#F5F5F3;--field:#FFFFFF;
+--well:#EFEFEC;--well-ink:#9A9A96;--ok:#1B7F47;--on-chip:#FFFFFF;--shadow:rgba(20,20,20,.16)}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 var(--sans)}
+[hidden]{display:none!important}
+.wrap{max-width:1180px;margin:0 auto;padding:0 16px}
+a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
+:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+header.top{background:var(--black);color:#fff;border-bottom:4px solid var(--yellow)}
+header.top .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px;min-height:56px}
+header.top .brand{color:#fff;text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em}
+header.top .section{font:700 13px/1 var(--cond);letter-spacing:.3em;text-transform:uppercase;color:var(--yellow)}
+header.top .site{margin-left:auto;color:var(--header-fg);text-decoration:none;font:13px var(--mono)}
+header.top .theme{margin:0;padding:6px 0;background:none;border:0;color:var(--header-fg);font:13px var(--mono);cursor:pointer}
+header.top a:hover,header.top .theme:hover{color:var(--yellow)}
+
+/* the question, asked once, big */
+.ask{background:var(--yellow);color:var(--black)}
+.ask .wrap{padding-top:44px;padding-bottom:36px}
+h1{font:clamp(34px,6.4vw,64px)/.95 var(--stencil);letter-spacing:.03em;text-transform:uppercase;margin:0 0 14px}
+.ask p{margin:0 0 20px;max-width:640px;font-size:16.5px}
+.box{display:flex;align-items:stretch;background:var(--black);border:3px solid var(--black);max-width:760px}
+.box svg{flex:none;width:52px;padding:0 0 0 16px;color:var(--yellow)}
+.box input{flex:1;min-width:0;font:600 clamp(17px,2.6vw,22px)/1.2 var(--mono);color:#fff;background:transparent;border:0;padding:16px 14px;border-radius:0}
+.box input::placeholder{color:#8C8C8C;font-weight:400}
+.box input:focus{outline:none}
+.box input::-webkit-search-cancel-button{filter:grayscale(1) brightness(2);cursor:pointer}
+@media (max-width:600px){.box kbd{display:none}}
+.box:focus-within{outline:3px solid var(--black);outline-offset:3px}
+.box kbd{align-self:center;margin-right:14px;font:600 12px/1 var(--mono);color:#8C8C8C;border:1px solid #3A3A3A;padding:4px 7px}
+.try{margin:12px 0 0;font:13px/1.6 var(--mono)}
+.try button{font:inherit;background:none;border:0;padding:0 2px;margin:0 4px 0 0;color:var(--black);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;cursor:pointer}
+
+/* the answer */
+.answer{border-bottom:1px solid var(--rule)}
+.answer .wrap{padding-top:22px;padding-bottom:22px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px 18px;align-items:center}
+@media (max-width:720px){.answer .wrap{grid-template-columns:auto minmax(0,1fr)}.answer .acts{grid-column:1/-1}}
+.verdict{font:clamp(28px,4vw,40px)/1 var(--stencil);letter-spacing:.03em;text-transform:uppercase;padding:10px 14px;color:var(--black);background:var(--fg)}
+.answer[data-v="yes"] .verdict{background:var(--ok);color:var(--on-chip)}
+.answer[data-v="near"] .verdict{background:var(--yellow)}
+.answer[data-v="no"] .verdict{background:var(--rule-strong);color:var(--bg)}
+.answer .say{margin:0;font-size:16px;min-width:0;overflow-wrap:anywhere}
+.answer .say b{font-weight:600}
+.answer .say small{display:block;color:var(--muted);font:13px/1.5 var(--mono);margin-top:3px}
+.acts{display:flex;flex-wrap:wrap;gap:8px}
+.btn{font:600 13px/1 var(--mono);padding:11px 14px;border:2px solid var(--rule-strong);color:var(--fg);text-decoration:none;display:inline-block;white-space:nowrap}
+.btn.primary{background:var(--yellow);border-color:var(--yellow);color:var(--black)}
+.btn:hover{outline:2px solid var(--yellow);outline-offset:2px}
+
+/* the shelf */
+main .wrap{padding-top:26px;padding-bottom:72px}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 22px}
+.count{font:13px var(--mono);color:var(--muted);margin-right:auto}
+.vendors{display:flex;flex-wrap:wrap;gap:6px}
+.vendors button{font:600 12px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;padding:8px 10px;background:transparent;color:var(--muted);border:1px solid var(--rule);cursor:pointer;border-radius:0}
+.vendors button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.vendors button:hover{color:var(--fg);border-color:var(--fg)}
+.vendors button[aria-pressed="true"]:hover{color:var(--bg)}
+.vendors button span{font-weight:400;opacity:.7;margin-left:4px}
+h2.shelf{display:flex;align-items:baseline;gap:12px;font:700 15px/1 var(--cond);letter-spacing:.3em;text-transform:uppercase;margin:34px 0 14px;padding-top:12px;border-top:4px solid var(--rule-strong)}
+h2.shelf:first-child{margin-top:0}
+h2.shelf span{font:12px var(--mono);letter-spacing:0;text-transform:none;color:var(--muted)}
+.grid{display:grid;gap:18px;grid-template-columns:repeat(auto-fill,minmax(min(100%,212px),1fr))}
+.card{position:relative;display:flex;flex-direction:column;background:var(--panel);text-decoration:none;color:inherit;min-width:0;transition:transform .15s ease,box-shadow .15s ease}
+.card:hover,.card:focus-within{transform:translateY(-3px);box-shadow:0 10px 24px -8px var(--shadow)}
+.card.hit{outline:3px solid var(--ok);outline-offset:0}
+.card.near{outline:3px solid var(--yellow);outline-offset:0}
+.well{position:relative;aspect-ratio:4/3;background:var(--well);display:grid;place-items:center;overflow:hidden}
+.well img{width:86%;height:86%;object-fit:contain;mix-blend-mode:multiply;opacity:0;transition:opacity .25s ease}
+.well img.in{opacity:1}
+.well svg{width:58%;height:58%;color:var(--well-ink)}
+.badge{position:absolute;left:8px;top:8px;font:600 10.5px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;padding:4px 6px;background:var(--black);color:#fff}
+.badge.ok{background:var(--ok);color:var(--on-chip)}
+.meta{padding:12px 13px 14px;display:grid;gap:3px;min-width:0;flex:1}
+.vendor{font:600 11px/1.2 var(--mono);text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.model{margin:2px 0 0;font:700 21px/1.08 var(--cond);letter-spacing:.02em;overflow-wrap:anywhere}
+.model a{text-decoration:none}
+.model a::after{content:"";position:absolute;inset:0}
+.io{font-size:13px;color:var(--muted);line-height:1.4;margin-top:2px;overflow-wrap:anywhere}
+.protos{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.protos span{font:600 10.5px/1 var(--mono);padding:4px 5px;border:1px solid var(--rule);color:var(--muted)}
+.credit{position:relative;z-index:1;font:11px var(--mono);color:var(--muted);padding:0 13px 10px}
+.credit a{text-decoration-thickness:1px}
+.none{padding:28px 0;color:var(--muted);font:14px var(--mono)}
+.foot{margin-top:46px;padding-top:14px;border-top:1px solid var(--rule);color:var(--muted);font:13px/1.6 var(--mono);max-width:820px}
+.foot p{margin:0 0 8px}
+@media (prefers-reduced-motion:reduce){.card,.well img{transition:none}.card:hover,.card:focus-within{transform:none}}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="../">HELMSMAN</a><span class="section">Device library</span>
+  <a class="site" href="../#library">About the library</a>
+  <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
+</div></header>
+
+<section class="ask"><div class="wrap">
+  <h1>Is yours here?</h1>
+  <p>Type the model printed on the unit you have. For an IO-Link sensor its order number works too, and so does a paste of what <code>enip-identify.py</code> printed.</p>
+  <label class="box" for="q">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+    <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="e.g. E1213, TBEN-S2-8DXP, IF6124" aria-label="Model or order number on your unit">
+    <kbd aria-hidden="true">/</kbd>
+  </label>
+  <p class="try" id="try" hidden>Try <button type="button">ioLogik E1213</button><button type="button">TBEN-S2</button><button type="button">EK9500</button><button type="button">PN7092</button></p>
+</div></section>
+
+<section class="answer" id="answer" aria-live="polite" hidden><div class="wrap">
+  <div class="verdict" id="verdict"></div>
+  <p class="say" id="say"></p>
+  <div class="acts" id="acts"></div>
+</div></section>
+
+<main><div class="wrap">
+  <div class="bar">
+    <span class="count" id="count" aria-live="polite">Loading the library…</span>
+    <div class="vendors" id="vendors" role="group" aria-label="Show one vendor"></div>
+  </div>
+  <div id="shelves"></div>
+  <div class="foot">
+    <p>A card marked <b>from documents</b> was drafted from the vendor's EDS file and manual and has not yet been run on a unit; a <b>checked</b> card names the date it was. Open a card to read every claim the entry makes, with its source.</p>
+    <p>Pictures are the vendors' own, shown from their sites and credited under each card; none is copied into the library. The library is open: <a href="https://github.com/JimothyJohn/helmsman-devices">github.com/JimothyJohn/helmsman-devices</a>.</p>
+  </div>
+</div></main>
+
+<script>
+(function(){var h=document.documentElement,b=document.querySelector('header.top .theme');function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();
+</script>
+<script>
+(function(){
+'use strict';
+const RAW='https://raw.githubusercontent.com/JimothyJohn/helmsman-devices/';
+const ISSUE='https://github.com/JimothyJohn/helmsman-devices/issues/new?';
+const CHECK='../library/#';
+const FOLDER=/^devices\/[a-z0-9][a-z0-9_.-]{0,63}\/[a-z0-9][a-z0-9_.-]{0,63}$/;
+const PHOTO=/^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/[!#-&(-;=?-[\]_a-z~]*$/;
+const PROTO={enip:'EtherNet/IP',modbus:'Modbus TCP',iolink:'IO-Link'};
+const $=s=>document.querySelector(s);
+const el=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e};
+
+/* ---- the data: nothing from the network is used before it is checked ---- */
+const str=(v,max)=>typeof v==='string'&&v.length>0&&v.length<=max&&!/[\u0000-\u001f\u007f]/.test(v)?v:'';
+const int=(v,top)=>Number.isInteger(v)&&v>=0&&v<=top?v:null;
+const norm=s=>s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g,'');
+function clean(d){
+  if(!d||typeof d!=='object'||!FOLDER.test(d.folder)||!str(d.vendor,120)||!str(d.model,120))return null;
+  const id=d.identity&&typeof d.identity==='object'?d.identity:{};
+  const enip=id.enip&&typeof id.enip==='object'?{v:int(id.enip.vendor_id,65535),p:int(id.enip.product_code,65535)}:null;
+  const iol=id.iolink&&typeof id.iolink==='object'?{v:int(id.iolink.vendor_id,65535),d:int(id.iolink.device_id,16777215)}:null;
+  const ph=d.photo&&typeof d.photo==='object'&&PHOTO.test(d.photo.url||'')&&String(d.photo.url).length<=400
+    &&PHOTO.test(d.photo.page||'')&&String(d.photo.page).length<=400?{url:d.photo.url,page:d.photo.page}:null;
+  const protos=d.protocols&&typeof d.protocols==='object'?Object.keys(d.protocols).filter(k=>PROTO[k]):[];
+  if(iol&&iol.v!==null)protos.push('iolink');
+  const products=Array.isArray(d.products)?d.products.slice(0,128).map(p=>str(p,120)).filter(Boolean):[];
+  const o={folder:d.folder,vendor:d.vendor,model:d.model,kind:str(d.kind,40)||'other',channels:str(d.channels,120),
+    checked:/^\d{4}-\d{2}-\d{2}$/.test(d.checked_on)?d.checked_on:'',enip,iol,photo:ph,protos,products};
+  // What a label says, squeezed: "ioLogik E1213" and "IOLOGIK-E1213" are one key.
+  o.keys=[o.model,...products,...o.model.split(/[,/()]+/)].map(norm).filter(k=>k.length>=3);
+  o.toks=[...new Set([...o.keys,...[o.model,...products].join(' ').split(/[\s,/()_]+/).map(norm)])].filter(k=>k.length>=4);
+  o.hay=norm([o.vendor,o.model,...products,o.channels,d.folder].join(' '));
+  return o;
+}
+
+/* ---- the question: what is on the label ---- */
+function lev(a,b){
+  if(Math.abs(a.length-b.length)>2)return 9;
+  let prev=Array.from({length:b.length+1},(_,i)=>i);
+  for(let i=1;i<=a.length;i++){const cur=[i];for(let j=1;j<=b.length;j++)cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));prev=cur}
+  return prev[b.length];
+}
+function ident(q){
+  const n=k=>{const m=q.match(new RegExp(k+'\\s*[=:]\\s*(\\d{1,8})','i'));return m?Number(m[1]):null};
+  const v=n('vendor_?id'),p=n('product_?code'),dv=n('device_?id');
+  return v===null?null:{v,p,d:dv};
+}
+// 3 = this is it, 2 = one of a family the query names, 1 = close (a typo or a neighbour), 0 = no.
+function score(o,q,qn,words,id){
+  if(id){
+    if(o.enip&&id.p!==null&&o.enip.v===id.v&&o.enip.p===id.p)return 3;
+    if(o.iol&&id.d!==null&&o.iol.v===id.v&&o.iol.d===id.d)return 3;
+    return 0;
+  }
+  if(qn.length<2)return 0;
+  if(o.keys.includes(qn))return 3;
+  if(qn.length>=4&&o.keys.some(k=>k.endsWith(qn)||qn.endsWith(k)))return 3;
+  if(words.length&&words.every(w=>o.hay.includes(w)))return 2;
+  if(qn.length>=5&&o.toks.some(k=>lev(k,qn)<=(qn.length>=8?2:1)))return 1;
+  return 0;
+}
+
+/* ---- the page ---- */
+let all=[],vendor='',photosShown=0;
+const q=$('#q');
+function art(kind){
+  // Drawn when a card has no picture: a remote-I/O block or a sensor barrel.
+  const s='<svg viewBox="0 0 120 90" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true">';
+  if(kind==='sensor')return s+'<rect x="14" y="34" width="70" height="22" rx="3"/><path d="M84 38h12v14H84M96 41h10v8H96"/><path d="M26 34v22M40 34v22"/><circle cx="20" cy="45" r="2.5" fill="currentColor"/></svg>';
+  return s+'<rect x="22" y="8" width="76" height="74" rx="4"/><path d="M22 24h76M22 66h76"/>'
+    +[34,48,62,76,90].map(x=>'<circle cx="'+(x-2)+'" cy="16" r="2.6" fill="currentColor"/>').join('')
+    +[30,46,62,78].map(x=>'<rect x="'+(x-4)+'" y="34" width="16" height="22" rx="2"/>').join('')+'</svg>';
+}
+function card(o){
+  const c=el('article','card');
+  const w=el('div','well');
+  if(o.photo){
+    const img=new Image();
+    img.alt=o.vendor+' '+o.model;img.loading='lazy';img.decoding='async';img.referrerPolicy='no-referrer';
+    img.addEventListener('load',()=>{if(img.naturalWidth>8){img.classList.add('in')}else{img.replaceWith(fall())}});
+    img.addEventListener('error',()=>{img.replaceWith(fall());credit.remove()});
+    img.src=o.photo.url;w.appendChild(img);
+  }else{w.innerHTML=art(o.kind)}
+  function fall(){const t=document.createElement('template');t.innerHTML=art(o.kind);return t.content.firstChild}
+  const b=el('span',o.checked?'badge ok':'badge',o.checked?'checked '+o.checked:'from documents');
+  w.appendChild(b);c.appendChild(w);
+  const m=el('div','meta');
+  m.appendChild(el('span','vendor',o.vendor));
+  const h=el('h3','model'),a=el('a',null,o.model);a.href=CHECK+o.folder;h.appendChild(a);m.appendChild(h);
+  if(o.channels)m.appendChild(el('span','io',o.channels));
+  else if(o.products.length>1)m.appendChild(el('span','io',o.products.length+' order numbers'));
+  if(o.protos.length){const p=el('div','protos');o.protos.forEach(k=>p.appendChild(el('span',null,PROTO[k])));m.appendChild(p)}
+  c.appendChild(m);
+  const credit=el('div','credit');
+  if(o.photo){let host='';try{host=new URL(o.photo.page).hostname.replace(/^www\./,'')}catch(e){}
+    credit.append('Photo: ');const ca=el('a',null,host||'vendor');ca.href=o.photo.page;ca.rel='noopener noreferrer';ca.target='_blank';credit.appendChild(ca);c.appendChild(credit)}
+  o.card=c;return c;
+}
+function issue(title,body){return ISSUE+'title='+encodeURIComponent(title)+'&body='+encodeURIComponent(body)}
+function draw(){
+  const raw=q.value.trim().slice(0,400),qn=norm(raw),id=ident(raw);
+  const words=raw.toLowerCase().split(/\s+/).map(norm).filter(w=>w.length>=2);
+  const asking=!!(id||qn.length>=2);
+  all.forEach(o=>{o.s=asking?score(o,raw,qn,words,id):0});
+  const best=asking?Math.max(0,...all.map(o=>o.s)):0;
+  // A match shows the matches; no match keeps the whole shelf, to look for it by eye.
+  const floor=best>=2?2:1;
+  const visible=all.filter(o=>(!vendor||o.vendor===vendor)&&(best===0||o.s>=floor));
+  const shelves=$('#shelves');shelves.textContent='';
+  const groups=new Map();visible.forEach(o=>{if(!groups.has(o.vendor))groups.set(o.vendor,[]);groups.get(o.vendor).push(o)});
+  groups.forEach((items,name)=>{
+    const h=el('h2','shelf',name);h.appendChild(el('span',null,items.length===1?'1 device':items.length+' devices'));shelves.appendChild(h);
+    const g=el('div','grid');items.forEach(o=>{o.card.classList.toggle('hit',asking&&o.s===3);o.card.classList.toggle('near',asking&&o.s>0&&o.s<3);g.appendChild(o.card)});shelves.appendChild(g);
+  });
+  if(!visible.length)shelves.appendChild(el('p','none','No '+vendor+' device matches that.'));
+  const proven=all.filter(o=>o.checked).length;
+  $('#count').textContent=asking&&best>0?visible.length+' of '+all.length+' devices':all.length+' devices from '+new Set(all.map(o=>o.vendor)).size+' vendors · '+proven+' checked on a unit';
+  answer(asking,best,raw,id,all.filter(o=>best>0&&o.s===best));
+  try{const h=raw?'#q='+encodeURIComponent(raw):'';if(location.hash!==h)history.replaceState(null,'',h||location.pathname)}catch(e){}
+}
+function answer(asking,best,raw,id,top){
+  const box=$('#answer'),say=$('#say'),acts=$('#acts');
+  box.hidden=!asking;if(!asking)return;
+  say.textContent='';acts.textContent='';
+  const btn=(text,href,primary)=>{const a=el('a',primary?'btn primary':'btn',text);a.href=href;if(/^https:/.test(href)){a.target='_blank';a.rel='noopener'}acts.appendChild(a)};
+  const what=id?(id.p!==null?'vendor '+id.v+', product '+id.p:'vendor '+id.v+', device '+id.d):'"'+raw+'"';
+  if(best===3&&top.length===1){
+    const o=top[0];box.dataset.v='yes';$('#verdict').textContent='Yes';
+    say.append('It is here: ');say.appendChild(el('b',null,o.vendor+' '+o.model));say.append('.');
+    say.appendChild(el('small',null,o.checked?'Checked on a unit '+o.checked+'.':'Drafted from the vendor’s documents; no unit has been checked yet. Yours could be the first.'));
+    btn('Read the entry',CHECK+o.folder,true);
+    if(!o.checked)btn('Test it on yours',CHECK+o.folder+'#test');
+    return;
+  }
+  if(best>=2){
+    box.dataset.v='yes';$('#verdict').textContent='Yes';
+    say.append(top.length+' entries match '+what+'. Pick the one on your label.');
+    say.appendChild(el('small',null,'They are outlined below.'));return;
+  }
+  const vendor=raw.split(/\s+/)[0]||'';
+  if(best===1){
+    box.dataset.v='near';$('#verdict').textContent='Close';
+    say.append('No exact match for '+what+'. '+(top.length===1?'The nearest is ':'The nearest are '));
+    say.appendChild(el('b',null,top.map(o=>o.model).join(', ')));say.append('.');
+    say.appendChild(el('small',null,'Check one letter or digit at a time: a neighbour in the same family can have different I/O.'));
+  }else{
+    box.dataset.v='no';$('#verdict').textContent='Not yet';
+    say.append('Nothing in the library matches '+what+'.');
+    say.appendChild(el('small',null,'Name it and it goes on the list; send one and the bench maps it.'));
+  }
+  btn('Name it',issue('New device: '+raw.slice(0,80),'Vendor:\nModel: '+raw.slice(0,80)+'\nProduct page:\nProtocols (EtherNet/IP, Modbus TCP, other):\nI have a unit and can run a read-only test: yes / no\nI could send a unit to the bench: yes / no\n'),best===0);
+  btn('Send one, $50',issue('Unit offer: '+raw.slice(0,80),'Device (vendor and model): '+raw.slice(0,80)+'\nFirmware, if known:\nShips from (country):\nPowers up and worked when last used: yes / no\nWant it back after testing: yes / no\n\nNotes:\n\n(No address or payment details here. Those are arranged in private after a yes.)\n'));
+}
+function vendors(){
+  const box=$('#vendors'),counts=new Map();all.forEach(o=>counts.set(o.vendor,(counts.get(o.vendor)||0)+1));
+  const b=(name,label,n)=>{const x=el('button',null,label);x.type='button';if(n)x.appendChild(el('span',null,String(n)));x.setAttribute('aria-pressed',String(vendor===name));
+    x.addEventListener('click',()=>{vendor=name;box.querySelectorAll('button').forEach(y=>y.setAttribute('aria-pressed',String(y===x)));draw()});box.appendChild(x)};
+  b('','All',0);[...counts.keys()].forEach(v=>b(v,v,counts.get(v)));
+}
+function load(branch){
+  return fetch(RAW+branch+'/index.json',{credentials:'omit',referrerPolicy:'no-referrer',cache:'no-cache'}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()});
+}
+load('main').catch(()=>load('dev')).then(ix=>{
+  if(!ix||ix.format!=='helmsman-devices-index 1'||!Array.isArray(ix.devices))throw new Error('format');
+  // Vendors spell themselves two ways (TURCK, Turck): one shelf each, by the folder.
+  const shelf=new Map();
+  all=ix.devices.slice(0,2000).map(clean).filter(Boolean);
+  all.forEach(o=>{const k=o.folder.split('/')[1];if(!shelf.has(k))shelf.set(k,o.vendor);o.vendor=shelf.get(k)});
+  all.sort((a,b)=>(a.vendor+' '+a.model).localeCompare(b.vendor+' '+b.model,undefined,{numeric:true,sensitivity:'base'}));
+  all.forEach(card);
+  vendors();
+  let h='';try{h=decodeURIComponent((location.hash.match(/^#q=(.*)$/)||[])[1]||'')}catch(e){}
+  if(h)q.value=h.slice(0,400);
+  $('#try').hidden=false;
+  q.addEventListener('input',draw);
+  draw();
+}).catch(()=>{$('#count').textContent='The library could not be loaded here. It is on GitHub: github.com/JimothyJohn/helmsman-devices.'});
+$('#try').addEventListener('click',e=>{if(e.target.tagName==='BUTTON'){q.value=e.target.textContent;draw();q.focus()}});
+addEventListener('keydown',e=>{if(e.key==='/'&&document.activeElement!==q&&!e.metaKey&&!e.ctrlKey){e.preventDefault();q.focus();q.select()}
+  else if(e.key==='Escape'&&document.activeElement===q){q.value='';draw()}});
+})();
+</script>
+</body>
+</html>
