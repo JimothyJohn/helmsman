@@ -617,6 +617,13 @@ pub const fn extended_text(code: u16) -> Option<&'static str> {
         extended::VENDOR_OR_PRODUCT_CODE_MISMATCH => "vendor or product code mismatch",
         extended::DEVICE_TYPE_MISMATCH => "device type mismatch",
         extended::REVISION_MISMATCH => "revision mismatch",
+        extended::NON_LISTEN_ONLY_NOT_OPENED => {
+            "no owning connection is open on this path; a block that takes its channel setup from the controller answers this to the wrong configuration instance"
+        }
+        extended::INVALID_CONFIGURATION_SIZE => "invalid configuration size",
+        extended::INVALID_CONSUMING_PATH => "invalid consuming path",
+        extended::INVALID_PRODUCING_PATH => "invalid producing path",
+        extended::INCONSISTENT_PATH_COMBO => "inconsistent connection path",
         extended::INVALID_O_TO_T_SIZE => "invalid O->T size",
         extended::INVALID_T_TO_O_SIZE => "invalid T->O size",
         extended::CONNECTION_TIMED_OUT => "connection timed out",
@@ -634,7 +641,21 @@ impl fmt::Display for Refused {
             }
         }
         if self.extended.len() > 1 {
-            write!(f, " {:04X?}", &self.extended[1..])?;
+            // A run of one word is written once with its count: the
+            // Murrelektronik IMPACT67 E pads its status to 17 words with
+            // 0x5555 (captured 2026-11-16).
+            let mut sep = " [";
+            let mut rest = &self.extended[1..];
+            while let Some(&word) = rest.first() {
+                let run = rest.iter().take_while(|w| **w == word).count();
+                write!(f, "{sep}{word:04X}")?;
+                if run > 1 {
+                    write!(f, " x{run}")?;
+                }
+                sep = ", ";
+                rest = &rest[run..];
+            }
+            write!(f, "]")?;
         }
         if self.status == GeneralStatus::CONNECTION_FAILURE && self.extended.is_empty() {
             // docs/devices/moxa-iologik-e1213.md, "On the bench": the
@@ -985,6 +1006,76 @@ mod tests {
         // `OpENer` g_kForwardOpenHeaderLength = 36 up to and including the path size.
         assert_eq!(req.data.len(), 36 + 8);
         assert_eq!(ForwardOpen::decode(&req.data).unwrap(), fo);
+    }
+
+    /// A Murrelektronik IMPACT67 E DIO8 (art. no. 55089, revision 1.2)
+    /// out of the box, 2026-11-16: the message router replies to a
+    /// `Forward_Open` naming configuration instance 110 (the one for a
+    /// block set up in its web server, which this one is not) and to the
+    /// same connection with instance 109. Bytes as received; the
+    /// originator serial is the probe's.
+    #[test]
+    fn the_impact67s_refusal_and_its_padded_reply_read() {
+        let hex = |s: &str| -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let refusal = hex(concat!(
+            "d400011119010000000055555555555555555555555555555555555555555555",
+            "555555555555444cffff785634120400"
+        ));
+        let resp = cip::Response::decode(&refusal).unwrap();
+        let refused = open_result(&resp).unwrap().unwrap_err();
+        assert_eq!(refused.extended.len(), 17);
+        assert_eq!(
+            refused.extended_code(),
+            Some(extended::NON_LISTEN_ONLY_NOT_OPENED)
+        );
+        assert_eq!(refused.connection_serial, 0x4C44);
+        assert_eq!(refused.originator_serial, 0x1234_5678);
+        assert_eq!(refused.remaining_path_size, 4);
+        assert_eq!(
+            refused.to_string(),
+            "refused: 0x01 connection failure extended 0x0119 (no owning connection is open on this path; a block that takes its channel setup from the controller answers this to the wrong configuration instance) [0000 x2, 5555 x14]"
+        );
+
+        // Accepted with instance 109 and 4 bytes of configuration: an
+        // application reply of 18 words, two of zeros and the rest filler.
+        let accepted = hex(concat!(
+            "d40000000a007343ffff4a4c4a4cffff7856341210270000102700001200",
+            "000000005555555555555555555555555555555555555555555555555555",
+            "555555555555"
+        ));
+        let resp = cip::Response::decode(&accepted).unwrap();
+        let reply = open_result(&resp).unwrap().unwrap();
+        assert_eq!(reply.o_to_t_connection_id, 0x4373_000A);
+        assert_eq!(reply.t_to_o_connection_id, 0x4C4A_FFFF);
+        assert_eq!(reply.connection_serial, 0x4C4A);
+        assert_eq!((reply.o_to_t_api_us, reply.t_to_o_api_us), (10_000, 10_000));
+        assert_eq!(reply.application_reply.len(), 36);
+    }
+
+    #[test]
+    fn extended_status_runs_are_written_once() {
+        let r = |extended: Vec<u16>| Refused {
+            status: GeneralStatus(0x01),
+            extended,
+            connection_serial: 0,
+            originator_vendor_id: 0,
+            originator_serial: 0,
+            remaining_path_size: 0,
+        };
+        for (words, tail) in [
+            (vec![0x0127, 38], " [0026]"),
+            (vec![0x0127, 1, 1], " [0001 x2]"),
+            (vec![0x0127, 1, 2, 2, 2, 1], " [0001, 0002 x3, 0001]"),
+            (vec![0x0127; 255], " [0127 x254]"),
+        ] {
+            let text = r(words).to_string();
+            assert!(text.ends_with(tail), "{text}");
+        }
     }
 
     /// The E1213's answer to an Input Only `Forward_Open` from the P4 node

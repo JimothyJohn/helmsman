@@ -30,6 +30,15 @@
 //! - explicit: `config=N o2t=POINT:BYTES t2o=POINT:BYTES`, with
 //!   `run_idle=on|off` for the O->T header (default on).
 //!
+//! `config_data=HEX` (with `eds=` or the explicit form) is the
+//! configuration assembly's bytes, sent in every `Forward_Open` so a
+//! device that takes its channel setup from the controller gets it again
+//! on each reconnect: `config=109 config_data=00ff00` makes pin 4 of every
+//! port of a Murrelektronik IMPACT67 E DIO8 an output. An EDS connection
+//! that declares a configuration size needs it, unless every member of
+//! the EDS's configuration assembly is a parameter with a default; then
+//! those defaults are sent.
+//!
 //! Optional everywhere: `rpi_ms` (default the EDS's, else 100; checked
 //! against the EDS's range), `multiplier` (0..=7, default 1: the
 //! connection times out after RPI × 2^(multiplier+2) without T->O data),
@@ -37,6 +46,13 @@
 //! port of the link's own for T->O data; see below), `device_io_port` (the
 //! device's, default 2222), and `key=off|exact|compatible` (an electronic
 //! key from the EDS or profile identity; default off).
+//!
+//! A `Forward_Open` refused over a size that is off by exactly the
+//! run/idle header (0x0127 or 0x0128 with the size the device wants) is
+//! tried again with the header the device asks for, once the device's own
+//! assembly has been read and is as long as the connection says: an EDS
+//! that declares the wrong real-time format still connects, and a map
+//! that has the assembly's size wrong does not.
 //!
 //! # The I/O port
 //!
@@ -48,6 +64,9 @@
 //! or with `io_port=N`, the link binds a port of its own (2222 by
 //! default). Devices send T->O to 2222 unless told otherwise, so off 2222
 //! the `Forward_Open` carries a T->O socket-address item naming the port.
+//! Not every device reads it: a Murrelektronik IMPACT67 E and a Novanta
+//! `MDrive` send to 2222 regardless, and a link on another port then gets
+//! no data, which its error says.
 //!
 //! # Points
 //!
@@ -74,6 +93,10 @@
 //! and opens a new one on the next read or write, sending the outputs it
 //! last held from the first packet: exclusive ownership is released before
 //! it is taken again, and the outputs come back without a zero glitch.
+//! A connect that fails is not tried again at once: the next goes 200 ms
+//! later, then 400 ms, up to every 2 s, and the reads in between repeat
+//! what the last attempt said. A connection that was up and is lost is
+//! reopened by the next read.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddrV4;
@@ -404,6 +427,12 @@ pub struct Spec {
     pub do_channels: Option<u16>,
     /// From the EDS or profile, for an electronic key.
     pub identity: Option<helmsman_proto::eds::Identity>,
+    /// The configuration assembly's bytes, sent in the `Forward_Open`
+    /// (empty: none).
+    pub config_data: Vec<u8>,
+    /// Bytes of configuration data the EDS's connection declares, when
+    /// `config_data` could not be filled from the EDS's defaults.
+    pub config_wanted: Option<u16>,
 }
 
 impl Spec {
@@ -440,15 +469,20 @@ impl Spec {
                 product_name: Some("E1213".into()),
                 catalog: Some("ioLogik E1200 Series".into()),
             }),
+            config_data: Vec::new(),
+            config_wanted: None,
         }
     }
 
     /// The connection an EDS declares as `connection`.
     ///
     /// # Errors
-    /// The EDS has none, or it isn't Class 1 cyclic point-to-point, needs
-    /// configuration data, or uses a real-time format this driver doesn't
-    /// speak (anything but modeless, heartbeat and run/idle).
+    /// The EDS has none, or it isn't Class 1 cyclic point-to-point, or
+    /// uses a real-time format this driver doesn't speak (anything but
+    /// modeless, heartbeat and run/idle). A connection that wants
+    /// configuration data resolves: the data is the EDS's defaults when
+    /// its configuration assembly gives them, else `config_wanted` says
+    /// how many bytes `config_data=` has to bring.
     pub fn from_eds(eds: &helmsman_proto::eds::Eds, connection: Connection) -> Result<Self, String> {
         use helmsman_proto::eds::{AppType, RealTimeFormat};
         let want = match connection {
@@ -467,12 +501,19 @@ impl Spec {
         if !c.o_to_t.point_to_point || !c.t_to_o.point_to_point {
             return Err(format!("{name}: not point-to-point both ways"));
         }
-        if c.config_size > 0 {
-            return Err(format!(
-                "{name}: needs {} bytes of configuration data",
-                c.config_size
-            ));
-        }
+        let (config_data, config_wanted) = if c.config_size == 0 {
+            (Vec::new(), None)
+        } else {
+            match eds
+                .assembly(u32::from(c.configuration))
+                .ok()
+                .and_then(|a| a.defaults(eds))
+                .filter(|d| d.len() == usize::from(c.config_size))
+            {
+                Some(d) => (d, None),
+                None => (Vec::new(), Some(c.config_size)),
+            }
+        };
         let o_run_idle = match c.o_to_t.format {
             RealTimeFormat::RunIdle => true,
             RealTimeFormat::Modeless | RealTimeFormat::Heartbeat => false,
@@ -509,6 +550,8 @@ impl Spec {
             di_channels: None,
             do_channels: None,
             identity: eds.identity().ok(),
+            config_data,
+            config_wanted,
         })
     }
 
@@ -560,6 +603,8 @@ pub struct Params {
     pub spec: Option<Spec>,
     pub eds: Option<String>,
     pub connection: Connection,
+    /// `config_data=`: replaces what the EDS would send.
+    pub config_data: Option<Vec<u8>>,
     pub rpi: Option<Duration>,
     pub multiplier: u8,
     pub timeout: Duration,
@@ -587,6 +632,7 @@ const KNOWN: &[&str] = &[
     "eds",
     "connection",
     "config",
+    "config_data",
     "o2t",
     "t2o",
     "run_idle",
@@ -639,6 +685,16 @@ impl Params {
                 "give exactly one of profile=, eds= or config= o2t= t2o=",
             ));
         }
+        let config_data = match get("config_data") {
+            None => None,
+            Some(_) if params.contains_key("profile") => {
+                return Err(bad("config_data", "only with eds= or explicit config= o2t= t2o="));
+            }
+            Some(hex) => Some(
+                config_bytes(hex)
+                    .ok_or_else(|| bad("config_data", "want 1 to 480 bytes as hex digits, like 00ff00"))?,
+            ),
+        };
         let spec = if let Some(p) = get("profile") {
             match p {
                 "moxa-e1213" => Some(Spec::moxa_e1213(connection)),
@@ -685,6 +741,8 @@ impl Params {
                 di_channels: None,
                 do_channels: None,
                 identity: None,
+                config_data: config_data.clone().unwrap_or_default(),
+                config_wanted: None,
             })
         } else {
             None
@@ -722,6 +780,7 @@ impl Params {
             eds: get("eds").map(str::to_string),
             sweep,
             connection,
+            config_data,
             rpi,
             multiplier: int("multiplier", 7)?
                 .and_then(|v| u8::try_from(v).ok())
@@ -760,6 +819,65 @@ impl Params {
     }
 }
 
+/// The most configuration data a `Forward_Open` of this driver carries:
+/// its connection path is at most 255 words, and the key, the class, the
+/// three instances and the data segment's own header take up to 30 bytes
+/// of them.
+pub const MAX_CONFIG_DATA: usize = 480;
+
+/// `config_data=`: pairs of hex digits, 1 to [`MAX_CONFIG_DATA`] bytes.
+fn config_bytes(hex: &str) -> Option<Vec<u8>> {
+    let h = hex.as_bytes();
+    if h.is_empty()
+        || h.len() % 2 == 1
+        || h.len() > MAX_CONFIG_DATA * 2
+        || !h.iter().all(u8::is_ascii_hexdigit)
+    {
+        return None;
+    }
+    h.chunks(2)
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
+        .collect()
+}
+
+impl Spec {
+    /// `config_data=` put on a connection read from an EDS, and the check
+    /// that a connection wanting configuration data has some.
+    ///
+    /// # Errors
+    /// Data of another size than the EDS declares, or none where the EDS
+    /// wants it and gives no defaults.
+    pub fn with_config_data(mut self, given: Option<&[u8]>) -> Result<Self, String> {
+        if let Some(d) = given {
+            let wanted = self
+                .config_wanted
+                .or_else(|| u16::try_from(self.config_data.len()).ok().filter(|n| *n > 0));
+            if let Some(n) = wanted
+                && d.len() != usize::from(n)
+            {
+                return Err(format!(
+                    "config_data is {} bytes, the EDS's connection wants {n}",
+                    d.len()
+                ));
+            }
+            self.config_data = d.to_vec();
+            self.config_wanted = None;
+        }
+        if self.config_data.len() > MAX_CONFIG_DATA {
+            return Err(format!(
+                "the EDS's connection sends {} bytes of configuration data, more than the {MAX_CONFIG_DATA} a Forward_Open here carries",
+                self.config_data.len()
+            ));
+        }
+        match self.config_wanted {
+            Some(n) => Err(format!(
+                "the EDS's connection wants {n} bytes of configuration data and gives no defaults: add config_data=HEX"
+            )),
+            None => Ok(self),
+        }
+    }
+}
+
 /// Parses a point for a device with these params, checking it against the
 /// connection when the params say what it is (a profile or explicit
 /// sizes; an `eds=` file is read only when the driver opens).
@@ -785,7 +903,7 @@ pub use driver::EnipDriver;
 mod driver {
     use std::io;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use helmsman_proto::endpoint::IoEndpoint;
     use helmsman_proto::io::{ElectronicKey, Priority};
@@ -820,7 +938,30 @@ mod driver {
         /// Where the device was found at the last connection
         /// (`crate::resolve`).
         resolved: Option<SocketAddrV4>,
+        /// The run/idle header was corrected from a refusal, O->T and
+        /// T->O ([`Self::fix_header`]): once a direction.
+        header_fixed: (bool, bool),
+        /// After a connect that failed: when the next one may go, what
+        /// the reads until then answer, and the wait that follows if it
+        /// fails again.
+        held: Option<Held>,
     }
+
+    /// See [`EnipDriver::held`].
+    struct Held {
+        until: Instant,
+        kind: io::ErrorKind,
+        what: String,
+        wait: Duration,
+    }
+
+    /// The wait after the first failed connect; it doubles with each
+    /// failure up to [`RETRY_MAX`]. A link asks its driver every scan, and
+    /// a device that answers and refuses would otherwise get a TCP session
+    /// and a `Forward_Open` each time.
+    const RETRY_FIRST: Duration = Duration::from_millis(200);
+    /// The longest wait: how long a device that is back may go unnoticed.
+    const RETRY_MAX: Duration = Duration::from_secs(2);
 
     impl std::fmt::Debug for EnipDriver {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -874,7 +1015,9 @@ mod driver {
             let params = Params::parse(params)?;
             let spec = match (&params.spec, &params.eds) {
                 (Some(s), _) => s.clone(),
-                (None, Some(path)) => read_eds(path, params.connection)?,
+                (None, Some(path)) => read_eds(path, params.connection)?
+                    .with_config_data(params.config_data.as_deref())
+                    .map_err(|why| Error::Address(format!("eds={path}: {why}")))?,
                 (None, None) => return Err(Error::Address("profile: no connection given".into())),
             };
             params.rpi_for(&spec)?;
@@ -898,6 +1041,8 @@ mod driver {
                 shared: None,
                 opens: 0,
                 resolved: None,
+                header_fixed: (false, false),
+                held: None,
             })
         }
 
@@ -932,6 +1077,7 @@ mod driver {
             );
             c.o_to_t_run_idle = spec.o_to_t_run_idle;
             c.t_to_o_run_idle = spec.t_to_o_run_idle;
+            c.config_data.clone_from(&spec.config_data);
             c.timeout_multiplier = self.params.multiplier;
             c.priority = Priority::Scheduled;
             c.key = match (self.params.key, &spec.identity) {
@@ -946,6 +1092,38 @@ mod driver {
                 }),
             };
             Ok(c)
+        }
+
+        /// [`Self::connect`], unless the last one failed a moment ago:
+        /// then its error again, with no traffic, until the wait is over.
+        fn connect_paced(&mut self) -> Result<(), Error> {
+            let wait = match &self.held {
+                Some(h) if Instant::now() < h.until => {
+                    return Err(Error::Io(io::Error::new(h.kind, h.what.clone())));
+                }
+                Some(h) => (h.wait * 2).min(RETRY_MAX),
+                None => RETRY_FIRST,
+            };
+            match self.connect() {
+                Ok(()) => {
+                    self.held = None;
+                    Ok(())
+                }
+                Err(e) if e.is_link() => {
+                    let (kind, what) = match &e {
+                        Error::Io(io) => (io.kind(), io.to_string()),
+                        other => (io::ErrorKind::Other, other.to_string()),
+                    };
+                    self.held = Some(Held {
+                        until: Instant::now() + wait,
+                        kind,
+                        what,
+                        wait,
+                    });
+                    Err(e)
+                }
+                Err(e) => Err(e),
+            }
         }
 
         fn connect(&mut self) -> Result<(), Error> {
@@ -976,28 +1154,100 @@ mod driver {
                     })?
                 }
             };
-            let config = self.config()?;
-            let timeout = config.timeout();
             let target = SocketAddrV4::new(ip, self.params.device_io_port);
-            self.opens += 1;
-            let io = IoConnection::open_on(&mut session, &endpoint, target, config, &self.out)
-                .map_err(scanner_error)?;
+            let (io, timeout) = loop {
+                let config = self.config()?;
+                let timeout = config.timeout();
+                self.opens += 1;
+                match IoConnection::open_on(&mut session, &endpoint, target, config, &self.out) {
+                    Ok(io) => break (io, timeout),
+                    Err(scanner::Error::Refused(r)) if self.fix_header(&mut session, &r) => {}
+                    Err(e) => return Err(scanner_error(e)),
+                }
+            };
             // The first T->O packet, within the connection's timeout.
             if io.wait_for_input(timeout).is_none() {
                 let closer = io.closer();
                 drop(io);
                 let _ = closer.send(&mut session);
                 session.close();
+                // Off 2222 the Forward_Open names the port in a T->O
+                // socket-address item, which devices are free to ignore:
+                // a Murrelektronik IMPACT67 E and a Novanta MDrive both
+                // send to 2222 whatever it says (2026-11-16).
+                let port = endpoint.local_addr().port();
+                let hint = if port == IO_PORT {
+                    String::new()
+                } else {
+                    format!(
+                        " on UDP {port}: the device may send its inputs to UDP {IO_PORT} whatever port it is asked for"
+                    )
+                };
                 return Err(Error::Io(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!(
-                        "connection opened, but no T->O data within {} ms",
+                        "connection opened, but no T->O data within {} ms{hint}",
                         timeout.as_millis()
                     ),
                 )));
             }
             self.link = Some(Link { session, io, timeout });
             Ok(())
+        }
+
+        /// A refusal over a size that is off by exactly the 32-bit run/idle
+        /// header: the EDS or the map has the header wrong for that
+        /// direction (a Novanta `MDrive`'s EDS declares its O->T modeless,
+        /// and the drive takes the header). Corrects the spec and says
+        /// `true` so the open is tried again, once a direction, and only
+        /// if the device's own assembly is as long as the spec says: the
+        /// same four bytes can be an assembly longer than the map
+        /// thinks, and a header sent into that would write its run bit
+        /// into the first output.
+        fn fix_header(&mut self, session: &mut Session, r: &helmsman_proto::io::Refused) -> bool {
+            use helmsman_proto::io::extended::{INVALID_O_TO_T_SIZE, INVALID_T_TO_O_SIZE};
+            let (Some(code), Some(&wanted)) = (r.extended_code(), r.extended.get(1)) else {
+                return false;
+            };
+            let spec = self.spec();
+            let (outward, point, len, header) = match code {
+                INVALID_O_TO_T_SIZE => (true, spec.o_to_t, spec.o_to_t_len, spec.o_to_t_run_idle),
+                INVALID_T_TO_O_SIZE => (false, spec.t_to_o, spec.t_to_o_len, spec.t_to_o_run_idle),
+                _ => return false,
+            };
+            let tried = if outward {
+                self.header_fixed.0
+            } else {
+                self.header_fixed.1
+            };
+            // The connection size counts the 16-bit sequence count too.
+            let ours = u32::from(len) + 2 + if header { 4 } else { 0 };
+            let with_header = if u32::from(wanted) == ours + 4 && !header {
+                true
+            } else if u32::from(wanted) + 4 == ours && header {
+                false
+            } else {
+                return false;
+            };
+            if tried || len == 0 {
+                return false;
+            }
+            let class = helmsman_proto::cip::class::ASSEMBLY;
+            if !session
+                .get_attribute_single(class, point, 3)
+                .is_ok_and(|data| data.len() == usize::from(len))
+            {
+                return false;
+            }
+            let spec = self.spec.as_mut().expect("set in from_params");
+            if outward {
+                spec.o_to_t_run_idle = with_header;
+                self.header_fixed.0 = true;
+            } else {
+                spec.t_to_o_run_idle = with_header;
+                self.header_fixed.1 = true;
+            }
+            true
         }
 
         /// Close the connection after a link error: `Forward_Close` now if
@@ -1017,7 +1267,7 @@ mod driver {
         /// The latest T->O data, from a live connection of the right size.
         fn input(&mut self) -> Result<Vec<u8>, Error> {
             if self.link.is_none() {
-                self.connect()?;
+                self.connect_paced()?;
             }
             let want = usize::from(self.spec().t_to_o_len);
             let link = self.link.as_ref().expect("connected above");
@@ -1053,6 +1303,17 @@ mod driver {
     impl Drop for EnipDriver {
         fn drop(&mut self) {
             self.drop_link();
+            // The session was gone (a Novanta MDrive resets an idle one
+            // seconds after the Forward_Open and keeps exchanging I/O):
+            // there is no next connect to carry the close, so it goes
+            // over a session of its own, or the device would hold its
+            // outputs until the connection timed out.
+            if let (Some(closer), Some(at)) = (self.stale.take(), self.resolved)
+                && let Ok(mut session) = Session::connect(SocketAddr::V4(at), self.params.timeout)
+            {
+                let _ = closer.send(&mut session);
+                session.close();
+            }
         }
     }
 

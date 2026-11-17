@@ -63,6 +63,12 @@ impl From<io::Error> for Error {
     }
 }
 
+/// How long a stopping connection waits after its last O->T packet
+/// before the `Forward_Close` may follow: the two travel on different
+/// sockets, and a target that reads the close first drops the packet as
+/// one for a connection it no longer has.
+const LAST_PACKET_GRACE: Duration = Duration::from_millis(10);
+
 /// The latest T->O packet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Input {
@@ -374,6 +380,9 @@ impl IoConnection {
     fn stop_threads(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.producer.take() {
+            // It waits out its RPI parked; it sends what is still unsent
+            // and ends.
+            h.thread().unpark();
             let _ = h.join();
         }
         if let Some(h) = self.consumer.take() {
@@ -454,14 +463,46 @@ fn spawn_producer(
     thread::Builder::new()
         .name("helmsman-producer".into())
         .spawn(move || {
+            // Paced on deadlines, not on a sleep after each send, so the
+            // interval is the RPI and not the RPI plus the time a send
+            // takes; a deadline missed by more than an RPI (the machine
+            // slept) starts over from now instead of sending a burst.
+            let mut next = Instant::now();
             while !stop.load(Ordering::Relaxed) {
                 let Some(pkt) = shared.producer.lock().ok().map(|mut g| g.next_packet()) else {
-                    break;
+                    return;
                 };
                 if send_to(&pkt, target).is_ok() {
                     shared.packets_out.fetch_add(1, Ordering::Relaxed);
                 }
-                thread::sleep(rpi);
+                next += rpi;
+                let now = Instant::now();
+                if next + rpi < now {
+                    next = now;
+                }
+                while !stop.load(Ordering::Relaxed) {
+                    let left = next.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    thread::park_timeout(left);
+                }
+            }
+            // Stopped. What was written since the last packet still goes
+            // out, so a value set just before the close (the safe values
+            // of a box that stops) reaches the target; then a moment for
+            // the target to take it off its I/O socket before the
+            // Forward_Close arrives on the TCP one.
+            let last = shared
+                .producer
+                .lock()
+                .ok()
+                .and_then(|mut g| g.unsent().then(|| g.next_packet()));
+            if let Some(pkt) = last {
+                if send_to(&pkt, target).is_ok() {
+                    shared.packets_out.fetch_add(1, Ordering::Relaxed);
+                }
+                thread::sleep(LAST_PACKET_GRACE);
             }
         })
 }
