@@ -1,10 +1,9 @@
 # Novanta IMS Liberty MDrive (Lexium MDrive Ethernet)
 
 An integrated stepper motor, drive and controller with one Ethernet
-interface. Not on the bench yet (due the week of 2026-11-10, TODO.md
-`mdrive-bringup`): everything here is read from Novanta's files and
-pages, cited in docs/SOURCES.md ("Novanta IMS MDrive files"), and nothing
-has been tried against a unit.
+interface. A unit is on the bench since 2026-11-16 in EtherNet/IP mode
+("On the bench" below is what it did); the rest is read from Novanta's
+files and pages, cited in docs/SOURCES.md ("Novanta IMS MDrive files").
 
 ## What it speaks
 
@@ -43,7 +42,128 @@ signal beyond the raw first bytes.
 The device line in docs/devices/novanta-mdrive-profinet.map is what
 `scripts/gsdml-slots.py` prints for this file.
 
-## First run on the bench
+## EtherNet/IP, from its files
+
+`SEM_MDrivever1_2.eds` (revision 1.2 of 2012, in the firmware zip) and
+the fieldbus manual LMD-EIP-REV-F (02/2022):
+
+| | |
+| --- | --- |
+| Identity | vendor 243, device type 43, product code 15362, revision 2.22, `MDrive` |
+| Input (T->O) | assembly 100, 16 bytes |
+| Output (O->T) | assembly 112, 36 bytes |
+| Exclusive owner | configuration instance 1, O->T 112, T->O 100, both declared modeless, point-to-point, no RPI given |
+| Input only / listen only | heartbeat points 128 / 129 |
+
+The EDS gives its assemblies no size, only members; `helmsman_proto::eds`
+takes the size from the members' bits (fixture
+`tests/fixtures/mdrive-facts.eds`, and the vendor's file in
+`scripts/eds-corpus.sh`).
+
+The manual's layout (p. 20), which the manual also says "may be changed
+to any MCode mnemonic of the same data type using the TCP/IP
+Configuration Utility":
+
+| assembly | bytes | |
+| --- | --- | --- |
+| 100 | 0 | bit 0 EF error flag, bit 1 MV moving |
+| | 1 | IN, the inputs as a group |
+| | 4..7 | C1, position counter |
+| | 8..11 | C2, encoder counter |
+| | 12..15 | LL lead/lag (the EDS says V, velocity) |
+| 112 | 0..3, 4..7 | A, D: acceleration, deceleration |
+| | 8..11, 12..15 | MA, MR: move absolute, move relative |
+| | 16, 17, 18 | RC, HC run and hold current, OT outputs |
+| | 20..23 | SL, slew |
+| | 24..27, 28..31 | VI, VM: initial and maximum velocity |
+| | 32.. | TQ and EF in the manual (34 bytes in all), TE in the EDS (36) |
+
+## On the bench (2026-11-16)
+
+One LMDCE853C at its default address, 192.168.33.1, DC supply on, shaft
+free, set to EtherNet/IP by Nick. `PR VR` answers `LMDCM 6.013, Hw:
+2.10`. The Studio reaches it through an alias on en0 (`sudo ifconfig en0
+alias 192.168.33.10 255.255.255.0`, gone at a reboot).
+
+**The connection**
+
+- **Identity.** Vendor 243, device type 43, product code 15362, product
+  name `MDrive`, revision **2.36** (the EDS and the manual say 2.22).
+- **Assemblies** that answer: 100 (16 bytes) and 112 (36 bytes), nothing
+  else. Attribute 4 (the size) is not supported.
+- **It takes a run/idle header O->T, which its EDS does not declare.** A
+  `Forward_Open` at the EDS's size (38 with the sequence count) is
+  refused 0x0127 with the size it wants, 42. `enip-io` reads assembly 112
+  to see that it is the 36 bytes the EDS says, concludes the four bytes
+  are the header, and opens again with it: `eds=` with the vendor's file
+  connects. T->O is 16 bytes without a header.
+- Any configuration instance is taken (1, 100, 112, 128 tried). The
+  input-only and listen-only points of the EDS are refused, 0x012A.
+- **It sends less often than it agrees to.** Its reply grants the RPI
+  asked for, and its packets come at about 1.3 to 1.5 times that: every
+  26 ms at 20, 72 ms at 50, 147 ms at 100, 750 ms at 500, and every
+  2 ms at 1. Inside the connection's timeout at every multiplier.
+- **It resets the TCP session 2 to 3 s after the `Forward_Open`** and
+  goes on exchanging I/O. A `Forward_Close` over a new session is
+  accepted. `enip-io` holds the link through it and closes that way
+  when the driver goes.
+- **It sends its inputs to UDP 2222 only**; a T->O socket-address item
+  is ignored.
+- MCode/TCP on port 503 answers beside EtherNet/IP (`PR P`, `PR ER`,
+  `SL 0`), which is how the numbers below were read back.
+- **A hold of 20 minutes** at 20 ms, outputs at zero (`enip_soak`):
+  SOAK_MDRIVE.
+
+**What the bytes did on this unit**
+
+Input 100: byte 0 bit 1 is MV (moving); bit 0 followed the drive enable
+(1 with DE=1, 0 with DE=0) while EF read 0; byte 1 is IN (0x0F);
+bytes 4..7 are the position (`PR P`); bytes 8..9 held the error code
+(`PR ER`: 30, 94, 107, 25 were seen there), not an encoder count.
+
+Output 112 does **not** follow the manual's layout on this unit, and a
+field is acted on when it changes from the last image the drive saw,
+even across connections. Seen, one field at a time with the drive
+disabled, read back over MCode:
+
+| bytes | did |
+| --- | --- |
+| 0..3 | set the position counter (`PR P` read the value written) |
+| 4..7 | started a move when the drive was enabled (see below) |
+| 17 | non-zero enabled the drive (DE=1), zero disabled it |
+| 18 | set the run current RC |
+| 20..23 | SL: 5000 gave `PR V` 5000 and 5000 steps/s of position; 0 stopped |
+| 19, 32.. | changed OT, R1 and EF; not worked out |
+
+So the mapping is either changed on this unit or not what the manual
+prints for this firmware. Until it is read from the Configuration
+Utility (TODO.md `mdrive-assembly-mapping`), the only output fields to
+rely on are byte 17 and bytes 20..23, and an image built from the
+manual's table must not be sent: the first one that was (acceleration,
+currents and velocities where the manual puts them, SL 0) started a
+move at the `Forward_Open` that reached about 1.1 million steps/s,
+roughly 1300 rpm, before SL stopped it.
+
+**When the controller goes away**
+
+Slewing at 5000 steps/s over the cyclic connection (RPI 20 ms):
+
+| the controller | the drive |
+| --- | --- |
+| sends `Forward_Close` | stops |
+| sets the run/idle header to idle | stops |
+| goes silent (no close, no more packets) | **keeps slewing**: still 5000 steps/s after 10 s, with timeout multipliers 0 and 1, until `SL 0` arrived over MCode |
+
+A pulled cable or a controller that dies does not stop this drive. A
+stop on comms loss has to be the drive's own (an MCode program watching
+the connection, or a hardware input); nothing in `enip-io` can supply
+it. A box that stops normally closes its connections, which does stop
+it.
+
+## PROFINET: first run on the bench
+
+Parked (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first). When it is
+wanted:
 
 1. `~/github/helmsman/scratch/27-bpf-access.sh` (once per boot, sudo),
    then `~/github/helmsman/scratch/28-profinet-scan.sh`: the drive

@@ -1057,7 +1057,7 @@ into the code.
 - **How to cite:** `E1200 web console write-up, section <name>`; the vendor
   vectors as `password.rs` `VENDOR`.
 
-### Novanta IMS MDrive files (read 2026-11-10, no unit on the bench)
+### Novanta IMS MDrive files (read 2026-11-10 and 2026-11-16)
 
 - **GSDML:** `GSDML-V2.2-mdrive-SchneiderElectic-20130530.xml`, SHA-256
   `3271ffc6dddf37bf4578e6da91a9096ac90841cab54c041a816f0899fb3070c1`, in
@@ -1065,13 +1065,70 @@ into the code.
   https://www.novantaims.com/dloads/firmware/ (with `SEM_MDrivever1_2.eds`
   and the firmware image). No licence text; **not committed**, facts
   restated in docs/devices/novanta-mdrive.md.
+- **EDS:** `SEM_MDrivever1_2.eds` from the same zip, revision 1.2
+  (2012-01-17, EZ-EDS 3.9), 24813 bytes, SHA-256
+  `b14f0fe268df5b37e9dcee6bd0288a88e59d428dbe6044b49dba8beaaeb86041`.
+  **Not committed**: `crates/helmsman-proto/tests/fixtures/mdrive-facts.eds`
+  restates its identity, assemblies and connections with the vendor
+  file's line numbers, and `scripts/eds-corpus.sh` checks the vendor's
+  file against that fixture when it is at hand (helmsman-devices'
+  `cache/sha256/`). Cite as `MDrive EDS l.N`.
+- **EtherNet/IP manual:** "LMD EtherNet/IP Protocol Implementation,
+  Ethernet TCP/IP Fieldbus Manual", LMD-EIP-REV-F, 02/2022, 47 pp.,
+  SHA-256 `2a5a6f726b2a5b2fa7220215568829345872257623b80dcd68fc6766a56efdd3`,
+  from Novanta's manuals page (helmsman-devices `collect/novanta.toml`
+  has the link as fetched). Read for: the assembly table and its note
+  that the mapping can be changed (p. 20), the vendor objects 0x64 to
+  0x6A (pp. 24-31), the identity table (p. 18). It says nothing about
+  the run/idle header, the RPI range, or what the drive does when the
+  connection is lost. Cite as `LMD-EIP-REV-F p. N`.
+- **MCode reference:** "LMD MCode OS Programming and Reference",
+  LMD-MCODE-V2.06, 03/2022, 191 pp., SHA-256
+  `3945e47f63d497529d7f6c21d518a9d7d6c8b57689932b27179e2db1f9475e81`.
+  Read for the error codes the drive showed (30, 94: its error table)
+  and the meaning of DE, SL, MS, RC. Cite as `LMD-MCODE-V2.06 p. N`.
 - **Product manual:** "Lexium MDrive Ethernet with circular connectors
   LMDxE57C/85C", V1.00, 03.2015,
   https://novanta.com/robotics-automation/wp-content/uploads/sites/3/2015/04/LMDxE57-85C.pdf
   (protocols §1.2.1, default address §6, configuration ch. 7), read by a
   research pass, not re-read.
-- **Not read:** the "Profinet IO Fieldbus Manual" (the I/O byte map) and
-  Novanta's S7 workbook.
+- **Not read:** the "Profinet IO Fieldbus Manual" (the I/O byte map),
+  Novanta's S7 workbook, and the application note on running a stored
+  MCode program over EtherNet/IP.
+
+### Murrelektronik IMPACT67 E handbook
+
+- **What:** "Manual for the Devices of the IMPACT67 E Series", art. no.
+  55368, edition 1.8 (2019-06), 9631751 bytes, SHA-256
+  `f01edb0ad41cc1aa12de4984c68e1384afc3e6a6df38694401623be58d77c77f`.
+  Nick's copy; its terms ("Copyright", p. 104) do not allow
+  redistribution, so it is **not committed**. helmsman-devices
+  `devices/murrelektronik/` restates each assembly with the page.
+- **Read for:** the two parameterization modes and their configuration
+  instances 109 and 110 (pp. 43, 62-63, 70-73), the meaning of the
+  three configuration bytes, the connections of art. no. 55089 (p. 69).
+- **How to cite:** `IMPACT67 E handbook p. N`.
+
+### The bench IMPACT67 E DIO8 and MDrive, 2026-11-16
+
+- **What:** the two units themselves, observed over the wire with
+  stand-alone Python probes (session scratch, not committed: identity
+  and attribute reads, `Forward_Open` variants, a Class 1 originator
+  that times every packet) and with `enip-io` through
+  `examples/conformance` and `examples/enip_soak`; the MDrive also over
+  its MCode/TCP port. What they showed is in
+  docs/devices/murrelektronik-impact67-e.md and novanta-mdrive.md, "On
+  the bench".
+- **Where:** the IMPACT67 at an address from DHCP on the office LAN
+  (revision 1.2); the MDrive at its default 192.168.33.1 (identity
+  revision 2.36, `LMDCM 6.013, Hw: 2.10`).
+- **Leaned on by:** `enip-io`'s `config_data=`, its run/idle header
+  correction, the last packet before a close, the close over a new
+  session, the port hint; `helmsman_proto::io`'s refusal text and the
+  two captured replies in its tests; `helmsman_proto::eds`'s assembly
+  size from members; `E1213Sim::start_idle`.
+- **How to cite:** `IMPACT67 bench 2026-11-16`, `MDrive bench
+  2026-11-16` (and the device doc section).
 
 ### Universal Robots fieldbus files (read 2026-11-10, no robot on the bench)
 
