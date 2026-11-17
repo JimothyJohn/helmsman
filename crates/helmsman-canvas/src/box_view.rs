@@ -1266,25 +1266,9 @@ impl BoxView {
     /// diagram's lines are the open project's: the project running, or
     /// the one program file the box runs as it is.
     pub fn chat_about_node(&mut self, n: helmsman_diagram::NodeId, chrome: &mut Chrome) {
-        let running = self.projects.open.as_ref().map(|o| &o.name) == self.projects.running.as_ref();
         let chip = self.view.as_ref().and_then(|v| {
             let (_, _, files) = self.agent_files()?;
-            let src = v.src.trim_end();
-            let single = || {
-                let mut same = files.iter().filter(|(f, t)| {
-                    helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
-                        && !helmsman_iec::spec::is_test(f)
-                        && t.trim_end() == src
-                });
-                match (same.next(), same.next()) {
-                    (Some((f, _)), None) => Some(f.clone()),
-                    _ => None,
-                }
-            };
-            let locate = |l: u32| match projects::file_line(&v.src, l) {
-                Some(at) => running.then_some(at),
-                None => single().map(|f| (f, l)),
-            };
+            let locate = box_locate(&v.src, &files, self.diagram_running());
             crate::chat_about::of_node(v.diagram(), n, &locate, &files)
         });
         self.collect(
@@ -1292,6 +1276,40 @@ impl BoxView {
             "That block's statement could not be placed: the diagram is of the project running, deploy the open one first.",
             chrome,
         );
+    }
+
+    /// Whether the project open is the one the box runs: the diagram's
+    /// lines are its files' only then.
+    fn diagram_running(&self) -> bool {
+        self.projects.open.as_ref().map(|o| &o.name) == self.projects.running.as_ref()
+    }
+
+    /// The blocks selected in the diagram are the Agent's focus: its
+    /// chips, made again when the selection, the chips collected or the
+    /// diagram change.
+    fn sync_focus(&mut self) {
+        let Some(v) = self.view.as_mut() else {
+            self.instruct.focus.clear();
+            return;
+        };
+        crate::chat_about::apply_off(&mut self.instruct, v);
+        let running = self.diagram_running();
+        let Some(v) = self.view.as_ref() else { return };
+        let sel = v.selection().to_vec();
+        let key = (sel.clone(), self.instruct.chips.len(), v.src.len(), running);
+        if self.instruct.focus.is_for(&key) {
+            return;
+        }
+        let made = if sel.is_empty() {
+            crate::chat_about::Focus::default()
+        } else {
+            self.agent_files()
+                .map_or_else(crate::chat_about::Focus::default, |(_, _, files)| {
+                    let locate = box_locate(&v.src, &files, running);
+                    crate::chat_about::focus_of(v.diagram(), &sel, &self.instruct.chips, &locate, &files)
+                })
+        };
+        self.instruct.focus.set(key, made);
     }
 
     /// "Chat about this" on the input, output or variable `name`: a chip
@@ -3104,6 +3122,7 @@ impl Body for BoxView {
             Some(v) if v.drawable() => {
                 v.icons.update(icons.as_deref());
                 v.assign = menus;
+                v.menu_open = self.dedit.is_open();
                 // The block's own lines are placed (or refused with a notice) by the chat item.
                 v.chat_ok = true;
                 let outer = vec![
@@ -3137,6 +3156,7 @@ impl Body for BoxView {
                 ui.vertical_centered(|ui| ui.label(RichText::new(self.waiting()).color(t.muted)));
             }
         }
+        self.sync_focus();
         if let Some((port, ask)) = self.dedit.take_assign() {
             self.assign_ask(port, ask);
         }
@@ -3160,5 +3180,30 @@ impl Body for BoxView {
         if !reads.is_empty() {
             self.input_controls(ui, area, &reads, chrome);
         }
+    }
+}
+
+/// Where a line of the diagram built from `src` is in `files`: its place
+/// in the project when that is the one running, else (a line of the one
+/// program file the box runs as it is) in that file.
+fn box_locate<'a>(
+    src: &'a str,
+    files: &'a crate::scope::Files,
+    running: bool,
+) -> impl Fn(u32) -> Option<(String, u32)> + 'a {
+    let single = move || {
+        let mut same = files.iter().filter(|(f, t)| {
+            helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                && !helmsman_iec::spec::is_test(f)
+                && t.trim_end() == src.trim_end()
+        });
+        match (same.next(), same.next()) {
+            (Some((f, _)), None) => Some(f.clone()),
+            _ => None,
+        }
+    };
+    move |l: u32| match projects::file_line(src, l) {
+        Some(at) => running.then_some(at),
+        None => single().map(|f| (f, l)),
     }
 }

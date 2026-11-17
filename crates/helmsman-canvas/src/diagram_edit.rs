@@ -108,6 +108,18 @@ impl Viewer {
             .map(Hit::Block)
     }
 
+    /// Whether screen point `p` is within reach of an input pin of the
+    /// diagram as drawn (a press there is the pin's, not empty space).
+    pub(crate) fn on_pin(&self, cam: Cam, p: Pos2) -> bool {
+        let (x, y) = cam.to_world(p);
+        let reach = (PIN_REACH / cam.zoom).max(PORT_ROW / 2.0);
+        self.shown()
+            .nodes
+            .iter()
+            .flat_map(|n| (0..n.ins.len()).map(move |k| in_port(n, k)))
+            .any(|(px, py)| (px - x).hypot(py - y) <= reach)
+    }
+
     /// What io.map can do with the program port `node` reads (an input's
     /// Read block) or writes (an output's Write block), on the program's
     /// own diagram.
@@ -635,6 +647,12 @@ impl EditUi {
             error: None,
             focus: true,
         });
+    }
+
+    /// Whether a menu or field of the diagram is open (it takes Escape).
+    #[must_use]
+    pub const fn is_open(&self) -> bool {
+        self.open.is_some()
     }
 
     /// Which popup is open, for the tests.

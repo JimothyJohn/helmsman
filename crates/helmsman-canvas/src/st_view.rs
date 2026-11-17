@@ -23,6 +23,9 @@ use helmsman_iec::trace::StmtId;
 pub mod brand {
     use eframe::egui::Color32;
     pub const YELLOW: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x0E);
+    /// The blocks selected to ask the Agent about (and the rubber band
+    /// that selects them): a blue no other mark of the diagram uses.
+    pub const SELECT: Color32 = Color32::from_rgb(0x4D, 0xA3, 0xFF);
     pub const BLACK: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
     pub const GRAPHITE: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x3A);
     pub const STEEL: Color32 = Color32::from_rgb(0x8C, 0x8C, 0x8C);
@@ -239,6 +242,17 @@ pub struct Viewer {
     pub scope: usize,
     pub cams: Vec<Cam>,
     pub pick: Option<Pick>,
+    /// The blocks selected to ask the Agent about (a rubber band, or
+    /// Shift or Ctrl and a click), as blocks of the diagram, in order and
+    /// without repeats; a fold on screen selects every block it holds.
+    /// Apart from `pick`; cleared with it on a new scope or a fold.
+    selected: Vec<NodeId>,
+    /// The rubber band being drawn: where the press was and where the
+    /// pointer is, on screen.
+    band: Option<(Pos2, Pos2)>,
+    /// A menu, popup or card of the host is open and takes Escape (the
+    /// host sets it each frame).
+    pub menu_open: bool,
     /// The variable last tapped (an output, or a block's first output),
     /// as a program path.
     pub because: Option<String>,
@@ -342,12 +356,24 @@ pub struct TreeRow {
     pub folded: bool,
 }
 
+/// What hovering empty diagram space says.
+const EMPTY_TIP: &str = "Drag to select the blocks the box touches; Shift or Ctrl and a click adds one. \
+The Agent tab then asks about them. Esc or a click here clears the selection. \
+Move the view with Space and a drag, the middle button, or scroll.";
+
 /// What a drag on the diagram holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Grab {
     Node(NodeId),
     Region(RegionId),
+    /// Moves the view: a middle-button drag, or Space held.
     Pan,
+    /// Draws the rubber band from the press at this screen point.
+    Band(Pos2),
+    /// Empty space: a primary drag from here draws the band.
+    Empty,
+    /// Nothing: a pin, or a button that has no drag.
+    Idle,
 }
 
 /// Where the operator moved blocks, by what they are rather than their
@@ -667,6 +693,9 @@ impl Viewer {
             scope: 0,
             cams,
             pick: None,
+            selected: Vec::new(),
+            band: None,
+            menu_open: false,
             because: None,
             highlight: Vec::new(),
             lit: None,
@@ -937,6 +966,7 @@ impl Viewer {
             set.remove(&entry);
         }
         self.pick = None;
+        self.selected.clear();
         self.edits += 1;
         self.reshow();
     }
@@ -1385,6 +1415,97 @@ impl Viewer {
         self.edits
     }
 
+    /// The keys of the folds of the POU shown.
+    #[cfg(test)]
+    pub(crate) fn fold_keys(&self) -> Vec<String> {
+        self.folds[self.scopes[self.scope].pou]
+            .iter()
+            .map(|f| f.key.clone())
+            .collect()
+    }
+
+    /// The blocks selected to ask the Agent about, as blocks of the
+    /// diagram ([`Self::diagram`]).
+    #[must_use]
+    pub fn selection(&self) -> &[NodeId] {
+        &self.selected
+    }
+
+    /// Selects `nodes` of the diagram: added to the selection when `add`,
+    /// else replacing it. Blocks the diagram lacks are left out.
+    pub fn select(&mut self, nodes: impl IntoIterator<Item = NodeId>, add: bool) {
+        let count = self.diagram().nodes.len();
+        if !add {
+            self.selected.clear();
+        }
+        self.selected
+            .extend(nodes.into_iter().filter(|n| (n.0 as usize) < count));
+        self.selected.sort_unstable();
+        self.selected.dedup();
+    }
+
+    /// Takes `nodes` out of the selection.
+    pub fn deselect(&mut self, nodes: &[NodeId]) {
+        self.selected.retain(|n| !nodes.contains(n));
+    }
+
+    /// The blocks of the diagram block `n` as drawn stands for: itself,
+    /// or every block of a fold.
+    fn members(&self, n: NodeId) -> Vec<NodeId> {
+        let Some(v) = self.view() else { return vec![n] };
+        match v.origin.get(n.0 as usize) {
+            Some(Origin::Node(o)) => vec![*o],
+            Some(Origin::Fold(f)) => v.folds[*f].nodes.iter().copied().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Ctrl or Shift and a click: block `n` as drawn joins the selection,
+    /// or leaves it when it is all there already.
+    fn toggle(&mut self, n: NodeId) {
+        let members = self.members(n);
+        if !members.is_empty() && members.iter().all(|m| self.selected.contains(m)) {
+            self.deselect(&members);
+        } else {
+            self.select(members, true);
+        }
+    }
+
+    /// The blocks as drawn that are selected (a fold when any block of
+    /// it is).
+    fn selected_shown(&self) -> Vec<NodeId> {
+        if self.selected.is_empty() {
+            return Vec::new();
+        }
+        self.shown()
+            .nodes
+            .iter()
+            .map(|n| n.id)
+            .filter(|n| self.members(*n).iter().any(|m| self.selected.contains(m)))
+            .collect()
+    }
+
+    /// The rubber band `band` (screen) ends: the blocks it touches are
+    /// selected, added to the selection when `add`. A band no larger than
+    /// a click is a click on empty space.
+    fn finish_band(&mut self, cam: Cam, area: Rect, band: Rect, add: bool) {
+        let band = band.intersect(area);
+        if band.width() < 2.0 && band.height() < 2.0 {
+            if !add {
+                self.selected.clear();
+            }
+            return;
+        }
+        let touched: Vec<NodeId> = self
+            .shown()
+            .nodes
+            .iter()
+            .filter(|n| cam.rect(&n.rect).intersects(band))
+            .flat_map(|n| self.members(n.id))
+            .collect();
+        self.select(touched, add);
+    }
+
     /// A block or region is being dragged.
     #[must_use]
     pub const fn dragging(&self) -> bool {
@@ -1799,6 +1920,7 @@ impl Viewer {
         if k < self.scopes.len() && k != self.scope {
             self.scope = k;
             self.pick = None;
+            self.selected.clear();
         }
     }
 
@@ -2191,7 +2313,7 @@ impl Viewer {
             .iter()
             .filter(|r| r.rect.contains(x, y) && y <= r.rect.y + LABEL_H)
             .min_by(|a, b| (a.rect.w * a.rect.h).total_cmp(&(b.rect.w * b.rect.h)))
-            .map_or(Grab::Pan, |r| Grab::Region(r.id))
+            .map_or(Grab::Empty, |r| Grab::Region(r.id))
     }
 
     /// The stops of the diagram shown ([`crate::jump::stops`]), each
@@ -2374,7 +2496,11 @@ impl Viewer {
                 ui.ctx().request_repaint();
             }
         }
-        let double = response.double_clicked();
+        let additive = ui
+            .ctx()
+            .input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
+        // Shift or Ctrl clicks select; they do not also open or fit.
+        let double = response.double_clicked() && !additive;
         if (cam.offset, cam.zoom) != glided || double || response.dragged() {
             self.glide = None;
         }
@@ -2416,26 +2542,88 @@ impl Viewer {
                 None => self.cams[self.scope].fitted = false,
             }
         }
-        // A drag that starts on a block moves it, on a region's label moves
-        // the region with all it holds, anywhere else pans.
+        // A primary drag that starts on a block moves it, on a region's
+        // label moves the region with all it holds, on empty space draws a
+        // rubber band that selects the blocks it touches. A middle-button
+        // drag, or any drag with Space held, moves the view.
         if response.drag_started() {
-            let at = ui.ctx().input(|i| i.pointer.press_origin());
-            self.grab = Some(at.map_or(Grab::Pan, |p| self.grab_at(cam, p)));
+            let (at, primary, middle, space) = ui.ctx().input(|i| {
+                (
+                    i.pointer.press_origin(),
+                    i.pointer.button_down(egui::PointerButton::Primary),
+                    i.pointer.button_down(egui::PointerButton::Middle),
+                    i.key_down(egui::Key::Space),
+                )
+            });
+            self.grab = Some(match at {
+                None => Grab::Idle,
+                Some(_) if middle || space => Grab::Pan,
+                Some(_) if !primary => Grab::Idle,
+                Some(p) => match self.grab_at(cam, p) {
+                    Grab::Empty if self.on_pin(cam, p) => Grab::Idle,
+                    Grab::Empty => Grab::Band(p),
+                    g => g,
+                },
+            });
         }
         if response.dragged() {
             let by = response.drag_delta();
             match self.grab {
                 Some(Grab::Node(n)) => self.move_shown(n, by / cam.zoom),
                 Some(Grab::Region(r)) => self.move_shown_region(r, by / cam.zoom),
-                _ => {
+                Some(Grab::Pan) => {
                     let cam = &mut self.cams[self.scope];
                     cam.offset += by;
                     cam.moved = true;
                 }
+                Some(Grab::Band(from)) => {
+                    self.band = hover.map(|to| (from, to));
+                }
+                _ => {}
             }
         }
         if response.drag_stopped() {
+            if let Some(Grab::Band(from)) = self.grab {
+                let to = self.band.map_or(from, |(_, to)| to);
+                let add = ui
+                    .ctx()
+                    .input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
+                self.finish_band(cam, area, Rect::from_two_pos(from, to), add);
+            }
             self.grab = None;
+            self.band = None;
+        }
+        // Escape leaves a band half drawn, else clears the selection, but
+        // only when nothing else is using it: a menu or popup, a note, a
+        // modal question or a field with the cursor in it.
+        let busy = self.menu_open
+            || self.off_note.is_some()
+            || ui.ctx().any_popup_open()
+            || ui
+                .ctx()
+                .memory(|m| m.focused().is_some() || m.top_modal_layer().is_some());
+        // Whether a field, popup or modal had Escape's use at the last
+        // frame's canvas: panels drawn before the diagram have let go of
+        // their focus by the time Escape reaches it.
+        let busy_id = ui.scope_id().with("escape-busy");
+        let was_busy = ui.ctx().data_mut(|d| {
+            let id = busy_id;
+            let was = d.get_temp::<bool>(id).unwrap_or(false);
+            d.insert_temp(id, busy);
+            was
+        });
+        if (self.band.is_some() || !self.selected.is_empty())
+            && !busy
+            && !was_busy
+            && ui
+                .ctx()
+                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            if self.band.take().is_some() {
+                self.grab = Some(Grab::Idle);
+            } else {
+                self.selected.clear();
+            }
         }
         let size = self.shown().size;
         self.cams[self.scope].clamp(area, size);
@@ -2452,13 +2640,27 @@ impl Viewer {
             // A tap on a state opens the sequence on that state's arm.
             self.open_arm(&key, arm, area, now);
         } else if response.clicked()
+            && additive
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            // Shift or Ctrl and a click on a block: in the selection or
+            // out of it. On empty space nothing changes.
+            let (x, y) = cam.to_world(p);
+            if let Some(n) = node_near(self.shown(), x, y, TAP / 2.0 / cam.zoom) {
+                self.toggle(n);
+            }
+        } else if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
         {
             let (x, y) = cam.to_world(p);
-            let d = self.shown();
             // A finger is wider than a block at low zoom: the nearest
             // block within half a tap target counts.
             let slop = TAP / 2.0 / cam.zoom;
+            if node_near(self.shown(), x, y, slop).is_none() {
+                // Clicking off the blocks deselects.
+                self.selected.clear();
+            }
+            let d = self.shown();
             let region = |r: RegionId| self.view().map_or(r, |v| v.region_origin[r.0 as usize]);
             self.pick = match node_near(d, x, y, slop) {
                 Some(n) => self.pick_of(n).map(Pick::Node),
@@ -2510,6 +2712,7 @@ impl Viewer {
             self.frame_output(lit.as_ref(), scan.is_some(), area, ui.input(|i| i.time));
             ui.ctx().request_repaint();
         }
+        let selected = self.selected_shown();
         let mut added: Vec<NodeId> = added.into_iter().filter_map(|n| self.to_shown(n)).collect();
         added.dedup();
         let pick = match self.pick {
@@ -2556,6 +2759,14 @@ impl Viewer {
         }
         if response.hovered()
             && let Some(p) = hover
+            && self.grab.is_none()
+            && !self.on_pin(cam, p)
+            && matches!(self.grab_at(cam, p), Grab::Empty)
+        {
+            response.clone().on_hover_text_at_pointer(EMPTY_TIP);
+        }
+        if response.hovered()
+            && let Some(p) = hover
             && self.instance_at(cam, p).is_some()
         {
             response.clone().on_hover_text_at_pointer(
@@ -2590,6 +2801,7 @@ impl Viewer {
                 breaks: &self.breaks,
                 paused: self.paused,
                 added: &added,
+                selected: &selected,
                 opens: &opens,
                 ghosts: old.map(|o| (o, removed.as_slice())),
                 rows: &rows,
@@ -2611,6 +2823,16 @@ impl Viewer {
                 title,
                 font(10.0 * z),
                 t.fg,
+            );
+        }
+        if let Some((a, b)) = self.band {
+            let band = Rect::from_two_pos(a, b);
+            painter.rect_filled(band, CornerRadius::ZERO, brand::SELECT.gamma_multiply(0.12));
+            painter.rect_stroke(
+                band,
+                CornerRadius::ZERO,
+                Stroke::new(1.5, brand::SELECT),
+                StrokeKind::Inside,
             );
         }
         self.off_note_ui(ui, area);
@@ -2789,6 +3011,8 @@ struct Marks<'a> {
     paused: Option<StmtId>,
     /// Blocks the Agent's last change added: outlined green.
     added: &'a [NodeId],
+    /// Blocks selected to ask the Agent about: outlined blue.
+    selected: &'a [NodeId],
     /// Blocks that open into a diagram of their own: drawn as a stack.
     opens: &'a [NodeId],
     /// Blocks it removed, in the old diagram: drawn as red ghosts where
@@ -3011,6 +3235,7 @@ fn draw(
         breaks,
         paused,
         added,
+        selected,
         opens,
         ghosts,
         rows,
@@ -3238,6 +3463,15 @@ fn draw(
                     stroke,
                 ));
             }
+        }
+        if selected.contains(&n.id) {
+            painter.rect_filled(r, radius, brand::SELECT.gamma_multiply(0.14));
+            painter.rect_stroke(
+                r.expand(3.0 * z),
+                CornerRadius::same(6),
+                Stroke::new(2.5 * z.max(0.6), brand::SELECT),
+                StrokeKind::Outside,
+            );
         }
         if added.contains(&n.id) {
             painter.rect_stroke(

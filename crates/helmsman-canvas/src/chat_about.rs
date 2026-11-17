@@ -475,12 +475,127 @@ pub fn of_signal(name: &str, files: &Files, diagrams: &[&Diagram]) -> Option<Chi
     ))
 }
 
+/// What the key of a [`Focus`] is made of: the selected blocks, how many
+/// chips were collected, the diagram's text length and whether its lines
+/// place in the files.
+pub type FocusKey = (Vec<NodeId>, usize, usize, bool);
+
+/// The blocks selected in the diagram (Nick, 2026-11-16: "when selected
+/// the boxes will be focused on in the context of the agent
+/// conversation"), as the chips they stand for. Derived from the
+/// selection, never kept past it: the Agent tab shows them beside the
+/// collected chips and an instruction carries them in the same envelope.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Focus {
+    /// One chip per selected statement, as many as the collected chips
+    /// leave room for ([`MAX_CHIPS`] in all).
+    pub chips: Vec<Chip>,
+    /// Per chip: the selected blocks of the diagram it stands for.
+    pub nodes: Vec<Vec<NodeId>>,
+    /// Selected statements left out for want of room.
+    pub more: usize,
+    /// What the selection stands for now ([`Self::set`]).
+    key: Option<FocusKey>,
+    /// Blocks whose chip the engineer took off with its x, for the owner
+    /// of the diagram to deselect.
+    pub off: Vec<Vec<NodeId>>,
+}
+
+impl Focus {
+    /// Whether this is the focus of `key` already.
+    #[must_use]
+    pub fn is_for(&self, key: &FocusKey) -> bool {
+        self.key.as_ref() == Some(key)
+    }
+
+    /// Takes `made` as the focus for `key`. What the engineer took off
+    /// stays for the owner to take.
+    pub fn set(&mut self, key: FocusKey, made: Self) {
+        let off = std::mem::take(&mut self.off);
+        *self = made;
+        self.off = off;
+        self.key = Some(key);
+    }
+
+    /// Empties it (no diagram, or none that matches the files).
+    pub fn clear(&mut self) {
+        self.set((Vec::new(), 0, 0, false), Self::default());
+        self.key = None;
+    }
+
+    /// Chip `k` taken off: its blocks are to be deselected.
+    pub fn take_off(&mut self, k: usize) {
+        if let Some(n) = self.nodes.get(k) {
+            self.off.push(n.clone());
+        }
+    }
+}
+
+/// The focus of blocks `selected` of `d`: one chip per statement they
+/// belong to (blocks of one statement are one entry), in statement order,
+/// at most as many as [`MAX_CHIPS`] leaves after `collected`, none that
+/// is `collected` already. A statement that cannot be placed in the files
+/// is not counted.
+#[must_use]
+pub fn focus_of(
+    d: &Diagram,
+    selected: &[NodeId],
+    collected: &[Chip],
+    locate: &dyn Fn(u32) -> Option<(String, u32)>,
+    files: &Files,
+) -> Focus {
+    let mut groups: std::collections::BTreeMap<u32, Vec<NodeId>> = std::collections::BTreeMap::new();
+    for n in selected {
+        if let Some(node) = d.nodes.get(n.0 as usize) {
+            groups.entry(node.stmt.0).or_default().push(*n);
+        }
+    }
+    let room = MAX_CHIPS.saturating_sub(collected.len());
+    let mut out = Focus::default();
+    for members in groups.into_values() {
+        if out.chips.len() >= room {
+            out.more += 1;
+            continue;
+        }
+        // The block that names the statement: what it writes or calls,
+        // among those selected, else the statement's own.
+        let names = |m: &NodeId| {
+            matches!(
+                d.nodes[m.0 as usize].kind,
+                NodeKind::Write { .. } | NodeKind::Fb { .. }
+            )
+        };
+        let stmt = d.nodes[members[0].0 as usize].stmt;
+        let rep = members
+            .iter()
+            .copied()
+            .find(names)
+            .or_else(|| {
+                d.nodes
+                    .iter()
+                    .find(|n| n.stmt == stmt && names(&n.id))
+                    .map(|n| n.id)
+            })
+            .unwrap_or(members[0]);
+        let Some(chip) = of_node(d, rep, locate, files) else {
+            continue;
+        };
+        if collected.iter().any(|c| c.same(&chip)) || out.chips.iter().any(|c| c.same(&chip)) {
+            continue;
+        }
+        out.chips.push(chip);
+        out.nodes.push(members);
+    }
+    out
+}
+
 /// The chips as one `<chat_about>` envelope for the Agent's user message,
 /// with the newline before it; empty for none. Every character of it is
 /// data: the closing tag of this and of every other envelope in a name or
-/// a statement is defanged.
+/// a statement is defanged. `more` further statements selected in the
+/// diagram and left out for want of room are said.
 #[must_use]
-pub fn envelope(chips: &[Chip]) -> String {
+pub fn envelope(chips: &[Chip], more: usize) -> String {
     if chips.is_empty() {
         return String::new();
     }
@@ -513,8 +628,23 @@ pub fn envelope(chips: &[Chip]) -> String {
             }
         }
     }
+    if more > 0 {
+        let _ = writeln!(
+            body,
+            "{more} more selected statement{} not included here.",
+            if more == 1 { " is" } else { "s are" }
+        );
+    }
     format!(
         "\n<chat_about>\n{}</chat_about>",
         crate::claude::neutralize(&body)
     )
+}
+
+/// Deselects, in the diagram `v`, what the engineer took off the Agent
+/// tab with a chip's x.
+pub fn apply_off(instruct: &mut crate::instruct::Instruct, v: &mut crate::st_view::Viewer) {
+    for nodes in std::mem::take(&mut instruct.focus.off) {
+        v.deselect(&nodes);
+    }
 }
