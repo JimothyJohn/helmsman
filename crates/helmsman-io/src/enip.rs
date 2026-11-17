@@ -1160,6 +1160,17 @@ mod driver {
     impl Drop for EnipDriver {
         fn drop(&mut self) {
             self.drop_link();
+            // The session was gone (a Novanta MDrive resets an idle one
+            // seconds after the Forward_Open and keeps exchanging I/O):
+            // there is no next connect to carry the close, so it goes
+            // over a session of its own, or the device would hold its
+            // outputs until the connection timed out.
+            if let (Some(closer), Some(at)) = (self.stale.take(), self.resolved)
+                && let Ok(mut session) = Session::connect(SocketAddr::V4(at), self.params.timeout)
+            {
+                let _ = closer.send(&mut session);
+                session.close();
+            }
         }
     }
 

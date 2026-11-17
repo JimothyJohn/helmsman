@@ -946,14 +946,19 @@ fn eds_with_config(params: &str, members: &str) -> String {
     let eds = FACTS
         .replace(
             "    Assem101 = \"Input Data\"",
-            &format!("    Assem100 = \"Configuration\", , 3, 0x0001, ,, {members};\n    Assem101 = \"Input Data\""),
+            &format!(
+                "    Assem100 = \"Configuration\", , 3, 0x0001, ,, {members};\n    Assem101 = \"Input Data\""
+            ),
         )
         .replace(
             "        ,,                              $ target config\n        \"Exclusive Owner\"",
             "        , Assem100,\n        \"Exclusive Owner\"",
         )
         .replace("[Assembly]", &format!("{params}\n[Assembly]"));
-    assert!(eds.contains("Assem100") && eds.contains(", Assem100,"), "the fixture moved");
+    assert!(
+        eds.contains("Assem100") && eds.contains(", Assem100,"),
+        "the fixture moved"
+    );
     eds
 }
 
@@ -964,7 +969,10 @@ const MODE_PARAMS: &str = "    Param10 = 0, ,, 0x0000, 0xC6, 1, \"Mode\", \"\", 
 #[test]
 fn an_eds_with_parameter_defaults_sends_them_as_configuration() {
     let s = configurable();
-    let path = temp_eds(&eds_with_config(MODE_PARAMS, "8, Param10, 8, Param11, 8, Param12"));
+    let path = temp_eds(&eds_with_config(
+        MODE_PARAMS,
+        "8, Param10, 8, Param11, 8, Param12",
+    ));
     let mut p = with(&s, &[("eds", path.to_str().unwrap())]);
     p.remove("profile");
     let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
@@ -980,7 +988,10 @@ fn an_eds_with_parameter_defaults_sends_them_as_configuration() {
     drop(d);
     p.insert("config_data".into(), "000f".into());
     let e = EnipDriver::from_params(&s.endpoint(), &p).unwrap_err();
-    assert!(e.to_string().contains("2 bytes, the EDS's connection wants 3"), "{e}");
+    assert!(
+        e.to_string().contains("2 bytes, the EDS's connection wants 3"),
+        "{e}"
+    );
     std::fs::remove_file(path).unwrap();
 }
 
@@ -1009,7 +1020,11 @@ fn an_eds_that_wants_configuration_and_gives_no_defaults_asks_for_it() {
         p.insert("config_data".into(), "010203".into());
         let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
         read(&mut d, "di:0").unwrap();
-        assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[1, 2, 3][..]), "{members:?}");
+        assert_eq!(
+            lock_ref(&s.device()).assembly(100),
+            Some(&[1, 2, 3][..]),
+            "{members:?}"
+        );
         drop(d);
         std::fs::remove_file(path).unwrap();
     }
@@ -1041,5 +1056,46 @@ fn an_output_written_just_before_the_driver_goes_reaches_the_device() {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+    }
+}
+
+/// A Novanta MDrive resets the TCP session about 2.5 s after the
+/// `Forward_Open` and goes on exchanging I/O (2026-11-16). The link must
+/// not notice, and when the driver goes the connection is still closed,
+/// over a session of its own, instead of being left to time out with the
+/// device's outputs held.
+#[test]
+fn a_device_that_drops_the_idle_session_keeps_its_link_and_is_still_closed() {
+    let s = E1213Sim::start_idle(
+        DeviceConfig::moxa_e1213(),
+        Application::bench(),
+        Duration::from_millis(150),
+    )
+    .unwrap();
+    // Multiplier 3: the simulator would only time the connection out
+    // after 3.2 s, far past the deadline below.
+    let mut d = EnipDriver::from_params(&s.endpoint(), &with(&s, &[("multiplier", "3")])).unwrap();
+    d.write("do:1", Value::Bool(true)).unwrap();
+    wait_value(&mut d, "di:1", Value::Bool(true), Duration::from_secs(2));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while s.sessions() > 0 {
+        assert!(Instant::now() < deadline, "the simulator kept the idle session");
+        read(&mut d, "di:1").unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Still exchanging: an output written now reaches the device.
+    d.write("do:0", Value::Bool(true)).unwrap();
+    wait_value(&mut d, "di:0", Value::Bool(true), Duration::from_secs(2));
+    assert_eq!(d.opens, 1);
+    assert_eq!(lock_ref(&s.device()).connections().len(), 1);
+
+    drop(d);
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    while !lock_ref(&s.device()).connections().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the connection was left open for the device to time out"
+        );
+        std::thread::sleep(Duration::from_millis(5));
     }
 }

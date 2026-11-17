@@ -231,7 +231,10 @@ fn a_failed_loop_leaves_the_output_as_it_was() {
     let b = Bench {
         points: vec![],
         expect: vec![],
-        loops: vec![("coil:9".into(), "di:10".into()), ("coil:3".into(), "di:4".into())],
+        loops: vec![
+            ("coil:9".into(), "di:10".into()),
+            ("coil:3".into(), "di:4".into()),
+        ],
         registers: vec![],
         absent: None,
         settle: Duration::from_millis(50),
