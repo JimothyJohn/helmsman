@@ -1109,6 +1109,24 @@ into the code.
   three configuration bytes, the connections of art. no. 55089 (p. 69).
 - **How to cite:** `IMPACT67 E handbook p. N`.
 
+### Murrelektronik IMPACT67 E DIO8 EDS (art. no. 55089)
+
+- **What:** `55089_Impact67_E_DIO16.eds`, EDS revision 1.3 (modified
+  09-18-2017, EZ-EDS 3.21), 43388 bytes, SHA-256
+  `6eb94568f8b5fc73420611ac1633073da2c6e8cda75d81593bd73631807bef3d`; and `55089_Impact67_E_DIO16_Omron.eds` (modified 07-09-2019,
+  EZ-EDS 3.25), 43416 bytes, SHA-256
+  `2320dbc1dded11586c969412e8e0e11182c010325a598af4bd823fc4c1c1f225`: the same file with a fourth, reserved byte in configuration
+  assembly 109 and the two channel parameters as USINT.
+- **Where:** Murrelektronik's shop page for the article, downloaded in
+  a browser by Nick on 2026-11-17 (the page answers a fetch with a
+  script page). No terms in the files; **not committed**. Kept in
+  helmsman-devices' `cache/sha256/`, where `scripts/eds-corpus.sh`
+  looks.
+- **Leaned on by:** `crates/helmsman-io/tests/eds_corpus.rs` (both
+  resolve, with their defaults as configuration data), the device doc's
+  "Its EDS".
+- **How to cite:** `IMPACT67 DIO8 EDS l.N`.
+
 ### The bench IMPACT67 E DIO8 and MDrive, 2026-11-16
 
 - **What:** the two units themselves, observed over the wire with

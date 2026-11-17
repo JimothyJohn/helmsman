@@ -13,8 +13,8 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-16
   by: claude-session
 
-- [ ] **The MDrive's output bytes are not the manual's: read its mapping, or reset it?** — On the bench unit (2026-11-16) output assembly 112 does not follow the table in Novanta's fieldbus manual (p. 20): bytes 0..3 set the position counter, bytes 4..7 started a move, byte 17 enables the drive, byte 18 sets the run current, and only bytes 20..23 (SL, slew) are where the manual puts them. The manual says the mapping can be changed in the LMD Software Suite's TCP/IP Configuration Utility, so either this unit's was changed before it got here or the manual is wrong for firmware 6.013. It matters because the first image I built from the manual's table started a move at about 1300 rpm the moment the connection opened (stopped on command; details in docs/devices/novanta-mdrive.md, "On the bench"). Until this is settled the library entry has no map for the drive. My pick: read it, so the library records what a unit really does.
-  options: I open the Configuration Utility and send you its EtherNet/IP mapping page | I reset the mapping to factory default and tell you | leave it, keep mapping it by experiment
+- [ ] **The MDrive's mapping was changed before it got here: read it, or reset it to the default?** — You confirmed on 2026-11-17 that the bench unit's EtherNet/IP assembly mapping is not the factory one, which is why output assembly 112 did not follow the table in Novanta's fieldbus manual (p. 20) on 2026-11-16: bytes 0..3 set the position counter, bytes 4..7 started a move, byte 17 enables the drive, byte 18 sets the run current, and only bytes 20..23 (SL, slew) are where the manual puts them. The drive gives no sign of its mapping over EtherNet/IP; it is in the LMD Software Suite's TCP/IP Configuration Utility. What is open is which layout the bring-up continues on. My pick: reset it, because the library and the profile should describe a drive as delivered, and the manual's table has still not been checked on a unit.
+  options: I reset the mapping to the factory default and tell you | I keep this mapping and send you the Configuration Utility's EtherNet/IP page | leave it, keep mapping it by experiment
   id: mdrive-assembly-mapping
   asked: 2026-11-16
   by: claude-session
@@ -26,14 +26,6 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 ## Needs your hands
-
-- [ ] **Download the Murrelektronik 55089 EDS in a browser** — Why it matters: the IMPACT67 E DIO8 on the bench is checked against its handbook only; its EDS would settle the RPI range and whether configuration instance 109 is 3 bytes (handbook p. 70) or 4 (what the unit reports). Murrelektronik's shop page answers a fetch with a "Please wait" script page, so a session cannot read the link. Steps: (1) open https://shop.murrelektronik.com/55089 in a browser; (2) under downloads take the EDS (a search result named it `55089_IMPACT67_KF5_x_15.zip`, not verified); (3) put the zip in `~/github/helmsman-devices/scratch/` and tell a session "the 55089 EDS is in scratch". The session adds it to `collect/murrelektronik.toml` by hash and compares it with the folder.
-  result: helmsman-devices `devices/murrelektronik/impact67-e-dio8-dio8/` checked against the vendor's file as well as the unit
-  est: 5m
-  difficulty: low
-  id: murr-55089-eds
-  asked: 2026-11-16
-  by: claude-session
 
 - [ ] **Watch the IMPACT67's LEDs while a session switches it, and wire one output to one input** — Why it matters: the block was driven on 2026-11-16 with nothing on its ports and nobody looking, so no channel is confirmed and nobody knows what its outputs do when the controller goes away (after a Forward_Close its output assembly still read the last values written). Steps: (1) put an M12 jumper from pin 4 of port 0 to pin 4 of port 1 (or tell the session which channels you joined); (2) tell a session "watch the Murr with me": it sets port 0 pin 4 as an output, switches it, and asks what the channel LEDs do, then closes the connection and stops sending in turn and asks again.
   needs: the block powered at its DHCP address (10.0.0.73 on 2026-11-16; a session finds it by ListIdentity)
@@ -146,7 +138,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **Bring up the Murrelektronik IMPACT67 E DI8 DO8 (55086)** — Why it matters: every implicit-messaging finding so far is against one Moxa unit on one old firmware; a second vendor's block is what shows whether the EtherNet/IP driver is right or only right for that Moxa. A second unit also ends the contention for the E1213's single connection: the P4 owns one, a Studio box the other. What is already done without the unit (helmsman-devices `devices/murrelektronik/`, from its EDS and handbook, 2026-11-12): the 55086 is EtherNet/IP only, vendor 640, product code 55086, input instance 100 (4 bytes), output 112 (2 bytes), RPI 10 ms by default; its folder has the doc, an enip map and a `.device` profile. It ships at rotary 000, DHCP/BOOTP, so it is also the first device `box-dhcp-server` can address with nobody touching it. Left for the bench: power it, let it take an address, Scan, add by click, and record what its Forward_Open accepts.
-  needs: `murr-outputs-watch` (a jumper and your eyes) for the channels; `murr-55089-eds` for the vendor's file
+  needs: `murr-outputs-watch` (a jumper and your eyes) for the channels
   result: the block found, added and driven from the library's profile with no hand-written map; its doc gains "On the bench"
   est: 4h
   difficulty: med

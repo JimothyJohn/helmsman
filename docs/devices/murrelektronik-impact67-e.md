@@ -71,10 +71,31 @@ cable, nothing on its ports, an address from DHCP. Revision 1.2.
 - **A hold of 20 minutes** at 10 ms, toggling channel 00 twice a second
   (`enip_soak`): 120 000 reads, one connection, the link never lost.
 
+## Its EDS (2026-11-17)
+
+Nick downloaded the article's two files from Murrelektronik's shop page
+(docs/SOURCES.md, "Murrelektronik IMPACT67 E DIO8 EDS"):
+`55089_Impact67_E_DIO16.eds` (EDS revision 1.3, 2017) and
+`55089_Impact67_E_DIO16_Omron.eds` (2019). They differ in one thing that
+matters: configuration assembly 109 is 3 bytes in the first and 4 in
+the second, the fourth reserved, which is the size the unit reports.
+
+- Both agree with the unit: identity 640 / 7 / 55089 revision 1.2, the
+  assembly sizes, O->T run/idle and T->O modeless. Neither gives an RPI.
+- Six connections: an exclusive owner without and with diagnosis, each
+  with configuration instance 109 ("Config over EDS") and with 110
+  ("Config over Web Server"), and two listen-only ones.
+- `eds=` with either file connects to the unit. The configuration sent
+  is the file's parameter defaults (pin mode, every channel an input),
+  or `config_data=` of the file's size: `00ff00` for the first,
+  `00ff0000` for the second. Both read back in assembly 109.
+- From an EDS `enip-io` opens the first exclusive owner, which here is
+  the one **without** diagnosis (T->O 5, 2 bytes). The map line at the
+  top of this page gives the sizes itself and gets the 8 bytes.
+- `scripts/eds-corpus.sh` checks both files when they are at hand.
+
 ## Open
 
-- The EDS for the article. Murrelektronik's shop page is a script page a
-  fetch cannot read (TODO.md `murr-55089-eds`).
 - What the outputs do when the controller goes away: the handbook only
   says the network LED flashes red (p. 83). Needs eyes on the block.
 - Diagnosis bytes (input bytes 2..7) were zero throughout: no load, no

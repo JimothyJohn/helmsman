@@ -32,6 +32,15 @@ pub const MDRIVE: (&str, &str) = (
     "b14f0fe268df5b37e9dcee6bd0288a88e59d428dbe6044b49dba8beaaeb86041",
 );
 
+pub const IMPACT67: (&str, &str) = (
+    "55089_Impact67_E_DIO16.eds",
+    "6eb94568f8b5fc73420611ac1633073da2c6e8cda75d81593bd73631807bef3d",
+);
+pub const IMPACT67_OMRON: (&str, &str) = (
+    "55089_Impact67_E_DIO16_Omron.eds",
+    "2320dbc1dded11586c969412e8e0e11182c010325a598af4bd823fc4c1c1f225",
+);
+
 fn corpus() -> Option<PathBuf> {
     std::env::var_os("HELMSMAN_EDS_CORPUS").map(PathBuf::from)
 }
@@ -188,4 +197,53 @@ fn the_mdrive_eds_resolves_as_its_facts_fixture_does() {
     let id = spec.identity.unwrap();
     assert_eq!((id.vendor_id, id.device_type, id.product_code), (243, 43, 15362));
     assert_eq!(Spec::from_eds(&eds, Connection::InputOnly).unwrap().o_to_t, 128);
+}
+
+/// Murrelektronik's two files for the IMPACT67 E DIO8 resolve to the
+/// connection the unit on the bench took from each on 2026-11-17
+/// (docs/devices/murrelektronik-impact67-e.md): the first exclusive
+/// owner, configuration instance 109, with the file's parameter defaults
+/// as configuration data, three bytes in one file and four in the other.
+#[test]
+fn the_impact67_eds_files_resolve_with_their_configuration_defaults() {
+    let Some(dir) = corpus() else {
+        eprintln!("HELMSMAN_EDS_CORPUS not set: nothing to check");
+        return;
+    };
+    for (file, config_bytes) in [(IMPACT67, 3usize), (IMPACT67_OMRON, 4)] {
+        let Some(text) = load(&dir, file) else {
+            eprintln!("{} not in the corpus", file.0);
+            continue;
+        };
+        let eds = Eds::parse(&text).unwrap();
+        let id = eds.identity().unwrap();
+        assert_eq!((id.vendor_id, id.device_type, id.product_code), (640, 7, 55089));
+        assert_eq!((id.major_revision, id.minor_revision), (1, 2));
+        let connections = eds.connections().unwrap();
+        assert_eq!(connections.len(), 6, "{}", file.0);
+        let spec = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap();
+        assert_eq!(
+            (
+                spec.configuration,
+                spec.o_to_t,
+                spec.t_to_o,
+                spec.o_to_t_len,
+                spec.t_to_o_len
+            ),
+            (109, 35, 5, 2, 2),
+            "{}",
+            file.0
+        );
+        assert!(spec.o_to_t_run_idle && !spec.t_to_o_run_idle, "{}", file.0);
+        assert_eq!(spec.config_data, vec![0; config_bytes], "{}", file.0);
+        assert_eq!(spec.config_wanted, None);
+        // The map's own setup must be the file's size.
+        let own = vec![0xFF; config_bytes];
+        assert_eq!(
+            spec.clone().with_config_data(Some(&own)).unwrap().config_data,
+            own
+        );
+        let e = spec.with_config_data(Some(&[0; 7])).unwrap_err();
+        assert!(e.contains("7 bytes"), "{e}");
+    }
 }
