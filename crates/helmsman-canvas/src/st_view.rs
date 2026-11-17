@@ -320,7 +320,7 @@ pub struct Viewer {
     /// has it ([`Viewer::show_output`]).
     frame_lit: bool,
     /// The output cards of the source in `.0` ([`Viewer::output_cards`]).
-    cards: std::cell::RefCell<Option<(String, Vec<crate::output_cards::OutputCard>)>>,
+    cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
 }
 
 /// Whether folds of `kind` start as their blocks and fold when the reader
@@ -1313,10 +1313,14 @@ impl Viewer {
     fn references(&self, head: &str) -> Drivers {
         let d = self.diagram();
         let of = |n: &helmsman_diagram::Node| match &n.kind {
-            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => path
-                .split(['.', '['])
-                .next()
-                .is_some_and(|h| h.eq_ignore_ascii_case(head)),
+            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
+                // An address (`%IX0.0`) is one name, dots and all.
+                path.eq_ignore_ascii_case(head)
+                    || path
+                        .split(['.', '['])
+                        .next()
+                        .is_some_and(|h| h.eq_ignore_ascii_case(head))
+            }
             NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
             _ => false,
         };
@@ -1744,7 +1748,7 @@ impl Viewer {
     /// not) and the located outputs it assigns, in declaration order, each
     /// with the signals it finally depends on.
     #[must_use]
-    pub fn output_cards(&self) -> Vec<crate::output_cards::OutputCard> {
+    pub fn output_cards(&self) -> Vec<crate::io_cards::OutputCard> {
         if let Some((src, cards)) = &*self.cards.borrow()
             && *src == self.src
         {
@@ -1755,7 +1759,7 @@ impl Viewer {
         cards
     }
 
-    fn make_cards(&self) -> Vec<crate::output_cards::OutputCard> {
+    fn make_cards(&self) -> Vec<crate::io_cards::OutputCard> {
         let Some(k) = self
             .module
             .pous
@@ -1781,7 +1785,7 @@ impl Viewer {
             .collect();
         outs.sort_by(|a, b| (a.1.line, a.0).cmp(&(b.1.line, b.0)));
         outs.into_iter()
-            .map(|(name, _)| crate::output_cards::OutputCard {
+            .map(|(name, _)| crate::io_cards::OutputCard {
                 name: name.clone(),
                 signals: helmsman_diagram::signals(&self.module, k, name),
                 driven: written(name),
@@ -1962,46 +1966,6 @@ impl Viewer {
         hit
     }
 
-    /// The outputs as cards with their values; a tap lights the path that
-    /// sets one and goes to it ([`Self::show_output`]).
-    pub fn outputs_ui(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
-        ui.label(RichText::new("Outputs").strong())
-            .tip("Click an output to light the path that sets it in the diagram.");
-        let t = theme(ui);
-        let cards = self.output_cards();
-        let mut tapped = None;
-        for card in &cards {
-            let path = &card.name;
-            let value = scan.and_then(|s| s.get(path));
-            let on = value == Some(Value::Bool(true));
-            let color = if on {
-                crate::lamps::colour(path).map_or(t.accent, |c| t.ink(c))
-            } else {
-                t.fg
-            };
-            let row = crate::output_cards::Row {
-                key: path,
-                text: format!(
-                    "{} {} = {}",
-                    if on { "●" } else { "○" },
-                    path.to_ascii_lowercase(),
-                    show(value)
-                ),
-                color,
-                glyph: crate::glyph_lib::for_point(path, false, matches!(value, Some(Value::Bool(_)))),
-                place: "",
-                selected: self.because.as_deref() == Some(path.as_str()),
-                card: Some(card),
-            };
-            if crate::output_cards::show(ui, &row).0 {
-                tapped = Some(path.clone());
-            }
-        }
-        if let Some(path) = tapped {
-            self.show_output(&path);
-        }
-    }
-
     /// A tap on an output's card: its program path lit on the program's
     /// diagram (as a click on its write gives), and the view eased to
     /// frame what is lit once the next frame draws it. Folds stay as they
@@ -2013,6 +1977,29 @@ impl Viewer {
         self.xref = None;
         self.because = Some(path.to_ascii_uppercase());
         self.frame_lit = true;
+    }
+
+    /// The diagram glyph of a point's card: every block of the program
+    /// that reads or writes `name` lit, as Cross references lights them,
+    /// and the view eased to frame them. It needs no scan, so it shows
+    /// where a point is while the program is stopped. An address
+    /// (`%IX0.0`) is lit by its own spelling.
+    pub fn show_signal(&mut self, name: &str) {
+        if self.scope != 0 {
+            self.open(0);
+        }
+        let head = name.split(['.', '[']).next().unwrap_or(name);
+        let head = if name.starts_with('%') { name } else { head };
+        self.because = None;
+        self.xref = Some(head.to_ascii_uppercase());
+        self.frame_lit = true;
+    }
+
+    /// The source line that declares the program's variable `name`.
+    #[must_use]
+    pub fn declared_line(&self, name: &str) -> Option<u32> {
+        let head = name.split(['.', '[']).next()?.to_ascii_uppercase();
+        self.module.program()?.vars.get(&head).map(|v| v.line)
     }
 
     #[cfg(test)]
@@ -3839,7 +3826,7 @@ END_PROGRAM
         NodeKind::Write { path: path.into() }
     }
 
-    /// The cards (`output_cards`): the program's outputs, each with the
+    /// The cards (`io_cards`): the program's outputs, each with the
     /// signals it finally depends on; a latch does not list itself.
     #[test]
     fn the_cards_are_the_outputs_with_the_signals_that_set_them() {

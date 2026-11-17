@@ -6899,6 +6899,7 @@ mod chat_about;
 mod device_io;
 mod diagram_edit;
 mod front;
+mod io_cards;
 mod io_names;
 mod layouts;
 mod outputs;

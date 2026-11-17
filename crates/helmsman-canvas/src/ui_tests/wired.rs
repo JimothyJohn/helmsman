@@ -134,10 +134,18 @@ fn the_playground_io_tab_says_what_is_wired_inside_the_default_width() {
     h.press("tab io");
     h.wait(0.3);
     let tab = h.rect("tab io");
-    // The latch's inputs are on the diagram's blocks, so the tab lists
-    // only its output; a point's line uses the program's name for it.
+    // Every point has a card, and its second line says what it is in
+    // the real world: what is wired to it. The line is named for the
+    // program's point.
     assert!(h.has("wired MOTOR"), "the line under the output");
-    assert!(!h.has("wired STOP"));
+    assert!(
+        h.has("wired START"),
+        "and under the input, which has a card of its own now"
+    );
+    assert!(
+        !h.has("wired STOP"),
+        "nothing wired and no device declared: no line"
+    );
     // The playground has no box: what its own reading of the library found.
     h.app
         .sim
@@ -147,15 +155,27 @@ fn the_playground_io_tab_says_what_is_wired_inside_the_default_width() {
         .wired
         .insert("ifm/if6123".into(), long_brief());
     h.wait(0.3);
-    let line = h.rect("wired MOTOR");
     let edge = h.size.x - crate::editor::RIGHT_W;
+    let line = h.rect("wired MOTOR");
     assert!(
         line.left() >= edge - 8.0 && line.right() <= h.size.x,
         "the line {line:?} stays in the pane's {} pt default width",
         crate::editor::RIGHT_W
     );
+    assert!(line.height() < 30.0, "one line on the card, cut short: {line:?}");
+    // The card's details say it in full.
+    let at = line.center();
+    h.click(at);
+    h.click(at);
+    h.wait(0.3);
+    let line = h.rect("wired MOTOR");
     assert!(
-        line.height() < 90.0,
+        line.left() >= edge - 8.0 && line.right() <= h.size.x,
+        "the open line {line:?} stays in the pane's {} pt default width",
+        crate::editor::RIGHT_W
+    );
+    assert!(
+        line.height() < 120.0,
         "it wraps in words, not a letter a line: {line:?}"
     );
     assert!(line.height() > 25.0, "the long name wraps: {line:?}");

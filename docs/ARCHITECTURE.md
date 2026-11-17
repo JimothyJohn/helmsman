@@ -2896,22 +2896,52 @@ canvas" at the end of this section.
   are not sources. Inputs, then kept, then blocks, each in source order
   of first read; each variable is visited once, so cycles end. Contract:
   `tests/signals.rs`.
-- **Output cards** (`output_cards.rs`, `Viewer::output_cards`): one card
-  per `VAR_OUTPUT` (set or not) and located output the program sets, in
-  declaration order. A card is a framed block, one to a row at the
-  panel's width: the lamp or value and the name, then wrapped chips in
-  three groups (driven by: signals read from outside; kept: state the
-  program carries; timer, counter: block instances), each chip with its
-  own tooltip. The whole card is the tap target and the tapped one is
-  shown selected while its path is lit. They are the outputs of the I/O
-  tab, in the simulation and on a box. A tap calls `Viewer::show_output`: the program's diagram opens,
-  the "because" variable is the output (what a click on its write
-  gives) and the next frame eases the view (`Cam::frame_within`, the Q/E
-  jump's padding, never closer than the current zoom) to frame the lit
-  blocks of the diagram shown, so a write inside a closed fold frames and
-  lights the fold, which stays closed. Cards never widen the panel: rows
-  wrap, widths are capped, 12 pt for the scroll bar
-  (`ui_tests/outputs.rs`, 50 outputs with long names).
+- **I/O cards** (`io_cards.rs`, `Viewer::output_cards`): the I/O tab,
+  the same in the simulation and on a box. One card per input and per
+  output (every `VAR_OUTPUT`, set or not, and located output the program
+  sets, in declaration order; on a box, the map's signals too). A card
+  says three things: the point (an input's control in the simulation,
+  else the lamp or value and the name), what it is in the real world
+  (`io_cards::real`: the device the library says is wired to it and the
+  channel it is on; no line for a point that is only simulated), and its
+  part in the control scheme from the diagram alone (`io_cards::summary`:
+  the first signal that drives an output, the first output an input
+  affects by `io_cards::affects`, and "…" when there are more). A
+  double-click on the card or a click on the "…" opens its details in
+  place: every source as chips in three groups (driven by: signals read
+  from outside; timer, counter: block instances; kept: state the program
+  carries), the wiring in full, how often the code names it, and for a
+  simulated input "Simulate…" (the popup a double-click on its diagram
+  block opens). Two glyphs at the card's right go to the point. `< >`
+  opens the file that declares it with the find box on its name as a
+  whole name (`Find::name`, `find::names`: `start` never matches
+  `start_button`), the first place selected; pressed again it steps to
+  the next, as Ctrl G does, within the open file. The diagram glyph calls
+  `Viewer::show_signal`: every block that reads or writes the point is
+  lit as Cross references lights them and framed, with no scan needed, so
+  it works while the program is stopped. A tap on an output's card still
+  calls `Viewer::show_output`: the program's diagram opens, the "because"
+  variable is the output (what a click on its write gives) and the next
+  frame eases the view (`Cam::frame_within`, the Q/E jump's padding, never
+  closer than the current zoom) to frame the lit blocks of the diagram
+  shown, so a write inside a closed fold frames and lights the fold, which
+  stays closed. The list and grid glyphs at the tab's top switch between
+  one card to a row and tiles (`io_cards::lay`, `tiles`: the first line
+  alone, as many columns as fit at 96 pt; the details of an open tile go
+  under the grid), and the arrow of the Inputs and Outputs headings folds
+  each section; `Chrome` remembers all three (`iogrid`, `iofold`). Every
+  input has a card whether or not its block is on the diagram, so a push
+  button can be drawn twice: both report to `PlaygroundView::hold` and the
+  input is on while either is held. A right-click on a card offers "Chat
+  about this" (`assign_ui::row_menu`, `chat_about_signal`: a chip for the
+  point on the Agent tab, nothing sent) above the port's assignment
+  items. The card takes clicks where it was
+  drawn the frame before, so its control and glyphs, drawn after, are in
+  front of it. Cards never widen the panel: lines are cut or wrapped to
+  the column, a number input drops its slider under 150 pt, 12 pt is left
+  for the scroll bar (`ui_tests/io_cards.rs`, `ui_tests/outputs.rs`: 40
+  inputs and 50 outputs with long names, in the list, the grid and with
+  details open).
 - **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from

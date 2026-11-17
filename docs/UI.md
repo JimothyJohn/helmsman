@@ -330,13 +330,19 @@ this; change it here first when a decision changes.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
-- **Outputs as cards (2026-11-16, `output_cards.rs`):** the outputs in the
-  I/O tab are one card each, not a fold on the diagram (an output's logic
-  is spread over statements that are not next to each other): name, live
-  value and "driven by" the signals it finally depends on, as wrapped
-  chips; an output nothing sets says so. A tap goes to the diagram with
-  that output's path lit, framed as the Q/E jump frames, no closer than the
-  current zoom. The diagram stays in source order.
+- **I/O as cards (2026-11-16, `io_cards.rs`):** every input and output
+  in the I/O tab is one card, not a fold on the diagram (an output's logic
+  is spread over statements that are not next to each other). Nick,
+  2026-11-16: "You just need to know their name, what triggers them in the
+  real-world, and what the influence in the control scheme." So a card has
+  the point, one line for what is wired to it, and one line for the first
+  thing that drives it or that it affects, with "…" when there are more.
+  A double-click opens the rest in place. The `< >` glyph finds the point
+  in the code and steps through its uses; the diagram glyph lights and
+  frames its blocks, running or not. A tap on an output lights the path
+  that sets it, framed as the Q/E jump frames, no closer than the current
+  zoom. List or tiles at the top; Inputs and Outputs fold behind their
+  arrows. The diagram stays in source order.
 - **Assign to device I/O (2026-11-15, `assign.rs`, `assign_ui.rs`):** a
   program's inputs and outputs start on simulated or on-screen I/O
   (`in start bool box di:0`, `out speed int screen speed safe=0`). A device

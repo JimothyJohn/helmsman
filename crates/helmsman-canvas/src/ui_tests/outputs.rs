@@ -1,4 +1,4 @@
-//! The outputs as cards in the I/O tab (`crate::output_cards`): inside the
+//! The outputs as cards in the I/O tab (`crate::io_cards`): inside the
 //! pane's default width however many there are and however long their
 //! names, and a tap lights the output's path on the diagram.
 

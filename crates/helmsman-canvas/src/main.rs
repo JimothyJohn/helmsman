@@ -88,6 +88,7 @@ mod icons;
 mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;
+mod io_cards;
 mod io_names;
 mod jump;
 mod lamps;
@@ -100,7 +101,6 @@ mod monitor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod node_api_tests;
 mod node_token;
-mod output_cards;
 mod pane_layout;
 #[cfg(test)]
 mod pane_layout_tests;
