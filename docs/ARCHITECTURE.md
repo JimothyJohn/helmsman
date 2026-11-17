@@ -974,7 +974,36 @@ the files spell them). When the instruction is sent the chips go with it as
 one `<chat_about>` envelope after `<requirement_tests>`
 (`chat_about::envelope`, defanged with the other envelopes, which now
 include `chat_about`), stay in the retries of that instruction, and are
-then empty. A block's lines are placed through the project's `locate`
+then empty.
+
+Selecting blocks (Nick, 2026-11-16, `ui_tests/multi_select.rs`) is the
+other way to point. `Viewer` keeps a selection beside `pick`: blocks of
+the diagram (a fold drawn as one block selects all it holds), cleared with
+`pick` on a new scope or a fold change and gone with the viewer when the
+source changes. A primary drag that starts on empty space (not on a block,
+a region's label or an input pin) draws a rubber band; on release the
+blocks it touches replace the selection, or join it with Shift or
+Ctrl/Cmd held. Shift or Ctrl/Cmd and a click toggles a block and does not
+pick it; a plain click on empty space and Esc clear the selection (a plain
+click on a block picks it and keeps it). Esc is left alone while a menu or
+popup, a note, a modal or a field with focus has it (`Viewer::menu_open`,
+set by the host, plus egui's own state at this and the last frame, since
+panels drawn before the diagram let go of their focus first). The view no
+longer pans by dragging empty space: a middle-button drag, or any drag
+with Space held, does, and the arrow keys and W A S D as before (the wheel
+zooms). The selection is the Agent's focus: each frame the host makes
+`Instruct::focus` (`chat_about::focus_of`, kept while the selection, the
+collected chips and the diagram text are what it was made for) one chip
+per selected statement, none that is collected already, as many as
+`MAX_CHIPS` leaves after the collected ones, with `more` counting the
+statements left out. They are drawn after the collected chips in the
+selection's blue, their x deselects (`Focus::off`, taken by
+`chat_about::apply_off`), and an instruction carries them in the same
+envelope, which says how many more are selected and not included. The
+selection stays through the send. Selecting changes no tab and sends
+nothing.
+
+A block's lines are placed through the project's `locate`
 only while the diagram is of the deployed text; on a box, through the
 build's `(* file *)` headers when that project is the one running, else
 the one program file that is the running source.

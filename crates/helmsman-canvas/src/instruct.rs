@@ -358,6 +358,10 @@ pub struct Instruct {
     /// Things collected with "Chat about this" for the next instruction
     /// ([`crate::chat_about`]); they go with it and are then empty.
     pub chips: Vec<crate::chat_about::Chip>,
+    /// The blocks selected in the diagram, as chips beside those: made
+    /// from the selection each frame by the owner, gone when it is. They
+    /// go with an instruction too, and the selection stays.
+    pub focus: crate::chat_about::Focus,
     /// The `<chat_about>` envelope the instruction under way went with,
     /// for the messages after its first (a retry, an answer to a
     /// question).
@@ -456,7 +460,10 @@ impl Instruct {
         self.about = if spec {
             String::new()
         } else {
-            let about = crate::chat_about::envelope(&self.chips);
+            let mut all = self.chips.clone();
+            all.extend(self.focus.chips.iter().cloned());
+            all.truncate(crate::chat_about::MAX_CHIPS);
+            let about = crate::chat_about::envelope(&all, self.focus.more);
             self.chips.clear();
             about
         };
@@ -1811,7 +1818,7 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
     /// gap to the x, the x.
     const FRAME: f32 = 8.0 + 2.0 + 4.0 + X_W + 2.0;
 
-    if s.chips.is_empty() {
+    if s.chips.is_empty() && s.focus.chips.is_empty() && s.focus.more == 0 {
         return;
     }
     let t = crate::theme::theme(ui);
@@ -1820,11 +1827,19 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
     let font = egui::FontId::proportional(crate::theme::BODY);
     let busy = s.busy();
     let mut gone = None;
+    let mut off = None;
+    let held = s.chips.len();
+    let chips: Vec<(&crate::chat_about::Chip, bool)> = s
+        .chips
+        .iter()
+        .map(|c| (c, false))
+        .chain(s.focus.chips.iter().map(|c| (c, true)))
+        .collect();
     // The row is wrapped by hand: a frame is not one widget, so egui lets
     // it run past the end of the row, and the panel grows to follow.
     let mut used = 0.0_f32;
     ui.horizontal_wrapped(|ui| {
-        for (k, c) in s.chips.iter().enumerate() {
+        for (k, (c, selected)) in chips.iter().copied().enumerate() {
             let text = c.label();
             let wanted = ui
                 .fonts_mut(|f| f.layout_no_wrap(text.clone(), font.clone(), t.fg))
@@ -1837,7 +1852,11 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
                 used = 0.0;
             }
             used += if used > 0.0 { gap + w } else { w };
-            egui::Frame::group(ui.style()).inner_margin(4.0).show(ui, |ui| {
+            let mut frame = egui::Frame::group(ui.style()).inner_margin(4.0);
+            if selected {
+                frame = frame.stroke(egui::Stroke::new(1.5, crate::st_view::brand::SELECT));
+            }
+            frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let r = ui
@@ -1849,28 +1868,61 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
                             )
                         })
                         .inner
-                        .tip(format!(
-                            "{} Collected with Chat about this; it goes with the next instruction.",
-                            c.tip()
-                        ));
+                        .tip(if selected {
+                            format!(
+                                "{} Selected in the diagram; it goes with the next instruction. Its x, a click on empty space or Esc deselects it.",
+                                c.tip()
+                            )
+                        } else {
+                            format!(
+                                "{} Collected with Chat about this; it goes with the next instruction.",
+                                c.tip()
+                            )
+                        });
                     chrome.hit(format!("chat chip {k}"), r.rect);
                     let x = ui
                         .add_enabled(
-                            !busy,
+                            !busy || selected,
                             egui::Button::new(RichText::new("x").size(crate::theme::BODY))
                                 .min_size(egui::vec2(X_W, 0.0)),
                         )
-                        .tip(format!("Takes {text} off the instruction."));
+                        .tip(if selected {
+                            format!("Deselects {text} in the diagram.")
+                        } else {
+                            format!("Takes {text} off the instruction.")
+                        });
                     chrome.hit(format!("chat chip {k} remove"), x.rect);
                     if x.clicked() {
-                        gone = Some(k);
+                        if selected {
+                            off = Some(k - held);
+                        } else {
+                            gone = Some(k);
+                        }
                     }
                 });
             });
         }
     });
+    if s.focus.more > 0 {
+        let n = s.focus.more;
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "{n} more selected, not included: {} are carried at most.",
+                    crate::chat_about::MAX_CHIPS
+                ))
+                .size(crate::theme::BODY)
+                .color(t.muted),
+            )
+            .wrap(),
+        )
+        .tip("The Agent is asked about at most eight things at once. Deselect some, or send this instruction and the rest come next.");
+    }
     if let Some(k) = gone {
         s.remove_chip(k);
+    }
+    if let Some(k) = off {
+        s.focus.take_off(k);
     }
 }
 
@@ -1893,6 +1945,9 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
         .outcome
         .as_ref()
         .is_some_and(|o| matches!(o.kind, Kind::Refused | Kind::Failed));
+    // The chips take their rows first (the selection can fill several),
+    // so the box is what the tab has left.
+    chips_ui(ui, chrome, s);
     // The box takes the tab's height, less one row of buttons, one of
     // status and what the owner draws under it.
     let row = ui.spacing().interact_size.y;
@@ -1910,7 +1965,6 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
          Enter sends; Shift+Enter or Ctrl+Enter starts a new line and goes on with a list \
          (- , * or 1. ); Tab indents."
     );
-    chips_ui(ui, chrome, s);
     let hint = format!("What should {target} do? e.g. Latch the lamp until stop");
     let (field, enter) = if let Some(run) = &s.run {
         // While it works the box shows what was sent, and takes no typing.
