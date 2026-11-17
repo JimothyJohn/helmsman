@@ -220,6 +220,12 @@ pub struct PlaygroundView {
     /// The question that goes with the instruction under way or just
     /// done.
     pub card: Option<crate::ask::Card>,
+    /// The I/O tab's field for a start state in words, and its own way to
+    /// the relay (`crate::start_state`): it never shares the question
+    /// card's link, so neither drops the other's answer.
+    pub start: crate::start_state::Card,
+    pub start_link: Link,
+    start_answer: crate::claude::Side,
     /// A change that passed its checks and waits to be compared with the
     /// engineer's answer, and when that was asked (page time, s).
     held: Option<(crate::instruct::Apply, f64)>,
@@ -333,6 +339,9 @@ impl PlaygroundView {
             side: Link::default(),
             side_answer: crate::claude::Side::default(),
             card: None,
+            start: crate::start_state::Card::default(),
+            start_link: Link::default(),
+            start_answer: crate::claude::Side::default(),
             held: None,
             fallback: None,
             asked_at: 0.0,
@@ -1324,6 +1333,242 @@ impl PlaygroundView {
             }
         }
         self.tidy_question();
+    }
+
+    /// Whether the I/O tab offers a start state in words: only on the free
+    /// chat whose status lists the `start` agent (a page that cannot ask
+    /// it shows no field).
+    #[must_use]
+    pub fn offers_start(&self) -> bool {
+        self.session.build.is_some() && self.chat.serves(crate::start_state::AGENT)
+    }
+
+    /// Sends the field's words to the relay's `start` agent with the
+    /// program's inputs. Not while the program runs.
+    fn start_send(&mut self, ctx: &egui::Context) {
+        if self.session.running
+            || self.start.draft.trim().is_empty()
+            || self.start.phase != crate::start_state::Phase::Idle
+            || !self.offers_start()
+        {
+            return;
+        }
+        let Ok(route) = self.chat.route() else { return };
+        let inputs: Vec<Point> = self.session.inputs().cloned().collect();
+        let message = crate::start_state::message(&self.start.draft, &inputs);
+        let turn = self.chat.takes.allow(crate::claude::Turn {
+            agent: Some(crate::start_state::AGENT),
+            quick: false,
+        });
+        let req = crate::claude::request_turn(&route, self.chat.model, &[], &message, turn);
+        let seq = self.start_answer.start();
+        self.start_link.send(seq, req, ctx);
+        self.start.asked();
+    }
+
+    /// Stops the request, or drops what it proposed.
+    fn start_stop(&mut self) {
+        self.start_answer.stop();
+        self.start_link.abort();
+        self.start.stopped();
+    }
+
+    /// The request's answer, once it is whole; a proposal made for a
+    /// program that has since changed goes; so does anything under way
+    /// once the program runs (an Agent never moves a running machine).
+    fn start_settle(&mut self, ctx: &egui::Context) {
+        use crate::start_state::Phase;
+        for m in self.start_link.drain() {
+            self.start_answer.receive(m);
+        }
+        if self.session.running && self.start.phase == Phase::Working {
+            self.start_stop();
+            self.start.line = Some("The program started, so the request was dropped.".into());
+        }
+        if let Some(done) = self.start_answer.take() {
+            if self.start.phase == Phase::Working {
+                let inputs: Vec<Point> = self.session.inputs().cloned().collect();
+                let src = self.session.src.clone();
+                self.start
+                    .answered(done.as_deref().map_err(String::as_str), &src, &inputs);
+            }
+        } else if self.start.phase == Phase::Working {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        if matches!(&self.start.phase, Phase::Proposed(p) if p.program != self.session.src) {
+            self.start.stopped();
+            self.start.line = Some("The program changed, so the proposal was dropped.".into());
+        }
+    }
+
+    /// Sets what the Agent proposed, each value as set by hand, if the
+    /// program is still not running and still the text it was made for.
+    fn start_accept(&mut self) {
+        let src = self.session.src.clone();
+        let set: Vec<(String, Value)> = match self.start.accept(self.session.running, &src) {
+            Ok(p) => p.changes.iter().map(|c| (c.name.clone(), c.new)).collect(),
+            Err(why) => {
+                self.start.line = Some(why);
+                return;
+            }
+        };
+        let n = set.len();
+        for (name, v) in set {
+            self.set_by_hand(&name, v);
+        }
+        self.start.stopped();
+        self.start.draft.clear();
+        self.start.line = Some(format!("Set {n} input{}.", if n == 1 { "" } else { "s" }));
+    }
+
+    /// The start-state field above the Inputs, and under it the working
+    /// state, the quiet line or the proposal. Every row wraps and is
+    /// capped to the tab's width, with 12 pt left for the scroll bar.
+    fn start_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        use crate::start_state::Phase;
+        if !self.offers_start() {
+            return;
+        }
+        let t = theme(ui);
+        let running = self.session.running;
+        let working = self.start.phase == Phase::Working;
+        let width = (ui.available_width() - 12.0).max(120.0);
+        ui.set_max_width(width);
+        let mut send = false;
+        let mut stop = false;
+        let glyph = crate::st_view::TAP * 1.5;
+        ui.horizontal(|ui| {
+            let field_w = (width - glyph - ui.spacing().item_spacing.x - 4.0).max(80.0);
+            let tip = if running {
+                "Stop the program first: an Agent never changes the inputs of a running machine."
+            } else {
+                "Describe the state the machine should start in, in your own words, for example \
+                 part seated, guard open, speed 40. The Agent answers with input values as a \
+                 proposal; nothing is set until you accept it. Enter sends."
+            };
+            let out = ui.add_enabled_ui(!running && !working, |ui| {
+                egui::TextEdit::singleline(&mut self.start.draft)
+                    .id_salt("start-state")
+                    .hint_text("Describe a start state…")
+                    .char_limit(crate::start_state::MAX_DESCRIPTION)
+                    .desired_width(field_w)
+                    .show(ui)
+                    .tip(tip)
+            });
+            let field = out.inner;
+            chrome.hit("start field", field.response.response.rect);
+            let enter = field.response.response.lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if working {
+                let r = crate::glyphs::action(ui, crate::glyphs::Icon::Stop, true, false)
+                    .tip("Stop: drops the request. Nothing is set.");
+                chrome.hit("start stop", r.rect);
+                stop = r.clicked();
+            } else {
+                let why_not = if running {
+                    Some("Stop the program first: an Agent never changes the inputs of a running machine.")
+                } else if self.start.draft.trim().is_empty() {
+                    Some("Write a start state first.")
+                } else {
+                    None
+                };
+                let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true).tip(
+                    why_not.unwrap_or(
+                        "Send: asks the Agent for input values that match this description. They are shown as a proposal first.",
+                    ),
+                );
+                chrome.hit("start send", r.rect);
+                send = (r.clicked() || enter) && why_not.is_none();
+            }
+        });
+        if working {
+            let r = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new("Working…")
+                            .color(t.muted)
+                            .size(crate::theme::MIN_TEXT),
+                    )
+                    .wrap(),
+                )
+                .tip("The Agent is reading your description. Stop it with the square beside the field.");
+            chrome.hit("start working", r.rect);
+        }
+        if let Some(line) = self.start.line.clone() {
+            let r = ui
+                .add(egui::Label::new(RichText::new(line).color(t.muted).size(crate::theme::MIN_TEXT)).wrap())
+                .tip("What happened to your description. Nothing was set.");
+            chrome.hit("start line", r.rect);
+        }
+        let mut accept = false;
+        let mut discard = false;
+        if let Phase::Proposed(p) = &self.start.phase {
+            let frame = egui::Frame::new()
+                .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
+                .corner_radius(4.0)
+                .inner_margin(6.0);
+            let r = frame
+                .show(ui, |ui| {
+                    ui.set_width(width - 14.0);
+                    let r = ui
+                        .add(
+                            egui::Label::new(
+                                RichText::new("The Agent proposes these start values:")
+                                    .strong()
+                                    .size(crate::theme::MIN_TEXT),
+                            )
+                            .wrap(),
+                        )
+                        .tip("Nothing is set yet. Set these puts every value below into its input, as if you had set it by hand.");
+                    chrome.hit("start proposal", r.rect);
+                    egui::ScrollArea::vertical()
+                        .id_salt("start-proposal")
+                        .max_height(160.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.set_max_width(ui.available_width() - 12.0);
+                            for c in &p.changes {
+                                let line = format!(
+                                    "{}: {} → {}",
+                                    c.name,
+                                    show(c.ty, c.old),
+                                    show(c.ty, c.new)
+                                );
+                                ui.add(egui::Label::new(RichText::new(line).size(crate::theme::MIN_TEXT)).wrap())
+                                    .tip("An input the Agent would change: now → proposed.");
+                            }
+                        });
+                    ui.horizontal_wrapped(|ui| {
+                        let go = ui
+                            .add_enabled(
+                                !running,
+                                egui::Button::new(RichText::new("Set these").size(crate::theme::MIN_TEXT)),
+                            )
+                            .tip(if running {
+                                "Stop the program first: an Agent never changes the inputs of a running machine."
+                            } else {
+                                "Put these values into the inputs. The program then starts with them."
+                            });
+                        chrome.hit("start set", go.rect);
+                        accept = go.clicked();
+                        let no = ui
+                            .add(egui::Button::new(RichText::new("Discard").size(crate::theme::MIN_TEXT)))
+                            .tip("Drop the proposal. Nothing is set.");
+                        chrome.hit("start discard", no.rect);
+                        discard = no.clicked();
+                    });
+                })
+                .response;
+            chrome.hit("start card", r.rect);
+        }
+        ui.add_space(4.0);
+        if stop || discard {
+            self.start_stop();
+        } else if accept {
+            self.start_accept();
+        } else if send {
+            self.start_send(&ui.ctx().clone());
+        }
     }
 
     /// A card with nothing on it, and one nobody answered once its
@@ -2676,6 +2921,7 @@ impl PlaygroundView {
         }
         self.drop_run_of_another_project();
         self.side_settle(ctx);
+        self.start_settle(ctx);
         self.settle(ctx);
         self.tidy_question();
         let t = ctx.input(|i| i.time);
@@ -3325,6 +3571,8 @@ impl PlaygroundView {
         }
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
         let outputs: Vec<Point> = self.session.outputs().cloned().collect();
+        // Above the cards, not among them: it keeps its place while they scroll.
+        self.start_ui(ui, chrome);
         // What is wired to each point, from io.map and the library; where
         // each port is, and what a right-click on its row offers.
         self.assign_context();
