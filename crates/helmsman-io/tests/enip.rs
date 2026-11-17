@@ -1184,3 +1184,22 @@ fn a_size_refusal_that_is_not_the_header_stays_a_refusal() {
     }
     assert_eq!(lock_ref(&s.device()).connections().len(), 0);
 }
+
+/// A link on a port of its own asks the device, in the `Forward_Open`, to
+/// send its inputs there. A Murrelektronik IMPACT67 E and a Novanta
+/// MDrive ignore that and send to UDP 2222 (2026-11-16); the link then
+/// sees an open connection with no data, and its error says what to look
+/// at.
+#[test]
+fn no_data_on_a_port_of_the_links_own_names_the_port() {
+    let s = E1213Sim::start().unwrap();
+    s.inject(Fault::Silent);
+    let mut d = driver(&s);
+    let e = read(&mut d, "di:0").unwrap_err();
+    let text = e.to_string();
+    assert!(
+        e.is_link() && text.contains("no T->O data within") && text.contains("to UDP 2222 whatever port"),
+        "{text}"
+    );
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0, "closed again");
+}

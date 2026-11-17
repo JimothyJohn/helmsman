@@ -64,6 +64,9 @@
 //! or with `io_port=N`, the link binds a port of its own (2222 by
 //! default). Devices send T->O to 2222 unless told otherwise, so off 2222
 //! the `Forward_Open` carries a T->O socket-address item naming the port.
+//! Not every device reads it: a Murrelektronik IMPACT67 E and a Novanta
+//! MDrive send to 2222 regardless, and a link on another port then gets
+//! no data, which its error says.
 //!
 //! # Points
 //!
@@ -1111,10 +1114,22 @@ mod driver {
                 drop(io);
                 let _ = closer.send(&mut session);
                 session.close();
+                // Off 2222 the Forward_Open names the port in a T->O
+                // socket-address item, which devices are free to ignore:
+                // a Murrelektronik IMPACT67 E and a Novanta MDrive both
+                // send to 2222 whatever it says (2026-11-16).
+                let port = endpoint.local_addr().port();
+                let hint = if port == IO_PORT {
+                    String::new()
+                } else {
+                    format!(
+                        " on UDP {port}: the device may send its inputs to UDP {IO_PORT} whatever port it is asked for"
+                    )
+                };
                 return Err(Error::Io(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!(
-                        "connection opened, but no T->O data within {} ms",
+                        "connection opened, but no T->O data within {} ms{hint}",
                         timeout.as_millis()
                     ),
                 )));
