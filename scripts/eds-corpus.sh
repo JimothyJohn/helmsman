@@ -13,6 +13,9 @@
 #     ../helmsman-devices/cache/sha256/<its hash>, where
 #     scripts/docs-fetch.py puts it). No licence text, so never committed.
 #     Without it that half is skipped.
+#   - Murrelektronik's two EDS files for the IMPACT67 E DIO8 (art. no.
+#     55089), from the same store ($IMPACT67_EDS_DIR to look elsewhere).
+#     Without them that half is skipped.
 # Provenance in docs/SOURCES.md ("Device sources"). Data only: nothing in them
 # is executed.
 #
@@ -23,6 +26,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 corpus="${HELMSMAN_EDS_CORPUS:-$PWD/target/eds-corpus}"
+# The device library's checkout sits beside the main checkout of this
+# repository, which a worktree under .claude/worktrees/ is three levels
+# below: ask git where the main checkout is.
+library="$(cd "$(git rev-parse --git-common-dir)/../.." && pwd)/helmsman-devices"
 mkdir -p "$corpus"
 
 sha256() {
@@ -62,7 +69,7 @@ else
   echo "no E1213 EDS at $src (set E1213_EDS=PATH): checking OpENer's only" >&2
 fi
 
-src="${MDRIVE_EDS:-$PWD/../helmsman-devices/cache/sha256/$mdrive_sha}"
+src="${MDRIVE_EDS:-$library/cache/sha256/$mdrive_sha}"
 if [ -f "$src" ]; then
   got="$(sha256 "$src")"
   if [ "$got" != "$mdrive_sha" ]; then
@@ -74,5 +81,25 @@ if [ -f "$src" ]; then
 else
   echo "no MDrive EDS at $src (set MDRIVE_EDS=PATH): skipping it" >&2
 fi
+
+# name:sha256, as the vendor names them.
+for entry in \
+  55089_Impact67_E_DIO16.eds:6eb94568f8b5fc73420611ac1633073da2c6e8cda75d81593bd73631807bef3d \
+  55089_Impact67_E_DIO16_Omron.eds:2320dbc1dded11586c969412e8e0e11182c010325a598af4bd823fc4c1c1f225; do
+  name="${entry%%:*}"
+  want="${entry##*:}"
+  src="${IMPACT67_EDS_DIR:-$library/cache/sha256}/$want"
+  [ -f "$src" ] || src="${IMPACT67_EDS_DIR:-$library/scratch}/$name"
+  if [ -f "$src" ]; then
+    got="$(sha256 "$src")"
+    if [ "$got" != "$want" ]; then
+      echo "$src: SHA-256 $got, want $want" >&2
+      exit 1
+    fi
+    cp "$src" "$corpus/$name"
+  else
+    echo "no $name (set IMPACT67_EDS_DIR=DIR): skipping it" >&2
+  fi
+done
 
 HELMSMAN_EDS_CORPUS="$corpus" cargo test --locked -p helmsman-io --test eds_corpus -- --nocapture

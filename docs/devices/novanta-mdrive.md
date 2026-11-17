@@ -135,8 +135,10 @@ disabled, read back over MCode:
 | 20..23 | SL: 5000 gave `PR V` 5000 and 5000 steps/s of position; 0 stopped |
 | 19, 32.. | changed OT, R1 and EF; not worked out |
 
-So the mapping is either changed on this unit or not what the manual
-prints for this firmware. Until it is read from the Configuration
+The mapping had been changed on this unit before it reached the bench
+(Nick, 2026-11-17), and nothing the drive says over EtherNet/IP shows
+it. So the manual's table is still unchecked on a drive as delivered.
+Until the mapping is reset or read from the Configuration
 Utility (TODO.md `mdrive-assembly-mapping`), the only output fields to
 rely on are byte 17 and bytes 20..23, and an image built from the
 manual's table must not be sent: the first one that was (acceleration,
