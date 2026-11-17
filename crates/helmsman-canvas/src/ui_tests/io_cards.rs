@@ -288,3 +288,27 @@ fn a_push_button_held_in_the_tab_stays_on_while_its_block_is_on_the_diagram() {
         "released"
     );
 }
+
+#[test]
+fn a_right_click_on_a_card_chats_about_its_point_and_sends_nothing() {
+    let mut h = sim_with(MIXER);
+    for (card, name) in [("io card stop", "stop"), ("io card start_button", "start_button")] {
+        h.wait(1.0);
+        let r = h.rect(card);
+        h.right_click(eframe::egui::pos2(r.center().x, r.bottom() - 8.0));
+        h.wait(0.2);
+        h.press("menu chat about");
+        h.wait(0.3);
+        let v = h.app.sim.as_ref().unwrap();
+        assert!(
+            v.instruct.chips.iter().any(|c| c.name.eq_ignore_ascii_case(name)),
+            "a chip for {name}: {:?}",
+            v.instruct.chips
+        );
+        assert!(!v.instruct.busy(), "nothing is sent");
+        assert!(h.app.chrome.showing(Pane::Claude), "the Agent tab is showing");
+        h.press("tab io");
+        h.wait(0.3);
+    }
+    assert_eq!(h.app.sim.as_ref().unwrap().instruct.chips.len(), 2);
+}

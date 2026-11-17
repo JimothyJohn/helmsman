@@ -2932,7 +2932,10 @@ canvas" at the end of this section.
   each section; `Chrome` remembers all three (`iogrid`, `iofold`). Every
   input has a card whether or not its block is on the diagram, so a push
   button can be drawn twice: both report to `PlaygroundView::hold` and the
-  input is on while either is held. The card takes clicks where it was
+  input is on while either is held. A right-click on a card offers "Chat
+  about this" (`assign_ui::row_menu`, `chat_about_signal`: a chip for the
+  point on the Agent tab, nothing sent) above the port's assignment
+  items. The card takes clicks where it was
   drawn the frame before, so its control and glyphs, drawn after, are in
   front of it. Cards never widen the panel: lines are cut or wrapped to
   the column, a number input drops its slider under 150 pt, 12 pt is left

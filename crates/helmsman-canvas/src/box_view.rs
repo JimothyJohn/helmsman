@@ -1297,8 +1297,6 @@ impl BoxView {
     /// "Chat about this" on the input, output or variable `name`: a chip
     /// for it (its declaration, else its first use, as the place) on the
     /// Agent tab, and the tab shown. Nothing is sent.
-    // The I/O rows' right-click menu calls this once the I/O tab's rewrite lands.
-    #[allow(dead_code)]
     pub fn chat_about_signal(&mut self, name: &str, chrome: &mut Chrome) {
         let chip = self.agent_files().and_then(|(_, _, files)| {
             let diagrams: Vec<&helmsman_diagram::Diagram> = self
@@ -2889,6 +2887,10 @@ impl Body for BoxView {
         let menus = self.devices_ui.port_menus(&self.assign_write());
         let map = self.devices_ui.map.clone();
         let mut asks: Vec<(String, crate::assign_ui::PortAsk)> = Vec::new();
+        let mut chat = crate::assign_ui::RowChat {
+            full: self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS,
+            asked: Vec::new(),
+        };
         let known = &self.devices_ui.wired;
         // What the diagram says of each point; nothing while there is none.
         let cards = self.view.as_ref().map(Viewer::output_cards);
@@ -3036,7 +3038,7 @@ impl Body for BoxView {
                                     &text,
                                 );
                             });
-                            crate::assign_ui::row_menu(&card, chrome, &menus, name, &mut asks);
+                            crate::assign_ui::row_menu(&card, chrome, &menus, name, &mut asks, &mut chat);
                             asked.push((name.clone(), input, a));
                         },
                     );
@@ -3049,6 +3051,9 @@ impl Body for BoxView {
         });
         for (name, input, a) in asked {
             self.io_asked(&name, input, a, chrome);
+        }
+        for name in chat.asked {
+            self.chat_about_signal(&name, chrome);
         }
         for (port, ask) in asks {
             self.assign_ask(port, ask);

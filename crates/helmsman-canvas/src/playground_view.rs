@@ -1753,8 +1753,6 @@ impl PlaygroundView {
     /// "Chat about this" on the input, output or variable `name`: a chip
     /// for it (its declaration, else its first use, as the place) on the
     /// Agent tab, and the tab shown. Nothing is sent.
-    // The I/O rows' right-click menu calls this once the I/O tab's rewrite lands.
-    #[allow(dead_code)]
     pub fn chat_about_signal(&mut self, name: &str, chrome: &mut Chrome) {
         let chip = {
             let diagrams: Vec<&helmsman_diagram::Diagram> = self
@@ -3263,6 +3261,10 @@ impl PlaygroundView {
         let menus = self.devices_ui.port_menus(&self.assign_write());
         let map = self.devices_ui.map.clone();
         let mut asks: Vec<(String, crate::assign_ui::PortAsk)> = Vec::new();
+        let mut chat = crate::assign_ui::RowChat {
+            full: self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS,
+            asked: Vec::new(),
+        };
         // What the diagram says of each point; nothing while there is none.
         let cards = self.viewer.as_ref().map(crate::st_view::Viewer::output_cards);
         let lit = self
@@ -3341,7 +3343,9 @@ impl PlaygroundView {
                                 (_, Some(v)) => set.push((p.name.clone(), v)),
                                 (_, None) => {}
                             }
-                            crate::assign_ui::row_menu(&anchor, chrome, &menus, &p.name, &mut asks);
+                            crate::assign_ui::row_menu(
+                                &anchor, chrome, &menus, &p.name, &mut asks, &mut chat,
+                            );
                             rects.push((p.name.to_ascii_lowercase(), rect));
                             mark_mode(
                                 ui,
@@ -3349,7 +3353,7 @@ impl PlaygroundView {
                                 plant.map_or(helmsman_sim::Mode::Normal, |pl| pl.mode(&p.name)),
                             );
                         }
-                        crate::assign_ui::row_menu(&card, chrome, &menus, &p.name, &mut asks);
+                        crate::assign_ui::row_menu(&card, chrome, &menus, &p.name, &mut asks, &mut chat);
                         asked.push((p.name.clone(), true, a));
                     },
                 );
@@ -3398,7 +3402,7 @@ impl PlaygroundView {
                         let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             output_ui(ui, p, form == Form::Tile);
                         });
-                        crate::assign_ui::row_menu(&card, chrome, &menus, &p.name, &mut asks);
+                        crate::assign_ui::row_menu(&card, chrome, &menus, &p.name, &mut asks, &mut chat);
                         asked.push((p.name.clone(), false, a));
                     },
                 );
@@ -3416,6 +3420,9 @@ impl PlaygroundView {
         }
         for (name, input, a) in asked {
             self.io_asked(&name, input, a, chrome);
+        }
+        for name in chat.asked {
+            self.chat_about_signal(&name, chrome);
         }
         for (port, ask) in asks {
             self.assign_ask(port, ask);

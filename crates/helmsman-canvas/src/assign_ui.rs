@@ -68,23 +68,42 @@ pub fn port_items(ui: &mut egui::Ui, chrome: &mut Chrome, m: &PortMenu) -> Optio
     asked
 }
 
-/// A right-click menu on the row of a program port: `anchor` is what the
-/// row draws, `menus` what each port offers. A choice is pushed on `asks`
-/// as (port, what it asked for). The row is a hit for the tests and the
-/// tour, by its port's name.
+/// "Chat about this" asked on rows of the I/O tab ([`crate::chat_about`]).
+#[derive(Debug, Default)]
+pub struct RowChat {
+    /// As many things are collected as one instruction carries.
+    pub full: bool,
+    /// The points it was chosen on this frame.
+    pub asked: Vec<String>,
+}
+
+/// A right-click menu on a point's row or card in the I/O tab: `anchor`
+/// is what the row draws. It offers "Chat about this" (pushed on `chat`)
+/// and, for a program port, what `menus` holds for it: a choice is pushed
+/// on `asks` as (port, what it asked for). The row is a hit for the tests
+/// and the tour, by its point's name.
 pub fn row_menu(
     anchor: &egui::Response,
     chrome: &mut Chrome,
     menus: &[PortMenu],
     name: &str,
     asks: &mut Vec<(String, PortAsk)>,
+    chat: &mut RowChat,
 ) {
     chrome.hit(format!("io row {}", name.to_ascii_lowercase()), anchor.rect);
-    let Some(m) = menus.iter().find(|m| m.port.eq_ignore_ascii_case(name)) else {
-        return;
-    };
+    let m = menus.iter().find(|m| m.port.eq_ignore_ascii_case(name));
     anchor.context_menu(|ui| {
-        if let Some(a) = port_items(ui, chrome, m) {
+        let tip = if chat.full {
+            crate::chat_about::FULL
+        } else {
+            "Puts this point and where the code declares it in the Agent tab, with what drives it and what it drives. Nothing is sent until you type what to ask and send it."
+        };
+        if crate::devices::menu_item(ui, chrome, "menu chat about", "Chat about this", !chat.full, tip) {
+            chat.asked.push(name.to_string());
+        }
+        if let Some(m) = m
+            && let Some(a) = port_items(ui, chrome, m)
+        {
             asks.push((m.port.clone(), a));
         }
     });
