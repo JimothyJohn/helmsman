@@ -1258,6 +1258,73 @@ impl BoxView {
         }
     }
 
+    /// "Chat about this" on block `n` of the diagram: a chip for it on
+    /// the Agent tab, and the tab shown. Nothing is sent. Only where the
+    /// diagram's lines are the open project's: the project running, or
+    /// the one program file the box runs as it is.
+    pub fn chat_about_node(&mut self, n: helmsman_diagram::NodeId, chrome: &mut Chrome) {
+        let running = self.projects.open.as_ref().map(|o| &o.name) == self.projects.running.as_ref();
+        let chip = self.view.as_ref().and_then(|v| {
+            let (_, _, files) = self.agent_files()?;
+            let src = v.src.trim_end();
+            let single = || {
+                let mut same = files.iter().filter(|(f, t)| {
+                    helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                        && !helmsman_iec::spec::is_test(f)
+                        && t.trim_end() == src
+                });
+                match (same.next(), same.next()) {
+                    (Some((f, _)), None) => Some(f.clone()),
+                    _ => None,
+                }
+            };
+            let locate = |l: u32| match projects::file_line(&v.src, l) {
+                Some(at) => running.then_some(at),
+                None => single().map(|f| (f, l)),
+            };
+            crate::chat_about::of_node(v.diagram(), n, &locate, &files)
+        });
+        self.collect(
+            chip,
+            "That block's statement could not be placed: the diagram is of the project running, deploy the open one first.",
+            chrome,
+        );
+    }
+
+    /// "Chat about this" on the input, output or variable `name`: a chip
+    /// for it (its declaration, else its first use, as the place) on the
+    /// Agent tab, and the tab shown. Nothing is sent.
+    // The I/O rows' right-click menu calls this once the I/O tab's rewrite lands.
+    #[allow(dead_code)]
+    pub fn chat_about_signal(&mut self, name: &str, chrome: &mut Chrome) {
+        let chip = self.agent_files().and_then(|(_, _, files)| {
+            let diagrams: Vec<&helmsman_diagram::Diagram> = self
+                .view
+                .as_ref()
+                .map(|v| v.module.pous.iter().map(|p| &p.diagram).collect())
+                .unwrap_or_default();
+            crate::chat_about::of_signal(name, &files, &diagrams)
+        });
+        self.collect(
+            chip,
+            &format!("{name} is not in the open project's files."),
+            chrome,
+        );
+    }
+
+    /// Takes `chip` for the next instruction and shows the Agent tab, on
+    /// the program side; the notice `missing` when there is none.
+    fn collect(&mut self, chip: Option<crate::chat_about::Chip>, missing: &str, chrome: &mut Chrome) {
+        match chip {
+            Some(c) => {
+                self.instruct.add_chip(c);
+                self.help.mode = crate::help::Mode::Code;
+                chrome.show(crate::editor::Pane::Claude);
+            }
+            None => self.projects.note(missing, true),
+        }
+    }
+
     /// The Agent tab: its heading (the agent's state as a dot, the mode's
     /// name, the mode toggle), then the shared tab (changing the program)
     /// or Help.
@@ -2873,6 +2940,8 @@ impl Body for BoxView {
             Some(v) if v.drawable() => {
                 v.icons.update(icons.as_deref());
                 v.assign = menus;
+                // The block's own lines are placed (or refused with a notice) by the chat item.
+                v.chat_ok = true;
                 let outer = vec![
                     "This box".to_string(),
                     self.state.selected.clone().unwrap_or_default(),
@@ -2889,7 +2958,8 @@ impl Body for BoxView {
                     self.dedit.open(v, g);
                 }
                 // Edits to the code are off on a box: what the menu holds is
-                // what io.map can take, so no edit comes back.
+                // what io.map can take and the chat item, so no edit comes back.
+                self.dedit.chat_full = self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS;
                 let _ = self.dedit.show(ui.ctx(), chrome, area, v);
                 if v.pick != self.last_pick {
                     self.last_pick = v.pick;
@@ -2905,6 +2975,9 @@ impl Body for BoxView {
         }
         if let Some((port, ask)) = self.dedit.take_assign() {
             self.assign_ask(port, ask);
+        }
+        if let Some(n) = self.dedit.take_chat() {
+            self.chat_about_node(n, chrome);
         }
         if let Some((at, line)) = jump {
             match at {

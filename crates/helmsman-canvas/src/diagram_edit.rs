@@ -159,11 +159,13 @@ impl Viewer {
     /// Takes a gesture made at `at`: for the host when gestures are on,
     /// else a note of why they are not.
     pub(crate) fn gesture_at(&mut self, at: Pos2, hit: Hit, in_place: bool) {
-        // A program port's block has its io.map items whatever the gate
-        // says: the menu then shows the code's items off, with the reason.
+        // A program port's block has its io.map items, and any block
+        // "Chat about this" while the diagram's lines are the host's,
+        // whatever the gate says: the menu then shows the code's items
+        // off, with the reason.
         let port = !in_place && matches!(hit, Hit::Block(n) if self.port_block(n).is_some());
         match &self.edit_gate {
-            Gate::Off(_) if port => {
+            Gate::Off(_) if port || (self.chat_ok && !in_place) => {
                 self.off_note = None;
                 self.gesture = Some(Gesture { at, hit, in_place });
             }
@@ -336,6 +338,9 @@ struct Entries {
     delete: Option<Edit>,
     /// The port this block is, with what io.map offers on it.
     assign: Option<crate::assign::PortMenu>,
+    /// The block "Chat about this" is about ([`crate::chat_about`]): the
+    /// block hit, or the block of the pin hit.
+    chat: Option<NodeId>,
     /// Why the code's own items are off, when they are and the menu is
     /// only here for `assign`.
     off: Option<String>,
@@ -344,6 +349,7 @@ struct Entries {
 impl Entries {
     fn is_empty(&self) -> bool {
         self.assign.is_none()
+            && self.chat.is_none()
             && self.operators.is_empty()
             && self.negate.is_empty()
             && self.connect.is_none()
@@ -539,9 +545,13 @@ fn entries(v: &Viewer, hit: Hit) -> Entries {
             out.assign = v.port_block(node).cloned();
         }
     }
-    if let (Gate::Off(why), Some(_)) = (&v.edit_gate, &out.assign) {
+    let (Hit::Block(node) | Hit::Pin { node, .. }) = hit;
+    out.chat = v.chat_ok.then_some(node);
+    // Edits are off (a box): only what io.map takes and the chat stay.
+    if let Gate::Off(why) = &v.edit_gate {
         out = Entries {
             assign: out.assign.take(),
+            chat: out.chat.take(),
             off: Some(why.clone()),
             ..Entries::default()
         };
@@ -589,6 +599,11 @@ pub struct EditUi {
     open: Option<Open>,
     /// A port's assignment asked for in the menu, for the host to take.
     assign: Option<(String, crate::assign_ui::PortAsk)>,
+    /// "Chat about this" chosen in the menu, for the host to take.
+    chat: Option<NodeId>,
+    /// The Agent tab holds as many chips as it takes: the menu item is
+    /// off and says why. The host sets it before [`Self::show`].
+    pub chat_full: bool,
 }
 
 impl std::fmt::Debug for EditUi {
@@ -647,6 +662,12 @@ impl EditUi {
         self.open = None;
     }
 
+    /// The block the menu asked to chat about, once; the menu is closed
+    /// then.
+    pub fn take_chat(&mut self) -> Option<NodeId> {
+        self.chat.take()
+    }
+
     /// The port the menu asked to assign (or put back on simulated I/O),
     /// once; the menu is closed then.
     pub fn take_assign(&mut self) -> Option<(String, crate::assign_ui::PortAsk)> {
@@ -668,6 +689,8 @@ impl EditUi {
         let mut asked: Option<Edit> = None;
         let mut close = false;
         let mut assign: Option<(String, crate::assign_ui::PortAsk)> = None;
+        let mut chat: Option<NodeId> = None;
+        let chat_full = self.chat_full;
         let vars = if matches!(o.stage, Stage::Connect(_)) {
             variables(v)
         } else {
@@ -721,6 +744,22 @@ impl EditUi {
                             }
                             if e.is_empty() {
                                 ui.label(RichText::new("Nothing here can be changed from the diagram.").size(BODY));
+                            }
+                            if let Some(n) = e.chat
+                                && row_on(
+                                    ui,
+                                    chrome,
+                                    "diagram menu chat",
+                                    "Chat about this",
+                                    !chat_full,
+                                    if chat_full {
+                                        crate::chat_about::FULL
+                                    } else {
+                                        "Puts this block and its statement in the Agent tab, with what drives it and what it drives. Nothing is sent until you type what to ask and send it."
+                                    },
+                                )
+                            {
+                                chat = Some(n);
                             }
                             if !e.operators.is_empty()
                                 && row(
@@ -1003,6 +1042,10 @@ Stage::Operators => {
             self.assign = assign;
             return None;
         }
+        if chat.is_some() {
+            self.chat = chat;
+            return None;
+        }
         if close || crate::theme::dismissed(ctx, "diagram-edit-popup", &[r.response.rect]) {
             return None;
         }
@@ -1194,6 +1237,19 @@ mod box_tests {
         assert!(v.gesture.is_none(), "no menu is asked for");
         assert_eq!(v.off_note.as_ref().map(|(_, t)| t.as_str()), Some(BOX_REASON));
         assert!(v.pick.is_some(), "the click still picks the block");
+    }
+
+    /// A host that says the diagram's lines are its own (`chat_ok`) gets
+    /// the menu while the edits are off: it holds "Chat about this" and
+    /// says why the rest is not there.
+    #[test]
+    fn a_host_that_owns_the_lines_gets_the_menu_with_the_edits_off() {
+        let (ctx, s, mut v) = setup();
+        v.chat_ok = true;
+        let at = centre(&v, |k| matches!(k, NodeKind::Op { op } if op == "AND"));
+        click(&ctx, &mut v, &s, at, PointerButton::Secondary, 1);
+        assert!(v.gesture.is_some(), "the menu is asked for");
+        assert!(v.off_note.is_none());
     }
 
     #[test]

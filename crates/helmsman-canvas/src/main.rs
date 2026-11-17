@@ -53,6 +53,9 @@ mod commit;
 mod debugger_tests;
 // The design step's contract, ahead of the Agent tab entry that will call
 // it (TODO.md `design-step-canvas`): nothing outside its tests uses it yet.
+mod chat_about;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod chat_about_tests;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "wired into the Agent tab by design-step-canvas")

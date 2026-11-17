@@ -4401,6 +4401,71 @@ fn the_diagram_of_a_box_offers_assign_on_a_port_block_with_its_code_edits_off() 
     assert!(h.bv().projects.dirty());
 }
 
+/// "Chat about this" on a box (Nick, 2026-11-16): the diagram's menu has
+/// it though the code's edits are off, it collects a chip for the Agent
+/// tab and sends nothing, and the chip goes with the instruction.
+#[test]
+fn the_diagram_of_a_box_collects_a_block_for_the_agent_and_sends_nothing() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.wait(0.3);
+    let at = {
+        let v = h.bv().view.as_ref().expect("the diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, helmsman_diagram::NodeKind::Write { path } if path.eq_ignore_ascii_case("lamp"))
+            })
+            .expect("the lamp's block");
+        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    };
+    h.app.chrome.show(crate::editor::Pane::Code);
+    h.wait(0.2);
+    h.right_click(at);
+    assert!(
+        h.app.chrome.rect("diagram menu chat").is_some(),
+        "offered on a box"
+    );
+    h.press("diagram menu chat");
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.showing(crate::editor::Pane::Claude),
+        "the Agent tab opens"
+    );
+    let chips = h.bv().instruct.chips.clone();
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    assert_eq!(
+        (chips[0].name.as_str(), chips[0].file.as_str(), chips[0].line),
+        ("lamp", "main.st", 8)
+    );
+    assert_eq!(chips[0].text, "lamp := start;");
+    assert_eq!(chips[0].driven_by, vec!["start".to_string()]);
+    assert!(h.app.chrome.rect("chat chip 0").is_some());
+    // Chat about a signal by name, as the I/O rows will: a second chip.
+    let mut chrome = std::mem::take(&mut h.app.chrome);
+    h.bv().chat_about_signal("start", &mut chrome);
+    h.app.chrome = chrome;
+    assert_eq!(h.bv().instruct.chips.len(), 2);
+    assert_eq!(
+        (h.bv().instruct.chips[1].kind, h.bv().instruct.chips[1].line),
+        (crate::chat_about::Kind::Input, 3)
+    );
+    // The instruction goes with both, once.
+    h.bv().instruct.draft = "latch the lamp".into();
+    h.bv().send_instruction(&egui::Context::default());
+    assert_eq!(h.bv().instruct.chips.len(), 0);
+    let sent = h.bv().instruct.run.as_ref().expect("under way").asked.clone();
+    assert_eq!(sent.matches("<chat_about>").count(), 1, "{sent}");
+    assert!(
+        sent.contains("output `lamp` at main.st:8") || sent.contains("block `lamp` at main.st:8"),
+        "{sent}"
+    );
+    assert!(sent.contains("input `start` at main.st:3"), "{sent}");
+}
+
 #[test]
 fn an_operator_sees_the_items_off_and_nothing_is_written() {
     let b = Bench::new();
