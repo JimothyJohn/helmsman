@@ -53,6 +53,17 @@ impl E1213Sim {
     /// # Errors
     /// A socket that won't bind.
     pub fn start_with(config: DeviceConfig, app: Application) -> io::Result<Self> {
+        Self::start_idle(config, app, ServerConfig::default().session_idle)
+    }
+
+    /// As [`Self::start_with`], closing a TCP session that has been quiet
+    /// for `session_idle` while its Class 1 connections carry on: a
+    /// Novanta `MDrive` resets the session about 2.5 s after the
+    /// `Forward_Open` and keeps exchanging I/O (2026-11-16).
+    ///
+    /// # Errors
+    /// A socket that won't bind.
+    pub fn start_idle(config: DeviceConfig, app: Application, session_idle: Duration) -> io::Result<Self> {
         let adapter = Adapter::start(
             Device::new(config),
             &ServerConfig {
@@ -61,6 +72,7 @@ impl E1213Sim {
                 io_port: 0,
                 peer_io_port: 0,
                 o_to_t_port: Some(0),
+                session_idle,
                 ..ServerConfig::default()
             },
         )?;
@@ -84,6 +96,12 @@ impl E1213Sim {
             stop,
             thread: Some(thread),
         })
+    }
+
+    /// TCP sessions open on the simulator now.
+    #[must_use]
+    pub fn sessions(&self) -> usize {
+        self.adapter.sessions()
     }
 
     /// `127.0.0.1:PORT`, the encapsulation endpoint.
