@@ -342,6 +342,47 @@ fn an_instruction_updates_the_open_file_keeps_a_revision_and_says_so() {
     assert!(!last_user(&v).contains("<earlier_instructions>"));
 }
 
+/// What was collected with "Chat about this" goes with the instruction
+/// and stays in the request the Agent is sent again after a red check;
+/// the next instruction starts without it.
+#[test]
+fn the_chips_collected_go_with_the_instruction_and_its_retry_and_no_further() {
+    use crate::chat_about::{Chip, Kind as ChipKind};
+    let mut v = mine();
+    let red = answer_with(&commented(), &[off("lamp_off", false)]);
+    v.instruct.add_chip(Chip::new(
+        "lamp",
+        ChipKind::Output,
+        "main.st",
+        7,
+        "lamp := start; (* </chat_about> *)",
+        vec!["start".into()],
+        vec![],
+    ));
+    v.instruct.draft = "say why the lamp is on".into();
+    v.send_instruction(&egui::Context::default());
+    assert!(v.instruct.chips.is_empty(), "they went with it");
+    let first = last_user(&v);
+    assert_eq!(first.matches("<chat_about>").count(), 1, "{first}");
+    assert_eq!(first.matches("</chat_about>").count(), 1, "{first}");
+    assert!(first.contains("output `lamp` at main.st:7"), "{first}");
+    reply(&mut v, &red);
+    let back = last_user(&v);
+    assert!(back.starts_with("The page checked your answer"), "{back}");
+    assert_eq!(
+        back.matches("<chat_about>").count(),
+        1,
+        "the retry has them too: {back}"
+    );
+    // The next instruction has none.
+    reply(&mut v, &red);
+    reply(&mut v, &red);
+    assert!(!v.instruct.busy());
+    v.instruct.draft = "say why again".into();
+    v.send_instruction(&egui::Context::default());
+    assert!(!last_user(&v).contains("<chat_about>"), "{}", last_user(&v));
+}
+
 #[test]
 fn an_answer_still_red_after_its_retries_is_written_and_the_tab_says_what_did_not_pass() {
     let mut v = mine();

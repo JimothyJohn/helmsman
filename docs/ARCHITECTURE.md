@@ -943,6 +943,26 @@ failed attempts, the Agent's words), the scenarios kept as test files;
 Undo restores the revision before it. The tab shows only the instruction
 box, Send or Stop, Undo, and a status line with the reason.
 
+"Chat about this" (`chat-about-this`, Nick 2026-11-16, `chat_about.rs`)
+makes the diagram something to point at. A right click on a block has the
+item, on the page and on a box (a box's menu holds it with the code's
+edits shown off); an input's or output's row will call
+`chat_about_signal(name, chrome)` on either view. Choosing it sends
+nothing: it opens the Agent tab and adds a chip to `Instruct::chips`,
+drawn above the instruction box (`instruct::chips_ui`: wrapped by hand
+and cut to the column, an x on each, at most eight, none twice). A chip
+holds the name, kind, file:line, the statement (cut at 40 lines or 2000
+characters) and the named blocks wired to and from it, traced through the
+operators between (`chat_about::of_node`, `of_signal`; names spelled as
+the files spell them). When the instruction is sent the chips go with it as
+one `<chat_about>` envelope after `<requirement_tests>`
+(`chat_about::envelope`, defanged with the other envelopes, which now
+include `chat_about`), stay in the retries of that instruction, and are
+then empty. A block's lines are placed through the project's `locate`
+only while the diagram is of the deployed text; on a box, through the
+build's `(* file *)` headers when that project is the one running, else
+the one program file that is the running source.
+
 The transports differ. In the page, `claude.rs` sends it to the Messages
 API with the playground's system prompt, the failed answers of the same
 instruction as earlier turns. On a box, `box_agent.rs` sends it as one

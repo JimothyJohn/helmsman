@@ -281,6 +281,10 @@ pub struct Viewer {
     /// Whether the diagram's gestures change the program (the host sets
     /// it each frame): off unless it says why not ([`crate::diagram_edit`]).
     pub edit_gate: crate::diagram_edit::Gate,
+    /// The diagram's lines are the text the host's files hold, so a block's
+    /// menu has "Chat about this" even while `edit_gate` is off (the host
+    /// sets it each frame).
+    pub chat_ok: bool,
     /// The right click or double click the host has not taken yet.
     pub gesture: Option<crate::diagram_edit::Gesture>,
     /// Why a gesture did nothing, and where it was made: shown until the
@@ -679,6 +683,7 @@ impl Viewer {
             baseline: None,
             change: None,
             edit_gate: crate::diagram_edit::Gate::Off(crate::diagram_edit::BOX_REASON.into()),
+            chat_ok: false,
             gesture: None,
             off_note: None,
             assign: Vec::new(),

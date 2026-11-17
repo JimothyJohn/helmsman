@@ -297,7 +297,7 @@ fn one_line(text: &str) -> String {
 /// own envelope, or another, early. White space inside the tag (`</ tag>`,
 /// `< /tag >`) and more after the name do not get past; the `<` of the
 /// tag gets a backslash after it: `<\/tag>`.
-fn neutralize(text: &str) -> String {
+pub(crate) fn neutralize(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(k) = rest.find('<') {
