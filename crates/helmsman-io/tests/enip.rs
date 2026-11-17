@@ -1099,3 +1099,88 @@ fn a_device_that_drops_the_idle_session_keeps_its_link_and_is_still_closed() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+/// The facts EDS with its exclusive owner's O->T real-time format
+/// declared modeless, as the Novanta MDrive's EDS declares its own while
+/// the drive takes a run/idle header (its `Forward_Open` at the EDS's size
+/// is refused 0x0127 with the size it wants, four bytes more; 2026-11-16).
+fn modeless_eds() -> std::path::PathBuf {
+    let eds = FACTS.replace("0x44640405,", "0x44640005,");
+    assert_ne!(eds, FACTS, "the fixture moved");
+    temp_eds(&eds)
+}
+
+#[test]
+fn an_eds_that_leaves_out_the_run_idle_header_is_corrected_from_the_refusal() {
+    let s = E1213Sim::start().unwrap();
+    let path = modeless_eds();
+    let mut p = with(&s, &[("eds", path.to_str().unwrap())]);
+    p.remove("profile");
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    assert!(!d.connection().o_to_t_run_idle, "the EDS says modeless");
+    // The outputs arrive where they belong, not four bytes late.
+    d.write("do:3", Value::Bool(true)).unwrap();
+    wait_value(&mut d, "di:3", Value::Bool(true), Duration::from_secs(2));
+    assert_eq!(lock_ref(&s.device()).assembly(102), Some(&[0b1000][..]));
+    assert!(d.connection().o_to_t_run_idle);
+    assert_eq!(d.opens, 2, "one refusal, one corrected open");
+    assert_eq!(lock_ref(&s.device()).connections().len(), 1);
+    drop(d);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn a_header_the_device_does_not_take_is_dropped_from_the_refusal() {
+    // The other way round, both directions: a target without a run/idle
+    // header O->T, and with one T->O, against explicit sizes that assume
+    // the usual (header out, none in).
+    let mut c = DeviceConfig::moxa_e1213();
+    c.consumed_run_idle = false;
+    c.produced_run_idle = true;
+    let s = E1213Sim::start_with(c, Application::bench()).unwrap();
+    let mut d = EnipDriver::from_params(&s.endpoint(), &explicit(&s, &[])).unwrap();
+    // Inputs read where they are (the simulated wiring only follows an
+    // owner whose header says run, so an input is held on instead), and
+    // the output byte lands in the output assembly.
+    s.force_di(2, true);
+    wait_value(&mut d, "di:2", Value::Bool(true), Duration::from_secs(2));
+    assert_eq!(read(&mut d, "di:1").unwrap(), Value::Bool(false));
+    d.write("do:0", Value::Bool(true)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while lock_ref(&s.device()).assembly(102) != Some(&[1][..]) {
+        assert!(Instant::now() < deadline, "DO-00 never arrived");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let spec = d.connection();
+    assert!(!spec.o_to_t_run_idle && spec.t_to_o_run_idle);
+    assert_eq!(d.opens, 3, "one refusal a direction, then the open");
+}
+
+#[test]
+fn a_size_refusal_that_is_not_the_header_stays_a_refusal() {
+    // Four bytes more wanted, but because the assembly is four bytes
+    // longer than the map says: a run/idle header sent there would put
+    // its run bit into the first output byte.
+    let mut c = DeviceConfig::moxa_e1213();
+    c.consumed_run_idle = false;
+    c.assemblies[2] = (102, 5);
+    let s = E1213Sim::start_with(c, Application::bench()).unwrap();
+    let p = explicit(&s, &[("run_idle", "off")]);
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    let e = read(&mut d, "in:0.0").unwrap_err();
+    assert!(e.is_link() && e.to_string().contains("0x0127"), "{e}");
+    assert_eq!(d.opens, 1, "nothing was retried");
+    assert!(!d.connection().o_to_t_run_idle);
+    assert_eq!(lock_ref(&s.device()).assembly(102), Some(&[0; 5][..]));
+
+    // Sizes off by something else are refused as before, once.
+    let s = E1213Sim::start().unwrap();
+    for (o2t, t2o, code) in [("102:3", "101:51", "0x0127"), ("102:1", "101:47", "0x0128")] {
+        let p = explicit(&s, &[("o2t", o2t), ("t2o", t2o)]);
+        let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+        let e = read(&mut d, "in:0.0").unwrap_err();
+        assert!(e.is_link() && e.to_string().contains(code), "{o2t} {t2o}: {e}");
+        assert_eq!(d.opens, 1);
+    }
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+}

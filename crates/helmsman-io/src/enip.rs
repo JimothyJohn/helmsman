@@ -47,6 +47,13 @@
 //! device's, default 2222), and `key=off|exact|compatible` (an electronic
 //! key from the EDS or profile identity; default off).
 //!
+//! A `Forward_Open` refused over a size that is off by exactly the
+//! run/idle header (0x0127 or 0x0128 with the size the device wants) is
+//! tried again with the header the device asks for, once the device's own
+//! assembly has been read and is as long as the connection says: an EDS
+//! that declares the wrong real-time format still connects, and a map
+//! that has the assembly's size wrong does not.
+//!
 //! # The I/O port
 //!
 //! On a box the link consumes on the box's one Class 1 endpoint
@@ -924,6 +931,9 @@ mod driver {
         /// Where the device was found at the last connection
         /// (`crate::resolve`).
         resolved: Option<SocketAddrV4>,
+        /// The run/idle header was corrected from a refusal, O->T and
+        /// T->O ([`Self::fix_header`]): once a direction.
+        header_fixed: (bool, bool),
     }
 
     impl std::fmt::Debug for EnipDriver {
@@ -1004,6 +1014,7 @@ mod driver {
                 shared: None,
                 opens: 0,
                 resolved: None,
+                header_fixed: (false, false),
             })
         }
 
@@ -1083,12 +1094,17 @@ mod driver {
                     })?
                 }
             };
-            let config = self.config()?;
-            let timeout = config.timeout();
             let target = SocketAddrV4::new(ip, self.params.device_io_port);
-            self.opens += 1;
-            let io = IoConnection::open_on(&mut session, &endpoint, target, config, &self.out)
-                .map_err(scanner_error)?;
+            let (io, timeout) = loop {
+                let config = self.config()?;
+                let timeout = config.timeout();
+                self.opens += 1;
+                match IoConnection::open_on(&mut session, &endpoint, target, config, &self.out) {
+                    Ok(io) => break (io, timeout),
+                    Err(scanner::Error::Refused(r)) if self.fix_header(&mut session, &r) => {}
+                    Err(e) => return Err(scanner_error(e)),
+                }
+            };
             // The first T->O packet, within the connection's timeout.
             if io.wait_for_input(timeout).is_none() {
                 let closer = io.closer();
@@ -1105,6 +1121,57 @@ mod driver {
             }
             self.link = Some(Link { session, io, timeout });
             Ok(())
+        }
+
+        /// A refusal over a size that is off by exactly the 32-bit run/idle
+        /// header: the EDS or the map has the header wrong for that
+        /// direction (a Novanta MDrive's EDS declares its O->T modeless,
+        /// and the drive takes the header). Corrects the spec and says
+        /// `true` so the open is tried again, once a direction, and only
+        /// if the device's own assembly is as long as the spec says: the
+        /// same four bytes can be an assembly longer than the map
+        /// thinks, and a header sent into that would write its run bit
+        /// into the first output.
+        fn fix_header(&mut self, session: &mut Session, r: &helmsman_proto::io::Refused) -> bool {
+            use helmsman_proto::io::extended::{INVALID_O_TO_T_SIZE, INVALID_T_TO_O_SIZE};
+            let (Some(code), Some(&wanted)) = (r.extended_code(), r.extended.get(1)) else {
+                return false;
+            };
+            let spec = self.spec();
+            let (outward, point, len, header) = match code {
+                INVALID_O_TO_T_SIZE => (true, spec.o_to_t, spec.o_to_t_len, spec.o_to_t_run_idle),
+                INVALID_T_TO_O_SIZE => (false, spec.t_to_o, spec.t_to_o_len, spec.t_to_o_run_idle),
+                _ => return false,
+            };
+            let tried = if outward { self.header_fixed.0 } else { self.header_fixed.1 };
+            // The connection size counts the 16-bit sequence count too.
+            let ours = u32::from(len) + 2 + if header { 4 } else { 0 };
+            let with_header = if u32::from(wanted) == ours + 4 && !header {
+                true
+            } else if u32::from(wanted) + 4 == ours && header {
+                false
+            } else {
+                return false;
+            };
+            if tried || len == 0 {
+                return false;
+            }
+            let class = helmsman_proto::cip::class::ASSEMBLY;
+            if !session
+                .get_attribute_single(class, point, 3)
+                .is_ok_and(|data| data.len() == usize::from(len))
+            {
+                return false;
+            }
+            let spec = self.spec.as_mut().expect("set in from_params");
+            if outward {
+                spec.o_to_t_run_idle = with_header;
+                self.header_fixed.0 = true;
+            } else {
+                spec.t_to_o_run_idle = with_header;
+                self.header_fixed.1 = true;
+            }
+            true
         }
 
         /// Close the connection after a link error: `Forward_Close` now if
