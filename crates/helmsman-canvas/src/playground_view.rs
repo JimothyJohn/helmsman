@@ -1714,24 +1714,15 @@ impl PlaygroundView {
         let (stmt, name) = match v.pick? {
             Pick::Node(n) => {
                 let n = d.nodes.get(n.0 as usize)?;
-                let name = match &n.kind {
-                    helmsman_diagram::NodeKind::Fb { instance, .. } => instance.clone(),
-                    helmsman_diagram::NodeKind::Write { path }
-                    | helmsman_diagram::NodeKind::Read { path } => path.clone(),
-                    _ if !n.label.trim().is_empty() => n.label.clone(),
-                    _ => n.text.clone(),
-                };
-                (n.stmt, name)
+                (n.stmt, crate::chat_about::node_name(n))
             }
             Pick::Region(r) => {
                 let r = d.regions.get(r.0 as usize)?;
                 (r.stmt, r.label.clone())
             }
         };
-        let s = d.stmts.iter().find(|s| s.id == stmt)?;
-        let (file, line) = self.proj.locate(s.pos.line)?;
-        let text = self.proj.files.get(&file)?;
-        let end = crate::scope::statement_end(text, line, s.pos.col);
+        let (file, line, end) =
+            crate::chat_about::statement_at(d, stmt, &|l| self.proj.locate(l), &self.proj.files)?;
         let name: String = name.split_whitespace().collect::<Vec<_>>().join(" ");
         let name = if name.chars().count() > 32 {
             format!("{}…", name.chars().take(31).collect::<String>())
@@ -1739,6 +1730,53 @@ impl PlaygroundView {
             name
         };
         Some((file, name, line, end))
+    }
+
+    /// "Chat about this" on block `n` of the diagram: a chip for it on
+    /// the Agent tab, and the tab shown. Nothing is sent.
+    pub fn chat_about_node(&mut self, n: helmsman_diagram::NodeId, chrome: &mut Chrome) {
+        let chip = self
+            .viewer
+            .as_mut()
+            .filter(|v| v.src == self.proj.build_src())
+            .and_then(|v| {
+                v.pick = Some(Pick::Node(n));
+                crate::chat_about::of_node(v.diagram(), n, &|l| self.proj.locate(l), &self.proj.files)
+            });
+        self.collect(
+            chip,
+            "That block's statement could not be placed: deploy the code, then ask again.",
+            chrome,
+        );
+    }
+
+    /// "Chat about this" on the input, output or variable `name`: a chip
+    /// for it (its declaration, else its first use, as the place) on the
+    /// Agent tab, and the tab shown. Nothing is sent.
+    // The I/O rows' right-click menu calls this once the I/O tab's rewrite lands.
+    #[allow(dead_code)]
+    pub fn chat_about_signal(&mut self, name: &str, chrome: &mut Chrome) {
+        let chip = {
+            let diagrams: Vec<&helmsman_diagram::Diagram> = self
+                .viewer
+                .as_ref()
+                .map(|v| v.module.pous.iter().map(|p| &p.diagram).collect())
+                .unwrap_or_default();
+            crate::chat_about::of_signal(name, &self.proj.files, &diagrams)
+        };
+        self.collect(chip, &format!("{name} is not in the program's files."), chrome);
+    }
+
+    /// Takes `chip` for the next instruction and shows the Agent tab; the
+    /// notice `missing` when there is none.
+    fn collect(&mut self, chip: Option<crate::chat_about::Chip>, missing: &str, chrome: &mut Chrome) {
+        match chip {
+            Some(c) => {
+                self.instruct.add_chip(c);
+                chrome.show(editor::Pane::Claude);
+            }
+            None => self.proj.note(missing, true),
+        }
     }
 
     /// What the Agent may change now (`crate::scope`): the lines selected
@@ -3136,6 +3174,8 @@ impl Body for PlaygroundView {
         let gate = self.edit_gate();
         if let Some(v) = &mut self.viewer {
             v.edit_gate = gate;
+            // A block's lines are the files' only while the diagram is of the text.
+            v.chat_ok = v.src == self.proj.build_src();
             v.assign = menus;
             v.icons
                 .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
@@ -3154,6 +3194,7 @@ impl Body for PlaygroundView {
             if let Some(g) = v.gesture.take() {
                 self.dedit.open(v, g);
             }
+            self.dedit.chat_full = self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS;
             let asked = self.dedit.show(ui.ctx(), chrome, area, v);
 
             let mut jump = None;
@@ -3167,6 +3208,9 @@ impl Body for PlaygroundView {
             }
             if let Some((port, ask)) = self.dedit.take_assign() {
                 self.assign_ask(port, ask);
+            }
+            if let Some(n) = self.dedit.take_chat() {
+                self.chat_about_node(n, chrome);
             }
             self.map_inputs(ui, area, &reads);
             if let Some(line) = jump {

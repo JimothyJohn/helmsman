@@ -103,6 +103,7 @@ footer a{color:var(--yellow)}
 header.top .gh{display:flex;color:var(--header-fg);flex:none;padding:6px}
 header.top .gh:hover{color:var(--yellow)}
 .early{margin:22px 0 0;font-size:15px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.btn.find{display:inline-block;margin-top:20px;background:var(--yellow);color:var(--black);border-color:var(--yellow)}
 .lib-tools{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;margin:24px 0 0}
 .lib-tools input{font:14px var(--mono);padding:10px 12px;min-width:min(100%,280px);background:var(--bg);color:var(--fg);border:2px solid var(--rule-strong)}
 .lib-tools input:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
@@ -236,6 +237,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
     <p class="muted">An offer or a request opens a filled-in issue on GitHub. It is public, so the shipping address and the payment are arranged in private afterwards.</p>
     <p class="muted">Working with an agent? Point it at <a href="https://github.com/JimothyJohn/helmsman-devices/blob/dev/AGENTS.md"><code>AGENTS.md</code></a> in the library and give it the device's address. It identifies the unit, drafts or looks up the entry, tests it against the unit and sends the pull request.</p>
     <p class="muted">An entry marked <i>from documents</i> was read from the vendor's EDS file and manual, page by page, and has not yet been run on a unit. A checked entry names the date it was.</p>
+    <p><a class="btn primary find" href="find/">Is yours here? See every device &rarr;</a></p>
     <div class="lib-tools">
       <input id="lib-q" type="search" placeholder="Filter: vendor, model, protocol" aria-label="Filter the device library" hidden>
       <span id="lib-count" class="muted" aria-live="polite">Loading the library…</span>

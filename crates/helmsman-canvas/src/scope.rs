@@ -21,7 +21,7 @@ pub type Files = BTreeMap<String, String>;
 
 /// The tags the page wraps the model's context in; an answer that
 /// carries one is refused.
-pub const ENVELOPES: [&str; 8] = [
+pub const ENVELOPES: [&str; 9] = [
     "edit_scope",
     "current_program",
     "compile_errors",
@@ -30,6 +30,7 @@ pub const ENVELOPES: [&str; 8] = [
     "requirement_tests",
     "box-data",
     "specification",
+    "chat_about",
 ];
 
 /// What one answer may change.
