@@ -1755,15 +1755,50 @@ fn dragging_a_block_by_its_header_moves_it_and_not_the_view() {
     assert_eq!(s.input("enable"), b(false));
 }
 
+/// Was `dragging_empty_space_pans_and_moves_no_block`: since 2026-11-16 a
+/// plain drag on empty space draws a selection box, and the view moves
+/// with the middle button (Space and a drag is in `ui_tests/multi_select.rs`).
 #[test]
-fn dragging_empty_space_pans_and_moves_no_block() {
+fn dragging_empty_space_selects_and_the_middle_button_pans_and_neither_moves_a_block() {
     let mut s = Screen::new();
     s.view.session.set_running(false);
     let before = s.node("enable");
     let size = s.view.viewer.as_ref().unwrap().diagram().size;
-    // Below and right of everything drawn.
-    let empty = s.screen(size.0 + 40.0, size.1 + 40.0);
+    let offset = |s: &Screen| {
+        let v = s.view.viewer.as_ref().unwrap();
+        v.cams[v.scope].offset
+    };
+    // Below everything drawn, in the view.
+    let empty = s.screen(size.0 / 2.0, size.1 + 40.0);
+    assert!(
+        s.chrome.diagram.contains(empty),
+        "{empty:?} in {:?}",
+        s.chrome.diagram
+    );
+    let start = offset(&s);
     s.drag(empty, empty + Vec2::new(-60.0, -30.0));
+    assert_eq!(s.node("enable"), before);
+    assert_eq!(offset(&s), start, "a plain drag no longer pans");
+    assert!(!s.view.viewer.as_ref().unwrap().rearranged());
+    // The middle button moves the view and nothing else.
+    s.frame(vec![Event::PointerMoved(empty)]);
+    let middle = |s: &mut Screen, at: Pos2, pressed: bool| {
+        s.frame(vec![Event::PointerButton {
+            pos: at,
+            button: PointerButton::Middle,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+    };
+    middle(&mut s, empty, true);
+    for k in 1..=10 {
+        #[allow(clippy::cast_precision_loss)]
+        let at = empty + Vec2::new(-60.0, -30.0) * (k as f32 / 10.0);
+        s.frame(vec![Event::PointerMoved(at)]);
+    }
+    middle(&mut s, empty + Vec2::new(-60.0, -30.0), false);
+    let moved = offset(&s) - start;
+    assert!(moved.x < -20.0 && moved.y < -10.0, "the view moved by {moved:?}");
     assert_eq!(s.node("enable"), before);
     assert!(!s.view.viewer.as_ref().unwrap().rearranged());
 }

@@ -312,6 +312,16 @@ this; change it here first when a decision changes.
   diagram too big for the view at that zoom shows its left part and you
   pan, instead of shrinking to one-letter labels. Controls on blocks cut
   their text instead of wrapping it.
+- **Selecting blocks (Nick, 2026-11-16).** Drag on empty space to draw a
+  box; the blocks it touches are selected (Shift or Ctrl/Cmd adds). Shift
+  or Ctrl/Cmd and a click toggles one block. A click on empty space or
+  Esc deselects. The selected blocks are outlined blue and are the
+  Agent's focus: they show as chips after the collected ones (an x
+  deselects), go with the next instruction, and say how many more are
+  selected than the eight an instruction carries. Dragging empty space no
+  longer pans the diagram: Space and a drag, or the middle button, do; the
+  arrow keys and W A S D too, and the wheel zooms. Hovering empty space
+  says so.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).
