@@ -112,7 +112,7 @@ alias 192.168.33.10 255.255.255.0`, gone at a reboot).
 - MCode/TCP on port 503 answers beside EtherNet/IP (`PR P`, `PR ER`,
   `SL 0`), which is how the numbers below were read back.
 - **A hold of 20 minutes** at 20 ms, outputs at zero (`enip_soak`):
-  the first 13 s lost the link over and over (191 connections opened that brought no data, after 40 minutes in which nothing had talked to the drive), then one connection held for the remaining 19 minutes with no loss. Starts after a short pause were clean three times; what the first seconds were is open.
+  the first 13 s lost the link over and over (191 connections opened that brought no data, after 40 minutes in which nothing had talked to the drive), then one connection held for the remaining 19 minutes with no loss. It happened once and is not explained. Ruled out afterwards, each with the link held and watched: a start after a short pause (clean three times), a start after 40 minutes of silence (first packet after 18 ms, no gap over 42 ms in 30 s), a change of an output field mid-connection, and load on the controller's machine (a build on every core, a test suite). A failed connect is now tried again after a wait, so such a stretch costs a handful of attempts, not 191.
 
 **What the bytes did on this unit**
 
