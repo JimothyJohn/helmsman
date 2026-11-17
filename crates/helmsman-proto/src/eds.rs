@@ -726,6 +726,19 @@ impl Assembly {
                 reference: pair[1].clone(),
             });
         }
+        // No size, only members (the Novanta MDrive's EDS): the assembly
+        // is as long as their bits, when they fill whole bytes.
+        let size = size.or_else(|| {
+            if members.is_empty() {
+                return None;
+            }
+            let bits = members
+                .iter()
+                .try_fold(0u64, |sum, m| Some(sum + u64::from(m.bits?)))?;
+            (bits % 8 == 0)
+                .then(|| u16::try_from(bits / 8).ok())
+                .flatten()
+        });
         if let Some(size) = size
             && !members.is_empty()
             && members.iter().all(|m| m.bits.is_some())
