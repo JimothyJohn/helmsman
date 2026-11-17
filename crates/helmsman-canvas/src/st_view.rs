@@ -250,6 +250,9 @@ pub struct Viewer {
     /// The rubber band being drawn: where the press was and where the
     /// pointer is, on screen.
     band: Option<(Pos2, Pos2)>,
+    /// What the last frame drew as selected.
+    #[cfg(test)]
+    pub(crate) drew_selected: Vec<NodeId>,
     /// A menu, popup or card of the host is open and takes Escape (the
     /// host sets it each frame).
     pub menu_open: bool,
@@ -357,9 +360,9 @@ pub struct TreeRow {
 }
 
 /// What hovering empty diagram space says.
-const EMPTY_TIP: &str = "Drag to select the blocks the box touches; Shift or Ctrl and a click adds one. \
-The Agent tab then asks about them. Esc or a click here clears the selection. \
-Move the view with Space and a drag, the middle button, or scroll.";
+const EMPTY_TIP: &str = "Click a block to select it, or drag to select the blocks the box touches; \
+Shift or Ctrl adds. The Agent tab then asks about them. Esc, a click here or a click off the diagram \
+lets them go. Move the view with Space and a drag, the middle button, or the arrow keys.";
 
 /// What a drag on the diagram holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -695,6 +698,8 @@ impl Viewer {
             pick: None,
             selected: Vec::new(),
             band: None,
+            #[cfg(test)]
+            drew_selected: Vec::new(),
             menu_open: false,
             because: None,
             highlight: Vec::new(),
@@ -1444,6 +1449,12 @@ impl Viewer {
         self.selected.dedup();
     }
 
+    /// Lets the whole selection go: a click off the diagram, anywhere
+    /// but where the selection is being used (the Agent tab).
+    pub fn release_selection(&mut self) {
+        self.selected.clear();
+    }
+
     /// Takes `nodes` out of the selection.
     pub fn deselect(&mut self, nodes: &[NodeId]) {
         self.selected.retain(|n| !nodes.contains(n));
@@ -1483,6 +1494,32 @@ impl Viewer {
             .map(|n| n.id)
             .filter(|n| self.members(*n).iter().any(|m| self.selected.contains(m)))
             .collect()
+    }
+
+    /// What is drawn as selected now. While a rubber band is being drawn
+    /// (the button is still down) that is what the band touches so far,
+    /// with the selection it adds to when `add`; the selection itself
+    /// changes when the button is released.
+    fn selected_live(&self, cam: Cam, area: Rect, add: bool) -> Vec<NodeId> {
+        let mut out = self.selected_shown();
+        let Some((a, b)) = self.band else { return out };
+        let band = Rect::from_two_pos(a, b).intersect(area);
+        if band.width() < 2.0 && band.height() < 2.0 {
+            return out;
+        }
+        if !add {
+            out.clear();
+        }
+        out.extend(
+            self.shown()
+                .nodes
+                .iter()
+                .filter(|n| cam.rect(&n.rect).intersects(band))
+                .map(|n| n.id),
+        );
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     /// The rubber band `band` (screen) ends: the blocks it touches are
@@ -2656,9 +2693,14 @@ impl Viewer {
             // A finger is wider than a block at low zoom: the nearest
             // block within half a tap target counts.
             let slop = TAP / 2.0 / cam.zoom;
-            if node_near(self.shown(), x, y, slop).is_none() {
-                // Clicking off the blocks deselects.
-                self.selected.clear();
+            // A plain click on a block selects that block alone; off the
+            // blocks it deselects (Nick, 2026-11-17).
+            match node_near(self.shown(), x, y, slop) {
+                Some(n) => {
+                    let members = self.members(n);
+                    self.select(members, false);
+                }
+                None => self.selected.clear(),
             }
             let d = self.shown();
             let region = |r: RegionId| self.view().map_or(r, |v| v.region_origin[r.0 as usize]);
@@ -2712,7 +2754,11 @@ impl Viewer {
             self.frame_output(lit.as_ref(), scan.is_some(), area, ui.input(|i| i.time));
             ui.ctx().request_repaint();
         }
-        let selected = self.selected_shown();
+        let selected = self.selected_live(cam, area, additive);
+        #[cfg(test)]
+        {
+            self.drew_selected.clone_from(&selected);
+        }
         let mut added: Vec<NodeId> = added.into_iter().filter_map(|n| self.to_shown(n)).collect();
         added.dedup();
         let pick = match self.pick {

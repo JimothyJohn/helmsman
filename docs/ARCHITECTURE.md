@@ -984,8 +984,19 @@ source changes. A primary drag that starts on empty space (not on a block,
 a region's label or an input pin) draws a rubber band; on release the
 blocks it touches replace the selection, or join it with Shift or
 Ctrl/Cmd held. Shift or Ctrl/Cmd and a click toggles a block and does not
-pick it; a plain click on empty space and Esc clear the selection (a plain
-click on a block picks it and keeps it). Esc is left alone while a menu or
+pick it; a plain click on a block picks it and makes it the whole
+selection, and a plain click on empty space or Esc clears it (Nick,
+2026-11-17). So does a click anywhere off the diagram
+(`app::clicked_off_the_diagram`, after the frame is drawn), except in the
+Agent tab and on its tab button, where the selection is being used: its
+chips, and the instruction typed about it. Only a released click changes
+the selection: a press that becomes a drag (a block moved, the view
+moved, a band) leaves it as it was, and while a band is being drawn the
+blocks it touches so far are drawn selected (`Viewer::selected_live`).
+The proposal review's diagram has the same gestures (`review_view::select`:
+click, band, Shift or Ctrl, Esc, a click off, the middle button or Space
+to move the view), kept with the widget's state; nothing reads its
+selection yet. Esc is left alone while a menu or
 popup, a note, a modal or a field with focus has it (`Viewer::menu_open`,
 set by the host, plus egui's own state at this and the last frame, since
 panels drawn before the diagram let go of their focus first). The view no

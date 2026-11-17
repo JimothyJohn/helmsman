@@ -314,8 +314,13 @@ this; change it here first when a decision changes.
   their text instead of wrapping it.
 - **Selecting blocks (Nick, 2026-11-16).** Drag on empty space to draw a
   box; the blocks it touches are selected (Shift or Ctrl/Cmd adds). Shift
-  or Ctrl/Cmd and a click toggles one block. A click on empty space or
-  Esc deselects. The selected blocks are outlined blue and are the
+  or Ctrl/Cmd and a click toggles one block. A plain click on a block
+  selects that block alone; a click on empty space, a click anywhere off
+  the diagram (the Agent tab aside, where the selection is used) or Esc
+  deselects (Nick, 2026-11-17). Only a released click changes the
+  selection: while the button is down the highlights stay, and a box
+  being drawn shows what it touches. The proposal review's diagram takes
+  the same gestures. The selected blocks are outlined blue and are the
   Agent's focus: they show as chips after the collected ones (an x
   deselects), go with the next instruction, and say how many more are
   selected than the eight an instruction carries. Dragging empty space no
