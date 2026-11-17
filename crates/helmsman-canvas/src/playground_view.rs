@@ -3483,12 +3483,32 @@ impl Body for PlaygroundView {
             for t in self.session.earlier() {
                 v.saw(t, now);
             }
+            v.menu_open = self.dedit.is_open() || self.sim_popup.is_some();
             v.canvas(ui, scan);
             let reads = v.reads_on_screen();
             // The switches over the Read blocks take the right-click first.
             v.secondary_on_controls(ui, &reads);
             if let Some(g) = v.gesture.take() {
                 self.dedit.open(v, g);
+            }
+            // The blocks selected are the Agent's focus.
+            crate::chat_about::apply_off(&mut self.instruct, v);
+            let current = v.src == self.proj.build_src();
+            let sel = if current {
+                v.selection().to_vec()
+            } else {
+                Vec::new()
+            };
+            let key = (sel.clone(), self.instruct.chips.len(), v.src.len(), current);
+            if !self.instruct.focus.is_for(&key) {
+                let made = crate::chat_about::focus_of(
+                    v.diagram(),
+                    &sel,
+                    &self.instruct.chips,
+                    &|l| self.proj.locate(l),
+                    &self.proj.files,
+                );
+                self.instruct.focus.set(key, made);
             }
             self.dedit.chat_full = self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS;
             let asked = self.dedit.show(ui.ctx(), chrome, area, v);

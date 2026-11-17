@@ -4,10 +4,15 @@
 use helmsman_diagram::NodeKind;
 
 use crate::chat_about::{
-    self, Chip, Kind, MAX_CHIPS, MAX_LINES, MAX_NAME, MAX_NEIGHBOURS, MAX_TEXT, Taken, add, clip, envelope,
+    self, Chip, Kind, MAX_CHIPS, MAX_LINES, MAX_NAME, MAX_NEIGHBOURS, MAX_TEXT, Taken, add, clip,
+    envelope as envelope_more,
 };
 use crate::playground::Session;
 use crate::scope::{ENVELOPES, Files};
+
+fn envelope(chips: &[Chip]) -> String {
+    envelope_more(chips, 0)
+}
 
 const SRC: &str = "PROGRAM p
 VAR_INPUT
