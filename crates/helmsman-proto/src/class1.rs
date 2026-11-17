@@ -200,6 +200,8 @@ pub struct Producer {
     encapsulation_sequence: u32,
     sequence_count: u16,
     sent: u64,
+    /// The data or the run bit changed since the last packet was built.
+    unsent: bool,
 }
 
 impl Producer {
@@ -221,6 +223,7 @@ impl Producer {
             encapsulation_sequence: 0,
             sequence_count: 0,
             sent: 0,
+            unsent: true,
         })
     }
 
@@ -236,14 +239,29 @@ impl Producer {
                 carried: self.output_len,
             });
         }
-        self.output.clear();
-        self.output.extend_from_slice(data);
+        if self.output != data {
+            self.output.clear();
+            self.output.extend_from_slice(data);
+            self.unsent = true;
+        }
         Ok(())
     }
 
     /// Set the run/idle header bit (ignored for heartbeats).
     pub const fn set_run(&mut self, run: bool) {
+        if self.run != run {
+            self.unsent = true;
+        }
         self.run = run;
+    }
+
+    /// Whether the target has yet to be sent what this producer holds:
+    /// true from a change of the data or the run bit until the next
+    /// packet is built. What an originator checks before it closes, so
+    /// the last values written are not lost with the connection.
+    #[must_use]
+    pub const fn unsent(&self) -> bool {
+        self.unsent
     }
 
     #[must_use]
@@ -268,6 +286,7 @@ impl Producer {
         self.encapsulation_sequence = self.encapsulation_sequence.wrapping_add(1);
         self.sequence_count = self.sequence_count.wrapping_add(1);
         self.sent += 1;
+        self.unsent = false;
         let run_idle = self.header.then_some(if self.run {
             Class1Body::RUN
         } else {

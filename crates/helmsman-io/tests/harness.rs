@@ -218,3 +218,32 @@ fn render_is_one_line_per_check_plus_a_summary() {
     );
     assert!(!harness::ok(&checks));
 }
+
+/// A loop whose input never follows (nothing wired, as on a block fresh
+/// out of its box) fails, and the output goes back to what it was: the
+/// harness must not leave an output on at a device (a Murrelektronik
+/// IMPACT67 still held the bits of three failed loops after the run of
+/// 2026-11-16).
+#[test]
+fn a_failed_loop_leaves_the_output_as_it_was() {
+    let s = sim();
+    let mut d = driver(&s);
+    let b = Bench {
+        points: vec![],
+        expect: vec![],
+        loops: vec![("coil:9".into(), "di:10".into()), ("coil:3".into(), "di:4".into())],
+        registers: vec![],
+        absent: None,
+        settle: Duration::from_millis(50),
+    };
+    let checks = harness::run(&mut d, &b, None);
+    assert_eq!(
+        failed(&checks),
+        ["loop coil:9 -> di:10", "loop coil:3 -> di:4"],
+        "{}",
+        harness::render(&checks)
+    );
+    for coil in ["coil:9", "coil:3"] {
+        assert_eq!(d.read(&[coil]).unwrap(), [Value::Bool(false)], "{coil} left on");
+    }
+}

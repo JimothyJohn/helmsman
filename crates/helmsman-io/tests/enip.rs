@@ -1014,3 +1014,32 @@ fn an_eds_that_wants_configuration_and_gives_no_defaults_asks_for_it() {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+/// What a box does when it stops: writes the safe values and lets the
+/// driver go. The write changes the O->T image, which the producer sends
+/// at its next RPI; closing before that left the device holding the old
+/// outputs (a Murrelektronik IMPACT67 keeps its output assembly as it was
+/// after a `Forward_Close`, 2026-11-16). The last image goes out before
+/// the close.
+#[test]
+fn an_output_written_just_before_the_driver_goes_reaches_the_device() {
+    let s = E1213Sim::start().unwrap();
+    for round in 0..5 {
+        let mut d = driver(&s);
+        d.write("do:2", Value::Bool(true)).unwrap();
+        wait_value(&mut d, "di:2", Value::Bool(true), Duration::from_secs(2));
+        d.write("do:2", Value::Bool(false)).unwrap();
+        drop(d);
+        // The close is answered after the last packet was sent; the
+        // simulator takes that packet off its socket within a tick.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while lock_ref(&s.device()).assembly(102) != Some(&[0][..]) {
+            assert!(
+                Instant::now() < deadline,
+                "round {round}: DO-02 still on after the driver went"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+    }
+}
