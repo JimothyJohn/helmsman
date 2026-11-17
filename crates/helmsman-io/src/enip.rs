@@ -93,6 +93,10 @@
 //! and opens a new one on the next read or write, sending the outputs it
 //! last held from the first packet: exclusive ownership is released before
 //! it is taken again, and the outputs come back without a zero glitch.
+//! A connect that fails is not tried again at once: the next goes 200 ms
+//! later, then 400 ms, up to every 2 s, and the reads in between repeat
+//! what the last attempt said. A connection that was up and is lost is
+//! reopened by the next read.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddrV4;
@@ -899,7 +903,7 @@ pub use driver::EnipDriver;
 mod driver {
     use std::io;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use helmsman_proto::endpoint::IoEndpoint;
     use helmsman_proto::io::{ElectronicKey, Priority};
@@ -937,7 +941,27 @@ mod driver {
         /// The run/idle header was corrected from a refusal, O->T and
         /// T->O ([`Self::fix_header`]): once a direction.
         header_fixed: (bool, bool),
+        /// After a connect that failed: when the next one may go, what
+        /// the reads until then answer, and the wait that follows if it
+        /// fails again.
+        held: Option<Held>,
     }
+
+    /// See [`EnipDriver::held`].
+    struct Held {
+        until: Instant,
+        kind: io::ErrorKind,
+        what: String,
+        wait: Duration,
+    }
+
+    /// The wait after the first failed connect; it doubles with each
+    /// failure up to [`RETRY_MAX`]. A link asks its driver every scan, and
+    /// a device that answers and refuses would otherwise get a TCP session
+    /// and a `Forward_Open` each time.
+    const RETRY_FIRST: Duration = Duration::from_millis(200);
+    /// The longest wait: how long a device that is back may go unnoticed.
+    const RETRY_MAX: Duration = Duration::from_secs(2);
 
     impl std::fmt::Debug for EnipDriver {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1018,6 +1042,7 @@ mod driver {
                 opens: 0,
                 resolved: None,
                 header_fixed: (false, false),
+                held: None,
             })
         }
 
@@ -1067,6 +1092,38 @@ mod driver {
                 }),
             };
             Ok(c)
+        }
+
+        /// [`Self::connect`], unless the last one failed a moment ago:
+        /// then its error again, with no traffic, until the wait is over.
+        fn connect_paced(&mut self) -> Result<(), Error> {
+            let wait = match &self.held {
+                Some(h) if Instant::now() < h.until => {
+                    return Err(Error::Io(io::Error::new(h.kind, h.what.clone())));
+                }
+                Some(h) => (h.wait * 2).min(RETRY_MAX),
+                None => RETRY_FIRST,
+            };
+            match self.connect() {
+                Ok(()) => {
+                    self.held = None;
+                    Ok(())
+                }
+                Err(e) if e.is_link() => {
+                    let (kind, what) = match &e {
+                        Error::Io(io) => (io.kind(), io.to_string()),
+                        other => (io::ErrorKind::Other, other.to_string()),
+                    };
+                    self.held = Some(Held {
+                        until: Instant::now() + wait,
+                        kind,
+                        what,
+                        wait,
+                    });
+                    Err(e)
+                }
+                Err(e) => Err(e),
+            }
         }
 
         fn connect(&mut self) -> Result<(), Error> {
@@ -1210,7 +1267,7 @@ mod driver {
         /// The latest T->O data, from a live connection of the right size.
         fn input(&mut self) -> Result<Vec<u8>, Error> {
             if self.link.is_none() {
-                self.connect()?;
+                self.connect_paced()?;
             }
             let want = usize::from(self.spec().t_to_o_len);
             let link = self.link.as_ref().expect("connected above");

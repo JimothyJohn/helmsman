@@ -280,8 +280,9 @@ fn a_second_owner_is_refused_until_the_first_lets_go() {
     ));
 
     drop(a); // Forward_Close
-    read(&mut b, "di:0").unwrap();
-    wait_value(&mut b, "di:2", Value::Bool(false), Duration::from_secs(2));
+    // b's refused connect is tried again after a wait, not on the very
+    // next read (`a_device_that_keeps_refusing_is_not_asked_every_read`).
+    wait_value(&mut b, "di:2", Value::Bool(false), Duration::from_secs(4));
 }
 
 #[test]
@@ -1202,4 +1203,55 @@ fn no_data_on_a_port_of_the_links_own_names_the_port() {
         "{text}"
     );
     assert_eq!(lock_ref(&s.device()).connections().len(), 0, "closed again");
+}
+
+/// A box's link asks its driver every scan, which is every few
+/// milliseconds. Against a device that answers and refuses (another owner,
+/// the wrong configuration instance) each ask used to be a TCP session
+/// and a `Forward_Open`: 41 in 5 s against a Murrelektronik IMPACT67 on
+/// 2026-11-16. A refused or failed connect is not tried again at once;
+/// the reads in between say what the last attempt said.
+#[test]
+fn a_device_that_keeps_refusing_is_not_asked_every_read() {
+    let s = E1213Sim::start().unwrap();
+    // A size the device does not have: refused 0x0127 every time.
+    let p = explicit(&s, &[("o2t", "102:3")]);
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    let until = Instant::now() + Duration::from_millis(700);
+    let mut reads = 0u32;
+    while Instant::now() < until {
+        let e = read(&mut d, "in:0.0").unwrap_err();
+        assert!(e.is_link() && e.to_string().contains("0x0127"), "{e}");
+        reads += 1;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(reads > 50, "the loop itself ran: {reads} reads");
+    assert!(
+        (2..=5).contains(&d.opens),
+        "{} Forward_Opens for {reads} reads in 700 ms",
+        d.opens
+    );
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+}
+
+/// The wait after a failed connect is short at first and has a ceiling,
+/// so a device that comes back is found again within seconds, and a
+/// connection that was up and is lost is reopened at the next read.
+#[test]
+fn a_device_that_comes_back_is_connected_again_without_being_asked_to() {
+    let s = E1213Sim::start().unwrap();
+    let mut first = driver(&s);
+    read(&mut first, "di:0").unwrap();
+    // A second owner is refused for as long as the first holds on.
+    let mut second = driver(&s);
+    for _ in 0..40 {
+        let e = read(&mut second, "di:0").unwrap_err();
+        assert!(e.is_link() && e.to_string().contains("0x0106"), "{e}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(first);
+    // Nothing tells the second driver: its next attempt, a wait away,
+    // gets in.
+    wait_value(&mut second, "di:0", Value::Bool(false), Duration::from_secs(5));
+    assert!(second.opens <= 6, "{} opens", second.opens);
 }
