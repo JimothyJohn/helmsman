@@ -95,7 +95,7 @@ pub struct Env<'a> {
 impl Env<'_> {
     /// The user message for `text`, the instruction or what failed, with
     /// the file and the envelopes after it.
-    fn message(&self, text: &str, earlier: &[String], edits: bool) -> String {
+    fn message(&self, text: &str, earlier: &[String], edits: bool, about: &str) -> String {
         let scope = self.scope.envelope_for(self.project, self.files, edits);
         // The file goes once: when the program is that one file, the
         // `<edit_scope>` carries it and `<current_program>` points there.
@@ -118,6 +118,7 @@ impl Env<'_> {
                 .filter(|(n, _)| helmsman_iec::spec::is_test(n))
                 .map(|(n, t)| (n.as_str(), t.as_str())),
         ));
+        m.push_str(about);
         m
     }
 }
@@ -354,9 +355,28 @@ pub struct Instruct {
     /// (`crate::edits`), so it is asked for those and not for the whole
     /// file. The page sets it before each instruction.
     pub edits: bool,
+    /// Things collected with "Chat about this" for the next instruction
+    /// ([`crate::chat_about`]); they go with it and are then empty.
+    pub chips: Vec<crate::chat_about::Chip>,
+    /// The `<chat_about>` envelope the instruction under way went with,
+    /// for the messages after its first (a retry, an answer to a
+    /// question).
+    pub(crate) about: String,
 }
 
 impl Instruct {
+    /// Collects `chip` for the next instruction (nothing is sent).
+    pub fn add_chip(&mut self, chip: crate::chat_about::Chip) -> crate::chat_about::Taken {
+        crate::chat_about::add(&mut self.chips, chip)
+    }
+
+    /// Takes chip `k` off again.
+    pub fn remove_chip(&mut self, k: usize) {
+        if k < self.chips.len() {
+            self.chips.remove(k);
+        }
+    }
+
     #[must_use]
     pub const fn busy(&self) -> bool {
         self.run.is_some()
@@ -431,7 +451,16 @@ impl Instruct {
         spec: bool,
     ) -> Ask {
         let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
-        let message = env.message(text, &earlier, self.edits);
+        // The collected chips go with an instruction (a run from a
+        // specification keeps them for the next one).
+        self.about = if spec {
+            String::new()
+        } else {
+            let about = crate::chat_about::envelope(&self.chips);
+            self.chips.clear();
+            about
+        };
+        let message = env.message(text, &earlier, self.edits, &self.about);
         self.outcome = None;
         self.run = Some(Run {
             instruction,
@@ -509,7 +538,7 @@ impl Instruct {
                 self.failed("the change ran out of room in one answer, and the Agent could not split it into steps. Ask for one part first");
                 return Step::Done;
             }
-            let message = env.message(&run.instruction, &run.earlier, self.edits);
+            let message = env.message(&run.instruction, &run.earlier, self.edits, &self.about);
             run.asked.clone_from(&message);
             let text = run.instruction.clone();
             self.run = Some(run);
@@ -534,7 +563,7 @@ impl Instruct {
             diagnostics: env.diagnostics.to_vec(),
             splits: 0,
         }));
-        Step::Ask(Self::step_ask(self.run.insert(run), env, self.edits))
+        Step::Ask(Self::step_ask(self.run.insert(run), env, self.edits, &self.about))
     }
 
     /// The instruction under way, sent again as `text` (the instruction
@@ -542,6 +571,7 @@ impl Instruct {
     /// while its first request is still out, in one go. `None` otherwise.
     pub fn resend(&mut self, env: &Env<'_>, text: &str) -> Option<Ask> {
         let edits = self.edits;
+        let about = self.about.clone();
         let run = self.run.as_mut()?;
         if run.mode != Mode::Direct || run.retries > 0 || !run.attempts.is_empty() {
             return None;
@@ -550,7 +580,7 @@ impl Instruct {
             scope: run.scope.clone(),
             ..env.clone()
         };
-        let message = env.message(text, &run.earlier, edits);
+        let message = env.message(text, &run.earlier, edits, &about);
         run.asked.clone_from(&message);
         Some(Ask {
             text: text.to_string(),
@@ -567,6 +597,7 @@ impl Instruct {
     /// in one go.
     pub fn amend(&mut self, env: &Env<'_>, answer: &str, text: &str) -> Option<Ask> {
         let edits = self.edits;
+        let about = self.about.clone();
         let run = self.run.as_mut()?;
         if run.mode != Mode::Direct {
             return None;
@@ -581,7 +612,7 @@ impl Instruct {
             scope: run.scope.clone(),
             ..env.clone()
         };
-        let message = env.message(text, &run.earlier, edits);
+        let message = env.message(text, &run.earlier, edits, &about);
         run.asked.clone_from(&message);
         let context = run
             .attempts
@@ -614,20 +645,20 @@ impl Instruct {
         run.retries = 0;
         run.asked_scenarios = false;
         run.attempts.clear();
-        Some(Self::step_ask(run, env, self.edits))
+        Some(Self::step_ask(run, env, self.edits, &self.about))
     }
 
     /// The request for the plan's next step, on its working copy.
-    fn step_ask(run: &mut Run, env: &Env<'_>, edits: bool) -> Ask {
+    fn step_ask(run: &mut Run, env: &Env<'_>, edits: bool, about: &str) -> Ask {
         let Mode::Steps(plan) = &run.mode else {
             unreachable!("only a plan has steps")
         };
         let text = crate::steps::step_request(&run.instruction, &plan.steps, plan.done);
-        Self::plan_ask(run, env, text, edits)
+        Self::plan_ask(run, env, text, edits, about)
     }
 
     /// `text` asked of the Agent on the plan's working copy.
-    fn plan_ask(run: &mut Run, env: &Env<'_>, text: String, edits: bool) -> Ask {
+    fn plan_ask(run: &mut Run, env: &Env<'_>, text: String, edits: bool, about: &str) -> Ask {
         let Mode::Steps(plan) = &run.mode else {
             unreachable!("only a plan has steps")
         };
@@ -644,7 +675,7 @@ impl Instruct {
             diagnostics: &diagnostics,
             ..env.clone()
         };
-        let message = env.message(&text, &run.earlier, edits);
+        let message = env.message(&text, &run.earlier, edits, about);
         run.asked.clone_from(&message);
         Ask {
             text,
@@ -672,7 +703,7 @@ impl Instruct {
                     scope: run.scope.clone(),
                     ..env.clone()
                 };
-                let message = env.message(&text, &run.earlier, self.edits);
+                let message = env.message(&text, &run.earlier, self.edits, &self.about);
                 run.asked.clone_from(&message);
                 Step::Ask(Ask {
                     text,
@@ -692,7 +723,7 @@ impl Instruct {
                 run.asked_scenarios = false;
                 run.attempts.clear();
                 let text = crate::steps::split_request(&run.instruction, &plan.steps, plan.done);
-                Step::Ask(Self::plan_ask(run, env, text, self.edits))
+                Step::Ask(Self::plan_ask(run, env, text, self.edits, &self.about))
             }
             Mode::Planning { .. } => {
                 self.failed(why);
@@ -716,7 +747,7 @@ impl Instruct {
         }
         plan.steps.splice(plan.done..=plan.done, parts);
         plan.state = PlanState::Running;
-        let ask = Self::step_ask(&mut run, env, self.edits);
+        let ask = Self::step_ask(&mut run, env, self.edits, &self.about);
         self.run = Some(run);
         Step::Ask(ask)
     }
@@ -771,7 +802,7 @@ impl Instruct {
                     scope: run.scope.clone(),
                     ..env.clone()
                 };
-                let message = env.message(&text, &run.earlier, self.edits);
+                let message = env.message(&text, &run.earlier, self.edits, &self.about);
                 run.asked.clone_from(&message);
                 let context = run
                     .attempts
@@ -843,7 +874,7 @@ impl Instruct {
         run.attempts.clear();
         if plan.done < plan.steps.len() {
             run.mode = Mode::Steps(plan);
-            let ask = Self::step_ask(&mut run, env, self.edits);
+            let ask = Self::step_ask(&mut run, env, self.edits, &self.about);
             self.run = Some(run);
             return Step::Ask(ask);
         }
@@ -1767,6 +1798,82 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
     r.clicked()
 }
 
+/// The things collected with "Chat about this", one chip each in a
+/// wrapping row above the box: its kind and name cut to the column, an x
+/// to take it off. Nothing here is wider than the column, or the
+/// resizable panel would grow to it.
+fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruct) {
+    use egui::RichText;
+
+    /// The x button's width.
+    const X_W: f32 = 30.0;
+    /// What a chip adds to its label: the frame's margins and stroke, the
+    /// gap to the x, the x.
+    const FRAME: f32 = 8.0 + 2.0 + 4.0 + X_W + 2.0;
+
+    if s.chips.is_empty() {
+        return;
+    }
+    let t = crate::theme::theme(ui);
+    let col = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    let font = egui::FontId::proportional(crate::theme::BODY);
+    let busy = s.busy();
+    let mut gone = None;
+    // The row is wrapped by hand: a frame is not one widget, so egui lets
+    // it run past the end of the row, and the panel grows to follow.
+    let mut used = 0.0_f32;
+    ui.horizontal_wrapped(|ui| {
+        for (k, c) in s.chips.iter().enumerate() {
+            let text = c.label();
+            let wanted = ui
+                .fonts_mut(|f| f.layout_no_wrap(text.clone(), font.clone(), t.fg))
+                .size()
+                .x;
+            let label_w = wanted.min((col - FRAME).max(24.0)).ceil();
+            let w = label_w + FRAME;
+            if used > 0.0 && used + gap + w > col {
+                ui.end_row();
+                used = 0.0;
+            }
+            used += if used > 0.0 { gap + w } else { w };
+            egui::Frame::group(ui.style()).inner_margin(4.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let r = ui
+                        .scope(|ui| {
+                            ui.set_max_width(label_w);
+                            ui.add(
+                                egui::Label::new(RichText::new(text.clone()).font(font.clone()).color(t.fg))
+                                    .truncate(),
+                            )
+                        })
+                        .inner
+                        .tip(format!(
+                            "{} Collected with Chat about this; it goes with the next instruction.",
+                            c.tip()
+                        ));
+                    chrome.hit(format!("chat chip {k}"), r.rect);
+                    let x = ui
+                        .add_enabled(
+                            !busy,
+                            egui::Button::new(RichText::new("x").size(crate::theme::BODY))
+                                .min_size(egui::vec2(X_W, 0.0)),
+                        )
+                        .tip(format!("Takes {text} off the instruction."));
+                    chrome.hit(format!("chat chip {k} remove"), x.rect);
+                    if x.clicked() {
+                        gone = Some(k);
+                    }
+                });
+            });
+        }
+    });
+    if let Some(k) = gone {
+        s.remove_chip(k);
+    }
+}
+
 /// The instruction box, as tall as the tab leaves it, then one row: Send
 /// or Stop, the arrows through the revisions (or Undo), and what is
 /// happening. A change that
@@ -1803,6 +1910,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
          Enter sends; Shift+Enter or Ctrl+Enter starts a new line and goes on with a list \
          (- , * or 1. ); Tab indents."
     );
+    chips_ui(ui, chrome, s);
     let hint = format!("What should {target} do? e.g. Latch the lamp until stop");
     let (field, enter) = if let Some(run) = &s.run {
         // While it works the box shows what was sent, and takes no typing.
