@@ -6907,5 +6907,6 @@ mod proposal;
 mod shell;
 mod sim_popup;
 mod spec_mode;
+mod start_state;
 mod vendor;
 mod wired;

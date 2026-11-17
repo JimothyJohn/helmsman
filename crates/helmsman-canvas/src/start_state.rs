@@ -207,3 +207,131 @@ pub fn parse(answer: &str, inputs: &[Point]) -> Result<Vec<(String, Value)>, Str
     }
     Ok(out)
 }
+
+/// One input a proposal would move.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Change {
+    pub name: String,
+    pub ty: Ty,
+    pub old: Value,
+    pub new: Value,
+}
+
+/// What the Agent proposed, and the program text it was made for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Proposal {
+    pub program: String,
+    /// Only the inputs whose value differs from what they have.
+    pub changes: Vec<Change>,
+}
+
+/// Where a request for a start state stands.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Phase {
+    #[default]
+    Idle,
+    /// A request is out.
+    Working,
+    Proposed(Proposal),
+}
+
+/// The field, its request and its proposal (the I/O tab's).
+#[derive(Debug, Default)]
+pub struct Card {
+    /// The engineer's words.
+    pub draft: String,
+    pub phase: Phase,
+    /// One quiet line under the field: a refusal, what was set, why not.
+    pub line: Option<String>,
+}
+
+impl Card {
+    /// The request went out.
+    pub fn asked(&mut self) {
+        self.phase = Phase::Working;
+        self.line = None;
+    }
+
+    /// The request is stopped or dropped; nothing proposed, nothing said.
+    pub fn stopped(&mut self) {
+        self.phase = Phase::Idle;
+        self.line = None;
+    }
+
+    /// The Agent's answer (or why there was none) for the program text
+    /// `program`, whose inputs are `inputs` as they are now.
+    pub fn answered(&mut self, answer: Result<&str, &str>, program: &str, inputs: &[Point]) {
+        self.phase = Phase::Idle;
+        let text = match answer {
+            Ok(text) => text,
+            Err(why) => {
+                self.line = Some(format!("The Agent did not answer: {}.", quoted_plain(why, 80)));
+                return;
+            }
+        };
+        match parse(text, inputs) {
+            Err(why) => {
+                self.line = Some(format!("The Agent's answer cannot be used, so nothing is proposed. {why}"));
+            }
+            Ok(set) if set.is_empty() => {
+                self.line = Some("Nothing in that description names an input of this program.".into());
+            }
+            Ok(set) => {
+                let changes: Vec<Change> = set
+                    .into_iter()
+                    .filter_map(|(name, new)| {
+                        let p = inputs.iter().find(|p| p.name == name)?;
+                        (p.value != new).then(|| Change {
+                            name,
+                            ty: p.ty,
+                            old: p.value,
+                            new,
+                        })
+                    })
+                    .collect();
+                if changes.is_empty() {
+                    self.line = Some("The inputs already have the values it describes.".into());
+                } else {
+                    self.line = None;
+                    self.phase = Phase::Proposed(Proposal {
+                        program: program.to_owned(),
+                        changes,
+                    });
+                }
+            }
+        }
+    }
+
+    /// The proposal, once it may be set: `program` is the text it was made
+    /// for and nothing is running. Otherwise why not, in a line.
+    ///
+    /// # Errors
+    /// There is no proposal, the program changed, or it is running.
+    pub fn accept(&self, running: bool, program: &str) -> Result<&Proposal, String> {
+        let Phase::Proposed(p) = &self.phase else {
+            return Err("There is nothing proposed.".into());
+        };
+        if p.program != program {
+            return Err("The program changed after this was proposed, so nothing was set.".into());
+        }
+        if running {
+            return Err("The program is running, so nothing was set. Stop it first.".into());
+        }
+        Ok(p)
+    }
+}
+
+/// `text` as one line of at most `n` characters, for a reason.
+fn quoted_plain(text: &str, n: usize) -> String {
+    let flat: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let line = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = line.trim_end_matches('.');
+    if line.chars().count() > n {
+        format!("{}...", line.chars().take(n).collect::<String>())
+    } else {
+        line.to_owned()
+    }
+}
