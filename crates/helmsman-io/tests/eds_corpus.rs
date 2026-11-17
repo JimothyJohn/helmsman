@@ -27,6 +27,11 @@ pub const OPENER: (&str, &str) = (
     "0e0da5ddd62f571ea319dc29254be08cac5134236b389174983d80f0e370760f",
 );
 
+pub const MDRIVE: (&str, &str) = (
+    "SEM_MDrivever1_2.eds",
+    "b14f0fe268df5b37e9dcee6bd0288a88e59d428dbe6044b49dba8beaaeb86041",
+);
+
 fn corpus() -> Option<PathBuf> {
     std::env::var_os("HELMSMAN_EDS_CORPUS").map(PathBuf::from)
 }
@@ -126,9 +131,61 @@ fn the_opener_eds_resolves_to_the_sample_layout() {
         .map(|p| (p.configuration, p.consumed, p.produced))
         .collect();
     assert_eq!(points, want);
-    // Its exclusive owner sends 10 bytes of configuration, which neither
-    // the driver nor a target built from an EDS does yet.
-    let e = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap_err();
-    assert!(e.contains("configuration data"), "{e}");
+    // Its exclusive owner sends 10 bytes of configuration: the EDS's
+    // defaults when its configuration assembly spells them out, else
+    // `config_data=` has to bring them.
+    let spec = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap();
+    match spec.config_wanted {
+        Some(n) => {
+            assert_eq!(n, 10);
+            let e = spec.clone().with_config_data(None).unwrap_err();
+            assert!(e.contains("10 bytes of configuration data"), "{e}");
+            assert_eq!(
+                spec.with_config_data(Some(&[0; 10])).unwrap().config_data,
+                [0; 10]
+            );
+        }
+        None => assert_eq!(spec.config_data.len(), 10),
+    }
     Spec::from_eds(&eds, Connection::InputOnly).unwrap();
+}
+
+/// Novanta's own file resolves to the connection the drive on the bench
+/// took on 2026-11-16 (docs/devices/novanta-mdrive.md), and to the same
+/// one as the fixture that restates it for the other tests.
+#[test]
+fn the_mdrive_eds_resolves_as_its_facts_fixture_does() {
+    let Some(dir) = corpus() else {
+        eprintln!("HELMSMAN_EDS_CORPUS not set: nothing to check");
+        return;
+    };
+    let Some(text) = load(&dir, MDRIVE) else {
+        eprintln!("{} not in the corpus", MDRIVE.0);
+        return;
+    };
+    let eds = Eds::parse(&text).unwrap();
+    let facts = Eds::parse(include_str!(
+        "../../helmsman-proto/tests/fixtures/mdrive-facts.eds"
+    ))
+    .unwrap();
+    let spec = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap();
+    assert_eq!(spec, Spec::from_eds(&facts, Connection::ExclusiveOwner).unwrap());
+    assert_eq!(
+        (
+            spec.configuration,
+            spec.o_to_t,
+            spec.t_to_o,
+            spec.o_to_t_len,
+            spec.t_to_o_len
+        ),
+        (1, 112, 100, 36, 16)
+    );
+    // What the file says; the drive takes a run/idle header O->T, which
+    // the driver learns from the refusal.
+    assert!(!spec.o_to_t_run_idle && !spec.t_to_o_run_idle);
+    assert_eq!((spec.rpi_min, spec.rpi_max, spec.rpi_default), (None, None, None));
+    assert!(spec.config_data.is_empty() && spec.config_wanted.is_none());
+    let id = spec.identity.unwrap();
+    assert_eq!((id.vendor_id, id.device_type, id.product_code), (243, 43, 15362));
+    assert_eq!(Spec::from_eds(&eds, Connection::InputOnly).unwrap().o_to_t, 128);
 }

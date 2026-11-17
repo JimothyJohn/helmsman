@@ -1,0 +1,88 @@
+$ Written for this repository; not the vendor's file. It restates the facts
+$ of the Novanta IMS (Schneider Electric Motion) MDrive EDS,
+$ SEM_MDrivever1_2.eds (revision 1.2 of 2012, SHA-256 b14f0fe2...b86041,
+$ which is not redistributed here: docs/devices/novanta-mdrive.md), in the
+$ same layout, so tests can read an MDrive-shaped EDS without the vendor's
+$ file. What makes it worth a fixture: its assemblies give no size, only
+$ members; its connections give no RPI; and it declares the exclusive
+$ owner's O->T data modeless, while the drive takes a run/idle header.
+$ Line references below are to the vendor file.
+
+[File]
+    DescText = "MDrive facts for helmsman tests";
+    CreateDate = 11-16-2026;
+    CreateTime = 12:00:00;
+    Revision = 1.2;                                 $ vendor l.9
+
+[Device]
+    VendCode = 243;                                 $ l.12
+    VendName = "Schneider Electric";
+    ProdType = 43;                                  $ l.14, Generic Device
+    ProdTypeStr = "Generic Device";
+    ProdCode = 15362;                               $ l.16
+    MajRev = 2;                                     $ l.17
+    MinRev = 22;                                    $ l.18
+    ProdName = "MDrive";
+
+[Device Classification]
+    Class1 = EtherNetIP;
+
+[Params]
+    $ l.24-256: no minimum, no maximum, default 0, each of them.
+    Param1 = 0, ,, 0x0030, 0xD3, 4, "Status Flags & Inputs", "", "", ,,0, ,,,, ,,,, ;
+    Param2 = 0, ,, 0x0030, 0xC4, 4, "C1 (Position Counter)", "", "", ,,0, ,,,, ,,,, ;
+    Param3 = 0, ,, 0x0030, 0xC4, 4, "C2 (Encoder Counter)", "", "", ,,0, ,,,, ,,,, ;
+    Param4 = 0, ,, 0x0030, 0xC4, 4, "V (Velocity)", "", "", ,,0, ,,,, ,,,, ;
+    Param5 = 0, ,, 0x0000, 0xC6, 1, "Pad", "", "", ,,0, ,,,, ,,,, ;
+    Param6 = 0, ,, 0x0000, 0xC8, 4, "A (Acceleration)", "", "", ,,0, ,,,, ,,,, ;
+    Param7 = 0, ,, 0x0000, 0xC8, 4, "D (Deceleration)", "", "", ,,0, ,,,, ,,,, ;
+    Param8 = 0, ,, 0x0000, 0xC4, 4, "MA (Move Absolute)", "", "", ,,0, ,,,, ,,,, ;
+    Param9 = 0, ,, 0x0000, 0xC4, 4, "MR (Move Relative)", "", "", ,,0, ,,,, ,,,, ;
+    Param10 = 0, ,, 0x0000, 0xC6, 1, "RC (Run Current)", "", "", ,,0, ,,,, ,,,, ;
+    Param11 = 0, ,, 0x0000, 0xC6, 1, "HC (Hold Current)", "", "", ,,0, ,,,, ,,,, ;
+    Param12 = 0, ,, 0x0000, 0xD1, 1, "OT (Outputs)", "", "", ,,0, ,,,, ,,,, ;
+    Param13 = 0, ,, 0x0000, 0xC4, 4, "SL (Slew)", "", "", ,,0, ,,,, ,,,, ;
+    Param14 = 0, ,, 0x0000, 0xC8, 4, "VI (Initial Velocity)", "", "", ,,0, ,,,, ,,,, ;
+    Param15 = 0, ,, 0x0000, 0xC8, 4, "VM (Maximum Velocity)", "", "", ,,0, ,,,, ,,,, ;
+    Param16 = 0, ,, 0x0000, 0xC8, 4, "TE (Trip Enable)", "", "", ,,0, ,,,, ,,,, ;
+
+[Assembly]
+    $ l.259-287: a path, no size, the members' bits.
+    Assem100 = "INPUT (T2O)", "20 04 24 64 30 03", , 0x0000, ,,
+               32,Param1, 32,Param2, 32,Param3, 32,Param4;
+    Assem112 = "OUTPUT (O2T)", "20 04 24 70 30 03", , 0x0000, ,,
+               32,Param6, 32,Param7, 32,Param8, 32,Param9,
+               8,Param10, 8,Param11, 8,Param12, 8,Param5,
+               32,Param13, 32,Param14, 32,Param15, 32,Param16;
+
+[Connection Manager]
+    Connection1 =                       $ l.289-333
+        0x84010002,                     $ class 1, cyclic, exclusive owner, server
+        0x00440005,                     $ fixed sizes, modeless both ways, p2p
+        ,,Assem112,                     $ O->T: no RPI, no size
+        ,,Assem100,
+        ,,
+        ,,
+        "Exclusive Owner",
+        "",
+        "20 04 24 01 2C 70 2C 64";      $ config 1, O->T 112, T->O 100
+    Connection2 =                       $ l.334-378
+        0x01010002,                     $ listen only
+        0x00440305,                     $ O->T heartbeat
+        ,0,,
+        ,,Assem100,
+        ,,
+        ,,
+        "Listen Only",
+        "",
+        "20 04 24 01 2C 81 2C 64";      $ heartbeat point 129
+    Connection3 =                       $ l.379-423
+        0x02010002,                     $ input only
+        0x00440305,
+        ,0,,
+        ,,Assem100,
+        ,,
+        ,,
+        "Input Only",
+        "",
+        "20 04 24 01 2C 80 2C 64";      $ heartbeat point 128

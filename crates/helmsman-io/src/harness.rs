@@ -116,12 +116,18 @@ pub fn run(d: &mut dyn Driver, bench: &Bench, sim: Option<&dyn Faults>) -> Vec<C
     for (o, i) in &bench.loops {
         let r = (|| {
             let before = read_one(d, o).map_err(|e| format!("{o}: {e}"))?;
-            for v in [true, false, true, false] {
-                d.write(o, Value::Bool(v))
-                    .map_err(|e| format!("write {o}: {e}"))?;
-                await_value(d, i, Value::Bool(v), bench.settle)?;
-            }
-            d.write(o, before).map_err(|e| format!("restore {o}: {e}"))
+            let toggled = (|| {
+                for v in [true, false, true, false] {
+                    d.write(o, Value::Bool(v))
+                        .map_err(|e| format!("write {o}: {e}"))?;
+                    await_value(d, i, Value::Bool(v), bench.settle)?;
+                }
+                Ok(())
+            })();
+            // Whatever the loop showed, the output goes back: a failed
+            // check must not leave something switched on at a device.
+            let restored = d.write(o, before).map_err(|e| format!("restore {o}: {e}"));
+            toggled.and(restored)
         })();
         out.push(check(format!("loop {o} -> {i}"), r));
     }

@@ -29,7 +29,7 @@
 //! line) and bounded ([`MAX_TEXT`], [`MAX_FIELDS`]). It never panics,
 //! whatever the input: `tests/eds.rs` checks that on arbitrary text.
 
-use alloc::{format, string::String, string::ToString, vec::Vec};
+use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 use core::fmt;
 use core::fmt::Write as _;
 use core::time::Duration;
@@ -726,6 +726,17 @@ impl Assembly {
                 reference: pair[1].clone(),
             });
         }
+        // No size, only members (the Novanta MDrive's EDS): the assembly
+        // is as long as their bits, when they fill whole bytes.
+        let size = size.or_else(|| {
+            if members.is_empty() {
+                return None;
+            }
+            let bits = members
+                .iter()
+                .try_fold(0u64, |sum, m| Some(sum + u64::from(m.bits?)))?;
+            (bits % 8 == 0).then(|| u16::try_from(bits / 8).ok()).flatten()
+        });
         if let Some(size) = size
             && !members.is_empty()
             && members.iter().all(|m| m.bits.is_some())
@@ -745,6 +756,53 @@ impl Assembly {
             members,
             line: e.line,
         })
+    }
+}
+
+impl Assembly {
+    /// The assembly's bytes with every member at its default, when each
+    /// member is a `ParamN` with a size in bits and a default that fits
+    /// it; members fill bytes from the lowest bit up, as CIP packs an
+    /// assembly. `None` when any member says less (an empty reference,
+    /// another assembly, a param with no default), or the assembly has no
+    /// members or no size.
+    #[must_use]
+    pub fn defaults(&self, eds: &Eds) -> Option<Vec<u8>> {
+        let size = usize::from(self.size?);
+        if self.members.is_empty() {
+            return None;
+        }
+        let mut out = vec![0u8; size];
+        let mut at = 0usize;
+        for m in &self.members {
+            let bits = usize::try_from(m.bits?).ok()?;
+            let param = eds.param(m.reference.reference("Param")?).ok()?;
+            let value = param.default?;
+            if bits == 0 || bits > 64 || at + bits > size * 8 {
+                return None;
+            }
+            // Two's complement in `bits` bits: a negative default must
+            // fit as signed, a positive one as unsigned.
+            let fits = if bits == 64 {
+                true
+            } else if value < 0 {
+                value >= -(1i64 << (bits - 1))
+            } else {
+                value < (1i64 << bits)
+            };
+            if !fits {
+                return None;
+            }
+            #[allow(clippy::cast_sign_loss)] // the bit pattern is what goes on the wire
+            let raw = value as u64;
+            for i in 0..bits {
+                if raw >> i & 1 == 1 {
+                    out[(at + i) / 8] |= 1 << ((at + i) % 8);
+                }
+            }
+            at += bits;
+        }
+        (at == size * 8).then_some(out)
     }
 }
 
