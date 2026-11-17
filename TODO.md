@@ -13,14 +13,8 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-16
   by: claude-session
 
-- [ ] **The MDrive's mapping was changed before it got here: read it, or reset it to the default?** — You confirmed on 2026-11-17 that the bench unit's EtherNet/IP assembly mapping is not the factory one, which is why output assembly 112 did not follow the table in Novanta's fieldbus manual (p. 20) on 2026-11-16: bytes 0..3 set the position counter, bytes 4..7 started a move, byte 17 enables the drive, byte 18 sets the run current, and only bytes 20..23 (SL, slew) are where the manual puts them. The drive gives no sign of its mapping over EtherNet/IP; it is in the LMD Software Suite's TCP/IP Configuration Utility. What is open is which layout the bring-up continues on. My pick: reset it, because the library and the profile should describe a drive as delivered, and the manual's table has still not been checked on a unit.
-  options: I reset the mapping to the factory default and tell you | I keep this mapping and send you the Configuration Utility's EtherNet/IP page | leave it, keep mapping it by experiment
-  id: mdrive-assembly-mapping
-  asked: 2026-11-16
-  by: claude-session
-
-- [ ] **The MDrive keeps moving when the controller goes silent: how should it stop?** — Measured on the bench unit (2026-11-16): slewing at 5000 steps/s over the cyclic connection, it stops on a Forward_Close and when the run/idle header goes to idle, but when the controller simply stops sending (a pulled cable, a box that dies) it was still slewing 10 s later, until `SL 0` arrived over its MCode port. Nothing in the box can supply that stop; it has to be the drive's own. My pick: the MCode program, because it needs no wiring and travels with the drive; it writes to the drive's flash, which is why I am asking first.
-  options: a small MCode program on the drive that stops it when the connection is gone (I write and load it) | a hardware stop input wired to the drive | accept it on the bench for now, decide before any demo
+- [ ] **The MDrive kept moving when the controller went silent, and its utility shows Halt Motion on: what does Get say?** — Measured on the bench unit (2026-11-16): slewing at 5000 steps/s over the cyclic connection, it stops on a Forward_Close and when the run/idle header goes to idle, but when the controller simply stops sending (a pulled cable, a box that dies) it was still slewing 10 s later, until `SL 0` arrived over its MCode port. Your photo of the Configuration Utility's E.I.P. page (2026-11-17) shows "I/O Implicit connection tests: Halt Motion On", which reads like the setting for exactly this, so either the page was showing its own default and the drive has it off, or on does not cover a connection that times out. Please press Get beside Halt Motion and tell me what it shows; if it comes back Off, set it On and I repeat the test. If it really is On and the drive still runs, the stop has to be an MCode program on the drive (my pick then; it writes to the drive's flash) or a hardware input.
+  options: Get shows Off: I set it On, test again | Get shows On: write the MCode program | Get shows On: I wire a hardware stop | accept it on the bench for now
   id: mdrive-comms-loss-stop
   asked: 2026-11-16
   by: claude-session
@@ -117,7 +111,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **Bring up the Novanta IMS Liberty MDrive over EtherNet/IP or Modbus TCP** — Why it matters: the first device on the bench that is not discrete I/O. A motor drive is where the device profile's "kinds" get decided (step (g) of `device-profiles`: a drive's enable, speed, position and fault as the same four channels whatever the vendor), and where a comms loss has to stop something that moves. PROFINET first is out (Nick, 2026-11-13), so this starts on the protocols plants run. What its files say (docs/devices/novanta-mdrive.md, read 2026-11-10): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1; its EDS is in the firmware zip. Steps: Modbus TCP as it ships (no vendor tool needed), read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested; then EtherNet/IP from its EDS, so one device compares two drivers; PROFINET later, if ever. Motion asks "cell clear?" once per session (hardware-guard).
-  needs: your answers to `mdrive-assembly-mapping` and `mdrive-comms-loss-stop`; the drive on the bench at 192.168.33.1 (the Studio reaches it through `sudo ifconfig en0 alias 192.168.33.10 255.255.255.0`, gone at a reboot)
+  needs: your answer to `mdrive-comms-loss-stop`; the drive on the bench at 192.168.33.1 (the Studio reaches it through `sudo ifconfig en0 alias 192.168.33.10 255.255.255.0`, gone at a reboot)
   result: a device doc with citations, a profile and a library entry; an ST program that jogs and positions the axis and stops it on comms loss
   est: 2d
   difficulty: med
