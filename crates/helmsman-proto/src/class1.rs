@@ -324,8 +324,11 @@ pub struct Consumer {
     connection_id: u32,
     header: bool,
     latest: Option<Received>,
+    /// The encapsulation sequence number of the last packet taken.
+    sequence: Option<u32>,
     received: u64,
     ignored: u64,
+    stale: u64,
 }
 
 impl Consumer {
@@ -336,32 +339,54 @@ impl Consumer {
             connection_id: t_to_o_connection_id,
             header: config.t_to_o_run_idle,
             latest: None,
+            sequence: None,
             received: 0,
             ignored: 0,
+            stale: 0,
         }
     }
 
-    /// Offers one datagram. `Some` if it was this connection's and parsed
-    /// (and it is now [`Self::latest`]); `None` if it was ignored.
+    /// Offers one datagram. `Some` if it was this connection's, parsed,
+    /// and is newer than the last one taken (and it is now
+    /// [`Self::latest`]); `None` if it was ignored.
+    ///
+    /// Newer is by the address item's 32-bit sequence number with
+    /// wraparound, as `OpENer` compares the O->T packets it consumes
+    /// (`SEQ_GT32`, `HandleReceivedIoConnectionData`): UDP can deliver a
+    /// datagram twice or late, and a stale one must neither put old
+    /// inputs back nor count as the target being alive. A packet whose
+    /// address item has no sequence number is taken as it comes.
     pub fn accept(&mut self, datagram: &[u8]) -> Option<&Received> {
         let parsed = IoPacket::decode(datagram)
             .ok()
             .filter(|p| p.connection_id == self.connection_id)
             .and_then(|p| {
-                Class1Body::decode(p.body, self.header).ok().map(|b| Received {
-                    data: b.data.to_vec(),
-                    sequence_count: b.sequence_count,
-                    run_idle: b.run_idle,
+                Class1Body::decode(p.body, self.header).ok().map(|b| {
+                    (
+                        p.encapsulation_sequence,
+                        Received {
+                            data: b.data.to_vec(),
+                            sequence_count: b.sequence_count,
+                            run_idle: b.run_idle,
+                        },
+                    )
                 })
             });
-        if let Some(r) = parsed {
-            self.received += 1;
-            self.latest = Some(r);
-            self.latest.as_ref()
-        } else {
+        let Some((sequence, r)) = parsed else {
             self.ignored += 1;
-            None
+            return None;
+        };
+        if let (Some(new), Some(last)) = (sequence, self.sequence)
+            && (new == last || new.wrapping_sub(last) >= 0x8000_0000)
+        {
+            self.ignored += 1;
+            self.stale += 1;
+            return None;
         }
+        self.sequence = sequence.or(self.sequence);
+        self.received += 1;
+        self.latest = Some(r);
+        self.latest.as_ref()
     }
 
     #[must_use]
@@ -377,6 +402,13 @@ impl Consumer {
     #[must_use]
     pub const fn ignored(&self) -> u64 {
         self.ignored
+    }
+
+    /// Of the ignored: this connection's packets that were not newer than
+    /// one already taken (a duplicate, or one that arrived late).
+    #[must_use]
+    pub const fn stale(&self) -> u64 {
+        self.stale
     }
 }
 
@@ -441,6 +473,76 @@ mod tests {
 
     fn config() -> IoConfig {
         IoConfig::exclusive_owner(0x66, 0x65, 0x64, 2, 4, Duration::from_millis(10))
+    }
+
+    fn t_to_o(id: u32, sequence: Option<u32>, data: &[u8]) -> Vec<u8> {
+        let body = Class1Body {
+            sequence_count: 1,
+            run_idle: None,
+            data,
+        }
+        .encode();
+        IoPacket {
+            connection_id: id,
+            encapsulation_sequence: sequence,
+            body: &body,
+        }
+        .encode()
+    }
+
+    /// UDP may deliver a datagram twice or late (a ring that forwards
+    /// both ways, a wireless hop). A packet that is not newer than the
+    /// last one taken must not put old inputs back, and must not count as
+    /// the device being alive.
+    #[test]
+    fn a_replayed_or_late_packet_does_not_replace_newer_inputs() {
+        let mut c = Consumer::new(&config(), 7);
+        for (sequence, data, taken) in [
+            (5u32, [1u8, 0, 0, 0], true),
+            (6, [2, 0, 0, 0], true),
+            (6, [9, 9, 9, 9], false),  // the same packet again
+            (4, [9, 9, 9, 9], false),  // an older one, late
+            (8, [3, 0, 0, 0], true),   // one lost on the way: fine
+            (7, [9, 9, 9, 9], false),  // and here it is, too late
+            (8 + 0x7FFF_FFFF, [4, 0, 0, 0], true),
+            (8, [9, 9, 9, 9], false),
+        ] {
+            let got = c.accept(&t_to_o(7, Some(sequence), &data)).is_some();
+            assert_eq!(got, taken, "sequence {sequence}");
+        }
+        assert_eq!(c.latest().unwrap().data, [4, 0, 0, 0]);
+        assert_eq!((c.received(), c.ignored(), c.stale()), (4, 4, 4));
+    }
+
+    #[test]
+    fn the_sequence_wraps_and_another_connections_packets_do_not_move_it() {
+        let mut c = Consumer::new(&config(), 7);
+        assert!(c.accept(&t_to_o(7, Some(u32::MAX - 1), &[1; 4])).is_some());
+        // Not this connection's: ignored, and not the new high-water mark.
+        assert!(c.accept(&t_to_o(8, Some(100), &[9; 4])).is_none());
+        assert!(c.accept(&t_to_o(7, Some(u32::MAX), &[2; 4])).is_some());
+        assert!(c.accept(&t_to_o(7, Some(0), &[3; 4])).is_some());
+        assert!(c.accept(&t_to_o(7, Some(1), &[4; 4])).is_some());
+        assert!(c.accept(&t_to_o(7, Some(u32::MAX), &[9; 4])).is_none());
+        assert_eq!(c.latest().unwrap().data, [4; 4]);
+        assert_eq!(c.stale(), 1);
+        // A body that does not parse is not the newest packet either.
+        let mut bad = t_to_o(7, Some(50), &[5; 4]);
+        bad.truncate(bad.len() - 5);
+        assert!(c.accept(&bad).is_none());
+        assert!(c.accept(&t_to_o(7, Some(2), &[6; 4])).is_some());
+        assert_eq!(c.latest().unwrap().data, [6; 4]);
+    }
+
+    /// A connected-address item (no sequence number) gives nothing to
+    /// compare: every packet is taken, as before.
+    #[test]
+    fn packets_without_a_sequence_number_are_all_taken() {
+        let mut c = Consumer::new(&config(), 7);
+        for n in 0..3u8 {
+            assert!(c.accept(&t_to_o(7, None, &[n; 4])).is_some());
+        }
+        assert_eq!((c.received(), c.stale()), (3, 0));
     }
 
     #[test]
