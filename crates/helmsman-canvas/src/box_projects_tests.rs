@@ -1411,6 +1411,55 @@ fn ctrl_shift_f_forces_the_picked_input_and_ctrl_shift_u_releases_all() {
     assert_eq!(b.json("/api/forces")["forces"], serde_json::json!([]));
 }
 
+/// A stopped or faulted program reads no input (Nick, 2026-11-16): the
+/// click on an input's block says so and sends no force; any other state
+/// forces as before.
+#[test]
+fn forcing_an_input_of_a_program_that_is_not_running_reminds_and_sends_nothing() {
+    for (state, forces) in [
+        ("stopped", false),
+        ("faulted", false),
+        ("STOPPED", true),
+        ("held", true),
+        ("running", true),
+    ] {
+        let b = Bench::new();
+        let jar = Jar::default();
+        let mut v = drawn(&b, &jar);
+        let shown = v.state.selected.clone().expect("a module is shown");
+        for m in &mut v.state.modules {
+            if m.name == shown {
+                m.state = state.into();
+            }
+        }
+        let session = v.session.clone();
+        let mut h = Harness::new(v, session);
+        h.frame(vec![]);
+        h.sent();
+        h.press("force start");
+        let reqs = h.sent();
+        assert_eq!(
+            reqs.iter().any(|q| q.url.starts_with("/api/forces")),
+            forces,
+            "{state}: {reqs:?}"
+        );
+        let note = h.bv().projects.notice.clone();
+        if forces {
+            assert!(
+                !note.as_ref().is_some_and(|(n, _)| n.contains("forcing")),
+                "{state}: {note:?}"
+            );
+        } else {
+            let (text, error) = note.expect("a reminder");
+            assert!(
+                text.contains(&format!("{shown} is {state}")) && text.contains("forcing start"),
+                "{text}"
+            );
+            assert!(!error, "a reminder, not an error");
+        }
+    }
+}
+
 #[test]
 fn ctrl_shift_f_sends_nothing_without_an_engineer_signed_in() {
     let b = Bench::new();
