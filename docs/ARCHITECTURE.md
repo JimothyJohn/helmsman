@@ -2935,7 +2935,14 @@ canvas" at the end of this section.
   input is on while either is held. A right-click on a card offers "Chat
   about this" (`assign_ui::row_menu`, `chat_about_signal`: a chip for the
   point on the Agent tab, nothing sent) above the port's assignment
-  items. The card takes clicks where it was
+  items. An input set by hand while the simulation is stopped or paused
+  is set all the same (`PlaygroundView::set_by_hand`: the panel's values
+  outlive Stop, so that is how a machine is set up before it starts), and
+  a quiet line low on the diagram says nothing reacts yet and what the
+  program starts with (`idle_note`, `idle_ui`); it goes when the program
+  runs. On a box, `BoxView::force` sends nothing for a module that is
+  stopped or has faulted and says why in the project note. The card takes
+  clicks where it was
   drawn the frame before, so its control and glyphs, drawn after, are in
   front of it. Cards never widen the panel: lines are cut or wrapped to
   the column, a number input drops its slider under 150 pt, 12 pt is left

@@ -312,3 +312,105 @@ fn a_right_click_on_a_card_chats_about_its_point_and_sends_nothing() {
     }
     assert_eq!(h.app.sim.as_ref().unwrap().instruct.chips.len(), 2);
 }
+
+const DRIVE: &str = "PROGRAM p\nVAR_INPUT enable : BOOL; jog_button : BOOL; END_VAR\nVAR_OUTPUT motor : BOOL; END_VAR\nmotor := enable OR jog_button;\nEND_PROGRAM\n";
+
+/// Of the controls drawn under an input's name, the one on its card.
+fn control(h: &Harness, name: &str) -> eframe::egui::Rect {
+    let card = h.rect(&format!("io card {name}"));
+    let key = format!("input {name}");
+    h.app
+        .chrome
+        .hits
+        .iter()
+        .find(|(k, r)| *k == key && card.contains_rect(*r))
+        .map(|(_, r)| *r)
+        .expect("the control on the card")
+}
+
+fn value(h: &Harness, name: &str) -> Option<helmsman_iec::Value> {
+    h.app.sim.as_ref().unwrap().session.value(name)
+}
+
+#[test]
+fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_reacts() {
+    use crate::playground::RunState;
+    use helmsman_iec::Value::Bool;
+    let mut h = sim_with(DRIVE);
+    assert_eq!(h.app.sim.as_ref().unwrap().session.state(), RunState::Stopped);
+    let at = control(&h, "enable");
+    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    h.wait(0.2);
+    assert_eq!(
+        value(&h, "enable"),
+        Some(Bool(true)),
+        "the click sets it all the same"
+    );
+    assert_eq!(value(&h, "motor"), Some(Bool(false)), "and nothing reacts");
+    let note = h.app.sim.as_ref().unwrap().notice.clone().expect("a quiet line");
+    assert!(
+        note.contains("is stopped, so nothing reacts yet") && note.contains("starts with enable at"),
+        "{note}"
+    );
+    assert!(h.drew("nothing reacts yet"), "on the page");
+    let line = h.rect("idle note");
+    assert!(
+        h.app.chrome.diagram.contains_rect(line),
+        "low on the diagram, inside it: {line:?} in {:?}",
+        h.app.chrome.diagram
+    );
+    // Run: the line goes, and the program starts from what was set.
+    h.press("run");
+    h.wait(0.3);
+    assert_eq!(h.app.sim.as_ref().unwrap().session.state(), RunState::Running);
+    assert_eq!(h.app.sim.as_ref().unwrap().notice, None, "gone once it runs");
+    assert!(!h.has("idle note"));
+    assert_eq!(value(&h, "motor"), Some(Bool(true)), "it started with enable on");
+    // Running: a click is just a click.
+    let at = control(&h, "enable");
+    h.wait(1.0);
+    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    h.wait(0.2);
+    assert_eq!(value(&h, "enable"), Some(Bool(false)));
+    assert_eq!(h.app.sim.as_ref().unwrap().notice, None, "no line while it runs");
+    // Paused: said as paused.
+    h.app.sim.as_mut().unwrap().session.set_running(false);
+    h.wait(1.0);
+    assert_eq!(h.app.sim.as_ref().unwrap().session.state(), RunState::Paused);
+    let at = control(&h, "enable");
+    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    h.wait(0.2);
+    let note = h.app.sim.as_ref().unwrap().notice.clone().expect("a quiet line");
+    assert!(
+        note.contains("is paused") && note.contains("goes on with enable at"),
+        "{note}"
+    );
+    assert_eq!(
+        value(&h, "motor"),
+        Some(Bool(false)),
+        "held as the last scan left it"
+    );
+    // Stop keeps what the inputs were set to: the next run starts there.
+    h.press("stop");
+    h.wait(0.3);
+    assert_eq!(h.app.sim.as_ref().unwrap().session.state(), RunState::Stopped);
+    assert_eq!(value(&h, "enable"), Some(Bool(true)), "still set after Stop");
+}
+
+#[test]
+fn a_push_button_pressed_while_stopped_says_it_is_on_only_while_held() {
+    let mut h = sim_with(DRIVE);
+    let at = control(&h, "jog_button");
+    let at = eframe::egui::pos2(at.right() - 30.0, at.center().y);
+    h.frame(vec![Event::PointerMoved(at)]);
+    h.frame(vec![Harness::button(at, true)]);
+    h.wait(0.2);
+    let note = h.app.sim.as_ref().unwrap().notice.clone().expect("a quiet line");
+    assert!(
+        note.contains("nothing reacts to jog_button yet") && note.contains("only while it is held"),
+        "{note}"
+    );
+    h.frame(vec![Harness::button(at, false)]);
+    h.wait(0.2);
+    assert_eq!(value(&h, "jog_button"), Some(helmsman_iec::Value::Bool(false)));
+}
