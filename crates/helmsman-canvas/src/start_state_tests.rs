@@ -284,7 +284,7 @@ fn a_located_bit_takes_only_a_bool() {
 
 #[test]
 fn more_than_the_most_lines_is_refused() {
-    let many: Vec<Point> = (0..MAX_LINES + 1)
+    let many: Vec<Point> = (0..=MAX_LINES)
         .map(|k| point(&format!("I{k}"), Ty::Bool, Value::Bool(false)))
         .collect();
     let at = |n: usize| {

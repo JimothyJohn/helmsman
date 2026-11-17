@@ -16,6 +16,8 @@
 //! a name twice, or not a line of that form: a half-read answer would
 //! set a machine to a state nobody asked for.
 
+use std::fmt::Write as _;
+
 use helmsman_iec::{Ty, Value};
 
 use crate::playground::{Place, Point};
@@ -65,13 +67,14 @@ pub fn message(description: &str, inputs: &[Point]) -> String {
     let words: String = description.trim().chars().take(MAX_DESCRIPTION).collect();
     let mut list = String::new();
     for p in inputs {
-        list.push_str(&format!(
-            "{} | {} | {} | now {}\n",
+        let _ = writeln!(
+            list,
+            "{} | {} | {} | now {}",
             p.name,
             p.ty,
             accepts(p.ty),
             plain(p.ty, p.value)
-        ));
+        );
     }
     format!(
         "<{DESCRIPTION_TAG}>\n{}\n</{DESCRIPTION_TAG}>\n<{INPUTS_TAG}>\n{}</{INPUTS_TAG}>\n",
@@ -271,7 +274,9 @@ impl Card {
         };
         match parse(text, inputs) {
             Err(why) => {
-                self.line = Some(format!("The Agent's answer cannot be used, so nothing is proposed. {why}"));
+                self.line = Some(format!(
+                    "The Agent's answer cannot be used, so nothing is proposed. {why}"
+                ));
             }
             Ok(set) if set.is_empty() => {
                 self.line = Some("Nothing in that description names an input of this program.".into());
@@ -281,7 +286,7 @@ impl Card {
                     .into_iter()
                     .filter_map(|(name, new)| {
                         let p = inputs.iter().find(|p| p.name == name)?;
-                        (p.value != new).then(|| Change {
+                        (p.value != new).then_some(Change {
                             name,
                             ty: p.ty,
                             old: p.value,

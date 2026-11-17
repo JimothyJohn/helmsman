@@ -1373,10 +1373,10 @@ impl PlaygroundView {
     /// program that has since changed goes; so does anything under way
     /// once the program runs (an Agent never moves a running machine).
     fn start_settle(&mut self, ctx: &egui::Context) {
+        use crate::start_state::Phase;
         for m in self.start_link.drain() {
             self.start_answer.receive(m);
         }
-        use crate::start_state::Phase;
         if self.session.running && self.start.phase == Phase::Working {
             self.start_stop();
             self.start.line = Some("The program started, so the request was dropped.".into());
@@ -1385,7 +1385,8 @@ impl PlaygroundView {
             if self.start.phase == Phase::Working {
                 let inputs: Vec<Point> = self.session.inputs().cloned().collect();
                 let src = self.session.src.clone();
-                self.start.answered(done.as_deref().map_err(String::as_str), &src, &inputs);
+                self.start
+                    .answered(done.as_deref().map_err(String::as_str), &src, &inputs);
             }
         } else if self.start.phase == Phase::Working {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -1396,7 +1397,8 @@ impl PlaygroundView {
         }
     }
 
-    fn set_by_hand(&mut self, name: &str, v: Value) { // TEMP-STUB
+    fn set_by_hand(&mut self, name: &str, v: Value) {
+        // TEMP-STUB
         let _ = self.session.try_input(name, v); // TEMP-STUB
     } // TEMP-STUB
 
@@ -1482,7 +1484,14 @@ impl PlaygroundView {
         });
         if working {
             let r = ui
-                .add(egui::Label::new(RichText::new("Working…").color(t.muted).size(crate::theme::MIN_TEXT)).wrap())
+                .add(
+                    egui::Label::new(
+                        RichText::new("Working…")
+                            .color(t.muted)
+                            .size(crate::theme::MIN_TEXT),
+                    )
+                    .wrap(),
+                )
                 .tip("The Agent is reading your description. Stop it with the square beside the field.");
             chrome.hit("start working", r.rect);
         }
