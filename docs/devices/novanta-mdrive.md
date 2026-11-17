@@ -121,30 +121,53 @@ Input 100: byte 0 bit 1 is MV (moving); bit 0 followed the drive enable
 bytes 4..7 are the position (`PR P`); bytes 8..9 held the error code
 (`PR ER`: 30, 94, 107, 25 were seen there), not an encoder count.
 
-Output 112 does **not** follow the manual's layout on this unit, and a
+Output 112 does **not** follow the manual's layout on this unit: its
+mapping had been changed before it reached the bench (Nick,
+2026-11-17), and nothing the drive says over EtherNet/IP shows it. A
 field is acted on when it changes from the last image the drive saw,
-even across connections. Seen, one field at a time with the drive
-disabled, read back over MCode:
+even across connections.
 
-| bytes | did |
-| --- | --- |
-| 0..3 | set the position counter (`PR P` read the value written) |
-| 4..7 | started a move when the drive was enabled (see below) |
-| 17 | non-zero enabled the drive (DE=1), zero disabled it |
-| 18 | set the run current RC |
-| 20..23 | SL: 5000 gave `PR V` 5000 and 5000 steps/s of position; 0 stopped |
-| 19, 32.. | changed OT, R1 and EF; not worked out |
+The mapping as the E.I.P. page of Novanta's TCP/IP Configuration
+Utility shows it (Nick's photo of 2026-11-17), with what the bench saw
+of each field the night before, one field at a time, read back over
+MCode:
 
-The mapping had been changed on this unit before it reached the bench
-(Nick, 2026-11-17), and nothing the drive says over EtherNet/IP shows
-it. So the manual's table is still unchecked on a drive as delivered.
-Until the mapping is reset or read from the Configuration
-Utility (TODO.md `mdrive-assembly-mapping`), the only output fields to
-rely on are byte 17 and bytes 20..23, and an image built from the
-manual's table must not be sent: the first one that was (acceleration,
-currents and velocities where the manual puts them, SL 0) started a
-move at the `Forward_Open` that reached about 1.1 million steps/s,
-roughly 1300 rpm, before SL stopped it.
+| assembly | bytes | mnemonic | on the bench |
+| --- | --- | --- | --- |
+| 100 | 0 bit 0 | DE drive enable | followed `PR DE` |
+| | 0 bit 1 | MV moving | followed `PR MV` |
+| | 1 | IN inputs | 0x0F, as `PR IN` |
+| | 4..7 | P position | equal to `PR P` |
+| | 8..11 | ER error code | equal to `PR ER` |
+| | 12..15 | LL lead/lag | 0 throughout |
+| 112 | 0..3 | P position | set the counter (`PR P` read the value) |
+| | 4..7 | MF make-up frequency | not seen to act |
+| | 8..11 | VM maximum velocity | not tried with a valid value |
+| | 12..15 | ER error code | not tried |
+| | 16 | CF clear locked rotor | not tried |
+| | 17 | DE drive enable | non-zero enabled, zero disabled |
+| | 18 | RC run current | 44 gave `PR RC` 44 |
+| | 20..23 | SL slew | 5000 gave 5000 steps/s, 0 stopped |
+| | 24..27 | LG lag limit | not tried |
+| | 28..31 | MA move absolute | see below |
+| | 32, 33 | RD reverse direction, AS hMT mode | not tried |
+| | 34..35 | toggle bits (off) | not tried |
+
+The first image sent to the drive was built from the manual's table,
+which put 2 500 000 (meant as the maximum velocity) into bytes 28..31
+and an enable into byte 17. The drive started a move at the
+`Forward_Open` that reached about 1.1 million steps/s, roughly
+1300 rpm, before SL stopped it: on this mapping that image reads as
+"enable, move to 2 500 000". One thing does not fit yet: a small MA
+through the same bytes on 2026-11-17 (4746 steps away, drive enabled)
+did not move the drive and left error 25, then 30, and `MA` typed at
+the MCode port did the same. Not explained.
+
+The same page shows three settings, as the photo has them (whether
+they had been read from the drive with the page's Get buttons is not
+known): "I/O Implicit connection tests" with Halt Motion **On** and
+Imp. Writes On, a TCP socket inactivity timeout of 0 ("indefinitely"),
+and toggle bits mode Off.
 
 **When the controller goes away**
 
@@ -156,10 +179,11 @@ Slewing at 5000 steps/s over the cyclic connection (RPI 20 ms):
 | sets the run/idle header to idle | stops |
 | goes silent (no close, no more packets) | **keeps slewing**: still 5000 steps/s after 10 s, with timeout multipliers 0 and 1, until `SL 0` arrived over MCode |
 
-A pulled cable or a controller that dies does not stop this drive. A
-stop on comms loss has to be the drive's own (an MCode program watching
-the connection, or a hardware input); nothing in `enip-io` can supply
-it. A box that stops normally closes its connections, which does stop
+A pulled cable or a controller that dies did not stop this drive,
+although the Configuration Utility's page shows Halt Motion on for its
+implicit connection tests (above). Whether that setting is really on
+in the drive, and what it covers, is TODO.md `mdrive-comms-loss-stop`.
+Nothing in `enip-io` can supply that stop. A box that stops normally closes its connections, which does stop
 it.
 
 ## PROFINET: first run on the bench
