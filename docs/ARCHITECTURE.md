@@ -230,7 +230,23 @@ scan; the scheduler bounds how often.
   is a link error: the driver closes the connection (releasing exclusive
   ownership) and reopens it with the outputs it held from the first packet.
   A point past an assembly or a value its format can't hold is a point
-  error. Behind helmsman-io's `enip` feature, which helmsman-plc's `enip-io`
+  error. What two more vendors' devices asked of it on the bench
+  (2026-11-16, docs/devices/murrelektronik-impact67-e.md and
+  novanta-mdrive.md): `config_data=HEX` sends the configuration
+  assembly's bytes in every `Forward_Open` (an EDS connection that wants
+  configuration gets the EDS's parameter defaults unless the map gives
+  its own), for a block that takes its channel setup from the
+  controller; a `Forward_Open` refused over a size that is off by
+  exactly the run/idle header is tried again with the header the device
+  asks for, once the device's own assembly has been read and is as long
+  as the connection says (an EDS with the wrong real-time format still
+  connects); outputs written since the last packet go out before the
+  `Forward_Close`, so the safe values of a box that stops arrive; a
+  device that resets the idle TCP session keeps its link, and its
+  connection is closed over a new session when the driver goes; O->T
+  packets are paced on deadlines. `cargo run --release -p helmsman-io
+  --example enip_soak -- HOST --param ... --seconds N` holds a device
+  for a while and counts lost links. Behind helmsman-io's `enip` feature, which helmsman-plc's `enip-io`
   feature turns on: in the default build since the real E1213 passed the
   bench (2026-11-02, TODO.md `e1213-bench`). A helmsman-plc built without
   it refuses a box map naming `enip-io` as "not in this build"
@@ -2935,7 +2951,14 @@ canvas" at the end of this section.
   input is on while either is held. A right-click on a card offers "Chat
   about this" (`assign_ui::row_menu`, `chat_about_signal`: a chip for the
   point on the Agent tab, nothing sent) above the port's assignment
-  items. The card takes clicks where it was
+  items. An input set by hand while the simulation is stopped or paused
+  is set all the same (`PlaygroundView::set_by_hand`: the panel's values
+  outlive Stop, so that is how a machine is set up before it starts), and
+  a quiet line low on the diagram says nothing reacts yet and what the
+  program starts with (`idle_note`, `idle_ui`); it goes when the program
+  runs. On a box, `BoxView::force` sends nothing for a module that is
+  stopped or has faulted and says why in the project note. The card takes
+  clicks where it was
   drawn the frame before, so its control and glyphs, drawn after, are in
   front of it. Cards never widen the panel: lines are cut or wrapped to
   the column, a number input drops its slider under 150 pt, 12 pt is left

@@ -183,6 +183,9 @@ pub struct PlaygroundView {
     /// The text of `notice` while it says the program is running in this
     /// page: it goes when the program stops, faults or restarts.
     running_notice: Option<String>,
+    /// The text of `notice` while it says an input was set with nothing
+    /// running ([`Self::idle_note`]): it goes when the program runs.
+    idle_notice: Option<String>,
     /// The projects, kept in the browser's storage.
     pub proj: SimProjects,
     pub files_ui: FilesUi,
@@ -320,6 +323,7 @@ impl PlaygroundView {
             seen: Seen::default(),
             notice: None,
             running_notice: None,
+            idle_notice: None,
             proj,
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
@@ -2652,7 +2656,10 @@ impl PlaygroundView {
         // Every push button of this frame has spoken (the diagram's and
         // the I/O tab's): an input is on while any of its buttons is held.
         for (name, on) in std::mem::take(&mut self.pushed) {
-            self.session.set_input(&name, Value::Bool(on));
+            let was = self.session.value(&name);
+            if self.session.set_input(&name, Value::Bool(on)) && on && was != Some(Value::Bool(true)) {
+                self.idle_note(&name, true);
+            }
         }
         self.sim_popup_ui(&ui.ctx().clone(), chrome);
     }
@@ -2775,6 +2782,42 @@ impl PlaygroundView {
             || self.program_name.is_some()
             || self.spec_review.is_some();
         self.noticed = self.watching.say(noticed, busy, t);
+    }
+
+    /// [`Self::idle_note`]'s line while it stands, low on the diagram
+    /// where it is seen whichever tab the click was in: muted, with no
+    /// button, and it takes no click from the blocks under it.
+    fn idle_ui(&self, ui: &egui::Ui, chrome: &mut Chrome) {
+        let Some(note) = self
+            .idle_notice
+            .as_ref()
+            .filter(|n| self.notice.as_ref() == Some(n))
+        else {
+            return;
+        };
+        let t = theme(ui);
+        let area = ui.available_rect_before_wrap();
+        let width = (area.width() - 24.0).clamp(160.0, NOTICED_WIDTH);
+        let shown = egui::Area::new(egui::Id::unique("idle note"))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .pivot(egui::Align2::CENTER_BOTTOM)
+            .fixed_pos(Pos2::new(area.center().x, area.bottom() - 12.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(t.panel)
+                    .stroke(Stroke::new(1.0, t.rule))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.set_max_width(width - 20.0);
+                        ui.add(
+                            egui::Label::new(RichText::new(note).color(t.muted).size(crate::theme::MIN_TEXT))
+                                .wrap(),
+                        );
+                    });
+            });
+        chrome.hit("idle note", shown.response.rect);
     }
 
     /// What the Agent noticed, as a card over the top of the diagram:
@@ -3025,6 +3068,14 @@ impl PlaygroundView {
             self.seen.storage.clone_from(&self.proj.storage_problem);
         }
         let running = Some(self.session.running);
+        if self.session.running
+            && self
+                .idle_notice
+                .take()
+                .is_some_and(|n| self.notice.as_ref() == Some(&n))
+        {
+            self.notice = None;
+        }
         if running != self.seen.running {
             if self.seen.running.is_some() {
                 self.log.info(
@@ -3418,6 +3469,7 @@ impl Body for PlaygroundView {
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         self.noticed_ui(ui, chrome);
+        self.idle_ui(ui, chrome);
         let menus = self.assign_menus();
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         let gate = self.edit_gate();
@@ -3664,9 +3716,7 @@ impl PlaygroundView {
         });
         self.input_rects.extend(rects);
         for (name, v) in set {
-            if let Err(why) = self.session.try_input(&name, v) {
-                self.notice = Some(why);
-            }
+            self.set_by_hand(&name, v);
         }
         for (name, on) in held {
             self.hold(&name, on);
@@ -3680,6 +3730,49 @@ impl PlaygroundView {
         for (port, ask) in asks {
             self.assign_ask(port, ask);
         }
+    }
+
+    /// An input set by hand, in the I/O tab or on its block: the value
+    /// is the input's from now on, running or not, so a machine is set
+    /// up before it starts. A refusal is said; with nothing running, so
+    /// is that nothing reacts yet ([`Self::idle_note`]).
+    fn set_by_hand(&mut self, name: &str, v: Value) {
+        match self.session.try_input(name, v) {
+            Ok(()) => self.idle_note(name, false),
+            Err(why) => self.notice = Some(why),
+        }
+    }
+
+    /// The quiet line under the top bar after an input is set while the
+    /// program is not running (Nick, 2026-11-16): nothing reacts until
+    /// it runs, and the input keeps what it was set to. It goes when the
+    /// program runs. `push`: a push button, which is on only while held.
+    fn idle_note(&mut self, name: &str, push: bool) {
+        use crate::playground::RunState;
+        let state = self.session.state();
+        if state == RunState::Running {
+            return;
+        }
+        let low = name.to_ascii_lowercase();
+        let now = self
+            .session
+            .inputs()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .map_or_else(String::new, |p| show(p.ty, p.value));
+        let word = state.word();
+        let note = match (push, state) {
+            (true, _) => format!(
+                "The program is {word}, so nothing reacts to {low} yet. A push button is on only while it is held."
+            ),
+            (false, RunState::Paused) => {
+                format!("The program is paused, so nothing reacts yet. It goes on with {low} at {now}.")
+            }
+            (false, _) => {
+                format!("The program is {word}, so nothing reacts yet. It starts with {low} at {now}.")
+            }
+        };
+        self.idle_notice = Some(note.clone());
+        self.notice = Some(note);
     }
 
     /// A push button, on the diagram or in the I/O tab, says whether it
@@ -4488,7 +4581,7 @@ impl PlaygroundView {
             self.open_sim_popup(&name);
         }
         for (name, v) in set {
-            self.session.set_input(&name, v);
+            self.set_by_hand(&name, v);
         }
     }
 

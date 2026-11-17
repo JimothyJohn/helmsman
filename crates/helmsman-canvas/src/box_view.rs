@@ -1896,9 +1896,33 @@ impl BoxView {
                 .any(|s| s.forced && s.name.eq_ignore_ascii_case(name))
     }
 
+    /// The module shown, when it is stopped or has faulted.
+    fn idle_module(&self) -> Option<&crate::remote::ModuleRow> {
+        let shown = self.state.selected.as_ref()?;
+        self.state
+            .modules
+            .iter()
+            .find(|m| &m.name == shown && matches!(m.state.as_str(), "stopped" | "faulted"))
+    }
+
     /// Forces input `name` to `v` (an engineer's click on its block).
     pub fn force(&mut self, name: &str, v: Value) {
         if is_engineer(self.session.as_ref()).is_err() {
+            return;
+        }
+        // A program that is not running reads no input: the force would
+        // sit on the box and change nothing until someone starts it. Say
+        // so and leave the input alone (Nick, 2026-11-16).
+        if let Some(m) = self.idle_module() {
+            self.projects.note(
+                format!(
+                    "{} is {}, so forcing {} would change nothing. Start the program first.",
+                    m.name,
+                    m.state,
+                    name.to_ascii_lowercase()
+                ),
+                false,
+            );
             return;
         }
         let value = match v {
