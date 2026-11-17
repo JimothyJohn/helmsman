@@ -1,5 +1,5 @@
 //! `enip-io` held against a real adapter for a while: how often the link
-//! is lost, how long a read goes without fresh data, and whether the
+//! is lost, the longest stretch without a good read, and whether the
 //! connection comes back by itself.
 //!
 //! ```text
@@ -141,7 +141,7 @@ fn note(t: &mut Tally, e: String) {
 
 fn line(t: &Tally, d: &EnipDriver) -> String {
     format!(
-        "{} reads, {} errors, {} connections opened, longest without data {} ms",
+        "{} reads, {} errors, {} connections opened, longest between good reads {} ms",
         t.reads,
         t.errors,
         d.opens,
