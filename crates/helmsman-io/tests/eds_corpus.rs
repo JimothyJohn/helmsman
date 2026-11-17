@@ -140,7 +140,10 @@ fn the_opener_eds_resolves_to_the_sample_layout() {
             assert_eq!(n, 10);
             let e = spec.clone().with_config_data(None).unwrap_err();
             assert!(e.contains("10 bytes of configuration data"), "{e}");
-            assert_eq!(spec.with_config_data(Some(&[0; 10])).unwrap().config_data, [0; 10]);
+            assert_eq!(
+                spec.with_config_data(Some(&[0; 10])).unwrap().config_data,
+                [0; 10]
+            );
         }
         None => assert_eq!(spec.config_data.len(), 10),
     }
@@ -168,7 +171,13 @@ fn the_mdrive_eds_resolves_as_its_facts_fixture_does() {
     let spec = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap();
     assert_eq!(spec, Spec::from_eds(&facts, Connection::ExclusiveOwner).unwrap());
     assert_eq!(
-        (spec.configuration, spec.o_to_t, spec.t_to_o, spec.o_to_t_len, spec.t_to_o_len),
+        (
+            spec.configuration,
+            spec.o_to_t,
+            spec.t_to_o,
+            spec.o_to_t_len,
+            spec.t_to_o_len
+        ),
         (1, 112, 100, 36, 16)
     );
     // What the file says; the drive takes a run/idle header O->T, which
@@ -178,8 +187,5 @@ fn the_mdrive_eds_resolves_as_its_facts_fixture_does() {
     assert!(spec.config_data.is_empty() && spec.config_wanted.is_none());
     let id = spec.identity.unwrap();
     assert_eq!((id.vendor_id, id.device_type, id.product_code), (243, 43, 15362));
-    assert_eq!(
-        Spec::from_eds(&eds, Connection::InputOnly).unwrap().o_to_t,
-        128
-    );
+    assert_eq!(Spec::from_eds(&eds, Connection::InputOnly).unwrap().o_to_t, 128);
 }

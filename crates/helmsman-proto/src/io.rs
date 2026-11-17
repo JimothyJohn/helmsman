@@ -1029,7 +1029,10 @@ mod tests {
         let resp = cip::Response::decode(&refusal).unwrap();
         let refused = open_result(&resp).unwrap().unwrap_err();
         assert_eq!(refused.extended.len(), 17);
-        assert_eq!(refused.extended_code(), Some(extended::NON_LISTEN_ONLY_NOT_OPENED));
+        assert_eq!(
+            refused.extended_code(),
+            Some(extended::NON_LISTEN_ONLY_NOT_OPENED)
+        );
         assert_eq!(refused.connection_serial, 0x4C44);
         assert_eq!(refused.originator_serial, 0x1234_5678);
         assert_eq!(refused.remaining_path_size, 4);

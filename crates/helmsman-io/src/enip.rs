@@ -65,7 +65,7 @@
 //! default). Devices send T->O to 2222 unless told otherwise, so off 2222
 //! the `Forward_Open` carries a T->O socket-address item naming the port.
 //! Not every device reads it: a Murrelektronik IMPACT67 E and a Novanta
-//! MDrive send to 2222 regardless, and a link on another port then gets
+//! `MDrive` send to 2222 regardless, and a link on another port then gets
 //! no data, which its error says.
 //!
 //! # Points
@@ -1140,7 +1140,7 @@ mod driver {
 
         /// A refusal over a size that is off by exactly the 32-bit run/idle
         /// header: the EDS or the map has the header wrong for that
-        /// direction (a Novanta MDrive's EDS declares its O->T modeless,
+        /// direction (a Novanta `MDrive`'s EDS declares its O->T modeless,
         /// and the drive takes the header). Corrects the spec and says
         /// `true` so the open is tried again, once a direction, and only
         /// if the device's own assembly is as long as the spec says: the
@@ -1158,7 +1158,11 @@ mod driver {
                 INVALID_T_TO_O_SIZE => (false, spec.t_to_o, spec.t_to_o_len, spec.t_to_o_run_idle),
                 _ => return false,
             };
-            let tried = if outward { self.header_fixed.0 } else { self.header_fixed.1 };
+            let tried = if outward {
+                self.header_fixed.0
+            } else {
+                self.header_fixed.1
+            };
             // The connection size counts the 16-bit sequence count too.
             let ours = u32::from(len) + 2 + if header { 4 } else { 0 };
             let with_header = if u32::from(wanted) == ours + 4 && !header {

@@ -29,7 +29,7 @@
 //! line) and bounded ([`MAX_TEXT`], [`MAX_FIELDS`]). It never panics,
 //! whatever the input: `tests/eds.rs` checks that on arbitrary text.
 
-use alloc::{format, string::String, string::ToString, vec::Vec};
+use alloc::{format, string::String, string::ToString, vec, vec::Vec};
 use core::fmt;
 use core::fmt::Write as _;
 use core::time::Duration;
@@ -735,9 +735,7 @@ impl Assembly {
             let bits = members
                 .iter()
                 .try_fold(0u64, |sum, m| Some(sum + u64::from(m.bits?)))?;
-            (bits % 8 == 0)
-                .then(|| u16::try_from(bits / 8).ok())
-                .flatten()
+            (bits % 8 == 0).then(|| u16::try_from(bits / 8).ok()).flatten()
         });
         if let Some(size) = size
             && !members.is_empty()

@@ -500,10 +500,10 @@ mod tests {
         for (sequence, data, taken) in [
             (5u32, [1u8, 0, 0, 0], true),
             (6, [2, 0, 0, 0], true),
-            (6, [9, 9, 9, 9], false),  // the same packet again
-            (4, [9, 9, 9, 9], false),  // an older one, late
-            (8, [3, 0, 0, 0], true),   // one lost on the way: fine
-            (7, [9, 9, 9, 9], false),  // and here it is, too late
+            (6, [9, 9, 9, 9], false), // the same packet again
+            (4, [9, 9, 9, 9], false), // an older one, late
+            (8, [3, 0, 0, 0], true),  // one lost on the way: fine
+            (7, [9, 9, 9, 9], false), // and here it is, too late
             (8 + 0x7FFF_FFFF, [4, 0, 0, 0], true),
             (8, [9, 9, 9, 9], false),
         ] {

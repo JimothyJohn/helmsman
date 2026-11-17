@@ -1059,7 +1059,7 @@ fn an_output_written_just_before_the_driver_goes_reaches_the_device() {
     }
 }
 
-/// A Novanta MDrive resets the TCP session about 2.5 s after the
+/// A Novanta `MDrive` resets the TCP session about 2.5 s after the
 /// `Forward_Open` and goes on exchanging I/O (2026-11-16). The link must
 /// not notice, and when the driver goes the connection is still closed,
 /// over a session of its own, instead of being left to time out with the
@@ -1101,7 +1101,7 @@ fn a_device_that_drops_the_idle_session_keeps_its_link_and_is_still_closed() {
 }
 
 /// The facts EDS with its exclusive owner's O->T real-time format
-/// declared modeless, as the Novanta MDrive's EDS declares its own while
+/// declared modeless, as the Novanta `MDrive`'s EDS declares its own while
 /// the drive takes a run/idle header (its `Forward_Open` at the EDS's size
 /// is refused 0x0127 with the size it wants, four bytes more; 2026-11-16).
 fn modeless_eds() -> std::path::PathBuf {
@@ -1161,10 +1161,10 @@ fn a_size_refusal_that_is_not_the_header_stays_a_refusal() {
     // Four bytes more wanted, but because the assembly is four bytes
     // longer than the map says: a run/idle header sent there would put
     // its run bit into the first output byte.
-    let mut c = DeviceConfig::moxa_e1213();
-    c.consumed_run_idle = false;
-    c.assemblies[2] = (102, 5);
-    let s = E1213Sim::start_with(c, Application::bench()).unwrap();
+    let mut config = DeviceConfig::moxa_e1213();
+    config.consumed_run_idle = false;
+    config.assemblies[2] = (102, 5);
+    let s = E1213Sim::start_with(config, Application::bench()).unwrap();
     let p = explicit(&s, &[("run_idle", "off")]);
     let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
     let e = read(&mut d, "in:0.0").unwrap_err();
@@ -1187,7 +1187,7 @@ fn a_size_refusal_that_is_not_the_header_stays_a_refusal() {
 
 /// A link on a port of its own asks the device, in the `Forward_Open`, to
 /// send its inputs there. A Murrelektronik IMPACT67 E and a Novanta
-/// MDrive ignore that and send to UDP 2222 (2026-11-16); the link then
+/// `MDrive` ignore that and send to UDP 2222 (2026-11-16); the link then
 /// sees an open connection with no data, and its error says what to look
 /// at.
 #[test]

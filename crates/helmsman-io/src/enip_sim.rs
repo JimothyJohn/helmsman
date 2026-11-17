@@ -58,7 +58,7 @@ impl E1213Sim {
 
     /// As [`Self::start_with`], closing a TCP session that has been quiet
     /// for `session_idle` while its Class 1 connections carry on: a
-    /// Novanta MDrive resets the session about 2.5 s after the
+    /// Novanta `MDrive` resets the session about 2.5 s after the
     /// `Forward_Open` and keeps exchanging I/O (2026-11-16).
     ///
     /// # Errors
