@@ -1350,6 +1350,8 @@ impl BoxView {
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::help::Mode;
         use crate::instruct::Act;
+        // Where the diagram's selection is being used: a click here keeps it.
+        chrome.hit("agent tab", ui.clip_rect());
 
         if self.agent.status_due(ui.ctx().input(|i| i.time)) {
             #[cfg(target_arch = "wasm32")]

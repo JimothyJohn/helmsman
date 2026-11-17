@@ -3887,6 +3887,8 @@ impl PlaygroundView {
 
     fn claude(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        // Where the diagram's selection is being used: a click here keeps it.
+        chrome.hit("agent tab", ui.clip_rect());
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().id_salt("pg-claude").show(ui, |ui| {
             // Room for the scroll bar: a full-width field plus the bar is

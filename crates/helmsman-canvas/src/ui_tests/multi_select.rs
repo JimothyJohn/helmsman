@@ -342,17 +342,124 @@ fn a_click_on_empty_space_and_escape_clear_the_selection() {
 }
 
 #[test]
-fn a_click_on_a_block_keeps_the_selection() {
+fn a_plain_click_on_a_block_selects_that_block_alone() {
     let mut h = Harness::selecting(SRC);
     let motor = h.write_of("motor");
-    h.select_all();
-    let all = h.selected();
+    // With nothing selected.
     h.click_with(h.on_screen(motor).center(), Modifiers::NONE);
+    assert_eq!(h.selected(), vec![motor], "the block clicked");
+    // With many selected: only the one clicked stays.
+    h.select_all();
+    assert!(h.selected().len() > 1);
+    h.click_with(h.on_screen(motor).center(), Modifiers::NONE);
+    assert_eq!(h.selected(), vec![motor], "and no other");
+    // Another block: the selection moves to it.
+    let other = h.write_of("horn");
+    h.click_with(h.on_screen(other).center(), Modifiers::NONE);
+    assert_eq!(h.selected(), vec![other]);
+}
+
+#[test]
+fn a_click_off_the_diagram_lets_the_selection_go_but_not_one_in_the_agent_tab() {
+    let mut h = Harness::selecting(SRC);
+    h.app.chrome.dock(Pane::Claude, true);
+    h.wait(0.3);
+    h.press(&Pane::Claude.hit());
+    h.wait(0.3);
+    h.select_all();
+    let sel = h.selected();
+    assert!(!sel.is_empty(), "something is selected");
+    // The Agent tab's own button, then the instruction box in it: the
+    // selection is what the instruction is about.
+    h.wait(1.0);
+    h.press(&Pane::Claude.hit());
+    h.wait(1.0);
+    assert_eq!(h.selected(), sel, "the Agent tab's button keeps it");
+    h.press("agent instruction");
+    h.wait(1.0);
+    assert_eq!(h.selected(), sel, "a click in the Agent tab keeps it");
+    // The menu bar, off the diagram and off the Agent tab: gone.
+    let bar = h.rect("bar help").center();
+    assert!(!h.area().contains(bar));
+    h.click(bar);
+    h.wait(0.3);
+    assert!(h.selected().is_empty(), "a click anywhere else lets it go");
+    // A press off the diagram that is dragged, not clicked, changes nothing.
+    h.wait(1.0);
+    h.select_all();
+    let sel = h.selected();
+    let from = h.rect("bar file").center();
+    h.pull(
+        from,
+        from + Vec2::new(80.0, 0.0),
+        PointerButton::Primary,
+        Modifiers::NONE,
+    );
+    assert_eq!(h.selected(), sel, "a drag is not a click");
+}
+
+#[test]
+fn a_band_shows_what_it_touches_while_the_button_is_down_and_selects_on_release() {
+    let mut h = Harness::selecting(SRC);
+    let motor = h.write_of("motor");
+    h.click_with(h.on_screen(motor).center(), Modifiers::NONE);
+    assert_eq!(h.selected(), vec![motor]);
+    h.wait(1.0);
+    let corner = h.corner();
+    let a = h.area();
+    let to = Pos2::new(a.right() - 4.0, a.top() + 60.0);
+    let want = h.touched(corner, to);
+    assert!(want.len() > 1);
+    let press = |at: Pos2, pressed: bool| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    h.frame(vec![Event::PointerMoved(corner)]);
+    h.frame(vec![press(corner, true)]);
+    h.frame(vec![]);
+    assert_eq!(h.selected(), vec![motor], "a press alone changes nothing");
+    assert_eq!(sim_view(&h).drew_selected, vec![motor], "and the highlight stays");
+    for k in 1..=8 {
+        #[allow(clippy::cast_precision_loss)]
+        h.frame(vec![Event::PointerMoved(corner.lerp(to, k as f32 / 8.0))]);
+    }
+    h.frame(vec![]);
     assert_eq!(
         h.selected(),
-        all,
-        "a plain click on a block picks it and leaves the selection"
+        vec![motor],
+        "held: the selection is not changed yet"
     );
+    let mut drew = sim_view(&h).drew_selected.clone();
+    drew.sort_unstable();
+    assert_eq!(drew, want, "held: what the band touches is drawn selected");
+    h.frame(vec![press(to, false)]);
+    h.frame(vec![]);
+    assert_eq!(h.selected(), want, "released: that is the selection");
+}
+
+#[test]
+fn dragging_a_block_keeps_the_selection_it_had() {
+    let mut h = Harness::selecting(SRC);
+    h.select_all();
+    let sel = h.selected();
+    let motor = h.write_of("motor");
+    let at = h.on_screen(motor);
+    let from = Pos2::new(at.center().x, at.top() + 6.0);
+    h.wait(1.0);
+    h.pull(
+        from,
+        from + Vec2::new(40.0, 30.0),
+        PointerButton::Primary,
+        Modifiers::NONE,
+    );
+    assert_eq!(
+        h.selected(),
+        sel,
+        "the click was not released on it: nothing changes"
+    );
+    assert_eq!(sim_view(&h).drew_selected.len(), sel.len());
 }
 
 #[test]
@@ -376,12 +483,14 @@ fn escape_belongs_to_a_menu_or_the_find_box_first() {
     h.key(Modifiers::NONE, Key::Escape);
     assert!(h.selected().is_empty(), "the next one clears it");
 
-    // The find box with the keyboard: Escape closes it first.
+    // The find box with the keyboard: Escape closes it first. (The Code
+    // tab is opened before the blocks are selected: a click on its
+    // button is a click off the diagram.)
     h.wait(1.0);
-    h.select_all();
-    let sel = h.selected();
     h.press("pane code");
     h.wait(0.3);
+    h.select_all();
+    let sel = h.selected();
     h.key(Modifiers::COMMAND, Key::F);
     h.frame(vec![]);
     assert!(h.app.chrome.find.is_some(), "the find box opens");

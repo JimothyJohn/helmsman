@@ -276,6 +276,26 @@ pub struct App {
     front_seen: bool,
 }
 
+/// A click this frame that lets the diagram's selection go (Nick,
+/// 2026-11-17): anywhere off the diagram, except the Agent tab and its
+/// tab button, where the selection is being used (its chips, the
+/// instruction typed about it).
+fn clicked_off_the_diagram(ctx: &egui::Context, chrome: &Chrome) -> bool {
+    let Some(p) = ctx.input(|i| {
+        i.pointer
+            .primary_clicked()
+            .then(|| i.pointer.interact_pos())
+            .flatten()
+    }) else {
+        return false;
+    };
+    !chrome.diagram.contains(p)
+        && !chrome
+            .hits
+            .iter()
+            .any(|(k, r)| matches!(k.as_str(), "agent tab" | "tab claude" | "pane claude") && r.contains(p))
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // A page the box serves watches that box; docs/playground/ (and
@@ -657,6 +677,11 @@ impl App {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.session = session;
                 b.show(ui, &mut self.chrome);
+                if clicked_off_the_diagram(&ctx, &self.chrome)
+                    && let Some(v) = &mut b.view
+                {
+                    v.release_selection();
+                }
                 if std::mem::take(&mut b.wants_sim) {
                     self.source = Source::Sim;
                 }
@@ -674,9 +699,13 @@ impl App {
                 }
             }
             (Screen::Editor, Source::Sim) => {
-                self.sim
-                    .get_or_insert_with(PlaygroundView::new)
-                    .show(ui, &mut self.chrome);
+                let sim = self.sim.get_or_insert_with(PlaygroundView::new);
+                sim.show(ui, &mut self.chrome);
+                if clicked_off_the_diagram(&ctx, &self.chrome)
+                    && let Some(v) = &mut sim.viewer
+                {
+                    v.release_selection();
+                }
             }
             (Screen::Monitor, Source::Box) => {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
