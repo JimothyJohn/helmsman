@@ -2965,6 +2965,34 @@ canvas" at the end of this section.
   for the scroll bar (`ui_tests/io_cards.rs`, `ui_tests/outputs.rs`: 40
   inputs and 50 outputs with long names, in the list, the grid and with
   details open).
+- **Start state in words** (`start_state.rs`, `PlaygroundView::start_ui`):
+  above the Inputs cards, the simulation's I/O tab has one field, "Describe
+  a start state…", and a send glyph. It is there only when the relay's
+  status lists the `start` agent (`Chat::serves`: the free chat, as for
+  `ask`; on a key, a local proxy or a relay without it there is no field,
+  and the cards are as before), and it is off while the program runs (an
+  Agent never moves a running machine). `start_state::message` sends the
+  words in `<start_description>` and the inputs, one `NAME | TYPE | what
+  it takes | now VALUE` line each, in `<program_inputs>` (closing tags of
+  either defanged, `claude::neutralize`; TIME in whole milliseconds), over
+  a link of its own (`start_link`, not the question card's). The answer is
+  `NAME = value` lines and nothing else, in one fence at most, or `NONE`
+  (`start_state::parse`): a name that is not an input (matched in any
+  case, kept as the program spells it), a name twice, a value that
+  `Session::try_input` would refuse, prose, more than 64 lines or 8 KiB
+  refuse the whole answer, which is one quiet line under the field and
+  sets nothing. What passes is a proposal card, `NAME: old → new` for each
+  input that would change, with Set these and Discard; nothing is set
+  until Set these, which goes through `set_by_hand` (so the "nothing
+  reacts yet" line appears) and only while nothing runs and the program
+  text is the one the proposal was made for (`Card::accept`; a changed
+  program drops the proposal, a started one drops a request still out).
+  The relay half is the demo's `start` agent (agent-relay
+  `helmsman/start-v1`, a new id and a deploy). Tests: `start_state_tests.rs`
+  (hostile messages and answers), `ui_tests/start_state.rs` (proposal
+  before set, set, discard, started and edited between, the refused
+  answer, no field without the agent, and 40 long-named inputs in the
+  list and the grid at the panel's width).
 - **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from

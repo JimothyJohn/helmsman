@@ -1401,11 +1401,6 @@ impl PlaygroundView {
         }
     }
 
-    fn set_by_hand(&mut self, name: &str, v: Value) {
-        // TEMP-STUB
-        let _ = self.session.try_input(name, v); // TEMP-STUB
-    } // TEMP-STUB
-
     /// Sets what the Agent proposed, each value as set by hand, if the
     /// program is still not running and still the text it was made for.
     fn start_accept(&mut self) {
