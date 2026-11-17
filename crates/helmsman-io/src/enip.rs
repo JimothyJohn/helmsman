@@ -30,6 +30,15 @@
 //! - explicit: `config=N o2t=POINT:BYTES t2o=POINT:BYTES`, with
 //!   `run_idle=on|off` for the O->T header (default on).
 //!
+//! `config_data=HEX` (with `eds=` or the explicit form) is the
+//! configuration assembly's bytes, sent in every `Forward_Open` so a
+//! device that takes its channel setup from the controller gets it again
+//! on each reconnect: `config=109 config_data=00ff00` makes pin 4 of every
+//! port of a Murrelektronik IMPACT67 E DIO8 an output. An EDS connection
+//! that declares a configuration size needs it, unless every member of
+//! the EDS's configuration assembly is a parameter with a default; then
+//! those defaults are sent.
+//!
 //! Optional everywhere: `rpi_ms` (default the EDS's, else 100; checked
 //! against the EDS's range), `multiplier` (0..=7, default 1: the
 //! connection times out after RPI × 2^(multiplier+2) without T->O data),
@@ -404,6 +413,12 @@ pub struct Spec {
     pub do_channels: Option<u16>,
     /// From the EDS or profile, for an electronic key.
     pub identity: Option<helmsman_proto::eds::Identity>,
+    /// The configuration assembly's bytes, sent in the `Forward_Open`
+    /// (empty: none).
+    pub config_data: Vec<u8>,
+    /// Bytes of configuration data the EDS's connection declares, when
+    /// `config_data` could not be filled from the EDS's defaults.
+    pub config_wanted: Option<u16>,
 }
 
 impl Spec {
@@ -440,15 +455,20 @@ impl Spec {
                 product_name: Some("E1213".into()),
                 catalog: Some("ioLogik E1200 Series".into()),
             }),
+            config_data: Vec::new(),
+            config_wanted: None,
         }
     }
 
     /// The connection an EDS declares as `connection`.
     ///
     /// # Errors
-    /// The EDS has none, or it isn't Class 1 cyclic point-to-point, needs
-    /// configuration data, or uses a real-time format this driver doesn't
-    /// speak (anything but modeless, heartbeat and run/idle).
+    /// The EDS has none, or it isn't Class 1 cyclic point-to-point, or
+    /// uses a real-time format this driver doesn't speak (anything but
+    /// modeless, heartbeat and run/idle). A connection that wants
+    /// configuration data resolves: the data is the EDS's defaults when
+    /// its configuration assembly gives them, else `config_wanted` says
+    /// how many bytes `config_data=` has to bring.
     pub fn from_eds(eds: &helmsman_proto::eds::Eds, connection: Connection) -> Result<Self, String> {
         use helmsman_proto::eds::{AppType, RealTimeFormat};
         let want = match connection {
@@ -467,12 +487,19 @@ impl Spec {
         if !c.o_to_t.point_to_point || !c.t_to_o.point_to_point {
             return Err(format!("{name}: not point-to-point both ways"));
         }
-        if c.config_size > 0 {
-            return Err(format!(
-                "{name}: needs {} bytes of configuration data",
-                c.config_size
-            ));
-        }
+        let (config_data, config_wanted) = if c.config_size == 0 {
+            (Vec::new(), None)
+        } else {
+            match eds
+                .assembly(u32::from(c.configuration))
+                .ok()
+                .and_then(|a| a.defaults(eds))
+                .filter(|d| d.len() == usize::from(c.config_size))
+            {
+                Some(d) => (d, None),
+                None => (Vec::new(), Some(c.config_size)),
+            }
+        };
         let o_run_idle = match c.o_to_t.format {
             RealTimeFormat::RunIdle => true,
             RealTimeFormat::Modeless | RealTimeFormat::Heartbeat => false,
@@ -509,6 +536,8 @@ impl Spec {
             di_channels: None,
             do_channels: None,
             identity: eds.identity().ok(),
+            config_data,
+            config_wanted,
         })
     }
 
@@ -560,6 +589,8 @@ pub struct Params {
     pub spec: Option<Spec>,
     pub eds: Option<String>,
     pub connection: Connection,
+    /// `config_data=`: replaces what the EDS would send.
+    pub config_data: Option<Vec<u8>>,
     pub rpi: Option<Duration>,
     pub multiplier: u8,
     pub timeout: Duration,
@@ -587,6 +618,7 @@ const KNOWN: &[&str] = &[
     "eds",
     "connection",
     "config",
+    "config_data",
     "o2t",
     "t2o",
     "run_idle",
@@ -639,6 +671,16 @@ impl Params {
                 "give exactly one of profile=, eds= or config= o2t= t2o=",
             ));
         }
+        let config_data = match get("config_data") {
+            None => None,
+            Some(_) if params.contains_key("profile") => {
+                return Err(bad("config_data", "only with eds= or explicit config= o2t= t2o="));
+            }
+            Some(hex) => Some(
+                config_bytes(hex)
+                    .ok_or_else(|| bad("config_data", "want 1 to 480 bytes as hex digits, like 00ff00"))?,
+            ),
+        };
         let spec = if let Some(p) = get("profile") {
             match p {
                 "moxa-e1213" => Some(Spec::moxa_e1213(connection)),
@@ -685,6 +727,8 @@ impl Params {
                 di_channels: None,
                 do_channels: None,
                 identity: None,
+                config_data: config_data.clone().unwrap_or_default(),
+                config_wanted: None,
             })
         } else {
             None
@@ -722,6 +766,7 @@ impl Params {
             eds: get("eds").map(str::to_string),
             sweep,
             connection,
+            config_data,
             rpi,
             multiplier: int("multiplier", 7)?
                 .and_then(|v| u8::try_from(v).ok())
@@ -757,6 +802,65 @@ impl Params {
             )));
         }
         Ok(rpi)
+    }
+}
+
+/// The most configuration data a `Forward_Open` of this driver carries:
+/// its connection path is at most 255 words, and the key, the class, the
+/// three instances and the data segment's own header take up to 30 bytes
+/// of them.
+pub const MAX_CONFIG_DATA: usize = 480;
+
+/// `config_data=`: pairs of hex digits, 1 to [`MAX_CONFIG_DATA`] bytes.
+fn config_bytes(hex: &str) -> Option<Vec<u8>> {
+    let h = hex.as_bytes();
+    if h.is_empty()
+        || h.len() % 2 == 1
+        || h.len() > MAX_CONFIG_DATA * 2
+        || !h.iter().all(u8::is_ascii_hexdigit)
+    {
+        return None;
+    }
+    h.chunks(2)
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
+        .collect()
+}
+
+impl Spec {
+    /// `config_data=` put on a connection read from an EDS, and the check
+    /// that a connection wanting configuration data has some.
+    ///
+    /// # Errors
+    /// Data of another size than the EDS declares, or none where the EDS
+    /// wants it and gives no defaults.
+    pub fn with_config_data(mut self, given: Option<&[u8]>) -> Result<Self, String> {
+        if let Some(d) = given {
+            let wanted = self
+                .config_wanted
+                .or_else(|| u16::try_from(self.config_data.len()).ok().filter(|n| *n > 0));
+            if let Some(n) = wanted
+                && d.len() != usize::from(n)
+            {
+                return Err(format!(
+                    "config_data is {} bytes, the EDS's connection wants {n}",
+                    d.len()
+                ));
+            }
+            self.config_data = d.to_vec();
+            self.config_wanted = None;
+        }
+        if self.config_data.len() > MAX_CONFIG_DATA {
+            return Err(format!(
+                "the EDS's connection sends {} bytes of configuration data, more than the {MAX_CONFIG_DATA} a Forward_Open here carries",
+                self.config_data.len()
+            ));
+        }
+        match self.config_wanted {
+            Some(n) => Err(format!(
+                "the EDS's connection wants {n} bytes of configuration data and gives no defaults: add config_data=HEX"
+            )),
+            None => Ok(self),
+        }
     }
 }
 
@@ -874,7 +978,9 @@ mod driver {
             let params = Params::parse(params)?;
             let spec = match (&params.spec, &params.eds) {
                 (Some(s), _) => s.clone(),
-                (None, Some(path)) => read_eds(path, params.connection)?,
+                (None, Some(path)) => read_eds(path, params.connection)?
+                    .with_config_data(params.config_data.as_deref())
+                    .map_err(|why| Error::Address(format!("eds={path}: {why}")))?,
                 (None, None) => return Err(Error::Address("profile: no connection given".into())),
             };
             params.rpi_for(&spec)?;
@@ -932,6 +1038,7 @@ mod driver {
             );
             c.o_to_t_run_idle = spec.o_to_t_run_idle;
             c.t_to_o_run_idle = spec.t_to_o_run_idle;
+            c.config_data.clone_from(&spec.config_data);
             c.timeout_multiplier = self.params.multiplier;
             c.priority = Priority::Scheduled;
             c.key = match (self.params.key, &spec.identity) {

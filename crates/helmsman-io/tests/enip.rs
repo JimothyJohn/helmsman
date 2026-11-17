@@ -853,3 +853,164 @@ fn a_scan_lists_the_simulated_e1213_once_with_its_identity() {
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].mac, None);
 }
+
+/// The E1213's layout with a 3-byte configuration assembly: a block that
+/// takes its channel setup from the controller, as the Murrelektronik
+/// IMPACT67 E DIO8 does with its instance 109 out of the box.
+fn configurable() -> E1213Sim {
+    let mut c = DeviceConfig::moxa_e1213();
+    c.assemblies[0] = (100, 3);
+    E1213Sim::start_with(c, Application::bench()).unwrap()
+}
+
+fn explicit(s: &E1213Sim, extra: &[(&str, &str)]) -> BTreeMap<String, String> {
+    let mut p = with(s, &[("config", "100"), ("o2t", "102:1"), ("t2o", "101:51")]);
+    p.remove("profile");
+    for (k, v) in extra {
+        p.insert((*k).into(), (*v).into());
+    }
+    p
+}
+
+#[test]
+fn configuration_data_reaches_the_device_and_again_after_a_reconnect() {
+    let s = configurable();
+    let p = explicit(&s, &[("config_data", "00Ff01")]);
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[0x00, 0xFF, 0x01][..]));
+
+    // A power cycle: the connection gone, the channel setup back at the
+    // device's own.
+    s.inject(Fault::Reboot);
+    lock_ref(&s.device()).write_assembly(100, &[0; 3]).unwrap();
+    let e = wait_error(&mut d, "di:0", Duration::from_secs(3));
+    assert!(e.is_link(), "{e}");
+    s.clear_faults();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(d.opens, 2);
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[0x00, 0xFF, 0x01][..]));
+}
+
+#[test]
+fn no_configuration_data_leaves_the_devices_own() {
+    let s = configurable();
+    lock_ref(&s.device()).write_assembly(100, &[7, 8, 9]).unwrap();
+    let mut d = EnipDriver::from_params(&s.endpoint(), &explicit(&s, &[])).unwrap();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[7, 8, 9][..]));
+}
+
+#[test]
+fn configuration_data_of_another_size_is_refused_with_the_devices_code() {
+    let s = configurable();
+    for hex in ["00", "0001", "0001020304", &"00".repeat(480)] {
+        let p = explicit(&s, &[("config_data", hex)]);
+        let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+        let e = read(&mut d, "di:0").unwrap_err();
+        assert!(
+            e.is_link() && e.to_string().contains("0x0126 (invalid configuration size)"),
+            "{hex}: {e}"
+        );
+        assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[0; 3][..]), "{hex}");
+    }
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+}
+
+#[test]
+fn bad_configuration_data_is_refused_before_any_traffic() {
+    let s = configurable();
+    for (hex, what) in [
+        ("", "hex digits"),
+        ("0", "hex digits"),
+        ("000", "hex digits"),
+        ("0g", "hex digits"),
+        ("0x00", "hex digits"),
+        ("00 ff", "hex digits"),
+        ("+1", "hex digits"),
+        ("\u{ff10}\u{ff10}", "hex digits"),
+        (&"00".repeat(481), "hex digits"),
+    ] {
+        let e = EnipDriver::from_params(&s.endpoint(), &explicit(&s, &[("config_data", hex)])).unwrap_err();
+        assert!(!e.is_link() && e.to_string().contains(what), "{hex:?}: {e}");
+    }
+    // The built-in profile has no configuration assembly to fill.
+    let e = EnipDriver::from_params(&s.endpoint(), &with(&s, &[("config_data", "00")])).unwrap_err();
+    assert!(e.to_string().contains("only with eds= or explicit"), "{e}");
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+}
+
+/// The facts EDS with an exclusive owner that sends `Assem100` as
+/// configuration; `members` is that assembly's member list.
+fn eds_with_config(params: &str, members: &str) -> String {
+    let eds = FACTS
+        .replace(
+            "    Assem101 = \"Input Data\"",
+            &format!("    Assem100 = \"Configuration\", , 3, 0x0001, ,, {members};\n    Assem101 = \"Input Data\""),
+        )
+        .replace(
+            "        ,,                              $ target config\n        \"Exclusive Owner\"",
+            "        , Assem100,\n        \"Exclusive Owner\"",
+        )
+        .replace("[Assembly]", &format!("{params}\n[Assembly]"));
+    assert!(eds.contains("Assem100") && eds.contains(", Assem100,"), "the fixture moved");
+    eds
+}
+
+const MODE_PARAMS: &str = "    Param10 = 0, ,, 0x0000, 0xC6, 1, \"Mode\", \"\", \"\", 0, 1, 1, ,,,, ,,,, ;
+    Param11 = 0, ,, 0x0000, 0xC6, 1, \"Pin 4\", \"\", \"\", 0, 255, 240, ,,,, ,,,, ;
+    Param12 = 0, ,, 0x0000, 0xC6, 1, \"Pin 2\", \"\", \"\", 0, 255, 0, ,,,, ,,,, ;";
+
+#[test]
+fn an_eds_with_parameter_defaults_sends_them_as_configuration() {
+    let s = configurable();
+    let path = temp_eds(&eds_with_config(MODE_PARAMS, "8, Param10, 8, Param11, 8, Param12"));
+    let mut p = with(&s, &[("eds", path.to_str().unwrap())]);
+    p.remove("profile");
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[1, 240, 0][..]));
+    drop(d);
+
+    // config_data= replaces the defaults, and must be the EDS's size.
+    p.insert("config_data".into(), "000f0f".into());
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[0, 15, 15][..]));
+    drop(d);
+    p.insert("config_data".into(), "000f".into());
+    let e = EnipDriver::from_params(&s.endpoint(), &p).unwrap_err();
+    assert!(e.to_string().contains("2 bytes, the EDS's connection wants 3"), "{e}");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn an_eds_that_wants_configuration_and_gives_no_defaults_asks_for_it() {
+    let s = configurable();
+    // Members the EDS does not spell out, a param without a default, a
+    // default too wide for its bits, and members short of the size.
+    for (params, members) in [
+        ("", "24, "),
+        (
+            "    Param10 = 0, ,, 0x0000, 0xC6, 1, \"Mode\", \"\", \"\", 0, 1, , ,,,, ,,,, ;",
+            "8, Param10, 16, ",
+        ),
+        (MODE_PARAMS, "4, Param11, 20, Param12"),
+        (MODE_PARAMS, "8, Param10, 8, Param11, 8, Param99"),
+    ] {
+        let path = temp_eds(&eds_with_config(params, members));
+        let mut p = with(&s, &[("eds", path.to_str().unwrap())]);
+        p.remove("profile");
+        let e = EnipDriver::from_params(&s.endpoint(), &p).unwrap_err();
+        assert!(
+            !e.is_link() && e.to_string().contains("wants 3 bytes of configuration data"),
+            "{members:?}: {e}"
+        );
+        p.insert("config_data".into(), "010203".into());
+        let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+        read(&mut d, "di:0").unwrap();
+        assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[1, 2, 3][..]), "{members:?}");
+        drop(d);
+        std::fs::remove_file(path).unwrap();
+    }
+}

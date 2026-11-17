@@ -748,6 +748,53 @@ impl Assembly {
     }
 }
 
+impl Assembly {
+    /// The assembly's bytes with every member at its default, when each
+    /// member is a `ParamN` with a size in bits and a default that fits
+    /// it; members fill bytes from the lowest bit up, as CIP packs an
+    /// assembly. `None` when any member says less (an empty reference,
+    /// another assembly, a param with no default), or the assembly has no
+    /// members or no size.
+    #[must_use]
+    pub fn defaults(&self, eds: &Eds) -> Option<Vec<u8>> {
+        let size = usize::from(self.size?);
+        if self.members.is_empty() {
+            return None;
+        }
+        let mut out = vec![0u8; size];
+        let mut at = 0usize;
+        for m in &self.members {
+            let bits = usize::try_from(m.bits?).ok()?;
+            let param = eds.param(m.reference.reference("Param")?).ok()?;
+            let value = param.default?;
+            if bits == 0 || bits > 64 || at + bits > size * 8 {
+                return None;
+            }
+            // Two's complement in `bits` bits: a negative default must
+            // fit as signed, a positive one as unsigned.
+            let fits = if bits == 64 {
+                true
+            } else if value < 0 {
+                value >= -(1i64 << (bits - 1))
+            } else {
+                value < (1i64 << bits)
+            };
+            if !fits {
+                return None;
+            }
+            #[allow(clippy::cast_sign_loss)] // the bit pattern is what goes on the wire
+            let raw = value as u64;
+            for i in 0..bits {
+                if raw >> i & 1 == 1 {
+                    out[(at + i) / 8] |= 1 << ((at + i) % 8);
+                }
+            }
+            at += bits;
+        }
+        (at == size * 8).then_some(out)
+    }
+}
+
 /// Application types (bits 24–27 of a connection's first word).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AppType {
