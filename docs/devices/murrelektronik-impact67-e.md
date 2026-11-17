@@ -69,7 +69,7 @@ cable, nothing on its ports, an address from DHCP. Revision 1.2.
   was written last before it closes, so a box that writes its safe
   values and stops leaves them on the block.
 - **A hold of 20 minutes** at 10 ms, toggling channel 00 twice a second
-  (`enip_soak`): SOAK_MURR.
+  (`enip_soak`): 120 000 reads, one connection, the link never lost.
 
 ## Open
 

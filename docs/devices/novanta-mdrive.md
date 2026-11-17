@@ -112,7 +112,7 @@ alias 192.168.33.10 255.255.255.0`, gone at a reboot).
 - MCode/TCP on port 503 answers beside EtherNet/IP (`PR P`, `PR ER`,
   `SL 0`), which is how the numbers below were read back.
 - **A hold of 20 minutes** at 20 ms, outputs at zero (`enip_soak`):
-  SOAK_MDRIVE.
+  the first 13 s lost the link over and over (191 connections opened that brought no data, after 40 minutes in which nothing had talked to the drive), then one connection held for the remaining 19 minutes with no loss. Starts after a short pause were clean three times; what the first seconds were is open.
 
 **What the bytes did on this unit**
 
