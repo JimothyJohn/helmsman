@@ -338,12 +338,17 @@ pub struct Viewer {
     frame_lit: bool,
     /// The output cards of the source in `.0` ([`Viewer::output_cards`]).
     cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
+    /// What the zoom closes ([`zoom_fold`]).
+    zoom: zoom_fold::ZoomFolds,
 }
 
 /// Whether folds of `kind` start as their blocks and fold when the reader
 /// asks: the author's own structure. The standard circuits start folded.
 const fn on_request(kind: FoldKind) -> bool {
-    matches!(kind, FoldKind::Arm | FoldKind::Section | FoldKind::Output)
+    matches!(
+        kind,
+        FoldKind::Arm | FoldKind::Section | FoldKind::Statement | FoldKind::Output
+    )
 }
 
 /// Height of the tab over an opened fold's blocks, in diagram units.
@@ -685,6 +690,7 @@ impl Viewer {
                 helmsman_diagram::fold::auto(d)
                     .into_iter()
                     .chain(by_request.map(Fold::with_blocks))
+                    .chain(structure::statements(d, src))
                     .collect()
             })
             .collect();
@@ -730,6 +736,7 @@ impl Viewer {
             frame_lit: false,
             cards: std::cell::RefCell::new(None),
             jumped: None,
+            zoom: zoom_fold::ZoomFolds::default(),
         };
         v.reshow();
         v
@@ -738,6 +745,7 @@ impl Viewer {
     /// Rebuilds what is drawn for every POU: its diagram with the folds
     /// still closed applied, each block where the operator left it.
     fn reshow(&mut self) {
+        self.refresh_zoom_folds();
         for pou in 0..self.module.pous.len() {
             // The folds the reader made go first (a fold that shares a
             // block with an earlier one is left out): a folded section
@@ -747,15 +755,17 @@ impl Viewer {
             let closed: Vec<Fold> = asked
                 .chain(standard)
                 .filter(|f| self.is_closed(pou, f))
-                .cloned()
+                .map(|f| self.zoom_shape(pou, f))
                 .collect();
             if closed.is_empty() {
                 self.views[pou] = None;
+                self.zoom_unmagnified(pou);
                 continue;
             }
             let mut view = helmsman_diagram::fold::view(&self.module.pous[pou].diagram, &closed);
             if view.folds.is_empty() {
                 self.views[pou] = None;
+                self.zoom_unmagnified(pou);
                 continue;
             }
             for k in 0..view.diagram.nodes.len() {
@@ -774,6 +784,7 @@ impl Viewer {
                 }
             }
             helmsman_diagram::layout::refit(&mut view.diagram);
+            self.zoom_magnify(pou, &mut view);
             self.views[pou] = Some(view);
         }
     }
@@ -782,7 +793,7 @@ impl Viewer {
     fn is_closed(&self, pou: usize, f: &Fold) -> bool {
         let entry = (self.module.pous[pou].name.clone(), f.key.clone());
         if on_request(f.kind) {
-            self.collapsed.contains(&entry)
+            self.collapsed.contains(&entry) || self.zoom.is_shut(pou, &f.key)
         } else {
             !self.opened.contains(&entry)
         }
@@ -957,6 +968,7 @@ impl Viewer {
         let Some(kind) = self.folds[pou].iter().find(|f| f.key == key).map(|f| f.kind) else {
             return;
         };
+        self.zoom_note_hand(key, open);
         let entry = (self.module.pous[pou].name.clone(), key.to_string());
         // What starts as its blocks is kept while folded; what starts
         // folded, while opened.
@@ -1166,7 +1178,10 @@ impl Viewer {
         for f in &self.folds[pou] {
             // An arm has its region's box and label already; a folded
             // comparison is never opened.
-            if self.is_closed(pou, f) || matches!(f.kind, FoldKind::Arm | FoldKind::Chip) {
+            if self.is_closed(pou, f)
+                || matches!(f.kind, FoldKind::Arm | FoldKind::Chip)
+                || !self.zoom_tab_wanted(pou, f)
+            {
                 continue;
             }
             // Around whatever is drawn for its blocks (a fold inside it
@@ -1735,6 +1750,7 @@ impl Viewer {
         self.edits += 1;
         self.opened.clear();
         self.collapsed.clear();
+        self.zoom.forget();
         self.reshow();
     }
 
@@ -2428,7 +2444,7 @@ impl Viewer {
             return;
         };
         let mut to = cam;
-        to.frame(below, &stops[k].rect);
+        self.zoom_frame(&mut to, below, &stops[k].rect);
         to.clamp(area, self.shown().size);
         let to = (to.offset, to.zoom);
         self.cams[self.scope].moved = true;
@@ -2541,7 +2557,9 @@ impl Viewer {
         if (cam.offset, cam.zoom) != glided || double || response.dragged() {
             self.glide = None;
         }
-        let cam = *cam;
+        // The level follows the zoom the frame ended at; the camera is read
+        // again, as a level change keeps the diagram under the pointer.
+        let cam = self.follow_zoom(hover.filter(|_| response.hovered()), area);
         // A double click on a block instance opens it; anywhere else it
         // fits the diagram to the view.
         if double
@@ -2606,8 +2624,8 @@ impl Viewer {
         if response.dragged() {
             let by = response.drag_delta();
             match self.grab {
-                Some(Grab::Node(n)) => self.move_shown(n, by / cam.zoom),
-                Some(Grab::Region(r)) => self.move_shown_region(r, by / cam.zoom),
+                Some(Grab::Node(n)) => self.move_shown(n, by / cam.zoom / self.zoom_scale()),
+                Some(Grab::Region(r)) => self.move_shown_region(r, by / cam.zoom / self.zoom_scale()),
                 Some(Grab::Pan) => {
                     let cam = &mut self.cams[self.scope];
                     cam.offset += by;
@@ -2852,6 +2870,7 @@ impl Viewer {
                 ghosts: old.map(|o| (o, removed.as_slice())),
                 rows: &rows,
                 tables: &tables,
+                far: self.zoom_far(),
             },
         );
         for (_, title, around, tab) in &tabs {
@@ -3165,6 +3184,9 @@ struct Marks<'a> {
     rows: &'a [(NodeId, Vec<StateRow>)],
     /// The rows of the table blocks drawn, by block ([`Viewer::table_rows`]).
     tables: &'a [(NodeId, Vec<TableRow>)],
+    /// Drawn at the far level: the blocks of the author's structure carry
+    /// their title at a fixed size on screen ([`zoom_fold`]).
+    far: bool,
 }
 
 /// One row of a table block, as [`draw`] paints it.
@@ -3383,6 +3405,7 @@ fn draw(
         ghosts,
         rows,
         tables,
+        far,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -3646,7 +3669,25 @@ fn draw(
         } else {
             icons.of(n)
         };
-        if !text {
+        let far_fold = far
+            && matches!(n.kind, NodeKind::Fold { kind, .. } if helmsman_diagram::fold::zoom::managed(kind));
+        if far_fold {
+            // On the block's body (a headed block) or on a dimmed yellow: the
+            // page's ink reads on both.
+            let title_ink = if two_tone || !ran { t.fg } else { ink };
+            // The title at the floor size on screen, whatever the zoom:
+            // the block was laid out to hold it ([`zoom_fold`]). A section
+            // the scan did not run is dimmed with the block.
+            let label = zoom_fold::far_text(&n.label, r.width());
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                label,
+                font(helmsman_diagram::fold::zoom::FAR_FLOOR_PT),
+                title_ink,
+            );
+        }
+        if !text && !far_fold {
             if let Some(g) = glyph {
                 let side = (18.0 * z).max(14.0);
                 crate::glyph_lib::paint(
@@ -3799,6 +3840,9 @@ fn draw(
 #[cfg(test)]
 #[path = "st_view_fold_tests.rs"]
 mod fold_tests;
+
+#[path = "st_zoom.rs"]
+mod zoom_fold;
 
 #[cfg(test)]
 mod hold_tests {

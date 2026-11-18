@@ -41,6 +41,24 @@
 //!   for a title used again in the POU.
 //!
 //! A section of one statement is offered only if that statement has arms.
+//!
+//! ## Statements ([`statements`])
+//!
+//! One fold per statement of the POU, at any depth (an IF inside an arm is
+//! one too): the line the middle zoom draws ([`super::zoom`]). Its title is
+//! the statement's own text with the comments taken out and the white space
+//! run together, at most [`LINE`] characters (longer is cut and ends in
+//! `…`). Its key is `stmt:{path}`: the statement's index at the top of the
+//! POU (`stmt:2`), then for one nested in an arm `/{arm}.{index}` for each
+//! level (`stmt:2/1.0` is the first statement of the second arm of the
+//! third one). It holds while other statements are edited, as an arm's
+//! does. The fold keeps no variable as a block: its inputs and outputs are
+//! named pins, which makes it a line. Nothing is offered for a source that
+//! does not parse, or a POU the source lacks.
+
+use std::collections::HashMap;
+
+use helmsman_iec::ast::{self, Stmt, StmtKind};
 
 use super::{Fold, FoldKind};
 use crate::edit::{offset_in, skip_trivia};
@@ -188,6 +206,114 @@ pub fn sections(d: &Diagram, src: &str) -> Vec<Fold> {
             format!("section:{}:{title}#{}", d.pou, before + 1)
         };
         let fold = Fold::over_stmts(d, key, FoldKind::Section, title, run);
+        if !fold.nodes.is_empty() {
+            out.push(fold);
+        }
+    }
+    out
+}
+
+/// The longest statement title, in characters.
+pub const LINE: usize = 48;
+
+/// Where each statement of `body` and of every block nested in it starts
+/// and ends in `src`, by byte offset.
+fn spans(src: &str, body: &[Stmt], out: &mut HashMap<usize, usize>) {
+    for s in body {
+        out.insert(offset_in(src, s.pos), offset_in(src, s.end));
+        match &s.kind {
+            StmtKind::If(conds, other) => {
+                for (_, b) in conds {
+                    spans(src, b, out);
+                }
+                spans(src, other, out);
+            }
+            StmtKind::Case(_, arms, other) => {
+                for (_, b) in arms {
+                    spans(src, b, out);
+                }
+                spans(src, other, out);
+            }
+            StmtKind::For { body, .. } | StmtKind::While(_, body) | StmtKind::Repeat(body, _) => {
+                spans(src, body, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `text` with its comments taken out and its white space run together,
+/// cut at [`LINE`] characters.
+fn one_line(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut line = String::new();
+    let mut i = 0;
+    while i < b.len() {
+        let past = skip_trivia(b, i);
+        if past > i {
+            if !line.is_empty() && !line.ends_with(' ') {
+                line.push(' ');
+            }
+            i = past;
+        } else if let Some(c) = text.get(i..).and_then(|t| t.chars().next()) {
+            line.push(c);
+            i += c.len_utf8();
+        } else {
+            i += 1;
+        }
+    }
+    let line = line.trim_end();
+    if line.chars().count() > LINE {
+        let cut: String = line.chars().take(LINE - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        line.to_string()
+    }
+}
+
+/// Every statement of `d` with its path (see the module docs).
+fn paths(d: &Diagram, run: &[usize], prefix: &str, out: &mut Vec<(usize, String)>) {
+    for (j, &s) in run.iter().enumerate() {
+        let path = if prefix.is_empty() {
+            j.to_string()
+        } else {
+            format!("{prefix}.{j}")
+        };
+        let Some(stmt) = d.stmts.get(s) else { continue };
+        out.push((s, path.clone()));
+        for (k, &r) in stmt.arms.iter().enumerate() {
+            paths(d, &d.region(r).body, &format!("{path}/{k}"), out);
+        }
+    }
+}
+
+/// One fold per statement of `d`, a POU of the module whose source is
+/// `src` (positions in `d` are positions in `src`). See the module docs.
+#[must_use]
+pub fn statements(d: &Diagram, src: &str) -> Vec<Fold> {
+    let Ok(unit) = ast::parse(src) else {
+        return Vec::new();
+    };
+    let Some(pou) = unit.pous.iter().find(|p| p.name.eq_ignore_ascii_case(&d.pou)) else {
+        return Vec::new();
+    };
+    let mut ends = HashMap::new();
+    spans(src, &pou.body, &mut ends);
+    let mut all = Vec::new();
+    paths(d, &d.top, "", &mut all);
+    let mut out = Vec::new();
+    for (s, path) in all {
+        let start = offset_in(src, d.stmts[s].pos);
+        let Some(text) = ends.get(&start).and_then(|&end| src.get(start..end)) else {
+            continue;
+        };
+        let fold = Fold::over_stmts(
+            d,
+            format!("stmt:{path}"),
+            FoldKind::Statement,
+            one_line(text),
+            &[s],
+        );
         if !fold.nodes.is_empty() {
             out.push(fold);
         }

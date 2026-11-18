@@ -2929,6 +2929,17 @@ canvas" at the end of this section.
     lowering from the declarations) leaves the expression as gates. The
     fold's pins are the distinct signals, one each: `view` leaves the
     bubble off a table's pin because each cell carries its own.
+  - `fold::structure::statements`: one `FoldKind::Statement` fold per
+    statement at any depth (`stmt:2`, `stmt:2/1.0`), titled with its text
+    without comments, cut at `structure::LINE` characters. Its pins are
+    named, so it draws as one line.
+  - `fold::zoom` (semantic zoom, pure): `level(zoom, prev)` picks `Far`,
+    `Middle` or `Near` with a dead band at each threshold (out: 0.60 and
+    0.30, in: 0.72 and 0.36), and `closed(folds, level, hand)` says which
+    folds the level closes. Far closes sections, arms and statements,
+    middle closes statements, near nothing. A fold the reader set (`Hand`)
+    is never closed by it, and nor is one that holds a fold the reader
+    opened.
   `fold::auto` is what a diagram opens with: the idioms, the state
   blocks, the tables and the chips, the larger shape first (a range wins
   over its two comparisons).
@@ -2960,6 +2971,16 @@ canvas" at the end of this section.
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
+  The zoom picks the level (`st_zoom.rs`, a child of `st_view`): each frame
+  `follow_zoom` takes the camera's zoom through `zoom::level`, and when the
+  level changes the folds are drawn again and the point under the pointer
+  (the view's middle without one) keeps its place in the band of its
+  top-level statements. Nothing of this reaches `opened`, `collapsed`, the
+  edit count or `diagram.layout`: the zoom's folds are recomputed from the
+  level and what the reader set. A fold the reader opened over the zoom
+  (`kept_open`) lasts the session and is no layer of the layout, which keeps
+  only what differs from the start state. A jump (Q, E) frames within its
+  level (`Level::reach`), and no level changes while one eases.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label
