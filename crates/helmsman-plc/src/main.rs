@@ -1612,7 +1612,7 @@ fn run(o: &Opts) -> Result<(), String> {
     let cfg = device_config(o.serial);
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
     // First, so a zone that cannot be had stops the box before it binds.
-    let zone = plant_zone(o)?;
+    let (zone, zone_notes) = plant_zone(o)?;
     let d = defaults(o, i_len, q_len);
     let mut content = content(o, &d)?;
     let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
@@ -1757,6 +1757,9 @@ fn run(o: &Opts) -> Result<(), String> {
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
     let mut names: Vec<String> = rt.names().map(str::to_string).collect();
+    for note in &zone_notes {
+        eprintln!("helmsman-plc: {note}");
+    }
     let start = Instant::now();
     // A planned stop (service manager, Ctrl-C) sets one of these; the scan
     // loop sees it within a scan and writes the RETAIN values before exiting.
@@ -1841,7 +1844,10 @@ fn run(o: &Opts) -> Result<(), String> {
 /// The zone `DT_NOW()` reads in: `--time-zone`, which stops the box when it
 /// cannot be had, else the system's, which falls back to UTC with a line
 /// that says so (a box with no zone database still runs). Read once.
-fn plant_zone(o: &Opts) -> Result<Zone, String> {
+/// The lines for the journal come back with it, to be printed after the
+/// start banner.
+fn plant_zone(o: &Opts) -> Result<(Zone, Vec<String>), String> {
+    let mut notes = Vec::new();
     let (zone, why) = match &o.time_zone {
         Some(name) => (
             Zone::named(name).map_err(|e| format!("--time-zone: {e}"))?,
@@ -1850,20 +1856,20 @@ fn plant_zone(o: &Opts) -> Result<Zone, String> {
         None => match Zone::system() {
             Ok(z) => (z, "the system's"),
             Err(e) => {
-                eprintln!(
-                    "helmsman-plc: time zone: {e}; DT_NOW() reads UTC (give --time-zone to say otherwise)"
-                );
+                notes.push(format!(
+                    "time zone: {e}; DT_NOW() reads UTC (give --time-zone to say otherwise)"
+                ));
                 (Zone::utc(), "fallback")
             }
         },
     };
     let now = i64::try_from(zone::system_utc_ns().div_euclid(1_000_000_000)).unwrap_or(0);
-    eprintln!(
-        "helmsman-plc: DT_NOW() reads {} time ({why}), UTC{} now",
+    notes.push(format!(
+        "DT_NOW() reads {} time ({why}), UTC{} now",
         zone.name(),
         zone.offset_text(now)
-    );
-    Ok(zone)
+    ));
+    Ok((zone, notes))
 }
 
 /// `helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE...]`:
