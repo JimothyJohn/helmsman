@@ -1659,6 +1659,7 @@ dependencies = [
  "helmsman-iolink",
  "proptest",
  "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]
