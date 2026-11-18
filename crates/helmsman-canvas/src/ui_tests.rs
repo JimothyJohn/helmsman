@@ -1828,6 +1828,86 @@ mod chrome {
         assert_eq!(h.app.screen, Screen::Editor);
     }
 
+    /// The install form sits in the review screen's resizable left panel,
+    /// and a stopped install draws the Agent's long words in the centre:
+    /// neither may push the panel wider than it opens (the egui panel
+    /// rule in CLAUDE.md).
+    #[test]
+    fn the_install_form_and_a_stopped_install_leave_the_review_panel_its_width() {
+        use crate::install_review::{BundleReview, Stopped};
+        use crate::review::Session;
+        let mut h = Harness::new(App::boxed());
+        h.press("bar view");
+        h.press("view proposals");
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: None,
+            role: "engineer".into(),
+        });
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let width = |h: &Harness, key: &str| {
+            h.app
+                .review
+                .as_ref()
+                .unwrap()
+                .rects
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, r)| r.width())
+                .unwrap_or_else(|| panic!("no {key} drawn"))
+        };
+        let (index0, name0) = (width(&h, "install index"), width(&h, "install name"));
+        assert!(
+            index0 <= 280.0 && name0 <= 280.0,
+            "{index0} {name0}: wider than the panel"
+        );
+        let long = "x".repeat(600);
+        {
+            let v = h.app.review.as_mut().unwrap();
+            v.state.install.index = format!("https://{long}/index.json");
+            v.state.install.name = long.clone();
+        }
+        let verdict = serde_json::json!({
+            "summary": long, "reads": [long.clone()], "writes": [long.clone()], "devices": [long.clone()],
+            "access": [long.clone()], "at_start": [long.clone()], "undeclared": [long.clone()],
+            "risk": "high", "refuse": true, "reason": long,
+        });
+        for state in ["refused", "not_reviewed"] {
+            let review =
+                BundleReview::parse(&serde_json::json!({ "state": state, "why": long, "verdict": verdict }))
+                    .unwrap();
+            h.app.review.as_mut().unwrap().state.install.stopped = Some(Stopped {
+                bundle: long.clone(),
+                error: long.clone(),
+                review,
+                index: "i".into(),
+                name: "n".into(),
+            });
+            for _ in 0..3 {
+                h.frame(vec![]);
+            }
+            let (index, name) = (width(&h, "install index"), width(&h, "install name"));
+            assert!(
+                (index - index0).abs() <= 8.0,
+                "{state}: the index field went from {index0} to {index}"
+            );
+            assert!(
+                (name - name0).abs() <= 8.0,
+                "{state}: the name field went from {name0} to {name}"
+            );
+            assert!(
+                h.app
+                    .review
+                    .as_ref()
+                    .unwrap()
+                    .rects
+                    .iter()
+                    .any(|(k, _)| k == "install dismiss"),
+                "{state}: the result has its Dismiss"
+            );
+        }
+    }
+
     #[test]
     fn about_shows_the_boxs_https_fingerprint_when_it_has_one() {
         let mut h = Harness::new(App::boxed());

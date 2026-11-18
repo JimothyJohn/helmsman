@@ -85,6 +85,9 @@ mod help;
 mod history_ui;
 mod hotkeys;
 mod icons;
+mod install_review;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod install_review_tests;
 mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;

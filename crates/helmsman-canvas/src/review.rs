@@ -17,6 +17,11 @@
 //!   the sim replay, charted.
 //! - `POST /api/proposals/{id}/apply`, `POST /api/snapshots/{id}/rollback`:
 //!   approve and undo, `{replay}` only: the session's role approves.
+//! - `POST /api/market/install`: install a bundle from a marketplace's
+//!   index. The box has the Agent read it first: a proposal comes back
+//!   with the review on it, or the install stops (a refusal, or no review
+//!   with "Install without a review" for an engineer signed in). See
+//!   [`crate::install_review`].
 //! - `POST /api/login`, `POST /api/logout`, `GET /api/session`: signing
 //!   in, with a user and password on a box with accounts (`GET
 //!   /api/policy` says `credentials: accounts`), else with a role and its
@@ -41,6 +46,8 @@ use helmsman_diagram::diff::{self, Line, ModuleDiff};
 use helmsman_diagram::{Module, lower};
 use helmsman_iec::{ImageSizes, compile};
 use serde_json::{Value as Json, json};
+
+use crate::install_review::{BundleReview, Install, Stopped};
 
 /// The roles a PIN can be for, least first.
 pub const ROLES: [&str; 3] = ["operator", "engineer", "integrator"];
@@ -117,6 +124,9 @@ pub enum Call {
     /// `GET /api/login`: how this box signs in (the one read open before
     /// a session, card read-lock).
     LoginHow,
+    /// `POST /api/market/install`: a bundle from a marketplace, reviewed by
+    /// the Agent and then proposed ([`crate::install_review`]).
+    Install,
 }
 
 /// Who this page is signed in as (the box holds the session; the page
@@ -238,6 +248,13 @@ fn title(j: &Json) -> String {
             j["param"].as_str().unwrap_or("?"),
             j["to"]
         ),
+        Some("bundle") => format!(
+            "bundle {} {}",
+            j["bundle"]["name"].as_str().unwrap_or("?"),
+            j["bundle"]["version"].as_str().unwrap_or("")
+        )
+        .trim_end()
+        .to_string(),
         _ => "proposal".into(),
     }
 }
@@ -724,6 +741,14 @@ impl Open {
         Some((n["role"].as_str()?.to_string(), n["replay"].as_bool()?))
     }
 
+    /// The Agent's review of this proposal, when it is a bundle's.
+    #[must_use]
+    pub fn bundle_review(&self) -> Option<BundleReview> {
+        (self.json["kind"] == "bundle")
+            .then(|| BundleReview::parse(&self.json["review"]))
+            .flatten()
+    }
+
     #[must_use]
     pub fn module_name(&self) -> Option<&str> {
         match self.json["kind"].as_str() {
@@ -761,6 +786,10 @@ pub struct Review {
     pub login_problem: Option<String>,
     /// A login is on its way.
     pub logging_in: bool,
+    /// The install form and what became of the last install.
+    pub install: Install,
+    /// The index and name the install on its way asked for.
+    asked: Option<(String, String)>,
     /// A list is on its way: the badge's round waits for it.
     listing: bool,
     queue: Vec<Request>,
@@ -881,6 +910,101 @@ impl Review {
         if self.session.take().is_some() {
             self.login_problem =
                 Some("The session ended (signed out, expired, or the box restarted). Sign in again.".into());
+        }
+    }
+
+    /// Whether the session is an engineer's or above: the one who may go
+    /// on when a bundle could not be reviewed.
+    #[must_use]
+    pub fn engineer(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| {
+            ROLES.iter().position(|r| *r == s.role) >= ROLES.iter().position(|r| *r == "engineer")
+        })
+    }
+
+    /// Installs the bundle the form names. Nothing is sent while nobody
+    /// is signed in or a field is empty.
+    pub fn install_bundle(&mut self) {
+        let (index, name) = (
+            self.install.index.trim().to_string(),
+            self.install.name.trim().to_string(),
+        );
+        self.send_install(index, name, false);
+    }
+
+    /// Installs again the bundle the last stop was for, going on without
+    /// a review. Only a missing review has this way on, and the box asks
+    /// for an engineer's session.
+    pub fn install_without_review(&mut self) {
+        let Some(s) = self.install.stopped.as_ref().filter(|s| s.can_go_on()) else {
+            return;
+        };
+        let (index, name) = (s.index.clone(), s.name.clone());
+        self.send_install(index, name, true);
+    }
+
+    fn send_install(&mut self, index: String, name: String, without_review: bool) {
+        if self.install.busy {
+            return;
+        }
+        if self.session.is_none() {
+            self.install.error = Some(not_signed_in().hint);
+            return;
+        }
+        if index.is_empty() || name.is_empty() {
+            self.install.error = Some("Type the marketplace's index address and the bundle's name.".into());
+            return;
+        }
+        let mut body = json!({ "index": index, "name": name });
+        if without_review {
+            body["without_review"] = json!(true);
+        }
+        self.install.error = None;
+        self.install.installed = None;
+        self.install.stopped = None;
+        self.install.busy = true;
+        // What was asked stays with the answer: a stop remembers it.
+        self.queue.push(Request::post(
+            Call::Install,
+            "/api/market/install".into(),
+            Some(body.to_string()),
+        ));
+        self.asked = Some((index, name));
+    }
+
+    fn installed(&mut self, a: &Answer, j: Option<&Json>) {
+        self.install.busy = false;
+        let asked = self.asked.take();
+        let review = j.and_then(|j| BundleReview::parse(&j["review"]));
+        match (a.status, j, review) {
+            (201, Some(p), _) => {
+                self.install.dismiss();
+                self.install.installed = p["id"].as_u64();
+                self.relist();
+                if let Some(id) = p["id"].as_u64() {
+                    self.open(id);
+                }
+            }
+            (409 | 422, Some(j), Some(review)) => {
+                let (index, name) = asked.unwrap_or_default();
+                let bundle = format!(
+                    "{} {}",
+                    j["bundle"]["name"].as_str().unwrap_or(&name),
+                    j["bundle"]["version"].as_str().unwrap_or("")
+                );
+                self.install.stopped = Some(Stopped {
+                    bundle: crate::install_review::plain(bundle.trim()),
+                    error: crate::install_review::plain(j["error"].as_str().unwrap_or("the install stopped")),
+                    review,
+                    index,
+                    name,
+                });
+            }
+            (401, ..) => {
+                self.session_ended();
+                self.install.error = Some(not_signed_in().hint);
+            }
+            _ => self.install.error = Some(short(a)),
         }
     }
 
@@ -1083,6 +1207,7 @@ impl Review {
                     _ => error,
                 });
             }
+            Call::Install => self.installed(a, j.as_ref()),
             // Ended here already; the box's answer changes nothing.
             Call::Logout => {}
         }
