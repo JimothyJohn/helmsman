@@ -426,6 +426,7 @@ pub fn declared_ports(src: &str) -> Vec<Declared> {
                     ty: match &v.ty {
                         TypeRef::Named(n, _) => n.to_ascii_uppercase(),
                         TypeRef::Array { .. } => "ARRAY".to_string(),
+                        TypeRef::Str(..) => "STRING".to_string(),
                     },
                     what: lines.get(line).and_then(|l| first_comment(l)),
                 }

@@ -490,7 +490,7 @@ fn structural_errors() {
         (project(&[], "<SFC/>"), "SFC bodies"),
         (project(&[], "<IL><xhtml:p>LD a</xhtml:p></IL>"), "IL bodies"),
         (project(&[], "<LD/><FBD/>"), "exactly one language"),
-        (project(&[("s", "string")], &st("")), "STRING"),
+        (project(&[("s", "wstring")], &st("")), "WSTRING"),
         ("<plc/>".to_string(), "expected a PLCopen <project>"),
         (
             "<project><types><pous><pou name=\"p\" pouType=\"task\"/></pous></types></project>".into(),

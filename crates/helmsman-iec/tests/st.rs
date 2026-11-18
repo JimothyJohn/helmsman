@@ -123,9 +123,12 @@ proptest! {
         Just("FOR"), Just("TO"), Just("BY"), Just("END_FOR"), Just("EXIT"), Just("0"), Just("1"), Just("-1"),
         Just("127"), Just("2.5"), Just("TRUE"), Just("%QX0.0"), Just("%IW1"), Just("%MD2"), Just("INT_TO_SINT"),
         Just("CASE"), Just("OF"), Just(":"), Just(".."), Just(","), Just("END_CASE"),
+        Just("s"), Just("u"), Just("'ab'"), Just("''"), Just("'a$$b$'c$N$4A'"), Just("'"), Just("$"),
+        Just("LEN"), Just("LEFT"), Just("MID"), Just("CONCAT"), Just("FIND"), Just("INSERT"),
+        Just("DELETE"), Just("REPLACE"), Just("INT_TO_STRING"), Just("STRING_TO_INT"), Just("TO_STRING"),
     ], 0..40)) {
         let src = format!(
-            "PROGRAM t VAR x, y : INT; b : BOOL; END_VAR {} END_PROGRAM",
+            "PROGRAM t VAR x, y : INT; b : BOOL; s : STRING[8]; u : STRING; END_VAR {} END_PROGRAM",
             words.join(" ")
         );
         if let Ok(mut p) = compile(&src, SIZES) {
@@ -458,12 +461,8 @@ fn zero_and_one_are_bool_literals() {
 #[test]
 fn unsupported_features_say_so() {
     for (vars, body, want) in [
-        ("x : INT;", "x := 'abc';", "STRING literals are not supported yet"),
-        (
-            "x : INT;",
-            "x := \"abc\";",
-            "STRING literals are not supported yet",
-        ),
+        ("x : INT;", "x := \"abc\";", "WSTRING literals"),
+        ("x : WSTRING;", "", "WSTRING is not supported"),
         (
             "x : INT;",
             "x := DT#2013-02-23-22:35:46;",
