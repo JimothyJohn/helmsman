@@ -28,6 +28,10 @@ pub struct Config {
     pub token: String,
     /// The agent version asked for (`v1`).
     pub version: String,
+    /// The relay protocol the version speaks: 1 (the box keeps the
+    /// conversation) or 2 (the relay keeps it, [`crate::session`]). Set
+    /// from [`lookup`]; a config starts at 1.
+    pub protocol: u8,
     pub timeouts: Timeouts,
 }
 
@@ -36,6 +40,7 @@ impl fmt::Debug for Config {
         f.debug_struct("Config")
             .field("url", &self.url)
             .field("version", &self.version)
+            .field("protocol", &self.protocol)
             .field("timeouts", &self.timeouts)
             .finish_non_exhaustive()
     }
@@ -50,6 +55,7 @@ impl Config {
             url,
             token,
             version,
+            protocol: 1,
             timeouts: Timeouts {
                 connect: Duration::from_secs(10),
                 idle: Duration::from_secs(120),
@@ -165,7 +171,7 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-fn from_http(e: http::Error) -> Error {
+pub(crate) fn from_http(e: http::Error) -> Error {
     match e {
         http::Error::Unreachable(why) => Error::Unreachable(why),
         http::Error::Timeout => Error::Timeout,
@@ -173,6 +179,105 @@ fn from_http(e: http::Error) -> Error {
         http::Error::NoTls => Error::Unreachable("https:// needs a build with the https feature".into()),
         http::Error::Protocol(why) => Error::Malformed(why.into()),
         http::Error::Io(k) => Error::Unreachable(format!("connection failed: {k}")),
+    }
+}
+
+/// What the relay says an agent profile is: its id and the protocol it
+/// speaks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Profile {
+    /// The profile id (`helmsman/v8`), whichever name was asked for.
+    pub id: String,
+    /// 1 or 2 (`GET /v1/agents/{agent}` carries `"protocol"`; an older
+    /// relay says nothing, and that is 1).
+    pub protocol: u8,
+}
+
+/// The one rule for which protocol an agent uses: ask the relay.
+/// `GET /v1/agents/{version}` names the profile's `protocol` (relay
+/// protocol v2, "Everything in protocol v1 still holds"). A bare name the
+/// relay does not know (`v8`: the aliases stop at `v7`) is asked again as
+/// `helmsman/{name}`, this box's own namespace. Nothing here is a list of
+/// versions.
+///
+/// # Errors
+/// [`Error`] as for a turn: unreachable, a status, or an answer that is
+/// not a profile.
+pub fn lookup(cfg: &Config) -> Result<Profile, Error> {
+    let ask = |name: &str| -> Result<Profile, Error> {
+        let path = format!("{}/v1/agents/{}", cfg.url.prefix, http::segment(name));
+        let auth = format!("Bearer {}", cfg.token);
+        let req = http::Request {
+            method: "GET",
+            path: &path,
+            headers: &[("Authorization", &auth)],
+            json: None,
+            raw: None,
+        };
+        let t = Timeouts {
+            connect: cfg.timeouts.connect.min(PROBE_TIMEOUT),
+            idle: cfg.timeouts.idle.min(PROBE_TIMEOUT),
+            total: cfg.timeouts.total.min(PROBE_TIMEOUT),
+        };
+        let resp = http::send(&cfg.url, &req, t).map_err(from_http)?;
+        if resp.status != 200 {
+            return Err(status_error(resp));
+        }
+        let body = resp.read_body(MAX_PROFILE_BODY).map_err(from_http)?;
+        let j: Json = serde_json::from_slice(&body)
+            .map_err(|_| Error::Malformed("the agent profile is not JSON".into()))?;
+        let id = j["version"].as_str().filter(|v| version_ok(v));
+        let protocol = match &j["protocol"] {
+            Json::Null => 1,
+            Json::Number(n) if n.as_u64() == Some(1) => 1,
+            Json::Number(n) if n.as_u64() == Some(2) => 2,
+            _ => {
+                return Err(Error::Malformed(
+                    "the agent profile names a protocol this box does not speak".into(),
+                ));
+            }
+        };
+        Ok(Profile {
+            id: id.unwrap_or(name).to_string(),
+            protocol,
+        })
+    };
+    match ask(&cfg.version) {
+        Err(Error::Status {
+            status: 404,
+            ref kind,
+            ..
+        }) if kind == "unknown_agent_version" && !cfg.version.contains('/') => {
+            ask(&format!("helmsman/{}", cfg.version)).map_err(|e| match e {
+                Error::Status { status: 404, .. } => Error::Status {
+                    status: 404,
+                    kind: "unknown_agent_version".into(),
+                    message: format!("the relay serves no agent {:?}", cfg.version),
+                    retryable: false,
+                },
+                e => e,
+            })
+        }
+        r => r,
+    }
+}
+
+/// Largest agent profile body read (the profile carries its tool schemas).
+const MAX_PROFILE_BODY: usize = 1 << 20;
+
+/// A non-200 answer as an [`Error::Status`].
+pub(crate) fn status_error(resp: http::Response) -> Error {
+    let status = resp.status;
+    let body = resp.read_body(MAX_ERROR_BODY).unwrap_or_default();
+    let j: Json = serde_json::from_slice(&body).unwrap_or(Json::Null);
+    let e = &j["error"];
+    Error::Status {
+        status,
+        kind: e["type"].as_str().unwrap_or("relay_error").to_string(),
+        message: e["message"]
+            .as_str()
+            .map_or_else(|| format!("status {status}"), str::to_string),
+        retryable: e["retryable"].as_bool().unwrap_or(status >= 500),
     }
 }
 
@@ -273,18 +378,7 @@ pub fn turn(cfg: &Config, messages: &[Json], on: &mut dyn FnMut(Delta<'_>)) -> R
     };
     let resp = http::send(&cfg.url, &req, cfg.timeouts).map_err(from_http)?;
     if resp.status != 200 {
-        let status = resp.status;
-        let body = resp.read_body(MAX_ERROR_BODY).unwrap_or_default();
-        let j: Json = serde_json::from_slice(&body).unwrap_or(Json::Null);
-        let e = &j["error"];
-        return Err(Error::Status {
-            status,
-            kind: e["type"].as_str().unwrap_or("relay_error").to_string(),
-            message: e["message"]
-                .as_str()
-                .map_or_else(|| format!("status {status}"), str::to_string),
-            retryable: e["retryable"].as_bool().unwrap_or(status >= 500),
-        });
+        return Err(status_error(resp));
     }
     if !resp
         .header("content-type")

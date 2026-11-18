@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value as Json, json};
 
 use crate::relay::{self, Error as RelayError};
+use crate::session::{self, Input};
 use crate::tools::{self, BoxApi, Drafts};
 use crate::turn::{Delta, Turn};
 
@@ -107,6 +108,13 @@ pub struct Conversation {
     /// The messages as sent to the relay.
     pub messages: Vec<Json>,
     pub drafts: Drafts,
+    /// On a protocol v2 relay ([`relay::Config::protocol`]) the relay holds
+    /// the conversation and `messages` stays empty: this is its session.
+    pub relay_session: Option<String>,
+    /// The step a v2 conversation owes the relay (tool results or
+    /// `continue`) because the last message stopped before sending it
+    /// (a budget, a relay failure); it goes first on the next message.
+    pub relay_pending: Option<Input>,
 }
 
 impl Conversation {
@@ -555,6 +563,9 @@ impl Agent {
         runner: &mut Runner<'_>,
         on: &mut dyn FnMut(Progress),
     ) -> Outcome {
+        if self.relay.protocol >= 2 {
+            return self.run_loop_v2(conv, blocks, runner, on);
+        }
         let until = Instant::now() + self.budget.time;
         conv.push_user(blocks);
         let mut out = Outcome {
@@ -624,6 +635,306 @@ impl Agent {
                 out.stop = Stop::Budget(format!("{} output tokens", self.budget.output_tokens));
                 return out;
             }
+        }
+    }
+}
+
+/// What the user is told when the relay no longer has their session.
+const LOST: &str = "The relay no longer has this conversation (it expired after 7 days without a step, or the relay lost it). Everything said before this message, and the documents it had fetched, are gone from the agent's memory; continuing in a new conversation from this message.";
+
+/// Protocol v2: the relay holds the conversation. One user message is a
+/// run of steps: send the new input, stream the text, save any document
+/// the relay stored, run the client tools the step yielded, send their
+/// results, until the model ends its turn.
+impl Agent {
+    #[allow(clippy::too_many_lines)]
+    fn run_loop_v2(
+        &self,
+        conv: &mut Conversation,
+        blocks: Vec<Json>,
+        runner: &mut Runner<'_>,
+        on: &mut dyn FnMut(Progress),
+    ) -> Outcome {
+        let until = Instant::now() + self.budget.time;
+        let mut out = Outcome {
+            stop: Stop::Done,
+            steps: 0,
+            output_tokens: 0,
+            proposals: Vec::new(),
+        };
+        let mut sid = match conv.relay_session.clone() {
+            Some(s) => s,
+            None => match session::open(&self.relay) {
+                Ok(s) => {
+                    conv.relay_session = Some(s.clone());
+                    s
+                }
+                Err(e) => {
+                    out.stop = Stop::Relay(e);
+                    return out;
+                }
+            },
+        };
+        // What the last message left unsent goes first; the user's message
+        // follows once the relay is waiting for a person again.
+        let mut input;
+        let mut after = None;
+        if let Some(p) = conv.relay_pending.take() {
+            input = p;
+            after = Some(Input::User(blocks));
+        } else {
+            input = Input::User(blocks);
+        }
+        let mut reopened = false;
+        // Whether `input` is still owed to the relay (not when the session
+        // it was for is gone).
+        let mut owed = true;
+        let stop = loop {
+            // The person's message is always sent; the budget bounds the
+            // steps that follow it.
+            if !matches!(input, Input::User(_)) {
+                if out.steps >= self.budget.steps {
+                    break Stop::Budget(format!("{} relay steps", self.budget.steps));
+                }
+                if Instant::now() >= until {
+                    break Stop::Budget("time".into());
+                }
+            }
+            let end = match self.step_v2(&sid, &mut input, until, on) {
+                Ok(e) => e,
+                Err(RelayError::Status {
+                    status: 404, kind, ..
+                }) if kind != "unknown_agent_version" => {
+                    // The session is gone. Reopen once; a message that was
+                    // the start of the run is sent again, the middle of a
+                    // task cannot be.
+                    conv.relay_pending = None;
+                    owed = false;
+                    match session::open(&self.relay) {
+                        Ok(s) => {
+                            sid.clone_from(&s);
+                            conv.relay_session = Some(s);
+                        }
+                        Err(e) => {
+                            conv.relay_session = None;
+                            break Stop::Relay(e);
+                        }
+                    }
+                    if reopened || !matches!(input, Input::User(_)) {
+                        break Stop::Relay(RelayError::Status {
+                            status: 404,
+                            kind: "session_lost".into(),
+                            message: format!(
+                                "{LOST} The task that was running stopped; send your message again."
+                            ),
+                            retryable: false,
+                        });
+                    }
+                    reopened = true;
+                    owed = true;
+                    on(Progress::Text(format!("[box] {LOST}\n\n")));
+                    continue;
+                }
+                Err(e) => break Stop::Relay(e),
+            };
+            out.steps += 1;
+            out.output_tokens += end.output_tokens;
+            for doc in &end.documents {
+                self.save_document(doc, on);
+            }
+            match end.yielded.reason.as_str() {
+                "tool_use" => {
+                    let mut results = Vec::with_capacity(end.yielded.calls.len());
+                    for (k, call) in end.yielded.calls.iter().enumerate() {
+                        let allowed = if session::RELAY_TOOLS.contains(&call.name.as_str()) {
+                            Err(format!(
+                                "{} is a tool the relay runs, not the box; not run",
+                                call.name
+                            ))
+                        } else if k >= self.budget.tools_per_turn {
+                            Err(format!(
+                                "at most {} tool calls run per step; not run",
+                                self.budget.tools_per_turn
+                            ))
+                        } else {
+                            Ok(())
+                        };
+                        let mut r = self.answer(conv, call, runner, allowed, on, &mut out.proposals);
+                        // v2 results carry no block type.
+                        if let Some(o) = r.as_object_mut() {
+                            o.remove("type");
+                        }
+                        results.push(r);
+                    }
+                    input = Input::ToolResults(results);
+                }
+                "continue" => input = Input::Continue,
+                "refusal" => break Stop::Refusal,
+                _ => {
+                    // The model finished: end_turn, max_tokens, stop_sequence.
+                    match after.take() {
+                        Some(next) => input = next,
+                        None => break Stop::Done,
+                    }
+                }
+            }
+        };
+        // Input the relay has not taken yet is owed to it: sending a user
+        // message while it waits for tool results would be refused.
+        if owed && !matches!(stop, Stop::Done | Stop::Refusal) && !matches!(input, Input::User(_)) {
+            conv.relay_pending = Some(input);
+        }
+        out.stop = stop;
+        out
+    }
+
+    /// One step with retries. A retryable failure before the stream (the
+    /// relay refused the input: `session_busy`, a 5xx) sends the same
+    /// input again; one after it began (cut off, timeout, `relay_error`)
+    /// asks the session where it stands first, because the input may have
+    /// been taken: sending it twice would say it twice.
+    fn step_v2(
+        &self,
+        sid: &str,
+        input: &mut Input,
+        until: Instant,
+        on: &mut dyn FnMut(Progress),
+    ) -> Result<session::StepEnd, RelayError> {
+        let mut wait = self.retry.first;
+        let mut attempt = 0;
+        loop {
+            let mut forward = |e: session::Event<'_>| match e {
+                session::Event::Text(t) => on(Progress::Text(t.to_string())),
+                session::Event::RelayTool { id, name, is_error } => {
+                    on(Progress::ToolCall {
+                        id: id.to_string(),
+                        name: name.to_string(),
+                        input: json!({}),
+                    });
+                    on(Progress::ToolResult {
+                        id: id.to_string(),
+                        name: name.to_string(),
+                        ok: !is_error,
+                        summary: "run by the relay".into(),
+                    });
+                }
+            };
+            let e = match session::step(&self.relay, sid, input, &mut forward) {
+                Ok(end) => return Ok(end),
+                Err(e) => e,
+            };
+            if !e.retryable() || attempt >= self.retry.attempts {
+                return Err(e);
+            }
+            let after = wait + jitter(wait / 2 + Duration::from_millis(1));
+            if Instant::now() + after >= until {
+                return Err(e);
+            }
+            on(Progress::Retrying {
+                error: e.to_string(),
+                after,
+            });
+            std::thread::sleep(after);
+            attempt += 1;
+            wait = (wait * 2).min(self.retry.cap);
+            if matches!(e, RelayError::Status { .. }) {
+                continue;
+            }
+            let Ok(phase) = session::phase(&self.relay, sid) else {
+                return Err(e);
+            };
+            let waiting = matches!(input, Input::ToolResults(_));
+            let finished = |reason: &str, calls: Vec<crate::turn::ToolCall>| session::StepEnd {
+                yielded: session::Yield {
+                    reason: reason.into(),
+                    calls,
+                },
+                documents: Vec::new(),
+                output_tokens: 0,
+            };
+            match phase.state.as_str() {
+                "empty" => {}
+                "ready" => *input = Input::Continue,
+                "done" => return Ok(finished("end_turn", Vec::new())),
+                "awaiting_tools" if waiting => {}
+                "awaiting_tools" => {
+                    let calls: Vec<_> = phase
+                        .calls
+                        .into_iter()
+                        .filter(|c| !session::RELAY_TOOLS.contains(&c.name.as_str()))
+                        .collect();
+                    if calls.is_empty() {
+                        *input = Input::Continue;
+                    } else {
+                        return Ok(finished("tool_use", calls));
+                    }
+                }
+                other => {
+                    return Err(RelayError::Malformed(format!(
+                        "a session in a state this box does not know ({:?})",
+                        other.chars().take(40).collect::<String>()
+                    )));
+                }
+            }
+        }
+    }
+
+    /// A document the relay stored (`harness_document`): fetched from the
+    /// relay and kept on the box as a drop-in under the same rules as a v1
+    /// fetch ([`tools::store_fetched`]: the kind's size cap, the SHA-256,
+    /// a name the box accepts). Whatever is wrong is said in the chat and
+    /// nothing is stored.
+    fn save_document(&self, doc: &Json, on: &mut dyn FnMut(Progress)) {
+        let said_id = doc["id"].as_str().filter(|i| session::doc_id_ok(i));
+        let mut say = |ok: bool, summary: String| {
+            on(Progress::ToolResult {
+                id: said_id.unwrap_or("document").to_string(),
+                name: "fetch_document".into(),
+                ok,
+                summary,
+            });
+        };
+        let mut refuse = |why: &str| {
+            say(
+                false,
+                format!("a document the relay stored was not saved to the project: {why}"),
+            );
+        };
+        let Some(id) = said_id else {
+            return refuse("its id is not a document id");
+        };
+        let kind = doc["kind"].as_str().unwrap_or_default();
+        let cap = match kind {
+            "pdf" => tools::FETCH_PDF_MAX,
+            "eds" | "text" | "html-text" => tools::FETCH_TEXT_MAX,
+            _ => return refuse("it is not a kind the box keeps (a PDF, an EDS or text)"),
+        };
+        let said = doc["sha256"].as_str().unwrap_or_default().to_ascii_lowercase();
+        if said.len() != 64 || !said.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return refuse("the relay named no SHA-256 for it");
+        }
+        if doc["bytes"].as_u64().is_none_or(|n| n == 0 || n > cap as u64) {
+            return refuse(&format!(
+                "its size is 0 or past the {cap} bytes a {kind} document may be"
+            ));
+        }
+        let resp = match session::raw_document(&self.relay, id) {
+            Ok(r) => r,
+            Err(e) => return refuse(&e.to_string()),
+        };
+        if resp
+            .header("x-document-sha256")
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+            != Some(said.as_str())
+        {
+            return refuse("the bytes' SHA-256 is not the one the relay named");
+        }
+        let o = tools::store_fetched(&self.api, resp);
+        if o.ok {
+            say(true, o.summary);
+        } else {
+            refuse(&o.summary);
         }
     }
 }

@@ -1123,7 +1123,7 @@ fn relay_json_answer(status: u16, resp: http::Response) -> Outcome {
 
 /// A fetched document from the relay: checked against its kind's cap and
 /// the SHA-256 the relay named, then stored on the box as a drop-in.
-fn store_fetched(api: &dyn Caller, resp: http::Response) -> Outcome {
+pub(crate) fn store_fetched(api: &dyn Caller, resp: http::Response) -> Outcome {
     // A document: the facts in headers, the bytes in the body.
     let kind = resp.header("x-document-kind").unwrap_or("").to_string();
     let (dropin_kind, media, cap) = match kind.as_str() {
