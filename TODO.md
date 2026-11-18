@@ -695,10 +695,11 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **TOD, DATE and DT on the box** — the language half is built (ARCHITECTURE.md "Dates and times of day"): types, literals, arithmetic, `DT_NOW()`, text. What is left: the box never calls `Program::set_wall_clock`, so `DT_NOW()` counts from 1970 on a box; it needs the time zone the shift calendar uses (or UTC, say which), set at module start and after a hot swap. Also open: the playground `SYSTEM` prompt (crates/helmsman-canvas/src/claude.rs) still says DATE, DT and TOD are not supported, which means a new relay profile id; DATE/TOD/DT ports are no signals (like STRING, `st-string-signals`); `SPLIT_DATE`/`SPLIT_TOD`/`SPLIT_DT` and the `L` forms are not built.
-  result: schedule logic written in ST ("after 22:00", "weekdays only") runs on the box in the plant's local time
+- [ ] **TOD, DATE and DT: the rest** — built: the language, the box's wall clock in its system time zone (`--time-zone`), the canvas simulation's browser time, and the prompts (relay PR agent-relay#54: `helmsman/v14`, `playground-v7`, `tests-v2`). Left: point the box (`--relay-agent`), the demo (`RELAY_DEMO_AGENTS`) and the test writer at those ids once the relay is deployed; DATE/TOD/DT ports are no signals (with STRING: `st-string-signals`); `SPLIT_DATE`/`SPLIT_TOD`/`SPLIT_DT` and the `L` forms are not built.
+  result: a controls engineer can read a DATE, TOD or DT port beside the other signals, and the agents write with the new ids
   est: 4h
   difficulty: low
+  depends: st-string-signals
   id: st-tod-date
   asked: 2026-11-08
   by: claude-session
