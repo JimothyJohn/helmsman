@@ -13,10 +13,11 @@
 //!   box streams `done`, no `error` or `fallback`, and the relay asked the
 //!   model at least once;
 //! - on its first request of a turn the stub calls every tool the profile
-//!   offers, with an empty input. The box refuses most of them as input
-//!   that does not fit the schema, which is fine; a tool the box answers
-//!   with `no tool named` is a tool the relay offers and the box does not
-//!   have (or not in that mode), and fails;
+//!   offers, with an input no tool takes (`{"compat_probe": 1}`): the
+//!   box checks the name and the mode before the input, refuses the input
+//!   and runs nothing. A tool it answers with `no tool named` or `not
+//!   available in this mode` is one the relay offers and the box will not
+//!   run there, and fails;
 //! - with `latest`, the newest `helmsman/vN` the relay serves is run as
 //!   the chat profile too (a harness profile, relay-held sessions).
 //!
@@ -43,8 +44,14 @@ use crate::web::{Resp, Server};
 pub const TOKEN: &str = "hmr1_c0c0a7c0c0a7c0c0a7c0c0a7c0c0a7c0c0a7c0c0a7c0c0a7c0c0a7c0c0a7c0c0";
 /// What the stub model answers with when it is done.
 pub const STUB_TEXT: &str = "compat ok";
-/// What the box answers a tool it does not have with (helmsman-agent).
-pub const UNKNOWN_TOOL: &str = "no tool named";
+/// What the box answers a tool it does not run with (helmsman-agent
+/// `agent.rs`): one it does not have, and one it has but not in the
+/// surface's mode.
+pub const NOT_RUN: &[&str] = &["no tool named", "is not available in this mode"];
+/// The input every probe call carries: no box tool takes this field and
+/// each refuses unknown fields, so the box names the tool, checks the
+/// mode, refuses the input and runs nothing (no scan, no write).
+pub const PROBE_FIELD: &str = "compat_probe";
 
 /// The profiles a box asks for by default: (flag, id) from its `--help`.
 #[must_use]
@@ -107,7 +114,8 @@ fn answers_tools(body: &Json) -> bool {
 }
 
 /// The stub model's streamed answer to one request: every offered tool
-/// called once with `{}` on a turn's first request, then text.
+/// called once with only [`PROBE_FIELD`] on a turn's first request, then
+/// text.
 #[must_use]
 pub fn stub_reply(body: &Json) -> String {
     let tools: Vec<&str> = body["tools"]
@@ -142,7 +150,7 @@ pub fn stub_reply(body: &Json) -> String {
             );
             ev(
                 &mut s,
-                &json!({ "type": "content_block_delta", "index": i, "delta": { "type": "input_json_delta", "partial_json": "{}" } }),
+                &json!({ "type": "content_block_delta", "index": i, "delta": { "type": "input_json_delta", "partial_json": format!("{{\"{PROBE_FIELD}\":1}}") } }),
             );
             ev(&mut s, &json!({ "type": "content_block_stop", "index": i }));
         }
@@ -186,6 +194,20 @@ pub fn start_stub() -> std::io::Result<(Server, Arc<Mutex<StubLog>>)> {
     Ok((server, log))
 }
 
+/// The tiers the local relay defines besides `default` (agent-relay
+/// `tiers.rs` names `default`, `best` and `cheap`).
+pub const TIERS: &[&str] = &["best", "cheap"];
+
+/// `RELAY_TIERS` with `default` and every [`TIERS`] on the stub at `url`.
+#[must_use]
+pub fn tiers_json(url: &str) -> String {
+    let mut tiers = serde_json::Map::new();
+    for t in std::iter::once(&"default").chain(TIERS) {
+        tiers.insert((*t).to_string(), json!({ "upstream": "stub" }));
+    }
+    json!({ "upstreams": { "stub": { "kind": "anthropic", "url": url } }, "tiers": tiers }).to_string()
+}
+
 /// A running `agent-relay-local`.
 pub struct RelayProc {
     child: Child,
@@ -222,6 +244,13 @@ impl RelayProc {
             .env("ANTHROPIC_API_KEY", "compat-stub-key")
             .env("RELAY_DEV_BOX_ID", "compat")
             .env("RELAY_DEV_BOX_TOKEN", TOKEN)
+            // Every tier a profile may name (design-v1 is on `best`), all
+            // on the stub, and the dev token granted each: a profile is
+            // then refused only for what the relay's own code says. A
+            // relay without tiers (older main) ignores both.
+            .env("RELAY_TIERS", tiers_json(upstream))
+            .env("RELAY_DEV_TIERS", TIERS.join(","))
+            .env("RELAY_DEV_TIER_DAILY_TOKENS", "100000000")
             .env("RUST_LOG", "warn")
             .current_dir(&cwd)
             .stdin(Stdio::null())
@@ -316,7 +345,7 @@ pub fn judge_turn(
                         Json::String(s) => s.clone(),
                         other => other.to_string(),
                     };
-                    if text.contains(UNKNOWN_TOOL) {
+                    if NOT_RUN.iter().any(|w| text.contains(w)) {
                         let name = tool_name_of(seen, b["tool_use_id"].as_str().unwrap_or_default());
                         if !unknown.contains(&name) {
                             unknown.push(name);
@@ -492,6 +521,13 @@ pub fn check(
     }
     drop(relay);
     drop(stub);
+    // What the model was sent, for a failure's post-mortem.
+    let seen = log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .requests
+        .clone();
+    let _ = std::fs::write(work.join("stub-requests.json"), Json::Array(seen).to_string());
     Ok(out)
 }
 
@@ -619,6 +655,27 @@ mod tests {
         let bad = f.iter().find(|f| !f.ok).unwrap();
         assert_eq!(bad.check, "turn chat tools");
         assert!(bad.detail.ends_with("make_coffee"), "{bad:?}");
+    }
+
+    #[test]
+    fn a_tool_refused_in_this_mode_is_named_too() {
+        let seen =
+            seen_with_result("make_coffee is not available in this mode (read-only); the tools here are ...");
+        let f = judge_turn("turn explain", 200, &[ev("done")], Some(&seen));
+        assert!(
+            f.iter().any(|f| !f.ok && f.detail.ends_with("make_coffee")),
+            "{f:?}"
+        );
+    }
+
+    #[test]
+    fn every_probe_input_is_one_no_tool_takes() {
+        let s = stub_reply(&json!({ "model": "m", "tools": [ { "name": "discover" } ], "messages": [] }));
+        assert!(s.contains(r#"compat_probe\":1"#), "{s}");
+        assert!(
+            !s.contains(r#""partial_json":"{}""#),
+            "an empty input would run a tool with no fields: {s}"
+        );
     }
 
     #[test]

@@ -216,7 +216,17 @@ pub fn judge(netlist: &BTreeMap<String, Vec<Node>>, sources: &[(String, String)]
 /// # Errors
 /// The netlist or the firmware sources cannot be read.
 pub fn check(helmsman: &Path, hardware: &Path) -> Result<Vec<Finding>, String> {
-    let text = std::fs::read_to_string(hardware.join(NETLIST)).map_err(|e| format!("{NETLIST}: {e}"))?;
+    let path = hardware.join(NETLIST);
+    if !hardware.join("hardware/node-p4-poe").exists() {
+        // A board ref from before the KiCad project (the design package
+        // alone) has no wiring to hold the firmware to. Once the project
+        // exists a missing netlist fails below.
+        return Ok(vec![Finding::pass(
+            "board netlist",
+            "n/a: no KiCad project (hardware/node-p4-poe) at this ref, so no pin contract yet",
+        )]);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{NETLIST}: {e}"))?;
     let nets = parse_netlist(&text)?;
     let fw = helmsman.join("crates/helmsman-node-p4/src");
     let mut sources = Vec::new();

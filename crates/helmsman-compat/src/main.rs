@@ -67,9 +67,9 @@ fn main() -> ExitCode {
 }
 
 fn path(opts: &BTreeMap<String, String>, k: &str) -> Result<PathBuf, String> {
-    opts.get(k)
-        .map(PathBuf::from)
-        .ok_or_else(|| format!("--{k} is required"))
+    // Absolute: the box and the relay run in working directories of their own.
+    let p = opts.get(k).ok_or_else(|| format!("--{k} is required"))?;
+    std::fs::canonicalize(p).map_err(|e| format!("--{k} {p}: {e}"))
 }
 
 fn run(cmd: &str, o: &BTreeMap<String, String>, latest: bool) -> Result<Vec<Finding>, String> {
@@ -78,7 +78,7 @@ fn run(cmd: &str, o: &BTreeMap<String, String>, latest: bool) -> Result<Vec<Find
             .get("work")
             .map_or_else(|| std::env::temp_dir().join("helmsman-compat"), PathBuf::from);
         let w = helmsman_compat::boxp::fresh_dir(&w, cmd)?;
-        Ok(w)
+        std::fs::canonicalize(&w).map_err(|e| format!("{}: {e}", w.display()))
     };
     match cmd {
         "devices" => devices::check(

@@ -91,7 +91,7 @@ impl BoxProc {
     pub fn log_tail(&self) -> String {
         let log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
         let from = log.len().saturating_sub(15);
-        log[from..].join("\n")
+        redact(&log[from..].join("\n"))
     }
 }
 
@@ -100,6 +100,32 @@ impl Drop for BoxProc {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// `text` with every run of 32 or more hex digits (the box's API token,
+/// a relay token's tail) replaced: a failure's detail lands in a report.
+#[must_use]
+pub fn redact(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if run.len() >= 32 {
+            out.push_str("[redacted]");
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_hexdigit() {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 /// `work/<name>-<n>`, made new and empty.
@@ -129,4 +155,21 @@ pub fn help_text(bin: &Path) -> Result<String, String> {
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_never_reach_a_report() {
+        let t = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let line = format!("API token (new): {t}; relay hmr1_{t}; port 8080, sha 4a6d37aa");
+        let r = redact(&line);
+        assert!(!r.contains(t), "{r}");
+        assert_eq!(
+            r,
+            "API token (new): [redacted]; relay hmr1_[redacted]; port 8080, sha 4a6d37aa"
+        );
+    }
 }
