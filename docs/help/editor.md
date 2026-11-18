@@ -54,8 +54,28 @@ for its name and key.
 ## The diagram
 
 The diagram is the program, drawn from its Structured Text and lit from
-the controller as it runs. It is not a second way to write the program:
-you cannot draw into it. What you can do:
+the controller as it runs. The Structured Text stays the program: you
+cannot draw a new block into it, but you can change what is there (the
+first bullet below). What you can do:
+
+- **Change it.** Right-click a block, or one of its input pins (a long
+  press on a touch screen), for a menu of what can change there. It lists
+  only changes the code accepts: **Change operator** (AND for OR, one
+  comparison for another, `+ - * /` for each other), **Negate input** (a
+  NOT in front of the input, or taken off), **Connect to…** (wire the
+  input from another variable of the program; type a path such as `T1.Q`
+  whole), **Edit value…** (a number, TRUE or FALSE, a time such as
+  `T#5s`), **Rename…** (the variable, everywhere the program uses it) and
+  **Delete statement**. A double-click on a constant edits it in place:
+  <kbd>Enter</kbd> sets it, <kbd>Esc</kbd> cancels. Each choice writes
+  exactly the characters that change into the code, so your comments and
+  layout stay as typed, and the editor scrolls to the change and
+  highlights it for a moment. One <kbd>Ctrl</kbd> <kbd>Z</kbd> takes a
+  change back. A change the code would not take (a name already used, a
+  value of the wrong type) is refused in the popup and the code is left
+  as it was. What happens next differs: the simulation runs the change at
+  once (see [Simulation](simulation.html)), a box leaves it for you to
+  save and deploy (see [On a box](box.html)).
 
 - **Read it.** Each block is a variable, a block instance, an operator or
   a function; wires carry values left to right and show them (a BOOL wire

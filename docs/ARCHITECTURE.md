@@ -2968,8 +2968,9 @@ tokio ever reach the box build.
 
 The operator's view of what a module's code is doing
 (`canvas-edit-scope`: ST is the source of truth). The view itself only
-reads. In the simulation the diagram also writes ST back through checked
-splices (`helmsman_diagram::edit`, below the lowering): see "Editing on the
+reads. The diagram also writes ST back through checked splices
+(`helmsman_diagram::edit`, below the lowering): in the simulation as a
+deploy, on a box as an edit of the open buffer. See "Editing on the
 canvas" at the end of this section.
 
 - **Lowering** (`helmsman_diagram::lower`, from `helmsman_iec::ast`, the
@@ -3272,13 +3273,18 @@ canvas" at the end of this section.
   through an in-process proxy with a site VPN's 300 ms round trip,
   1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
 
-- **Editing on the canvas** (`diagram-edit-canvas`, the simulation only;
+- **Editing on the canvas** (`diagram-edit-canvas`, `diagram-edit-box`;
   `diagram_edit.rs`, tests in `ui_tests/diagram_edit.rs`). `Viewer::canvas`
   only notices a right click (`hit_at`: a pin within reach of an input
   port, else the nearest block) or a double click on a constant, and
   hands it up as a `Gesture`; with `Viewer::edit_gate` off it leaves a
-  note of why instead (a viewer starts off with `BOX_REASON`: a box never
-  turns it on until `diagram-edit-box`). `PlaygroundView` sets the gate
+  note of why instead (a viewer starts off with `BOX_REASON`; both hosts
+  set the gate each frame, so it shows only for a viewer no host drives).
+  The menu offers Change operator (`SwapOp`), Negate input
+  (`ToggleNegation`), Connect to… (`Rewire`), Edit value… (`SetConst`),
+  Rename… and Delete statement; `SetFbArg` is in the engine and is not
+  offered by the menu. A long press is egui's secondary click on touch.
+  `PlaygroundView` sets the gate
   each frame (`edit_gate`: the viewer's source equals the build source,
   and the project builds from exactly one `.st` file, so the engine's byte
   offsets are the buffer's) and draws `EditUi`, whose menu lists only
@@ -3297,6 +3303,25 @@ canvas" at the end of this section.
   sends the editor to its line for 1.5 s. Undo and Redo of a gesture
   redeploy while the diagram was in sync before them (`Follow::deployed`,
   cleared by any typing or Deploy).
+
+  On a box (`BoxView::edit_gate`, `BoxView::diagram_edit`, #505) a gesture
+  only edits the open buffer, as typing would: the same `edit::apply`
+  against the diagram's source (the box's header lines are stripped by
+  `file_start`), the old text pushed as one undo entry
+  (`editor::push_undo`), the patched text in the buffer, the highlight
+  flashed. Nothing is saved or deployed; Save and Deploy are the
+  engineer's, through the box's approval policy, which tiers the change
+  from its diff as for typed text. The gate is on only when the session is
+  an engineer's (`is_engineer`), the open project is the one the box
+  runs, the project has exactly one program file (`sole_program`, test
+  files aside), that file is loaded, and the diagram's source is the file
+  under the box's header lines. The diagram draws what runs, so after one
+  gesture the buffer differs from it and the gate is off ("Save and
+  Deploy, then edit from the diagram") until the change is deployed and
+  running or Undo restores the text. Tests:
+  `box_projects_tests.rs` (`a_diagram_edit_on_a_box_is_an_unsaved_typed_edit_with_one_undo_step`,
+  `an_operator_or_nobody_cannot_edit_from_the_diagram`,
+  `the_diagram_is_off_when_it_is_not_the_open_file`).
 
 ## Explain mode (`explain-mode`, built)
 
