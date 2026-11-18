@@ -868,3 +868,45 @@ proptest! {
         let _ = lints(&frame(&format!("{{{s}}}")));
     }
 }
+
+// ------------------------------------------------- what the repo ships
+
+fn st_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = rd.filter_map(Result::ok).map(|e| e.path()).collect();
+    entries.sort();
+    for p in entries {
+        if p.is_dir() {
+            st_files(&p, out);
+        } else if p.extension().is_some_and(|e| e == "st") {
+            out.push(p);
+        }
+    }
+}
+
+/// Every `.st` file under crates/ and docs/ (bench programs, fixtures, the
+/// library): no blocking finding; each finding is listed with `--nocapture`.
+#[test]
+fn the_repos_st_files_hold_no_blocking_finding() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    for d in ["crates", "docs"] {
+        st_files(&root.join(d), &mut files);
+    }
+    assert!(files.len() > 20, "found {} files", files.len());
+    let mut bad = Vec::new();
+    for f in &files {
+        let src = std::fs::read_to_string(f).unwrap();
+        let name = f.strip_prefix(&root).unwrap().display().to_string();
+        for l in lints(&src) {
+            let said: String = l.msg.chars().take(60).collect();
+            eprintln!("{name}:{}:{} {} {said}", l.pos.line, l.pos.col, l.id);
+            if l.blocking {
+                bad.push(format!("{name}:{} {}", l.pos.line, l.id));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+}
