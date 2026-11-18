@@ -122,6 +122,7 @@ pub mod ast {
 }
 
 mod check;
+mod dt;
 mod fmath;
 pub mod hints;
 mod interp;
