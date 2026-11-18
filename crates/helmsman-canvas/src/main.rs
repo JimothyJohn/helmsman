@@ -49,15 +49,13 @@ mod box_spec;
 mod box_tests;
 mod box_trend;
 mod box_view;
+mod chat_about;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod chat_about_tests;
 mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod lint_shipped_tests;
-mod chat_about;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod chat_about_tests;
 mod design;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod design_page_tests;
@@ -96,6 +94,8 @@ mod jump;
 mod lamps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod link_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lint_shipped_tests;
 mod md_view;
 mod messages;
 mod monitor;
