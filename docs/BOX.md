@@ -149,6 +149,15 @@ pairing client), every Monday, and on demand. It is not a required check.
 A failure prints the end of the serial console, and CI keeps the whole
 console and the relay's record as the `box-boot` artifact.
 
+**Status (2026-11-18): the image builds in CI (about 45 minutes) and the
+kernel boots into systemd, but the guest then stops after about 30 KB of
+console output with the vCPUs idle, before the box's service is up, on both
+CI's arm64 runner and a Mac, with the image and with a stock Raspberry Pi OS
+image (`PAIR=0 HEALTH=0`), and with single-thread TCG too. The API wait
+therefore times out. Not yet known whether it is the emulated PL011 console
+(output stops, the guest blocks writing to it) or the guest waiting on a
+device; see the `box-sku` card.**
+
 Why `raspi3b`: it is the Pi machine QEMU 8.2 (Ubuntu's) can boot the
 image's own kernel on with a working network. `raspi4b` arrives in QEMU 9
 and has no working network; `virt` cannot take the image's kernel (no
