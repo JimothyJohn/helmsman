@@ -115,44 +115,69 @@ these pages. Hover one for its name and key.</p>
 
 <h2 id="the-diagram">The diagram</h2>
 <p>The diagram is the program, drawn from its Structured Text and lit
-from the controller as it runs. It is not a second way to write the
-program: you cannot draw into it. What you can do:</p>
+from the controller as it runs. The Structured Text stays the program:
+you cannot draw a new block into it, but you can change what is there
+(the first bullet below). What you can do:</p>
 <ul>
-<li><strong>Read it.</strong> Each block is a variable, a block
+<li><p><strong>Change it.</strong> Right-click a block, or one of its
+input pins (a long press on a touch screen), for a menu of what can
+change there. It lists only changes the code accepts: <strong>Change
+operator</strong> (AND for OR, one comparison for another,
+<code>+ - * /</code> for each other), <strong>Negate input</strong> (a
+NOT in front of the input, or taken off), <strong>Connect to…</strong>
+(wire the input from another variable of the program; type a path such
+as <code>T1.Q</code> whole), <strong>Edit value…</strong> (a number,
+TRUE or FALSE, a time such as <code>T#5s</code>),
+<strong>Rename…</strong> (the variable, everywhere the program uses it)
+and <strong>Delete statement</strong>. A double-click on a constant
+edits it in place: <kbd>Enter</kbd> sets it, <kbd>Esc</kbd> cancels.
+Each choice writes exactly the characters that change into the code, so
+your comments and layout stay as typed, and the editor scrolls to the
+change and highlights it for a moment. One <kbd>Ctrl</kbd> <kbd>Z</kbd>
+takes a change back. A change the code would not take (a name already
+used, a value of the wrong type) is refused in the popup and the code is
+left as it was. What happens next differs: the simulation runs the
+change at once (see <a href="simulation.html">Simulation</a>), a box
+leaves it for you to save and deploy (see <a href="box.html">On a
+box</a>).</p></li>
+<li><p><strong>Read it.</strong> Each block is a variable, a block
 instance, an operator or a function; wires carry values left to right
 and show them (a BOOL wire is bright when TRUE). An IF, CASE or loop is
 a box around what it guards, marked taken or skipped. A block that ran
-this scan stays lit for a moment, so a one-shot reads as a blink.</li>
-<li><strong>Ask why.</strong> Click an output or any assignment:
+this scan stays lit for a moment, so a one-shot reads as a
+blink.</p></li>
+<li><p><strong>Ask why.</strong> Click an output or any assignment:
 everything that drives its value stays lit and the rest dims. Click
-empty space to clear.</li>
-<li><strong>Go to the code.</strong> Click any block and the Structured
-Text pane scrolls to its line. Edit › Go to definition (<kbd>Alt</kbd>
-<kbd>Shift</kbd> <kbd>D</kbd>) jumps to where the picked block's
-variable is declared; Cross references (<kbd>Alt</kbd> <kbd>Shift</kbd>
-<kbd>X</kbd>) lights every read and write of it.</li>
-<li><strong>Switch an input.</strong> An input's block is a control: a
-switch flips on a click, a push button is on while you hold it, a number
-takes what you type and keeps it when you press <kbd>Enter</kbd>
+empty space to clear.</p></li>
+<li><p><strong>Go to the code.</strong> Click any block and the
+Structured Text pane scrolls to its line. Edit › Go to definition
+(<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>D</kbd>) jumps to where the picked
+block's variable is declared; Cross references (<kbd>Alt</kbd>
+<kbd>Shift</kbd> <kbd>X</kbd>) lights every read and write of
+it.</p></li>
+<li><p><strong>Switch an input.</strong> An input's block is a control:
+a switch flips on a click, a push button is on while you hold it, a
+number takes what you type and keeps it when you press <kbd>Enter</kbd>
 (<kbd>Esc</kbd> puts the old value back). In the simulation these are
 the virtual inputs; on a box they are forces (see <a href="box.html">On
-a box</a>).</li>
-<li><strong>Go into a block.</strong> A function block instance with a
-diagram of its own is drawn as a stack of cards with a double chevron in
-its header. Double-click it to see that diagram; <kbd>Alt</kbd>
+a box</a>).</p></li>
+<li><p><strong>Go into a block.</strong> A function block instance with
+a diagram of its own is drawn as a stack of cards with a double chevron
+in its header. Double-click it to see that diagram; <kbd>Alt</kbd>
 <kbd>↑</kbd> or the breadcrumbs come back up. From the keyboard, pick
 the instance and press <kbd>Alt</kbd> <kbd>]</kbd> to go in and
 <kbd>Alt</kbd> <kbd>[</kbd> to come out (the instance stays picked, so
 <kbd>Alt</kbd> <kbd>]</kbd> goes back in). With the simulation stopped,
 each also steps one scan, so you watch the instance work as you move
-through the levels.</li>
-<li><strong>See the step.</strong> A CASE on one variable, a sequence of
-states, is drawn as one block with a row for each state. The row of the
-state the program is in lights up as it runs. Click a row to open the
-CASE and see what that state does; the tab over it draws the states as
-one block again. A double-click on the block opens it the same way.</li>
-<li><strong>Read an interlock as a table.</strong> A condition written
-as several ways to be true,
+through the levels.</p></li>
+<li><p><strong>See the step.</strong> A CASE on one variable, a sequence
+of states, is drawn as one block with a row for each state. The row of
+the state the program is in lights up as it runs. Click a row to open
+the CASE and see what that state does; the tab over it draws the states
+as one block again. A double-click on the block opens it the same
+way.</p></li>
+<li><p><strong>Read an interlock as a table.</strong> A condition
+written as several ways to be true,
 <code>(a AND b AND NOT c) OR (d AND e) OR f</code>, is drawn as one
 block with a row for each way and a cell for each signal in it. A filled
 dot on a cell means the row needs the signal on, a ring means it needs
@@ -160,22 +185,22 @@ it off. The row that holds lights up. When the output is off, the cells
 that keep each row from holding turn red: that row is waiting for
 exactly those signals. Hover a cell to see what its row needs and what
 the signal is now. A double-click opens the block into its gates, and
-the tab over it draws them as one block again.</li>
-<li><strong>Arrange.</strong> Drag a block, or an IF by its label, to
+the tab over it draws them as one block again.</p></li>
+<li><p><strong>Arrange.</strong> Drag a block, or an IF by its label, to
 move it. View › Reset layout goes back; View › Save layout as default
 keeps your arrangement with the project so everyone opens it that way.
 Zoom with the wheel, a two-finger scroll or a pinch, about the pointer.
 Move the view with a drag on empty space, or with the arrow keys or W A
 S D while the pointer is over the diagram. The diagram never leaves the
-view, and a double-click on empty space fits it again.</li>
-<li><strong>Jump.</strong> With the pointer over the diagram,
+view, and a double-click on empty space fits it again.</p></li>
+<li><p><strong>Jump.</strong> With the pointer over the diagram,
 <kbd>E</kbd> goes to the next function block call, IF, CASE or loop and
 <kbd>Q</kbd> to the previous one. The view zooms in to frame it with its
 inputs and picks it, so a long program is a few key presses from one end
 to the other. The keys follow the program's order and carry on round
 from the last to the first. After you move the view yourself, the next
 press starts from what is right (<kbd>E</kbd>) or left (<kbd>Q</kbd>) of
-its centre.</li>
+its centre.</p></li>
 </ul>
 <p><img src="img/diagram-why.png"
 alt="The green lamp&#39;s assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs." /></p>

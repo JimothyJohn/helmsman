@@ -44,6 +44,28 @@ From the keyboard: pick the input's block and press <kbd>Alt</kbd>
 field opens for the value), and <kbd>Alt</kbd> <kbd>Shift</kbd>
 <kbd>U</kbd> releases every force. Both are in the Edit menu.
 
+## Editing from the diagram
+
+Signed in as an engineer, the diagram's right-click menu and the
+double-click on a constant work on a box too (see [The Editor](editor.html),
+Change it). A change goes into the code open in the editor and nothing
+else: it is not saved, not deployed and nothing is sent to the box. The
+file shows as unsaved, and one <kbd>Ctrl</kbd> <kbd>Z</kbd> takes the
+change back. **Save** and **Deploy** stay yours, and the approval policy
+treats the change exactly as it treats the same change typed.
+
+The diagram shows the program the box is running, so it takes one change
+at a time: after a change its gestures are off until the change runs on
+the box (Save and Deploy, and the approval if the policy asks for one) or
+you undo it. They are also off:
+
+- for anyone who is not signed in as an engineer;
+- when the project open in the editor is not the one the box runs;
+- when the code in the editor has been typed on since it was deployed;
+- in a project with more than one program file.
+
+Each time the note where you clicked says which of these it is.
+
 ## The trend
 
 The Trend tab opens with the box's own history of each pinned signal,

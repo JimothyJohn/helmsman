@@ -4,20 +4,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **Should a blocking lint refuse an engineer's own deploy on a box, or only hold the Agent's drafts?** — Draft #509 (st-lints) is built and green and waits on this. Your ruling of 2026-11-07 says the first two lints (a function block called inside a branch, an output written in more than one place) block "Use this code" and Deploy "the way a red requirement test does"; since 2026-11-15 a red requirement test no longer refuses a deploy, so the sentence points two ways. As built, a box answers 422 until the finding is fixed or overridden on its line with a reasoned pragma, which goes to the audit trail. The first lint is stricter than the guideline it comes from (PLCopen CP20 allows a conditional call), so a hand-written timer inside an IF is refused until the pragma is added. Session's pick: keep it blocking, as you ruled.
-  result: #509 is marked ready and merges, or goes back for the narrower rule
-  options: block every deploy (as built) | block the Agent's drafts only, warn on a hand deploy | advisory everywhere
-  id: st-lints-deploy-block
-  asked: 2026-11-17
-  by: recovery session aa9f9f8a
-
-- [ ] **STRING[n] is stored in the slot array, not in a byte store beside it: accept?** — Draft #508 (st-string) is built and green, oracle included, and waits on this. In the interview of 2026-11-17 you picked a bounded byte store beside the slot array with `Value` staying `Copy`. What was built keeps `Value` unchanged and `Copy` but packs a string into consecutive ordinary slots, 16 bytes each, length byte first (crates/helmsman-iec/src/strs.rs). For it: every existing move (struct or array copy, by-value argument, function block instance, hot swap) already copies slots, so strings needed no new copy paths. Against it: at runtime a string's slot looks like an integer, so only the checker keeps them apart. Also yours to veto in the same PR: text to number copies ruSTy as measured (unparseable text gives 0, '1.9' to an integer gives 1). Session's pick: accept after reading strs.rs.
-  result: #508 is marked ready and merges, or the storage is rebuilt as the byte store
-  options: accept as built | rebuild as a byte store beside the slots
-  id: st-string-storage
-  asked: 2026-11-17
-  by: recovery session aa9f9f8a
-
 
 ## Needs your hands
 
@@ -42,6 +28,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 - [ ] **Deploy the relay so the Agent's edits and its one question go live** — Why it matters: the page on dev answers a long program with only the lines that change and asks one question while it works, but only where the relay serves those agents; the deployed relay does not yet, so the published page behaves as before. agent-relay #40 (merged to its dev when green) adds the demo's `edits`, `ask` and `check` agents; nothing in template.yaml changes. Steps: (1) promote agent-relay dev to its default branch; (2) deploy as usual (`scripts/deploy.sh`) with `RELAY_MODEL=deepseek/deepseek-v4.1-flash-1017` (decided 2026-11-16 from the ladder: 45 of 45, fastest and cheapest of the four, a dated snapshot) and `DemoAddressTurnsPerHour` raised from 40 to about 120: one instruction is now up to three turns (the question, the change, the check), so the old limit closes the free chat for everyone about three times sooner; (3) `curl -s -H "Origin: <the page's origin>" <demo url>/demo/v1/status` should list `"agents":["ask","check","edits"]`; (4) tell a session, which then runs the ladder against the deployed demo and looks at the card in a browser.
   needs: agent-relay #40 merged, your promote and deploy
   result: the published playground answers a one-line change to a long program in about a third of the time, and asks its question
+  notes: 2026-11-18: the same promote and deploy also serves helmsman/v12 and helmsman/playground-v6 (agent-relay #48, in its dev): the Agent writes one short comment above each part of a program, which the diagram shows as that section's name. A box asks for it with `--relay-agent v12` (it needs the v2 client, in dev since #506); the playground gets it when RELAY_DEMO_AGENTS maps `edits` to helmsman/playground-v6. v12 passed its live eval and v11 failed the same one as a control; playground-v6 has offline tests only.
   id: agent-edits-deploy
   asked: 2026-11-15
   by: claude-session
@@ -755,16 +742,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 6: docs** — amend `canvas-edit-scope` in docs/ARCHITECTURE.md (the live ST view section: the diagram now writes ST through checked splices), docs/UI.md, and a help page in the floor-engineer voice.
-  result: the docs say what the diagram can change and how it reaches the code
-  est: 2h
-  difficulty: low
-  depends: diagram-edit-box
-  id: diagram-edit-docs
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
   result: building new logic from the diagram, not only changing it
   notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
@@ -781,15 +758,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
 Built: n-input gates, the fold layer (`helmsman_diagram::fold`) with the canvas drawing it, the comparison with its literal, range, latch, edge, selector and set/reset (on as the diagram opens), and sections named by a comment and arms (fold on request). Each card below is one more rule or renderer. Gates,
 chips and idioms are on as the diagram opens; arms, sections and output
 cards fold on request and the choice is kept in `diagram.layout`.
-
-- [ ] **A relay profile that writes section comments** — the diagram names a run of statements by the comment alone on its line above it (`fold::structure::sections`). A new profile id in ../agent-relay whose prompt asks for one short comment above each part of a program (a served profile never changes).
-  result: programs the Agent writes open with their parts named on the diagram
-  est: 2h
-  difficulty: low
-  id: relay-profile-sections
-  asked: 2026-11-16
-  by: claude-session
-  status: ready
 
 
 ## Product vision (interview 2026-10-29)
