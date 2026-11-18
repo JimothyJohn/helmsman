@@ -388,12 +388,47 @@ impl std::fmt::Debug for Build {
     }
 }
 
+/// The checker's `warnings` and the lint findings of `src`
+/// (`helmsman_iec::lint`), as the rows show them: the id first, and for a
+/// blocking one that no pragma overrides, that it holds Deploy.
+fn with_lints(src: &str, mut warnings: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    for l in helmsman_iec::lint::lints(src) {
+        let msg = if l.blocking {
+            format!("{}: {} (holds Deploy)", l.id, l.msg)
+        } else {
+            l.text()
+        };
+        warnings.push(Diagnostic { pos: l.pos, msg });
+    }
+    warnings.sort_by_key(|d| d.pos);
+    warnings
+}
+
+/// The blocking, un-overridden lint findings of `src`, as errors that
+/// say Deploy was refused.
+fn held_lints(src: &str) -> Vec<Diagnostic> {
+    helmsman_iec::lint::lints(src)
+        .into_iter()
+        .filter(|l| l.blocking)
+        .map(|l| Diagnostic {
+            pos: l.pos,
+            msg: format!(
+                "not deployed, held by {}: {} Fix it, or override it on this line with {{lint: off {} \"reason\"}}.",
+                l.id, l.msg, l.id
+            ),
+        })
+        .collect()
+}
+
 impl Build {
     /// Compiles `src`: the build, or the compiler's diagnostics; and in
     /// both cases the checker's warnings.
     pub fn new(src: &str) -> (Result<Self, Vec<Diagnostic>>, Vec<Diagnostic>) {
         let (compiled, warnings) = compile_warned(src, SIZES);
-        (compiled.map(|program| Self::from_program(src, program)), warnings)
+        (
+            compiled.map(|program| Self::from_program(src, program)),
+            with_lints(src, warnings),
+        )
     }
 
     fn from_program(src: &str, program: Program) -> Self {
@@ -933,7 +968,7 @@ impl Session {
             return false;
         }
         let (compiled, warnings) = compile_warned(&self.src, SIZES);
-        self.warnings = warnings;
+        self.warnings = with_lints(&self.src, warnings);
         match compiled {
             Ok(_) => {
                 self.diags.clear();
@@ -972,7 +1007,16 @@ impl Session {
             return None;
         }
         let (built, warnings) = Build::new(&self.src);
+        // Deploy holds for a lint that blocks, as a box's does: the rows
+        // say which and how to override it, and what runs is untouched.
+        let held = hot && built.is_ok() && !held_lints(&self.src).is_empty();
         self.warnings = warnings;
+        let built = if held {
+            self.diags = held_lints(&self.src);
+            return None;
+        } else {
+            built
+        };
         match built {
             Ok(mut b) => {
                 self.breaks = self

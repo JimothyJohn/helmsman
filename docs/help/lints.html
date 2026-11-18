@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Helmsman Help · Code checks</title>
+<link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
+<style>
+:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;--header-fg:#C8C8C8;
+--stencil:'Saira Stencil One',Impact,sans-serif;
+--mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif;
+color-scheme:dark;
+--bg:#141414;--fg:#F0F0F0;--muted:#8C8C8C;--rule:#3A3A3A;--nav:#B8B8B8;
+--code:#2C2C2C;--pre:#242424;--pre-fg:#F0F0F0;--kbd:#2C2C2C;--kbd-edge:#4A4A4A;--note:#2B2510}
+:root[data-theme="light"]{color-scheme:light;
+--bg:#FFFFFF;--fg:#141414;--muted:#3A3A3A;--rule:#E6E6E6;--nav:#3A3A3A;
+--code:#F2F2F2;--pre:#141414;--pre-fg:#F0F0F0;--kbd:#F2F2F2;--kbd-edge:#D8D8D8;--note:#FFF8E0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans)}
+.wrap{max-width:1040px;margin:0 auto;padding:0 16px}
+header.top{background:var(--black);color:var(--white);border-bottom:4px solid var(--yellow)}
+header.top .wrap{display:flex;align-items:center;gap:16px;min-height:56px}
+header.top .brand{color:var(--white);text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
+header.top .section{color:var(--steel);font:13px var(--mono)}
+header.top .site{margin-left:auto;color:var(--header-fg);text-decoration:none;font:13px var(--mono)}
+header.top .site:hover{color:var(--yellow)}
+header.top .theme{flex:none;margin:0;padding:6px 0;background:none;border:0;color:var(--header-fg);font:13px var(--mono);cursor:pointer;white-space:nowrap}
+header.top .theme:hover{color:var(--yellow)}
+header.top .theme:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+.page{display:grid;grid-template-columns:220px 1fr;gap:40px;padding:32px 0 64px}
+nav.help{position:sticky;top:16px;align-self:start;display:flex;flex-direction:column;gap:4px;font:14px var(--mono)}
+nav.help a{color:var(--nav);text-decoration:none;padding:6px 10px;border-left:3px solid transparent}
+nav.help a:hover{color:var(--fg);border-left-color:var(--steel)}
+nav.help a.current{color:var(--fg);border-left-color:var(--yellow);font-weight:600}
+main{min-width:0}
+main h1{font-size:32px;line-height:1.15;margin:0 0 16px}
+main h2{font-size:22px;margin:36px 0 10px;padding-top:12px;border-top:1px solid var(--rule)}
+main h3{font-size:17px;margin:24px 0 6px}
+main p,main li{max-width:72ch}
+main code{font-family:var(--mono);font-size:.92em;background:var(--code);padding:1px 4px;border-radius:3px}
+main pre{background:var(--pre);color:var(--pre-fg);padding:14px 16px;overflow-x:auto;border-radius:6px;font:14px/1.5 var(--mono)}
+main pre code{background:none;padding:0;color:inherit}
+main table{border-collapse:collapse;margin:12px 0;font-size:15px}
+main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+main th{font:600 13px var(--mono);color:var(--muted)}
+main img{display:block;max-width:100%;height:auto;margin:14px 0;border:1px solid var(--rule);border-radius:6px}
+main img.narrow{max-width:420px}
+main kbd{font:13px var(--mono);background:var(--kbd);border:1px solid var(--kbd-edge);border-bottom-width:2px;border-radius:4px;padding:1px 6px}
+main a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
+.note{border-left:4px solid var(--yellow);background:var(--note);padding:10px 14px;margin:14px 0}
+footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);padding:18px 0}
+@media (max-width:760px){.page{grid-template-columns:1fr;gap:16px}nav.help{position:static;flex-direction:row;flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="../">HELMSMAN</a><span class="section">Help</span>
+  <a class="site" href="../playground/">Playground</a>
+  <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
+</div></header>
+<div class="wrap page">
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<main>
+<h1 id="code-checks">Code checks</h1>
+<p>The editor reads your Structured Text for patterns that compile and
+still cause trouble on a real machine. Each finding is listed under the
+editor as a warning, with a stable ID, the file and the line, and it is
+sent to the Agent with the compile errors when you ask it for code. The
+IDs are the same on the page, on a box and in the audit trail, so you
+can look one up.</p>
+<p>Two of the checks hold the code. A finding of either one stops
+<strong>Use this code</strong> and <strong>Deploy</strong> until you fix
+it or override it on its line with a reason. The others are advice: they
+never stop anything.</p>
+<h2 id="the-checks-that-hold-the-code">The checks that hold the
+code</h2>
+<p><strong>HELMSMAN-L1: a function block called inside a
+condition.</strong> A timer, counter or edge detector that is called
+only in an IF or CASE branch does not run on the scans where the branch
+is not taken. The timer stops counting, the edge is missed, the counter
+misses its input. Call the block on every scan and put the condition on
+its input (<code>IN := ...</code>). A call inside a branch is allowed
+when every branch of that IF or CASE calls the same block. A test's
+<code>ASSERT</code> is not a function block with state and is never
+flagged. A timer in a state machine's CASE arm is flagged on purpose: it
+stops with the state, so say in a reason why that is what you want.</p>
+<p><strong>PLCOPEN-CP12: an output written in more than one
+place.</strong> A <code>VAR_OUTPUT</code> of the program, a variable
+located at <code>%Q</code> or a <code>%Q</code> address that is written
+twice in one scan, in sequence or once inside a branch and once outside
+it. The two arms of one IF or CASE count as one place. Members of a
+structure and different array elements are different outputs. The rule
+is in the PLCopen Coding Guidelines, rule CP12: compute the output in
+one place at the end of the scan.</p>
+<h2 id="the-advice">The advice</h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>What it says</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PLCOPEN-CP3</td>
+<td>A local variable is read and nothing gives it a value. A counter
+that is read before its first assignment and written later is fine.</td>
+</tr>
+<tr>
+<td>PLCOPEN-CP8</td>
+<td><code>=</code> or <code>&lt;&gt;</code> on a REAL or LREAL. A
+comparison with a literal zero is left alone.</td>
+</tr>
+<tr>
+<td>PLCOPEN-L12</td>
+<td>A FOR variable, or something in its start, end or step, is changed
+inside the loop.</td>
+</tr>
+<tr>
+<td>PLCOPEN-CP24</td>
+<td>A variable is declared and nothing uses it. Inputs, outputs and
+located variables are left alone.</td>
+</tr>
+<tr>
+<td>PLCOPEN-CP2</td>
+<td>Code that can never run: after RETURN, EXIT or CONTINUE, or in a
+branch whose condition is the literal FALSE.</td>
+</tr>
+<tr>
+<td>HELMSMAN-L2</td>
+<td>A lint pragma that overrides nothing (see below).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="overriding-a-finding">Overriding a finding</h2>
+<p>Put a pragma on the line the finding names, with the ID and a reason
+in quotes:</p>
+<pre><code>t(IN := go, PT := T#2s); {lint: off HELMSMAN-L1 &quot;the branch is the enable&quot;}</code></pre>
+<p>The finding stays listed, marked overridden with your reason, and it
+no longer holds the code. When you deploy to a box, the audit trail
+records the ID, the file and line and your reason. A reason is required,
+one line of plain text of at most 200 characters. A pragma with no
+reason, an ID that does not exist, a finding that cannot be overridden
+or no such finding on its line overrides nothing and is itself reported
+as HELMSMAN-L2.</p>
+<h2 id="where-the-findings-show">Where the findings show</h2>
+<ul>
+<li>In the editor, in the list under the code, and in the Messages tab.
+A finding that holds the code says so on its row.</li>
+<li>In the Agent's answer: a finding the answer adds is sent back to the
+Agent for another try. A finding the project already had is not blamed
+on the answer.</li>
+<li>On a box, a deploy that holds a finding is refused before anything
+changes, and the answer lists the finding with its line.</li>
+</ul>
+<p>Recursion is not in this list: the compiler refuses it as an
+error.</p>
+</main>
+</div>
+<footer><div class="wrap">Helmsman Factory Automation · early release · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
+<script>
+(function(){var c=document.querySelectorAll('nav.help a');for(var i=0;i<c.length;i++){if(c[i].getAttribute('href')==='lints.html'){c[i].className='current';}}})();
+(function(){var h=document.documentElement,b=document.querySelector('header.top .theme');if(!b){return}function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();
+</script>
+</body>
+</html>
