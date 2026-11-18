@@ -295,22 +295,15 @@ pub struct Viewer {
     /// The diff of `baseline` to `module`, kept while neither changes:
     /// (the baseline's address, the source it was made against, the diff).
     change: Option<(usize, String, helmsman_diagram::diff::ModuleDiff)>,
-    /// Whether the diagram's gestures change the program (the host sets
-    /// it each frame): off unless it says why not ([`crate::diagram_edit`]).
-    pub edit_gate: crate::diagram_edit::Gate,
     /// The diagram's lines are the text the host's files hold, so a block's
-    /// menu has "Chat about this" even while `edit_gate` is off (the host
-    /// sets it each frame).
+    /// menu has "Chat about this" (the host sets it each frame).
     pub chat_ok: bool,
-    /// The right click or double click the host has not taken yet.
-    pub gesture: Option<crate::diagram_edit::Gesture>,
-    /// Why a gesture did nothing, and where it was made: shown until the
-    /// next click or Escape.
-    pub off_note: Option<(Pos2, String)>,
+    /// The right click the host has not taken yet.
+    pub gesture: Option<crate::diagram_menu::Gesture>,
     /// What io.map can do with each of the program's inputs and outputs
     /// (the host sets it each frame): the diagram's menu on the block of a
-    /// port offers "Assign to device I/O…" whatever `edit_gate` says,
-    /// since it changes io.map and not the code.
+    /// port offers "Assign to device I/O…", since it changes io.map and not
+    /// the code.
     pub assign: Vec<crate::assign::PortMenu>,
     /// The folds each POU's diagram opens with
     /// ([`helmsman_diagram::fold::auto`]): sets of blocks drawn as one.
@@ -435,10 +428,6 @@ impl FoldState {
         }
     }
 }
-
-/// A block as an [`Arrangement`] names it: POU, label, source text, which
-/// of the same.
-pub type BlockKey = (String, String, String, usize);
 
 /// Offsets closer to zero than this are no move (float residue).
 const STILL: f32 = 0.01;
@@ -576,52 +565,6 @@ impl Arrangement {
         Self(out, newer.1.clone())
     }
 
-    /// The moves of the blocks `pairs` name as old, now under the new name
-    /// (a diagram edit changes a block's text, which names it), less what
-    /// `shared` already moves the new name by.
-    #[must_use]
-    pub fn carried(&self, pairs: &[(BlockKey, BlockKey)], shared: &Self) -> Self {
-        let mut out = Vec::new();
-        for (old, new) in pairs {
-            let Some(e) = self
-                .0
-                .iter()
-                .find(|e| (&e.0, &e.1, &e.2, e.3) == (&old.0, &old.1, &old.2, old.3))
-            else {
-                continue;
-            };
-            let mut by = e.4;
-            for s in shared
-                .0
-                .iter()
-                .filter(|s| (&s.0, &s.1, &s.2, s.3) == (&new.0, &new.1, &new.2, new.3))
-            {
-                by -= s.4;
-            }
-            out.push((new.0.clone(), new.1.clone(), new.2.clone(), new.3, by));
-        }
-        Self(out, FoldState::default())
-    }
-
-    /// `self` with `more` added: a move of `more` replaces one of `self`
-    /// for the same block.
-    #[must_use]
-    pub fn merged(&self, more: &Self) -> Self {
-        let mut out: Vec<_> = self
-            .0
-            .iter()
-            .filter(|e| {
-                !more
-                    .0
-                    .iter()
-                    .any(|m| (&m.0, &m.1, &m.2, m.3) == (&e.0, &e.1, &e.2, e.3))
-            })
-            .cloned()
-            .collect();
-        out.extend(more.0.iter().cloned());
-        Self(out, self.1.clone())
-    }
-
     /// Only the moves of blocks `v` has.
     #[must_use]
     pub fn within(&self, v: &Viewer) -> Self {
@@ -722,10 +665,8 @@ impl Viewer {
             paused: None,
             baseline: None,
             change: None,
-            edit_gate: crate::diagram_edit::Gate::Off(crate::diagram_edit::BOX_REASON.into()),
             chat_ok: false,
             gesture: None,
-            off_note: None,
             assign: Vec::new(),
             folds,
             opened: std::collections::BTreeSet::new(),
@@ -830,49 +771,12 @@ impl Viewer {
         ))
     }
 
-    /// The block of the diagram a gesture on block `n` as drawn is made
-    /// on ([`crate::diagram_edit`]): the block itself, or the comparison
-    /// of a folded comparison (its operator is what a menu changes). Any
-    /// other fold has nothing to change until it is opened.
+    /// The block of the diagram a right click on block `n` as drawn is
+    /// about ([`crate::diagram_menu`]): the block itself, or the comparison
+    /// of a folded comparison. Any other fold has no block of its own
+    /// until it is opened.
     pub(crate) fn base_block(&self, n: NodeId) -> Option<NodeId> {
         self.to_base(n).or_else(|| self.chip(n).map(|(op, _)| op))
-    }
-
-    /// The literal a double click on block `n` as drawn changes: a
-    /// constant block, or the one folded into a comparison.
-    pub(crate) fn base_const(&self, n: NodeId) -> Option<NodeId> {
-        match self.to_base(n) {
-            Some(o) => matches!(self.diagram().node(o).kind, NodeKind::Const { .. }).then_some(o),
-            None => self.chip(n).map(|(_, konst)| konst),
-        }
-    }
-
-    /// The input pin of the diagram behind input `input` of block `n` as
-    /// drawn: the same pin, or for a fold the one pin of its blocks that
-    /// wire enters by (none when several read it).
-    pub(crate) fn base_pin(&self, n: NodeId, input: usize) -> Option<(NodeId, usize)> {
-        let Some(v) = self.view() else {
-            return Some((n, input));
-        };
-        match *v.origin.get(n.0 as usize)? {
-            Origin::Node(o) => Some((o, input)),
-            Origin::Fold(f) => {
-                // A table's pin feeds several rows, each with its own bubble:
-                // there is no one pin of its gates to change.
-                if v.folds[f].kind == FoldKind::Table {
-                    return None;
-                }
-                let helmsman_diagram::fold::Input::Wire { from, negated } = v.ins[f].get(input)? else {
-                    return None;
-                };
-                let mut into = self.diagram().wires.iter().filter(|w| {
-                    (w.from, w.out, w.negated) == (from.0, from.1, *negated)
-                        && v.folds[f].nodes.contains(&w.to)
-                });
-                let w = into.next()?;
-                into.next().is_none().then_some((w.to, w.inp))
-            }
-        }
     }
 
     /// The block drawn for block `n` of the diagram: itself, or the fold
@@ -1575,114 +1479,6 @@ impl Viewer {
             .filter(|m| m.label == label && m.text == text)
             .nth(k)
             .map(|m| (p, m.id))
-    }
-
-    /// How an [`Arrangement`] names block `n` of POU number `pou`.
-    #[must_use]
-    pub fn key_of(&self, pou: usize, n: NodeId) -> Option<BlockKey> {
-        let p = self.module.pous.get(pou)?;
-        let node = p.diagram.nodes.get(n.0 as usize)?;
-        let k = p.diagram.nodes[..n.0 as usize]
-            .iter()
-            .filter(|m| m.label == node.label && m.text == node.text)
-            .count();
-        Some((p.name.clone(), node.label.clone(), node.text.clone(), k))
-    }
-
-    /// The same blocks under their new names across an edit. A POU whose
-    /// blocks are the same in number and kind (a constant, an operator, a
-    /// bubble or a rename changes only text) pairs them by place; for any
-    /// other the blocks that differ pair up as
-    /// [`helmsman_diagram::diff::modules`] pairs them.
-    #[must_use]
-    pub fn edited_blocks(&self, new: &Self) -> Vec<(BlockKey, BlockKey, NodeId, NodeId)> {
-        use helmsman_diagram::diff::{Change, modules};
-        let pou_of = |v: &Self, name: &str| v.module.pous.iter().position(|p| p.name == name);
-        let mut out = Vec::new();
-        let mut by_diff = false;
-        for (pn, p) in new.module.pous.iter().enumerate() {
-            let Some(po) = pou_of(self, &p.name) else {
-                continue;
-            };
-            let (a, b) = (&self.module.pous[po].diagram.nodes, &p.diagram.nodes);
-            let same_shape = a.len() == b.len()
-                && a.iter()
-                    .zip(b)
-                    .all(|(x, y)| std::mem::discriminant(&x.kind) == std::mem::discriminant(&y.kind));
-            if !same_shape {
-                by_diff = true;
-                continue;
-            }
-            for (x, y) in a.iter().zip(b) {
-                if (x.label.as_str(), x.text.as_str()) == (y.label.as_str(), y.text.as_str()) {
-                    continue;
-                }
-                if let (Some(ko), Some(kn)) = (self.key_of(po, x.id), new.key_of(pn, y.id)) {
-                    out.push((ko, kn, x.id, y.id));
-                }
-            }
-        }
-        if by_diff {
-            for c in &modules(&self.module, &new.module).nodes {
-                if c.change != Change::Changed {
-                    continue;
-                }
-                let (Some((o, _)), Some((n, _))) = (c.old.as_ref(), c.new.as_ref()) else {
-                    continue;
-                };
-                let (Some(po), Some(pn)) = (pou_of(self, &c.pou), pou_of(new, &c.pou)) else {
-                    continue;
-                };
-                if self.module.pous[po].diagram.nodes.len() == new.module.pous[pn].diagram.nodes.len()
-                    && std::mem::discriminant(&self.module.pous[po].diagram.nodes[o.0 as usize].kind)
-                        == std::mem::discriminant(&new.module.pous[pn].diagram.nodes[n.0 as usize].kind)
-                    && out.iter().any(|r| r.2 == *o)
-                {
-                    continue;
-                }
-                if let (Some(ko), Some(kn)) = (self.key_of(po, *o), new.key_of(pn, *n)) {
-                    out.push((ko, kn, *o, *n));
-                }
-            }
-        }
-        out
-    }
-
-    /// Keeps what `old` showed across an edit: the scope, every camera
-    /// and the picked block (by `renamed`, from [`Self::edited_blocks`],
-    /// when its text changed).
-    pub fn carry_view(&mut self, old: &Self, renamed: &[(BlockKey, BlockKey, NodeId, NodeId)]) {
-        if old.scopes == self.scopes {
-            self.cams.clone_from(&old.cams);
-            self.scope = old.scope;
-        }
-        // A fold the reader opened stays open while the program still
-        // has it under the same key.
-        self.opened.clone_from(&old.opened);
-        self.collapsed.clone_from(&old.collapsed);
-        self.reshow();
-        let Some(pick) = old.pick else { return };
-        let pou = self.scopes.get(self.scope).map_or(0, |s| s.pou);
-        self.pick = match pick {
-            Pick::Node(n) => {
-                let key = old.key_of(old.scopes[old.scope].pou, n);
-                renamed
-                    .iter()
-                    .find(|r| r.2 == n)
-                    .map(|r| r.3)
-                    .or_else(|| {
-                        let (p, label, text, k) = key?;
-                        self.block(&p, &label, &text, k).map(|(_, id)| id)
-                    })
-                    .map(Pick::Node)
-            }
-            Pick::Region(r) => self
-                .module
-                .pous
-                .get(pou)
-                .and_then(|p| p.diagram.regions.get(r.0 as usize))
-                .map(|_| Pick::Region(r)),
-        };
     }
 
     /// Moves block `n` of the shown POU by `by` (diagram units).
@@ -2564,11 +2360,6 @@ impl Viewer {
         // fits the diagram to the view.
         if double
             && let Some(p) = response.interact_pointer_pos()
-            && let Some(n) = self.const_at(cam, p)
-        {
-            self.gesture_at(p, crate::diagram_edit::Hit::Block(n), true);
-        } else if double
-            && let Some(p) = response.interact_pointer_pos()
             && let Some(key) = self.fold_at(cam, p)
         {
             // A fold opens into its blocks...
@@ -2652,7 +2443,6 @@ impl Viewer {
         // only when nothing else is using it: a menu or popup, a note, a
         // modal question or a field with the cursor in it.
         let busy = self.menu_open
-            || self.off_note.is_some()
             || ui.ctx().any_popup_open()
             || ui
                 .ctx()
@@ -2741,11 +2531,10 @@ impl Viewer {
         }
         if response.secondary_clicked()
             && let Some(p) = response.interact_pointer_pos()
-            && let Some(hit) = self.hit_at(cam, p)
+            && let Some(n) = self.hit_at(cam, p)
         {
-            let (crate::diagram_edit::Hit::Block(n) | crate::diagram_edit::Hit::Pin { node: n, .. }) = hit;
             self.pick = Some(Pick::Node(n));
-            self.gesture_at(p, hit, false);
+            self.gesture_at(p, n);
         }
         let mut live = self.live(scan);
         if let Some(l) = &mut live {
@@ -2837,12 +2626,6 @@ impl Viewer {
                 "This block has a diagram of its own. Double-click opens it (Alt ] with it picked).",
             );
         }
-        if response.hovered()
-            && let Some(p) = hover
-            && let Some(text) = self.edit_hover(cam, p)
-        {
-            response.clone().on_hover_text_at_pointer(text);
-        }
         let pou = &self.module.pous[self.scopes[self.scope].pou].name;
         let old = self
             .baseline
@@ -2900,7 +2683,6 @@ impl Viewer {
                 StrokeKind::Inside,
             );
         }
-        self.off_note_ui(ui, area);
         // The program's BOOL outputs as lamps in the corner (a traffic
         // light for a red, a yellow and a green), on the program's own
         // diagram only: a block instance's outputs are not the machine's.

@@ -6897,7 +6897,7 @@ mod devconf {
 mod assign;
 mod chat_about;
 mod device_io;
-mod diagram_edit;
+mod diagram_menu;
 mod front;
 mod io_cards;
 mod io_names;

@@ -224,15 +224,6 @@ fn a_dragged_fold_stays_where_it_was_put() {
     assert_eq!(rect(&h), before);
 }
 
-#[test]
-fn what_the_reader_folded_stays_folded_across_a_new_version_of_the_program() {
-    let h = Harness::with_section();
-    let module = h.session.build.as_ref().unwrap().module.clone().unwrap();
-    let mut next = Viewer::new(SRC, module);
-    next.carry_view(&h.view, &[]);
-    assert!(next.collapsed.contains(&("LINE".to_string(), "sec".to_string())));
-}
-
 /// A latch, a commented section and an IF with a two-statement arm.
 const PLANT: &str = "PROGRAM plant
 VAR
@@ -284,7 +275,7 @@ fn a_latch_opens_as_one_block_with_set_and_reset_and_its_inputs_beside_it() {
             "{input}: {reads:?}"
         );
     }
-    // A right click on its reset pin is a gesture on the AND's pin.
+    // A right click on its reset pin is about the AND.
     let d = h.view.diagram().clone();
     let and = d
         .nodes
@@ -294,10 +285,7 @@ fn a_latch_opens_as_one_block_with_set_and_reset_and_its_inputs_beside_it() {
         .id;
     let at = h.view.pin_on_screen(and, 1).expect("the reset pin is drawn");
     let cam = h.view.cams[h.view.scope];
-    assert_eq!(
-        h.view.hit_at(cam, at),
-        Some(crate::diagram_edit::Hit::Pin { node: and, input: 1 })
-    );
+    assert_eq!(h.view.hit_at(cam, at), Some(and));
     // A double click shows its gates, and its tab folds them again.
     let at = h.header("MOTOR");
     h.press(at, 2);
@@ -927,11 +915,13 @@ fn the_jump_keys_frame_a_condition_that_is_a_table_and_a_tap_on_a_cell_only_pick
 }
 
 #[test]
-fn a_gesture_on_a_table_pin_is_refused_not_mapped_to_a_gate() {
+fn a_right_click_on_a_table_pin_is_about_no_block() {
     let h = Harness::of(&permissive([true, false, true, false, false]));
     let (n, _) = h.table(true).unwrap();
     for k in 0..h.view.shown().node(n).ins.len() {
-        assert_eq!(h.view.base_pin(n, k), None, "pin {k}");
+        let at = h.view.pin_on_screen(n, k).expect("the pin is drawn");
+        let cam = h.view.cams[h.view.scope];
+        assert_eq!(h.view.hit_at(cam, at), None, "pin {k}");
     }
     assert_eq!(h.view.base_block(n), None);
 }
