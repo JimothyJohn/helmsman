@@ -742,16 +742,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 6: docs** — amend `canvas-edit-scope` in docs/ARCHITECTURE.md (the live ST view section: the diagram now writes ST through checked splices), docs/UI.md, and a help page in the floor-engineer voice.
-  result: the docs say what the diagram can change and how it reaches the code
-  est: 2h
-  difficulty: low
-  depends: diagram-edit-box
-  id: diagram-edit-docs
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
   result: building new logic from the diagram, not only changing it
   notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.

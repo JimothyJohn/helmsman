@@ -6,9 +6,9 @@ this; change it here first when a decision changes.
 ## Principles
 
 - **Structured Text and its live diagram, nothing else.** The diagram is a
-  view of the ST. In the simulation it also changes the code through a few
-  gestures (Editing on the diagram, below); on a box it is read-only for
-  now. (The node-graph Lab editor is gone.)
+  view of the ST. It also changes the code through a few gestures (Editing
+  on the diagram, below); on a box they change the open file and leave Save
+  and Deploy to the engineer. (The node-graph Lab editor is gone.)
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the
   page. Same screens, same buttons; the source is a setting, not a mode.
@@ -405,8 +405,7 @@ this; change it here first when a decision changes.
   engineer only: the block shows FORCED in the warning colour, a banner
   lists every force with "release all", and forces end on logout or deploy.
 
-- **Editing on the diagram (the simulation; a box later, card
-  `diagram-edit-box`):** a right click on a block or on one of its input
+- **Editing on the diagram (the simulation and a box):** a right click on a block or on one of its input
   pins (a long press on a touch screen) opens a menu of what can change
   there, and only of what the code accepts: *Change operator ▸* (AND for
   OR, one comparison for another, `+ - * /` for each other), *Negate
@@ -436,7 +435,13 @@ this; change it here first when a decision changes.
     with the reason in a note where you clicked (and in the tooltip over a
     constant), when the diagram shows other code than the editor holds (the
     code was typed since the last Deploy, or does not compile), when the
-    project has more than one program file, and on a box.
+    project has more than one program file.
+  - **On a box** a gesture changes the open file only, as typing does:
+    one Undo step, unsaved, nothing sent. Save and Deploy stay the
+    engineer's, through the box's approval policy. It is on only for an
+    engineer, only while the diagram is the open file of the project the
+    box runs, and off after one gesture until that change is deployed and
+    running or undone (the diagram draws what runs).
 
 ## Projects
 
