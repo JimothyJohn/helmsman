@@ -341,12 +341,29 @@ fn real_st_compiles_or_says_why_not() {
     let mut by_source: BTreeMap<String, [usize; 5]> = BTreeMap::new();
     let mut causes = Causes::new();
     let mut regressions = Vec::new();
+    // Lint findings by id: (findings, files with at least one).
+    let mut lint_counts: BTreeMap<&'static str, (usize, usize)> = BTreeMap::new();
     for f in &found {
         let bytes = std::fs::read(f).unwrap_or_else(|e| panic!("{}: {e}", f.display()));
         let src = String::from_utf8_lossy(&bytes);
         let name = rel(&root, f);
         let source = name.split('/').next().unwrap_or("").to_string();
         let outcome = std::panic::catch_unwind(|| run(&src)).unwrap_or(Outcome::Panicked);
+        // The lint pass (`helmsman_iec::lint`) over every file that parses:
+        // it must never panic, and its hits are the noise measure.
+        match std::panic::catch_unwind(|| helmsman_iec::lint::lints(&src)) {
+            Ok(found) => {
+                let mut seen: Vec<&'static str> = Vec::new();
+                for l in &found {
+                    lint_counts.entry(l.id).or_default().0 += 1;
+                    if !seen.contains(&l.id) {
+                        seen.push(l.id);
+                        lint_counts.entry(l.id).or_default().1 += 1;
+                    }
+                }
+            }
+            Err(_) => regressions.push(format!("PANIC in the lint pass: {name}")),
+        }
         let expected = expects_refusal(&name);
         let row = by_source.entry(source.clone()).or_default();
         row[0] += 1;
@@ -405,6 +422,11 @@ fn real_st_compiles_or_says_why_not() {
     }
 
     report.push_str(&summary(&by_source, &causes));
+    writeln!(report, "\nlint findings (findings, files) by id, over the files that parse:").unwrap();
+    for (id, _, what) in helmsman_iec::lint::IDS {
+        let (n, f) = lint_counts.get(id).copied().unwrap_or_default();
+        writeln!(report, "  {id:<13} {n:>5} findings in {f:>4} files  ({what})").unwrap();
+    }
     eprint!("{report}");
     assert!(regressions.is_empty(), "{}", regressions.join("\n"));
 }
