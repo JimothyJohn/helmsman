@@ -31,14 +31,19 @@ Helmsman box: pairing files, read once at first boot by helmsman-firstboot.
 
   relay-url     the relay's https URL, one line (optional)
   relay-token   the box's relay token (hmr1_...), one line (optional)
-  site          the site this box joins, 1 to 32 of A-Z a-z 0-9 . _ - (optional)
+  pairing-code  a one-time code from the relay's operator, instead of
+                relay-token (optional; needs relay-url and relay-box-id)
+  relay-box-id  the id the code was made for, e.g. plc-7 (a-z 0-9 -)
+  relay-allow-http  an empty file: accept an http:// relay-url (a relay on
+                the plant's own network); the code and token then cross it
+                in the clear
+  site         the site this box joins, 1 to 32 of A-Z a-z 0-9 . _ - (optional)
   box-name      this box's name on the site (optional, needs site; default:
                 the hostname)
 
-relay-url and relay-token go together: one without the other is ignored.
+relay-url and a token go together: one without the other is ignored.
 
-The token file is moved into the box's state directory and removed from
-here. Without these files the box runs without an agent; add them later
+The token file, or the code once it has been traded, is removed from here. Without these files the box runs without an agent; add them later
 and run: sudo systemctl start helmsman-firstboot
 EOF
 

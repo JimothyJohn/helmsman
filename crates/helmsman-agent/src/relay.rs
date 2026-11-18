@@ -356,6 +356,75 @@ pub fn probe(cfg: &Config) -> Result<(), Error> {
     })
 }
 
+/// Whether `c` is a pairing code as the relay prints it: 10 symbols of
+/// Crockford's base32, as typed (case, one dash or blanks between the two
+/// groups of five are the relay's to read). Only a shape check, so a
+/// mistyped file is caught before the relay counts a try against the box.
+#[must_use]
+pub fn pair_code_ok(c: &str) -> bool {
+    let symbols = c
+        .chars()
+        .filter(|ch| *ch != '-' && !ch.is_whitespace())
+        .collect::<Vec<_>>();
+    symbols.len() == 10
+        && symbols
+            .iter()
+            .all(|ch| ch.is_ascii_alphanumeric() && !matches!(ch.to_ascii_uppercase(), 'U'))
+}
+
+/// Whether `id` is a box id the relay takes: 1 to 64 of `a-z 0-9 -`, not
+/// starting with `-`.
+#[must_use]
+pub fn box_id_ok(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && !id.starts_with('-')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Trades a one-time pairing code for this box's relay token
+/// (`POST {prefix}/v1/pair`, relay protocol "Pairing by code"): no bearer
+/// token, the code is the credential. The token comes back once and is
+/// checked to be a box token for `box_id` before it is returned.
+///
+/// The code and the token are secrets: neither appears in an [`Error`]
+/// (the relay's own refusal text is fixed and names neither).
+///
+/// # Errors
+/// [`Error::Unreachable`] before anything was sent (safe to retry);
+/// [`Error::Timeout`] or [`Error::Malformed`] after it was (the code may
+/// be spent; ask for a new one); [`Error::Status`] for the relay's refusal
+/// (403: the code is wrong, used, expired or for another id; 429: slow
+/// down; 404: this relay has no pairing).
+pub fn pair(url: &Url, code: &str, box_id: &str, timeouts: Timeouts) -> Result<String, Error> {
+    let body = serde_json::to_vec(&json!({ "code": code, "box_id": box_id })).unwrap_or_default();
+    let path = format!("{}/v1/pair", url.prefix);
+    let req = http::Request {
+        method: "POST",
+        path: &path,
+        headers: &[],
+        json: Some(&body),
+        raw: None,
+    };
+    let resp = http::send(url, &req, timeouts).map_err(from_http)?;
+    if resp.status != 200 {
+        return Err(status_error(resp));
+    }
+    let bytes = resp
+        .read_body(MAX_ERROR_BODY)
+        .map_err(|_| Error::Malformed("the pairing answer could not be read".into()))?;
+    let j: Json = serde_json::from_slice(&bytes)
+        .map_err(|_| Error::Malformed("the pairing answer is not JSON".into()))?;
+    match (j["token"].as_str(), j["box_id"].as_str()) {
+        (Some(t), Some(id)) if token_ok(t) && id == box_id => Ok(t.to_string()),
+        _ => Err(Error::Malformed(
+            "the pairing answer is not a box token for this box".into(),
+        )),
+    }
+}
+
 /// Runs one model turn over `messages`, calling `on` as text and tool
 /// calls stream in.
 ///
