@@ -10,6 +10,9 @@
 //! nanoseconds reaches); a literal or a conversion outside it is refused
 //! at compile time, and arithmetic that leaves it wraps like TIME does.
 
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+
 use core::fmt::Write;
 
 /// Nanoseconds in a second, a day.
@@ -87,6 +90,39 @@ pub fn tod_ns(h: u32, m: u32, s: u32, frac: u32) -> Option<i128> {
     Some((i128::from(h) * 3600 + i128::from(m) * 60 + i128::from(s)) * NS_SEC + i128::from(frac))
 }
 
+/// `CONCAT_DATE(y, m, d)`: midnight of the date, or 0 (1970-01-01) when
+/// there is no such date, as ruSTy's `concat_date` (a year or day that
+/// does not fit 32 bits is no date either). A date beyond the 64-bit
+/// range is the range's end on its side of 1970.
+#[must_use]
+pub fn concat_date(y: i128, m: i128, d: i128) -> i128 {
+    let (Ok(y), Ok(m), Ok(d)) = (i32::try_from(y), u32::try_from(m), u32::try_from(d)) else {
+        return 0;
+    };
+    // chrono's range, which ruSTy's function inherits.
+    if !(-262_143..=262_142).contains(&y)
+        || !(1..=12).contains(&m)
+        || d < 1
+        || d > days_in_month(i64::from(y), m)
+    {
+        return 0;
+    }
+    let ns = i128::from(days_from_civil(i64::from(y), m, d)) * NS_DAY;
+    ns.clamp(MIN, MAX)
+}
+
+/// `CONCAT_TOD(h, m, s, ms)`: the time of day, or 0 when it is none
+/// (hour above 23, minute or second above 59, milliseconds above 999,
+/// or any part negative).
+#[must_use]
+pub fn concat_tod(h: i128, m: i128, s: i128, ms: i128) -> i128 {
+    if !(0..=23).contains(&h) || !(0..=59).contains(&m) || !(0..=59).contains(&s) || !(0..=999).contains(&ms)
+    {
+        return 0;
+    }
+    (h * 3600 + m * 60 + s) * NS_SEC + ms * 1_000_000
+}
+
 /// A reader over the characters of a literal's body.
 struct Cur<'a> {
     s: &'a [u8],
@@ -124,7 +160,7 @@ impl Cur<'_> {
 const BAD_DATE: &str = "a date is YYYY-MM-DD";
 const BAD_TIME: &str = "a time of day is hh:mm:ss or hh:mm:ss.fraction";
 
-fn date_part(c: &mut Cur<'_>) -> Result<i128, &'static str> {
+fn date_part(c: &mut Cur<'_>, whole_day_in_range: bool) -> Result<i128, &'static str> {
     let y = c.digits(4, true).ok_or(BAD_DATE)?;
     if !c.eat(b'-') {
         return Err(BAD_DATE);
@@ -140,7 +176,11 @@ fn date_part(c: &mut Cur<'_>) -> Result<i128, &'static str> {
     if d < 1 || d > days_in_month(i64::from(y), m) {
         return Err("no such day in that month");
     }
-    date_ns(i64::from(y), m, d).ok_or("beyond the range of a DATE (years 1677 to 2262)")
+    let ns = i128::from(days_from_civil(i64::from(y), m, d)) * NS_DAY;
+    if whole_day_in_range && !(MIN..=MAX).contains(&ns) {
+        return Err("beyond the range of a DATE (1677-09-22 to 2262-04-11)");
+    }
+    Ok(ns)
 }
 
 fn tod_part(c: &mut Cur<'_>) -> Result<i128, &'static str> {
@@ -185,7 +225,7 @@ fn tod_part(c: &mut Cur<'_>) -> Result<i128, &'static str> {
 /// What is wrong with it, in words.
 pub fn parse_date(s: &[u8]) -> Result<i128, &'static str> {
     let mut c = Cur { s, i: 0 };
-    let v = date_part(&mut c)?;
+    let v = date_part(&mut c, true)?;
     if c.done() { Ok(v) } else { Err(BAD_DATE) }
 }
 
@@ -205,7 +245,7 @@ pub fn parse_tod(s: &[u8]) -> Result<i128, &'static str> {
 /// What is wrong with it, in words.
 pub fn parse_dt(s: &[u8]) -> Result<i128, &'static str> {
     let mut c = Cur { s, i: 0 };
-    let d = date_part(&mut c)?;
+    let d = date_part(&mut c, false)?;
     if !c.eat(b'-') {
         return Err("a date and time is YYYY-MM-DD-hh:mm:ss");
     }
@@ -214,7 +254,7 @@ pub fn parse_dt(s: &[u8]) -> Result<i128, &'static str> {
         return Err(BAD_TIME);
     }
     let v = d + t;
-    if v > MAX {
+    if !(MIN..=MAX).contains(&v) {
         return Err("beyond the range of a DT (years 1677 to 2262)");
     }
     Ok(v)
@@ -318,6 +358,22 @@ pub fn format(kind: Kind, ns: i128, out: &mut [u8; TEXT_MAX]) -> usize {
         }
     }
     w.n
+}
+
+/// A DATE, TOD or DT value written as the literal that reads back as it
+/// (`TOD#08:30:00`); any other type gives its raw count.
+#[must_use]
+pub fn literal(ty: crate::types::Ty, ns: i128) -> String {
+    use crate::types::Ty;
+    let kind = match ty {
+        Ty::Date => Kind::Date,
+        Ty::Tod => Kind::Tod,
+        Ty::Dt => Kind::Dt,
+        _ => return ns.to_string(),
+    };
+    let mut b = [0u8; TEXT_MAX];
+    let n = format(kind, ns, &mut b);
+    String::from_utf8_lossy(&b[..n]).into_owned()
 }
 
 /// Text as a value of `kind`: the literal's body, optionally behind its

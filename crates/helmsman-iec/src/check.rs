@@ -322,6 +322,16 @@ pub enum Builtin {
     Trunc,
     /// Time since the program started (the built-in library's clock).
     Now,
+    /// `DT_NOW()`: the wall clock, a DT.
+    Wall,
+    /// `DAY_OF_WEEK(d)`: 0 (Sunday) to 6, a SINT.
+    DayOfWeek,
+    /// `CONCAT_DATE_TOD(date, tod)`: a DT.
+    ConcatDateTod,
+    /// `CONCAT_DATE(y, m, d)`: a DATE, 0 when there is no such date.
+    ConcatDate,
+    /// `CONCAT_TOD(h, m, s, ms)`: a TOD, 0 when there is no such time.
+    ConcatTod,
     /// Faults the scan with [`crate::interp::BadParam`]: how a built-in
     /// library block refuses a parameter (library code only, like `__NOW`).
     /// Typed BOOL so it can stand where a value goes; it never returns one.
@@ -830,8 +840,9 @@ impl<'a> Ck<'a> {
                     None => {
                         let hint = match n.as_str() {
                             "WSTRING" => " (WSTRING is not supported: use STRING)".to_string(),
-                            "DATE" | "DT" | "TOD" | "DATE_AND_TIME" | "TIME_OF_DAY" | "LDATE" | "LDT"
-                            | "LTOD" | "LTIME" => format!(" ({n} is not supported yet)"),
+                            "LDATE" | "LDT" | "LTOD" | "LTIME" | "LTIME_OF_DAY" | "LDATE_AND_TIME" => {
+                                format!(" ({n} is not supported yet)")
+                            }
                             _ => {
                                 let mut known: Vec<&str> = Ty::names().collect();
                                 known.extend(self.named.keys().map(String::as_str));
@@ -1892,6 +1903,7 @@ impl<'a> Ck<'a> {
                 Some((Ex::StrConst(off), T::Known(Type::Str(cap))))
             }
             ExprKind::Time(ns) => Some((Ex::Const(Value::Int(*ns)), T::Known(Type::Elem(Ty::Time)))),
+            ExprKind::Calendar(ty, ns) => Some((Ex::Const(Value::Int(*ns)), T::Known(Type::Elem(*ty)))),
             ExprKind::EnumLit(tn, v) => {
                 let Some(Named::Type(Type::Enum(id))) = self.named.get(tn).copied() else {
                     self.err(e.pos, format!("{tn} is not an enumeration type"));
@@ -2122,6 +2134,9 @@ impl<'a> Ck<'a> {
                 T::Known(Type::Elem(Ty::Bool)),
             ));
         }
+        if matches!(op, BinOp::Add | BinOp::Sub) && (Self::is_calendar(ta) || Self::is_calendar(tb)) {
+            return self.calendar_arith(op, Box::new(xa), ta, Box::new(xb), tb, pos);
+        }
         // TIME scaled by a number.
         let is_time = |t: T| t == T::Known(Type::Elem(Ty::Time));
         let is_num = |t: T| {
@@ -2168,6 +2183,43 @@ impl<'a> Ck<'a> {
         let xb = self.coerce(xb, tb, Type::Elem(ty), b.pos);
         let ex = Ex::Bin(op, Box::new(xa?), Box::new(xb?), ty);
         Some((ex, T::Known(Type::Elem(if cmp { Ty::Bool } else { ty }))))
+    }
+
+    /// `+` and `-` with a DATE, TOD or DT operand. Only the combinations
+    /// ruSTy defines: TOD or DT plus or minus a TIME, and the difference
+    /// of two values of one type, which is a TIME. A TOD wraps at midnight.
+    fn is_calendar(t: T) -> bool {
+        matches!(t, T::Known(Type::Elem(k)) if k.is_calendar())
+    }
+
+    #[inline(never)]
+    fn calendar_arith(&mut self, op: BinOp, xa: Box<Ex>, ta: T, xb: Box<Ex>, tb: T, pos: Pos) -> O<(Ex, T)> {
+        let result = match (ta, tb) {
+            (T::Known(Type::Elem(x)), T::Known(Type::Elem(y))) => match (x, op, y) {
+                (Ty::Tod, _, Ty::Time) => Some(Ty::Tod),
+                (Ty::Dt, _, Ty::Time) => Some(Ty::Dt),
+                (Ty::Date | Ty::Tod | Ty::Dt, BinOp::Sub, _) if x == y => Some(Ty::Time),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(ty) = result else {
+            let name = |me: &Self, t: T| match t {
+                T::Known(k) => me.type_name(k),
+                _ => "a number".to_string(),
+            };
+            let (x, y) = (name(self, ta), name(self, tb));
+            self.err(
+                pos,
+                format!(
+                    "{} cannot take {x} and {y}: a TOD or DT plus or minus a TIME, or two DATEs, TODs or DTs subtracted (giving a TIME), are the only date arithmetic",
+                    op.symbol()
+                ),
+            );
+            return None;
+        };
+        let t = T::Known(Type::Elem(ty));
+        Some((Ex::Bin(op, xa, xb, ty), t))
     }
 
     /// A binary operator with a STRING operand: only the comparisons of
@@ -2361,6 +2413,9 @@ impl<'a> Ck<'a> {
         if let Some(r) = self.string_fn(name, args, pos, sc) {
             return r;
         }
+        if let Some(r) = self.calendar_fn(name, args, pos, sc) {
+            return r;
+        }
         if let Some(conv) = self.conversion(name, args, pos, sc) {
             return conv;
         }
@@ -2391,7 +2446,15 @@ impl<'a> Ck<'a> {
                 let known = BUILTINS
                     .iter()
                     .map(|(n, _)| *n)
-                    .chain(["EXPT", "MOVE"])
+                    .chain([
+                        "EXPT",
+                        "MOVE",
+                        "DT_NOW",
+                        "DAY_OF_WEEK",
+                        "CONCAT_DATE_TOD",
+                        "CONCAT_DATE",
+                        "CONCAT_TOD",
+                    ])
                     .chain(STRING_FNS.iter().map(|(n, ..)| *n));
                 let hint = crate::suggest::hint(name, known.chain(functions));
                 self.err(at, format!("unknown function {name}{hint}"));
@@ -2418,6 +2481,11 @@ impl<'a> Ck<'a> {
                     T::Known(Type::Elem(Ty::Time)),
                 ))
             }
+            Builtin::Wall
+            | Builtin::DayOfWeek
+            | Builtin::ConcatDateTod
+            | Builtin::ConcatDate
+            | Builtin::ConcatTod => unreachable!("calendar_fn handles these before the table"),
             Builtin::Fault(_) => {
                 if !arity(0, args.is_empty(), self) {
                     return None;
@@ -2550,6 +2618,66 @@ impl<'a> Ck<'a> {
                 Some((Ex::Builtin(b, vec![x, n], ty), T::Known(Type::Elem(ty))))
             }
         }
+    }
+
+    /// The date and time functions: `DT_NOW`, `DAY_OF_WEEK`,
+    /// `CONCAT_DATE_TOD`, `CONCAT_DATE` and `CONCAT_TOD`; `None` if `name`
+    /// is not one of them.
+    fn calendar_fn(&mut self, name: &str, args: &[Arg], pos: Pos, sc: &Scope) -> O<O<(Ex, T)>> {
+        let (b, ret, want): (Builtin, Ty, &[Ty]) = match name {
+            "DT_NOW" => (Builtin::Wall, Ty::Dt, &[]),
+            "DAY_OF_WEEK" => (Builtin::DayOfWeek, Ty::SInt, &[Ty::Date]),
+            "CONCAT_DATE_TOD" => (Builtin::ConcatDateTod, Ty::Dt, &[Ty::Date, Ty::Tod]),
+            "CONCAT_DATE" => (Builtin::ConcatDate, Ty::Date, &[Ty::LInt; 3]),
+            "CONCAT_TOD" => (Builtin::ConcatTod, Ty::Tod, &[Ty::LInt; 4]),
+            _ => return None,
+        };
+        if !self.positional_or_none(name, args, pos) {
+            return Some(None);
+        }
+        if args.len() != want.len() {
+            self.err(
+                pos,
+                format!("{name} takes {} argument(s), got {}", want.len(), args.len()),
+            );
+            return Some(None);
+        }
+        let mut exs = Vec::new();
+        let mut ok = true;
+        for (a, &w) in args.iter().zip(want) {
+            let x = if b == Builtin::DayOfWeek {
+                // A DATE, or a DT (its day).
+                self.synth(&a.value, None, sc).and_then(|(x, t)| match t {
+                    T::Known(Type::Elem(Ty::Date | Ty::Dt)) => Some(x),
+                    other => {
+                        let found = match other {
+                            T::Known(k) => self.type_name(k),
+                            _ => "a number".to_string(),
+                        };
+                        self.err(a.value.pos, format!("{name} needs a DATE or a DT, found {found}"));
+                        None
+                    }
+                })
+            } else {
+                self.coerced(&a.value, Type::Elem(w), sc)
+            };
+            match x {
+                Some(x) => exs.push(x),
+                None => ok = false,
+            }
+        }
+        if !ok {
+            return Some(None);
+        }
+        Some(Some((Ex::Builtin(b, exs, ret), T::Known(Type::Elem(ret)))))
+    }
+
+    /// Like [`Self::positional`], but a call with no arguments is fine.
+    fn positional_or_none(&mut self, name: &str, args: &[Arg], pos: Pos) -> bool {
+        if args.is_empty() {
+            return true;
+        }
+        self.positional(name, args, pos)
     }
 
     /// The standard string functions and the conversions to and from
@@ -2788,6 +2916,19 @@ impl<'a> Ck<'a> {
                 Some((x, f))
             })
         };
+        let r = r.and_then(|(x, f)| {
+            let kept = f == to || matches!((f, to), (Ty::Dt, Ty::Date | Ty::Tod) | (Ty::Date, Ty::Dt));
+            if (f.is_calendar() || to.is_calendar()) && !kept {
+                self.err(
+                    pos,
+                    format!(
+                        "{name}: {f} does not convert to {to}. A DT converts to a DATE or a TOD (DT_TO_DATE, DT_TO_TOD) and a DATE to a DT; a TOD is TOD#00:00:00 plus a TIME, and a TIME is a TOD minus TOD#00:00:00"
+                    ),
+                );
+                return None;
+            }
+            Some((x, f))
+        });
         Some(r.map(|(x, f)| {
             (
                 if f == to { x } else { Ex::Conv(Box::new(x), f, to) },

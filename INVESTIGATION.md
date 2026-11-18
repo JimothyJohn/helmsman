@@ -62,7 +62,7 @@ Read this first, so we don't propose things that are already built.
   FUNCTION_BLOCK, VAR / VAR_TEMP / VAR_INPUT / VAR_OUTPUT / VAR CONSTANT,
   STRUCT / enum / alias, ARRAY, the elementary types up to LREAL and TIME,
   located variables, the full statement set, the standard functions.
-- **Language not covered**: STRING / WSTRING, DATE / DT / TOD, pointers and
+- **Language not covered**: WSTRING, pointers and
   references, and OOP (METHOD, INTERFACE, EXTENDS). VAR_IN_OUT (on a
   function block) and function outputs are covered since the
   `st-var-in-out` card, and VAR_GLOBAL / VAR_EXTERNAL inside one module
@@ -331,7 +331,7 @@ staying analysable. So each feature gets a position, not a blanket "yes":
 | VAR_IN_OUT | yes | the standard way to pass a struct or array into an FB; every library uses it. Inside one module it breaks nothing. |
 | function outputs (VAR_OUTPUT on FUNCTION) | yes | cheap, common in libraries |
 | STRING (fixed-length, `STRING[n]`) | yes | messages, recipe names, OPC UA and webhook payloads, device IDs. Fixed length keeps the scan bounded and fits no_std. WSTRING later. |
-| TOD / DATE / DT | yes | the shift calendar already exists; logic like "after 22:00" is natural to write and today can't be. Needs a clock source in `scan_at` (it has one). |
+| TOD / DATE / DT | yes (built 2026-11-18) | the shift calendar already exists; logic like "after 22:00" is natural to write and today can't be. Needs a clock source in `scan_at` (it has one). |
 | VAR_GLOBAL inside one module (CONFIGURATION / RESOURCE scope) | yes (built 2026-11-15) | common in imported code. Across modules it must stay refused; signals and `Binding::Module` are the way modules talk. |
 | METHOD / PROPERTY on FUNCTION_BLOCK | later | TwinCAT and CODESYS code (TcOpen, Henneken's blog, Pratt's OOIP talk) is written this way, and models have read a lot of it. The diagram needs a story for methods first. |
 | INTERFACE / EXTENDS / polymorphism | no, for now | dynamic dispatch defeats "on because ..." explanations and per-statement tracing. Revisit only if the corpus says imports fail mostly on this. |

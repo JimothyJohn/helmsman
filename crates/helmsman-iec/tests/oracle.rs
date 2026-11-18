@@ -82,6 +82,9 @@ fn printable(ty: &str) -> bool {
             | "LWORD"
             | "REAL"
             | "LREAL"
+            | "DATE"
+            | "TOD"
+            | "DT"
     ) || is_text(ty)
 }
 
@@ -93,7 +96,7 @@ fn is_text(ty: &str) -> bool {
 fn fmt(ty: &str) -> &'static str {
     match ty {
         t if is_text(t) => "%s",
-        "LINT" => "%lld",
+        "LINT" | "DATE" | "TOD" | "DT" => "%lld",
         "ULINT" | "LWORD" => "%llu",
         "SINT" | "INT" | "DINT" => "%d",
         "REAL" | "LREAL" => "%.17g",
@@ -683,6 +686,123 @@ fn corpus_agrees_with_rusty() {
 fn strings_agree_with_rusty() {
     let Some(cmd) = rusty() else { return };
     compare(&cmd, &string_corpus());
+}
+
+// ---- dates and times of day ----
+
+/// DATE, TOD and DT, one case per question: what a literal counts, what
+/// the arithmetic table gives (and where a TOD wraps), the conversions,
+/// `CONCAT_*` with a date that does not exist, `DAY_OF_WEEK`. ruSTy prints
+/// each as the 64-bit nanosecond count, which is what we hold.
+///
+/// Written from ruSTy 1.0.8's source (typesystem.rs, libs/stdlib) on a
+/// machine without docker: not run against it yet.
+#[allow(clippy::too_many_lines)]
+fn calendar_corpus() -> Vec<Case> {
+    let v = |n: &str, t: &str| var(n, t);
+    vec![
+        case(
+            "",
+            vec![
+                var_init("d", "DATE", "D#2024-02-29"),
+                var_init("t", "TOD", "TOD#08:30:15.5"),
+                var_init("x", "DT", "DT#2024-02-29-08:30:00"),
+                var_init("e", "DT", "DT#1969-12-31-23:59:59"),
+                var_init("d0", "DATE", "D#1970-01-01"),
+            ],
+            "",
+        ),
+        case(
+            "",
+            vec![
+                var_init("a", "TOD", "TOD#23:59:59.999"),
+                var_init("b", "TOD", "TOD#00:00:00"),
+                v("c", "TOD"),
+                v("d", "TOD"),
+                v("e", "TOD"),
+                v("f", "TOD"),
+            ],
+            "c := a + T#1s; d := b - T#1ms; e := a + T#49h; f := b - T#25h;",
+        ),
+        case(
+            "",
+            vec![
+                var_init("a", "DT", "DT#2023-12-31-23:59:59"),
+                var_init("b", "DT", "DT#2024-02-28-12:00:00"),
+                v("a1", "DT"),
+                v("b1", "DT"),
+                v("b2", "DT"),
+                v("gap", "TIME"),
+            ],
+            "a1 := a + T#1s; b1 := b + T#1d; b2 := b1 - T#36h; gap := a1 - b;",
+        ),
+        case(
+            "",
+            vec![
+                var_init("d1", "DATE", "D#2024-03-01"),
+                var_init("d0", "DATE", "D#2023-03-01"),
+                var_init("t1", "TOD", "TOD#06:00:00"),
+                var_init("t0", "TOD", "TOD#18:30:00"),
+                v("y", "TIME"),
+                v("w", "TIME"),
+            ],
+            "y := d1 - d0; w := t1 - t0;",
+        ),
+        case(
+            "",
+            vec![
+                var_init("x", "DT", "DT#2024-02-29-08:30:15"),
+                var_init("y", "DT", "DT#1969-12-31-23:00:00"),
+                v("d", "DATE"),
+                v("t", "TOD"),
+                v("dy", "DATE"),
+                v("ty", "TOD"),
+            ],
+            "d := DT_TO_DATE(x); t := DT_TO_TOD(x); dy := DT_TO_DATE(y); ty := DT_TO_TOD(y);",
+        ),
+        case(
+            "",
+            vec![
+                var_init("d", "DATE", "D#2024-02-29"),
+                var_init("t", "TOD", "TOD#13:05:00"),
+                v("x", "DT"),
+                v("w", "SINT"),
+                v("w0", "SINT"),
+                v("c", "DATE"),
+                v("ct", "TOD"),
+                v("bad", "DATE"),
+                v("badt", "TOD"),
+            ],
+            "x := CONCAT_DATE_TOD(d, t); w := DAY_OF_WEEK(d); w0 := DAY_OF_WEEK(D#1970-01-01); \
+             c := CONCAT_DATE(2024, 3, 31); ct := CONCAT_TOD(23, 59, 59, 999); \
+             bad := CONCAT_DATE(2023, 2, 29); badt := CONCAT_TOD(24, 0, 0, 0);",
+        ),
+        case(
+            "",
+            vec![
+                var_init("a", "DT", "DT#2024-02-29-08:30:00"),
+                var_init("z", "DT", "DT#2024-02-29-08:30:01"),
+                v("lt", "BOOL"),
+                v("ge", "BOOL"),
+                v("eq", "BOOL"),
+                v("ne", "BOOL"),
+            ],
+            "lt := a < z; ge := a >= z; eq := a = a; ne := a <> z;",
+        ),
+    ]
+}
+
+#[test]
+fn calendar_corpus_compiles_and_runs_here() {
+    for c in calendar_corpus() {
+        ours(&c).unwrap_or_else(|e| panic!("{e}\n{}", c.program("case")));
+    }
+}
+
+#[test]
+fn calendar_agrees_with_rusty() {
+    let Some(cmd) = rusty() else { return };
+    compare(&cmd, &calendar_corpus());
 }
 
 // ---- seeded random programs ----
