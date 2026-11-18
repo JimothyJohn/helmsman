@@ -1853,8 +1853,7 @@ mod chrome {
                 .rects
                 .iter()
                 .find(|(k, _)| k == key)
-                .map(|(_, r)| r.width())
-                .unwrap_or_else(|| panic!("no {key} drawn"))
+                .map_or_else(|| panic!("no {key} drawn"), |(_, r)| r.width())
         };
         let (index0, name0) = (width(&h, "install index"), width(&h, "install name"));
         assert!(

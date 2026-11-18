@@ -353,7 +353,10 @@ pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str, ga
                 );
             }
             Outcome::Unread(why) => {
-                let by = req.session.as_ref().map_or_else(|| "?".to_string(), |p| p.label());
+                let by = req
+                    .session
+                    .as_ref()
+                    .map_or_else(|| "?".to_string(), crate::policy::account::Principal::label);
                 (
                     review::not_reviewed(&why, Some(&by)),
                     format!("; installed without a review ({why}), an engineer went on: {by}"),

@@ -134,7 +134,7 @@ pub(super) fn install(req: &Request, ctx: &Ctx) -> Response {
     if b.name.len() > MAX_FIELD || b.version.as_ref().is_some_and(|v| v.len() > MAX_FIELD) {
         return refused(400, "name or version too long", "market install: bad request");
     }
-    if b.without_review && !req.session.as_ref().is_some_and(|p| p.role >= Role::Engineer) {
+    if b.without_review && req.session.as_ref().is_none_or(|p| p.role < Role::Engineer) {
         return refused(
             403,
             "going on without a review needs an engineer's login session; the box token cannot",

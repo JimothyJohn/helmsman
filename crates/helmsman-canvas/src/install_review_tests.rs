@@ -5,6 +5,7 @@
 //! screen made, carried out over a socket as the browser's `fetch` would.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -140,10 +141,7 @@ struct Relay {
 }
 
 fn event(out: &mut String, data: &Json) {
-    out.push_str(&format!(
-        "event: {}\ndata: {data}\n\n",
-        data["type"].as_str().unwrap()
-    ));
+    let _ = write!(out, "event: {}\ndata: {data}\n\n", data["type"].as_str().unwrap());
 }
 
 fn turn(text: &str) -> String {
@@ -346,12 +344,12 @@ fn a_refusal_shows_its_reason_as_text_and_has_no_way_on() {
     // An engineer cannot go on past a refusal from here, and the box would
     // not take it: nothing is sent.
     r.install_without_review();
-    assert!(r.poll().is_empty());
+    assert_eq!(r.poll().len(), 0);
     assert_eq!(relay.asked(), 1);
     // The box has no draft for it.
     r.relist();
     settle(&b, &mut r, 0.0);
-    assert!(r.list.is_empty(), "{:?}", r.list);
+    assert_eq!(r.list.len(), 0, "{:?}", r.list);
 }
 
 #[test]
@@ -421,7 +419,7 @@ fn nothing_is_sent_without_a_session_a_name_or_while_one_is_on_its_way() {
     r.install.index = "http://example.invalid/index.json".into();
     r.install.name = "horn-kit".into();
     r.install_bundle();
-    assert!(r.poll().is_empty(), "not signed in");
+    assert_eq!(r.poll().len(), 0, "not signed in");
     assert!(r.install.error.as_deref().unwrap_or("").contains("Sign in"));
     r.session = Some(Session {
         user: None,
@@ -429,7 +427,7 @@ fn nothing_is_sent_without_a_session_a_name_or_while_one_is_on_its_way() {
     });
     r.install.name = "   ".into();
     r.install_bundle();
-    assert!(r.poll().is_empty());
+    assert_eq!(r.poll().len(), 0);
     assert!(r.install.error.as_deref().unwrap_or("").contains("Type"));
     r.install.name = "horn-kit".into();
     r.install_bundle();
