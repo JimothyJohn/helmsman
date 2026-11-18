@@ -422,7 +422,10 @@ impl BoxView {
                     }
                 }
                 PCall::Config(device, op) => self.devices_ui.config.answer(&device, op, a.status, &a.body),
-                call @ (PCall::Proposal | PCall::ProposalAccept | PCall::ProposalDiscard) => {
+                call @ (PCall::Proposal
+                | PCall::ProposalAccept
+                | PCall::ProposalDiscard
+                | PCall::ProposalPublish) => {
                     self.devices_ui.proposal.answer(&call, a.status, &a.body);
                 }
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
