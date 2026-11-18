@@ -235,6 +235,36 @@ struct Start<'c> {
     overrides: String,
 }
 
+/// The refusal of a deploy of project build `b` that a blocking lint
+/// finding holds (`helmsman_iec::lint`, card `st-lints`): 422 with the
+/// findings and how to override one, audited, nothing changed. `None` when
+/// nothing holds it.
+fn held_by_lint(ctx: &Ctx, req: &Request, label: &str, b: &crate::project::build::Built) -> Option<Response> {
+    let held = super::projects::held(b);
+    if held.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = held.iter().map(ToString::to_string).collect();
+    let ids: Vec<&str> = held.iter().filter_map(|d| d.id.as_deref()).collect();
+    Some(refuse(
+        ctx,
+        req,
+        422,
+        &json!({
+            "error": "the project holds a lint finding that blocks a deploy; fix it, or override it on its line with a pragma and a reason: {lint: off ID \"reason\"}",
+            "changed": false,
+            "held": lines,
+            "warnings": super::projects::diags_json(&b.problems, "warning"),
+        }),
+        &format!(
+            "{label}: held by lint {}: {}",
+            ids.join(", "),
+            super::clean(&lines.join("; "))
+        ),
+        Note::default(),
+    ))
+}
+
 /// What every apply, rollback and replay starts with: the target exists
 /// (404), the box has an approval path (501), and the target has a change
 /// set (409). The approval path, the target change set, the proposal it
@@ -285,26 +315,9 @@ fn prelude<'c>(
                 .and_then(|r| super::projects::built(ctx, name).map(|b| (b, r)))
             {
                 Ok((b, r)) => {
-                    // A blocking lint finding refuses, unlike a red test
-                    // (`helmsman_iec::lint`, card `st-lints`): the box says
-                    // which and how to override it, and changes nothing.
-                    let held = super::projects::held(&b);
-                    if !held.is_empty() {
-                        let lines: Vec<String> = held.iter().map(|d| d.to_string()).collect();
-                        let ids: Vec<&str> = held.iter().filter_map(|d| d.id.as_deref()).collect();
-                        return Err(refuse(
-                            ctx,
-                            req,
-                            422,
-                            &json!({
-                                "error": "the project holds a lint finding that blocks a deploy; fix it, or override it on its line with a pragma and a reason: {lint: off ID \"reason\"}",
-                                "changed": false,
-                                "held": lines,
-                                "warnings": super::projects::diags_json(&b.problems, "warning"),
-                            }),
-                            &format!("{label}: held by lint {}: {}", ids.join(", "), super::clean(&lines.join("; "))),
-                            Note::default(),
-                        ));
+                    // A blocking lint finding refuses, unlike a red test.
+                    if let Some(r) = held_by_lint(ctx, req, label, &b) {
+                        return Err(r);
                     }
                     overrides = super::projects::override_note(&b);
                     red = r;

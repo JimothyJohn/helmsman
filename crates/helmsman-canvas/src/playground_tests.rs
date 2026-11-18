@@ -2820,7 +2820,9 @@ fn a_blocking_lint_row_names_its_id_and_holds_the_deploy_until_overridden() {
     assert!(s.chrome.rect("diag 0").is_some(), "the row under the editor");
     assert!(s.view.session.deploy(&bare).is_none(), "Deploy is held");
     assert!(
-        s.view.session.diags[0].msg.contains("not deployed, held by HELMSMAN-L1"),
+        s.view.session.diags[0]
+            .msg
+            .contains("not deployed, held by HELMSMAN-L1"),
         "{:?}",
         s.view.session.diags
     );
@@ -2829,7 +2831,9 @@ fn a_blocking_lint_row_names_its_id_and_holds_the_deploy_until_overridden() {
     let diags = s.view.diags();
     assert_eq!(diags.len(), 1, "still listed: {diags:?}");
     assert!(
-        diags[0].message.contains("(overridden: the branch is the enable)"),
+        diags[0]
+            .message
+            .contains("(overridden: the branch is the enable)"),
         "{diags:?}"
     );
 }

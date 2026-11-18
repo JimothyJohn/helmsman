@@ -422,7 +422,11 @@ fn real_st_compiles_or_says_why_not() {
     }
 
     report.push_str(&summary(&by_source, &causes));
-    writeln!(report, "\nlint findings (findings, files) by id, over the files that parse:").unwrap();
+    writeln!(
+        report,
+        "\nlint findings (findings, files) by id, over the files that parse:"
+    )
+    .unwrap();
     for (id, _, what) in helmsman_iec::lint::IDS {
         let (n, f) = lint_counts.get(id).copied().unwrap_or_default();
         writeln!(report, "  {id:<13} {n:>5} findings in {f:>4} files  ({what})").unwrap();

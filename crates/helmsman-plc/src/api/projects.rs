@@ -43,6 +43,8 @@
 //! compile, swap between scans, commit; a deploy that does not build
 //! changes nothing. Every call is audited.
 
+use std::fmt::Write as _;
+
 use helmsman_iec::{ImageSizes, spec};
 use serde_json::{Value as Json, json};
 
@@ -656,7 +658,7 @@ fn check(req: &Request, ctx: &Ctx, name: &str) -> Response {
                 "approval": tier,
                 "diagnostics": [],
                 "warnings": diags_json(&b.problems, "warning"),
-                "held": held(&b).iter().map(|d| d.to_string()).collect::<Vec<_>>(),
+                "held": held(&b).iter().map(ToString::to_string).collect::<Vec<_>>(),
             });
             audited(ctx, req, 200, &body, &format!("{what}: checked, builds"))
         }
@@ -846,7 +848,13 @@ pub(super) fn override_note(b: &Built) -> String {
     for d in &b.problems {
         if let (Some(id), Some(r)) = (&d.id, &d.overridden) {
             n += 1;
-            out.push_str(&format!("; {} at {}:{} overridden: \"{}\"", id, clean(&d.file), d.line, clean(r)));
+            let _ = write!(
+                out,
+                "; {id} at {}:{} overridden: \"{}\"",
+                clean(&d.file),
+                d.line,
+                clean(r)
+            );
         }
     }
     if n == 0 { String::new() } else { out }

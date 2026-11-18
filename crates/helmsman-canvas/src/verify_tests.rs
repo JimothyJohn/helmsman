@@ -596,17 +596,27 @@ fn a_blocking_lint_holds_the_answer_and_a_reasoned_pragma_releases_it() {
     let code = TIMER_IN_IF.replace("PRAGMA", " {lint: off HELMSMAN-L1 \"the branch is the enable\"}");
     let c = check(&file(), &project(), &answer_with(&code, &[]), settings());
     assert!(!c.blocked(), "{:?}", c.problems());
-    assert!(!c.problems().join("\n").contains("HELMSMAN-L1"), "{:?}", c.problems());
+    assert!(
+        !c.problems().join("\n").contains("HELMSMAN-L1"),
+        "{:?}",
+        c.problems()
+    );
     // No reason: still held, and the pragma is reported.
     let code = TIMER_IN_IF.replace("PRAGMA", " {lint: off HELMSMAN-L1}");
     let c = check(&file(), &project(), &answer_with(&code, &[]), settings());
     assert!(c.blocked(), "{:?}", c.problems());
     // The project already had it: an unrelated edit is not held for it.
     let had = Files::from([("main.st".to_string(), TIMER_IN_IF.replace("PRAGMA", ""))]);
-    let edited = TIMER_IN_IF.replace("PRAGMA", "").replace("lamp := t.Q;", "lamp := t.Q; (* on *)");
+    let edited = TIMER_IN_IF
+        .replace("PRAGMA", "")
+        .replace("lamp := t.Q;", "lamp := t.Q; (* on *)");
     let c = check(&file(), &had, &answer_with(&edited, &[]), settings());
     assert!(!c.blocked(), "{:?}", c.problems());
-    assert!(!c.problems().join("\n").contains("HELMSMAN-L1"), "{:?}", c.problems());
+    assert!(
+        !c.problems().join("\n").contains("HELMSMAN-L1"),
+        "{:?}",
+        c.problems()
+    );
 }
 
 /// An advisory lint goes back to the Agent like a red test and is a
@@ -616,7 +626,11 @@ fn an_advisory_lint_goes_back_but_never_blocks() {
     let code = LAMP.replace("VAR_OUTPUT", "VAR\n  spare : BOOL;\nEND_VAR\nVAR_OUTPUT");
     let c = check(&file(), &project(), &answer_with(&code, &[]), settings());
     assert!(!c.blocked(), "{:?}", c.problems());
-    assert!(c.problems().join("\n").contains("PLCOPEN-CP24"), "{:?}", c.problems());
+    assert!(
+        c.problems().join("\n").contains("PLCOPEN-CP24"),
+        "{:?}",
+        c.problems()
+    );
     assert!(matches!(next(&c, 0, true), Next::Retry(m) if m.contains("PLCOPEN-CP24")));
     assert!(c.warnings().iter().any(|w| w.contains("PLCOPEN-CP24")));
     assert!(matches!(next(&c, RETRIES, true), Next::Show));

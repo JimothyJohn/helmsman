@@ -15,7 +15,10 @@ fn shipped() -> Vec<(String, &'static str)> {
         .collect();
     all.push(("front-door main.st".into(), crate::front::MAIN));
     for (name, text) in PUMP_STATION {
-        if name.ends_with(".st") {
+        if std::path::Path::new(name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("st"))
+        {
             all.push((format!("pump-station {name}"), text));
         }
     }
