@@ -174,13 +174,27 @@ echo "== CI on the candidate commits"
 CI=""
 for pair in "helmsman $H_DEV" "agent-relay $R_DEV" "helmsman-devices $D_DEV" "helmsman-hardware $W_DEV"; do
   set -- $pair
-  # The workflow runs on that exact commit (a merge to dev is its own
-  # commit and gets its own push run).
-  line=$(gh run list -R "$(slug "$(src_of "$1")")" --commit "$2" --limit 20 \
-    --json workflowName,conclusion,status \
-    --jq '[.[] | .workflowName + "=" + (if .status == "completed" then .conclusion else .status end)] | unique | join(" ")' \
-    2>/dev/null) || line="unknown: gh could not list runs (signed in?)"
-  [ -z "$line" ] && line="none: no workflow ran on this commit, so it is unverified"
+  # Each workflow's newest run on that exact commit (an older run a
+  # re-run or a reopen cancelled does not count). A merge that auto-merge
+  # made (GITHUB_TOKEN) fires no push run on dev (automerge.yml says so),
+  # so a merge commit with none is judged by its PR's head, its second
+  # parent, and says so: the merged tree itself was not re-run there (the
+  # contracts above were run on it here).
+  runs() {
+    gh run list -R "$(slug "$(src_of "$1")")" --commit "$2" --limit 20 \
+      --json workflowName,conclusion,status,createdAt \
+      --jq 'group_by(.workflowName) | map(max_by(.createdAt)) | map(.workflowName + "=" + (if .status == "completed" then .conclusion else .status end)) | join(" ")' \
+      2>/dev/null
+  }
+  line=$(runs "$1" "$2") || line="unknown: gh could not list runs (signed in?)"
+  if [ -z "$line" ]; then
+    head=$(git -C "$(src_of "$1")" rev-parse -q --verify "$2^2" 2>/dev/null || true)
+    if [ -n "$head" ] && hl=$(runs "$1" "$head") && [ -n "$hl" ]; then
+      line="$hl (on its PR head ${head:0:12}; the merge commit itself has no run)"
+    else
+      line="none: no workflow ran on this commit, so it is unverified"
+    fi
+  fi
   echo "  $1@${2:0:12}: $line"
   CI="$CI| $1 | \`${2:0:12}\` | $line |
 "
@@ -215,7 +229,11 @@ done
 
 echo "== verdict"
 case $STATUS in
-  0) echo "the train is ready: every contract holds on every corner and CI is green (report: $OUT/report.md)" ;;
+  0) if [ "$CANDIDATE_ONLY" = 1 ]; then
+       echo "the dev tips are ready together: every contract holds on the candidate corner and CI is green; the skew corners (promotion order) were not run (report: $OUT/report.md)"
+     else
+       echo "the train is ready: every contract holds on every corner and CI is green (report: $OUT/report.md)"
+     fi ;;
   1) echo "NOT READY: see the FAIL lines above and $OUT/report.md (each cell's full output: $OUT/cells/)" ;;
   *) echo "INCOMPLETE: a cell could not run (see $OUT/cells/)" ;;
 esac
