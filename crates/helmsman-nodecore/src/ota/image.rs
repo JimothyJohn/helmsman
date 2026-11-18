@@ -6,6 +6,7 @@
 
 /// Bytes in the fixed image header.
 pub const HEADER_LEN: usize = 24;
+const HEADER_MIN: u32 = 24;
 /// First byte of every ESP-IDF image.
 pub const MAGIC: u8 = 0xE9;
 /// Most segments an image may declare (esptool's limit).
@@ -118,5 +119,5 @@ impl Header {
 /// shorter than a header are not images.
 #[must_use]
 pub const fn fits(size: u32, capacity: u32) -> bool {
-    size >= HEADER_LEN as u32 && size <= capacity
+    size >= HEADER_MIN && size <= capacity
 }

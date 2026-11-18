@@ -16,6 +16,7 @@ use super::install::{SECTOR, Slot};
 
 /// Slot size in the simulation: 16 sectors.
 pub const SLOT_CAP: usize = 16 * SECTOR;
+pub const SLOT_CAP_U32: u32 = 16 * 4096;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Fault {

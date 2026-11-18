@@ -18,6 +18,8 @@ use super::image::{self, Chip, Header, ImageError};
 
 /// Flash sector: the erase granularity and the write unit used here.
 pub const SECTOR: usize = 4096;
+/// The same, for offsets.
+pub const SECTOR_U32: u32 = 4096;
 
 /// Where bytes go. Offsets are relative to the slot.
 pub trait Slot {
@@ -210,10 +212,10 @@ impl<'a, S: Slot> Installer<'a, S> {
         let mut hasher = Sha256::new();
         let mut pos = 0u32;
         while pos < self.want.size {
-            let n = (self.want.size - pos).min(SECTOR as u32) as usize;
+            let n = (self.want.size - pos).min(SECTOR_U32) as usize;
             self.slot.read(pos, &mut self.buf[..n])?;
             hasher.update(&self.buf[..n]);
-            pos += n as u32;
+            pos += u32::try_from(n).unwrap_or(u32::MAX);
         }
         let on_flash: [u8; 32] = hasher.finalize().into();
         if on_flash != self.want.sha256 {

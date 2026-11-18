@@ -15,7 +15,7 @@
 //! 13 boots         14 reserved      28 checksum (FNV-1a over 0..28)
 //! ```
 
-use super::install::{SECTOR, Slot};
+use super::install::{SECTOR_U32, Slot};
 
 /// Bytes in a frame.
 pub const LEN: usize = 32;
@@ -23,7 +23,7 @@ pub const LEN: usize = 32;
 pub const MAGIC: u32 = u32::from_le_bytes(*b"HMBR");
 const VERSION: u16 = 1;
 /// Flash the record needs: one sector per copy.
-pub const SPAN: u32 = 2 * SECTOR as u32;
+pub const SPAN: u32 = 2 * SECTOR_U32;
 
 /// Which of the two sectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +37,7 @@ impl Copy {
     pub const fn offset(self) -> u32 {
         match self {
             Self::A => 0,
-            Self::B => SECTOR as u32,
+            Self::B => SECTOR_U32,
         }
     }
 
@@ -157,7 +157,7 @@ pub fn choose(a: &[u8], b: &[u8]) -> Option<Found> {
         trial,
     });
     match (a, b) {
-        (Some(a), Some(b)) => Some(if b.seq.wrapping_sub(a.seq) as i32 > 0 {
+        (Some(a), Some(b)) => Some(if b.seq.wrapping_sub(a.seq).cast_signed() > 0 {
             b
         } else {
             a

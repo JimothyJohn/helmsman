@@ -33,7 +33,7 @@ fn image_bytes(chip: Chip, size: usize, seed: u64) -> Vec<u8> {
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
-        *b = x as u8;
+        *b = x.to_le_bytes()[0];
     }
     img
 }
@@ -323,7 +323,7 @@ proptest! {
 
 // ---- the installer ----
 
-const CAP: u32 = SLOT_CAP as u32;
+const CAP: u32 = super::sim::SLOT_CAP_U32;
 
 #[test]
 fn installs_any_size_in_any_chunking_and_the_slot_holds_it() {
@@ -439,16 +439,16 @@ fn a_bad_header_or_another_chip_is_refused_at_the_first_sector() {
 fn flash_that_fails_or_lies_is_caught() {
     let img = image_bytes(Chip::Esp32P4, 20_000, 5);
     let (r, _) = install(&img, want(&img, Chip::Esp32P4), &[4096], |w| {
-        w.fail_write = Some((Part::Slot1, 5000))
+        w.fail_write = Some((Part::Slot1, 5000));
     });
     assert_eq!(r.unwrap_err(), InstallError::Slot(Fault::WriteFailed));
     let (r, _) = install(&img, want(&img, Chip::Esp32P4), &[4096], |w| {
-        w.corrupt_write = Some((Part::Slot1, 9000))
+        w.corrupt_write = Some((Part::Slot1, 9000));
     });
     assert_eq!(r.unwrap_err(), InstallError::ReadbackMismatch);
     // The last, short sector too.
     let (r, _) = install(&img, want(&img, Chip::Esp32P4), &[3000], |w| {
-        w.corrupt_write = Some((Part::Slot1, 19_999))
+        w.corrupt_write = Some((Part::Slot1, 19_999));
     });
     assert_eq!(r.unwrap_err(), InstallError::ReadbackMismatch);
 }
@@ -466,7 +466,7 @@ proptest! {
         let w = want(&img, Chip::Esp32P4);
         // What arrives may differ from what was announced.
         let mut sent = img.clone();
-        if let Some(f) = flip { if f < sent.len() { sent[f] ^= 0x01; } }
+        if let Some(f) = flip.filter(|f| *f < sent.len()) { sent[f] ^= 0x01; }
         if let Some(c) = cut { sent.truncate(c.min(sent.len())); }
         let (r, world) = install_sent(&sent, w, &chunks);
         match r {
@@ -609,7 +609,7 @@ proptest! {
             Step::Stale => prop_assert!(running != target),
             Step::Count { boots: n } => {
                 prop_assert!(running == target);
-                prop_assert!(n >= 1 && n <= MAX_PENDING_BOOTS);
+                prop_assert!((1..=MAX_PENDING_BOOTS).contains(&n));
             }
             Step::Revert { previous } => {
                 prop_assert!(running == target);
@@ -730,7 +730,7 @@ fn a_damaged_record_means_no_trial_never_a_revert() {
 struct Run {
     selected: u8,
     trial: Trial,
-    boots_run: usize,
+    boots_seen: usize,
     ops: usize,
 }
 
@@ -765,18 +765,18 @@ fn lifecycle(cut: Option<(usize, Cut)>, confirms: bool, old: &[u8], new: &[u8], 
 
     // Boots, until a boot changes nothing; the cut, if it has not come yet,
     // may fall inside any of them.
-    let mut boots_run = 0;
+    let mut boots_seen = 0;
     let mut quiet = 0;
-    while boots_run < 20 && quiet < 2 {
+    while boots_seen < 20 && quiet < 2 {
         w.borrow_mut().power_on();
-        boots_run += 1;
+        boots_seen += 1;
         let selected = w.borrow().selected;
         let image = w.borrow().slots[usize::from(selected)].clone();
         let ok_old = image.len() >= old.len() && image[..old.len()] == *old && selected == 0;
         let ok_new = image[..new.len()] == *new && selected == 1;
         assert!(
             ok_old || ok_new,
-            "boot {boots_run} (cut {cut:?}) runs slot {selected}, which holds no whole image"
+            "boot {boots_seen} (cut {cut:?}) runs slot {selected}, which holds no whole image"
         );
         let before = (selected, w.borrow().record.clone());
         let Ok(mut b) = boot_of(&w) else { continue };
@@ -798,7 +798,7 @@ fn lifecycle(cut: Option<(usize, Cut)>, confirms: bool, old: &[u8], new: &[u8], 
     Run {
         selected,
         trial,
-        boots_run,
+        boots_seen,
         ops,
     }
 }
@@ -817,7 +817,7 @@ fn power_cut_at_every_write_of_an_update_that_confirms() {
             // it did and confirmed.
             assert_eq!(r.trial, Trial::None, "cut {n} {how:?}: left a trial running");
             assert!(r.selected <= 1);
-            assert!(r.boots_run <= 20, "cut {n} {how:?}: never settled");
+            assert!(r.boots_seen <= 20, "cut {n} {how:?}: never settled");
         }
     }
 }
