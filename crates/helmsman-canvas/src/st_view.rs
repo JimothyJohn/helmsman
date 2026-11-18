@@ -338,12 +338,17 @@ pub struct Viewer {
     frame_lit: bool,
     /// The output cards of the source in `.0` ([`Viewer::output_cards`]).
     cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
+    /// What the zoom closes ([`zoom_fold`]).
+    zoom: zoom_fold::ZoomFolds,
 }
 
 /// Whether folds of `kind` start as their blocks and fold when the reader
 /// asks: the author's own structure. The standard circuits start folded.
 const fn on_request(kind: FoldKind) -> bool {
-    matches!(kind, FoldKind::Arm | FoldKind::Section | FoldKind::Output)
+    matches!(
+        kind,
+        FoldKind::Arm | FoldKind::Section | FoldKind::Statement | FoldKind::Output
+    )
 }
 
 /// Height of the tab over an opened fold's blocks, in diagram units.
@@ -685,6 +690,7 @@ impl Viewer {
                 helmsman_diagram::fold::auto(d)
                     .into_iter()
                     .chain(by_request.map(Fold::with_blocks))
+                    .chain(structure::statements(d, src))
                     .collect()
             })
             .collect();
@@ -730,6 +736,7 @@ impl Viewer {
             frame_lit: false,
             cards: std::cell::RefCell::new(None),
             jumped: None,
+            zoom: zoom_fold::ZoomFolds::default(),
         };
         v.reshow();
         v
@@ -738,6 +745,7 @@ impl Viewer {
     /// Rebuilds what is drawn for every POU: its diagram with the folds
     /// still closed applied, each block where the operator left it.
     fn reshow(&mut self) {
+        self.refresh_zoom_folds();
         for pou in 0..self.module.pous.len() {
             // The folds the reader made go first (a fold that shares a
             // block with an earlier one is left out): a folded section
@@ -747,7 +755,7 @@ impl Viewer {
             let closed: Vec<Fold> = asked
                 .chain(standard)
                 .filter(|f| self.is_closed(pou, f))
-                .cloned()
+                .map(|f| self.zoom_shape(pou, f))
                 .collect();
             if closed.is_empty() {
                 self.views[pou] = None;
@@ -782,7 +790,7 @@ impl Viewer {
     fn is_closed(&self, pou: usize, f: &Fold) -> bool {
         let entry = (self.module.pous[pou].name.clone(), f.key.clone());
         if on_request(f.kind) {
-            self.collapsed.contains(&entry)
+            self.collapsed.contains(&entry) || self.zoom.is_shut(pou, &f.key)
         } else {
             !self.opened.contains(&entry)
         }
@@ -957,6 +965,7 @@ impl Viewer {
         let Some(kind) = self.folds[pou].iter().find(|f| f.key == key).map(|f| f.kind) else {
             return;
         };
+        self.zoom_note_hand(key, open);
         let entry = (self.module.pous[pou].name.clone(), key.to_string());
         // What starts as its blocks is kept while folded; what starts
         // folded, while opened.
@@ -1166,7 +1175,10 @@ impl Viewer {
         for f in &self.folds[pou] {
             // An arm has its region's box and label already; a folded
             // comparison is never opened.
-            if self.is_closed(pou, f) || matches!(f.kind, FoldKind::Arm | FoldKind::Chip) {
+            if self.is_closed(pou, f)
+                || matches!(f.kind, FoldKind::Arm | FoldKind::Chip)
+                || !self.zoom_tab_wanted(pou, f)
+            {
                 continue;
             }
             // Around whatever is drawn for its blocks (a fold inside it
@@ -1735,6 +1747,7 @@ impl Viewer {
         self.edits += 1;
         self.opened.clear();
         self.collapsed.clear();
+        self.zoom.forget();
         self.reshow();
     }
 
@@ -2428,7 +2441,7 @@ impl Viewer {
             return;
         };
         let mut to = cam;
-        to.frame(below, &stops[k].rect);
+        self.zoom_frame(&mut to, below, &stops[k].rect);
         to.clamp(area, self.shown().size);
         let to = (to.offset, to.zoom);
         self.cams[self.scope].moved = true;
@@ -2541,7 +2554,9 @@ impl Viewer {
         if (cam.offset, cam.zoom) != glided || double || response.dragged() {
             self.glide = None;
         }
-        let cam = *cam;
+        // The level follows the zoom the frame ended at; the camera is read
+        // again, as a level change keeps the diagram under the pointer.
+        let cam = self.follow_zoom(hover.filter(|_| response.hovered()), area);
         // A double click on a block instance opens it; anywhere else it
         // fits the diagram to the view.
         if double
@@ -3702,6 +3717,9 @@ fn draw(
 #[cfg(test)]
 #[path = "st_view_fold_tests.rs"]
 mod fold_tests;
+
+#[path = "st_zoom.rs"]
+mod zoom_fold;
 
 #[cfg(test)]
 mod hold_tests {

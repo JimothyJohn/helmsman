@@ -804,15 +804,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   status: ready
 
 
-- [ ] **Zoom picks the level of detail** — far: every section and arm drawn as one block with its live state; middle: a statement as one line; near: the blocks. Sections and arms fold on request today (`Viewer::set_fold`); this folds them by zoom instead and opens nothing the reader folded by hand. The middle level is new: one fold per statement titled with its text.
-  result: a large program is readable at any zoom
-  est: 6h
-  difficulty: med
-  id: diagram-semantic-zoom
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
 ## Product vision (interview 2026-10-29)
 
 Working title until naming lands. A small, opinionated controller for factory edge boxes (Pi 5 reference, headless, browser UI), for non-mission-critical work: low-frequency detection, shift-aware scheduling of its own outputs, on-floor signalling (stack light, andon, screen). Data is pushed elsewhere (webhooks, OPC UA); the box keeps no historian.
