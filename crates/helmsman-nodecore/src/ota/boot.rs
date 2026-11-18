@@ -171,13 +171,15 @@ impl<R: Slot, O: Otadata> Boot<R, O> {
 
     /// An image has been installed and verified in `target`: put it on
     /// trial and make the bootloader boot it. The caller resets next.
+    /// `running` is the slot this image booted from, which stays the
+    /// fallback.
     ///
     /// # Errors
     /// `target` is the running slot, or flash failed (the old image stays
     /// selected unless the failure came after `otadata` was written).
-    pub fn start_trial(&mut self, target: u8) -> Result<(), Error<R::Error, O::Error>> {
-        let previous = self.selected()?;
-        if target == previous || target > 1 {
+    pub fn start_trial(&mut self, running: u8, target: u8) -> Result<(), Error<R::Error, O::Error>> {
+        let previous = running;
+        if target == previous || target > 1 || previous > 1 {
             return Err(Error::SameSlot);
         }
         self.save(Trial::On {
@@ -188,12 +190,16 @@ impl<R: Slot, O: Otadata> Boot<R, O> {
         self.ota.select(target).map_err(Error::Otadata)
     }
 
-    /// The running image works: end its trial.
+    /// The image running from slot `running` works: end its trial. That is
+    /// the slot the image booted from, not the one `otadata` selects now:
+    /// once an update has been started, `otadata` already points at the new
+    /// image, and a late confirm from the old one (the bench found this,
+    /// 2026-11-18: a confirm timer firing between the activation and the
+    /// reset) must not end the new image's trial.
     ///
     /// # Errors
     /// Flash failing while the record is written.
-    pub fn confirm(&mut self) -> Result<Confirmed, Error<R::Error, O::Error>> {
-        let running = self.selected()?;
+    pub fn confirm(&mut self, running: u8) -> Result<Confirmed, Error<R::Error, O::Error>> {
         match self.trial() {
             Trial::On { target, .. } if target == running => {
                 self.save(Trial::None)?;

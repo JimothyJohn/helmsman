@@ -143,7 +143,10 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
                 return Outcome::Reply(e);
             }
             if view.firmware.is_none() {
-                return Outcome::Reply(Response::error(404, "this board cannot update its firmware over the network"));
+                return Outcome::Reply(Response::error(
+                    404,
+                    "this board cannot update its firmware over the network",
+                ));
             }
             Outcome::Effect(Effect::FirmwareConfirm)
         }
@@ -299,10 +302,16 @@ fn firmware_fetch(req: &Request, view: &NodeView, settings: &Settings) -> Outcom
         return Outcome::Reply(e);
     }
     let Some(fw) = &view.firmware else {
-        return Outcome::Reply(Response::error(404, "this board cannot update its firmware over the network"));
+        return Outcome::Reply(Response::error(
+            404,
+            "this board cannot update its firmware over the network",
+        ));
     };
     if fw.fetch.busy() {
-        return Outcome::Reply(Response::error(409, "a firmware update is already running; read GET /api/firmware"));
+        return Outcome::Reply(Response::error(
+            409,
+            "a firmware update is already running; read GET /api/firmware",
+        ));
     }
     match ota::request::Fetch::from_json(&req.body) {
         Ok(fetch) => Outcome::Effect(Effect::FirmwareFetch { fetch }),
@@ -781,7 +790,11 @@ mod tests {
     #[test]
     fn firmware_status_is_open_and_shaped() {
         let v = sample_view();
-        let r = reply(handle(&req("GET /api/firmware HTTP/1.1\r\n\r\n"), &v, &settings()));
+        let r = reply(handle(
+            &req("GET /api/firmware HTTP/1.1\r\n\r\n"),
+            &v,
+            &settings(),
+        ));
         assert_eq!(r.status, 200);
         let j: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
         assert_eq!(j["chip"], "esp32p4");
@@ -790,7 +803,11 @@ mod tests {
         assert_eq!(j["fetch"]["state"], "idle");
         let mut v = sample_view();
         v.firmware = None;
-        let r = reply(handle(&req("GET /api/firmware HTTP/1.1\r\n\r\n"), &v, &settings()));
+        let r = reply(handle(
+            &req("GET /api/firmware HTTP/1.1\r\n\r\n"),
+            &v,
+            &settings(),
+        ));
         assert_eq!(r.status, 404, "a board with one slot has no firmware API");
     }
 
@@ -822,7 +839,10 @@ mod tests {
         }
         // A bad request is refused the same way before its body is read.
         let r = reply(handle(&fw_post("", "/api/firmware", "not json"), &v, &s));
-        assert_eq!(r.status, 401, "an unauthenticated caller learns nothing about its body");
+        assert_eq!(
+            r.status, 401,
+            "an unauthenticated caller learns nothing about its body"
+        );
     }
 
     #[test]
@@ -854,10 +874,19 @@ mod tests {
         }
         // One at a time.
         let mut busy = sample_view();
-        busy.firmware.as_mut().unwrap().fetch = crate::ota::status::Fetch::Fetching { received: 10, size: 100 };
-        assert_eq!(reply(handle(&fw_post(auth, "/api/firmware", &body), &busy, &s)).status, 409);
+        busy.firmware.as_mut().unwrap().fetch = crate::ota::status::Fetch::Fetching {
+            received: 10,
+            size: 100,
+        };
+        assert_eq!(
+            reply(handle(&fw_post(auth, "/api/firmware", &body), &busy, &s)).status,
+            409
+        );
         busy.firmware.as_mut().unwrap().fetch = crate::ota::status::Fetch::Restarting { sha256: [0; 32] };
-        assert_eq!(reply(handle(&fw_post(auth, "/api/firmware", &body), &busy, &s)).status, 409);
+        assert_eq!(
+            reply(handle(&fw_post(auth, "/api/firmware", &body), &busy, &s)).status,
+            409
+        );
         busy.firmware.as_mut().unwrap().fetch = crate::ota::status::Fetch::Failed("x".into());
         assert!(matches!(
             handle(&fw_post(auth, "/api/firmware", &body), &busy, &s),
@@ -870,14 +899,28 @@ mod tests {
         );
         let mut one_slot = sample_view();
         one_slot.firmware = None;
-        assert_eq!(reply(handle(&fw_post(auth, "/api/firmware", &body), &one_slot, &s)).status, 404);
-        assert_eq!(reply(handle(&fw_post(auth, "/api/firmware/confirm", ""), &one_slot, &s)).status, 404);
+        assert_eq!(
+            reply(handle(&fw_post(auth, "/api/firmware", &body), &one_slot, &s)).status,
+            404
+        );
+        assert_eq!(
+            reply(handle(&fw_post(auth, "/api/firmware/confirm", ""), &one_slot, &s)).status,
+            404
+        );
         assert_eq!(firmware_confirmed(true).status, 200);
         assert_eq!(firmware_not_started("x").status, 409);
         // Only POST writes.
-        let r = reply(handle(&req(&format!("PUT /api/firmware HTTP/1.1\r\n{auth}\r\n")), &v, &s));
+        let r = reply(handle(
+            &req(&format!("PUT /api/firmware HTTP/1.1\r\n{auth}\r\n")),
+            &v,
+            &s,
+        ));
         assert_eq!(r.status, 405);
-        let r = reply(handle(&req(&format!("GET /api/firmware/confirm HTTP/1.1\r\n{auth}\r\n")), &v, &s));
+        let r = reply(handle(
+            &req(&format!("GET /api/firmware/confirm HTTP/1.1\r\n{auth}\r\n")),
+            &v,
+            &s,
+        ));
         assert_eq!(r.status, 404);
     }
 

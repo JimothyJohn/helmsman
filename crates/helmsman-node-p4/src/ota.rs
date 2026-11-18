@@ -184,6 +184,13 @@ pub fn on_boot(cell: &Cell, shared: &state::Shared) -> (bool, String) {
     (on_trial, line)
 }
 
+/// The slot this image booted from, as the boot step read it. Not what
+/// `otadata` says now: once an update has been started that already names
+/// the new image while this one still runs.
+fn running_slot(ctx: &Ctx) -> Result<u8, String> {
+    state::with(ctx.shared, |live| live.fw.slot).ok_or_else(|| String::from("the running slot is unknown"))
+}
+
 /// Ends the running image's trial. `Ok(false)` if none was on.
 ///
 /// # Errors
@@ -196,7 +203,7 @@ pub async fn confirm(ctx: &Ctx) -> Result<bool, String> {
         .flatten()
         .ok_or_else(|| String::from("no A/B partition table on this board"))?;
     let mut trial = trial_of(cell, layout).map_err(|e| describe(&e))?;
-    let ended = trial.confirm().map_err(|e| describe(&e))? == Confirmed::Yes;
+    let ended = trial.confirm(running_slot(ctx)?).map_err(|e| describe(&e))? == Confirmed::Yes;
     state::with(ctx.shared, |live| live.fw.trial = status::Trial::Confirmed);
     Ok(ended)
 }
@@ -209,6 +216,9 @@ pub async fn confirm_task(ctx: &'static Ctx) {
     let start = Instant::now();
     loop {
         Timer::after(Duration::from_secs(1)).await;
+        if state::with(ctx.shared, |live| live.fw.trial == status::Trial::Confirmed) {
+            return;
+        }
         if start.elapsed() < CONFIRM_AFTER {
             continue;
         }
@@ -314,9 +324,7 @@ async fn run(
         .ok()
         .flatten()
         .ok_or_else(|| String::from("no A/B partition table on this board; flash it once over USB"))?;
-    let running = Bootloader { cell }
-        .selected()
-        .map_err(|e| alloc::format!("otadata: {e}"))?;
+    let running = running_slot(ctx)?;
     let idle = 1 - running;
     let span = layout.slots[usize::from(idle)];
 
@@ -375,7 +383,7 @@ async fn run(
     );
 
     let mut trial = trial_of(cell, layout).map_err(|e| describe(&e))?;
-    trial.start_trial(idle).map_err(|e| describe(&e))?;
+    trial.start_trial(running, idle).map_err(|e| describe(&e))?;
     Ok(())
 }
 

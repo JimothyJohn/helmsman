@@ -201,12 +201,18 @@ pub enum StoreError<E> {
 ///
 /// # Errors
 /// The region failing, or a read-back that differs.
-pub fn store<S: Slot>(region: &mut S, current: Option<&Found>, trial: Trial) -> Result<Found, StoreError<S::Error>> {
+pub fn store<S: Slot>(
+    region: &mut S,
+    current: Option<&Found>,
+    trial: Trial,
+) -> Result<Found, StoreError<S::Error>> {
     let (copy, seq) = next(current);
     let frame = encode(trial, seq);
     region.write(copy.offset(), &frame).map_err(StoreError::Region)?;
     let mut check = [0u8; LEN];
-    region.read(copy.offset(), &mut check).map_err(StoreError::Region)?;
+    region
+        .read(copy.offset(), &mut check)
+        .map_err(StoreError::Region)?;
     if check != frame {
         return Err(StoreError::Readback);
     }

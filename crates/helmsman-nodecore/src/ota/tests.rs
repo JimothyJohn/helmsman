@@ -347,7 +347,8 @@ fn either_slot_takes_an_image() {
     let img = image_bytes(Chip::Esp32P4, 6_000, 9);
     let w = World::new();
     let mut buf = [0u8; SECTOR];
-    let mut inst = Installer::new(SimPart::new(&w, Part::Slot0), &mut buf, want(&img, Chip::Esp32P4)).unwrap();
+    let mut inst =
+        Installer::new(SimPart::new(&w, Part::Slot0), &mut buf, want(&img, Chip::Esp32P4)).unwrap();
     inst.feed(&img).unwrap();
     inst.finish().unwrap();
     assert_eq!(&w.borrow().slots[0][..img.len()], &img[..]);
@@ -632,7 +633,7 @@ fn a_new_image_that_never_confirms_is_replaced_at_the_fourth_boot() {
     let w = World::new();
     let mut b = boot_of(&w).unwrap();
     assert_eq!(b.on_boot().unwrap(), Decision::Normal);
-    b.start_trial(1).unwrap();
+    b.start_trial(0, 1).unwrap();
     assert_eq!(w.borrow().selected, 1);
     drop(b);
     for boots in 1..=MAX_PENDING_BOOTS {
@@ -646,20 +647,52 @@ fn a_new_image_that_never_confirms_is_replaced_at_the_fourth_boot() {
     assert_eq!(boot_of(&w).unwrap().on_boot().unwrap(), Decision::Normal);
 }
 
+/// The bench, 2026-11-18: the old image's confirm timer fired after the
+/// update had selected the new slot and before the reset, ended the new
+/// image's trial, and a build that crashed at every boot was never replaced.
+#[test]
+fn a_late_confirm_from_the_old_image_does_not_end_the_new_trial() {
+    let w = World::new();
+    let mut old = boot_of(&w).unwrap();
+    old.start_trial(0, 1).unwrap();
+    assert_eq!(
+        w.borrow().selected,
+        1,
+        "the new slot is selected, the old image still runs"
+    );
+    assert_eq!(old.confirm(0).unwrap(), Confirmed::NothingToConfirm);
+    assert_eq!(
+        boot_of(&w).unwrap().confirm(0).unwrap(),
+        Confirmed::NothingToConfirm
+    );
+    // After the reset the new image is still on trial and, never
+    // confirming, is replaced.
+    for boots in 1..=MAX_PENDING_BOOTS {
+        assert_eq!(
+            boot_of(&w).unwrap().on_boot().unwrap(),
+            Decision::Confirming { boots }
+        );
+    }
+    assert_eq!(
+        boot_of(&w).unwrap().on_boot().unwrap(),
+        Decision::Reverted { to: 0 }
+    );
+}
+
 #[test]
 fn a_confirmed_image_stays_and_confirming_twice_changes_nothing() {
     let w = World::new();
     let mut b = boot_of(&w).unwrap();
     assert_eq!(
-        b.confirm().unwrap(),
+        b.confirm(0).unwrap(),
         Confirmed::NothingToConfirm,
         "nothing is on trial yet"
     );
-    b.start_trial(1).unwrap();
+    b.start_trial(0, 1).unwrap();
     let mut b = boot_of(&w).unwrap();
     assert_eq!(b.on_boot().unwrap(), Decision::Confirming { boots: 1 });
-    assert_eq!(b.confirm().unwrap(), Confirmed::Yes);
-    assert_eq!(b.confirm().unwrap(), Confirmed::NothingToConfirm);
+    assert_eq!(b.confirm(1).unwrap(), Confirmed::Yes);
+    assert_eq!(b.confirm(1).unwrap(), Confirmed::NothingToConfirm);
     for _ in 0..10 {
         assert_eq!(boot_of(&w).unwrap().on_boot().unwrap(), Decision::Normal);
     }
@@ -670,10 +703,10 @@ fn a_confirmed_image_stays_and_confirming_twice_changes_nothing() {
 fn updating_the_running_slot_is_refused_and_a_usb_flash_clears_a_stale_trial() {
     let w = World::new();
     let mut b = boot_of(&w).unwrap();
-    assert_eq!(b.start_trial(0).unwrap_err(), boot::Error::SameSlot);
-    assert_eq!(b.start_trial(2).unwrap_err(), boot::Error::SameSlot);
+    assert_eq!(b.start_trial(0, 0).unwrap_err(), boot::Error::SameSlot);
+    assert_eq!(b.start_trial(0, 2).unwrap_err(), boot::Error::SameSlot);
     assert_eq!(w.borrow().ops, 0, "nothing was written");
-    b.start_trial(1).unwrap();
+    b.start_trial(0, 1).unwrap();
     // A cable flash puts slot 0 back with otadata erased.
     w.borrow_mut().selected = 0;
     let mut b = boot_of(&w).unwrap();
@@ -684,7 +717,7 @@ fn updating_the_running_slot_is_refused_and_a_usb_flash_clears_a_stale_trial() {
 #[test]
 fn a_damaged_record_means_no_trial_never_a_revert() {
     let w = World::new();
-    boot_of(&w).unwrap().start_trial(1).unwrap();
+    boot_of(&w).unwrap().start_trial(0, 1).unwrap();
     w.borrow_mut().record.fill(0xA5);
     let mut b = boot_of(&w).unwrap();
     assert_eq!(b.trial(), Trial::None);
@@ -726,7 +759,7 @@ fn lifecycle(cut: Option<(usize, Cut)>, confirms: bool, old: &[u8], new: &[u8], 
             inst.feed(chunk).map_err(|_| Fault::PowerCut)?;
         }
         inst.finish().map_err(|_| Fault::PowerCut)?;
-        b.start_trial(1).map_err(|_| Fault::PowerCut)
+        b.start_trial(0, 1).map_err(|_| Fault::PowerCut)
     })();
     let _ = attempt;
 
@@ -749,7 +782,7 @@ fn lifecycle(cut: Option<(usize, Cut)>, confirms: bool, old: &[u8], new: &[u8], 
         let Ok(mut b) = boot_of(&w) else { continue };
         let Ok(decision) = b.on_boot() else { continue };
         if confirms && selected == 1 && matches!(decision, Decision::Confirming { .. }) {
-            let _ = b.confirm();
+            let _ = b.confirm(1);
         }
         let after = (w.borrow().selected, w.borrow().record.clone());
         quiet = if before == after && decision == Decision::Normal {
@@ -827,7 +860,7 @@ fn a_cut_during_the_revert_itself_still_ends_on_the_old_image() {
         for n in 1..=3 {
             let w = World::new();
             let mut b = boot_of(&w).unwrap();
-            b.start_trial(1).unwrap();
+            b.start_trial(0, 1).unwrap();
             for _ in 0..MAX_PENDING_BOOTS {
                 boot_of(&w).unwrap().on_boot().unwrap();
             }
