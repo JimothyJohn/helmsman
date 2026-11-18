@@ -3317,7 +3317,10 @@ fn value_text(
         }
         // A DATE, TOD or DT reads as the literal that writes it.
         Value::Int(ns) if !path.contains(['.', '[']) => {
-            match var.and_then(|x| helmsman_iec::Ty::from_name(&x.ty)).filter(|t| t.is_calendar()) {
+            match var
+                .and_then(|x| helmsman_iec::Ty::from_name(&x.ty))
+                .filter(|t| t.is_calendar())
+            {
                 Some(t) => Some(helmsman_iec::dt::literal(t, ns)),
                 None => Some(v.to_string()),
             }
@@ -4066,9 +4069,15 @@ END_PROGRAM
         let vars = v.module.program().map(|p| &p.vars);
         let read = |p: &str| node(&v, &NodeKind::Read { path: p.into() });
         let text = |p: &str, ns: i128| value_text(d, read(p), Value::Int(ns), vars);
-        assert_eq!(text("TOD_NOW", 23 * 3_600_000_000_000).as_deref(), Some("TOD#23:00:00"));
+        assert_eq!(
+            text("TOD_NOW", 23 * 3_600_000_000_000).as_deref(),
+            Some("TOD#23:00:00")
+        );
         assert_eq!(text("DAY", 86_400_000_000_000).as_deref(), Some("D#1970-01-02"));
-        assert_eq!(text("STAMP", -1_000_000_000).as_deref(), Some("DT#1969-12-31-23:59:59"));
+        assert_eq!(
+            text("STAMP", -1_000_000_000).as_deref(),
+            Some("DT#1969-12-31-23:59:59")
+        );
     }
 
     #[test]
