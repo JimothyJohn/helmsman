@@ -707,6 +707,7 @@ const fn atomic(k: &ExprKind) -> bool {
             | ExprKind::Real { .. }
             | ExprKind::Bool(_)
             | ExprKind::Time(_)
+            | ExprKind::Calendar(..)
             | ExprKind::EnumLit(..)
             | ExprKind::Var(_)
             | ExprKind::Direct(_)

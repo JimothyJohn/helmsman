@@ -685,11 +685,10 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **TOD, DATE and DT** — the last "yes" row of INVESTIGATION.md §4: time-of-day and date types and their arithmetic, from the clock `scan_at` already has (the shift calendar uses it), so "after 22:00" can be written in ST. Oracle cases (ruSTy accepts them), property tests across midnight and the year end, no_std, a relay profile id. After `st-string`, which the formatting functions need.
-  result: schedule logic is written in ST instead of worked around with the calendar
-  est: 2d
-  difficulty: med
-  depends: st-string
+- [ ] **TOD, DATE and DT on the box** — the language half is built (ARCHITECTURE.md "Dates and times of day"): types, literals, arithmetic, `DT_NOW()`, text. What is left: the box never calls `Program::set_wall_clock`, so `DT_NOW()` counts from 1970 on a box; it needs the time zone the shift calendar uses (or UTC, say which), set at module start and after a hot swap. Also open: the playground `SYSTEM` prompt (crates/helmsman-canvas/src/claude.rs) still says DATE, DT and TOD are not supported, which means a new relay profile id; DATE/TOD/DT ports are no signals (like STRING, `st-string-signals`); `SPLIT_DATE`/`SPLIT_TOD`/`SPLIT_DT` and the `L` forms are not built.
+  result: schedule logic written in ST ("after 22:00", "weekdays only") runs on the box in the plant's local time
+  est: 4h
+  difficulty: low
   id: st-tod-date
   asked: 2026-11-08
   by: claude-session

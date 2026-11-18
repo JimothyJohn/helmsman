@@ -1,0 +1,19 @@
+[package]
+name = "helmsman-compat"
+version = "0.1.0"
+description = "The release-train check: helmsman, agent-relay, helmsman-devices and helmsman-hardware at chosen refs, held to the contracts between them (scripts/compat.sh, docs/COMPAT.md)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# The box's own HTTP client and SSE reader: the checker talks to the box,
+# the relay and the deployed relay with the code the box uses, so no new
+# third-party code (https for the --live run against the deployed relay).
+helmsman-agent = { path = "../helmsman-agent", features = ["https"] }
+serde_json = "1.0"
+
+[lints]
+workspace = true

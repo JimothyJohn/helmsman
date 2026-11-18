@@ -78,6 +78,7 @@ Three directions of traffic, three different rules:
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, and v2 relay-held sessions for harness profiles; HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
+| `helmsman-compat` | The release train's checker (docs/COMPAT.md): the contracts between helmsman, agent-relay, helmsman-devices and helmsman-hardware, checked black-box against a box and a relay built at any ref (a devices checkout served as the library, `agent-relay-local` in front of a stub model, the node firmware's pins against the board's netlist). Run by `scripts/compat.sh` (`make compat`); never on a box. | built: against its own tests and the four repositories at dev and live |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
@@ -1452,6 +1453,65 @@ numeric types and BOOL. `WSTRING` is refused with a diagnostic. Code in
   50 (...)`; a plain `ASSERT`'s text is unchanged. A test can compare text
   it builds itself, but cannot read a program's STRING output until the
   signals card shares STRING ports.
+
+## Dates and times of day (`st-tod-date`, built)
+
+`DATE`, `TOD` (`TIME_OF_DAY`) and `DT` (`DATE_AND_TIME`) are elementary
+types of the language, in `helmsman-iec`'s `dt.rs` (calendar arithmetic,
+text), `lexer.rs` (literals), `check.rs` (types, arithmetic, the functions)
+and `interp.rs`. The `L` forms (`LDATE`, `LTOD`, `LDT`) are refused with a
+diagnostic, as is `LTIME`.
+
+- **Representation.** Three more `Ty` variants, held as `Value::Int` like
+  `TIME`: signed 64-bit nanoseconds, so `Value` is unchanged and stays
+  `Copy`. `DATE` and `DT` count from 1970-01-01T00:00:00 (proleptic
+  Gregorian, no time zone, no leap seconds), `DATE` at midnight; `TOD`
+  counts from midnight and stays in `0..86_400_000_000_000`. That is
+  ruSTy's representation, which the oracle can then compare as plain
+  numbers. The cost is the range: 1677-09-21 to 2262-04-11 for a `DT`
+  (a literal outside it is a compile error), and a resolution of
+  nanoseconds nobody asked for. Zero is 1970-01-01 and midnight. They
+  are not numbers: no implicit or explicit conversion to or from an
+  integer, real or `TIME`, no `-x`, `*`, `/`, `MOD`.
+- **Literals.** `D#2024-02-29`, `TOD#22:00:00[.fraction]` (up to 9
+  digits), `DT#2024-02-29-22:00:00[.fraction]`, and the long prefixes
+  `DATE#`, `TIME_OF_DAY#`, `DATE_AND_TIME#`. Refused with the reason: a
+  day that does not exist (29 Feb of 1900 or 2023), hour 24, second 60,
+  a missing part, a fraction past nanoseconds, a value beyond the range,
+  more than 40 characters of body.
+- **Comparison** (`= <> < > <= >=`) between two values of one type;
+  `MIN`, `MAX`, `LIMIT`, `SEL`, `MUX` work too.
+- **Arithmetic** is ruSTy's table and nothing else: `TOD +/- TIME` (wraps
+  at midnight), `DT +/- TIME`, `DATE - DATE`, `TOD - TOD` and `DT - DT`
+  (each a `TIME`, not wrapped). Overflow of a `DT` wraps like `TIME`
+  does. Everything else (`DATE + TIME`, `TIME + TOD`, `TOD + TOD`) is a
+  diagnostic that lists what is defined; a `TOD` from a `TIME` is
+  `TOD#00:00:00 + t`.
+- **Functions.** `DT_TO_DATE`, `DT_TO_TOD` (and the long
+  `DATE_AND_TIME_TO_DATE`, `DATE_AND_TIME_TO_TIME_OF_DAY`, `TO_DATE`,
+  `TO_TOD` on a DT), `DATE_TO_DT` (midnight), `CONCAT_DATE_TOD`,
+  `CONCAT_DATE(y, m, d)`, `CONCAT_TOD(h, m, s, ms)` (0, the epoch or
+  midnight, when there is no such date or time, as ruSTy), `DAY_OF_WEEK`
+  (0 Sunday), and `DT_NOW()`. Not built: the `SPLIT_*` functions (outputs
+  by reference), the `L` forms.
+- **Text.** `TO_STRING`, `DATE_TO_STRING`, `TOD_TO_STRING`, `DT_TO_STRING`
+  print the literal (`D#2024-02-29`, `TOD#08:30:00.5`, with the fraction
+  only when there is one), and `STRING_TO_DATE` / `_TOD` / `_DT` read it
+  back (prefix optional, spaces around ignored; anything else is the zero
+  value, like text that is no number). The print form is Helmsman's, not
+  a clause: it is the literal itself, so it round-trips.
+- **The clock.** `scan_at`'s clock is time since the program started, not a
+  date. `Program::set_wall_clock(ns)` gives the DT at that clock's zero;
+  `DT_NOW()` is that plus the clock, so the host owns the time zone (the
+  program has none) and a reset or hot swap keeps it. Unset it counts from
+  1970-01-01. An initial value cannot call it. **The box does not set it
+  yet** (card `st-wall-clock`: UTC or the calendar's zone?), so on a box
+  `DT_NOW()` still counts from 1970.
+- **Not signals.** A DATE, TOD or DT port works inside its program but
+  `Program::ports()` skips it, like a STRING one: not in `/api/signals`,
+  the values stream, trends or OPC UA. `RETAIN` works (the state encoding
+  has the types). The diagram's live value of a whole DATE, TOD or DT
+  variable reads as its literal (`TOD#23:00:00`), not as nanoseconds.
 
 ## Box API (`box-api`, built)
 

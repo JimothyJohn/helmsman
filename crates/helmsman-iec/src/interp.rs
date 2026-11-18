@@ -225,6 +225,17 @@ pub(crate) fn from_raw(ty: Ty, raw: u64) -> Value {
 /// Explicit or implicit conversion between elementary types.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn convert(v: Value, from: Ty, to: Ty) -> Value {
+    if from.is_calendar() || to.is_calendar() {
+        // Only DT to DATE or TOD, DATE to DT and a type to itself get past
+        // the checker; the value is its nanosecond count in every case but
+        // the first two.
+        let ns = int(v);
+        return Value::Int(match (from, to) {
+            (Ty::Dt, Ty::Date) => crate::dt::dt_to_date(ns),
+            (Ty::Dt, Ty::Tod) => crate::dt::dt_to_tod(ns),
+            _ => ns,
+        });
+    }
     if from == Ty::Time && to != Ty::Time {
         // TIME is counted in milliseconds when it becomes a number.
         let ns = int(v);
@@ -338,14 +349,19 @@ fn binop(op: BinOp, a: Value, b: Value, ty: Ty) -> Result<Value, FaultKind> {
                 BinOp::Mod => x % y,
                 _ => unreachable!("** on integers is rejected by the checker"),
             };
-            Value::Int(ty.arith().wrap(out))
+            // A time of day moved by a duration wraps at midnight.
+            if ty == Ty::Tod && matches!(op, BinOp::Add | BinOp::Sub) {
+                Value::Int(out.rem_euclid(crate::dt::NS_DAY))
+            } else {
+                Value::Int(ty.arith().wrap(out))
+            }
         }
     };
     Ok(v)
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn builtin(b: Builtin, args: &[Value], ty: Ty, now: i128) -> Result<Value, FaultKind> {
+fn builtin(b: Builtin, args: &[Value], ty: Ty, now: i128, wall: i128) -> Result<Value, FaultKind> {
     let r = |f: fn(f64) -> f64| Value::Real(round_real(ty, f(real(args[0]))));
     let pick = |want: core::cmp::Ordering| {
         args[1..].iter().fold(
@@ -355,6 +371,16 @@ fn builtin(b: Builtin, args: &[Value], ty: Ty, now: i128) -> Result<Value, Fault
     };
     Ok(match b {
         Builtin::Now => Value::Int(now),
+        Builtin::Wall => Value::Int(Ty::Dt.wrap(wall + now)),
+        Builtin::DayOfWeek => Value::Int(crate::dt::weekday(int(args[0]))),
+        Builtin::ConcatDateTod => Value::Int(Ty::Dt.wrap(int(args[0]) + int(args[1]))),
+        Builtin::ConcatDate => Value::Int(crate::dt::concat_date(int(args[0]), int(args[1]), int(args[2]))),
+        Builtin::ConcatTod => Value::Int(crate::dt::concat_tod(
+            int(args[0]),
+            int(args[1]),
+            int(args[2]),
+            int(args[3]),
+        )),
         Builtin::Fault(p) => return Err(FaultKind::BadParam(p)),
         Builtin::Abs => match args[0] {
             Value::Real(x) => Value::Real(crate::fmath::abs(x)),
@@ -443,6 +469,8 @@ pub struct Machine<'a> {
     pub budget: u64,
     /// Nanoseconds since the program started.
     pub now: i128,
+    /// The wall clock (nanoseconds since 1970) when `now` was zero.
+    pub wall: i128,
     /// Records the scan when tracing; `None` for a plain scan, which then
     /// pays one predictable branch per statement.
     pub tap: Option<&'a mut Recorder>,
@@ -547,7 +575,9 @@ impl Machine<'_> {
         let raw_ty = p.bit.map_or(ty, |(_, cty)| cty);
         // Promoted arithmetic may leave a value wider than its variable.
         let v = match v {
-            Value::Int(x) if raw_ty.is_integral() || raw_ty == Ty::Time => Value::Int(raw_ty.wrap(x)),
+            Value::Int(x) if raw_ty.is_integral() || raw_ty == Ty::Time || raw_ty.is_calendar() => {
+                Value::Int(raw_ty.wrap(x))
+            }
             v => v,
         };
         match t {
@@ -602,7 +632,7 @@ impl Machine<'_> {
                 for a in args {
                     vals.push(self.eval(a, line)?);
                 }
-                builtin(*b, &vals, *ty, self.now).map_err(&f)?
+                builtin(*b, &vals, *ty, self.now, self.wall).map_err(&f)?
             }
             Ex::Call(c) => self.call(c, line)?.unwrap_or(Value::Bool(false)),
             Ex::StrLoad(p) => Value::Int(self.mem_index(p, line)? as i128),
@@ -924,6 +954,7 @@ pub fn eval_const(e: &Ex) -> Result<Value, String> {
         base: 0,
         budget: 0,
         now: 0,
+        wall: 0,
         tap: None,
     };
     m.eval(e, 0).map_err(|h| match h {
