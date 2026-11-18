@@ -886,6 +886,22 @@ fn st_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// A one-shot block that latches its own guard is the initial value, not a
+/// second write (found on a converted ladder's prescan); the same writes
+/// under a guard that is never latched still are.
+#[test]
+fn a_one_shot_initialisation_is_not_a_second_write() {
+    let body = "IF NOT inited THEN lamp := FALSE; inited := TRUE; END_IF;\nlamp := go;";
+    let src =
+        "PROGRAM p VAR_INPUT go : BOOL; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR VAR inited : BOOL; END_VAR\n"
+            .to_string()
+            + body
+            + "\nEND_PROGRAM\n";
+    none_of(&src, lint::OUTPUT_WRITTEN_TWICE);
+    let src = src.replace("inited := TRUE;", "");
+    assert_eq!(only(&src, lint::OUTPUT_WRITTEN_TWICE).len(), 1, "never latched");
+}
+
 /// A requirement test calls its ASSERTs inside the IF that says when the
 /// check applies; that is not the timer-in-IF bug (found on the shipped
 /// test_*.st files).

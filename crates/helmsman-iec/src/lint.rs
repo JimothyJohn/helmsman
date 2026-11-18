@@ -55,7 +55,9 @@ pub const FB_IN_CONDITIONAL: &str = "HELMSMAN-L1";
 /// both: in sequence, or one inside a branch and one outside it. The arms
 /// of one IF/ELSIF/ELSE or CASE are one place per path, and so are the
 /// writes either side of a RETURN that leaves the branch. A write in a
-/// loop body is one place. Different members or different literal array
+/// loop body is one place, and a one-shot block (`IF NOT done THEN ...
+/// done := TRUE; END_IF;`) is not a place at all: it is the initial value.
+/// Different members or different literal array
 /// elements are different outputs; `o[i]` and `o[j]` are taken as the same.
 /// Function block outputs and function results are not outputs here.
 pub const OUTPUT_WRITTEN_TWICE: &str = "PLCOPEN-CP12";
@@ -709,6 +711,30 @@ struct Ev {
     ctx: Vec<(u32, u32)>,
 }
 
+/// `IF NOT done THEN ... done := TRUE; END_IF;` with no ELSE: a block that
+/// latches its own guard runs once, the initialisation idiom (a converted
+/// ladder's prescan writes every output this way).
+fn one_shot(s: &Stmt) -> bool {
+    let StmtKind::If(arms, els) = &s.kind else {
+        return false;
+    };
+    let [(cond, body)] = arms.as_slice() else {
+        return false;
+    };
+    let ExprKind::Unary(UnOp::Not, g) = &cond.kind else {
+        return false;
+    };
+    let ExprKind::Var(guard) = &g.kind else {
+        return false;
+    };
+    els.is_empty()
+        && body.iter().any(|x| {
+            matches!(&x.kind, StmtKind::Assign(l, r)
+                if matches!(&l.kind, ExprKind::Var(n) if n.eq_ignore_ascii_case(guard))
+                && matches!(r.kind, ExprKind::Bool(true)))
+        })
+}
+
 fn collect_events(
     sc: &Scope<'_>,
     b: &Block,
@@ -718,6 +744,9 @@ fn collect_events(
     out: &mut Vec<Ev>,
 ) {
     for s in b {
+        if one_shot(s) {
+            continue;
+        }
         for (key, segs, pos) in sc.writes(s) {
             out.push(Ev {
                 key,

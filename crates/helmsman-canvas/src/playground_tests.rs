@@ -2783,6 +2783,7 @@ VAR RETAIN
   kept : INT;
 END_VAR
 q := q OR set;
+kept := kept + 1;
 END_FUNCTION_BLOCK
 PROGRAM main
 VAR_INPUT

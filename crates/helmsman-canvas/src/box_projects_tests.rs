@@ -3650,6 +3650,7 @@ VAR RETAIN
   kept : INT;
 END_VAR
 q := (q OR set) AND NOT reset;
+kept := kept + 1;
 END_FUNCTION_BLOCK
 ";
 
@@ -3824,8 +3825,8 @@ fn messy_main() -> String {
         "VAR_OUTPUT lamp : BOOL; END_VAR",
     )
     .replace(
-        "l(set := start, reset := FALSE);\n",
-        "if start then l(set := start, reset := FALSE); end_if;\n",
+        "lamp := l.q;\n",
+        "if start then lamp := l.q; else lamp := false; end_if;\n",
     )
     .trim_end()
     .to_string()
