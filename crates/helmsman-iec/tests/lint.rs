@@ -886,6 +886,20 @@ fn st_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// A requirement test calls its ASSERTs inside the IF that says when the
+/// check applies; that is not the timer-in-IF bug (found on the shipped
+/// test_*.st files).
+#[test]
+fn an_assert_called_inside_an_if_is_not_flagged() {
+    let src = prog(
+        "t : TON; a : ASSERT;",
+        "t(IN := TRUE, PT := T#1s);\nIF t.Q THEN a(COND := TRUE); END_IF;",
+    );
+    none_of(&src, lint::FB_IN_CONDITIONAL);
+    let src = prog("t : TON;", "IF TRUE THEN t(IN := TRUE, PT := T#1s); END_IF;");
+    assert_eq!(only(&src, lint::FB_IN_CONDITIONAL).len(), 1, "a TON still is");
+}
+
 /// Every `.st` file under crates/ and docs/ (bench programs, fixtures, the
 /// library): no blocking finding; each finding is listed with `--nocapture`.
 #[test]

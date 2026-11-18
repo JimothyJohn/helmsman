@@ -40,7 +40,8 @@ use crate::parser::{
 /// same instance. Not flagged: a call in an IF ... ELSE (or CASE with an
 /// ELSE) whose every branch calls the instance; a call in a loop body that
 /// no IF or CASE encloses; a call after an early RETURN (not "inside" a
-/// branch). A timer called in a CASE state machine arm is flagged by
+/// branch); an `ASSERT` of a requirement test (it checks, it has no state to
+/// lose). A timer called in a CASE state machine arm is flagged by
 /// design: the timer stops with the state, which is the bug; override it
 /// with a reason when that is the intent.
 pub const FB_IN_CONDITIONAL: &str = "HELMSMAN-L1";
@@ -643,7 +644,9 @@ fn fb_call_key(sc: &Scope<'_>, e: &Expr) -> Option<String> {
     let ExprKind::Call(callee, _) = &e.kind else {
         return None;
     };
-    matches!(sc.type_of(callee), Ty::Fb(_)).then(|| render(callee))
+    // ASSERT is the requirement tests' check, not a block with state: a
+    // test calls it inside the IF that says when the check applies.
+    matches!(sc.type_of(callee), Ty::Fb(p) if !p.name.eq_ignore_ascii_case("ASSERT")).then(|| render(callee))
 }
 
 fn l1_walk(
