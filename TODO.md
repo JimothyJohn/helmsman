@@ -4,6 +4,20 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
+- [ ] **Should a blocking lint refuse an engineer's own deploy on a box, or only hold the Agent's drafts?** — Draft #509 (st-lints) is built and green and waits on this. Your ruling of 2026-11-07 says the first two lints (a function block called inside a branch, an output written in more than one place) block "Use this code" and Deploy "the way a red requirement test does"; since 2026-11-15 a red requirement test no longer refuses a deploy, so the sentence points two ways. As built, a box answers 422 until the finding is fixed or overridden on its line with a reasoned pragma, which goes to the audit trail. The first lint is stricter than the guideline it comes from (PLCopen CP20 allows a conditional call), so a hand-written timer inside an IF is refused until the pragma is added. Session's pick: keep it blocking, as you ruled.
+  result: #509 is marked ready and merges, or goes back for the narrower rule
+  options: block every deploy (as built) | block the Agent's drafts only, warn on a hand deploy | advisory everywhere
+  id: st-lints-deploy-block
+  asked: 2026-11-17
+  by: recovery session aa9f9f8a
+
+- [ ] **STRING[n] is stored in the slot array, not in a byte store beside it: accept?** — Draft #508 (st-string) is built and green, oracle included, and waits on this. In the interview of 2026-11-17 you picked a bounded byte store beside the slot array with `Value` staying `Copy`. What was built keeps `Value` unchanged and `Copy` but packs a string into consecutive ordinary slots, 16 bytes each, length byte first (crates/helmsman-iec/src/strs.rs). For it: every existing move (struct or array copy, by-value argument, function block instance, hot swap) already copies slots, so strings needed no new copy paths. Against it: at runtime a string's slot looks like an integer, so only the checker keeps them apart. Also yours to veto in the same PR: text to number copies ruSTy as measured (unparseable text gives 0, '1.9' to an integer gives 1). Session's pick: accept after reading strs.rs.
+  result: #508 is marked ready and merges, or the storage is rebuilt as the byte store
+  options: accept as built | rebuild as a byte store beside the slots
+  id: st-string-storage
+  asked: 2026-11-17
+  by: recovery session aa9f9f8a
+
 
 ## Needs your hands
 
