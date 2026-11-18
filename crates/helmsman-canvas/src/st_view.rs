@@ -3315,6 +3315,13 @@ fn value_text(
         Value::Int(ns) if !path.contains(['.', '[']) && var.is_some_and(|x| x.ty == "TIME") => {
             Some(helmsman_diagram::text::time(ns))
         }
+        // A DATE, TOD or DT reads as the literal that writes it.
+        Value::Int(ns) if !path.contains(['.', '[']) => {
+            match var.and_then(|x| helmsman_iec::Ty::from_name(&x.ty)).filter(|t| t.is_calendar()) {
+                Some(t) => Some(helmsman_iec::dt::literal(t, ns)),
+                None => Some(v.to_string()),
+            }
+        }
         v => Some(v.to_string()),
     }
 }
@@ -4046,6 +4053,22 @@ END_PROGRAM
 
     fn node(v: &Viewer, k: &NodeKind) -> helmsman_diagram::NodeId {
         v.diagram().nodes.iter().find(|n| n.kind == *k).unwrap().id
+    }
+
+    #[test]
+    fn a_date_and_a_time_of_day_read_as_literals_not_nanoseconds() {
+        let src = "PROGRAM clock\nVAR\n  tod_now : TOD;\n  day : DATE;\n  stamp : DT;\n  late : BOOL;\nEND_VAR\nlate := tod_now > TOD#22:00:00 AND day < D#2030-01-01 AND stamp > DT#2000-01-01-00:00:00;\nEND_PROGRAM\n";
+        let session = Session::new(src);
+        assert!(session.diags.is_empty(), "{:?}", session.diag_lines());
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let v = Viewer::new(src, module);
+        let d = v.diagram();
+        let vars = v.module.program().map(|p| &p.vars);
+        let read = |p: &str| node(&v, &NodeKind::Read { path: p.into() });
+        let text = |p: &str, ns: i128| value_text(d, read(p), Value::Int(ns), vars);
+        assert_eq!(text("TOD_NOW", 23 * 3_600_000_000_000).as_deref(), Some("TOD#23:00:00"));
+        assert_eq!(text("DAY", 86_400_000_000_000).as_deref(), Some("D#1970-01-02"));
+        assert_eq!(text("STAMP", -1_000_000_000).as_deref(), Some("DT#1969-12-31-23:59:59"));
     }
 
     #[test]

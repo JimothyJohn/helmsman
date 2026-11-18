@@ -1509,7 +1509,8 @@ diagnostic, as is `LTIME`.
 - **Not signals.** A DATE, TOD or DT port works inside its program but
   `Program::ports()` skips it, like a STRING one: not in `/api/signals`,
   the values stream, trends or OPC UA. `RETAIN` works (the state encoding
-  has the types).
+  has the types). The diagram's live value of a whole DATE, TOD or DT
+  variable reads as its literal (`TOD#23:00:00`), not as nanoseconds.
 
 ## Box API (`box-api`, built)
 
