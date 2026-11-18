@@ -218,6 +218,7 @@ fn pull_link(url: &str, number: u64) -> Option<String> {
         (1..=100).contains(&p.len())
             && p.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            && !p.bytes().all(|b| b == b'.')
     };
     let (owner, repo) = url
         .strip_prefix("https://github.com/")?

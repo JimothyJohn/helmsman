@@ -732,6 +732,8 @@ fn the_review_request_comes_back_as_a_number_and_a_library_link() {
         "https://evil.example/o/r/pull/12",
         "http://github.com/o/r/pull/12",
         "https://github.com/o/r/pull/13",
+        "https://github.com/../r/pull/12",
+        "https://github.com/o/../pull/12",
         "https://github.com.evil.example/o/r/pull/12",
         "javascript:alert(1)",
         "https://github.com/o/r/pull/12 and more",
