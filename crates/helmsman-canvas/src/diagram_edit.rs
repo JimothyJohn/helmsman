@@ -13,8 +13,9 @@
 //!
 //! The gestures are on only while [`Gate`] says so: the diagram must show
 //! the code in the editor (a single program file, deployed as it stands).
-//! On a box they are off ([`BOX_REASON`]) until the card
-//! `diagram-edit-box`.
+//! A viewer no host has set the gate of starts off ([`BOX_REASON`]); the
+//! box sets it each frame (`BoxView::edit_gate`), and a gesture there only
+//! changes the open file, as typing does.
 
 use eframe::egui::{self, Pos2, Rect, RichText, Vec2};
 use helmsman_diagram::edit::{self, Bubble, Edit, Literal, Pin, Source};

@@ -743,17 +743,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 5: on a box** — the same gestures on a box, on only for an engineer (`writable()`) and only while the diagram shows the open buffer, not the running module; otherwise off with a tooltip saying why. Nothing new on the box: Save and Deploy go through the existing policy, which sets the tier from the diff.
-  result: diagram edits on a Pi land like typed edits, approval and audit unchanged
-  notes: box_projects_tests: edit, Save, the stale-save 409, against the real API. A diagram edit runs on a box only after Deploy, the same as typing.
-  est: 4h
-  difficulty: low
-  depends: diagram-edit-canvas
-  id: diagram-edit-box
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits 6: docs** — amend `canvas-edit-scope` in docs/ARCHITECTURE.md (the live ST view section: the diagram now writes ST through checked splices), docs/UI.md, and a help page in the floor-engineer voice.
   result: the docs say what the diagram can change and how it reaches the code
   est: 2h
