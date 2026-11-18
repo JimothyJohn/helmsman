@@ -1398,6 +1398,61 @@ below) never stops the program, since such code compiled
   restart). Not yet: RETAIN inside a function block type, and `%M`
   retention.
 
+## Strings (`st-string`, built)
+
+`STRING[n]` (1 to 255 characters; a bare `STRING` is `STRING[80]`) is part
+of the language inside a program: variables of every section (including
+struct members, array elements, function block members, `VAR_GLOBAL` and
+function results), single-quoted literals with the `$` escapes (`$$ $' $L
+$N $P $R $T`, `$HH` for any byte), assignment, the six comparisons, `LEN`,
+`LEFT`, `RIGHT`, `MID`, `CONCAT` (two or more), `FIND`, `INSERT`,
+`DELETE`, `REPLACE`, and `X_TO_STRING` / `TO_STRING` / `STRING_TO_X` for the
+numeric types and BOOL. `WSTRING` is refused with a diagnostic. Code in
+`helmsman-iec`'s `strs.rs` (the functions), `lexer.rs` (literals), `check.rs`
+(types, scratch sizing) and `interp.rs`.
+
+- **Storage.** A string does not make `Value` bigger or non-`Copy`. It is a
+  fixed region of the same slot array as everything else: `ceil((n+1)/16)`
+  slots, each holding 16 bytes (a `Value::Int`), the first byte the length,
+  the rest the characters, everything past the length zero. So a struct or
+  array copy, a by-value argument, a function block instance and a hot swap
+  carry strings with no special case, and two equal strings are equal slot
+  for slot. (The first design put the bytes in a separate store beside the
+  slots; packing them into slots was chosen because every existing move
+  already copies slots.)
+- **Expressions.** A string-valued expression (a call, a conversion) is
+  evaluated into a scratch region sized at check time from its worst case,
+  after the program's frames in `mem_init`. Scratch is 64 KiB at most per
+  program: more is a compile error, not a run-time fault. Nothing in the
+  scan path allocates: the functions work in stack buffers of 255 bytes.
+- **Truncation, not faults.** Assigning, passing by value and returning cut
+  the text at the destination's declared length (ruSTy does the same:
+  oracle `strings_agree_with_rusty`). A position or count outside the string
+  selects nothing or everything to the end; `FIND` answers 0 when there is
+  no match. Text that is no number converts to 0, FALSE or 0.0; spaces
+  around it are ignored and a fraction or exponent is cut toward zero for
+  an integer type, as ruSTy reads it (the oracle test pins each form).
+  Comparison is by byte value, a prefix sorting first.
+- **Budget.** String work charges the instruction budget by bytes handled, so
+  a loop of `CONCAT`s ends in `Fault::Watchdog`.
+- **Characters.** One byte each. The lexer refuses a literal with a
+  character outside printable ASCII (write other bytes as `$HH`), invalid
+  UTF-8, an unterminated literal, a bad escape, or more than 255 bytes.
+- **Not signals yet (card `st-string-signals`).** A STRING port works inside
+  its program but `Program::ports()` skips it, so it is no box signal, not
+  in `/api/signals`, the values stream, trends, OPC UA, or bound to I/O or a
+  test's shared ports; `RETAIN` on a string is a compile error that names the
+  card. `Program::get_str` / `set_str` and the trace's text accessor read
+  and write one by path; `Program::get` does not return it.
+- **Typed asserts.** `ASSERT_EQ_BOOL`, `_INT` (any integer type, as LINT),
+  `_REAL` (any real, as LREAL, with a `TOLERANCE` input; a NaN fails),
+  `_TIME` and `_STRING` in library.st keep ASSERT's outputs and latch what
+  the first failure saw (`GOT`, `WANT`, `WHAT` from the `MESSAGE` input).
+  `spec.rs` turns that into `c failed at 3.20 s: speed was 40, expected
+  50 (...)`; a plain `ASSERT`'s text is unchanged. A test can compare text
+  it builds itself, but cannot read a program's STRING output until the
+  signals card shares STRING ports.
+
 ## Box API (`box-api`, built)
 
 `helmsman-plc --api ADDR` (default `127.0.0.1:8080`, `0.0.0.0:8080` for the

@@ -610,16 +610,6 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **STRING[n], then typed asserts** — fixed-length `STRING[n]` (default 80 as the standard), with concatenation, LEN, LEFT/RIGHT/MID, CONCAT, FIND, comparisons and the conversions, bounded so the scan stays bounded and the edge node still builds (no_std: no heap). WSTRING later. Then the TcUnit idea from §5: `ASSERT_EQ_<TYPE>(Expected, Actual, Message)` (one block per type, no generics) so a red requirement test reads "speed was 40, expected 50 at 3.2 s" in the Requirements tab and in the agent's retry message. Oracle cases, property tests (every length boundary, invalid UTF-8 refused at the lexer), relay profile id.
-  result: messages, recipe names, device IDs and OPC UA / webhook payloads can be written in ST; a failed test says what it saw
-  est: 4d
-  difficulty: high
-  depends: st-var-in-out
-  id: st-string
-  asked: 2026-11-08
-  by: claude-session
-  status: ready
-
 - [ ] **Process-control library: 10-15 blocks with tests** — in `crates/helmsman-iec/src/library.st`, written here (OSCAT's license is unverified and it leans on pointers): `PID` with anti-windup and bumpless manual/auto transfer, `RAMP`, `HYST`, `SCALE` (raw to engineering units, using the signal's `unit`), `LIMIT_ALARM`, `FILTER_PT1`, `DEBOUNCE`, `PULSE_COUNT` and a rate, sequence helpers. Decided (Nick, 2026-11-08: `st-library-names`): OSCAT's pin and block names where they exist, the standard's otherwise, no aliases; the plain-words explanation of every block and pin goes in its tooltip and its help page, the way the UI rule "tooltips on everything" already works. Each block gets requirement tests of its own, the non-IEC ones are marked in the docs as `BLINK_PATTERN` is, and the agent's profile gets the list (a new id).
   result: an analog loop the agent writes calls a tested PID instead of a hand-rolled PI with its own windup bug
   est: 4d
@@ -653,6 +643,15 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   id: relay-profile-dialect-2
   asked: 2026-11-15
   by: claude-session (board run)
+
+- [ ] **Strings as box signals** — `STRING[n]` is in the language (card `st-string`) but only inside a program: `Program::ports()` skips a STRING port, so it is no signal. Left for here, each with the skip it has today: `/api/signals` and the values stream, trend records, OPC UA, `RETAIN` (state.rs format; the checker refuses RETAIN on a string and names this card), I/O binding, `helmsman_io::Value`, nodecore `SignalValue`, helmsman-sim and its panel controls, and a requirement test sharing a STRING port with its program (`spec.rs` only shares ports `ports()` lists, so `ASSERT_EQ_STRING` can compare text the test builds but not a program output). Also the playground's `SYSTEM` prompt (helmsman-canvas/src/claude.rs, "Not supported: STRING and WSTRING") and a new relay profile id that tell the agent STRING, ASSERT_EQ_* and the string functions exist; a served profile never changes, so that is a new id in ../agent-relay.
+  needs: your call on the signal type for text (a bounded string of at most 255 bytes, as in the language), then a session in ../agent-relay for the profile and your deploy
+  result: a program's text outputs show on the desk, in trends and over OPC UA, survive a restart, and a requirement test reads them; the agent knows the syntax
+  est: 4d
+  difficulty: high
+  id: st-string-signals
+  asked: 2026-11-17
+  by: claude-session
 
 ## From user feedback: plan for later
 
