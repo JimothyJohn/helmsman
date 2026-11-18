@@ -2,8 +2,6 @@
 
 Done cards were removed on 2026-11-06 (git history has them). Three sections up top: decisions only you can make, things only your hands can do, and what an agent builds next. The roadmap below is the long view.
 
-Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
-
 ## Open questions for Nick
 
 
@@ -108,6 +106,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   id: mdrive-bringup
   asked: 2026-11-10
   by: claude-session
+  notes: 2026-11-17: Nick on the comms-loss stop: accept it on the bench for now. A silent controller does not stop a slew on this unit (it stops on a Forward_Close and on run/idle going to idle); what its Halt Motion setting really holds was not read. Open again before the drive runs anywhere but the bench: an MCode program on the drive or a hardware stop.
 
 - [ ] **Bring up a Universal Robot over EtherNet/IP and Modbus TCP** — Why it matters: the first device with a large mixed image (floats, 32-bit registers, bit fields), so it tests what a profile can say about a value beyond on and off, and a robot is something customers already own. PROFINET first is out (Nick, 2026-11-13). Read 2026-11-10 (docs/devices/universal-robots.md): EtherNet/IP input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); Modbus TCP server on 502, function codes 1..6, 15, 16, general purpose registers 128..255, robot state from 256, every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values converted by hand), the unit id ignored. EtherNet/IP and PROFINET cannot be on together. URSim is no stand-in: users report its Modbus registers stuck, so this needs the robot. PROFINET (its GSDML is read, slots 1..10) only if a customer asks.
   needs: the robot on 192.168.3.x, its model and PolyScope version, EtherNet/IP enabled under Installation > Fieldbus; a cleared cell before anything moves
