@@ -779,6 +779,34 @@ impl Viewer {
         self.to_base(n).or_else(|| self.chip(n).map(|(op, _)| op))
     }
 
+    /// The block of the diagram behind input `input` of block `n` as
+    /// drawn, for a right click on the pin: the same block, or for a fold
+    /// the one block its wire enters (none when several read it).
+    pub(crate) fn base_pin(&self, n: NodeId, input: usize) -> Option<NodeId> {
+        let Some(v) = self.view() else {
+            return Some(n);
+        };
+        match *v.origin.get(n.0 as usize)? {
+            Origin::Node(o) => Some(o),
+            Origin::Fold(f) => {
+                // A table's pin feeds several rows, each with its own bubble:
+                // there is no one block of its gates behind it.
+                if v.folds[f].kind == FoldKind::Table {
+                    return None;
+                }
+                let helmsman_diagram::fold::Input::Wire { from, negated } = v.ins[f].get(input)? else {
+                    return None;
+                };
+                let mut into = self.diagram().wires.iter().filter(|w| {
+                    (w.from, w.out, w.negated) == (from.0, from.1, *negated)
+                        && v.folds[f].nodes.contains(&w.to)
+                });
+                let w = into.next()?;
+                into.next().is_none().then_some(w.to)
+            }
+        }
+    }
+
     /// The block drawn for block `n` of the diagram: itself, or the fold
     /// it is in.
     fn to_shown(&self, n: NodeId) -> Option<NodeId> {

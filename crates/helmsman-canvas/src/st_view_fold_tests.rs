@@ -919,9 +919,7 @@ fn a_right_click_on_a_table_pin_is_about_no_block() {
     let h = Harness::of(&permissive([true, false, true, false, false]));
     let (n, _) = h.table(true).unwrap();
     for k in 0..h.view.shown().node(n).ins.len() {
-        let at = h.view.pin_on_screen(n, k).expect("the pin is drawn");
-        let cam = h.view.cams[h.view.scope];
-        assert_eq!(h.view.hit_at(cam, at), None, "pin {k}");
+        assert_eq!(h.view.base_pin(n, k), None, "pin {k}");
     }
     assert_eq!(h.view.base_block(n), None);
 }

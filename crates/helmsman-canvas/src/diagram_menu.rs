@@ -43,12 +43,12 @@ impl Viewer {
             .flat_map(|n| (0..n.ins.len()).map(move |k| (n, k)))
             .map(|(n, k)| {
                 let (px, py) = in_port(n, k);
-                (n.id, (px - x).hypot(py - y))
+                (n.id, k, (px - x).hypot(py - y))
             })
-            .filter(|(_, dist)| *dist <= reach)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((node, _)) = pin {
-            return self.base_block(node);
+            .filter(|(.., dist)| *dist <= reach)
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        if let Some((node, input, _)) = pin {
+            return self.base_pin(node, input);
         }
         node_near(d, x, y, TAP / 2.0 / cam.zoom).and_then(|n| self.base_block(n))
     }
