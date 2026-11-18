@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all live-state live-smoke help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
+.PHONY: help install-dev lint fmt test-unit test-integration test-all live-state live-smoke compat help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -30,6 +30,9 @@ live-state:  ## What a visitor can reach against what is on dev: site, relay, de
 
 live-smoke:  ## Drive the live public page headless as a first visit: drawn, moving, no console errors; screenshots in target/live-smoke (after a promotion).
 	python3 -I scripts/live-smoke.py
+
+compat:  ## The release train: helmsman, agent-relay, helmsman-devices and helmsman-hardware held to each other's contracts at dev and live (docs/COMPAT.md; ARGS=--live, --candidate).
+	./scripts/compat.sh $(ARGS)
 
 # ---- Interop targets --------------------------------------------------------
 
