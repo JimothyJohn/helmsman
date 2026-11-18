@@ -346,6 +346,7 @@ fn sniff(text: &str) -> Kind {
 fn ty_text(t: &TypeRef) -> (String, Vec<u32>) {
     match t {
         TypeRef::Named(n, _) => (n.clone(), Vec::new()),
+        TypeRef::Str(..) => ("STRING".to_string(), Vec::new()),
         TypeRef::Array { dims, elem, .. } => {
             let (name, _) = ty_text(elem);
             let d = dims

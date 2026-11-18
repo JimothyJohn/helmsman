@@ -16,13 +16,15 @@ pub fn stmt() -> impl Strategy<Value = String> {
         5 => format!("LIMIT(0, {v}, {k})"),
         _ => format!("{v} MOD 7"),
     });
-    let cond = (var.clone(), 0..7u8, -5i32..6).prop_map(|(v, op, k)| match op {
+    let cond = (var.clone(), 0..9u8, -5i32..6).prop_map(|(v, op, k)| match op {
         0 => format!("{v} > {k}"),
         1 => format!("{v} = {k}"),
         2 => "x".to_string(),
         3 => "f.q AND NOT y".to_string(),
         4 => "NOT tm.Q AND NOT NOT x".to_string(),
         5 => format!("tm.Q OR {v} <= {k}"),
+        7 => format!("x AND NOT y OR f.q AND {v} > {k} OR tm.Q"),
+        8 => "(y AND x) OR NOT x AND NOT f.q".to_string(),
         _ => format!("y AND {v} < {k}"),
     });
     let leaf = prop_oneof![

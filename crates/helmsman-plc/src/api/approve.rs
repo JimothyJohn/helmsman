@@ -231,6 +231,38 @@ struct Start<'c> {
     proposal: Option<Stored>,
     /// A project's red requirement tests, one line each: a warning.
     red: Vec<String>,
+    /// A project's lint overrides, as an audit line's tail.
+    overrides: String,
+}
+
+/// The refusal of a deploy of project build `b` that a blocking lint
+/// finding holds (`helmsman_iec::lint`, card `st-lints`): 422 with the
+/// findings and how to override one, audited, nothing changed. `None` when
+/// nothing holds it.
+fn held_by_lint(ctx: &Ctx, req: &Request, label: &str, b: &crate::project::build::Built) -> Option<Response> {
+    let held = super::projects::held(b);
+    if held.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = held.iter().map(ToString::to_string).collect();
+    let ids: Vec<&str> = held.iter().filter_map(|d| d.id.as_deref()).collect();
+    Some(refuse(
+        ctx,
+        req,
+        422,
+        &json!({
+            "error": "the project holds a lint finding that blocks a deploy; fix it, or override it on its line with a pragma and a reason: {lint: off ID \"reason\"}",
+            "changed": false,
+            "held": lines,
+            "warnings": super::projects::diags_json(&b.problems, "warning"),
+        }),
+        &format!(
+            "{label}: held by lint {}: {}",
+            ids.join(", "),
+            super::clean(&lines.join("; "))
+        ),
+        Note::default(),
+    ))
 }
 
 /// What every apply, rollback and replay starts with: the target exists
@@ -245,6 +277,7 @@ fn prelude<'c>(
     label: &str,
 ) -> Result<Start<'c>, Response> {
     let mut red = Vec::new();
+    let mut overrides = String::new();
     let (cs, proposal) = match target_ref {
         Target::Proposal(id) => {
             let Some(p) = super::proposal_id(id).and_then(|id| ctx.box_.proposals.get(id)) else {
@@ -282,6 +315,11 @@ fn prelude<'c>(
                 .and_then(|r| super::projects::built(ctx, name).map(|b| (b, r)))
             {
                 Ok((b, r)) => {
+                    // A blocking lint finding refuses, unlike a red test.
+                    if let Some(r) = held_by_lint(ctx, req, label, &b) {
+                        return Err(r);
+                    }
+                    overrides = super::projects::override_note(&b);
                     red = r;
                     (Some(b.change), None)
                 }
@@ -327,6 +365,7 @@ fn prelude<'c>(
         target: cs,
         proposal,
         red,
+        overrides,
     })
 }
 
@@ -595,6 +634,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         target,
         proposal,
         red,
+        overrides,
     } = match prelude(req, ctx, target_ref, &label) {
         Ok(s) => s,
         Err(r) => return r,
@@ -926,6 +966,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         }
     }
     detail.push_str(&red_note(&red));
+    detail.push_str(&overrides);
     let _ = record(ctx, req, 200, &detail, note);
     Response::json(
         200,

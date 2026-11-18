@@ -6260,7 +6260,7 @@ mod tour {
         card_is_fair(&h, "outputs");
         // The lamp, the first output.
         let outs = h.rect("io outputs");
-        h.click(outs.left_center() + egui::vec2(30.0, 0.0));
+        h.click(outs.left_top() + egui::vec2(30.0, 14.0));
         h.wait(0.3);
         assert_eq!(step(&h), Step::Trend);
         assert_eq!(anchor(&h).as_deref(), Some("trend window"));
@@ -6895,15 +6895,20 @@ mod devconf {
 }
 
 mod assign;
+mod chat_about;
 mod design;
 mod device_io;
 mod diagram_edit;
 mod front;
+mod io_cards;
 mod io_names;
 mod layouts;
+mod multi_select;
+mod outputs;
 mod proposal;
 mod shell;
 mod sim_popup;
 mod spec_mode;
+mod start_state;
 mod vendor;
 mod wired;

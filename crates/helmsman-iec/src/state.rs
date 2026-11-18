@@ -35,6 +35,8 @@
 //!        | 2 shape count:u32 (lo:i128 hi:i128)*                    array
 //!        | 3 name count:u32 (name shape)*                          struct
 //!        | 4 name count:u32 (name constant:u8 section:u8 shape)*   function block
+//!        | 5 cap:u16                                               STRING[cap]; its
+//!                                  values are the string's slots (a hot swap only)
 //! value  = 0 bool:u8 | 1 int:i128 | 2 real:f64 bits
 //! ```
 //!
@@ -77,6 +79,9 @@ struct Var {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Shape {
     Elem(Ty),
+    /// `STRING[n]`: only a [`Program::state`] hot swap carries one (the
+    /// checker refuses RETAIN on a string), but a state with one encodes.
+    Str(u16),
     Enum {
         name: String,
         values: Vec<(String, i128)>,
@@ -101,6 +106,8 @@ enum Shape {
 enum Slot {
     Elem(Ty),
     Enum(usize),
+    /// One slot of a string's region (checked whole by `copy_in`).
+    Text,
 }
 
 /// What [`Program::restore`] did, by variable name (upper-cased), in the
@@ -297,6 +304,7 @@ fn put_shape(out: &mut Vec<u8>, shape: &Shape, depth: usize) -> Result<(), Decod
     }
     match shape {
         Shape::Elem(t) => out.extend([0, code_of(&TYS, t)]),
+        Shape::Str(n) => out.extend([5, n.to_le_bytes()[0], n.to_le_bytes()[1]]),
         Shape::Enum { name, values } => {
             out.push(1);
             put_name(out, name);
@@ -453,6 +461,10 @@ impl Reader<'_> {
                 }
                 Shape::Fb { name, vars }
             }
+            5 => {
+                let lo = u16::from(self.u8()?);
+                Shape::Str(lo | (u16::from(self.u8()?) << 8))
+            }
             _ => return Err(self.fail("an unknown type tag")),
         })
     }
@@ -522,6 +534,7 @@ impl Program {
     fn size_of(&self, ty: Type) -> usize {
         match ty {
             Type::Agg(a) => self.code.aggs[a].size,
+            Type::Str(n) => crate::strs::slots(usize::from(n)),
             _ => 1,
         }
     }
@@ -529,6 +542,7 @@ impl Program {
     fn shape(&self, ty: Type) -> Shape {
         match ty {
             Type::Elem(t) => Shape::Elem(t),
+            Type::Str(n) => Shape::Str(n),
             Type::Enum(e) => {
                 let info = &self.code.enums[e];
                 Shape::Enum {
@@ -568,21 +582,34 @@ impl Program {
 
     /// The type of every slot of `ty` laid out at `off` within `out`, and
     /// the `(offset, len)` ranges that are function block constants.
-    fn layout(&self, ty: Type, off: usize, out: &mut [Option<Slot>], fixed: &mut Vec<(usize, usize)>) {
+    fn layout(
+        &self,
+        ty: Type,
+        off: usize,
+        out: &mut [Option<Slot>],
+        fixed: &mut Vec<(usize, usize)>,
+        text: &mut Vec<(usize, usize)>,
+    ) {
         match ty {
             Type::Elem(t) => out[off] = Some(Slot::Elem(t)),
             Type::Enum(e) => out[off] = Some(Slot::Enum(e)),
+            Type::Str(n) => {
+                for k in 0..crate::strs::slots(usize::from(n)) {
+                    out[off + k] = Some(Slot::Text);
+                }
+                text.push((off, usize::from(n)));
+            }
             Type::Agg(a) => match &self.code.aggs[a].kind {
                 AggKind::Array { elem, .. } => {
                     let esize = self.size_of(*elem);
                     let n = self.code.aggs[a].size.checked_div(esize).unwrap_or(0);
                     for k in 0..n {
-                        self.layout(*elem, off + k * esize, out, fixed);
+                        self.layout(*elem, off + k * esize, out, fixed, text);
                     }
                 }
                 AggKind::Struct { fields } => {
                     for f in fields {
-                        self.layout(f.ty, off + f.off, out, fixed);
+                        self.layout(f.ty, off + f.off, out, fixed, text);
                     }
                 }
                 AggKind::Fb(p) => {
@@ -593,7 +620,7 @@ impl Program {
                             out[off + v.off] = Some(Slot::Elem(Ty::DInt));
                             continue;
                         }
-                        self.layout(v.ty, off + v.off, out, fixed);
+                        self.layout(v.ty, off + v.off, out, fixed, text);
                         if v.constant {
                             fixed.push((off + v.off, self.size_of(v.ty)));
                         }
@@ -605,7 +632,7 @@ impl Program {
 
     fn fits(&self, slot: Slot, v: Value) -> bool {
         match (slot, v) {
-            (Slot::Elem(Ty::Bool), Value::Bool(_)) => true,
+            (Slot::Elem(Ty::Bool), Value::Bool(_)) | (Slot::Text, Value::Int(_)) => true,
             (Slot::Elem(t), Value::Real(x)) if t.is_real() => {
                 x.is_finite() && round_real(t, x).to_bits() == x.to_bits()
             }
@@ -693,11 +720,15 @@ impl Program {
         }
         let mut slots = vec![None; size];
         let mut fixed = Vec::new();
-        self.layout(ty, 0, &mut slots, &mut fixed);
+        let mut text = Vec::new();
+        self.layout(ty, 0, &mut slots, &mut fixed, &mut text);
         let ok = slots
             .iter()
             .zip(&old.values)
-            .all(|(s, v)| s.is_some_and(|s| self.fits(s, *v)));
+            .all(|(s, v)| s.is_some_and(|s| self.fits(s, *v)))
+            && text.iter().all(|&(off, cap)| {
+                crate::strs::is_valid(&old.values[off..off + crate::strs::slots(cap)], cap)
+            });
         if !ok {
             return false;
         }

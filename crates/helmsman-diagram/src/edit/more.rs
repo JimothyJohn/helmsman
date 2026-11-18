@@ -74,6 +74,10 @@ fn class_of(types: &Types, t: &TypeRef) -> Ty {
                 name: n.clone(),
             }
         }
+        TypeRef::Str(..) => Ty {
+            class: Class::Text,
+            name: "STRING".into(),
+        },
         TypeRef::Array { .. } => Ty {
             class: Class::Other("ARRAY".into()),
             name: "an array".into(),

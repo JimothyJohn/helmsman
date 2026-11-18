@@ -1411,6 +1411,55 @@ fn ctrl_shift_f_forces_the_picked_input_and_ctrl_shift_u_releases_all() {
     assert_eq!(b.json("/api/forces")["forces"], serde_json::json!([]));
 }
 
+/// A stopped or faulted program reads no input (Nick, 2026-11-16): the
+/// click on an input's block says so and sends no force; any other state
+/// forces as before.
+#[test]
+fn forcing_an_input_of_a_program_that_is_not_running_reminds_and_sends_nothing() {
+    for (state, forces) in [
+        ("stopped", false),
+        ("faulted", false),
+        ("STOPPED", true),
+        ("held", true),
+        ("running", true),
+    ] {
+        let b = Bench::new();
+        let jar = Jar::default();
+        let mut v = drawn(&b, &jar);
+        let shown = v.state.selected.clone().expect("a module is shown");
+        for m in &mut v.state.modules {
+            if m.name == shown {
+                m.state = state.into();
+            }
+        }
+        let session = v.session.clone();
+        let mut h = Harness::new(v, session);
+        h.frame(vec![]);
+        h.sent();
+        h.press("force start");
+        let reqs = h.sent();
+        assert_eq!(
+            reqs.iter().any(|q| q.url.starts_with("/api/forces")),
+            forces,
+            "{state}: {reqs:?}"
+        );
+        let note = h.bv().projects.notice.clone();
+        if forces {
+            assert!(
+                !note.as_ref().is_some_and(|(n, _)| n.contains("forcing")),
+                "{state}: {note:?}"
+            );
+        } else {
+            let (text, error) = note.expect("a reminder");
+            assert!(
+                text.contains(&format!("{shown} is {state}")) && text.contains("forcing start"),
+                "{text}"
+            );
+            assert!(!error, "a reminder, not an error");
+        }
+    }
+}
+
 #[test]
 fn ctrl_shift_f_sends_nothing_without_an_engineer_signed_in() {
     let b = Bench::new();
@@ -3601,6 +3650,7 @@ VAR RETAIN
   kept : INT;
 END_VAR
 q := (q OR set) AND NOT reset;
+kept := kept + 1;
 END_FUNCTION_BLOCK
 ";
 
@@ -3720,7 +3770,10 @@ fn a_check_answer_without_the_warnings_field_still_reads() {
     assert_eq!(d.len(), 2);
     assert!(d[0].is_warning() && d[0].id.as_deref() == Some("HELMSMAN-L1") && d[0].blocking);
     assert!(d[1].is_warning() && d[1].id.is_none() && !d[1].blocking && d[1].line == 0);
-    assert!(d[0].label().starts_with("warning HELMSMAN-L1  a.st:2:1"));
+    assert!(
+        d[0].label()
+            .starts_with("warning HELMSMAN-L1 (holds the deploy)  a.st:2:1")
+    );
 }
 
 /// A first visit, nobody signed in: the box refuses the page's own reads
@@ -3772,8 +3825,8 @@ fn messy_main() -> String {
         "VAR_OUTPUT lamp : BOOL; END_VAR",
     )
     .replace(
-        "l(set := start, reset := FALSE);\n",
-        "if start then l(set := start, reset := FALSE); end_if;\n",
+        "lamp := l.q;\n",
+        "if start then lamp := l.q; else lamp := false; end_if;\n",
     )
     .trim_end()
     .to_string()
@@ -4401,6 +4454,71 @@ fn the_diagram_of_a_box_offers_assign_on_a_port_block_with_its_code_edits_off() 
     assert!(h.bv().projects.dirty());
 }
 
+/// "Chat about this" on a box (Nick, 2026-11-16): the diagram's menu has
+/// it though the code's edits are off, it collects a chip for the Agent
+/// tab and sends nothing, and the chip goes with the instruction.
+#[test]
+fn the_diagram_of_a_box_collects_a_block_for_the_agent_and_sends_nothing() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.wait(0.3);
+    let at = {
+        let v = h.bv().view.as_ref().expect("the diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, helmsman_diagram::NodeKind::Write { path } if path.eq_ignore_ascii_case("lamp"))
+            })
+            .expect("the lamp's block");
+        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    };
+    h.app.chrome.show(crate::editor::Pane::Code);
+    h.wait(0.2);
+    h.right_click(at);
+    assert!(
+        h.app.chrome.rect("diagram menu chat").is_some(),
+        "offered on a box"
+    );
+    h.press("diagram menu chat");
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.showing(crate::editor::Pane::Claude),
+        "the Agent tab opens"
+    );
+    let chips = h.bv().instruct.chips.clone();
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    assert_eq!(
+        (chips[0].name.as_str(), chips[0].file.as_str(), chips[0].line),
+        ("lamp", "main.st", 8)
+    );
+    assert_eq!(chips[0].text, "lamp := start;");
+    assert_eq!(chips[0].driven_by, vec!["start".to_string()]);
+    assert!(h.app.chrome.rect("chat chip 0").is_some());
+    // Chat about a signal by name, as the I/O rows will: a second chip.
+    let mut chrome = std::mem::take(&mut h.app.chrome);
+    h.bv().chat_about_signal("start", &mut chrome);
+    h.app.chrome = chrome;
+    assert_eq!(h.bv().instruct.chips.len(), 2);
+    assert_eq!(
+        (h.bv().instruct.chips[1].kind, h.bv().instruct.chips[1].line),
+        (crate::chat_about::Kind::Input, 3)
+    );
+    // The instruction goes with both, once.
+    h.bv().instruct.draft = "latch the lamp".into();
+    h.bv().send_instruction(&egui::Context::default());
+    assert_eq!(h.bv().instruct.chips.len(), 0);
+    let sent = h.bv().instruct.run.as_ref().expect("under way").asked.clone();
+    assert_eq!(sent.matches("<chat_about>").count(), 1, "{sent}");
+    assert!(
+        sent.contains("output `lamp` at main.st:8") || sent.contains("block `lamp` at main.st:8"),
+        "{sent}"
+    );
+    assert!(sent.contains("input `start` at main.st:3"), "{sent}");
+}
+
 #[test]
 fn an_operator_sees_the_items_off_and_nothing_is_written() {
     let b = Bench::new();
@@ -4665,4 +4783,366 @@ fn a_boxs_pane_layouts_answer_is_read_as_hostile() {
         bad && note.contains("at most 32") && note.starts_with("A was not kept"),
         "{note}"
     );
+}
+
+// ---- diagram edits on a box (card diagram-edit-box) ----
+
+/// One program file with an AND to change.
+const EDITME: &str = "\
+PROGRAM conveyor
+VAR_INPUT
+  start : BOOL;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+  horn : BOOL;
+END_VAR
+lamp := start;
+horn := start AND lamp;
+END_PROGRAM
+";
+
+fn edited() -> String {
+    EDITME.replace("start AND lamp", "start OR lamp")
+}
+
+/// Project `edit` made and deployed by an engineer's page, so the box runs
+/// the file as it stands.
+fn deployed_edit(b: &Bench, jar: &Jar) {
+    let mut a = page(b, jar, Some(("alice", ALICE)));
+    make(
+        b,
+        jar,
+        &mut a.projects,
+        "edit",
+        &[("main.st", EDITME), ("io.map", MAP)],
+    );
+    a.projects.deploy();
+    settle(b, jar, &mut a.projects);
+    assert!(
+        matches!(a.projects.deploy, Deploy::Done(_)),
+        "{:?}",
+        a.projects.deploy
+    );
+}
+
+/// A page of `who` on the running `edit` project with its diagram drawn.
+fn edit_page(b: &Bench, jar: &Jar, who: (&str, &str)) -> Harness {
+    let ctx = egui::Context::default();
+    let mut v = page(b, jar, Some(who));
+    let mut now = 0.0;
+    wait("the running project drawn", || {
+        v.step_all(&ctx, vec![], vec![], now);
+        pump(b, jar, &mut v, &ctx, now);
+        now += 0.1;
+        v.view.is_some()
+    });
+    let session = v.session.clone();
+    Harness::new(v, session)
+}
+
+impl Harness {
+    /// The middle of the header of the block computing `op`, on screen.
+    fn op_at(&mut self, op: &str) -> Pos2 {
+        let v = self.bv().view.as_ref().expect("a diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Op { op: o } if o == op))
+            .unwrap_or_else(|| panic!("no {op} block"))
+            .id;
+        let r = v.block_on_screen(n).expect("the block is drawn");
+        Pos2::new(
+            r.center().x,
+            r.min.y + (r.height() / 2.0).min(10.0 * v.cams[v.scope].zoom),
+        )
+    }
+
+    fn text(&mut self) -> String {
+        self.bv().projects.current().unwrap().text.clone()
+    }
+
+    /// Everything the page queued, answered by the box; the writes it sent.
+    fn deliver(&mut self, b: &Bench, jar: &Jar) -> Vec<PReq> {
+        let mut all = Vec::new();
+        for _ in 0..40 {
+            let reqs = self.sent();
+            if reqs.is_empty() {
+                break;
+            }
+            for q in reqs {
+                let a = b.send(jar, &q);
+                self.bv().projects.answer(q.call.clone(), &a);
+                all.push(q);
+            }
+        }
+        all.retain(|q| q.method != "GET");
+        all
+    }
+
+    /// Right-click the `from` block and change its operator to `to`.
+    fn change_op(&mut self, from: &str, to: &str) {
+        let at = self.op_at(from);
+        self.right_click(at);
+        self.press("diagram menu operator");
+        self.frame(vec![]);
+        self.press(&format!("diagram op {to}"));
+        self.frame(vec![]);
+    }
+}
+
+fn is_off(g: &crate::diagram_edit::Gate, why: &str) -> bool {
+    matches!(g, crate::diagram_edit::Gate::Off(w) if w.contains(why))
+}
+
+/// A gesture on a box is a typed edit: the open file changes, nothing is
+/// saved or deployed, one Undo takes it back, and the diagram (still the
+/// running program) takes no more gestures until the change is deployed.
+#[test]
+fn a_diagram_edit_on_a_box_is_an_unsaved_typed_edit_with_one_undo_step() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    deployed_edit(&b, &jar);
+    let mut h = edit_page(&b, &jar, ("alice", ALICE));
+    assert_eq!(h.bv().edit_gate(), crate::diagram_edit::Gate::On);
+    assert_eq!(h.text(), EDITME);
+    h.change_op("AND", "OR");
+    assert_eq!(h.text(), edited());
+    assert!(h.bv().projects.dirty(), "unsaved, as typing leaves it");
+    h.frame(vec![]);
+    assert!(h.app.chrome.rect("dirty").is_some(), "the header marks it");
+    // Nothing went to the box: no save, no deploy.
+    let sent = h.deliver(&b, &jar);
+    assert!(sent.is_empty(), "{sent:?}");
+    assert_eq!(b.json("/api/projects/edit/files/main.st")["text"], EDITME);
+    // The diagram still shows what runs, so it takes no more gestures.
+    let g = h.bv().edit_gate();
+    assert!(is_off(&g, "Save and Deploy, then edit from the diagram"), "{g:?}");
+    let at = h.op_at("AND");
+    h.right_click(at);
+    assert!(h.app.chrome.rect("diagram menu operator").is_none());
+    assert_eq!(h.text(), edited());
+    // One Undo is the whole gesture; the diagram is the file again.
+    h.chord(Modifiers::COMMAND, egui::Key::Z);
+    assert_eq!(h.text(), EDITME);
+    assert!(!h.bv().projects.dirty());
+    assert_eq!(h.bv().edit_gate(), crate::diagram_edit::Gate::On);
+}
+
+/// Save and Deploy are the person's: the file lands on the box as typed,
+/// the box sets the approval tier from the diff exactly as for the same
+/// text typed, and the audit names the engineer.
+#[test]
+fn a_diagram_edit_saved_and_deployed_lands_like_typing_with_the_same_tier() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    deployed_edit(&b, &jar);
+    // The same change typed, checked first on this project: its tier.
+    let approval = |project: &str| {
+        let q = PReq::json(
+            crate::box_projects::PCall::Check(project.into()),
+            "POST",
+            format!("/api/projects/{project}/check"),
+            &serde_json::json!({}),
+        );
+        let a = b.send(&jar, &q);
+        assert_eq!(a.status, 200, "{a:?}");
+        serde_json::from_str::<Json>(&a.body).unwrap()["approval"].clone()
+    };
+    let mut typed = page(&b, &jar, Some(("alice", ALICE)));
+    typed.projects.current_mut().unwrap().text = edited();
+    typed.projects.save();
+    settle(&b, &jar, &mut typed.projects);
+    let by_typing = approval("edit");
+    typed.projects.current_mut().unwrap().text = EDITME.into();
+    typed.projects.save();
+    settle(&b, &jar, &mut typed.projects);
+    assert_eq!(b.json("/api/projects/edit/files/main.st")["text"], EDITME);
+    // The diagram edit, saved from its page, gets the same tier and reasons.
+    let mut h = edit_page(&b, &jar, ("alice", ALICE));
+    h.change_op("AND", "OR");
+    h.app.chrome.show_files();
+    h.wait(0.3);
+    h.press("save");
+    let sent = h.deliver(&b, &jar);
+    assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
+    assert!(!h.bv().projects.dirty());
+    assert_eq!(b.json("/api/projects/edit/files/main.st")["text"], edited());
+    let by_diagram = approval("edit");
+    assert_eq!(by_diagram, by_typing);
+    assert_eq!(by_diagram["tier"], "logic", "{by_diagram}");
+    // Deploy goes the page's way: check, replay if wanted, deploy.
+    h.bv().projects.deploy();
+    h.deliver(&b, &jar);
+    let p = &h.bv().projects;
+    assert!(
+        matches!(p.deploy, Deploy::Done(_)),
+        "{:?} {:?}",
+        p.deploy,
+        p.diags
+    );
+    let audit = b.json("/api/audit?limit=1000");
+    let audited = |what: &str| {
+        audit
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["user"] == "alice" && e["detail"].as_str().is_some_and(|d| d.contains(what)))
+    };
+    assert!(
+        audited("file main.st saved (151 bytes)"),
+        "the save is audited as alice's"
+    );
+    assert!(
+        audited("deploy of project edit: applied (logic) by alice (engineer)"),
+        "the deploy is approved at the tier typing gets"
+    );
+}
+
+/// Each gesture is its own Undo step across a deploy, and the diagram
+/// takes the next gesture once the change runs.
+#[test]
+fn gestures_after_a_deploy_are_separate_undo_steps() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    deployed_edit(&b, &jar);
+    let mut h = edit_page(&b, &jar, ("alice", ALICE));
+    h.change_op("AND", "OR");
+    h.bv().projects.deploy();
+    h.deliver(&b, &jar);
+    assert!(
+        matches!(h.bv().projects.deploy, Deploy::Done(_)),
+        "{:?}",
+        h.bv().projects.deploy
+    );
+    // The box runs the change; the page reads it and redraws.
+    let mut now = h.time;
+    wait("the change running and drawn", || {
+        h.frame(vec![]);
+        let Harness { ctx, app, .. } = &mut h;
+        pump(&b, &jar, app.boxv.as_mut().unwrap(), ctx, now);
+        now += 0.1;
+        app.boxv.as_ref().unwrap().edit_gate() == crate::diagram_edit::Gate::On
+    });
+    h.wait(0.5);
+    let deployed = h.text();
+    h.change_op("OR", "AND");
+    assert_ne!(h.text(), deployed);
+    h.chord(Modifiers::COMMAND, egui::Key::Z);
+    assert_eq!(h.text(), deployed, "one Undo takes back the second gesture only");
+}
+
+/// A diagram edit whose save is stale ends where a typed edit's does: 409,
+/// the conflict named, the edit kept until reloaded.
+#[test]
+fn a_diagram_edit_saved_stale_is_a_409_like_a_typed_one() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    deployed_edit(&b, &jar);
+    let mut h = edit_page(&b, &jar, ("alice", ALICE));
+    // Another page saves the file first.
+    let jar2 = Jar::default();
+    let mut other = page(&b, &jar2, Some(("alice", ALICE)));
+    other.projects.current_mut().unwrap().text = format!("(* theirs *)\n{EDITME}");
+    other.projects.save();
+    settle(&b, &jar2, &mut other.projects);
+    assert!(!other.projects.dirty());
+    h.change_op("AND", "OR");
+    h.app.chrome.show_files();
+    h.wait(0.3);
+    h.press("save");
+    let sent = h.deliver(&b, &jar);
+    assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
+    let p = &h.bv().projects;
+    assert_eq!(p.conflict.as_deref(), Some("main.st"));
+    let (msg, err) = p.notice.clone().unwrap();
+    assert!(err && msg.contains("Someone else saved main.st"), "{msg}");
+    assert!(p.dirty(), "the edit stays until reloaded");
+    assert_eq!(
+        b.json("/api/projects/edit/files/main.st")["text"],
+        format!("(* theirs *)\n{EDITME}"),
+        "the other save stands"
+    );
+    // Reload brings the box's text, and the edit here is dropped.
+    h.press("bottom messages");
+    h.press("reload");
+    let sent = h.deliver(&b, &jar);
+    assert!(sent.is_empty(), "a reload only reads: {sent:?}");
+    assert_eq!(h.bv().projects.conflict, None);
+    assert_eq!(h.text(), format!("(* theirs *)\n{EDITME}"));
+}
+
+/// Below an engineer, or signed out, the gesture is off and says so, and
+/// nothing is sent.
+#[test]
+fn an_operator_or_nobody_cannot_edit_from_the_diagram() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    deployed_edit(&b, &jar);
+    let mut h = edit_page(&b, &jar, ("bob", BOB));
+    let g = h.bv().edit_gate();
+    assert!(is_off(&g, "only an engineer"), "{g:?}");
+    let at = h.op_at("AND");
+    h.right_click(at);
+    assert!(h.app.chrome.rect("diagram menu operator").is_none());
+    assert_eq!(h.text(), EDITME);
+    let sent = h.deliver(&b, &jar);
+    assert!(sent.is_empty(), "{sent:?}");
+    // Signed out: the same, in other words.
+    let g = BoxView::new().edit_gate();
+    assert!(is_off(&g, "Sign in as an engineer"), "{g:?}");
+}
+
+/// The box draws what runs. With the file changed by typing, a project of
+/// several program files, or another project open, the diagram is not the
+/// open file and its gestures are off, each with its own reason.
+#[test]
+fn the_diagram_is_off_when_it_is_not_the_open_file() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    deployed_edit(&b, &jar);
+    let mut h = edit_page(&b, &jar, ("alice", ALICE));
+    // Typed ahead of what runs.
+    h.bv()
+        .projects
+        .current_mut()
+        .unwrap()
+        .text
+        .push_str("(* typed *)\n");
+    let g = h.bv().edit_gate();
+    assert!(is_off(&g, "has changed since"), "{g:?}");
+    h.bv().projects.current_mut().unwrap().text = EDITME.into();
+    assert_eq!(h.bv().edit_gate(), crate::diagram_edit::Gate::On);
+    // A project of two program files.
+    let p = &mut h.bv().projects;
+    p.new_file("more.st");
+    settle(&b, &jar, p);
+    p.open_file("main.st");
+    let g = h.bv().edit_gate();
+    assert!(is_off(&g, "one program file"), "{g:?}");
+    let p = &mut h.bv().projects;
+    p.delete_file("more.st");
+    settle(&b, &jar, p);
+    assert_eq!(h.bv().edit_gate(), crate::diagram_edit::Gate::On);
+    // Another project open: the diagram shows the one running.
+    let mut keep = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut keep.projects,
+        "other",
+        &[("main.st", EDITME), ("io.map", MAP)],
+    );
+    let p = &mut h.bv().projects;
+    p.open_project("other");
+    settle(&b, &jar, p);
+    let g = h.bv().edit_gate();
+    assert!(is_off(&g, "not other, the project open in the editor"), "{g:?}");
+    // The gesture sends nothing and changes nothing.
+    let at = h.op_at("AND");
+    h.right_click(at);
+    assert!(h.app.chrome.rect("diagram menu operator").is_none());
+    let sent = h.deliver(&b, &jar);
+    assert!(sent.is_empty(), "{sent:?}");
 }

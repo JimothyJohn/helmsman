@@ -14,7 +14,7 @@
 //! POST   /api/projects/{p}/tests              token or session: run its requirement tests (test_*.st) in the simulation; nothing changes
 //! POST   /api/projects/{p}/requirements       engineer: {text, name?}: one requirement; the agent writes its test (an event stream, see [`super::requirements`])
 //! POST   /api/projects/{p}/replay             engineer: sim replay of deploying it (evidence a deploy can cite)
-//! POST   /api/projects/{p}/deploy             engineer: {replay?}: tests, build, apply through the approval policy, commit, hot-swap; a red test is named in the answer (`red`) and the audit trail, and refuses nothing
+//! POST   /api/projects/{p}/deploy             engineer: {replay?}: tests, build, apply through the approval policy, commit, hot-swap; a red test is named in the answer (`red`) and the audit trail, and refuses nothing; a blocking lint (`helmsman_iec::lint`) that no pragma overrides refuses it (422, `held`), and an override's reason goes to the audit trail
 //! GET    /api/projects/{p}/zip                the project as a .zip
 //! POST   /api/projects/{p}/zip[?replace=true] engineer: a .zip as project p (new, or in place of it)
 //! POST   /api/projects/{p}/import?file=F[&replace=true]   (.st, .xml, .L5X as ST; .eds kept as NAME.eds)
@@ -42,6 +42,8 @@
 //! the change's tier (role, and a sim replay where the policy wants one),
 //! compile, swap between scans, commit; a deploy that does not build
 //! changes nothing. Every call is audited.
+
+use std::fmt::Write as _;
 
 use helmsman_iec::{ImageSizes, spec};
 use serde_json::{Value as Json, json};
@@ -656,6 +658,7 @@ fn check(req: &Request, ctx: &Ctx, name: &str) -> Response {
                 "approval": tier,
                 "diagnostics": [],
                 "warnings": diags_json(&b.problems, "warning"),
+                "held": held(&b).iter().map(ToString::to_string).collect::<Vec<_>>(),
             });
             audited(ctx, req, 200, &body, &format!("{what}: checked, builds"))
         }
@@ -806,19 +809,55 @@ pub(super) fn built(ctx: &Ctx, name: &str) -> Result<Built, (u16, Json, String)>
 
 /// A project's problems as the API lists them, each `file`, `line`,
 /// `col`, `message` and a `severity`: `"error"` stops a build,
-/// `"warning"` never does (a RETAIN that is not kept yet, a layout file
-/// that does not read). A later lint adds an optional `id` and a
-/// `blocking` flag to a warning; a reader that does not know them
-/// ignores them.
-fn diags_json(ds: &[build::Diag], severity: &str) -> Vec<Json> {
+/// `"warning"` does not (a RETAIN that is not kept yet, a layout file
+/// that does not read). A lint finding (`helmsman_iec::lint`) also has its
+/// `id`, a `blocking` flag (a deploy refuses while one is set) and, when a
+/// pragma overrides it, the `overridden` reason; a reader that does not
+/// know them ignores them.
+pub(super) fn diags_json(ds: &[build::Diag], severity: &str) -> Vec<Json> {
     ds.iter()
         .map(|d| {
-            json!({
+            let mut j = json!({
                 "file": d.file, "line": d.line, "col": d.col, "message": d.message,
                 "severity": severity,
-            })
+            });
+            if let Some(id) = &d.id {
+                j["id"] = json!(id);
+                j["blocking"] = json!(d.blocking);
+            }
+            if let Some(r) = &d.overridden {
+                j["overridden"] = json!(r);
+            }
+            j
         })
         .collect()
+}
+
+/// The lint findings that hold a deploy of a built project: blocking and
+/// not overridden. Each as `file:line ID`.
+pub(super) fn held(b: &Built) -> Vec<&build::Diag> {
+    b.problems.iter().filter(|d| d.blocking).collect()
+}
+
+/// The overrides a deploy went out with, for the audit line: each lint id
+/// at its file and line with the reason the pragma gave. The reason is
+/// user text: [`clean`] escapes control characters and bounds it.
+pub(super) fn override_note(b: &Built) -> String {
+    let mut out = String::new();
+    let mut n = 0;
+    for d in &b.problems {
+        if let (Some(id), Some(r)) = (&d.id, &d.overridden) {
+            n += 1;
+            let _ = write!(
+                out,
+                "; {id} at {}:{} overridden: \"{}\"",
+                clean(&d.file),
+                d.line,
+                clean(r)
+            );
+        }
+    }
+    if n == 0 { String::new() } else { out }
 }
 
 /// After a deploy committed `snapshot`: records `name` as the running

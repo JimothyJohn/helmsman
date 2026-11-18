@@ -2,18 +2,19 @@
 
 Done cards were removed on 2026-11-06 (git history has them). Three sections up top: decisions only you can make, things only your hands can do, and what an agent builds next. The roadmap below is the long view.
 
-Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
-
 ## Open questions for Nick
 
 
-- [ ] **Keep `sha2` in the canvas for the spec's PDF fingerprint?** — #475 (spec mode on a box) records each PDF in `spec.md` by name, size and SHA-256, since a project file is text and cannot hold the PDF. Nothing in the canvas computed SHA-256, so it added `sha2` 0.11.1 with default features off: the version the box, its agent and the I/O crate already build, no new crate in Cargo.lock, and `wasm_deps` is green. Dropping it leaves name and size only, so two different PDFs of one name and size could not be told apart later.
-  options: keep | drop, name and size only
-  id: spec-pdf-sha2
+## Needs your hands
+
+- [ ] **Watch the IMPACT67's LEDs while a session switches it, and wire one output to one input** — Why it matters: the block was driven on 2026-11-16 with nothing on its ports and nobody looking, so no channel is confirmed and nobody knows what its outputs do when the controller goes away (after a Forward_Close its output assembly still read the last values written). Steps: (1) put an M12 jumper from pin 4 of port 0 to pin 4 of port 1 (or tell the session which channels you joined); (2) tell a session "watch the Murr with me": it sets port 0 pin 4 as an output, switches it, and asks what the channel LEDs do, then closes the connection and stops sending in turn and asks again.
+  needs: the block powered at its DHCP address (10.0.0.73 on 2026-11-16; a session finds it by ListIdentity)
+  result: the library entry's channels confirmed on a unit, and its question about outputs after a lost connection answered
+  est: 15m
+  difficulty: low
+  id: murr-outputs-watch
   asked: 2026-11-16
   by: claude-session
-
-## Needs your hands
 
 - [ ] **Run spec mode against a real model, in the simulation and on a box** — #471 and #475 are tested with scripted answers only; no model has yet read a scope of work and answered in the format (a `Why:` line, the PROGRAM with a comment on each input and output, one scenario a requirement, a `requirements` block). Paste a real scope of work into "From a spec…" in the Agent tab of the playground, then the same with a PDF on a box whose agent is online, and note what comes back: names, comments, how many requirements are tested, whether the retries are used up.
   needs: a scope of work or a product document you would really build from; a box with its agent reachable for the PDF half (the try box, started for this and stopped after)
@@ -27,6 +28,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 - [ ] **Deploy the relay so the Agent's edits and its one question go live** — Why it matters: the page on dev answers a long program with only the lines that change and asks one question while it works, but only where the relay serves those agents; the deployed relay does not yet, so the published page behaves as before. agent-relay #40 (merged to its dev when green) adds the demo's `edits`, `ask` and `check` agents; nothing in template.yaml changes. Steps: (1) promote agent-relay dev to its default branch; (2) deploy as usual (`scripts/deploy.sh`) with `RELAY_MODEL=deepseek/deepseek-v4.1-flash-1017` (decided 2026-11-16 from the ladder: 45 of 45, fastest and cheapest of the four, a dated snapshot) and `DemoAddressTurnsPerHour` raised from 40 to about 120: one instruction is now up to three turns (the question, the change, the check), so the old limit closes the free chat for everyone about three times sooner; (3) `curl -s -H "Origin: <the page's origin>" <demo url>/demo/v1/status` should list `"agents":["ask","check","edits"]`; (4) tell a session, which then runs the ladder against the deployed demo and looks at the card in a browser.
   needs: agent-relay #40 merged, your promote and deploy
   result: the published playground answers a one-line change to a long program in about a third of the time, and asks its question
+  notes: 2026-11-18: the same promote and deploy also serves helmsman/v12 and helmsman/playground-v6 (agent-relay #48, in its dev): the Agent writes one short comment above each part of a program, which the diagram shows as that section's name. A box asks for it with `--relay-agent v12` (it needs the v2 client, in dev since #506); the playground gets it when RELAY_DEMO_AGENTS maps `edits` to helmsman/playground-v6. v12 passed its live eval and v11 failed the same one as a control; playground-v6 has offline tests only.
   id: agent-edits-deploy
   asked: 2026-11-15
   by: claude-session
@@ -96,14 +98,16 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **Bring up the Novanta IMS Liberty MDrive over EtherNet/IP or Modbus TCP** — Why it matters: the first device on the bench that is not discrete I/O. A motor drive is where the device profile's "kinds" get decided (step (g) of `device-profiles`: a drive's enable, speed, position and fault as the same four channels whatever the vendor), and where a comms loss has to stop something that moves. PROFINET first is out (Nick, 2026-11-13), so this starts on the protocols plants run. What its files say (docs/devices/novanta-mdrive.md, read 2026-11-10): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1; its EDS is in the firmware zip. Steps: Modbus TCP as it ships (no vendor tool needed), read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested; then EtherNet/IP from its EDS, so one device compares two drivers; PROFINET later, if ever. Motion asks "cell clear?" once per session (hardware-guard).
-  needs: the MDrive on 192.168.3.x with its DC supply and a free shaft (it was due the week of 2026-11-10: is it here?); its part number and firmware version (2.4.0.7 or later); the Modbus register map from Novanta's manual
+  needs: the drive on the bench at 192.168.33.1 (the Studio reaches it through `sudo ifconfig en0 alias 192.168.33.10 255.255.255.0`, gone at a reboot)
   result: a device doc with citations, a profile and a library entry; an ST program that jogs and positions the axis and stops it on comms loss
   est: 2d
   difficulty: med
+  notes: 2026-11-16 night, on the bench unit (LMDCE853C, EtherNet/IP mode, identity revision 2.36, `LMDCM 6.013`): EtherNet/IP came first because that is the mode it arrived in. Done: the connection (docs/devices/novanta-mdrive.md "On the bench": a run/idle header its EDS does not declare, which `enip-io` now corrects from the refusal; it sends 1.3 to 1.5 times slower than the RPI it grants; it resets the TCP session after 2 to 3 s and keeps exchanging I/O; UDP 2222 only), the vendor's EDS resolving and connecting, a 20-minute hold, a slew at 5000 steps/s and a stop from the cyclic image, the library entry (helmsman-devices `devices/novanta/lexium-mdrive-ethernet/`). Found: the output assembly is not laid out as the manual says, and a silent controller does not stop a slew (both are questions above). 2026-11-17: the unit's mapping is known (Nick's photo of the Configuration Utility; docs/devices/novanta-mdrive.md has it, and it explains the move at the first Forward_Open). Decided (Nick, 2026-11-17, on the board): that the drive keeps slewing when the controller goes silent is accepted on the bench for now; before it is shown or left running unattended it needs a stop of its own (the utility's Halt Motion setting read back with Get, an MCode program, or a hardware input). Not explained, for later: a small MA through bytes 28..31 and over MCode did not move the drive (errors 25, 30). Left: the profile and the kinds (a drive's enable, speed, position, fault), MA and MR, the ST program with the fault path, and Modbus TCP for the comparison (the drive speaks one protocol at a time).
   status: blocked
   id: mdrive-bringup
   asked: 2026-11-10
   by: claude-session
+  notes: 2026-11-17: Nick on the comms-loss stop: accept it on the bench for now. A silent controller does not stop a slew on this unit (it stops on a Forward_Close and on run/idle going to idle); what its Halt Motion setting really holds was not read. Open again before the drive runs anywhere but the bench: an MCode program on the drive or a hardware stop.
 
 - [ ] **Bring up a Universal Robot over EtherNet/IP and Modbus TCP** — Why it matters: the first device with a large mixed image (floats, 32-bit registers, bit fields), so it tests what a profile can say about a value beyond on and off, and a robot is something customers already own. PROFINET first is out (Nick, 2026-11-13). Read 2026-11-10 (docs/devices/universal-robots.md): EtherNet/IP input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); Modbus TCP server on 502, function codes 1..6, 15, 16, general purpose registers 128..255, robot state from 256, every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values converted by hand), the unit id ignored. EtherNet/IP and PROFINET cannot be on together. URSim is no stand-in: users report its Modbus registers stuck, so this needs the robot. PROFINET (its GSDML is read, slots 1..10) only if a customer asks.
   needs: the robot on 192.168.3.x, its model and PolyScope version, EtherNet/IP enabled under Installation > Fieldbus; a cleared cell before anything moves
@@ -116,10 +120,11 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **Bring up the Murrelektronik IMPACT67 E DI8 DO8 (55086)** — Why it matters: every implicit-messaging finding so far is against one Moxa unit on one old firmware; a second vendor's block is what shows whether the EtherNet/IP driver is right or only right for that Moxa. A second unit also ends the contention for the E1213's single connection: the P4 owns one, a Studio box the other. What is already done without the unit (helmsman-devices `devices/murrelektronik/`, from its EDS and handbook, 2026-11-12): the 55086 is EtherNet/IP only, vendor 640, product code 55086, input instance 100 (4 bytes), output 112 (2 bytes), RPI 10 ms by default; its folder has the doc, an enip map and a `.device` profile. It ships at rotary 000, DHCP/BOOTP, so it is also the first device `box-dhcp-server` can address with nobody touching it. Left for the bench: power it, let it take an address, Scan, add by click, and record what its Forward_Open accepts.
-  needs: the block on 192.168.3.x with 24 VDC (US and UA on its 7/8" connector)
+  needs: `murr-outputs-watch` (a jumper and your eyes) for the channels
   result: the block found, added and driven from the library's profile with no hand-written map; its doc gains "On the bench"
   est: 4h
   difficulty: med
+  notes: 2026-11-16 night: the block that arrived is a **55089** (DIO8), not a 55086, at 10.0.0.73 by DHCP, revision 1.2. Done (docs/devices/murrelektronik-impact67-e.md, helmsman-devices `impact67-e-dio8-dio8`): identity and assemblies confirmed, the connection opened from the library's sizes and held 20 minutes at 10 ms, its setup sent as configuration data (`config=109 config_data=00ff00`, new in `enip-io`: out of its box it refuses instance 110 with 0x0119). Left: Scan and add by click from the canvas, a channel seen switching, what the outputs do on a lost connection.
   status: blocked
   id: murr-block-bringup
   asked: 2026-11-10
@@ -135,6 +140,15 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 ## Next to build
+
+- [ ] **Named start states for the simulation: set a machine up once, pick it again** — Nick, 2026-11-16: "the user should be able to rapidly configure the state of the machine for various scenarios manually and with the agent before starting." Built first (#493): an input set by hand while the program is stopped is what it starts with, the values outlive Stop, and a quiet line says nothing reacts yet. Decided by interview that day: this card follows, simulation only; a stopped box only reminds. Left: a start state gets a name ("part seated, guard open") and is saved in the project as a text file the diff shows, one `input = value` a line; the I/O tab lists them above Inputs and a click sets every input of one while the program is stopped (running: asked first, since it moves the machine); the Agent writes one on request, checked against the program's inputs and their types before it is offered. Open in the design: whether a start state also names kept values (a step number, a latch), which the panel cannot set today. The Agent's first half is built (2026-11-17, PR feat/agent-start-state with agent-relay `start-v1`): a field above the Inputs takes the state in words, the Agent proposes input values, and nothing is set until Set these; it works once the relay is deployed with the `start` agent, and it is not yet a saved, named state.
+  needs: #492 and #493 in dev; the Agent's part needs a relay profile with the new block (a new id, Nick's deploy)
+  result: a list of named start states in the I/O tab, saved with the project, that the Agent can add to
+  est: 8h
+  difficulty: med
+  id: sim-start-states
+  asked: 2026-11-16
+  by: claude-session 4a05a85d
 
 - [ ] **A spec run into the project that is open** — spec mode (#471, #475) always makes a new project; Nick's ask was to "parse and add it". Left out because a kept file (`spec.md`) cannot be saved one at a time: `Projects::save` on a box and `SimProjects::add_file` in the page take only names `file_name` knows, and a box has no atomic write of several files short of a whole-project zip. Shape: the same window with a project open offers "Add to this project"; the spec goes in as an instruction on the open program file (`Scope::File`), the review shows what changes (I/O added, requirements added or replaced), and Accept writes the file, the tests and the new section of `spec.md` together.
   needs: nothing
@@ -220,6 +234,34 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-13
   by: claude-session
   notes: 2026-11-13: built as #374 (draft). Its last CI run failed in helmsman-plc tests/agent.rs:2152 `an_unreachable_relay_still_gives_the_boxs_explanation_then_an_error`; not looked into yet. Then `gh pr ready 374 && gh pr merge 374 --auto --merge` (classifier-denied once).
+
+- [ ] **The library says what has not been proven on a unit, entry by entry** — Nick, 2026-11-17: an entry is finalized by the first user who implements the device, so until then the library has to flag that it has not been proven out and exactly what has not. Today that is spread over three places a reader has to know: no `checked_on` means "from documents", a point's `source` may end "confirmed on a unit", and `[[questions]]` and the README's "Not run" hold the rest. The two entries of 2026-11-16 show the gap: the IMPACT67 55089 has `checked_on` although no channel was ever seen switching, and the Lexium MDrive has it although its output layout as delivered is unchecked. Shape to build (my recommendation, yours to change): a `[proof]` table in `device.toml` with one line per thing a unit can prove (identity, connection, each point group, outputs on a lost connection, each protocol), each `proven` with date and firmware or `unproven` with why; `checked_on` stays as the date of the last unit contact and stops meaning "done"; `build-index.py` carries a summary (`proven: 3 of 7`) and the list of what is open into `index.json`; `build-review.py` already walks every claim and gets the same marks; the site's library table and check page show "proven on a unit / not yet: channels, outputs on a lost connection" instead of one date; AGENTS.md step 5 tells the first implementer's agent to turn `unproven` lines into `proven` ones in the pull request that reports them. Backfill: all 45 entries, most of them entirely unproven, generated from what each file already says.
+  needs: later (Nick, 2026-11-17); nothing else
+  result: anyone picking a device sees at a glance what a unit has shown and what is still only on paper, and the first implementer's pull request closes those lines one by one
+  est: 2d
+  difficulty: med
+  id: library-unproven-flags
+  asked: 2026-11-17
+  by: claude-session
+
+- [ ] **Configure a device by talking to an agent, not through the vendor's tool** — Nick, 2026-11-17: come up with ways to configure devices agentically in the device library, casually and conversationally, so nobody has to use the vendor's software. What exists: helmsman-devconf reads and writes a Moxa E1200's settings through its web console, with the box's engineer gate as the only way a unit is changed (`devconf-agent-tools` is its read-only agent side). What the bench of 2026-11-16 showed is reachable without any vendor tool: the MDrive answers MCode on TCP 503 beside EtherNet/IP (every register read; `SL 0` stopped it), and its EtherNet/IP assembly mapping, protocol choice and "Halt Motion" setting live behind Novanta's Configuration Utility, which talks to that same port; the IMPACT67 takes its channel setup as configuration data in the Forward_Open (built: `config_data=`), and its address mode and parameterization mode through its web server; every EtherNet/IP device has the TCP/IP Interface object for its address. Shape to explore first, as an interview: a `configure` recipe per library entry (which channel reaches the setting: a CIP attribute, a web form, a vendor text port; what each setting is called in the vendor's words and in plain words; what is safe to change live and what needs a restart), read by one generic agent tool that proposes a change in words, shows the before and after, and applies it only through the engineer gate; settings the recipe cannot reach are listed as "needs the vendor's tool" so the gap is visible. First targets, because the bench has them: the MDrive's mapping page over MCode (capture what the utility sends, a hand-off `tcpdump`), the IMPACT67's parameterization mode, any device's IP address over CIP.
+  needs: later (Nick, 2026-11-17); an interview on the shape before anything is built; the MDrive and the IMPACT67 on the bench
+  result: "make pin 4 of every port an output" or "put the drive's mapping back to the default" is said to the agent and done, with the change shown first and recorded
+  est: 1w
+  difficulty: high
+  depends: devconf-agent-tools
+  id: agentic-device-config
+  asked: 2026-11-17
+  by: claude-session
+
+- [ ] **`enip-io`: pick which of an EDS's exclusive owners to open** — Why it matters: from an EDS the driver opens the first exclusive owner. The IMPACT67 55089's EDS has four (without and with diagnosis, each for two configuration instances), and the first has no diagnosis bytes, so `eds=` alone cannot reach the short-circuit and overload bits; the library's profile works around it by giving the sizes itself. Shape: `connection=N` (the EDS's `ConnectionN`) beside `exclusive-owner` and `input-only`, refused when N is not an owner of the kind asked for, with the Devices tab's import offering the EDS's own connection names.
+  needs: later (Nick, 2026-11-17); nothing else
+  result: a device with several owning connections is driven from its EDS alone
+  est: 4h
+  difficulty: low
+  id: enip-eds-owner-choice
+  asked: 2026-11-17
+  by: claude-session
 
 - [ ] **A DHCP server on the box's device port: a block out of the box needs no vendor tool** — Nick, 2026-11-13: users won't preconfigure devices themselves, and PROFINET-first is out (EtherNet/IP and Modbus TCP are what plants run). Turck TBEN blocks ship at rotary position 600 (PGM-DHCP, a DHCP client until given an address) and Murrelektronik IMPACT67 E at 000 (DHCP/BOOTP, helmsman-devices `devices/murrelektronik/impact67-e-series.md`), so a box that answers DHCP on its own I/O network gets them addressed with nobody touching the device. Shape: a DHCPv4 server (RFC 2131 subset: DISCOVER/OFFER/REQUEST/ACK/NAK/RELEASE, plus BOOTP replies for blocks that only send BOOTP), std only like the other protocol crates, a pure state machine with the socket outside it (the `helmsman-profinet` pattern), a fixed lease per MAC kept in the state dir, addresses from a pool the project settings name. A new device's lease shows up as `found` in the Scan (ListIdentity from that address, matched to the library by `cip=`), and the map line the box suggests is `mac=` (`helmsman_io::resolve`), so the lease can move without the project changing. Off by default and per interface: decision (4) of `device-profiles` says the I/O network may be IT's, and a second DHCP server on a plant network is an outage. Before it answers anything it listens for another server's OFFER (sends one DISCOVER of its own) and refuses to start if one exists, says so on the Devices tab, and stops if one appears later. Tests: hostile packets (truncated, option overflow, wrong magic cookie, a flood of DISCOVERs with random MACs against pool exhaustion), the rogue-server check, lease persistence across restarts, and one bench script that gives a TBEN out of the box its address (auto mode refuses LAN listeners: the bench run is Nick's).
   notes: 2026-11-13: the server itself is crate `helmsman-dhcp` (feat/dhcp-server): the message, the server state machine, the lease file and `guard` (the probe and the other-server check), with property tests; the property test found the pool's take-back handing out another client's reservation, fixed with its regression. Left: the box half (UDP 67 on the named interface, the probe before serving, the lease file in the state dir, the settings and the Devices tab's word for a refused start), then the Scan's `found` from a lease and the `mac=` suggestion.
@@ -346,11 +388,10 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   est: 2d
   difficulty: med
   depends: agent-on-box
-  notes: 2026-11-16: the relay now serves helmsman/v8, v9 and v10 (harness profiles, v2 sessions only); a box still has no /v2 client, so its default stays v7 and `propose_device_profile` (v10) is not reachable live from a box. Spec mode (#475) went through v7's chat for that reason.
+  notes: 2026-11-17, built (PR on feat/relay-v2-client): the box's v2 client (helmsman-agent session.rs and the v2 loop in agent.rs; docs/relay-protocol-v2.md vendored from agent-relay 26cd6dc9) and `--relay-agent v8`..`v11` on relay-held sessions; the chat route asks `GET /v1/agents/{agent}` once for the profile's `protocol` (a bare `v8` is retried as `helmsman/v8`), v7 and older stay on v1 and the default is still v7. Documents the relay stored are saved as drop-ins; a lost session is reopened once; the owed step goes first on the next message. Tested against a loopback relay scripted from the protocol doc (tests/session.rs, tests/agent.rs): no real relay has answered this client. Left: a bench run against the deployed relay (Nick's, relay card relay-deploy-v2), then v8 as the default; the model is not told a saved document's drop-in id; the MCP `fetch_document` route is still v1's; sessions are not deleted when a chat is dropped (7 days on the relay). agent-relay PR #7 merged 2026-11-07; spec mode (#475) went through v7's chat.
   id: relay-v2-client
   asked: 2026-11-05
   by: claude-session
-  notes: agent-relay PR #7 merged on 2026-11-07. Checked 2026-11-13: the relay's agents/helmsman has v1..v7 and explain-v1/v2, no v8, so nothing serves it yet (relay card relay-deploy-v2).
   status: ready
 
 - [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.
@@ -551,24 +592,6 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
 
-- [ ] **PLCopen guideline lints in the checker, the first 6-8** — in `crates/helmsman-iec/src/check.rs` as `Diagnostic`s with stable IDs (`PLCOPEN-CP<n>` where the guideline has a number, `HELMSMAN-L<n>` otherwise), on the warnings path #346 built (the check answer's `warnings`, the canvas rows and the CLI lines; its parser already reads an `id` and a `blocking` flag), fed into the agent's retry message in `verify::next` beside compile errors. The picks (INVESTIGATION.md §1): an FB instance called inside a conditional (the TON-inside-IF bug), an output written in more than one place, a variable read before it is assigned with no initial value, `=` or `<>` on REAL, a FOR variable or its bounds changed in the body, unused variables and unreachable code, recursion. Decided (Nick, 2026-11-07): every lint is shown and goes to the agent; the first two block "Use this code" and Deploy the way a red requirement test does; a blocking lint is overridden on its line by a pragma with a reason (`{lint: off CP-x "imported, the branch is the enable"}`: the lexer skips `{ }` pragmas today, so it has to keep this one), and the override is written to the audit trail with the reason. The others stay advisory until `st-corpus` shows how noisy they are. Source: the PLCopen Coding Guidelines v1.0 PDF, a free download from plcopen.org (checked 2026-11-08, no login: `https://www.plcopen.org/download_file/force/ff60e817-eee5-442d-b718-a357a7279c7e/342/`); a docs/SOURCES.md entry with the rule number and page per lint ID. iec-checker in docker as a dev-time cross-check (both tools flag the same corpus files) is optional.
-  result: the agent's first retry already knows about the timer-in-IF and the double-written output; an engineer sees why a draft is held, and can override with a reason on record
-  est: 3d
-  difficulty: med
-  id: st-lints
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **STRING[n], then typed asserts** — fixed-length `STRING[n]` (default 80 as the standard), with concatenation, LEN, LEFT/RIGHT/MID, CONCAT, FIND, comparisons and the conversions, bounded so the scan stays bounded and the edge node still builds (no_std: no heap). WSTRING later. Then the TcUnit idea from §5: `ASSERT_EQ_<TYPE>(Expected, Actual, Message)` (one block per type, no generics) so a red requirement test reads "speed was 40, expected 50 at 3.2 s" in the Requirements tab and in the agent's retry message. Oracle cases, property tests (every length boundary, invalid UTF-8 refused at the lexer), relay profile id.
-  result: messages, recipe names, device IDs and OPC UA / webhook payloads can be written in ST; a failed test says what it saw
-  est: 4d
-  difficulty: high
-  depends: st-var-in-out
-  id: st-string
-  asked: 2026-11-08
-  by: claude-session
-  status: ready
-
 - [ ] **Process-control library: 10-15 blocks with tests** — in `crates/helmsman-iec/src/library.st`, written here (OSCAT's license is unverified and it leans on pointers): `PID` with anti-windup and bumpless manual/auto transfer, `RAMP`, `HYST`, `SCALE` (raw to engineering units, using the signal's `unit`), `LIMIT_ALARM`, `FILTER_PT1`, `DEBOUNCE`, `PULSE_COUNT` and a rate, sequence helpers. Decided (Nick, 2026-11-08: `st-library-names`): OSCAT's pin and block names where they exist, the standard's otherwise, no aliases; the plain-words explanation of every block and pin goes in its tooltip and its help page, the way the UI rule "tooltips on everything" already works. Each block gets requirement tests of its own, the non-IEC ones are marked in the docs as `BLINK_PATTERN` is, and the agent's profile gets the list (a new id).
   result: an analog loop the agent writes calls a tested PID instead of a hand-rolled PI with its own windup bug
   est: 4d
@@ -602,6 +625,15 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   id: relay-profile-dialect-2
   asked: 2026-11-15
   by: claude-session (board run)
+
+- [ ] **Strings as box signals** — `STRING[n]` is in the language (card `st-string`) but only inside a program: `Program::ports()` skips a STRING port, so it is no signal. Left for here, each with the skip it has today: `/api/signals` and the values stream, trend records, OPC UA, `RETAIN` (state.rs format; the checker refuses RETAIN on a string and names this card), I/O binding, `helmsman_io::Value`, nodecore `SignalValue`, helmsman-sim and its panel controls, and a requirement test sharing a STRING port with its program (`spec.rs` only shares ports `ports()` lists, so `ASSERT_EQ_STRING` can compare text the test builds but not a program output). Also the playground's `SYSTEM` prompt (helmsman-canvas/src/claude.rs, "Not supported: STRING and WSTRING") and a new relay profile id that tell the agent STRING, ASSERT_EQ_* and the string functions exist; a served profile never changes, so that is a new id in ../agent-relay.
+  needs: your call on the signal type for text (a bounded string of at most 255 bytes, as in the language), then a session in ../agent-relay for the profile and your deploy
+  result: a program's text outputs show on the desk, in trends and over OPC UA, survive a restart, and a requirement test reads them; the agent knows the syntax
+  est: 4d
+  difficulty: high
+  id: st-string-signals
+  asked: 2026-11-17
+  by: claude-session
 
 ## From user feedback: plan for later
 
@@ -692,27 +724,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 5: on a box** — the same gestures on a box, on only for an engineer (`writable()`) and only while the diagram shows the open buffer, not the running module; otherwise off with a tooltip saying why. Nothing new on the box: Save and Deploy go through the existing policy, which sets the tier from the diff.
-  result: diagram edits on a Pi land like typed edits, approval and audit unchanged
-  notes: box_projects_tests: edit, Save, the stale-save 409, against the real API. A diagram edit runs on a box only after Deploy, the same as typing.
-  est: 4h
-  difficulty: low
-  depends: diagram-edit-canvas
-  id: diagram-edit-box
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
-
-- [ ] **Diagram edits 6: docs** — amend `canvas-edit-scope` in docs/ARCHITECTURE.md (the live ST view section: the diagram now writes ST through checked splices), docs/UI.md, and a help page in the floor-engineer voice.
-  result: the docs say what the diagram can change and how it reaches the code
-  est: 2h
-  difficulty: low
-  depends: diagram-edit-box
-  id: diagram-edit-docs
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
-
 - [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
   result: building new logic from the diagram, not only changing it
   notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
@@ -730,42 +741,6 @@ Built: n-input gates, the fold layer (`helmsman_diagram::fold`) with the canvas 
 chips and idioms are on as the diagram opens; arms, sections and output
 cards fold on request and the choice is kept in `diagram.layout`.
 
-- [ ] **A relay profile that writes section comments** — the diagram names a run of statements by the comment alone on its line above it (`fold::structure::sections`). A new profile id in ../agent-relay whose prompt asks for one short comment above each part of a program (a served profile never changes).
-  result: programs the Agent writes open with their parts named on the diagram
-  est: 2h
-  difficulty: low
-  id: relay-profile-sections
-  asked: 2026-11-16
-  by: claude-session
-  status: ready
-
-
-- [ ] **Outputs view: one card per output, a tap lights its path on the diagram** — decided 2026-11-16: a second way to look at the same program, not a fold (an output's logic is usually spread over statements that are not next to each other, and one statement cannot sit inside two cards). A view beside the program tree with one card per output: its name, its live value and the signals it finally depends on (`View::drivers` gives them). A tap goes to the diagram with that output's path lit. The diagram itself stays in source order.
-  result: "what drives each output" has an answer at a glance
-  est: 6h
-  difficulty: med
-  id: diagram-output-cards
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
-- [ ] **Permissive table: an OR of ANDs as rows of conditions** — one row per term, one cell per signal (must be on, must be off). Live: the row that holds is lit, and when the output is off each row marks the cell that stops it. `FoldKind::Table` exists and nothing makes or draws one. The rule is a fold within a statement over an n-input OR and the n-input ANDs that feed it; drawn as a plain fold it would lose which signal belongs to which row, so it needs its own drawing and its own size, as the state block does (build the sizing once for both).
-  result: an interlock reads as a table and says what is missing
-  est: 1d
-  difficulty: high
-  id: diagram-permissive-table
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
-
-- [ ] **Zoom picks the level of detail** — far: every section and arm drawn as one block with its live state; middle: a statement as one line; near: the blocks. Sections and arms fold on request today (`Viewer::set_fold`); this folds them by zoom instead and opens nothing the reader folded by hand. The middle level is new: one fold per statement titled with its text.
-  result: a large program is readable at any zoom
-  est: 6h
-  difficulty: med
-  id: diagram-semantic-zoom
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
 
 ## Product vision (interview 2026-10-29)
 

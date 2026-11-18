@@ -189,6 +189,16 @@ impl FakeRelay {
                         );
                         continue;
                     }
+                    // Which protocol the agent speaks: answered apart from the script.
+                    if req.head.starts_with("GET /v1/agents/") {
+                        let b = json!({"version":"helmsman/v1","protocol":1}).to_string();
+                        let _ = write!(
+                            s,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                            b.len()
+                        );
+                        continue;
+                    }
                     lock(&seen).push(req);
                     let reply = script.next().unwrap_or_else(|| {
                         Reply::Status(400, json!({"type":"error","error":{"type":"invalid_request","message":"script exhausted","retryable":false}}))

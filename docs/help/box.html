@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="on-a-box">On a box</h1>
 <p>A box is a controller on the machine's network. It serves this app
@@ -103,6 +103,29 @@ commissioning and troubleshooting; the audit log records each one.</p>
 <kbd>Shift</kbd> <kbd>F</kbd> to force it (a BOOL flips, a number's
 field opens for the value), and <kbd>Alt</kbd> <kbd>Shift</kbd>
 <kbd>U</kbd> releases every force. Both are in the Edit menu.</p>
+<h2 id="editing-from-the-diagram">Editing from the diagram</h2>
+<p>Signed in as an engineer, the diagram's right-click menu and the
+double-click on a constant work on a box too (see <a
+href="editor.html">The Editor</a>, Change it). A change goes into the
+code open in the editor and nothing else: it is not saved, not deployed
+and nothing is sent to the box. The file shows as unsaved, and one
+<kbd>Ctrl</kbd> <kbd>Z</kbd> takes the change back.
+<strong>Save</strong> and <strong>Deploy</strong> stay yours, and the
+approval policy treats the change exactly as it treats the same change
+typed.</p>
+<p>The diagram shows the program the box is running, so it takes one
+change at a time: after a change its gestures are off until the change
+runs on the box (Save and Deploy, and the approval if the policy asks
+for one) or you undo it. They are also off:</p>
+<ul>
+<li>for anyone who is not signed in as an engineer;</li>
+<li>when the project open in the editor is not the one the box
+runs;</li>
+<li>when the code in the editor has been typed on since it was
+deployed;</li>
+<li>in a project with more than one program file.</li>
+</ul>
+<p>Each time the note where you clicked says which of these it is.</p>
 <h2 id="the-trend">The trend</h2>
 <p>The Trend tab opens with the box's own history of each pinned signal,
 the last ten minutes, then streams. The window opens on 30 s and widens

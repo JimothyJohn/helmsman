@@ -76,7 +76,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-devconf` | Configuration of third-party devices over their own configuration protocols, std only with no dependencies: `moxa_e1200` is the Moxa ioLogik E1200 web console (HTTP client, form and export readers, export / form / set / restart / import / change-password) and `moxa_e1200::sim` (feature `sim`) is a simulated console for tests. A library for now: nothing in the box calls it yet. | built: against its simulator only; the real console was mapped by hand (2026-11-12) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
-| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
+| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, and v2 relay-held sessions for harness profiles; HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
@@ -230,7 +230,23 @@ scan; the scheduler bounds how often.
   is a link error: the driver closes the connection (releasing exclusive
   ownership) and reopens it with the outputs it held from the first packet.
   A point past an assembly or a value its format can't hold is a point
-  error. Behind helmsman-io's `enip` feature, which helmsman-plc's `enip-io`
+  error. What two more vendors' devices asked of it on the bench
+  (2026-11-16, docs/devices/murrelektronik-impact67-e.md and
+  novanta-mdrive.md): `config_data=HEX` sends the configuration
+  assembly's bytes in every `Forward_Open` (an EDS connection that wants
+  configuration gets the EDS's parameter defaults unless the map gives
+  its own), for a block that takes its channel setup from the
+  controller; a `Forward_Open` refused over a size that is off by
+  exactly the run/idle header is tried again with the header the device
+  asks for, once the device's own assembly has been read and is as long
+  as the connection says (an EDS with the wrong real-time format still
+  connects); outputs written since the last packet go out before the
+  `Forward_Close`, so the safe values of a box that stops arrive; a
+  device that resets the idle TCP session keeps its link, and its
+  connection is closed over a new session when the driver goes; O->T
+  packets are paced on deadlines. `cargo run --release -p helmsman-io
+  --example enip_soak -- HOST --param ... --seconds N` holds a device
+  for a while and counts lost links. Behind helmsman-io's `enip` feature, which helmsman-plc's `enip-io`
   feature turns on: in the default build since the real E1213 passed the
   bench (2026-11-02, TODO.md `e1213-bench`). A helmsman-plc built without
   it refuses a box map naming `enip-io` as "not in this build"
@@ -943,6 +959,77 @@ failed attempts, the Agent's words), the scenarios kept as test files;
 Undo restores the revision before it. The tab shows only the instruction
 box, Send or Stop, Undo, and a status line with the reason.
 
+"Chat about this" (`chat-about-this`, Nick 2026-11-16, `chat_about.rs`)
+makes the diagram something to point at. A right click on a block has the
+item, on the page and on a box (a box's menu holds it with the code's
+edits shown off); an input's or output's row will call
+`chat_about_signal(name, chrome)` on either view. Choosing it sends
+nothing: it opens the Agent tab and adds a chip to `Instruct::chips`,
+drawn above the instruction box (`instruct::chips_ui`: wrapped by hand
+and cut to the column, an x on each, at most eight, none twice). A chip
+holds the name, kind, file:line, the statement (cut at 40 lines or 2000
+characters) and the named blocks wired to and from it, traced through the
+operators between (`chat_about::of_node`, `of_signal`; names spelled as
+the files spell them). When the instruction is sent the chips go with it as
+one `<chat_about>` envelope after `<requirement_tests>`
+(`chat_about::envelope`, defanged with the other envelopes, which now
+include `chat_about`), stay in the retries of that instruction, and are
+then empty.
+
+What the Agent's last change did is marked on the diagram
+(`Viewer::agent_change`, against the baseline the host keeps): the blocks
+it added are outlined green, and the ones it removed are red. A removed
+block whose old place is free on the diagram drawn now is a ghost there,
+with the old wires between two such ghosts. One whose old place is under
+a block drawn now would lie half over it, a little off, so it is a small
+red tag over that block's top right corner instead (`st_view::hosts`,
+`draw_ghosts`; Nick, 2026-11-17): `was = 1` on a block the change added
+(what took its place), `removed = 1` on any other, two names at most and
+a count of the rest.
+
+Selecting blocks (Nick, 2026-11-16, `ui_tests/multi_select.rs`) is the
+other way to point. `Viewer` keeps a selection beside `pick`: blocks of
+the diagram (a fold drawn as one block selects all it holds), cleared with
+`pick` on a new scope or a fold change and gone with the viewer when the
+source changes. A primary drag that starts on empty space (not on a block,
+a region's label or an input pin) draws a rubber band; on release the
+blocks it touches replace the selection, or join it with Shift or
+Ctrl/Cmd held. Shift or Ctrl/Cmd and a click toggles a block and does not
+pick it; a plain click on a block picks it and makes it the whole
+selection, and a plain click on empty space or Esc clears it (Nick,
+2026-11-17). So does a click anywhere off the diagram
+(`app::clicked_off_the_diagram`, after the frame is drawn), except in the
+Agent tab and on its tab button, where the selection is being used: its
+chips, and the instruction typed about it. Only a released click changes
+the selection: a press that becomes a drag (a block moved, the view
+moved, a band) leaves it as it was, and while a band is being drawn the
+blocks it touches so far are drawn selected (`Viewer::selected_live`).
+The proposal review's diagram has the same gestures (`review_view::select`:
+click, band, Shift or Ctrl, Esc, a click off, the middle button or Space
+to move the view), kept with the widget's state; nothing reads its
+selection yet. Esc is left alone while a menu or
+popup, a note, a modal or a field with focus has it (`Viewer::menu_open`,
+set by the host, plus egui's own state at this and the last frame, since
+panels drawn before the diagram let go of their focus first). The view no
+longer pans by dragging empty space: a middle-button drag, or any drag
+with Space held, does, and the arrow keys and W A S D as before (the wheel
+zooms). The selection is the Agent's focus: each frame the host makes
+`Instruct::focus` (`chat_about::focus_of`, kept while the selection, the
+collected chips and the diagram text are what it was made for) one chip
+per selected statement, none that is collected already, as many as
+`MAX_CHIPS` leaves after the collected ones, with `more` counting the
+statements left out. They are drawn after the collected chips in the
+selection's blue, their x deselects (`Focus::off`, taken by
+`chat_about::apply_off`), and an instruction carries them in the same
+envelope, which says how many more are selected and not included. The
+selection stays through the send. Selecting changes no tab and sends
+nothing.
+
+A block's lines are placed through the project's `locate`
+only while the diagram is of the deployed text; on a box, through the
+build's `(* file *)` headers when that project is the one running, else
+the one program file that is the running source.
+
 The transports differ. In the page, `claude.rs` sends it to the Messages
 API with the playground's system prompt, the failed answers of the same
 instruction as earlier turns. On a box, `box_agent.rs` sends it as one
@@ -1310,6 +1397,61 @@ below) never stops the program, since such code compiled
 - A cold restart from the API resets RETAIN too (IEC 61131-3's cold
   restart). Not yet: RETAIN inside a function block type, and `%M`
   retention.
+
+## Strings (`st-string`, built)
+
+`STRING[n]` (1 to 255 characters; a bare `STRING` is `STRING[80]`) is part
+of the language inside a program: variables of every section (including
+struct members, array elements, function block members, `VAR_GLOBAL` and
+function results), single-quoted literals with the `$` escapes (`$$ $' $L
+$N $P $R $T`, `$HH` for any byte), assignment, the six comparisons, `LEN`,
+`LEFT`, `RIGHT`, `MID`, `CONCAT` (two or more), `FIND`, `INSERT`,
+`DELETE`, `REPLACE`, and `X_TO_STRING` / `TO_STRING` / `STRING_TO_X` for the
+numeric types and BOOL. `WSTRING` is refused with a diagnostic. Code in
+`helmsman-iec`'s `strs.rs` (the functions), `lexer.rs` (literals), `check.rs`
+(types, scratch sizing) and `interp.rs`.
+
+- **Storage.** A string does not make `Value` bigger or non-`Copy`. It is a
+  fixed region of the same slot array as everything else: `ceil((n+1)/16)`
+  slots, each holding 16 bytes (a `Value::Int`), the first byte the length,
+  the rest the characters, everything past the length zero. So a struct or
+  array copy, a by-value argument, a function block instance and a hot swap
+  carry strings with no special case, and two equal strings are equal slot
+  for slot. (The first design put the bytes in a separate store beside the
+  slots; packing them into slots was chosen because every existing move
+  already copies slots.)
+- **Expressions.** A string-valued expression (a call, a conversion) is
+  evaluated into a scratch region sized at check time from its worst case,
+  after the program's frames in `mem_init`. Scratch is 64 KiB at most per
+  program: more is a compile error, not a run-time fault. Nothing in the
+  scan path allocates: the functions work in stack buffers of 255 bytes.
+- **Truncation, not faults.** Assigning, passing by value and returning cut
+  the text at the destination's declared length (ruSTy does the same:
+  oracle `strings_agree_with_rusty`). A position or count outside the string
+  selects nothing or everything to the end; `FIND` answers 0 when there is
+  no match. Text that is no number converts to 0, FALSE or 0.0; spaces
+  around it are ignored and a fraction or exponent is cut toward zero for
+  an integer type, as ruSTy reads it (the oracle test pins each form).
+  Comparison is by byte value, a prefix sorting first.
+- **Budget.** String work charges the instruction budget by bytes handled, so
+  a loop of `CONCAT`s ends in `Fault::Watchdog`.
+- **Characters.** One byte each. The lexer refuses a literal with a
+  character outside printable ASCII (write other bytes as `$HH`), invalid
+  UTF-8, an unterminated literal, a bad escape, or more than 255 bytes.
+- **Not signals yet (card `st-string-signals`).** A STRING port works inside
+  its program but `Program::ports()` skips it, so it is no box signal, not
+  in `/api/signals`, the values stream, trends, OPC UA, or bound to I/O or a
+  test's shared ports; `RETAIN` on a string is a compile error that names the
+  card. `Program::get_str` / `set_str` and the trace's text accessor read
+  and write one by path; `Program::get` does not return it.
+- **Typed asserts.** `ASSERT_EQ_BOOL`, `_INT` (any integer type, as LINT),
+  `_REAL` (any real, as LREAL, with a `TOLERANCE` input; a NaN fails),
+  `_TIME` and `_STRING` in library.st keep ASSERT's outputs and latch what
+  the first failure saw (`GOT`, `WANT`, `WHAT` from the `MESSAGE` input).
+  `spec.rs` turns that into `c failed at 3.20 s: speed was 40, expected
+  50 (...)`; a plain `ASSERT`'s text is unchanged. A test can compare text
+  it builds itself, but cannot read a program's STRING output until the
+  signals card shares STRING ports.
 
 ## Box API (`box-api`, built)
 
@@ -1760,15 +1902,42 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   `warnings` (an older box has no such field and the canvas reads none),
   `severity` `"warning"` here and `"error"` on `diagnostics`. The ST
   lints (`st-lints`) add an optional `id` and a `blocking` flag to a
-  warning; the canvas already reads both (`projects::Diag`) and a reader
-  that does not know them ignores them. The canvas lists errors first
+  warning, and an `overridden` reason when a pragma lifts it; the canvas
+  already reads the first two (`projects::Diag`) and a reader that does
+  not know them ignores them. The canvas lists errors first
   then warnings under the editor (a warning with the word `warning`
   before it and the warning colour), marks a warning line with a thick
   underline and no red ground, and logs them as one Messages warning;
   the browser simulation does the same from `Session::warnings`. A
-  deploy takes no warnings into account, and the deploy route's answer
-  does not list them (the check before it does). `POST
-  /api/proposals/check` (a draft) does not list them yet.
+  deploy takes no warnings into account, except a blocking lint (below),
+  and the deploy route's answer does not list them (the check before it
+  does). `POST /api/proposals/check` (a draft) does not list them yet.
+- **The lint pass** (`st-lints`, `helmsman_iec::lint`, docs/help/lints.md):
+  a pass over the parsed syntax tree, apart from the checker (so a source
+  that does not compile still lists what it can), that gives each finding
+  a stable id (`PLCOPEN-CP<n>` / `PLCOPEN-L<n>` where the PLCopen Coding
+  Guidelines number the rule, `HELMSMAN-L<n>` otherwise; docs/SOURCES.md
+  has rule and page), a position and a `blocking` flag. Two block:
+  `HELMSMAN-L1` (a function block instance called inside a condition) and
+  `PLCOPEN-CP12` (an output written in more than one place). A pragma
+  `{lint: off ID "reason"}` on the finding's line overrides one: it stays
+  listed, advisory, with the reason. The pass reads pragmas from the
+  source text, so the lexer is untouched. Three consumers: `build_noted`
+  adds the findings to a module's problems (`Diag.id`, `blocking`,
+  `overridden`), and `POST /api/projects/{p}/deploy` refuses with 422
+  (`held`, the findings, how to override) while one blocks, before the
+  approval path and with nothing changed; the audit line of a deploy that
+  went out with an override names the id, file, line and reason (user
+  text, escaped and bounded by `clean`). `verify::check` adds the
+  findings an Agent answer introduces (those the project did not already
+  have): a blocking one is a failure that holds the answer like a compile
+  error, the rest go to the retry message like a red test and are a
+  warning after the retries. The browser simulation lists them in its
+  rows and refuses its Deploy for a blocking one. A box's agent path has
+  no twin of `verify::check` (card `warnings-box-gaps`): a box shows the
+  findings in its check answer and refuses a deploy, and nothing more.
+  Requirement tests (`test_*.st`) are not linted, and an `ASSERT` call
+  is never flagged by L1.
 - **ZIP** (`project::zip`, in the `helmsman-project` crate since the
   simulation uses it too; hand-written on APPNOTE 6.3.10; DEFLATE through
   `miniz_oxide`, already in the lockfile): a download is the files
@@ -2119,6 +2288,50 @@ in `relay_usage`; the box treats it as a label.
   jittered). Budgets per message: 24 model turns, 200k output tokens, 16
   tool calls per turn, 15 minutes; a spent budget leaves the tool results
   last, so the next message continues.
+- **Relay-held sessions (protocol v2, `relay-v2-client`).**
+  `--relay-agent v8` (and v9 to v11, the harness profiles) puts the
+  conversation in the relay (`docs/relay-protocol-v2.md`,
+  `helmsman-agent/src/session.rs`, the v2 loop in `agent.rs`). Which
+  protocol an agent speaks is the relay's answer: the chat route asks
+  `GET /v1/agents/{agent}` once and keeps the `protocol` it names (a bare
+  name the relay does not know is asked again as `helmsman/{name}`, since
+  the aliases stop at `v7`); v7 and older answer 1 and run exactly as
+  above. The box opens a session (`POST /v2/sessions`) and keeps only its
+  id in the chat's `Conversation`; each message and each step sends new
+  input only: `user`, `tool_results` or `continue`
+  (`POST /v2/sessions/{id}/steps`). The stream's text goes to the chat
+  panel in the same `/api/chat` events, so the canvas is unchanged; tools
+  the relay ran (`harness_tool`) show as a call and a result "run by the
+  relay". The step ends in `harness_yield`: `tool_use` names the client
+  tools, which run through the same executor and `<box-data>` envelope
+  (a relay tool named in a yield is answered unrun, an unknown name too,
+  at most 16 run per step, at most 64 named), and their results go back
+  as one `tool_results` input; `continue` goes on; `end_turn`,
+  `max_tokens` and `stop_sequence` end the message, `refusal` runs
+  nothing. The box's 900 KiB history cap and its output-token budget do
+  not apply here (the relay compacts); the step count (24) and the time
+  (15 minutes) still bound one message. A message that stops before its
+  input is sent (a budget, a relay failure) leaves that input owed: it
+  goes first on the next message.
+  A `harness_document` (`fetch_document` stored a manual or an EDS) is
+  downloaded with `GET /v2/docs/{id}/raw` and kept as a drop-in under the
+  v1 fetch's rules (the kind's size cap, the SHA-256 the relay named, a
+  name the box accepts); anything else is refused in a chat line ("not
+  saved to the project: ...") and nothing is stored. The id must be `d` and
+  16 hex digits before it goes in a path. The model is not told the
+  drop-in's id (the relay's own `doc_read` reads the document); the drop-in
+  is for the person and the project. Failures behave like v1: unreachable,
+  5xx and a refused token take the agent offline (the watcher and the rule
+  fallback are unchanged); a failure after a step began asks the session
+  where it stands (`GET /v2/sessions/{id}`) and sends `continue` instead of
+  the input again; `session_busy` retries the same input. A session the
+  relay no longer has (any 404 on a step) is reopened once: a message that
+  started the run is sent again with a line saying what was lost, a task in
+  the middle is stopped with `session_lost` and the next message starts
+  clean. Not built: a bench run against a deployed relay
+  (`relay-deploy-v2` on the relay's board), deleting the session when a
+  chat is dropped (it expires on the relay in 7 days), the MCP route's
+  `fetch_document` on a v2 profile (that route is v1's).
 - **Tools** (the relay's `tools.json` names): `list_signals`,
   `read_signals` (`GET /api/signals`), `list_modules` (`GET /api/modules`),
   `read_module` (`GET /api/modules/{name}` and its `trace`),
@@ -2724,8 +2937,9 @@ tokio ever reach the box build.
 
 The operator's view of what a module's code is doing
 (`canvas-edit-scope`: ST is the source of truth). The view itself only
-reads. In the simulation the diagram also writes ST back through checked
-splices (`helmsman_diagram::edit`, below the lowering): see "Editing on the
+reads. The diagram also writes ST back through checked splices
+(`helmsman_diagram::edit`, below the lowering): in the simulation as a
+deploy, on a box as an edit of the open buffer. See "Editing on the
 canvas" at the end of this section.
 
 - **Lowering** (`helmsman_diagram::lower`, from `helmsman_iec::ast`, the
@@ -2787,15 +3001,38 @@ canvas" at the end of this section.
     (`Fold::rows`: the arm's labels and its region, whose gate says
     whether it ran). Nested CASEs are offered too; the outer one wins
     while it is closed.
+  - `fold::table`: an OR of two terms or more, one of them an AND of two
+    signals or more, is one `FoldKind::Table` fold (`Fold::table`: a
+    `FoldCell` per signal of each term, with its bubble, and the OR whose
+    value is the table's). A cell is a plain BOOL signal (a variable, an
+    element or output of a function block, an earlier write) or a
+    comparison with a literal (`fold::chips::chip_of`); anything else in
+    a term, a negated AND, an AND read elsewhere, an OR inside an AND,
+    OR or XOR, or AND and OR on WORDs (`Diagram::bools`, set by the
+    lowering from the declarations) leaves the expression as gates. The
+    fold's pins are the distinct signals, one each: `view` leaves the
+    bubble off a table's pin because each cell carries its own.
+  - `fold::structure::statements`: one `FoldKind::Statement` fold per
+    statement at any depth (`stmt:2`, `stmt:2/1.0`), titled with its text
+    without comments, cut at `structure::LINE` characters. Its pins are
+    named, so it draws as one line.
+  - `fold::zoom` (semantic zoom, pure): `level(zoom, prev)` picks `Far`,
+    `Middle` or `Near` with a dead band at each threshold (out: 0.60 and
+    0.30, in: 0.72 and 0.36), and `closed(folds, level, hand)` says which
+    folds the level closes. Far closes sections, arms and statements,
+    middle closes statements, near nothing. A fold the reader set (`Hand`)
+    is never closed by it, and nor is one that holds a fold the reader
+    opened.
   `fold::auto` is what a diagram opens with: the idioms, the state
-  blocks and the chips, the larger shape first (a range wins over its
-  two comparisons).
+  blocks, the tables and the chips, the larger shape first (a range wins
+  over its two comparisons).
   A fold that draws more than its pins is sized by the layout from its
   own rows: `Fold::body` gives a `layout::Body` (rows, widest label) and
   `view` lays out with `layout::layout_with`; the block is as tall as its
   pins or rows, whichever are more, and `layout::body_row` is where row
   `k` sits, between the input and output names (the canvas draws and hits
-  chips there; `FoldKind::Table` is meant to reuse it).
+  chips there; a table uses it with `Body::chars` from `FoldTable::chars`
+  and `layout::body_cell` for the cells that share a row).
   On the canvas (`Viewer::shown`, tests in `st_view_fold_tests.rs`) the
   viewer keeps everything in the diagram's own numbers and draws the
   view: a click on a fold picks a block under it, a double click opens
@@ -2808,9 +3045,25 @@ canvas" at the end of this section.
   click on its label. A state block is on as the diagram opens: a chip
   per state (`Viewer::state_rows`), the one whose arm ran lit from the
   scan underneath, and a click on a chip opens the fold on that arm
-  (`Viewer::open_arm`: picked and framed with the tab that folds it back). The Q/E jump keeps its stops when an IF is drawn
+  (`Viewer::open_arm`: picked and framed with the tab that folds it back).
+  A table block is on as well: a chip per cell (`Viewer::table_rows`,
+  `draw_table_row`), the row whose cells all hold lit, and with the
+  output FALSE the cells that are not satisfied in the fault colour; a
+  cell's hover (`Viewer::cell_tip`) says what its row needs and what the
+  signal is. A gesture on a table's pin is refused (`base_pin`): its pin
+  feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
+  The zoom picks the level (`st_zoom.rs`, a child of `st_view`): each frame
+  `follow_zoom` takes the camera's zoom through `zoom::level`, and when the
+  level changes the folds are drawn again and the point under the pointer
+  (the view's middle without one) keeps its place in the band of its
+  top-level statements. Nothing of this reaches `opened`, `collapsed`, the
+  edit count or `diagram.layout`: the zoom's folds are recomputed from the
+  level and what the reader set. A fold the reader opened over the zoom
+  (`kept_open`) lasts the session and is no layer of the layout, which keeps
+  only what differs from the start state. A jump (Q, E) frames within its
+  level (`Level::reach`), and no level changes while one eases.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label
@@ -2844,6 +3097,101 @@ canvas" at the end of this section.
   Contract: `tests/live.rs` (the latch's MOTOR is start, stop and the
   seal-in, nothing else), a property that the path holds the assignment
   `explain` names, and a headless canvas test in `st_view.rs`.
+- **Sources of an output** (`signals`, no scan): what a variable finally
+  depends on, for the outputs view. It walks back from every assignment
+  through operators, functions, block calls (their arguments), earlier
+  assignments, other program variables (their assignments in turn) and
+  the gates around each, and names each once: `Input` (nothing sets it:
+  an input, a located bit, a struct field), `Kept` (state the program
+  carries between scans: a variable read before the scan sets it or that
+  reads itself, such as a latch or a step counter; the walk goes on
+  through what sets it) and `Block` (a function block instance whose
+  output is read, named by the instance, with its type; the walk goes on
+  through its arguments). Literals, `VAR CONSTANT`s and loop variables
+  are not sources. Inputs, then kept, then blocks, each in source order
+  of first read; each variable is visited once, so cycles end. Contract:
+  `tests/signals.rs`.
+- **I/O cards** (`io_cards.rs`, `Viewer::output_cards`): the I/O tab,
+  the same in the simulation and on a box. One card per input and per
+  output (every `VAR_OUTPUT`, set or not, and located output the program
+  sets, in declaration order; on a box, the map's signals too). A card
+  says three things: the point (an input's control in the simulation,
+  else the lamp or value and the name), what it is in the real world
+  (`io_cards::real`: the device the library says is wired to it and the
+  channel it is on; no line for a point that is only simulated), and its
+  part in the control scheme from the diagram alone (`io_cards::summary`:
+  the first signal that drives an output, the first output an input
+  affects by `io_cards::affects`, and "…" when there are more). A
+  double-click on the card or a click on the "…" opens its details in
+  place: every source as chips in three groups (driven by: signals read
+  from outside; timer, counter: block instances; kept: state the program
+  carries), the wiring in full, how often the code names it, and for a
+  simulated input "Simulate…" (the popup a double-click on its diagram
+  block opens). Two glyphs at the card's right go to the point. `< >`
+  opens the file that declares it with the find box on its name as a
+  whole name (`Find::name`, `find::names`: `start` never matches
+  `start_button`), the first place selected; pressed again it steps to
+  the next, as Ctrl G does, within the open file. The diagram glyph calls
+  `Viewer::show_signal`: every block that reads or writes the point is
+  lit as Cross references lights them and framed, with no scan needed, so
+  it works while the program is stopped. A tap on an output's card still
+  calls `Viewer::show_output`: the program's diagram opens, the "because"
+  variable is the output (what a click on its write gives) and the next
+  frame eases the view (`Cam::frame_within`, the Q/E jump's padding, never
+  closer than the current zoom) to frame the lit blocks of the diagram
+  shown, so a write inside a closed fold frames and lights the fold, which
+  stays closed. The list and grid glyphs at the tab's top switch between
+  one card to a row and tiles (`io_cards::lay`, `tiles`: the first line
+  alone, as many columns as fit at 96 pt; the details of an open tile go
+  under the grid), and the arrow of the Inputs and Outputs headings folds
+  each section; `Chrome` remembers all three (`iogrid`, `iofold`). Every
+  input has a card whether or not its block is on the diagram, so a push
+  button can be drawn twice: both report to `PlaygroundView::hold` and the
+  input is on while either is held. A right-click on a card offers "Chat
+  about this" (`assign_ui::row_menu`, `chat_about_signal`: a chip for the
+  point on the Agent tab, nothing sent) above the port's assignment
+  items. An input set by hand while the simulation is stopped or paused
+  is set all the same (`PlaygroundView::set_by_hand`: the panel's values
+  outlive Stop, so that is how a machine is set up before it starts), and
+  a quiet line low on the diagram says nothing reacts yet and what the
+  program starts with (`idle_note`, `idle_ui`); it goes when the program
+  runs. On a box, `BoxView::force` sends nothing for a module that is
+  stopped or has faulted and says why in the project note. The card takes
+  clicks where it was
+  drawn the frame before, so its control and glyphs, drawn after, are in
+  front of it. Cards never widen the panel: lines are cut or wrapped to
+  the column, a number input drops its slider under 150 pt, 12 pt is left
+  for the scroll bar (`ui_tests/io_cards.rs`, `ui_tests/outputs.rs`: 40
+  inputs and 50 outputs with long names, in the list, the grid and with
+  details open).
+- **Start state in words** (`start_state.rs`, `PlaygroundView::start_ui`):
+  above the Inputs cards, the simulation's I/O tab has one field, "Describe
+  a start state…", and a send glyph. It is there only when the relay's
+  status lists the `start` agent (`Chat::serves`: the free chat, as for
+  `ask`; on a key, a local proxy or a relay without it there is no field,
+  and the cards are as before), and it is off while the program runs (an
+  Agent never moves a running machine). `start_state::message` sends the
+  words in `<start_description>` and the inputs, one `NAME | TYPE | what
+  it takes | now VALUE` line each, in `<program_inputs>` (closing tags of
+  either defanged, `claude::neutralize`; TIME in whole milliseconds), over
+  a link of its own (`start_link`, not the question card's). The answer is
+  `NAME = value` lines and nothing else, in one fence at most, or `NONE`
+  (`start_state::parse`): a name that is not an input (matched in any
+  case, kept as the program spells it), a name twice, a value that
+  `Session::try_input` would refuse, prose, more than 64 lines or 8 KiB
+  refuse the whole answer, which is one quiet line under the field and
+  sets nothing. What passes is a proposal card, `NAME: old → new` for each
+  input that would change, with Set these and Discard; nothing is set
+  until Set these, which goes through `set_by_hand` (so the "nothing
+  reacts yet" line appears) and only while nothing runs and the program
+  text is the one the proposal was made for (`Card::accept`; a changed
+  program drops the proposal, a started one drops a request still out).
+  The relay half is the demo's `start` agent (agent-relay
+  `helmsman/start-v1`, a new id and a deploy). Tests: `start_state_tests.rs`
+  (hostile messages and answers), `ui_tests/start_state.rs` (proposal
+  before set, set, discard, started and edited between, the refused
+  answer, no field without the agent, and 40 long-named inputs in the
+  list and the grid at the panel's width).
 - **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from
@@ -2894,13 +3242,18 @@ canvas" at the end of this section.
   through an in-process proxy with a site VPN's 300 ms round trip,
   1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
 
-- **Editing on the canvas** (`diagram-edit-canvas`, the simulation only;
+- **Editing on the canvas** (`diagram-edit-canvas`, `diagram-edit-box`;
   `diagram_edit.rs`, tests in `ui_tests/diagram_edit.rs`). `Viewer::canvas`
   only notices a right click (`hit_at`: a pin within reach of an input
   port, else the nearest block) or a double click on a constant, and
   hands it up as a `Gesture`; with `Viewer::edit_gate` off it leaves a
-  note of why instead (a viewer starts off with `BOX_REASON`: a box never
-  turns it on until `diagram-edit-box`). `PlaygroundView` sets the gate
+  note of why instead (a viewer starts off with `BOX_REASON`; both hosts
+  set the gate each frame, so it shows only for a viewer no host drives).
+  The menu offers Change operator (`SwapOp`), Negate input
+  (`ToggleNegation`), Connect to… (`Rewire`), Edit value… (`SetConst`),
+  Rename… and Delete statement; `SetFbArg` is in the engine and is not
+  offered by the menu. A long press is egui's secondary click on touch.
+  `PlaygroundView` sets the gate
   each frame (`edit_gate`: the viewer's source equals the build source,
   and the project builds from exactly one `.st` file, so the engine's byte
   offsets are the buffer's) and draws `EditUi`, whose menu lists only
@@ -2919,6 +3272,25 @@ canvas" at the end of this section.
   sends the editor to its line for 1.5 s. Undo and Redo of a gesture
   redeploy while the diagram was in sync before them (`Follow::deployed`,
   cleared by any typing or Deploy).
+
+  On a box (`BoxView::edit_gate`, `BoxView::diagram_edit`, #505) a gesture
+  only edits the open buffer, as typing would: the same `edit::apply`
+  against the diagram's source (the box's header lines are stripped by
+  `file_start`), the old text pushed as one undo entry
+  (`editor::push_undo`), the patched text in the buffer, the highlight
+  flashed. Nothing is saved or deployed; Save and Deploy are the
+  engineer's, through the box's approval policy, which tiers the change
+  from its diff as for typed text. The gate is on only when the session is
+  an engineer's (`is_engineer`), the open project is the one the box
+  runs, the project has exactly one program file (`sole_program`, test
+  files aside), that file is loaded, and the diagram's source is the file
+  under the box's header lines. The diagram draws what runs, so after one
+  gesture the buffer differs from it and the gate is off ("Save and
+  Deploy, then edit from the diagram") until the change is deployed and
+  running or Undo restores the text. Tests:
+  `box_projects_tests.rs` (`a_diagram_edit_on_a_box_is_an_unsaved_typed_edit_with_one_undo_step`,
+  `an_operator_or_nobody_cannot_edit_from_the_diagram`,
+  `the_diagram_is_off_when_it_is_not_the_open_file`).
 
 ## Explain mode (`explain-mode`, built)
 

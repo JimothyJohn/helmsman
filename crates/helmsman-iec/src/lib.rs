@@ -128,6 +128,7 @@ mod interp;
 pub mod l5x;
 pub mod ladder;
 mod lexer;
+pub mod lint;
 mod once;
 mod parser;
 pub mod plcopen;
@@ -135,6 +136,7 @@ mod rename;
 pub mod scan;
 pub mod spec;
 mod state;
+mod strs;
 mod suggest;
 pub mod tidy;
 pub mod trace;
@@ -234,6 +236,7 @@ fn run_on(
         image,
         pous: &code.pous,
         library: code.library,
+        scratch: code.scratch,
         base: 0,
         budget,
         now: i128::try_from(now.as_nanos())
@@ -469,6 +472,7 @@ impl Program {
                 }
                 let esize = match elem {
                     Type::Agg(e) => self.code.aggs[*e].size,
+                    Type::Str(n) => strs::slots(usize::from(*n)),
                     _ => 1,
                 };
                 let mut stride = esize;
@@ -516,8 +520,44 @@ impl Program {
         matches!(ty, Type::Elem(_) | Type::Enum(_)).then(|| self.mem[slot])
     }
 
+    /// A string variable's text, by path as for [`Self::get`] (`name`,
+    /// `job.label`, `names[2]`), one byte per character (bytes above 127
+    /// read as Latin-1). `None` if the path is not a string.
+    #[must_use]
+    pub fn get_str(&self, path: &str) -> Option<String> {
+        let (slot, Type::Str(_)) = self.resolve(path)? else {
+            return None;
+        };
+        Some(strs::read(&self.mem, slot).into_iter().map(char::from).collect())
+    }
+
+    /// Writes a string variable by path, between scans, cut at nothing:
+    /// the text must fit and be ASCII.
+    ///
+    /// # Errors
+    /// No such string variable; text longer than it holds or with a
+    /// character that is not ASCII (a STRING holds single bytes). The
+    /// variable keeps its previous text.
+    pub fn set_str(&mut self, path: &str, text: &str) -> Result<(), SetError> {
+        let Some((slot, Type::Str(cap))) = self.resolve(path) else {
+            return Err(SetError::NoSuchVariable);
+        };
+        if !text.is_ascii() {
+            return Err(SetError::NotAscii);
+        }
+        if text.len() > usize::from(cap) {
+            return Err(SetError::TooLong(cap));
+        }
+        strs::put(&mut self.mem, slot, usize::from(cap), text.as_bytes());
+        Ok(())
+    }
+
     /// The program's ports: its `VAR_INPUT`s and `VAR_OUTPUT`s, in
     /// declaration order, names upper-cased. A host binds them to signals.
+    ///
+    /// Only elementary ports are listed. A STRING port compiles and works
+    /// inside the program but is no signal yet: it is skipped here, on
+    /// purpose (card `st-string-signals`).
     #[must_use]
     pub fn ports(&self) -> Vec<Port> {
         let prog = &self.code.pous[self.code.program];
@@ -621,6 +661,10 @@ pub enum SetError {
     Kind(Ty),
     /// Out of this type's range, or a non-finite real.
     Range(Ty),
+    /// [`Program::set_str`]: more characters than the STRING holds.
+    TooLong(u16),
+    /// [`Program::set_str`]: a character that is not ASCII.
+    NotAscii,
 }
 
 impl core::fmt::Display for SetError {
@@ -630,6 +674,8 @@ impl core::fmt::Display for SetError {
             Self::NoSuchVariable => f.write_str("no such variable"),
             Self::Kind(t) => write!(f, "wrong kind of value for {t}"),
             Self::Range(t) => write!(f, "value out of range for {t}"),
+            Self::TooLong(n) => write!(f, "more than the {n} characters this STRING holds"),
+            Self::NotAscii => f.write_str("a STRING holds ASCII characters only"),
         }
     }
 }

@@ -1487,6 +1487,7 @@ VAR_INPUT set : BOOL; reset : BOOL; END_VAR
 VAR_OUTPUT q : BOOL; END_VAR
 VAR RETAIN kept : INT; END_VAR
   q := (q OR set) AND NOT reset;
+  kept := kept + 1;
 END_FUNCTION_BLOCK
 ";
 
@@ -2861,4 +2862,72 @@ fn a_deploy_keeps_a_stopped_module_stopped() {
     wait("the new program drives the lamp", || {
         b.cmd("lamp") == Some(Value::Bool(true))
     });
+}
+
+/// A timer called inside an IF (`HELMSMAN-L1`), as a PROGRAM's body.
+const TIMER_IN_IF: &str = "\
+PROGRAM conveyor
+VAR_INPUT start : BOOL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
+VAR t : TON; END_VAR
+  IF start THEN
+    t(IN := TRUE, PT := T#1s);{PRAGMA}
+  END_IF;
+  lamp := t.Q;
+END_PROGRAM
+";
+
+/// A blocking lint (`st-lints`) refuses a deploy on the box itself, with the
+/// finding and how to override it; the same program with a pragma that
+/// gives a reason deploys, and the audit trail carries the reason. A pragma with no reason overrides nothing.
+#[test]
+fn a_blocking_lint_refuses_the_deploy_and_a_reasoned_pragma_lets_it_through_on_record() {
+    let b = Bench::new();
+    let s = b.alice();
+    let bare = TIMER_IN_IF.replace("{PRAGMA}", "");
+    b.project(&s, "held", &[("main.st", bare.as_str()), ("io.map", MAP)]);
+    let before = b.head();
+    // The check lists it, held.
+    let check = post_json(b.addr, "/api/projects/held/check", Some(&s), &json!({})).json();
+    assert_eq!(check["ok"], true, "{check}");
+    assert_eq!(check["held"].as_array().unwrap().len(), 1, "{check}");
+    let w = check["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "HELMSMAN-L1")
+        .unwrap_or_else(|| panic!("{check}"));
+    assert_eq!(w["blocking"], true, "{w}");
+    assert_eq!(w["line"], 6, "{w}");
+    // The deploy refuses: nothing changes, and the answer says why.
+    let r = b.deploy(&s, "held");
+    assert_eq!(r.status, 422, "{r:?}");
+    let j = r.json();
+    assert_eq!(j["changed"], false, "{j}");
+    assert!(j["held"][0].as_str().unwrap().contains("HELMSMAN-L1"), "{j}");
+    assert!(j["error"].as_str().unwrap().contains("pragma"), "{j}");
+    assert_eq!(b.head(), before, "nothing committed");
+    assert!(b.audited("held by lint HELMSMAN-L1"), "the refusal is audited");
+    // No reason: still held, and the pragma is itself reported.
+    let no_reason = TIMER_IN_IF.replace("{PRAGMA}", " {lint: off HELMSMAN-L1}");
+    let r = put_file(b.addr, &s, "held", "main.st", &no_reason, None);
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(b.deploy(&s, "held").status, 422);
+    // A reason.
+    let reasoned = TIMER_IN_IF.replace(
+        "{PRAGMA}",
+        " {lint: off HELMSMAN-L1 \"the branch is the enable\"}",
+    );
+    let r = put_file(b.addr, &s, "held", "main.st", &reasoned, None);
+    assert_eq!(r.status, 200, "{r:?}");
+    let check = post_json(b.addr, "/api/projects/held/check", Some(&s), &json!({})).json();
+    assert_eq!(check["held"], json!([]), "{check}");
+    let r = b.deploy(&s, "held");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["applied"], true, "{r:?}");
+    assert_ne!(b.head(), before, "committed");
+    assert!(
+        b.audited("HELMSMAN-L1 at main.st:6 overridden: \"the branch is the enable\""),
+        "the reason is on the audit trail"
+    );
 }

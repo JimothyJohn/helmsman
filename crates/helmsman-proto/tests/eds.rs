@@ -119,6 +119,80 @@ fn opener_shape() {
     assert_eq!((c[1].o_to_t_point, c[1].o_to_t.size), (153, 0));
 }
 
+const MDRIVE: &str = include_str!("fixtures/mdrive-facts.eds");
+
+/// The Novanta `MDrive`'s EDS gives its assemblies no size, only members:
+/// the size is the members' bits.
+#[test]
+fn an_assembly_without_a_size_is_as_long_as_its_members() {
+    let eds = Eds::parse(MDRIVE).unwrap();
+    let a = eds.assemblies().unwrap();
+    let got: Vec<_> = a.iter().map(|a| (a.instance, a.size, a.members.len())).collect();
+    assert_eq!(got, [(100, Some(16), 4), (112, Some(36), 12)]);
+
+    let c = eds.connections().unwrap();
+    let got: Vec<_> = c
+        .iter()
+        .map(|c| {
+            (
+                c.app_types.clone(),
+                c.configuration,
+                c.o_to_t_point,
+                c.t_to_o_point,
+                c.o_to_t.size,
+                c.t_to_o.size,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (vec![AppType::ExclusiveOwner], 1, 112, 100, 36, 16),
+            (vec![AppType::ListenOnly], 1, 129, 100, 0, 16),
+            (vec![AppType::InputOnly], 1, 128, 100, 0, 16),
+        ]
+    );
+    // As the file says, which is not what the drive does: it takes a
+    // run/idle header O->T (helmsman-io corrects that from the refusal).
+    assert_eq!(c[0].o_to_t.format, RealTimeFormat::Modeless);
+    assert_eq!(c[0].t_to_o.format, RealTimeFormat::Modeless);
+    assert_eq!(c[2].o_to_t.format, RealTimeFormat::Heartbeat);
+    assert_eq!(c[0].config_size, 0);
+    // No RPI at all.
+    assert_eq!(
+        (c[0].o_to_t.rpi.min, c[0].o_to_t.rpi.max, c[0].o_to_t.rpi.default),
+        (None, None, None)
+    );
+}
+
+#[test]
+fn members_that_do_not_fill_whole_bytes_give_no_size() {
+    // 8 bits short of the last DWORD, a member without a bit count, and
+    // more bits than an assembly can be: the size stays unknown, and a
+    // connection that needs it says so with its line.
+    for (from, to) in [
+        (
+            "32,Param1, 32,Param2, 32,Param3, 32,Param4;",
+            "32,Param1, 32,Param2, 32,Param3, 27,Param4;",
+        ),
+        (
+            "32,Param1, 32,Param2, 32,Param3, 32,Param4;",
+            "32,Param1, 32,Param2, 32,Param3, ,Param4;",
+        ),
+        (
+            "32,Param1, 32,Param2, 32,Param3, 32,Param4;",
+            "4294967295,Param1, 4294967295,Param2, 32,Param3, 32,Param4;",
+        ),
+    ] {
+        let text = MDRIVE.replace(from, to);
+        assert_ne!(text, MDRIVE, "the fixture moved");
+        let eds = Eds::parse(&text).unwrap();
+        assert_eq!(eds.assembly(100).unwrap().size, None, "{to}");
+        let e = eds.connections().unwrap_err();
+        assert!(e.to_string().contains("T->O size given neither"), "{to}: {e}");
+    }
+}
+
 fn refused(text: &str) -> eds::Error {
     match Eds::parse(text).map(|e| (e.connections(), e.identity(), e.assemblies())) {
         Err(e) | Ok((Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e))) => e,

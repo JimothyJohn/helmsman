@@ -230,6 +230,14 @@ def playground(ctx, base, out):
     r.step("diagram-menu", lambda: r.click(501, 400, "right"), DIAGRAM)
     r.step("diagram-operators", lambda: r.click(*DIAGRAM_MENU_FIRST), DIAGRAM)
     r.step("diagram-edited", lambda: r.click(*DIAGRAM_OP_FIRST), DIAGRAM, 1500)
+    # A drag on empty space draws a selection box (the blocks it touches
+    # are outlined blue); Escape deselects.
+    def band():
+        m = r.page.mouse
+        m.move(345, 495); m.down()
+        m.move(800, 200, steps=12); m.up()
+    r.step("diagram-selected", band, DIAGRAM, 800)
+    r.step("diagram-deselected", lambda: r.key("Escape"), DIAGRAM, 500)
     r.step("trend-hidden", lambda: r.key("Alt+Shift+Digit2"), BOTTOM_TABS)
     r.key("Alt+Shift+Digit2"); r.wait(400)
     # Alt+Shift+5 docks the Code tab on the right, the I/O shown on the

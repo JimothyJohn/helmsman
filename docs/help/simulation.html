@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="the-simulation">The simulation</h1>
 <p>The simulation runs the controller inside the page, scan by scan,
@@ -124,6 +124,20 @@ rewritten, and text that cannot be read yet (a stray character, a
 comment left open) is left as you typed it.</p>
 <p>Undo and Redo (<kbd>Ctrl</kbd> <kbd>Z</kbd>, <kbd>Ctrl</kbd>
 <kbd>Y</kbd>) work in the editor and from the Edit menu.</p>
+<h3 id="editing-from-the-diagram">Editing from the diagram</h3>
+<p>A change made on the diagram (see <a href="editor.html">The
+Editor</a>, Change it) does not wait for Deploy. It is written into the
+code and deployed at once, with the same checks as the Deploy button: if
+the code does not compile, the change stays in the code, the program
+runs as it was and the note under the header says why. A requirement
+test that fails is named there and does not stop the change. The running
+program keeps its values, as a Deploy does. Each change is one step of
+Undo, and Undo and Redo run the program again, as long as the diagram
+still shows the code as it stands.</p>
+<p>The diagram's gestures are off, with the reason in a note where you
+clicked, while the code in the editor has been typed on since the last
+Deploy or does not compile, and in a project with more than one program
+file.</p>
 <p><kbd>Ctrl</kbd> <kbd>F</kbd> opens a find box over the Structured
 Text. Every match is marked in yellow, the current one brighter, and the
 pane scrolls to it; the box counts them. <kbd>Enter</kbd> or

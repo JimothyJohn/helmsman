@@ -53,6 +53,11 @@ mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lint_shipped_tests;
+mod chat_about;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod chat_about_tests;
 mod design;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod design_page_tests;
@@ -85,6 +90,7 @@ mod icons;
 mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;
+mod io_cards;
 mod io_names;
 mod jump;
 mod lamps;
@@ -132,6 +138,9 @@ mod st_hints;
 mod st_syntax;
 mod st_view;
 mod stamp;
+mod start_state;
+#[cfg(test)]
+mod start_state_tests;
 mod steps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod steps_tests;

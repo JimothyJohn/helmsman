@@ -36,7 +36,7 @@ IF tick.Q THEN
   END_IF;
   step := step + 1;
   IF step > 2 THEN
-    step := 0;
+    step := 0; {lint: off PLCOPEN-CP12 "step counts, then wraps: the second write is the wrap"}
   END_IF;
 END_IF;
 do0 := step = 0;

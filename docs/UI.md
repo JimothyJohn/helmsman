@@ -6,9 +6,9 @@ this; change it here first when a decision changes.
 ## Principles
 
 - **Structured Text and its live diagram, nothing else.** The diagram is a
-  view of the ST. In the simulation it also changes the code through a few
-  gestures (Editing on the diagram, below); on a box it is read-only for
-  now. (The node-graph Lab editor is gone.)
+  view of the ST. It also changes the code through a few gestures (Editing
+  on the diagram, below); on a box they change the open file and leave Save
+  and Deploy to the engineer. (The node-graph Lab editor is gone.)
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the
   page. Same screens, same buttons; the source is a setting, not a mode.
@@ -324,6 +324,21 @@ this; change it here first when a decision changes.
   diagram too big for the view at that zoom shows its left part and you
   pan, instead of shrinking to one-letter labels. Controls on blocks cut
   their text instead of wrapping it.
+- **Selecting blocks (Nick, 2026-11-16).** Drag on empty space to draw a
+  box; the blocks it touches are selected (Shift or Ctrl/Cmd adds). Shift
+  or Ctrl/Cmd and a click toggles one block. A plain click on a block
+  selects that block alone; a click on empty space, a click anywhere off
+  the diagram (the Agent tab aside, where the selection is used) or Esc
+  deselects (Nick, 2026-11-17). Only a released click changes the
+  selection: while the button is down the highlights stay, and a box
+  being drawn shows what it touches. The proposal review's diagram takes
+  the same gestures. The selected blocks are outlined blue and are the
+  Agent's focus: they show as chips after the collected ones (an x
+  deselects), go with the next instruction, and say how many more are
+  selected than the eight an instruction carries. Dragging empty space no
+  longer pans the diagram: Space and a drag, or the middle button, do; the
+  arrow keys and W A S D too, and the wheel zooms. Hovering empty space
+  says so.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).
@@ -342,6 +357,19 @@ this; change it here first when a decision changes.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
+- **I/O as cards (2026-11-16, `io_cards.rs`):** every input and output
+  in the I/O tab is one card, not a fold on the diagram (an output's logic
+  is spread over statements that are not next to each other). Nick,
+  2026-11-16: "You just need to know their name, what triggers them in the
+  real-world, and what the influence in the control scheme." So a card has
+  the point, one line for what is wired to it, and one line for the first
+  thing that drives it or that it affects, with "…" when there are more.
+  A double-click opens the rest in place. The `< >` glyph finds the point
+  in the code and steps through its uses; the diagram glyph lights and
+  frames its blocks, running or not. A tap on an output lights the path
+  that sets it, framed as the Q/E jump frames, no closer than the current
+  zoom. List or tiles at the top; Inputs and Outputs fold behind their
+  arrows. The diagram stays in source order.
 - **Assign to device I/O (2026-11-15, `assign.rs`, `assign_ui.rs`):** a
   program's inputs and outputs start on simulated or on-screen I/O
   (`in start bool box di:0`, `out speed int screen speed safe=0`). A device
@@ -389,8 +417,7 @@ this; change it here first when a decision changes.
   engineer only: the block shows FORCED in the warning colour, a banner
   lists every force with "release all", and forces end on logout or deploy.
 
-- **Editing on the diagram (the simulation; a box later, card
-  `diagram-edit-box`):** a right click on a block or on one of its input
+- **Editing on the diagram (the simulation and a box):** a right click on a block or on one of its input
   pins (a long press on a touch screen) opens a menu of what can change
   there, and only of what the code accepts: *Change operator ▸* (AND for
   OR, one comparison for another, `+ - * /` for each other), *Negate
@@ -420,7 +447,13 @@ this; change it here first when a decision changes.
     with the reason in a note where you clicked (and in the tooltip over a
     constant), when the diagram shows other code than the editor holds (the
     code was typed since the last Deploy, or does not compile), when the
-    project has more than one program file, and on a box.
+    project has more than one program file.
+  - **On a box** a gesture changes the open file only, as typing does:
+    one Undo step, unsaved, nothing sent. Save and Deploy stay the
+    engineer's, through the box's approval policy. It is on only for an
+    engineer, only while the diagram is the open file of the project the
+    box runs, and off after one gesture until that change is deployed and
+    running or undone (the diagram draws what runs).
 
 ## Projects
 

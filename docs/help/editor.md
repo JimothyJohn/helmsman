@@ -54,8 +54,28 @@ for its name and key.
 ## The diagram
 
 The diagram is the program, drawn from its Structured Text and lit from
-the controller as it runs. It is not a second way to write the program:
-you cannot draw into it. What you can do:
+the controller as it runs. The Structured Text stays the program: you
+cannot draw a new block into it, but you can change what is there (the
+first bullet below). What you can do:
+
+- **Change it.** Right-click a block, or one of its input pins (a long
+  press on a touch screen), for a menu of what can change there. It lists
+  only changes the code accepts: **Change operator** (AND for OR, one
+  comparison for another, `+ - * /` for each other), **Negate input** (a
+  NOT in front of the input, or taken off), **Connect to…** (wire the
+  input from another variable of the program; type a path such as `T1.Q`
+  whole), **Edit value…** (a number, TRUE or FALSE, a time such as
+  `T#5s`), **Rename…** (the variable, everywhere the program uses it) and
+  **Delete statement**. A double-click on a constant edits it in place:
+  <kbd>Enter</kbd> sets it, <kbd>Esc</kbd> cancels. Each choice writes
+  exactly the characters that change into the code, so your comments and
+  layout stay as typed, and the editor scrolls to the change and
+  highlights it for a moment. One <kbd>Ctrl</kbd> <kbd>Z</kbd> takes a
+  change back. A change the code would not take (a name already used, a
+  value of the wrong type) is refused in the popup and the code is left
+  as it was. What happens next differs: the simulation runs the change at
+  once (see [Simulation](simulation.html)), a box leaves it for you to
+  save and deploy (see [On a box](box.html)).
 
 - **Read it.** Each block is a variable, a block instance, an operator or
   a function; wires carry values left to right and show them (a BOOL wire
@@ -87,6 +107,15 @@ you cannot draw into it. What you can do:
   is in lights up as it runs. Click a row to open the CASE and see what
   that state does; the tab over it draws the states as one block again.
   A double-click on the block opens it the same way.
+- **Read an interlock as a table.** A condition written as several ways
+  to be true, `(a AND b AND NOT c) OR (d AND e) OR f`, is drawn as one
+  block with a row for each way and a cell for each signal in it. A
+  filled dot on a cell means the row needs the signal on, a ring means it
+  needs it off. The row that holds lights up. When the output is off,
+  the cells that keep each row from holding turn red: that row is waiting
+  for exactly those signals. Hover a cell to see what its row needs and
+  what the signal is now. A double-click opens the block into its gates,
+  and the tab over it draws them as one block again.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Zoom with the
@@ -222,7 +251,15 @@ redrawn.
   scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
   **I/O**: every input and output with its value and a control for each
-  input the diagram does not show. Hover a row to see where its point is,
+  input the diagram does not show. Each output is a card: its name and
+  value, and under them what it finally depends on, through every
+  statement that sets it: the signals read from outside (driven by), the
+  values the program keeps from one scan to the next (kept) and the
+  timers and counters it reads. An output nothing sets says so.
+  Tap a card and the diagram goes to that output's write with the path
+  that sets it lit, framed with room around it and no closer than you
+  were; a write inside a closed fold lights the fold and leaves it
+  closed. Hover a row to see where its point is,
   on a device or still simulated; right-click it, or the input's or
   output's block in the diagram, for **Assign to device I/O…**, which lists
   the channels of the project's devices with the same direction and type,

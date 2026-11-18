@@ -693,6 +693,30 @@ into the code.
 - **How to cite:** `MCP 2026-07-28 <page> § <heading>`, e.g.
   `MCP 2026-07-28 basic/transports/streamable-http § Server Validation`.
 
+### agent-relay protocol v2 (the relay holds the conversation)
+
+- **Where:** `docs/relay-protocol-v2.md` in this repo, copied byte for byte
+  from `docs/relay-protocol-v2.md` of the private repo
+  JimothyJohn/agent-relay at commit `26cd6dc9098aaa015b2361017a7a5e590c865c5a`
+  (its `origin/dev` on 2026-11-17). Its `docs/harness.md` at the same commit
+  says why (compaction, relay-run tools, documents, retention). No v1
+  copy is held here: protocol v1 is the relay repo's
+  `docs/relay-protocol.md`, which `helmsman-agent` was built from.
+- **Leaned on by** `crates/helmsman-agent/src/session.rs` (sessions, steps,
+  the event stream, `GET /v2/docs/{id}/raw`) and the v2 loop in
+  `crates/helmsman-agent/src/agent.rs` (`relay-v2-client`). How the box
+  knows a profile is v2: `GET /v1/agents/{agent}` carries `"protocol"`
+  ("Everything in protocol v1 still holds ... each profile now says
+  `"protocol": 1` or `2`"), so no version list is kept. The bare
+  aliases stop at `v7` (v1 doc, "Naming an agent profile"): a bare name the
+  relay does not know is asked again as `helmsman/{name}`.
+- **Not in it, so the box decides:** what to do when a session is gone
+  (the doc says only that a session expires 7 days after its last step and
+  that another client's id answers 404 like an unknown one: the box reads
+  every 404 on a step as "lost", reopens once and says so), and how many
+  client tool calls one yield may name (the box takes at most 64).
+- **How to cite:** `relay-protocol-v2.md § Steps`, `§ Documents`.
+
 ### IEC 61131-3, by secondary references (the standard itself is not held)
 
 - **The standard:** IEC 61131-3 "Programmable controllers – Part 3:
@@ -720,8 +744,43 @@ into the code.
     Fernhill's dialect: check a claim against ruSTy before leaning on it.
   - The PLCopen Coding Guidelines v1.0 (2016), for the lints (card
     `st-lints`): a free PDF from https://www.plcopen.org/downloads
-    (no login; checked 2026-11-08). The entry with its rule numbers
-    arrives with that card.
+    (no login; checked 2026-11-08, downloaded and read 2026-11-17,
+    127 pages, Coding Guidelines V.1.0, April 20 2016). The rule numbers
+    and pages below are the PDF's own contents list and rule headings. A
+    lint's message never quotes the document.
+    - `PLCOPEN-CP12`: rule CP12, "Physical outputs shall be written once
+      per PLC cycle", §5.13, page 68. Its exception ("clear and explicit
+      requirements ... more than one location, with caution") is what the
+      override pragma is for.
+    - `PLCOPEN-CP3`: CP3, "All variables shall be initialized before being
+      used", §5.3, page 47.
+    - `PLCOPEN-CP8`: CP8, "Floating point comparison shall not be equality
+      or non-equality", §5.8, page 58.
+    - `PLCOPEN-L12`: rule L12, "Loop variables should not be modified
+      inside a FOR loop", §6.5.4, page 113 (the contents list prints it as
+      L22; the rule heading says L12).
+    - `PLCOPEN-CP24`: CP24, "Do not declare variables that are not used",
+      §5.25, page 94.
+    - `PLCOPEN-CP2`: CP2, "All code shall be used in the application",
+      §5.2, page 45. The lint covers the unreachable half only.
+    - Recursion is CP13 (§5.14, page 69): the checker already refuses it
+      as an error, so there is no lint.
+    - `HELMSMAN-L1` (a function block instance called inside a condition)
+      and `HELMSMAN-L2` (a pragma that overrides nothing) are Helmsman's
+      own. L1 is stricter than the guidelines: CP20 (§5.21, page 84, "each
+      instance should be called only once per cycle") says "the call may
+      be conditional". L1 follows INVESTIGATION.md §1 (the timer-in-IF bug)
+      and is overridable on its line for that reason.
+- **STRING (card `st-string`):** the behaviours below are pinned by the
+  oracle, not by a clause. Assignment cuts at the declared length, `LEN`
+  sees the cut text, `LEFT`/`RIGHT`/`MID`/`FIND`/`INSERT`/`DELETE`/`REPLACE`
+  at every boundary, comparisons and the `X_TO_STRING` / `STRING_TO_X`
+  conversions, including text that is no number (0), spaces around a
+  number (ignored) and a fraction or exponent for an integer type (cut
+  toward zero): `strings_agree_with_rusty` in oracle.rs (ruSTy 1.0.8). The
+  `$` escapes and the 255-character cap are not cited to any reference:
+  the escapes are pinned by tests/strings.rs (ruSTy reads `$N` in the same
+  literals), the cap is a one-byte length. WSTRING is not built.
 - **How to cite:** `IEC 61131-3 (secondary: Fernhill ST "<page>")`, never
   a `§` of the standard. A behaviour pinned by the oracle cites the oracle
   test by name.
@@ -1057,7 +1116,7 @@ into the code.
 - **How to cite:** `E1200 web console write-up, section <name>`; the vendor
   vectors as `password.rs` `VENDOR`.
 
-### Novanta IMS MDrive files (read 2026-11-10, no unit on the bench)
+### Novanta IMS MDrive files (read 2026-11-10 and 2026-11-16)
 
 - **GSDML:** `GSDML-V2.2-mdrive-SchneiderElectic-20130530.xml`, SHA-256
   `3271ffc6dddf37bf4578e6da91a9096ac90841cab54c041a816f0899fb3070c1`, in
@@ -1065,13 +1124,88 @@ into the code.
   https://www.novantaims.com/dloads/firmware/ (with `SEM_MDrivever1_2.eds`
   and the firmware image). No licence text; **not committed**, facts
   restated in docs/devices/novanta-mdrive.md.
+- **EDS:** `SEM_MDrivever1_2.eds` from the same zip, revision 1.2
+  (2012-01-17, EZ-EDS 3.9), 24813 bytes, SHA-256
+  `b14f0fe268df5b37e9dcee6bd0288a88e59d428dbe6044b49dba8beaaeb86041`.
+  **Not committed**: `crates/helmsman-proto/tests/fixtures/mdrive-facts.eds`
+  restates its identity, assemblies and connections with the vendor
+  file's line numbers, and `scripts/eds-corpus.sh` checks the vendor's
+  file against that fixture when it is at hand (helmsman-devices'
+  `cache/sha256/`). Cite as `MDrive EDS l.N`.
+- **EtherNet/IP manual:** "LMD EtherNet/IP Protocol Implementation,
+  Ethernet TCP/IP Fieldbus Manual", LMD-EIP-REV-F, 02/2022, 47 pp.,
+  SHA-256 `2a5a6f726b2a5b2fa7220215568829345872257623b80dcd68fc6766a56efdd3`,
+  from Novanta's manuals page (helmsman-devices `collect/novanta.toml`
+  has the link as fetched). Read for: the assembly table and its note
+  that the mapping can be changed (p. 20), the vendor objects 0x64 to
+  0x6A (pp. 24-31), the identity table (p. 18). It says nothing about
+  the run/idle header, the RPI range, or what the drive does when the
+  connection is lost. Cite as `LMD-EIP-REV-F p. N`.
+- **MCode reference:** "LMD MCode OS Programming and Reference",
+  LMD-MCODE-V2.06, 03/2022, 191 pp., SHA-256
+  `3945e47f63d497529d7f6c21d518a9d7d6c8b57689932b27179e2db1f9475e81`.
+  Read for the error codes the drive showed (30, 94: its error table)
+  and the meaning of DE, SL, MS, RC. Cite as `LMD-MCODE-V2.06 p. N`.
 - **Product manual:** "Lexium MDrive Ethernet with circular connectors
   LMDxE57C/85C", V1.00, 03.2015,
   https://novanta.com/robotics-automation/wp-content/uploads/sites/3/2015/04/LMDxE57-85C.pdf
   (protocols §1.2.1, default address §6, configuration ch. 7), read by a
   research pass, not re-read.
-- **Not read:** the "Profinet IO Fieldbus Manual" (the I/O byte map) and
-  Novanta's S7 workbook.
+- **Not read:** the "Profinet IO Fieldbus Manual" (the I/O byte map),
+  Novanta's S7 workbook, and the application note on running a stored
+  MCode program over EtherNet/IP.
+
+### Murrelektronik IMPACT67 E handbook
+
+- **What:** "Manual for the Devices of the IMPACT67 E Series", art. no.
+  55368, edition 1.8 (2019-06), 9631751 bytes, SHA-256
+  `f01edb0ad41cc1aa12de4984c68e1384afc3e6a6df38694401623be58d77c77f`.
+  Nick's copy; its terms ("Copyright", p. 104) do not allow
+  redistribution, so it is **not committed**. helmsman-devices
+  `devices/murrelektronik/` restates each assembly with the page.
+- **Read for:** the two parameterization modes and their configuration
+  instances 109 and 110 (pp. 43, 62-63, 70-73), the meaning of the
+  three configuration bytes, the connections of art. no. 55089 (p. 69).
+- **How to cite:** `IMPACT67 E handbook p. N`.
+
+### Murrelektronik IMPACT67 E DIO8 EDS (art. no. 55089)
+
+- **What:** `55089_Impact67_E_DIO16.eds`, EDS revision 1.3 (modified
+  09-18-2017, EZ-EDS 3.21), 43388 bytes, SHA-256
+  `6eb94568f8b5fc73420611ac1633073da2c6e8cda75d81593bd73631807bef3d`; and `55089_Impact67_E_DIO16_Omron.eds` (modified 07-09-2019,
+  EZ-EDS 3.25), 43416 bytes, SHA-256
+  `2320dbc1dded11586c969412e8e0e11182c010325a598af4bd823fc4c1c1f225`: the same file with a fourth, reserved byte in configuration
+  assembly 109 and the two channel parameters as USINT.
+- **Where:** Murrelektronik's shop page for the article, downloaded in
+  a browser by Nick on 2026-11-17 (the page answers a fetch with a
+  script page). No terms in the files; **not committed**. Kept in
+  helmsman-devices' `cache/sha256/`, where `scripts/eds-corpus.sh`
+  looks.
+- **Leaned on by:** `crates/helmsman-io/tests/eds_corpus.rs` (both
+  resolve, with their defaults as configuration data), the device doc's
+  "Its EDS".
+- **How to cite:** `IMPACT67 DIO8 EDS l.N`.
+
+### The bench IMPACT67 E DIO8 and MDrive, 2026-11-16
+
+- **What:** the two units themselves, observed over the wire with
+  stand-alone Python probes (session scratch, not committed: identity
+  and attribute reads, `Forward_Open` variants, a Class 1 originator
+  that times every packet) and with `enip-io` through
+  `examples/conformance` and `examples/enip_soak`; the MDrive also over
+  its MCode/TCP port. What they showed is in
+  docs/devices/murrelektronik-impact67-e.md and novanta-mdrive.md, "On
+  the bench".
+- **Where:** the IMPACT67 at an address from DHCP on the office LAN
+  (revision 1.2); the MDrive at its default 192.168.33.1 (identity
+  revision 2.36, `LMDCM 6.013, Hw: 2.10`).
+- **Leaned on by:** `enip-io`'s `config_data=`, its run/idle header
+  correction, the last packet before a close, the close over a new
+  session, the port hint; `helmsman_proto::io`'s refusal text and the
+  two captured replies in its tests; `helmsman_proto::eds`'s assembly
+  size from members; `E1213Sim::start_idle`.
+- **How to cite:** `IMPACT67 bench 2026-11-16`, `MDrive bench
+  2026-11-16` (and the device doc section).
 
 ### Universal Robots fieldbus files (read 2026-11-10, no robot on the bench)
 

@@ -184,6 +184,27 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   docs/devices/moxa-iologik-e1213.md). Probe a unit with
   `/usr/bin/python3 -I`, a few requests at a time.
 
+## Briefing workers (Nick, 2026-11-18)
+
+A reboot on 2026-11-17 killed four workers at once; one had 40 minutes of
+work and no commit, and two finished PRs would have merged unlooked-at.
+Every worker brief in this repo says:
+
+- **Open the PR as a draft** (`gh pr create --draft --base dev`).
+  .github/workflows/automerge.yml turns auto-merge on for every non-draft
+  PR into dev, so "no auto-merge" in a brief means nothing: the main
+  session marks it ready once it has looked.
+- **Commit at major milestones, and by about 40 minutes of work at the
+  latest.** No stream of small `wip:` commits. Commit before the gate
+  starts, not while it builds: the canvas and the box are stamped with
+  the commit, and a commit made mid-build fails
+  `the_canvas_and_the_box_of_one_checkout_carry_one_stamp`.
+- **Long runs write into the worktree's `target/` or the checkout's
+  `scratch/`**, never the session's /tmp scratch, which a reboot empties.
+- **The brief itself is recoverable**: the card id, the branch and the
+  worktree go into .claude/handoff.md when the worker starts, so a new
+  session can hand the same work to a new worker.
+
 ## Next door
 
 - `../agent-relay`: the relay (Rust, SAM, private repo JimothyJohn/agent-relay,

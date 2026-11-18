@@ -42,8 +42,8 @@ pub struct Diag {
     /// A stable name for the rule that raised it, when it has one (the
     /// lints will).
     pub id: Option<String>,
-    /// A warning that holds a deploy like an error (the lints that block).
-    /// Nothing sets it yet.
+    /// A warning that holds a deploy like an error (the lints that block,
+    /// when no pragma overrides them).
     pub blocking: bool,
 }
 
@@ -86,6 +86,7 @@ impl Diag {
         match (self.is_warning(), &self.id) {
             (false, _) => at,
             (true, None) => format!("warning  {at}"),
+            (true, Some(id)) if self.blocking => format!("warning {id} (holds the deploy)  {at}"),
             (true, Some(id)) => format!("warning {id}  {at}"),
         }
     }

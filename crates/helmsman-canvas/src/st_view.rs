@@ -23,6 +23,9 @@ use helmsman_iec::trace::StmtId;
 pub mod brand {
     use eframe::egui::Color32;
     pub const YELLOW: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x0E);
+    /// The blocks selected to ask the Agent about (and the rubber band
+    /// that selects them): a blue no other mark of the diagram uses.
+    pub const SELECT: Color32 = Color32::from_rgb(0x4D, 0xA3, 0xFF);
     pub const BLACK: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
     pub const GRAPHITE: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x3A);
     pub const STEEL: Color32 = Color32::from_rgb(0x8C, 0x8C, 0x8C);
@@ -239,6 +242,20 @@ pub struct Viewer {
     pub scope: usize,
     pub cams: Vec<Cam>,
     pub pick: Option<Pick>,
+    /// The blocks selected to ask the Agent about (a rubber band, or
+    /// Shift or Ctrl and a click), as blocks of the diagram, in order and
+    /// without repeats; a fold on screen selects every block it holds.
+    /// Apart from `pick`; cleared with it on a new scope or a fold.
+    selected: Vec<NodeId>,
+    /// The rubber band being drawn: where the press was and where the
+    /// pointer is, on screen.
+    band: Option<(Pos2, Pos2)>,
+    /// What the last frame drew as selected.
+    #[cfg(test)]
+    pub(crate) drew_selected: Vec<NodeId>,
+    /// A menu, popup or card of the host is open and takes Escape (the
+    /// host sets it each frame).
+    pub menu_open: bool,
     /// The variable last tapped (an output, or a block's first output),
     /// as a program path.
     pub because: Option<String>,
@@ -281,6 +298,10 @@ pub struct Viewer {
     /// Whether the diagram's gestures change the program (the host sets
     /// it each frame): off unless it says why not ([`crate::diagram_edit`]).
     pub edit_gate: crate::diagram_edit::Gate,
+    /// The diagram's lines are the text the host's files hold, so a block's
+    /// menu has "Chat about this" even while `edit_gate` is off (the host
+    /// sets it each frame).
+    pub chat_ok: bool,
     /// The right click or double click the host has not taken yet.
     pub gesture: Option<crate::diagram_edit::Gesture>,
     /// Why a gesture did nothing, and where it was made: shown until the
@@ -312,12 +333,22 @@ pub struct Viewer {
     /// offset and zoom it left. While the view rests there the next jump
     /// steps on from that stop ([`crate::jump::next`]).
     jumped: Option<(usize, Pick, (Vec2, f32))>,
+    /// An output card was tapped: frame what its path lights once a frame
+    /// has it ([`Viewer::show_output`]).
+    frame_lit: bool,
+    /// The output cards of the source in `.0` ([`Viewer::output_cards`]).
+    cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
+    /// What the zoom closes ([`zoom_fold`]).
+    zoom: zoom_fold::ZoomFolds,
 }
 
 /// Whether folds of `kind` start as their blocks and fold when the reader
 /// asks: the author's own structure. The standard circuits start folded.
 const fn on_request(kind: FoldKind) -> bool {
-    matches!(kind, FoldKind::Arm | FoldKind::Section | FoldKind::Output)
+    matches!(
+        kind,
+        FoldKind::Arm | FoldKind::Section | FoldKind::Statement | FoldKind::Output
+    )
 }
 
 /// Height of the tab over an opened fold's blocks, in diagram units.
@@ -333,12 +364,24 @@ pub struct TreeRow {
     pub folded: bool,
 }
 
+/// What hovering empty diagram space says.
+const EMPTY_TIP: &str = "Click a block to select it, or drag to select the blocks the box touches; \
+Shift or Ctrl adds. The Agent tab then asks about them. Esc, a click here or a click off the diagram \
+lets them go. Move the view with Space and a drag, the middle button, or the arrow keys.";
+
 /// What a drag on the diagram holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Grab {
     Node(NodeId),
     Region(RegionId),
+    /// Moves the view: a middle-button drag, or Space held.
     Pan,
+    /// Draws the rubber band from the press at this screen point.
+    Band(Pos2),
+    /// Empty space: a primary drag from here draws the band.
+    Empty,
+    /// Nothing: a pin, or a button that has no drag.
+    Idle,
 }
 
 /// Where the operator moved blocks, by what they are rather than their
@@ -647,6 +690,7 @@ impl Viewer {
                 helmsman_diagram::fold::auto(d)
                     .into_iter()
                     .chain(by_request.map(Fold::with_blocks))
+                    .chain(structure::statements(d, src))
                     .collect()
             })
             .collect();
@@ -658,6 +702,11 @@ impl Viewer {
             scope: 0,
             cams,
             pick: None,
+            selected: Vec::new(),
+            band: None,
+            #[cfg(test)]
+            drew_selected: Vec::new(),
+            menu_open: false,
             because: None,
             highlight: Vec::new(),
             lit: None,
@@ -674,6 +723,7 @@ impl Viewer {
             baseline: None,
             change: None,
             edit_gate: crate::diagram_edit::Gate::Off(crate::diagram_edit::BOX_REASON.into()),
+            chat_ok: false,
             gesture: None,
             off_note: None,
             assign: Vec::new(),
@@ -683,7 +733,10 @@ impl Viewer {
             fold_moved: Vec::new(),
             views,
             glide: None,
+            frame_lit: false,
+            cards: std::cell::RefCell::new(None),
             jumped: None,
+            zoom: zoom_fold::ZoomFolds::default(),
         };
         v.reshow();
         v
@@ -692,6 +745,7 @@ impl Viewer {
     /// Rebuilds what is drawn for every POU: its diagram with the folds
     /// still closed applied, each block where the operator left it.
     fn reshow(&mut self) {
+        self.refresh_zoom_folds();
         for pou in 0..self.module.pous.len() {
             // The folds the reader made go first (a fold that shares a
             // block with an earlier one is left out): a folded section
@@ -701,15 +755,17 @@ impl Viewer {
             let closed: Vec<Fold> = asked
                 .chain(standard)
                 .filter(|f| self.is_closed(pou, f))
-                .cloned()
+                .map(|f| self.zoom_shape(pou, f))
                 .collect();
             if closed.is_empty() {
                 self.views[pou] = None;
+                self.zoom_unmagnified(pou);
                 continue;
             }
             let mut view = helmsman_diagram::fold::view(&self.module.pous[pou].diagram, &closed);
             if view.folds.is_empty() {
                 self.views[pou] = None;
+                self.zoom_unmagnified(pou);
                 continue;
             }
             for k in 0..view.diagram.nodes.len() {
@@ -728,6 +784,7 @@ impl Viewer {
                 }
             }
             helmsman_diagram::layout::refit(&mut view.diagram);
+            self.zoom_magnify(pou, &mut view);
             self.views[pou] = Some(view);
         }
     }
@@ -736,7 +793,7 @@ impl Viewer {
     fn is_closed(&self, pou: usize, f: &Fold) -> bool {
         let entry = (self.module.pous[pou].name.clone(), f.key.clone());
         if on_request(f.kind) {
-            self.collapsed.contains(&entry)
+            self.collapsed.contains(&entry) || self.zoom.is_shut(pou, &f.key)
         } else {
             !self.opened.contains(&entry)
         }
@@ -800,6 +857,11 @@ impl Viewer {
         match *v.origin.get(n.0 as usize)? {
             Origin::Node(o) => Some((o, input)),
             Origin::Fold(f) => {
+                // A table's pin feeds several rows, each with its own bubble:
+                // there is no one pin of its gates to change.
+                if v.folds[f].kind == FoldKind::Table {
+                    return None;
+                }
                 let helmsman_diagram::fold::Input::Wire { from, negated } = v.ins[f].get(input)? else {
                     return None;
                 };
@@ -857,10 +919,11 @@ impl Viewer {
                 let Origin::Fold(f) = v.origin[s.0 as usize] else {
                     return None;
                 };
+                let table = v.folds[f].kind == FoldKind::Table;
                 v.ins[f].iter().position(|i| {
                     *i == helmsman_diagram::fold::Input::Wire {
                         from: (w.from, w.out),
-                        negated: w.negated,
+                        negated: w.negated && !table,
                     }
                 })?
             }
@@ -905,6 +968,7 @@ impl Viewer {
         let Some(kind) = self.folds[pou].iter().find(|f| f.key == key).map(|f| f.kind) else {
             return;
         };
+        self.zoom_note_hand(key, open);
         let entry = (self.module.pous[pou].name.clone(), key.to_string());
         // What starts as its blocks is kept while folded; what starts
         // folded, while opened.
@@ -919,6 +983,7 @@ impl Viewer {
             set.remove(&entry);
         }
         self.pick = None;
+        self.selected.clear();
         self.edits += 1;
         self.reshow();
     }
@@ -1025,6 +1090,85 @@ impl Viewer {
             .collect()
     }
 
+    /// The rows of each table block drawn, read off `live` (the scan of
+    /// the diagram underneath): a row holds when each of its cells is
+    /// satisfied, and while the table's output is FALSE a cell that is not
+    /// satisfied is what stops its row.
+    fn table_rows(&self, live: Option<&Live>) -> Vec<(NodeId, Vec<TableRow>)> {
+        let Some(v) = self.view() else {
+            return Vec::new();
+        };
+        let value = |(n, out): (NodeId, usize)| -> Option<bool> {
+            match live?.values.get(n.0 as usize)?.get(out).copied().flatten()? {
+                Value::Bool(b) => Some(b),
+                _ => None,
+            }
+        };
+        v.diagram
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let table = v.fold_at(n.id)?.table.as_ref()?;
+                let off = value((table.out, 0)) == Some(false);
+                let rows = table
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        let cells: Vec<TableCell> = row
+                            .iter()
+                            .map(|c| {
+                                let now = value(c.from);
+                                let met = now.map(|b| b != c.negated);
+                                let need = if c.negated { "off" } else { "on" };
+                                let state = match now {
+                                    Some(true) => "TRUE",
+                                    Some(false) => "FALSE",
+                                    None => "unknown",
+                                };
+                                let verdict = match met {
+                                    Some(true) => "It is as the row needs it.",
+                                    Some(false) if off => "This is what stops the row.",
+                                    Some(false) => "The row does not hold.",
+                                    None => "",
+                                };
+                                TableCell {
+                                    label: c.label.clone(),
+                                    must_be_on: !c.negated,
+                                    stops: off && met == Some(false),
+                                    tip: format!(
+                                        "{}: this row needs it {need}. It is {state} now. {verdict}",
+                                        c.label
+                                    )
+                                    .trim_end()
+                                    .to_string(),
+                                }
+                            })
+                            .collect();
+                        let holds = live
+                            .is_some()
+                            .then(|| row.iter().all(|c| value(c.from).is_some_and(|b| b != c.negated)));
+                        TableRow { cells, holds }
+                    })
+                    .collect();
+                Some((n.id, rows))
+            })
+            .collect()
+    }
+
+    /// The hover text of the table cell under screen point `p`.
+    fn cell_tip<'a>(&self, cam: Cam, p: Pos2, tables: &'a [(NodeId, Vec<TableRow>)]) -> Option<&'a str> {
+        let (x, y) = cam.to_world(p);
+        let d = self.shown();
+        let node = d.node(d.node_at(x, y)?);
+        let (_, rows) = tables.iter().find(|(id, _)| *id == node.id)?;
+        rows.iter().enumerate().find_map(|(k, row)| {
+            row.cells.iter().enumerate().find_map(|(j, c)| {
+                let r = layout::body_cell(node, k, j, row.cells.len());
+                (x >= r.x && x <= r.right() && y >= r.y && y <= r.bottom()).then_some(c.tip.as_str())
+            })
+        })
+    }
+
     /// Each opened fold of the POU shown with the box around its blocks
     /// and the tab over it that folds it back, on screen.
     fn opened_tabs(&self, cam: Cam) -> Vec<(String, String, Rect, Rect)> {
@@ -1034,7 +1178,10 @@ impl Viewer {
         for f in &self.folds[pou] {
             // An arm has its region's box and label already; a folded
             // comparison is never opened.
-            if self.is_closed(pou, f) || matches!(f.kind, FoldKind::Arm | FoldKind::Chip) {
+            if self.is_closed(pou, f)
+                || matches!(f.kind, FoldKind::Arm | FoldKind::Chip)
+                || !self.zoom_tab_wanted(pou, f)
+            {
                 continue;
             }
             // Around whatever is drawn for its blocks (a fold inside it
@@ -1216,10 +1363,14 @@ impl Viewer {
     fn references(&self, head: &str) -> Drivers {
         let d = self.diagram();
         let of = |n: &helmsman_diagram::Node| match &n.kind {
-            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => path
-                .split(['.', '['])
-                .next()
-                .is_some_and(|h| h.eq_ignore_ascii_case(head)),
+            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
+                // An address (`%IX0.0`) is one name, dots and all.
+                path.eq_ignore_ascii_case(head)
+                    || path
+                        .split(['.', '['])
+                        .next()
+                        .is_some_and(|h| h.eq_ignore_ascii_case(head))
+            }
             NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
             _ => false,
         };
@@ -1282,6 +1433,129 @@ impl Viewer {
     #[must_use]
     pub const fn edits(&self) -> u64 {
         self.edits
+    }
+
+    /// The keys of the folds of the POU shown.
+    #[cfg(test)]
+    pub(crate) fn fold_keys(&self) -> Vec<String> {
+        self.folds[self.scopes[self.scope].pou]
+            .iter()
+            .map(|f| f.key.clone())
+            .collect()
+    }
+
+    /// The blocks selected to ask the Agent about, as blocks of the
+    /// diagram ([`Self::diagram`]).
+    #[must_use]
+    pub fn selection(&self) -> &[NodeId] {
+        &self.selected
+    }
+
+    /// Selects `nodes` of the diagram: added to the selection when `add`,
+    /// else replacing it. Blocks the diagram lacks are left out.
+    pub fn select(&mut self, nodes: impl IntoIterator<Item = NodeId>, add: bool) {
+        let count = self.diagram().nodes.len();
+        if !add {
+            self.selected.clear();
+        }
+        self.selected
+            .extend(nodes.into_iter().filter(|n| (n.0 as usize) < count));
+        self.selected.sort_unstable();
+        self.selected.dedup();
+    }
+
+    /// Lets the whole selection go: a click off the diagram, anywhere
+    /// but where the selection is being used (the Agent tab).
+    pub fn release_selection(&mut self) {
+        self.selected.clear();
+    }
+
+    /// Takes `nodes` out of the selection.
+    pub fn deselect(&mut self, nodes: &[NodeId]) {
+        self.selected.retain(|n| !nodes.contains(n));
+    }
+
+    /// The blocks of the diagram block `n` as drawn stands for: itself,
+    /// or every block of a fold.
+    fn members(&self, n: NodeId) -> Vec<NodeId> {
+        let Some(v) = self.view() else { return vec![n] };
+        match v.origin.get(n.0 as usize) {
+            Some(Origin::Node(o)) => vec![*o],
+            Some(Origin::Fold(f)) => v.folds[*f].nodes.iter().copied().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Ctrl or Shift and a click: block `n` as drawn joins the selection,
+    /// or leaves it when it is all there already.
+    fn toggle(&mut self, n: NodeId) {
+        let members = self.members(n);
+        if !members.is_empty() && members.iter().all(|m| self.selected.contains(m)) {
+            self.deselect(&members);
+        } else {
+            self.select(members, true);
+        }
+    }
+
+    /// The blocks as drawn that are selected (a fold when any block of
+    /// it is).
+    fn selected_shown(&self) -> Vec<NodeId> {
+        if self.selected.is_empty() {
+            return Vec::new();
+        }
+        self.shown()
+            .nodes
+            .iter()
+            .map(|n| n.id)
+            .filter(|n| self.members(*n).iter().any(|m| self.selected.contains(m)))
+            .collect()
+    }
+
+    /// What is drawn as selected now. While a rubber band is being drawn
+    /// (the button is still down) that is what the band touches so far,
+    /// with the selection it adds to when `add`; the selection itself
+    /// changes when the button is released.
+    fn selected_live(&self, cam: Cam, area: Rect, add: bool) -> Vec<NodeId> {
+        let mut out = self.selected_shown();
+        let Some((a, b)) = self.band else { return out };
+        let band = Rect::from_two_pos(a, b).intersect(area);
+        if band.width() < 2.0 && band.height() < 2.0 {
+            return out;
+        }
+        if !add {
+            out.clear();
+        }
+        out.extend(
+            self.shown()
+                .nodes
+                .iter()
+                .filter(|n| cam.rect(&n.rect).intersects(band))
+                .map(|n| n.id),
+        );
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The rubber band `band` (screen) ends: the blocks it touches are
+    /// selected, added to the selection when `add`. A band no larger than
+    /// a click is a click on empty space.
+    fn finish_band(&mut self, cam: Cam, area: Rect, band: Rect, add: bool) {
+        let band = band.intersect(area);
+        if band.width() < 2.0 && band.height() < 2.0 {
+            if !add {
+                self.selected.clear();
+            }
+            return;
+        }
+        let touched: Vec<NodeId> = self
+            .shown()
+            .nodes
+            .iter()
+            .filter(|n| cam.rect(&n.rect).intersects(band))
+            .flat_map(|n| self.members(n.id))
+            .collect();
+        self.select(touched, add);
     }
 
     /// A block or region is being dragged.
@@ -1476,6 +1750,7 @@ impl Viewer {
         self.edits += 1;
         self.opened.clear();
         self.collapsed.clear();
+        self.zoom.forget();
         self.reshow();
     }
 
@@ -1643,12 +1918,62 @@ impl Viewer {
         out
     }
 
+    /// One card per output of the program: its `VAR_OUTPUT`s (assigned or
+    /// not) and the located outputs it assigns, in declaration order, each
+    /// with the signals it finally depends on.
+    #[must_use]
+    pub fn output_cards(&self) -> Vec<crate::io_cards::OutputCard> {
+        if let Some((src, cards)) = &*self.cards.borrow()
+            && *src == self.src
+        {
+            return cards.clone();
+        }
+        let cards = self.make_cards();
+        *self.cards.borrow_mut() = Some((self.src.clone(), cards.clone()));
+        cards
+    }
+
+    fn make_cards(&self) -> Vec<crate::io_cards::OutputCard> {
+        let Some(k) = self
+            .module
+            .pous
+            .iter()
+            .position(|p| p.kind == helmsman_iec::ast::PouKind::Program)
+        else {
+            return Vec::new();
+        };
+        let p = &self.module.pous[k];
+        let written = |name: &str| {
+            p.diagram
+                .nodes
+                .iter()
+                .any(|n| matches!(&n.kind, NodeKind::Write { path } if path == name))
+        };
+        let mut outs: Vec<(&String, &Var)> = p
+            .vars
+            .iter()
+            .filter(|(name, v)| {
+                v.fb.is_none()
+                    && (v.section == helmsman_iec::ast::Section::Output || (v.located && written(name)))
+            })
+            .collect();
+        outs.sort_by(|a, b| (a.1.line, a.0).cmp(&(b.1.line, b.0)));
+        outs.into_iter()
+            .map(|(name, _)| crate::io_cards::OutputCard {
+                name: name.clone(),
+                signals: helmsman_diagram::signals(&self.module, k, name),
+                driven: written(name),
+            })
+            .collect()
+    }
+
     /// The scope picker (program, or a block through one instance).
     /// Shows scope `k`: the program or a block instance.
     pub fn open(&mut self, k: usize) {
         if k < self.scopes.len() && k != self.scope {
             self.scope = k;
             self.pick = None;
+            self.selected.clear();
         }
     }
 
@@ -1816,43 +2141,91 @@ impl Viewer {
         hit
     }
 
-    /// The outputs with their values; a click picks one.
-    pub fn outputs_ui(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
-        ui.label(RichText::new("Outputs").strong())
-            .tip("Click an output to light the path that sets it in the diagram.");
-        let t = theme(ui);
-        for path in self.outputs() {
-            let value = scan.and_then(|s| s.get(&path));
-            let on = value == Some(Value::Bool(true));
-            let color = if on {
-                crate::lamps::colour(&path).map_or(t.accent, |c| t.ink(c))
-            } else {
-                t.fg
-            };
-            let text = RichText::new(format!("{} {path} = {}", if on { "●" } else { "○" }, show(value)))
-                .monospace()
-                .color(color);
-            let glyph = crate::glyph_lib::for_point(&path, false, matches!(value, Some(Value::Bool(_))));
-            let clicked = ui
-                .horizontal(|ui| {
-                    crate::glyph_lib::show(
-                        ui,
-                        glyph,
-                        crate::glyphs::ROW,
-                        color,
-                        crate::glyph_lib::tip(glyph),
-                    );
-                    let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
-                        .min_size(Vec2::new(ui.available_width(), TAP));
-                    ui.add(row)
-                        .tip("Click to light why it has this value in the diagram.")
-                        .clicked()
-                })
-                .inner;
-            if clicked {
-                self.because = Some(path);
-            }
+    /// A tap on an output's card: its program path lit on the program's
+    /// diagram (as a click on its write gives), and the view eased to
+    /// frame what is lit once the next frame draws it. Folds stay as they
+    /// are: a lit block inside a closed fold lights the fold.
+    pub fn show_output(&mut self, path: &str) {
+        if self.scope != 0 {
+            self.open(0);
         }
+        self.xref = None;
+        self.because = Some(path.to_ascii_uppercase());
+        self.frame_lit = true;
+    }
+
+    /// The diagram glyph of a point's card: every block of the program
+    /// that reads or writes `name` lit, as Cross references lights them,
+    /// and the view eased to frame them. It needs no scan, so it shows
+    /// where a point is while the program is stopped. An address
+    /// (`%IX0.0`) is lit by its own spelling.
+    pub fn show_signal(&mut self, name: &str) {
+        if self.scope != 0 {
+            self.open(0);
+        }
+        let head = name.split(['.', '[']).next().unwrap_or(name);
+        let head = if name.starts_with('%') { name } else { head };
+        self.because = None;
+        self.xref = Some(head.to_ascii_uppercase());
+        self.frame_lit = true;
+    }
+
+    /// The source line that declares the program's variable `name`.
+    #[must_use]
+    pub fn declared_line(&self, name: &str) -> Option<u32> {
+        let head = name.split(['.', '[']).next()?.to_ascii_uppercase();
+        self.module.program()?.vars.get(&head).map(|v| v.line)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn frame_lit_pending(&self) -> bool {
+        self.frame_lit
+    }
+
+    /// Frames the lit blocks (`lit`, on the diagram shown) in `area`, at
+    /// the zoom the view has unless they do not fit. Waits while there is
+    /// no scan to light them from; gives up when a scan lights nothing.
+    fn frame_output(&mut self, lit: Option<&Drivers>, have_scan: bool, area: Rect, now: f64) {
+        let Some(on) = lit else {
+            self.frame_lit = !have_scan;
+            return;
+        };
+        self.frame_lit = false;
+        let Some(rect) = self.lit_bounds(on) else {
+            return;
+        };
+        let cam = self.cams[self.scope];
+        let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
+        let mut to = cam;
+        to.frame_within(below, &rect, cam.zoom.min(FOCUS_MAX));
+        to.clamp(area, self.shown().size);
+        self.cams[self.scope].moved = true;
+        self.glide = Some(Glide {
+            scope: self.scope,
+            from: (cam.offset, cam.zoom),
+            to: (to.offset, to.zoom),
+            t0: now,
+        });
+        self.jumped = None;
+    }
+
+    /// The box around the blocks of the diagram shown that `on` lights.
+    #[must_use]
+    pub(crate) fn lit_bounds(&self, on: &Drivers) -> Option<helmsman_diagram::Rect> {
+        self.shown()
+            .nodes
+            .iter()
+            .filter(|n| on.node(n.id))
+            .map(|n| n.rect)
+            .reduce(|a, b| {
+                let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+                helmsman_diagram::Rect {
+                    x,
+                    y,
+                    w: a.right().max(b.right()) - x,
+                    h: a.bottom().max(b.bottom()) - y,
+                }
+            })
     }
 
     /// The variable a tap on node `n` asks about: a variable read or
@@ -1993,7 +2366,7 @@ impl Viewer {
             .iter()
             .filter(|r| r.rect.contains(x, y) && y <= r.rect.y + LABEL_H)
             .min_by(|a, b| (a.rect.w * a.rect.h).total_cmp(&(b.rect.w * b.rect.h)))
-            .map_or(Grab::Pan, |r| Grab::Region(r.id))
+            .map_or(Grab::Empty, |r| Grab::Region(r.id))
     }
 
     /// The stops of the diagram shown ([`crate::jump::stops`]), each
@@ -2071,7 +2444,7 @@ impl Viewer {
             return;
         };
         let mut to = cam;
-        to.frame(below, &stops[k].rect);
+        self.zoom_frame(&mut to, below, &stops[k].rect);
         to.clamp(area, self.shown().size);
         let to = (to.offset, to.zoom);
         self.cams[self.scope].moved = true;
@@ -2176,11 +2549,17 @@ impl Viewer {
                 ui.ctx().request_repaint();
             }
         }
-        let double = response.double_clicked();
+        let additive = ui
+            .ctx()
+            .input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
+        // Shift or Ctrl clicks select; they do not also open or fit.
+        let double = response.double_clicked() && !additive;
         if (cam.offset, cam.zoom) != glided || double || response.dragged() {
             self.glide = None;
         }
-        let cam = *cam;
+        // The level follows the zoom the frame ended at; the camera is read
+        // again, as a level change keeps the diagram under the pointer.
+        let cam = self.follow_zoom(hover.filter(|_| response.hovered()), area);
         // A double click on a block instance opens it; anywhere else it
         // fits the diagram to the view.
         if double
@@ -2218,26 +2597,88 @@ impl Viewer {
                 None => self.cams[self.scope].fitted = false,
             }
         }
-        // A drag that starts on a block moves it, on a region's label moves
-        // the region with all it holds, anywhere else pans.
+        // A primary drag that starts on a block moves it, on a region's
+        // label moves the region with all it holds, on empty space draws a
+        // rubber band that selects the blocks it touches. A middle-button
+        // drag, or any drag with Space held, moves the view.
         if response.drag_started() {
-            let at = ui.ctx().input(|i| i.pointer.press_origin());
-            self.grab = Some(at.map_or(Grab::Pan, |p| self.grab_at(cam, p)));
+            let (at, primary, middle, space) = ui.ctx().input(|i| {
+                (
+                    i.pointer.press_origin(),
+                    i.pointer.button_down(egui::PointerButton::Primary),
+                    i.pointer.button_down(egui::PointerButton::Middle),
+                    i.key_down(egui::Key::Space),
+                )
+            });
+            self.grab = Some(match at {
+                None => Grab::Idle,
+                Some(_) if middle || space => Grab::Pan,
+                Some(_) if !primary => Grab::Idle,
+                Some(p) => match self.grab_at(cam, p) {
+                    Grab::Empty if self.on_pin(cam, p) => Grab::Idle,
+                    Grab::Empty => Grab::Band(p),
+                    g => g,
+                },
+            });
         }
         if response.dragged() {
             let by = response.drag_delta();
             match self.grab {
-                Some(Grab::Node(n)) => self.move_shown(n, by / cam.zoom),
-                Some(Grab::Region(r)) => self.move_shown_region(r, by / cam.zoom),
-                _ => {
+                Some(Grab::Node(n)) => self.move_shown(n, by / cam.zoom / self.zoom_scale()),
+                Some(Grab::Region(r)) => self.move_shown_region(r, by / cam.zoom / self.zoom_scale()),
+                Some(Grab::Pan) => {
                     let cam = &mut self.cams[self.scope];
                     cam.offset += by;
                     cam.moved = true;
                 }
+                Some(Grab::Band(from)) => {
+                    self.band = hover.map(|to| (from, to));
+                }
+                _ => {}
             }
         }
         if response.drag_stopped() {
+            if let Some(Grab::Band(from)) = self.grab {
+                let to = self.band.map_or(from, |(_, to)| to);
+                let add = ui
+                    .ctx()
+                    .input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
+                self.finish_band(cam, area, Rect::from_two_pos(from, to), add);
+            }
             self.grab = None;
+            self.band = None;
+        }
+        // Escape leaves a band half drawn, else clears the selection, but
+        // only when nothing else is using it: a menu or popup, a note, a
+        // modal question or a field with the cursor in it.
+        let busy = self.menu_open
+            || self.off_note.is_some()
+            || ui.ctx().any_popup_open()
+            || ui
+                .ctx()
+                .memory(|m| m.focused().is_some() || m.top_modal_layer().is_some());
+        // Whether a field, popup or modal had Escape's use at the last
+        // frame's canvas: panels drawn before the diagram have let go of
+        // their focus by the time Escape reaches it.
+        let busy_id = ui.scope_id().with("escape-busy");
+        let was_busy = ui.ctx().data_mut(|d| {
+            let id = busy_id;
+            let was = d.get_temp::<bool>(id).unwrap_or(false);
+            d.insert_temp(id, busy);
+            was
+        });
+        if (self.band.is_some() || !self.selected.is_empty())
+            && !busy
+            && !was_busy
+            && ui
+                .ctx()
+                .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            if self.band.take().is_some() {
+                self.grab = Some(Grab::Idle);
+            } else {
+                self.selected.clear();
+            }
         }
         let size = self.shown().size;
         self.cams[self.scope].clamp(area, size);
@@ -2254,13 +2695,32 @@ impl Viewer {
             // A tap on a state opens the sequence on that state's arm.
             self.open_arm(&key, arm, area, now);
         } else if response.clicked()
+            && additive
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            // Shift or Ctrl and a click on a block: in the selection or
+            // out of it. On empty space nothing changes.
+            let (x, y) = cam.to_world(p);
+            if let Some(n) = node_near(self.shown(), x, y, TAP / 2.0 / cam.zoom) {
+                self.toggle(n);
+            }
+        } else if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
         {
             let (x, y) = cam.to_world(p);
-            let d = self.shown();
             // A finger is wider than a block at low zoom: the nearest
             // block within half a tap target counts.
             let slop = TAP / 2.0 / cam.zoom;
+            // A plain click on a block selects that block alone; off the
+            // blocks it deselects (Nick, 2026-11-17).
+            match node_near(self.shown(), x, y, slop) {
+                Some(n) => {
+                    let members = self.members(n);
+                    self.select(members, false);
+                }
+                None => self.selected.clear(),
+            }
+            let d = self.shown();
             let region = |r: RegionId| self.view().map_or(r, |v| v.region_origin[r.0 as usize]);
             self.pick = match node_near(d, x, y, slop) {
                 Some(n) => self.pick_of(n).map(Pick::Node),
@@ -2308,6 +2768,15 @@ impl Viewer {
             (Some(v), Some(on)) => Some(v.drivers(on)),
             (_, on) => on.clone(),
         };
+        if self.frame_lit {
+            self.frame_output(lit.as_ref(), scan.is_some(), area, ui.input(|i| i.time));
+            ui.ctx().request_repaint();
+        }
+        let selected = self.selected_live(cam, area, additive);
+        #[cfg(test)]
+        {
+            self.drew_selected.clone_from(&selected);
+        }
         let mut added: Vec<NodeId> = added.into_iter().filter_map(|n| self.to_shown(n)).collect();
         added.dedup();
         let pick = match self.pick {
@@ -2328,10 +2797,13 @@ impl Viewer {
         );
         let tabs = self.opened_tabs(cam);
         let rows = self.state_rows(live.as_ref());
+        let tables = self.table_rows(live.as_ref());
         if response.hovered()
             && let Some(p) = hover
         {
-            if self.chip_at(cam, p).is_some() {
+            if let Some(tip) = self.cell_tip(cam, p, &tables) {
+                response.clone().on_hover_text_at_pointer(tip);
+            } else if self.chip_at(cam, p).is_some() {
                 response
                     .clone()
                     .on_hover_text_at_pointer("A state of this sequence. Click to see what it does.");
@@ -2348,6 +2820,14 @@ impl Viewer {
                     .clone()
                     .on_hover_text_at_pointer("Double-click draws what this arm does as one block.");
             }
+        }
+        if response.hovered()
+            && let Some(p) = hover
+            && self.grab.is_none()
+            && !self.on_pin(cam, p)
+            && matches!(self.grab_at(cam, p), Grab::Empty)
+        {
+            response.clone().on_hover_text_at_pointer(EMPTY_TIP);
         }
         if response.hovered()
             && let Some(p) = hover
@@ -2385,9 +2865,12 @@ impl Viewer {
                 breaks: &self.breaks,
                 paused: self.paused,
                 added: &added,
+                selected: &selected,
                 opens: &opens,
                 ghosts: old.map(|o| (o, removed.as_slice())),
                 rows: &rows,
+                tables: &tables,
+                far: self.zoom_far(),
             },
         );
         for (_, title, around, tab) in &tabs {
@@ -2405,6 +2888,16 @@ impl Viewer {
                 title,
                 font(10.0 * z),
                 t.fg,
+            );
+        }
+        if let Some((a, b)) = self.band {
+            let band = Rect::from_two_pos(a, b);
+            painter.rect_filled(band, CornerRadius::ZERO, brand::SELECT.gamma_multiply(0.12));
+            painter.rect_stroke(
+                band,
+                CornerRadius::ZERO,
+                Stroke::new(1.5, brand::SELECT),
+                StrokeKind::Inside,
             );
         }
         self.off_note_ui(ui, area);
@@ -2518,14 +3011,80 @@ pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
 /// removed ones (the brand red, ghosted).
 const ADDED: Color32 = brand::GREEN;
 
-/// Blocks the Agent's change removed, drawn where they were in the old
-/// diagram: a faint red fill, a red outline and their label, and the old
-/// wires between two removed blocks, so what went is seen in place.
-fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[NodeId]) {
+/// The area two blocks' rectangles share, in diagram units squared.
+fn overlap(a: &helmsman_diagram::Rect, b: &helmsman_diagram::Rect) -> f32 {
+    // `min` and `max` step over a NaN, which would make an area of it.
+    if ![a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return 0.0;
+    }
+    let w = a.right().min(b.right()) - a.x.max(b.x);
+    let h = a.bottom().min(b.bottom()) - a.y.max(b.y);
+    if w > 0.0 && h > 0.0 { w * h } else { 0.0 }
+}
+
+/// For each removed block of `old`, the block of the diagram drawn now
+/// that its old place lies over, if any: the one it shares most area
+/// with, a block the change added before any other (that is what took
+/// its place). A removed block over nothing has `None`.
+fn hosts(old: &Diagram, removed: &[NodeId], new: &Diagram, added: &[NodeId]) -> Vec<Option<NodeId>> {
+    removed
+        .iter()
+        .map(|id| {
+            let was = &old.nodes.get(id.0 as usize)?.rect;
+            let most = |only_added: bool| {
+                new.nodes
+                    .iter()
+                    .filter(|n| !only_added || added.contains(&n.id))
+                    .map(|n| (n.id, overlap(was, &n.rect)))
+                    .filter(|(_, area)| *area > 0.0)
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(n, _)| n)
+            };
+            most(true).or_else(|| most(false))
+        })
+        .collect()
+}
+
+/// A removed block's name on a tag: its label on one line, cut short.
+fn ghost_name(label: &str) -> String {
+    let one: String = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() > 18 {
+        format!("{}…", one.chars().take(17).collect::<String>())
+    } else {
+        one
+    }
+}
+
+/// Blocks the Agent's change removed. One whose old place is free on the
+/// diagram drawn now is a ghost there: a faint red fill, a red outline
+/// and its label, with the old wires between two such ghosts. One whose
+/// old place is under a block of the new diagram (the layout moved, or
+/// that block replaced it) would lie half over it, a little off (Nick,
+/// 2026-11-17: "looks kinda janky"), so it is a small red tag over that
+/// block's top right corner instead: `was = 1` on a block the change
+/// added, `removed = 1` on one it did not.
+fn draw_ghosts(
+    painter: &egui::Painter,
+    cam: Cam,
+    old: &Diagram,
+    removed: &[NodeId],
+    new: &Diagram,
+    added: &[NodeId],
+) {
     let z = cam.zoom;
     let red = brand::RED;
+    let hosts = hosts(old, removed, new, added);
+    let free = |id: &NodeId| {
+        removed
+            .iter()
+            .position(|r| r == id)
+            .is_some_and(|k| hosts[k].is_none())
+    };
     for w in &old.wires {
-        if removed.contains(&w.from) && removed.contains(&w.to) {
+        if free(&w.from) && free(&w.to) {
             let (a, b) = (old.node(w.from), old.node(w.to));
             let (ax, ay) = out_port(a, w.out);
             let (bx, by) = in_port(b, w.inp);
@@ -2539,10 +3098,20 @@ fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[Node
             );
         }
     }
-    for id in removed {
+    // The tags of each host, in the order the blocks were removed.
+    let mut tags: Vec<(NodeId, Vec<String>)> = Vec::new();
+    for (id, host) in removed.iter().zip(&hosts) {
         let Some(n) = old.nodes.get(id.0 as usize) else {
             continue;
         };
+        if let Some(h) = host {
+            let name = ghost_name(&n.label);
+            match tags.iter_mut().find(|(t, _)| t == h) {
+                Some((_, names)) => names.push(name),
+                None => tags.push((*h, vec![name])),
+            }
+            continue;
+        }
         let r = cam.rect(&n.rect);
         painter.rect_filled(r, CornerRadius::same(4), red.gamma_multiply(0.12));
         painter.rect_stroke(
@@ -2560,6 +3129,27 @@ fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[Node
                 red.gamma_multiply(0.75),
             );
         }
+    }
+    if z <= 0.35 {
+        return;
+    }
+    for (host, names) in tags {
+        let r = cam.rect(&new.node(host).rect);
+        let word = if added.contains(&host) { "was" } else { "removed" };
+        let more = names.len().saturating_sub(2);
+        let shown = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+        let text = if more > 0 {
+            format!("{word} {shown} +{more}")
+        } else {
+            format!("{word} {shown}")
+        };
+        painter.text(
+            Pos2::new(r.max.x, r.min.y - 3.0 * z),
+            Align2::RIGHT_BOTTOM,
+            text,
+            font(9.5 * z),
+            red,
+        );
     }
 }
 
@@ -2583,6 +3173,8 @@ struct Marks<'a> {
     paused: Option<StmtId>,
     /// Blocks the Agent's last change added: outlined green.
     added: &'a [NodeId],
+    /// Blocks selected to ask the Agent about: outlined blue.
+    selected: &'a [NodeId],
     /// Blocks that open into a diagram of their own: drawn as a stack.
     opens: &'a [NodeId],
     /// Blocks it removed, in the old diagram: drawn as red ghosts where
@@ -2590,6 +3182,32 @@ struct Marks<'a> {
     ghosts: Option<(&'a Diagram, &'a [NodeId])>,
     /// The rows of the state blocks drawn, by block ([`Viewer::state_rows`]).
     rows: &'a [(NodeId, Vec<StateRow>)],
+    /// The rows of the table blocks drawn, by block ([`Viewer::table_rows`]).
+    tables: &'a [(NodeId, Vec<TableRow>)],
+    /// Drawn at the far level: the blocks of the author's structure carry
+    /// their title at a fixed size on screen ([`zoom_fold`]).
+    far: bool,
+}
+
+/// One row of a table block, as [`draw`] paints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRow {
+    pub cells: Vec<TableCell>,
+    /// Whether every cell is satisfied in the scan drawn; `None` with no
+    /// scan.
+    pub holds: Option<bool>,
+}
+
+/// One condition of a table row, as [`draw`] paints it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableCell {
+    pub label: String,
+    /// The row needs the signal on (a filled mark); off is the bubble.
+    pub must_be_on: bool,
+    /// The table's output is FALSE and this cell is not satisfied.
+    pub stops: bool,
+    /// What the hover says.
+    pub tip: String,
 }
 
 /// One state of a state block, as [`draw`] paints it.
@@ -2599,6 +3217,61 @@ pub struct StateRow {
     pub label: String,
     /// Whether the arm ran in the scan drawn; `None` with no scan.
     pub on: Option<bool>,
+}
+
+/// Row `k` of table block `n`: a chip per cell, the signal and a mark of
+/// what the row needs of it (a filled dot on, the bubble off). A row that
+/// holds is lit as a state is; while the output is FALSE the cells that
+/// stop their rows are red. `look` is whether text is drawn and how
+/// faded the block is.
+fn draw_table_row(
+    painter: &egui::Painter,
+    t: &Theme,
+    cam: Cam,
+    n: &helmsman_diagram::Node,
+    k: usize,
+    row: &TableRow,
+    (text, fade): (bool, f32),
+) {
+    let z = cam.zoom;
+    let chip = CornerRadius::same(3);
+    let lit = row.holds == Some(true);
+    for (j, cell) in row.cells.iter().enumerate() {
+        let c = cam.rect(&layout::body_cell(n, k, j, row.cells.len()));
+        let (fill, ink, edge) = if cell.stops {
+            (brand::OFF_RED, t.ink(brand::RED), brand::RED)
+        } else if lit {
+            (YELLOW, BLACK, YELLOW)
+        } else {
+            (t.shade, t.fg, t.edge)
+        };
+        painter.rect_filled(c, chip, fill.gamma_multiply(fade));
+        painter.rect_stroke(c, chip, Stroke::new(1.0 * z.max(0.6), edge), StrokeKind::Inside);
+        let mark = Pos2::new(c.left() + 6.0 * z, c.center().y);
+        if cell.must_be_on {
+            painter.circle_filled(mark, 2.5 * z, ink.gamma_multiply(fade));
+        } else {
+            painter.circle_stroke(
+                mark,
+                2.5 * z,
+                Stroke::new(1.3 * z.max(0.6), ink.gamma_multiply(fade)),
+            );
+        }
+        if text {
+            let g = fitted(
+                painter,
+                &cell.label,
+                font(11.0 * z),
+                ink.gamma_multiply(fade),
+                c.width() - 14.0 * z,
+            );
+            painter.galley(
+                Pos2::new(c.left() + 11.0 * z, c.center().y - g.size().y / 2.0),
+                g,
+                ink,
+            );
+        }
+    }
 }
 
 /// Where a statement is marked on the diagram: the blocks it ends in, or
@@ -2727,9 +3400,12 @@ fn draw(
         breaks,
         paused,
         added,
+        selected,
         opens,
         ghosts,
         rows,
+        tables,
+        far,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -2954,6 +3630,15 @@ fn draw(
                 ));
             }
         }
+        if selected.contains(&n.id) {
+            painter.rect_filled(r, radius, brand::SELECT.gamma_multiply(0.14));
+            painter.rect_stroke(
+                r.expand(3.0 * z),
+                CornerRadius::same(6),
+                Stroke::new(2.5 * z.max(0.6), brand::SELECT),
+                StrokeKind::Outside,
+            );
+        }
         if added.contains(&n.id) {
             painter.rect_stroke(
                 r.expand(3.0 * z),
@@ -2974,13 +3659,35 @@ fn draw(
         // A standard block takes its picture from the glyph library
         // instead of its character (`Icons::glyph`).
         let states = rows.iter().find(|(id, _)| *id == n.id).map(|(_, r)| r.as_slice());
-        let glyph = icons.glyph(n).filter(|_| states.is_none());
-        let icon = if glyph.is_some() || states.is_some() {
+        let grid = tables
+            .iter()
+            .find(|(id, _)| *id == n.id)
+            .map(|(_, r)| r.as_slice());
+        let glyph = icons.glyph(n).filter(|_| states.is_none() && grid.is_none());
+        let icon = if glyph.is_some() || states.is_some() || grid.is_some() {
             None
         } else {
             icons.of(n)
         };
-        if !text {
+        let far_fold = far
+            && matches!(n.kind, NodeKind::Fold { kind, .. } if helmsman_diagram::fold::zoom::managed(kind));
+        if far_fold {
+            // On the block's body (a headed block) or on a dimmed yellow: the
+            // page's ink reads on both.
+            let title_ink = if two_tone || !ran { t.fg } else { ink };
+            // The title at the floor size on screen, whatever the zoom:
+            // the block was laid out to hold it ([`zoom_fold`]). A section
+            // the scan did not run is dimmed with the block.
+            let label = zoom_fold::far_text(&n.label, r.width());
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                label,
+                font(helmsman_diagram::fold::zoom::FAR_FLOOR_PT),
+                title_ink,
+            );
+        }
+        if !text && !far_fold {
             if let Some(g) = glyph {
                 let side = (18.0 * z).max(14.0);
                 crate::glyph_lib::paint(
@@ -3031,6 +3738,9 @@ fn draw(
                     ink,
                 );
             }
+        }
+        for (k, row) in grid.into_iter().flatten().enumerate() {
+            draw_table_row(painter, t, cam, n, k, row, (text, fade));
         }
         if text {
             let band = if two_tone { h } else { r };
@@ -3120,9 +3830,9 @@ fn draw(
             }
         }
     }
-    // Last, so what the Agent removed shows over whatever took its place.
+    // Last, so what the Agent removed shows over the blocks drawn now.
     if let Some((old, removed)) = ghosts {
-        draw_ghosts(painter, cam, old, removed);
+        draw_ghosts(painter, cam, old, removed, d, added);
     }
 }
 
@@ -3130,6 +3840,9 @@ fn draw(
 #[cfg(test)]
 #[path = "st_view_fold_tests.rs"]
 mod fold_tests;
+
+#[path = "st_zoom.rs"]
+mod zoom_fold;
 
 #[cfg(test)]
 mod hold_tests {
@@ -3534,6 +4247,107 @@ END_PROGRAM
         NodeKind::Write { path: path.into() }
     }
 
+    /// The cards (`io_cards`): the program's outputs, each with the
+    /// signals it finally depends on; a latch does not list itself.
+    #[test]
+    fn the_cards_are_the_outputs_with_the_signals_that_set_them() {
+        let h = Harness::new();
+        let cards = h.sv.view.output_cards();
+        let got: Vec<(&str, Vec<String>, bool)> = cards
+            .iter()
+            .map(|c| {
+                (
+                    c.name.as_str(),
+                    c.signals
+                        .iter()
+                        .map(|s| format!("{:?}:{}", s.kind, s.name))
+                        .collect(),
+                    c.driven,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "MOTOR",
+                    vec!["Input:START".into(), "Input:STOP".into(), "Kept:MOTOR".into()],
+                    true
+                ),
+                ("LAMP", vec!["Input:OTHER".into()], true),
+            ],
+            "COUNT and the inputs are no outputs"
+        );
+    }
+
+    #[test]
+    fn an_output_nothing_sets_has_a_card_that_says_so() {
+        let src = "PROGRAM p
+VAR_INPUT a : BOOL; END_VAR
+VAR_OUTPUT y : BOOL; z : BOOL; END_VAR
+z := a;
+END_PROGRAM
+";
+        let session = Session::new(src);
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let cards = Viewer::new(src, module).output_cards();
+        assert_eq!(cards.len(), 2);
+        assert_eq!((cards[0].name.as_str(), cards[0].driven), ("Y", false));
+        assert_eq!(cards[0].signals.len(), 0);
+        assert_eq!((cards[1].name.as_str(), cards[1].driven), ("Z", true));
+    }
+
+    /// A tap on a card is a click on that output's write: the same path
+    /// lit, and the view eased to frame every lit block without zooming
+    /// in past where it was.
+    #[test]
+    fn a_card_lights_what_a_click_on_its_write_lights_and_frames_it() {
+        let mut h = Harness::new();
+        h.click(h.at(&write("MOTOR")));
+        h.frame(vec![]);
+        let by_click = h.sv.view.highlighted().cloned().unwrap();
+        // Empty space clears it; pan far off, then tap the card.
+        h.click(Pos2::new(1190.0, 790.0));
+        assert!(h.sv.view.highlighted().is_none());
+        let zoom = h.sv.view.cams[0].zoom;
+        h.sv.view.cams[0].offset += Vec2::new(-900.0, -300.0);
+        h.sv.view.show_output("motor");
+        for _ in 0..60 {
+            h.frame(vec![]);
+        }
+        let on = h.sv.view.highlighted().cloned().unwrap();
+        assert_eq!(on, by_click, "the path a click gives");
+        let cam = h.sv.view.cams[0];
+        assert!(
+            cam.zoom <= zoom + 1e-3,
+            "no closer than it was: {} > {zoom}",
+            cam.zoom
+        );
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        let bounds = h.sv.view.lit_bounds(&on).unwrap();
+        assert!(
+            screen.contains_rect(cam.rect(&bounds)),
+            "every lit block is in view: {:?}",
+            cam.rect(&bounds)
+        );
+        assert!(!h.sv.view.frame_lit, "asked once");
+    }
+
+    #[test]
+    fn a_card_for_an_output_with_no_path_here_frames_nothing_and_asks_once() {
+        let mut h = Harness::new();
+        let cam = h.sv.view.cams[0];
+        h.sv.view.show_output("nowhere");
+        for _ in 0..10 {
+            h.frame(vec![]);
+        }
+        assert!(!h.sv.view.frame_lit);
+        assert_eq!(
+            (h.sv.view.cams[0].offset, h.sv.view.cams[0].zoom),
+            (cam.offset, cam.zoom)
+        );
+    }
+
     /// Edit › Go to definition and Cross references (hotkey cards,
     /// 2026-11-01): the picked block's variable, its VAR line, and every
     /// read and write of it lit until the next click.
@@ -3618,5 +4432,102 @@ END_PROGRAM
         assert_eq!(h.sv.view.because, None);
         assert!(h.sv.view.highlighted().is_none());
         assert_eq!(h.lit(), Vec::<String>::new());
+    }
+}
+
+#[cfg(test)]
+mod ghost_tests {
+    //! Where a removed block is shown ([`hosts`]): as a ghost in its old
+    //! place when that is free, else as a tag on the block over it.
+
+    use helmsman_diagram::{Diagram, NodeId, NodeKind, Rect as Area};
+
+    use super::{ghost_name, hosts, overlap};
+
+    fn diagram(src: &str) -> Diagram {
+        let build = crate::playground::Build::new(src).0.expect("compiles");
+        build
+            .module
+            .expect("lowers")
+            .program()
+            .expect("a program")
+            .diagram
+            .clone()
+    }
+
+    fn area(x: f32, y: f32, w: f32, h: f32) -> Area {
+        Area { x, y, w, h }
+    }
+
+    #[test]
+    fn overlap_is_the_shared_area_and_never_negative() {
+        let a = area(0.0, 0.0, 10.0, 10.0);
+        assert!((overlap(&a, &area(5.0, 5.0, 10.0, 10.0)) - 25.0).abs() < 1e-3);
+        assert!((overlap(&a, &a) - 100.0).abs() < 1e-3);
+        assert!(
+            overlap(&a, &area(10.0, 0.0, 5.0, 5.0)).abs() < 1e-6,
+            "touching edges share nothing"
+        );
+        assert!(overlap(&a, &area(50.0, 50.0, 5.0, 5.0)).abs() < 1e-6);
+        assert!(
+            overlap(&a, &area(2.0, 2.0, -4.0, 3.0)).abs() < 1e-6,
+            "a negative size is no area"
+        );
+        assert!(
+            overlap(&a, &area(f32::NAN, 0.0, 5.0, 5.0)).abs() < 1e-6,
+            "NaN is no area"
+        );
+    }
+
+    #[test]
+    fn a_replaced_block_is_tagged_on_what_took_its_place_and_a_free_one_stays_a_ghost() {
+        let old = diagram(
+            "PROGRAM p\nVAR_INPUT a : BOOL; b : BOOL; END_VAR\nVAR_OUTPUT x : BOOL; END_VAR\nx := a AND b;\nEND_PROGRAM\n",
+        );
+        let new = diagram(
+            "PROGRAM p\nVAR_INPUT a : BOOL; b : BOOL; END_VAR\nVAR_OUTPUT x : BOOL; END_VAR\nx := a OR b;\nEND_PROGRAM\n",
+        );
+        let op = |d: &Diagram, label: &str| {
+            d.nodes
+                .iter()
+                .find(|n| {
+                    !matches!(n.kind, NodeKind::Read { .. } | NodeKind::Write { .. })
+                        && n.label.contains(label)
+                })
+                .unwrap_or_else(|| panic!("no {label} block"))
+                .id
+        };
+        let (and, or) = (op(&old, "AND"), op(&new, "OR"));
+        // The same shape of program: OR is laid out where AND was.
+        assert_eq!(
+            hosts(&old, &[and], &new, &[or]),
+            vec![Some(or)],
+            "on the block that replaced it"
+        );
+        // An unchanged block is over it too, but the added one is named.
+        let all: Vec<NodeId> = new.nodes.iter().map(|n| n.id).collect();
+        assert_eq!(hosts(&old, &[and], &new, &all), vec![Some(or)]);
+        // Nothing added: still tagged on whatever is drawn there now.
+        assert_eq!(hosts(&old, &[and], &new, &[]), vec![Some(or)]);
+        // The new diagram has nothing there: a ghost in its old place.
+        let mut moved = new.clone();
+        for n in &mut moved.nodes {
+            n.rect.x += 10_000.0;
+        }
+        assert_eq!(hosts(&old, &[and], &moved, &[or]), vec![None]);
+        // An id the old diagram does not have is skipped, not a panic.
+        assert_eq!(hosts(&old, &[NodeId(9_999)], &new, &[or]), vec![None]);
+        assert_eq!(hosts(&old, &[], &new, &[or]), Vec::<Option<NodeId>>::new());
+    }
+
+    #[test]
+    fn a_tag_names_the_block_on_one_short_line() {
+        assert_eq!(ghost_name("= 1"), "= 1");
+        assert_eq!(ghost_name("  a\n  b\tc "), "a b c");
+        let long = ghost_name("conveyor_section_12_motor_contactor");
+        assert_eq!(long.chars().count(), 18);
+        assert!(long.ends_with('…'));
+        assert_eq!(ghost_name("größenänderungswert_für_zone"), "größenänderungswe…");
+        assert_eq!(ghost_name(""), "");
     }
 }
