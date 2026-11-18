@@ -19,6 +19,9 @@
 //! GET  /api/signals  /api/devices  /api/io_map  /api/site  /api/node  /api/settings
 //! PUT  /api/settings              token: SaveSettings from JSON
 //! PUT  /api/io_map                token: SaveIoMap from {"text"} or text/plain; 422 names the bad line
+//! GET  /api/firmware              the running image, its trial and the fetch (404 on a board with one slot)
+//! POST /api/firmware              token: FirmwareFetch {"url", "sha256"}; 202, the node fetches and restarts
+//! POST /api/firmware/confirm      token: FirmwareConfirm, the running image works
 //! OPTIONS *                       204 with the CORS headers
 //! ```
 
@@ -30,6 +33,7 @@ use serde_json::json;
 
 use crate::api::{self, NodeView};
 use crate::http::{Request, Response, form_pairs};
+use crate::ota;
 use crate::settings::Settings;
 
 /// What the firmware must do before the reply.
@@ -48,6 +52,11 @@ pub enum Effect {
     /// drives the block it names ([`io_map_saved`]). The text parsed
     /// ([`crate::iomap::parse`]) before it got here.
     SaveIoMap { text: String, page: bool },
+    /// Start fetching an image into the idle slot ([`firmware_accepted`]);
+    /// the node restarts into it once it is written and checked.
+    FirmwareFetch { fetch: ota::request::Fetch },
+    /// End the running image's trial ([`firmware_confirmed`]).
+    FirmwareConfirm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +133,23 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
         ("POST", ["settings"]) => settings_form(req, view, settings),
         ("POST", ["io_map"]) => io_map_form(req, view, settings),
         ("PUT", ["api", "io_map"]) => io_map_put(req, settings),
+        ("GET", ["api", "firmware"]) => Outcome::Reply(match &view.firmware {
+            Some(fw) => Response::json(200, &fw.json()),
+            None => Response::error(404, "this board cannot update its firmware over the network"),
+        }),
+        ("POST", ["api", "firmware"]) => firmware_fetch(req, view, settings),
+        ("POST", ["api", "firmware", "confirm"]) => {
+            if let Err(e) = authorize(req.bearer(), settings) {
+                return Outcome::Reply(e);
+            }
+            if view.firmware.is_none() {
+                return Outcome::Reply(Response::error(
+                    404,
+                    "this board cannot update its firmware over the network",
+                ));
+            }
+            Outcome::Effect(Effect::FirmwareConfirm)
+        }
         ("GET", ["api", "modules"]) => Outcome::Reply(Response::json(200, &api::modules(view))),
         ("GET", ["api", "modules", name]) => match module_named(view, name) {
             Some(m) => Outcome::Reply(Response::json(200, &api::module_detail(m))),
@@ -268,6 +294,58 @@ fn io_map_put(req: &Request, settings: &Settings) -> Outcome {
         Ok(_) => Outcome::Effect(Effect::SaveIoMap { text, page: false }),
         Err(bad) => Outcome::Reply(Response::error(422, &alloc::format!("{bad}"))),
     }
+}
+
+/// `POST /api/firmware`: `{"url": "http://a.b.c.d:port/file.bin", "sha256": "<64 hex>"}`.
+fn firmware_fetch(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
+    if let Err(e) = authorize(req.bearer(), settings) {
+        return Outcome::Reply(e);
+    }
+    let Some(fw) = &view.firmware else {
+        return Outcome::Reply(Response::error(
+            404,
+            "this board cannot update its firmware over the network",
+        ));
+    };
+    if fw.fetch.busy() {
+        return Outcome::Reply(Response::error(
+            409,
+            "a firmware update is already running; read GET /api/firmware",
+        ));
+    }
+    match ota::request::Fetch::from_json(&req.body) {
+        Ok(fetch) => Outcome::Effect(Effect::FirmwareFetch { fetch }),
+        Err(why) => Outcome::Reply(Response::error(422, &format!("{why}"))),
+    }
+}
+
+/// The reply to a [`Effect::FirmwareFetch`] the node has taken up: the
+/// fetch runs on its own, so the answer comes before the image does.
+#[must_use]
+pub fn firmware_accepted(fetch: &ota::request::Fetch) -> Response {
+    Response::json(
+        202,
+        &json!({
+            "accepted": true,
+            "from": fetch.authority(),
+            "path": fetch.path,
+            "sha256": ota::request::encode_hex32(&fetch.sha256),
+            "next": "poll GET /api/firmware; the node restarts into the new image when it is written and checked",
+        }),
+    )
+}
+
+/// The reply to a [`Effect::FirmwareFetch`] the node could not start.
+#[must_use]
+pub fn firmware_not_started(why: &str) -> Response {
+    Response::error(409, why)
+}
+
+/// The reply to a [`Effect::FirmwareConfirm`]: `ended` says whether a
+/// trial was on.
+#[must_use]
+pub fn firmware_confirmed(ended: bool) -> Response {
+    Response::json(200, &json!({ "confirmed": ended, "on_trial": false }))
 }
 
 /// The reply once a [`Effect::SaveIoMap`] is on flash: a redirect back to
@@ -698,6 +776,152 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    const SHA: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    fn fw_post(auth: &str, path: &str, body: &str) -> Request {
+        req(&format!(
+            "POST {path} HTTP/1.1\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+    }
+
+    #[test]
+    fn firmware_status_is_open_and_shaped() {
+        let v = sample_view();
+        let r = reply(handle(
+            &req("GET /api/firmware HTTP/1.1\r\n\r\n"),
+            &v,
+            &settings(),
+        ));
+        assert_eq!(r.status, 200);
+        let j: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!(j["chip"], "esp32p4");
+        assert_eq!(j["slot"], 0);
+        assert_eq!(j["trial"]["state"], "confirmed");
+        assert_eq!(j["fetch"]["state"], "idle");
+        let mut v = sample_view();
+        v.firmware = None;
+        let r = reply(handle(
+            &req("GET /api/firmware HTTP/1.1\r\n\r\n"),
+            &v,
+            &settings(),
+        ));
+        assert_eq!(r.status, 404, "a board with one slot has no firmware API");
+    }
+
+    #[test]
+    fn a_firmware_write_without_the_right_token_changes_nothing() {
+        let v = sample_view();
+        let s = settings();
+        let body = format!(r#"{{"url":"http://10.0.0.9:8000/n.bin","sha256":"{SHA}"}}"#);
+        for path in ["/api/firmware", "/api/firmware/confirm"] {
+            for (auth, want) in [
+                ("", 401),
+                ("Authorization: Bearer nope\r\n", 401),
+                ("Authorization: Bearer toK\r\n", 401),
+                ("Authorization: Bearer tokx\r\n", 401),
+                ("Authorization: Bearer \r\n", 401),
+                ("Authorization: Basic dG9rOg==\r\n", 401),
+            ] {
+                let r = reply(handle(&fw_post(auth, path, &body), &v, &s));
+                assert_eq!(r.status, want, "{path} with {auth:?}");
+            }
+            // A node with no token set refuses every write.
+            let mut none = s.clone();
+            none.token.clear();
+            let ok = "Authorization: Bearer tok\r\n";
+            assert_eq!(reply(handle(&fw_post(ok, path, &body), &v, &none)).status, 403);
+            // The token in the URL or the body is no token.
+            let r = reply(handle(&fw_post("", &format!("{path}?token=tok"), &body), &v, &s));
+            assert!(r.status == 401 || r.status == 404, "{path}");
+        }
+        // A bad request is refused the same way before its body is read.
+        let r = reply(handle(&fw_post("", "/api/firmware", "not json"), &v, &s));
+        assert_eq!(
+            r.status, 401,
+            "an unauthenticated caller learns nothing about its body"
+        );
+    }
+
+    #[test]
+    fn a_firmware_fetch_with_the_token() {
+        let v = sample_view();
+        let s = settings();
+        let auth = "Authorization: Bearer tok\r\n";
+        let body = format!(r#"{{"url":"http://10.0.0.9:8000/n.bin","sha256":"{SHA}"}}"#);
+        match handle(&fw_post(auth, "/api/firmware", &body), &v, &s) {
+            Outcome::Effect(Effect::FirmwareFetch { fetch }) => {
+                assert_eq!(fetch.host, [10, 0, 0, 9]);
+                assert_eq!(fetch.port, 8000);
+                assert_eq!(fetch.path, "/n.bin");
+                let r = firmware_accepted(&fetch);
+                assert_eq!(r.status, 202);
+                assert!(String::from_utf8_lossy(&r.body).contains(SHA));
+            }
+            other => panic!("{other:?}"),
+        }
+        for bad in [
+            "not json".to_string(),
+            "{}".to_string(),
+            format!(r#"{{"url":"https://10.0.0.9/n.bin","sha256":"{SHA}"}}"#),
+            format!(r#"{{"url":"http://example.com/n.bin","sha256":"{SHA}"}}"#),
+            r#"{"url":"http://10.0.0.9/n.bin","sha256":"abc"}"#.to_string(),
+        ] {
+            let r = reply(handle(&fw_post(auth, "/api/firmware", &bad), &v, &s));
+            assert_eq!(r.status, 422, "{bad}");
+        }
+        // One at a time.
+        let mut busy = sample_view();
+        busy.firmware.as_mut().unwrap().fetch = crate::ota::status::Fetch::Fetching {
+            received: 10,
+            size: 100,
+        };
+        assert_eq!(
+            reply(handle(&fw_post(auth, "/api/firmware", &body), &busy, &s)).status,
+            409
+        );
+        busy.firmware.as_mut().unwrap().fetch = crate::ota::status::Fetch::Restarting { sha256: [0; 32] };
+        assert_eq!(
+            reply(handle(&fw_post(auth, "/api/firmware", &body), &busy, &s)).status,
+            409
+        );
+        busy.firmware.as_mut().unwrap().fetch = crate::ota::status::Fetch::Failed("x".into());
+        assert!(matches!(
+            handle(&fw_post(auth, "/api/firmware", &body), &busy, &s),
+            Outcome::Effect(Effect::FirmwareFetch { .. })
+        ));
+        // Confirm.
+        assert_eq!(
+            handle(&fw_post(auth, "/api/firmware/confirm", ""), &v, &s),
+            Outcome::Effect(Effect::FirmwareConfirm)
+        );
+        let mut one_slot = sample_view();
+        one_slot.firmware = None;
+        assert_eq!(
+            reply(handle(&fw_post(auth, "/api/firmware", &body), &one_slot, &s)).status,
+            404
+        );
+        assert_eq!(
+            reply(handle(&fw_post(auth, "/api/firmware/confirm", ""), &one_slot, &s)).status,
+            404
+        );
+        assert_eq!(firmware_confirmed(true).status, 200);
+        assert_eq!(firmware_not_started("x").status, 409);
+        // Only POST writes.
+        let r = reply(handle(
+            &req(&format!("PUT /api/firmware HTTP/1.1\r\n{auth}\r\n")),
+            &v,
+            &s,
+        ));
+        assert_eq!(r.status, 405);
+        let r = reply(handle(
+            &req(&format!("GET /api/firmware/confirm HTTP/1.1\r\n{auth}\r\n")),
+            &v,
+            &s,
+        ));
+        assert_eq!(r.status, 404);
     }
 
     #[test]
