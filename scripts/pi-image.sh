@@ -60,6 +60,10 @@ esac
 toolchain="${image#rust:}"
 toolchain="${toolchain%%-*}"
 
+# Made here, as the user running the script: on Linux Docker would make it as
+# root and the canvas build could not write its dist next to it.
+mkdir -p "$repo/target"
+
 echo "==> build linux/arm64 helmsman-plc in $image"
 docker run --rm --platform linux/arm64 \
     -v "$repo:/src" -w /src \
