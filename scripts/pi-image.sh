@@ -20,9 +20,9 @@
 #        target/pi-image/pi-gen; write its config; copy the stage in;
 #        run pi-gen; copy the image to target/pi-image/*.img.xz with its
 #        SHA-256 beside it.
-# Verifies: the stage's manifest (what went in) and the image file; a boot
-#        in QEMU is not part of the skeleton (docs/BOX.md says how to check
-#        the image by hand).
+# Verifies: the stage's manifest (what went in) and the image file. Booting
+#        it is scripts/box-boot-test.sh (QEMU), which CI runs on this
+#        script's output (.github/workflows/box-image.yml).
 # Runs in your own shell (long; Docker): scripts/pi-image.sh
 #
 # Usage: scripts/pi-image.sh [SEED.st]

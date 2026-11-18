@@ -1,0 +1,95 @@
+# The box image, built and booted. scripts/pi-image.sh builds the Raspberry
+# Pi OS image (pi-gen in Docker, the box binary and the canvas inside),
+# scripts/box-boot-test.sh boots it under QEMU, lets first boot pair with a
+# scripted relay by code, and waits for the box's API to answer on a
+# forwarded port (health, the canvas page). docs/BOX.md says how and why.
+#
+# Not a required check and not part of `gate`: an image build is slow, so it
+# runs when the image's inputs change (these paths: a workflow `paths:`
+# filter is safe here because nothing waits on this workflow), every Monday
+# (a base image or a package moving under us shows up within a week), and on
+# demand. The runner is arm64 (free for a public repository): pi-gen builds
+# the arm64 image natively there instead of emulating it.
+#
+# A failed boot attaches the serial console and the relay's record as the
+# `box-boot` artifact.
+name: Box image
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/**'
+      - 'scripts/pi-image.sh'
+      - 'scripts/box-boot-test.sh'
+      - 'scripts/box-boot-relay.py'
+      - 'crates/helmsman-plc/src/pair.rs'
+      - 'crates/helmsman-agent/src/relay.rs'
+      - '.github/workflows/box-image.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'deploy/**'
+      - 'scripts/pi-image.sh'
+      - 'scripts/box-boot-test.sh'
+      - 'scripts/box-boot-relay.py'
+      - 'crates/helmsman-plc/src/pair.rs'
+      - 'crates/helmsman-agent/src/relay.rs'
+      - '.github/workflows/box-image.yml'
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: box-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      # trunk builds the canvas; cargo-installed tools are kept between runs.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      - name: Install trunk
+        run: command -v trunk || cargo install trunk --locked
+      # pi-gen needs about 15 GB; the runner's own tools are most of what is in the way.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+      - name: Tools the boot test needs
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-arm qemu-utils mtools e2fsprogs xz-utils
+          qemu-system-aarch64 --version | head -1
+      # The ref names a branch until a build is worth keeping; the script
+      # prints the commit it built from so the ref can be pinned to it.
+      - name: Build the image
+        env:
+          PI_GEN_UNPINNED: '1'
+        run: ./scripts/pi-image.sh
+      - name: Boot it under QEMU
+        run: |
+          ls -l target/pi-image/*.img.xz
+          EXPAND=1 BOOT_DEADLINE=1500 ./scripts/box-boot-test.sh target/pi-image/*.img.xz
+      - name: Keep the serial console
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: box-boot
+          path: |
+            target/box-boot/serial.log
+            target/box-boot/relay.events
+            target/pi-image/*.sha256
+          if-no-files-found: ignore
+          retention-days: 14
