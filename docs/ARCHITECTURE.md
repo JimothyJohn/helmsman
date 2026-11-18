@@ -1503,9 +1503,28 @@ diagnostic, as is `LTIME`.
   date. `Program::set_wall_clock(ns)` gives the DT at that clock's zero;
   `DT_NOW()` is that plus the clock, so the host owns the time zone (the
   program has none) and a reset or hot swap keeps it. Unset it counts from
-  1970-01-01. An initial value cannot call it. **The box does not set it
-  yet** (card `st-wall-clock`: UTC or the calendar's zone?), so on a box
-  `DT_NOW()` still counts from 1970.
+  1970-01-01. An initial value cannot call it.
+- **The box's clock** (`helmsman-plc`'s `zone.rs`, `Runtime::set_wall_clock`;
+  contract in `tests/zone.rs`). `DT_NOW()` reads the box's own time zone:
+  the system's, from the TZif file `/etc/localtime` points at, read once at
+  start, or `--time-zone NAME` (an IANA name from the OS database, or
+  `UTC`). No dependency reads it: `zone.rs` parses TZif (RFC 8536: the
+  transitions, then the POSIX rule of the footer for later years) and
+  checks the name before it is a path (no `..`, no absolute path, 64
+  characters, no empty or dotted part). The system zone falling back to
+  UTC says so in the journal; an explicit `--time-zone` that cannot be had
+  stops the box. The runtime re-reads the system clock on every tick, adds
+  the zone's offset for that instant and hands the result to every module
+  it is about to scan, so a long-running box never drifts, a step of the
+  system clock or a daylight-saving change shows at the next scan, and any
+  way a program gets installed (load, swap, reconfigure, rebind, restart)
+  has the clock without its own code. Local time is not monotonic: at the
+  end of daylight saving `DT_NOW()` repeats an hour and at its start skips
+  one. Replay and requirement tests run on their own scan clock and keep
+  counting from 1970. The canvas's simulation (`playground.rs`,
+  `host_local_ns`) takes the browser's local time when the clock starts
+  over (a new program, a restart), keeps it across a deploy, and runs at
+  the simulation's pace from there.
 - **Not signals.** A DATE, TOD or DT port works inside its program but
   `Program::ports()` skips it, like a STRING one: not in `/api/signals`,
   the values stream, trends or OPC UA. `RETAIN` works (the state encoding
