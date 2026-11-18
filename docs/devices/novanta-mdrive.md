@@ -182,8 +182,10 @@ Slewing at 5000 steps/s over the cyclic connection (RPI 20 ms):
 A pulled cable or a controller that dies did not stop this drive,
 although the Configuration Utility's page shows Halt Motion on for its
 implicit connection tests (above). Whether that setting is really on
-in the drive, and what it covers, is TODO.md `mdrive-comms-loss-stop`.
-Nothing in `enip-io` can supply that stop. A box that stops normally closes its connections, which does stop
+in the drive, and what it covers, is not known. Nothing in `enip-io`
+can supply that stop. Accepted on the bench for now (Nick,
+2026-11-17): before the drive is shown or left running unattended it
+needs a stop of its own (TODO.md `mdrive-bringup`). A box that stops normally closes its connections, which does stop
 it.
 
 ## PROFINET: first run on the bench
