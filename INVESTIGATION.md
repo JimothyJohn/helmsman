@@ -211,13 +211,14 @@ stand on it.
   type, a second PROGRAM, a local that hides a global); the `bad_*` ones
   stay in their own list.
   The lint pass of `st-lints` (2026-11-17, `helmsman_iec::lint`) runs over
-  every file that parses, 72 of the 1009 until STRING lands: HELMSMAN-L1
+  every file that parses (185 of the 1009 after STRING landed, 72 before): HELMSMAN-L1
   0 findings, PLCOPEN-CP12 1 (in 1 file; `good/control-statements.st`
   writes `vo1` in six places), PLCOPEN-CP3 19 (8 files), PLCOPEN-CP8 0,
   PLCOPEN-L12 3 (1 file; iec-checker's own `plcopen-l22.st`), PLCOPEN-CP24
-  53 (39 files), PLCOPEN-CP2 3 (1 file; `dead-code.st`), HELMSMAN-L2 0. The
+  77 (56 files), PLCOPEN-CP2 3 (1 file; `dead-code.st`), HELMSMAN-L2 0. The
   test fails on a panic in the pass and prints the table after the
-  refusals; the numbers move when STRING makes more files parse.
+  refusals. The other counts did not change with the 113 files STRING
+  made parse.
   PLCOPEN-CP24 is the noisy one (a corpus file declares what it never
   uses); the blocking two are quiet.
 

@@ -902,6 +902,23 @@ fn a_one_shot_initialisation_is_not_a_second_write() {
     assert_eq!(only(&src, lint::OUTPUT_WRITTEN_TWICE).len(), 1, "never latched");
 }
 
+/// The typed asserts are a test's checks too, and strings are plain values
+/// to the lints: no REAL equality, no panic, and an unset local string is
+/// flagged like any unset local.
+#[test]
+fn typed_asserts_and_strings_are_handled() {
+    let src = prog(
+        "t : TON; a : ASSERT_EQ_INT; s : STRING[10]; u : STRING;",
+        "t(IN := TRUE, PT := T#1s);\nIF t.Q THEN a(EXPECTED := 1, ACTUAL := 1); END_IF;\nIF s = 'x' OR s <> u THEN s := 'y'; END_IF;",
+    );
+    none_of(&src, lint::FB_IN_CONDITIONAL);
+    none_of(&src, lint::REAL_EQUALITY);
+    // `u` is read and nothing ever sets it, as an INT would be.
+    assert_eq!(only(&src, lint::READ_BEFORE_WRITE).len(), 1, "{:?}", lints(&src));
+    let set = src.replace("s := 'y';", "s := 'y'; u := 'z';");
+    none_of(&set, lint::READ_BEFORE_WRITE);
+}
+
 /// A requirement test calls its ASSERTs inside the IF that says when the
 /// check applies; that is not the timer-in-IF bug (found on the shipped
 /// test_*.st files).

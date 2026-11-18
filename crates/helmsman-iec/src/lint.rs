@@ -40,7 +40,7 @@ use crate::parser::{
 /// same instance. Not flagged: a call in an IF ... ELSE (or CASE with an
 /// ELSE) whose every branch calls the instance; a call in a loop body that
 /// no IF or CASE encloses; a call after an early RETURN (not "inside" a
-/// branch); an `ASSERT` of a requirement test (it checks, it has no state to
+/// branch); an `ASSERT` or `ASSERT_EQ_<TYPE>` of a requirement test (it checks, it has no state to
 /// lose). A timer called in a CASE state machine arm is flagged by
 /// design: the timer stops with the state, which is the bug; override it
 /// with a reason when that is the intent.
@@ -267,6 +267,7 @@ impl<'a> Cx<'a> {
         }
         match tr {
             TypeRef::Array { elem, .. } => Ty::Array(elem),
+            TypeRef::Str(..) => Ty::Elem("STRING".into()),
             TypeRef::Named(n, _) => {
                 if let Some(p) = self.fbs.get(n.as_str()) {
                     return Ty::Fb(p);
@@ -288,6 +289,9 @@ impl<'a> Cx<'a> {
         }
         match tr {
             TypeRef::Array { .. } => true,
+            // An empty string is a value, but one nothing ever sets is the
+            // same bug as an integer nothing sets.
+            TypeRef::Str(..) => false,
             TypeRef::Named(n, _) => match self.types.get(n.as_str()).map(|t| &t.def) {
                 Some(TypeDef::Alias(t, init)) => init.is_some() || self.type_has_default(t, depth + 1),
                 Some(TypeDef::Struct(_)) => true,
@@ -358,6 +362,7 @@ impl<'a> Scope<'a> {
             ExprKind::Int { .. } => Ty::Elem("INT".into()),
             ExprKind::Bool(_) | ExprKind::Unary(UnOp::Not, _) => Ty::Elem("BOOL".into()),
             ExprKind::Time(_) => Ty::Elem("TIME".into()),
+            ExprKind::Str(_) => Ty::Elem("STRING".into()),
             ExprKind::EnumLit(..) => Ty::Enum,
             ExprKind::Var(n) => self.ty_of_var(n),
             ExprKind::Direct(_) | ExprKind::Bit(..) => Ty::Unknown,
@@ -642,13 +647,18 @@ fn render(e: &Expr) -> String {
     }
 }
 
+/// ASSERT and the typed `ASSERT_EQ_<TYPE>` blocks: a requirement test's checks.
+fn is_assert(name: &str) -> bool {
+    name.eq_ignore_ascii_case("ASSERT") || name.to_ascii_uppercase().starts_with("ASSERT_EQ_")
+}
+
 fn fb_call_key(sc: &Scope<'_>, e: &Expr) -> Option<String> {
     let ExprKind::Call(callee, _) = &e.kind else {
         return None;
     };
     // ASSERT is the requirement tests' check, not a block with state: a
     // test calls it inside the IF that says when the check applies.
-    matches!(sc.type_of(callee), Ty::Fb(p) if !p.name.eq_ignore_ascii_case("ASSERT")).then(|| render(callee))
+    matches!(sc.type_of(callee), Ty::Fb(p) if !is_assert(&p.name)).then(|| render(callee))
 }
 
 fn l1_walk(
