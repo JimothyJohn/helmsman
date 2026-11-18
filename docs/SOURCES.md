@@ -693,6 +693,30 @@ into the code.
 - **How to cite:** `MCP 2026-07-28 <page> § <heading>`, e.g.
   `MCP 2026-07-28 basic/transports/streamable-http § Server Validation`.
 
+### agent-relay protocol v2 (the relay holds the conversation)
+
+- **Where:** `docs/relay-protocol-v2.md` in this repo, copied byte for byte
+  from `docs/relay-protocol-v2.md` of the private repo
+  JimothyJohn/agent-relay at commit `26cd6dc9098aaa015b2361017a7a5e590c865c5a`
+  (its `origin/dev` on 2026-11-17). Its `docs/harness.md` at the same commit
+  says why (compaction, relay-run tools, documents, retention). No v1
+  copy is held here: protocol v1 is the relay repo's
+  `docs/relay-protocol.md`, which `helmsman-agent` was built from.
+- **Leaned on by** `crates/helmsman-agent/src/session.rs` (sessions, steps,
+  the event stream, `GET /v2/docs/{id}/raw`) and the v2 loop in
+  `crates/helmsman-agent/src/agent.rs` (`relay-v2-client`). How the box
+  knows a profile is v2: `GET /v1/agents/{agent}` carries `"protocol"`
+  ("Everything in protocol v1 still holds ... each profile now says
+  `"protocol": 1` or `2`"), so no version list is kept. The bare
+  aliases stop at `v7` (v1 doc, "Naming an agent profile"): a bare name the
+  relay does not know is asked again as `helmsman/{name}`.
+- **Not in it, so the box decides:** what to do when a session is gone
+  (the doc says only that a session expires 7 days after its last step and
+  that another client's id answers 404 like an unknown one: the box reads
+  every 404 on a step as "lost", reopens once and says so), and how many
+  client tool calls one yield may name (the box takes at most 64).
+- **How to cite:** `relay-protocol-v2.md § Steps`, `§ Documents`.
+
 ### IEC 61131-3, by secondary references (the standard itself is not held)
 
 - **The standard:** IEC 61131-3 "Programmable controllers – Part 3:
@@ -747,6 +771,16 @@ into the code.
       instance should be called only once per cycle") says "the call may
       be conditional". L1 follows INVESTIGATION.md §1 (the timer-in-IF bug)
       and is overridable on its line for that reason.
+- **STRING (card `st-string`):** the behaviours below are pinned by the
+  oracle, not by a clause. Assignment cuts at the declared length, `LEN`
+  sees the cut text, `LEFT`/`RIGHT`/`MID`/`FIND`/`INSERT`/`DELETE`/`REPLACE`
+  at every boundary, comparisons and the `X_TO_STRING` / `STRING_TO_X`
+  conversions, including text that is no number (0), spaces around a
+  number (ignored) and a fraction or exponent for an integer type (cut
+  toward zero): `strings_agree_with_rusty` in oracle.rs (ruSTy 1.0.8). The
+  `$` escapes and the 255-character cap are not cited to any reference:
+  the escapes are pinned by tests/strings.rs (ruSTy reads `$N` in the same
+  literals), the cap is a one-byte length. WSTRING is not built.
 - **How to cite:** `IEC 61131-3 (secondary: Fernhill ST "<page>")`, never
   a `§` of the standard. A behaviour pinned by the oracle cites the oracle
   test by name.

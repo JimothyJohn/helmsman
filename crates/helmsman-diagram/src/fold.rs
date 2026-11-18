@@ -30,6 +30,7 @@ pub mod idioms;
 pub mod states;
 pub mod structure;
 pub mod table;
+pub mod zoom;
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
@@ -61,6 +62,9 @@ pub enum FoldKind {
     Arm,
     /// A run of statements under the author's comment.
     Section,
+    /// One statement, titled with its text: what the middle zoom draws
+    /// ([`zoom`], [`structure::statements`]).
+    Statement,
     /// Everything that drives one output.
     Output,
     /// A CASE on a state variable: a row per state ([`Fold::rows`]).

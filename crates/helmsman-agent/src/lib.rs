@@ -18,6 +18,7 @@
 pub mod agent;
 pub mod http;
 pub mod relay;
+pub mod session;
 pub mod sse;
 pub mod tools;
 pub mod turn;

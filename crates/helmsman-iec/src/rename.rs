@@ -112,7 +112,7 @@ mod tests {
         assert!(rename_ident(SRC, "start", "1go").is_err());
         assert!(rename_ident(SRC, "start", "go button").is_err());
         assert!(rename_ident(SRC, "start", "").is_err());
-        assert!(rename_ident("PROGRAM p\nx := 'str';\nEND_PROGRAM\n", "x", "y").is_err());
+        assert!(rename_ident("PROGRAM p\nx := 'str;\nEND_PROGRAM\n", "x", "y").is_err());
     }
 
     /// A reserved word is no name: `IF` passed `ident()` until 2026-11-15.

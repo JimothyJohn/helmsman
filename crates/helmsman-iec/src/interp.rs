@@ -30,6 +30,7 @@ use core::fmt;
 
 use crate::check::{Area, Base, Builtin, Call, Ex, Loc, Move, Place, PouCode, PouType, St, StKind};
 use crate::parser::{BinOp, UnOp};
+use crate::strs::{self, StrFn};
 use crate::trace::Recorder;
 use crate::types::{Ty, Value, round_real};
 
@@ -261,6 +262,11 @@ fn int(v: Value) -> i128 {
     }
 }
 
+/// The slot a string-valued expression evaluated to.
+fn at_int(v: Value) -> usize {
+    usize::try_from(int(v)).unwrap_or(usize::MAX)
+}
+
 fn real(v: Value) -> f64 {
     match v {
         Value::Real(r) => r,
@@ -429,6 +435,9 @@ pub struct Machine<'a> {
     /// POUs `0..library` are the built-in library's: a fault inside one is
     /// reported at the line that called it, not a line of library.st.
     pub library: usize,
+    /// Where the scratch area starts: the string expressions' result
+    /// regions (see [`Ex::Str`]).
+    pub scratch: usize,
     /// The running POU's frame base.
     pub base: usize,
     pub budget: u64,
@@ -596,7 +605,93 @@ impl Machine<'_> {
                 builtin(*b, &vals, *ty, self.now).map_err(&f)?
             }
             Ex::Call(c) => self.call(c, line)?.unwrap_or(Value::Bool(false)),
+            Ex::StrLoad(p) => Value::Int(self.mem_index(p, line)? as i128),
+            Ex::StrConst(off) => Value::Int((self.scratch + off) as i128),
+            Ex::Str(f, args, off, cap) => self.eval_str(*f, args, *off, *cap, line)?,
+            Ex::StrCall(c, off, cap) => {
+                self.call(c, line)?;
+                let callee = self.pous[c.pou].base;
+                let at = self.scratch + off;
+                self.mem
+                    .copy_within(callee..callee + strs::slots(usize::from(*cap)), at);
+                self.charge(usize::from(*cap), line)?;
+                Value::Int(at as i128)
+            }
         })
+    }
+
+    /// Charges the budget for `bytes` of string work, an instruction per
+    /// eight, so a loop that builds strings meets the watchdog sooner than
+    /// one that adds numbers.
+    fn charge(&mut self, bytes: usize, line: u32) -> Res<()> {
+        let cost = (bytes as u64).div_ceil(8);
+        if self.budget < cost {
+            self.budget = 0;
+            return Err(Fault {
+                kind: FaultKind::Watchdog,
+                line,
+            }
+            .into());
+        }
+        self.budget -= cost;
+        Ok(())
+    }
+
+    /// A string function. Its arguments are evaluated first (strings as the
+    /// slot they start at), then read into stack buffers: nothing here
+    /// allocates, and the buffers exist only while no argument is being
+    /// evaluated, so nested calls do not stack them.
+    #[inline(never)]
+    fn eval_str(&mut self, f: StrFn, args: &[Ex], off: usize, cap: u16, line: u32) -> Res<Value> {
+        let mut vals = [Value::Int(0); 4];
+        for (v, a) in vals.iter_mut().zip(args) {
+            *v = self.eval(a, line)?;
+        }
+        let nstr = f.strings();
+        let at = |v: Value| usize::try_from(int(v)).unwrap_or(usize::MAX);
+        let (mut a, mut b, mut out) = ([0u8; strs::MAX], [0u8; strs::MAX], [0u8; strs::MAX]);
+        let la = if nstr >= 1 {
+            strs::get(self.mem, at(vals[0]), &mut a)
+        } else {
+            0
+        };
+        let lb = if nstr >= 2 {
+            strs::get(self.mem, at(vals[1]), &mut b)
+        } else {
+            0
+        };
+        let rest = &vals[nstr.min(args.len())..args.len().min(4)];
+        let made = strs::apply(f, &a[..la], &b[..lb], rest, vals[0], usize::from(cap), &mut out);
+        match made {
+            strs::Made::Num(v) => {
+                self.charge(la + lb, line)?;
+                Ok(v)
+            }
+            strs::Made::Text(n) => {
+                let to = self.scratch + off;
+                strs::put(self.mem, to, usize::from(cap), &out[..n]);
+                self.charge(la + lb + n, line)?;
+                Ok(Value::Int(to as i128))
+            }
+        }
+    }
+
+    /// `dst := src`, both string regions, cut at `cap`.
+    #[inline(never)]
+    fn str_assign(&mut self, src: usize, dst: usize, cap: u16, line: u32) -> Res<()> {
+        let mut b = [0u8; strs::MAX];
+        let n = strs::get(self.mem, src, &mut b);
+        strs::put(self.mem, dst, usize::from(cap), &b[..n]);
+        self.charge(n, line)
+    }
+
+    /// The slots of a string argument as the callee's parameter holds it.
+    #[inline(never)]
+    fn str_arg(&mut self, src: usize, cap: u16, line: u32) -> Res<Vec<Value>> {
+        let mut b = [0u8; strs::MAX];
+        let n = strs::get(self.mem, src, &mut b);
+        self.charge(n, line)?;
+        Ok(strs::encode(usize::from(cap), &b[..n]))
     }
 
     /// Runs a function or function block; returns a function's result.
@@ -614,6 +709,10 @@ impl Machine<'_> {
                         v => v,
                     };
                     staged.push((*off, vec![v]));
+                }
+                Move::Str { off, ex, cap } => {
+                    let src = at_int(self.eval(ex, line)?);
+                    staged.push((*off, self.str_arg(src, *cap, line)?));
                 }
                 Move::Copy { off, src, len } => {
                     let i = self.mem_index(src, line)?;
@@ -706,6 +805,11 @@ impl Machine<'_> {
             StKind::Store(place, ty, e) => {
                 let v = self.eval(e, line)?;
                 self.store(place, *ty, v, line)?;
+            }
+            StKind::StrStore(place, cap, e) => {
+                let src = at_int(self.eval(e, line)?);
+                let dst = self.mem_index(place, line)?;
+                self.str_assign(src, dst, *cap, line)?;
             }
             StKind::Copy(dst, src, len) => {
                 let i = self.mem_index(src, line)?;
@@ -816,6 +920,7 @@ pub fn eval_const(e: &Ex) -> Result<Value, String> {
         image: &mut image,
         pous: &[],
         library: 0,
+        scratch: 0,
         base: 0,
         budget: 0,
         now: 0,

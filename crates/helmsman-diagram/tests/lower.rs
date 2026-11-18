@@ -702,3 +702,15 @@ fn only_a_run_as_written_is_joined() {
 "
     );
 }
+
+#[test]
+fn string_variables_literals_and_calls_lower_like_any_other() {
+    let out = lowered(
+        "s, t : STRING[8]; n : INT; same : BOOL;",
+        "s := CONCAT('ab', t);\nn := LEN(s);\nsame := s = 'x$'y';",
+    );
+    assert!(out.contains("func CONCAT"), "{out}");
+    assert!(out.contains("func LEN"), "{out}");
+    assert!(out.contains("write S :="), "{out}");
+    assert!(out.contains("op = <-"), "{out}");
+}

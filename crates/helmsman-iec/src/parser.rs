@@ -108,6 +108,8 @@ pub enum ExprKind {
     },
     Bool(bool),
     Time(i128),
+    /// A STRING literal: its bytes, escapes resolved (at most 255).
+    Str(Vec<u8>),
     EnumLit(String, String),
     /// A name: a variable, an enumeration value or a function.
     Var(String),
@@ -182,13 +184,16 @@ pub enum TypeRef {
         elem: Box<TypeRef>,
         pos: Pos,
     },
+    /// `STRING[n]` or `STRING(n)`: a fixed-length string of at most `n`
+    /// characters. Plain `STRING` is `Named`.
+    Str(i128, Pos),
 }
 
 impl TypeRef {
     #[must_use]
     pub const fn pos(&self) -> Pos {
         match self {
-            Self::Named(_, p) | Self::Array { pos: p, .. } => *p,
+            Self::Named(_, p) | Self::Array { pos: p, .. } | Self::Str(_, p) => *p,
         }
     }
 }
@@ -1009,6 +1014,17 @@ impl Parser {
             return Ok(TypeRef::Array { dims, elem, pos });
         }
         match self.advance().0 {
+            Tok::Ident(s) if s == "STRING" && matches!(self.tok(), Tok::LBracket | Tok::LParen) => {
+                let close = if self.eat(&Tok::LBracket) {
+                    Tok::RBracket
+                } else {
+                    self.advance();
+                    Tok::RParen
+                };
+                let n = self.signed_int()?;
+                self.expect(&close)?;
+                Ok(TypeRef::Str(n, pos))
+            }
             Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => Ok(TypeRef::Named(s, pos)),
             t => Err(ParseError {
                 pos,
@@ -1730,6 +1746,7 @@ impl Parser {
             Tok::Real { value, prefix } => ExprKind::Real { value, prefix },
             Tok::Bool(b) => ExprKind::Bool(b),
             Tok::Time(ns) => ExprKind::Time(ns),
+            Tok::Str(bytes) => ExprKind::Str(bytes),
             Tok::EnumLit(t, v) => ExprKind::EnumLit(t, v),
             Tok::Direct(d) => ExprKind::Direct(d),
             Tok::LParen => {
@@ -1797,6 +1814,7 @@ mod tests {
             ExprKind::Real { value, .. } => format!("{value:?}"),
             ExprKind::Bool(b) => b.to_string(),
             ExprKind::Time(ns) => format!("T#{ns}ns"),
+            ExprKind::Str(b) => format!("{:?}", String::from_utf8_lossy(b)),
             ExprKind::EnumLit(t, v) => format!("{t}#{v}"),
             ExprKind::Var(v) => v.clone(),
             ExprKind::Direct(d) => format!("%{d}"),

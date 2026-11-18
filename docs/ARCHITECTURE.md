@@ -76,7 +76,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-devconf` | Configuration of third-party devices over their own configuration protocols, std only with no dependencies: `moxa_e1200` is the Moxa ioLogik E1200 web console (HTTP client, form and export readers, export / form / set / restart / import / change-password) and `moxa_e1200::sim` (feature `sim`) is a simulated console for tests. A library for now: nothing in the box calls it yet. | built: against its simulator only; the real console was mapped by hand (2026-11-12) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
-| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
+| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, and v2 relay-held sessions for harness profiles; HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
@@ -1398,6 +1398,61 @@ below) never stops the program, since such code compiled
   restart). Not yet: RETAIN inside a function block type, and `%M`
   retention.
 
+## Strings (`st-string`, built)
+
+`STRING[n]` (1 to 255 characters; a bare `STRING` is `STRING[80]`) is part
+of the language inside a program: variables of every section (including
+struct members, array elements, function block members, `VAR_GLOBAL` and
+function results), single-quoted literals with the `$` escapes (`$$ $' $L
+$N $P $R $T`, `$HH` for any byte), assignment, the six comparisons, `LEN`,
+`LEFT`, `RIGHT`, `MID`, `CONCAT` (two or more), `FIND`, `INSERT`,
+`DELETE`, `REPLACE`, and `X_TO_STRING` / `TO_STRING` / `STRING_TO_X` for the
+numeric types and BOOL. `WSTRING` is refused with a diagnostic. Code in
+`helmsman-iec`'s `strs.rs` (the functions), `lexer.rs` (literals), `check.rs`
+(types, scratch sizing) and `interp.rs`.
+
+- **Storage.** A string does not make `Value` bigger or non-`Copy`. It is a
+  fixed region of the same slot array as everything else: `ceil((n+1)/16)`
+  slots, each holding 16 bytes (a `Value::Int`), the first byte the length,
+  the rest the characters, everything past the length zero. So a struct or
+  array copy, a by-value argument, a function block instance and a hot swap
+  carry strings with no special case, and two equal strings are equal slot
+  for slot. (The first design put the bytes in a separate store beside the
+  slots; packing them into slots was chosen because every existing move
+  already copies slots.)
+- **Expressions.** A string-valued expression (a call, a conversion) is
+  evaluated into a scratch region sized at check time from its worst case,
+  after the program's frames in `mem_init`. Scratch is 64 KiB at most per
+  program: more is a compile error, not a run-time fault. Nothing in the
+  scan path allocates: the functions work in stack buffers of 255 bytes.
+- **Truncation, not faults.** Assigning, passing by value and returning cut
+  the text at the destination's declared length (ruSTy does the same:
+  oracle `strings_agree_with_rusty`). A position or count outside the string
+  selects nothing or everything to the end; `FIND` answers 0 when there is
+  no match. Text that is no number converts to 0, FALSE or 0.0; spaces
+  around it are ignored and a fraction or exponent is cut toward zero for
+  an integer type, as ruSTy reads it (the oracle test pins each form).
+  Comparison is by byte value, a prefix sorting first.
+- **Budget.** String work charges the instruction budget by bytes handled, so
+  a loop of `CONCAT`s ends in `Fault::Watchdog`.
+- **Characters.** One byte each. The lexer refuses a literal with a
+  character outside printable ASCII (write other bytes as `$HH`), invalid
+  UTF-8, an unterminated literal, a bad escape, or more than 255 bytes.
+- **Not signals yet (card `st-string-signals`).** A STRING port works inside
+  its program but `Program::ports()` skips it, so it is no box signal, not
+  in `/api/signals`, the values stream, trends, OPC UA, or bound to I/O or a
+  test's shared ports; `RETAIN` on a string is a compile error that names the
+  card. `Program::get_str` / `set_str` and the trace's text accessor read
+  and write one by path; `Program::get` does not return it.
+- **Typed asserts.** `ASSERT_EQ_BOOL`, `_INT` (any integer type, as LINT),
+  `_REAL` (any real, as LREAL, with a `TOLERANCE` input; a NaN fails),
+  `_TIME` and `_STRING` in library.st keep ASSERT's outputs and latch what
+  the first failure saw (`GOT`, `WANT`, `WHAT` from the `MESSAGE` input).
+  `spec.rs` turns that into `c failed at 3.20 s: speed was 40, expected
+  50 (...)`; a plain `ASSERT`'s text is unchanged. A test can compare text
+  it builds itself, but cannot read a program's STRING output until the
+  signals card shares STRING ports.
+
 ## Box API (`box-api`, built)
 
 `helmsman-plc --api ADDR` (default `127.0.0.1:8080`, `0.0.0.0:8080` for the
@@ -2233,6 +2288,50 @@ in `relay_usage`; the box treats it as a label.
   jittered). Budgets per message: 24 model turns, 200k output tokens, 16
   tool calls per turn, 15 minutes; a spent budget leaves the tool results
   last, so the next message continues.
+- **Relay-held sessions (protocol v2, `relay-v2-client`).**
+  `--relay-agent v8` (and v9 to v11, the harness profiles) puts the
+  conversation in the relay (`docs/relay-protocol-v2.md`,
+  `helmsman-agent/src/session.rs`, the v2 loop in `agent.rs`). Which
+  protocol an agent speaks is the relay's answer: the chat route asks
+  `GET /v1/agents/{agent}` once and keeps the `protocol` it names (a bare
+  name the relay does not know is asked again as `helmsman/{name}`, since
+  the aliases stop at `v7`); v7 and older answer 1 and run exactly as
+  above. The box opens a session (`POST /v2/sessions`) and keeps only its
+  id in the chat's `Conversation`; each message and each step sends new
+  input only: `user`, `tool_results` or `continue`
+  (`POST /v2/sessions/{id}/steps`). The stream's text goes to the chat
+  panel in the same `/api/chat` events, so the canvas is unchanged; tools
+  the relay ran (`harness_tool`) show as a call and a result "run by the
+  relay". The step ends in `harness_yield`: `tool_use` names the client
+  tools, which run through the same executor and `<box-data>` envelope
+  (a relay tool named in a yield is answered unrun, an unknown name too,
+  at most 16 run per step, at most 64 named), and their results go back
+  as one `tool_results` input; `continue` goes on; `end_turn`,
+  `max_tokens` and `stop_sequence` end the message, `refusal` runs
+  nothing. The box's 900 KiB history cap and its output-token budget do
+  not apply here (the relay compacts); the step count (24) and the time
+  (15 minutes) still bound one message. A message that stops before its
+  input is sent (a budget, a relay failure) leaves that input owed: it
+  goes first on the next message.
+  A `harness_document` (`fetch_document` stored a manual or an EDS) is
+  downloaded with `GET /v2/docs/{id}/raw` and kept as a drop-in under the
+  v1 fetch's rules (the kind's size cap, the SHA-256 the relay named, a
+  name the box accepts); anything else is refused in a chat line ("not
+  saved to the project: ...") and nothing is stored. The id must be `d` and
+  16 hex digits before it goes in a path. The model is not told the
+  drop-in's id (the relay's own `doc_read` reads the document); the drop-in
+  is for the person and the project. Failures behave like v1: unreachable,
+  5xx and a refused token take the agent offline (the watcher and the rule
+  fallback are unchanged); a failure after a step began asks the session
+  where it stands (`GET /v2/sessions/{id}`) and sends `continue` instead of
+  the input again; `session_busy` retries the same input. A session the
+  relay no longer has (any 404 on a step) is reopened once: a message that
+  started the run is sent again with a line saying what was lost, a task in
+  the middle is stopped with `session_lost` and the next message starts
+  clean. Not built: a bench run against a deployed relay
+  (`relay-deploy-v2` on the relay's board), deleting the session when a
+  chat is dropped (it expires on the relay in 7 days), the MCP route's
+  `fetch_document` on a v2 profile (that route is v1's).
 - **Tools** (the relay's `tools.json` names): `list_signals`,
   `read_signals` (`GET /api/signals`), `list_modules` (`GET /api/modules`),
   `read_module` (`GET /api/modules/{name}` and its `trace`),
@@ -2912,6 +3011,17 @@ canvas" at the end of this section.
     lowering from the declarations) leaves the expression as gates. The
     fold's pins are the distinct signals, one each: `view` leaves the
     bubble off a table's pin because each cell carries its own.
+  - `fold::structure::statements`: one `FoldKind::Statement` fold per
+    statement at any depth (`stmt:2`, `stmt:2/1.0`), titled with its text
+    without comments, cut at `structure::LINE` characters. Its pins are
+    named, so it draws as one line.
+  - `fold::zoom` (semantic zoom, pure): `level(zoom, prev)` picks `Far`,
+    `Middle` or `Near` with a dead band at each threshold (out: 0.60 and
+    0.30, in: 0.72 and 0.36), and `closed(folds, level, hand)` says which
+    folds the level closes. Far closes sections, arms and statements,
+    middle closes statements, near nothing. A fold the reader set (`Hand`)
+    is never closed by it, and nor is one that holds a fold the reader
+    opened.
   `fold::auto` is what a diagram opens with: the idioms, the state
   blocks, the tables and the chips, the larger shape first (a range wins
   over its two comparisons).
@@ -2943,6 +3053,16 @@ canvas" at the end of this section.
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
+  The zoom picks the level (`st_zoom.rs`, a child of `st_view`): each frame
+  `follow_zoom` takes the camera's zoom through `zoom::level`, and when the
+  level changes the folds are drawn again and the point under the pointer
+  (the view's middle without one) keeps its place in the band of its
+  top-level statements. Nothing of this reaches `opened`, `collapsed`, the
+  edit count or `diagram.layout`: the zoom's folds are recomputed from the
+  level and what the reader set. A fold the reader opened over the zoom
+  (`kept_open`) lasts the session and is no layer of the layout, which keeps
+  only what differs from the start state. A jump (Q, E) frames within its
+  level (`Level::reach`), and no level changes while one eases.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label

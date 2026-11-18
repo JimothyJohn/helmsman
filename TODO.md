@@ -4,6 +4,20 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
+- [ ] **Should a blocking lint refuse an engineer's own deploy on a box, or only hold the Agent's drafts?** — Draft #509 (st-lints) is built and green and waits on this. Your ruling of 2026-11-07 says the first two lints (a function block called inside a branch, an output written in more than one place) block "Use this code" and Deploy "the way a red requirement test does"; since 2026-11-15 a red requirement test no longer refuses a deploy, so the sentence points two ways. As built, a box answers 422 until the finding is fixed or overridden on its line with a reasoned pragma, which goes to the audit trail. The first lint is stricter than the guideline it comes from (PLCopen CP20 allows a conditional call), so a hand-written timer inside an IF is refused until the pragma is added. Session's pick: keep it blocking, as you ruled.
+  result: #509 is marked ready and merges, or goes back for the narrower rule
+  options: block every deploy (as built) | block the Agent's drafts only, warn on a hand deploy | advisory everywhere
+  id: st-lints-deploy-block
+  asked: 2026-11-17
+  by: recovery session aa9f9f8a
+
+- [ ] **STRING[n] is stored in the slot array, not in a byte store beside it: accept?** — Draft #508 (st-string) is built and green, oracle included, and waits on this. In the interview of 2026-11-17 you picked a bounded byte store beside the slot array with `Value` staying `Copy`. What was built keeps `Value` unchanged and `Copy` but packs a string into consecutive ordinary slots, 16 bytes each, length byte first (crates/helmsman-iec/src/strs.rs). For it: every existing move (struct or array copy, by-value argument, function block instance, hot swap) already copies slots, so strings needed no new copy paths. Against it: at runtime a string's slot looks like an integer, so only the checker keeps them apart. Also yours to veto in the same PR: text to number copies ruSTy as measured (unparseable text gives 0, '1.9' to an integer gives 1). Session's pick: accept after reading strs.rs.
+  result: #508 is marked ready and merges, or the storage is rebuilt as the byte store
+  options: accept as built | rebuild as a byte store beside the slots
+  id: st-string-storage
+  asked: 2026-11-17
+  by: recovery session aa9f9f8a
+
 
 ## Needs your hands
 
@@ -387,11 +401,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 2d
   difficulty: med
   depends: agent-on-box
-  notes: 2026-11-16: the relay now serves helmsman/v8, v9 and v10 (harness profiles, v2 sessions only); a box still has no /v2 client, so its default stays v7 and `propose_device_profile` (v10) is not reachable live from a box. Spec mode (#475) went through v7's chat for that reason.
+  notes: 2026-11-17, built (PR on feat/relay-v2-client): the box's v2 client (helmsman-agent session.rs and the v2 loop in agent.rs; docs/relay-protocol-v2.md vendored from agent-relay 26cd6dc9) and `--relay-agent v8`..`v11` on relay-held sessions; the chat route asks `GET /v1/agents/{agent}` once for the profile's `protocol` (a bare `v8` is retried as `helmsman/v8`), v7 and older stay on v1 and the default is still v7. Documents the relay stored are saved as drop-ins; a lost session is reopened once; the owed step goes first on the next message. Tested against a loopback relay scripted from the protocol doc (tests/session.rs, tests/agent.rs): no real relay has answered this client. Left: a bench run against the deployed relay (Nick's, relay card relay-deploy-v2), then v8 as the default; the model is not told a saved document's drop-in id; the MCP `fetch_document` route is still v1's; sessions are not deleted when a chat is dropped (7 days on the relay). agent-relay PR #7 merged 2026-11-07; spec mode (#475) went through v7's chat.
   id: relay-v2-client
   asked: 2026-11-05
   by: claude-session
-  notes: agent-relay PR #7 merged on 2026-11-07. Checked 2026-11-13: the relay's agents/helmsman has v1..v7 and explain-v1/v2, no v8, so nothing serves it yet (relay card relay-deploy-v2).
   status: ready
 
 - [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.
@@ -602,16 +615,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
 
-- [ ] **STRING[n], then typed asserts** — fixed-length `STRING[n]` (default 80 as the standard), with concatenation, LEN, LEFT/RIGHT/MID, CONCAT, FIND, comparisons and the conversions, bounded so the scan stays bounded and the edge node still builds (no_std: no heap). WSTRING later. Then the TcUnit idea from §5: `ASSERT_EQ_<TYPE>(Expected, Actual, Message)` (one block per type, no generics) so a red requirement test reads "speed was 40, expected 50 at 3.2 s" in the Requirements tab and in the agent's retry message. Oracle cases, property tests (every length boundary, invalid UTF-8 refused at the lexer), relay profile id.
-  result: messages, recipe names, device IDs and OPC UA / webhook payloads can be written in ST; a failed test says what it saw
-  est: 4d
-  difficulty: high
-  depends: st-var-in-out
-  id: st-string
-  asked: 2026-11-08
-  by: claude-session
-  status: ready
-
 - [ ] **Process-control library: 10-15 blocks with tests** — in `crates/helmsman-iec/src/library.st`, written here (OSCAT's license is unverified and it leans on pointers): `PID` with anti-windup and bumpless manual/auto transfer, `RAMP`, `HYST`, `SCALE` (raw to engineering units, using the signal's `unit`), `LIMIT_ALARM`, `FILTER_PT1`, `DEBOUNCE`, `PULSE_COUNT` and a rate, sequence helpers. Decided (Nick, 2026-11-08: `st-library-names`): OSCAT's pin and block names where they exist, the standard's otherwise, no aliases; the plain-words explanation of every block and pin goes in its tooltip and its help page, the way the UI rule "tooltips on everything" already works. Each block gets requirement tests of its own, the non-IEC ones are marked in the docs as `BLINK_PATTERN` is, and the agent's profile gets the list (a new id).
   result: an analog loop the agent writes calls a tested PID instead of a hand-rolled PI with its own windup bug
   est: 4d
@@ -645,6 +648,15 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   id: relay-profile-dialect-2
   asked: 2026-11-15
   by: claude-session (board run)
+
+- [ ] **Strings as box signals** — `STRING[n]` is in the language (card `st-string`) but only inside a program: `Program::ports()` skips a STRING port, so it is no signal. Left for here, each with the skip it has today: `/api/signals` and the values stream, trend records, OPC UA, `RETAIN` (state.rs format; the checker refuses RETAIN on a string and names this card), I/O binding, `helmsman_io::Value`, nodecore `SignalValue`, helmsman-sim and its panel controls, and a requirement test sharing a STRING port with its program (`spec.rs` only shares ports `ports()` lists, so `ASSERT_EQ_STRING` can compare text the test builds but not a program output). Also the playground's `SYSTEM` prompt (helmsman-canvas/src/claude.rs, "Not supported: STRING and WSTRING") and a new relay profile id that tell the agent STRING, ASSERT_EQ_* and the string functions exist; a served profile never changes, so that is a new id in ../agent-relay.
+  needs: your call on the signal type for text (a bounded string of at most 255 bytes, as in the language), then a session in ../agent-relay for the profile and your deploy
+  result: a program's text outputs show on the desk, in trends and over OPC UA, survive a restart, and a requirement test reads them; the agent knows the syntax
+  est: 4d
+  difficulty: high
+  id: st-string-signals
+  asked: 2026-11-17
+  by: claude-session
 
 ## From user feedback: plan for later
 
@@ -771,15 +783,6 @@ cards fold on request and the choice is kept in `diagram.layout`.
   by: claude-session
   status: ready
 
-
-- [ ] **Zoom picks the level of detail** — far: every section and arm drawn as one block with its live state; middle: a statement as one line; near: the blocks. Sections and arms fold on request today (`Viewer::set_fold`); this folds them by zoom instead and opens nothing the reader folded by hand. The middle level is new: one fold per statement titled with its text.
-  result: a large program is readable at any zoom
-  est: 6h
-  difficulty: med
-  id: diagram-semantic-zoom
-  asked: 2026-11-15
-  by: claude-session
-  status: ready
 
 ## Product vision (interview 2026-10-29)
 
