@@ -17,12 +17,21 @@
 //!   bundle that does not bind is refused with the whole binding report.
 //!
 //! Every import, refused or not, is in the audit log.
+//!
+//! A bundle installed from a marketplace ([`super::market`]) passes one
+//! more stage before the proposal is made: the review ([`super::review`]),
+//! asked for once the bundle has verified and bound, so a bundle the box
+//! refuses anyway costs no model turn. Its verdict goes on the proposal as
+//! `review`; a refusal, or no review without an engineer's explicit go-on,
+//! stops the install. A bundle imported as a file has `review.state`
+//! `not_asked`.
 
 use std::collections::BTreeSet;
 
 use serde_json::{Value as Json, json};
 
 use super::catalog::Catalog;
+use super::review::{self, Outcome};
 use super::{Ctx, Request, Response, approve, audit, audit_full, audit_with, render, snapshot, store, wall};
 use crate::Window;
 use crate::bundle::{self, Bundle, BundleManifest, Trust, Verified, capabilities};
@@ -200,7 +209,18 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
             None => audit_full(),
         };
     }
-    import_bytes(req, ctx, &req.body, "")
+    import_bytes(req, ctx, &req.body, "", Gate::Direct)
+}
+
+/// Whether the bundle is reviewed before it becomes a proposal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Gate {
+    /// A bundle file posted to the box: no review is asked for.
+    Direct,
+    /// A marketplace install: reviewed first. `without_review`: the
+    /// request asked to go on if there is no review (the caller has
+    /// already checked that it may).
+    Review { without_review: bool },
 }
 
 /// The import of `bytes` as a bundle file: verified against the trust
@@ -208,7 +228,7 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
 /// says where the bytes came from when not the request body (the
 /// marketplace), for the audit line and the proposal's note.
 #[allow(clippy::too_many_lines)]
-pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str) -> Response {
+pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str, gate: Gate) -> Response {
     let refused = |status: u16, body: &Json, detail: &str| {
         let detail = if via.is_empty() {
             detail.to_string()
@@ -295,6 +315,52 @@ pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str) ->
             &format!("{what}: nothing to change"),
         );
     }
+    let (review, review_detail) = match gate {
+        Gate::Direct => (review::not_asked(), String::new()),
+        Gate::Review { without_review } => match review::run(ctx.chat.as_ref(), &v) {
+            Outcome::Read(verdict) if verdict.refuse => {
+                return refused(
+                    422,
+                    &json!({
+                        "error": format!("the review advises against installing this bundle: {}", verdict.reason),
+                        "bundle": bundle_json(&v),
+                        "review": review::refused(&verdict),
+                    }),
+                    &format!(
+                        "{what}: review refused (risk {}): {}",
+                        verdict.risk.as_str(),
+                        review::one_line(&verdict.reason)
+                    ),
+                );
+            }
+            Outcome::Read(verdict) => (
+                review::reviewed(&verdict),
+                format!(
+                    "; review: not refused, risk {}: {}",
+                    verdict.risk.as_str(),
+                    review::one_line(&verdict.summary)
+                ),
+            ),
+            Outcome::Unread(why) if !without_review => {
+                return refused(
+                    409,
+                    &json!({
+                        "error": format!("the bundle was not reviewed: {why}"),
+                        "bundle": bundle_json(&v),
+                        "review": review::not_reviewed(&why, None),
+                    }),
+                    &format!("{what}: not reviewed ({why}); stopped"),
+                );
+            }
+            Outcome::Unread(why) => {
+                let by = req.session.as_ref().map_or_else(|| "?".to_string(), |p| p.label());
+                (
+                    review::not_reviewed(&why, Some(&by)),
+                    format!("; installed without a review ({why}), an engineer went on: {by}"),
+                )
+            }
+        },
+    };
     let Ok(id) = ctx.box_.proposals.reserve() else {
         return refused(507, &json!({ "error": "too many proposals" }), "proposals full");
     };
@@ -318,6 +384,7 @@ pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str) ->
         "status": "draft",
         "at": wall(),
         "bundle": bundle_json(&v),
+        "review": review,
         "bindings": bindings,
         "modules": v.caps.modules,
         "replaces": replaces,
@@ -330,7 +397,7 @@ pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str) ->
         "diff": render::diff(&diff(&running, &target)),
         "approval": approve::tier_json(ctx, &running, &target, None),
     });
-    let mut detail = format!("proposal {id}: {what}: snapshot {base} -> {snap}");
+    let mut detail = format!("proposal {id}: {what}: snapshot {base} -> {snap}{review_detail}");
     if !via.is_empty() {
         detail.push_str(" (via ");
         detail.push_str(via);

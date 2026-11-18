@@ -632,6 +632,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     };
     let role = by.role();
     let who = by.who();
+    // What the install review said, for the approval's audit lines.
+    let review_note = proposal
+        .as_ref()
+        .map_or_else(String::new, |p| super::review::audit_note(&p.json));
     if ctx.box_.snapshots.is_none() {
         return refuse(
             ctx,
@@ -805,7 +809,11 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         ctx,
         req,
         202,
-        &format!("{label}: approved ({tier}) by {who}{}; applying", red_note(&red)),
+        &format!(
+            "{label}: approved ({tier}) by {who}{}{}; applying",
+            red_note(&red),
+            review_note
+        ),
         note,
     )
     .is_none()
@@ -926,6 +934,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         }
     }
     detail.push_str(&red_note(&red));
+    detail.push_str(&review_note);
     let _ = record(ctx, req, 200, &detail, note);
     Response::json(
         200,

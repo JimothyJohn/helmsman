@@ -36,7 +36,7 @@
 //! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
 //! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
 //! POST /api/market/list                   token: {index}: the signed index at that URL, verified, its bundles (see [`market`])
-//! POST /api/market/install                token: {index, name, version?}: that bundle fetched, checked against the index, imported as POST /api/bundles
+//! POST /api/market/install                token: {index, name, version?, without_review?}: that bundle fetched, checked against the index, reviewed by the Agent (it can only refuse), then imported as POST /api/bundles; without a review it stops (409) until an engineer session sends without_review (see [`review`])
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
 //! POST /api/snapshots/{id}/rollback       as apply: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
@@ -148,6 +148,7 @@ pub mod projects;
 pub mod proposal;
 pub mod render;
 pub mod requirements;
+pub mod review;
 pub mod sim;
 pub mod store;
 pub mod swap;
@@ -2079,7 +2080,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/snapshots/{id}/bundle", true, "that snapshot as an unsigned bundle file (sign it off the box)"),
             e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/market/list", true, "{index}: the signed marketplace index at that URL, verified against the trusted publishers, and its bundles"),
-            e("POST", "/api/market/install", true, "{index, name, version?}: that bundle fetched from the index's site, checked against the index, then imported as POST /api/bundles"),
+            e("POST", "/api/market/install", true, "{index, name, version?, without_review?}: that bundle fetched from the index's site, checked against the index, reviewed by the Agent (422 if it advises against installing; 409 if it could not be reviewed, until an engineer's login session sends without_review: true), then imported as POST /api/bundles"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
             e("GET", "/api/replays/{n}", true, "a replay kept as evidence"),
