@@ -128,6 +128,7 @@ mod interp;
 pub mod l5x;
 pub mod ladder;
 mod lexer;
+pub mod lint;
 mod once;
 mod parser;
 pub mod plcopen;
