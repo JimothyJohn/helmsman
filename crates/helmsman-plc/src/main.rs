@@ -44,6 +44,7 @@ use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::site::{self, Site};
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::store::{ChangeSet, Code, Kind, Store};
+use helmsman_plc::zone::{self, Zone};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
@@ -75,6 +76,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        helmsman_plc::calendar::text): adds the signals in_shift,
                        on_break, planned_down, working, shift_id, shift_minute,
                        shift_left, and drives the outputs its `drive` lines name
+  --time-zone NAME     the zone DT_NOW() reads in: an IANA name (America/Chicago)
+                       or UTC. Default: the system's (/etc/localtime), read once
+                       at start; UTC, and a line saying so, if it cannot be read
   --sinks FILE         webhook sinks and the signals they publish (see
                        helmsman_plc::sink); needs --sink-dir
   --sink-dir DIR       where each sink keeps its on-disk queue (state, not config)
@@ -205,6 +209,8 @@ struct Opts {
     io_map: Option<PathBuf>,
     gpio_chip: Option<PathBuf>,
     calendar: Option<PathBuf>,
+    /// `--time-zone`: where `DT_NOW()` reads the plant's local time.
+    time_zone: Option<String>,
     sinks: Option<PathBuf>,
     sink_dir: Option<PathBuf>,
     store: Option<PathBuf>,
@@ -283,6 +289,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         store: None,
         projects: false,
         emit_st: false,
+        time_zone: None,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         https: cfg!(feature = "https"),
         market: MarketHosts::Public,
@@ -400,6 +407,13 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--io-map" => once(&mut o.io_map, flag, v)?,
             "--gpio-chip" => once(&mut o.gpio_chip, flag, v)?,
             "--calendar" => once(&mut o.calendar, flag, v)?,
+            "--time-zone" if o.time_zone.is_some() => return Err("--time-zone given twice".into()),
+            "--time-zone" => {
+                if v != "UTC" {
+                    zone::valid_name(v).map_err(|e| format!("--time-zone: {e}"))?;
+                }
+                o.time_zone = Some(v.clone());
+            }
             "--sinks" => once(&mut o.sinks, flag, v)?,
             "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
             "--store" => once(&mut o.store, flag, v)?,
@@ -1597,6 +1611,8 @@ fn run(o: &Opts) -> Result<(), String> {
     let access = o.api.map(|_| load_access(o)).transpose()?;
     let cfg = device_config(o.serial);
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    // First, so a zone that cannot be had stops the box before it binds.
+    let zone = plant_zone(o)?;
     let d = defaults(o, i_len, q_len);
     let mut content = content(o, &d)?;
     let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
@@ -1625,6 +1641,7 @@ fn run(o: &Opts) -> Result<(), String> {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
         format!("modules do not fit together:{}", lines.concat())
     })?;
+    rt.set_wall_clock(zone.wall_clock());
     let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
@@ -1819,6 +1836,34 @@ fn run(o: &Opts) -> Result<(), String> {
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
         sleep_to(start, rt.next_deadline(), cap(scene.calendar.as_ref()), &mut said);
     }
+}
+
+/// The zone `DT_NOW()` reads in: `--time-zone`, which stops the box when it
+/// cannot be had, else the system's, which falls back to UTC with a line
+/// that says so (a box with no zone database still runs). Read once.
+fn plant_zone(o: &Opts) -> Result<Zone, String> {
+    let (zone, why) = match &o.time_zone {
+        Some(name) => (
+            Zone::named(name).map_err(|e| format!("--time-zone: {e}"))?,
+            "--time-zone",
+        ),
+        None => match Zone::system() {
+            Ok(z) => (z, "the system's"),
+            Err(e) => {
+                eprintln!(
+                    "helmsman-plc: time zone: {e}; DT_NOW() reads UTC (give --time-zone to say otherwise)"
+                );
+                (Zone::utc(), "fallback")
+            }
+        },
+    };
+    let now = i64::try_from(zone::system_utc_ns().div_euclid(1_000_000_000)).unwrap_or(0);
+    eprintln!(
+        "helmsman-plc: DT_NOW() reads {} time ({why}), UTC{} now",
+        zone.name(),
+        zone.offset_text(now)
+    );
+    Ok(zone)
 }
 
 /// `helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE...]`:

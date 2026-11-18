@@ -256,3 +256,7 @@ required-features = ["box"]
 [[test]]
 name = "test_cli"
 required-features = ["box"]
+
+[[test]]
+name = "zone"
+required-features = ["box"]
