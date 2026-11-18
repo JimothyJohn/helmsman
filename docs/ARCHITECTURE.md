@@ -441,9 +441,9 @@ scan; the scheduler bounds how often.
   it: the menu items, `row_menu` for a row of the I/O tab, and the
   question (`DevicesUi::assigning`, `assign_ui`) both views call each
   frame. The Devices tab's point row opens it, or returns
-  `DeviceAct::Assign`; the diagram's menu (`diagram_edit.rs`, `Entries::
-  assign`, `Viewer::assign`) offers it on a port's Read or Write block
-  whatever `edit_gate` says, and `Viewer::secondary_on_controls` carries
+  `DeviceAct::Assign`; the diagram's menu (`diagram_menu.rs`, `Entries::
+  assign`, `Viewer::assign`) offers it on a port's Read or Write block,
+  and `Viewer::secondary_on_controls` carries
   a right-click made on the switch or force button over a Read block.
   The simulation writes `proj.files["io.map"]` (`assign_act`); a box
   writes the open project's `io.map` buffer, as `wire_in` does;
@@ -961,8 +961,7 @@ box, Send or Stop, Undo, and a status line with the reason.
 
 "Chat about this" (`chat-about-this`, Nick 2026-11-16, `chat_about.rs`)
 makes the diagram something to point at. A right click on a block has the
-item, on the page and on a box (a box's menu holds it with the code's
-edits shown off); an input's or output's row will call
+item, on the page and on a box; an input's or output's row will call
 `chat_about_signal(name, chrome)` on either view. Choosing it sends
 nothing: it opens the Agent tab and adds a chip to `Instruct::chips`,
 drawn above the instruction box (`instruct::chips_ui`: wrapped by hand
@@ -2937,10 +2936,10 @@ tokio ever reach the box build.
 
 The operator's view of what a module's code is doing
 (`canvas-edit-scope`: ST is the source of truth). The view itself only
-reads. The diagram also writes ST back through checked splices
-(`helmsman_diagram::edit`, below the lowering): in the simulation as a
-deploy, on a box as an edit of the open buffer. See "Editing on the
-canvas" at the end of this section.
+reads: on the diagram the user edits the layout and toggles inputs, and
+code changes are typed in the editor or asked of the Agent (Nick,
+2026-11-18, docs/UI.md). The diagram's right-click menu is described at
+the end of this section.
 
 - **Lowering** (`helmsman_diagram::lower`, from `helmsman_iec::ast`, the
   parser's tree exposed read-only). Per statement: reads and literals on the
@@ -2966,10 +2965,7 @@ canvas" at the end of this section.
   c AND d` is one AND with four inputs, the FBD convention, for AND, OR,
   XOR, `+` and `*`. Only a run as written is joined, so the inputs are
   evaluated in the source's order and an operand in the author's
-  parentheses keeps its own block. `edit::SwapOp` on such a block changes
-  every operator of the run, refuses an operator drawn with two inputs
-  (`ManyInputs`), and brackets whatever would otherwise join a
-  neighbouring run, so an edit never changes the number of blocks.
+  parentheses keeps its own block.
 - **Folds: several blocks drawn as one** (`helmsman_diagram::fold`). A
   `Fold` names blocks the reader would rather see as one thing; `view`
   gives the diagram with each fold as one block (`NodeKind::Fold`) whose
@@ -2979,8 +2975,8 @@ canvas" at the end of this section.
   read and written become named pins). A fold that is neither, or shares
   a block with an earlier one, is left out and the view says why. The
   view maps its blocks, ports, wires and regions back (`View::live`,
-  `View::drivers`, `View::original`), so lowering, the trace mapping and
-  the edit spans are those of the diagram underneath. A whole-statement
+  `View::drivers`, `View::original`), so lowering and the trace mapping
+  are those of the diagram underneath. A whole-statement
   fold made `with_blocks` keeps one block per variable it reads, wired
   into it (on the canvas that block is where an input is set), and a
   region inside a fold that is gated from outside it is one more input.
@@ -3037,9 +3033,9 @@ canvas" at the end of this section.
   viewer keeps everything in the diagram's own numbers and draws the
   view: a click on a fold picks a block under it, a double click opens
   it into its blocks (outlined, with a tab that folds them back), a
-  folded comparison is edited in place (double click its value, right
-  click for the operator), a right click on a fold's pin is a gesture
-  on the pin behind it, a dragged fold keeps its place. Sections and
+  right click on a fold's pin is about the block behind it
+  (`Viewer::base_block`: the block itself, or the comparison of a folded
+  comparison), a dragged fold keeps its place. Sections and
   arms start as their blocks (`on_request`): a section is outlined
   under its name and folds from that tab, an arm folds from a double
   click on its label. A state block is on as the diagram opens: a chip
@@ -3050,7 +3046,7 @@ canvas" at the end of this section.
   `draw_table_row`), the row whose cells all hold lit, and with the
   output FALSE the cells that are not satisfied in the fault colour; a
   cell's hover (`Viewer::cell_tip`) says what its row needs and what the
-  signal is. A gesture on a table's pin is refused (`base_pin`): its pin
+  signal is. A right click on a table's pin is about no block: its pin
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
@@ -3242,55 +3238,17 @@ canvas" at the end of this section.
   through an in-process proxy with a site VPN's 300 ms round trip,
   1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
 
-- **Editing on the canvas** (`diagram-edit-canvas`, `diagram-edit-box`;
-  `diagram_edit.rs`, tests in `ui_tests/diagram_edit.rs`). `Viewer::canvas`
-  only notices a right click (`hit_at`: a pin within reach of an input
-  port, else the nearest block) or a double click on a constant, and
-  hands it up as a `Gesture`; with `Viewer::edit_gate` off it leaves a
-  note of why instead (a viewer starts off with `BOX_REASON`; both hosts
-  set the gate each frame, so it shows only for a viewer no host drives).
-  The menu offers Change operator (`SwapOp`), Negate input
-  (`ToggleNegation`), Connect to… (`Rewire`), Edit value… (`SetConst`),
-  Rename… and Delete statement; `SetFbArg` is in the engine and is not
-  offered by the menu. A long press is egui's secondary click on touch.
-  `PlaygroundView` sets the gate
-  each frame (`edit_gate`: the viewer's source equals the build source,
-  and the project builds from exactly one `.st` file, so the engine's byte
-  offsets are the buffer's) and draws `EditUi`, whose menu lists only
-  what `edit::apply` accepts (each entry is dry-run when the menu opens).
-  A choice is an `Edit`; `PlaygroundView::diagram_edit` runs it through
-  `edit::apply` against the viewer's own source and module, pushes the old
-  text into the file's `TextEditState` undoer (`editor::push_undo`, its
-  own entry), writes the patched text to the file, and runs the Deploy
-  path without the formatter (`deploy_as(false)`, so the file holds the
-  splice and nothing else; the same requirement-test and compile checks
-  refuse it as for a typed edit, leaving the edit in the code). The
-  rebuilt `Viewer` keeps the old one's cameras, scope and pick, and
-  `Layers::carry` re-keys the dragged positions of the blocks whose text
-  changed (`Viewer::edited_blocks`: same shape pairs blocks by place,
-  otherwise by `diff::modules`). `Chrome::flash` highlights the patch and
-  sends the editor to its line for 1.5 s. Undo and Redo of a gesture
-  redeploy while the diagram was in sync before them (`Follow::deployed`,
-  cleared by any typing or Deploy).
-
-  On a box (`BoxView::edit_gate`, `BoxView::diagram_edit`, #505) a gesture
-  only edits the open buffer, as typing would: the same `edit::apply`
-  against the diagram's source (the box's header lines are stripped by
-  `file_start`), the old text pushed as one undo entry
-  (`editor::push_undo`), the patched text in the buffer, the highlight
-  flashed. Nothing is saved or deployed; Save and Deploy are the
-  engineer's, through the box's approval policy, which tiers the change
-  from its diff as for typed text. The gate is on only when the session is
-  an engineer's (`is_engineer`), the open project is the one the box
-  runs, the project has exactly one program file (`sole_program`, test
-  files aside), that file is loaded, and the diagram's source is the file
-  under the box's header lines. The diagram draws what runs, so after one
-  gesture the buffer differs from it and the gate is off ("Save and
-  Deploy, then edit from the diagram") until the change is deployed and
-  running or Undo restores the text. Tests:
-  `box_projects_tests.rs` (`a_diagram_edit_on_a_box_is_an_unsaved_typed_edit_with_one_undo_step`,
-  `an_operator_or_nobody_cannot_edit_from_the_diagram`,
-  `the_diagram_is_off_when_it_is_not_the_open_file`).
+- **The diagram's menu** (`diagram_menu.rs`, tests in
+  `ui_tests/diagram_menu.rs`). `Viewer::canvas` notices a right click
+  (`hit_at`: the block of a pin within reach of an input port, else the
+  nearest block; a long press is egui's secondary click on touch) and
+  hands it up as a `Gesture` when the block has an item: any block has
+  Chat about this while `Viewer::chat_ok` (the diagram is of the text the
+  host's files hold; a box always), and a program port's block has the
+  io.map items. Both hosts draw `Menu`; none of its items changes the
+  code. On the diagram the user moves blocks (`diagram.layout`), folds,
+  zooms, selects and switches inputs (the simulation's virtual inputs, a
+  box's forces); code changes are typed or asked of the Agent.
 
 ## Explain mode (`explain-mode`, built)
 
@@ -3465,44 +3423,6 @@ file and token in a temporary state directory).
   removed and changed plus the added and the changed ones' new versions
   are exactly the new blocks. Removed blocks are drawn as dashed ghosts in
   their old layout below the proposed diagram.
-- **Edits from the diagram** (`helmsman_diagram::edit`, `diagram-edit-core`;
-  pure, wasm-safe, depends only on `helmsman-iec`). ST stays the source of
-  truth and the parse tree drops comments, so an edit splices text.
-  Lowering records a byte range for every input pin (`Diagram::pins`,
-  `(node, input)` to the operand's text with its `NOT`s and parentheses),
-  every IF/ELSIF/WHILE/REPEAT gate (`gates`) and every binary operator
-  block (`ops`); the ranges are the parser's `Expr::start` and `end`,
-  converted from line and column (bytes, 1-based). A read wired from an
-  earlier write keeps its own text in this statement.
-  `apply(src, &Module, Edit) -> Result<Patch, Refusal>`: `SetConst` (a
-  literal, a TIME preset), `ToggleNegation` (a pin or a gate), `SwapOp`
-  (AND/OR, a comparison, `+ - * /`). A `Patch` is a byte range and the new
-  text, trimmed to what differs; `Patch::inverse(src)` undoes it exactly.
-  Brackets only where the precedence of `text::expr` needs them. The
-  module must be the lowering of `src` (geometry aside), else
-  `StaleDiagram`. Every edit is checked before it is returned: the result
-  is compiled and lowered again and compared block by block with the old
-  diagram (and with `diff::modules`): only the addressed block and the
-  blocks of its statement that hold its text may differ, and only the asked
-  bubble may flip, else the edit is refused in plain words (`Refusal`).
-  `diagram-edit-rewire` adds four more, through the same entry point:
-  `Rewire { pin, to: Source }` (a pin takes a variable, a literal or an
-  earlier write; a bubble stays except on a literal), `SetFbArg { pou,
-  node, arg, to }` (replace the argument or add `NAME := value` after the
-  last input argument), `DeleteStmt { pou, span }` (the range must be
-  exactly one statement; a statement alone on its line goes with its
-  indentation, trailing comment and line break, otherwise it goes with the
-  blanks that kept it from its neighbour and comments stay) and `Rename {
-  pou, from, to }` (`helmsman_iec::rename_ident` over the POU's text only).
-  Block numbers shift under these, so `edit/graph.rs` checks them as
-  trees: each statement unfolded from its roots, equal to the old one but
-  for the addressed pin and the blocks above it; a deleted statement's
-  readers may now read the variable or an older write. A rename is checked
-  as the same module with both names blanked out everywhere. Types come
-  from the declarations (`Types::type_of`): a pin takes what it takes now,
-  a function block port what it declares. Library POUs are refused
-  (`LibraryPou`), as are names that are reserved words, taken, or not
-  names; a rename that breaks a call by port name fails the compile check.
 - **Sim replay chart.** "Run the sim replay" posts `.../replay`; the
   answer now carries, per driven signal, both step tracks
   (`current_track`, `proposed_track`: type and `[at_ms, value]` steps, at

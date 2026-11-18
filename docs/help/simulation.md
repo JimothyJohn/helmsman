@@ -68,23 +68,6 @@ comment left open) is left as you typed it.
 Undo and Redo (<kbd>Ctrl</kbd> <kbd>Z</kbd>, <kbd>Ctrl</kbd> <kbd>Y</kbd>)
 work in the editor and from the Edit menu.
 
-### Editing from the diagram
-
-A change made on the diagram (see [The Editor](editor.html), Change it)
-does not wait for Deploy. It is written into the code and deployed at
-once, with the same checks as the Deploy button: if the code does not
-compile, the change stays in the code, the program runs as it was and the
-note under the header says why. A requirement test that fails is named
-there and does not stop the change. The running program keeps its
-values, as a Deploy does. Each change is one step of Undo, and Undo and
-Redo run the program again, as long as the diagram still shows the code
-as it stands.
-
-The diagram's gestures are off, with the reason in a note where you
-clicked, while the code in the editor has been typed on since the last
-Deploy or does not compile, and in a project with more than one program
-file.
-
 <kbd>Ctrl</kbd> <kbd>F</kbd> opens a find box over the Structured Text.
 Every match is marked in yellow, the current one brighter, and the pane
 scrolls to it; the box counts them. <kbd>Enter</kbd> or
