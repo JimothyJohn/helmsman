@@ -99,6 +99,13 @@ pub struct Setup {
     /// The agent version `POST /api/design` asks the relay for (a design
     /// profile: no tools). See [`super::design`].
     pub design_agent: String,
+    /// The agent version `POST /api/device-profile/publish` asks the relay
+    /// for: a profile that lists the relay's `publish_device_profile` tool
+    /// ([`super::device_profile::PUBLISH_AGENT`]).
+    pub publish_agent: String,
+    /// How long a publish may wait on the relay: it makes a few calls to
+    /// GitHub (`idle` is the longest silence, `total` the whole call).
+    pub publish_wait: (Duration, Duration),
     /// How often the relay is probed while the agent is not online.
     pub probe_every: Duration,
 }
@@ -121,6 +128,11 @@ impl Setup {
             help_agent: super::help::PROFILE.into(),
             help_budget: super::help::budget(),
             design_agent: super::design::PROFILE.into(),
+            publish_agent: super::device_profile::PUBLISH_AGENT.into(),
+            publish_wait: (
+                super::device_profile::PUBLISH_IDLE,
+                super::device_profile::PUBLISH_TOTAL,
+            ),
             probe_every: Duration::from_secs(15),
         }
     }
@@ -697,6 +709,16 @@ impl Chat {
         cfg.version.clone_from(&self.setup.design_agent);
         cfg.timeouts.idle = cfg.timeouts.idle.max(super::design::IDLE);
         cfg.timeouts.total = cfg.timeouts.total.max(super::design::TOTAL);
+        cfg
+    }
+
+    /// The relay as publishing a device profile uses it: the publish
+    /// agent's version, and timeouts for a call that makes a few
+    /// requests to GitHub.
+    pub(super) fn publish_relay(&self) -> relay::Config {
+        let mut cfg = self.setup.relay.clone();
+        cfg.version.clone_from(&self.setup.publish_agent);
+        (cfg.timeouts.idle, cfg.timeouts.total) = self.setup.publish_wait;
         cfg
     }
 
