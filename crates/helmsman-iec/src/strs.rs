@@ -269,6 +269,12 @@ fn to_num(s: &[u8], ty: Ty) -> Value {
             .filter(|x| x.is_finite());
         return Value::Real(x.unwrap_or(0.0));
     }
+    let s = s.trim_ascii();
+    if let Some(n) = fraction(s) {
+        let (lo, hi) = ty.range();
+        let n = i128::from(n);
+        return Value::Int(if (lo..=hi).contains(&n) { n } else { 0 });
+    }
     let (neg, digits) = match s.split_first() {
         Some((b'-', d)) => (true, d),
         Some((b'+', d)) => (false, d),
@@ -284,6 +290,34 @@ fn to_num(s: &[u8], ty: Ty) -> Value {
     let n = if neg { -n } else { n };
     let (lo, hi) = ty.range();
     Value::Int(if (lo..=hi).contains(&n) { n } else { 0 })
+}
+
+/// An integer read from a decimal with a fraction or an exponent (`1.9`,
+/// `-1.9`, `1e2`, `2.5E-1`), cut toward zero, the way ruSTy reads text for
+/// an integer type (oracle: tests/oracle.rs). `None` when the text is
+/// not such a number, or when it is a plain integer (the caller reads
+/// those exactly).
+fn fraction(s: &[u8]) -> Option<i64> {
+    let body = match s.split_first() {
+        Some((b'-' | b'+', d)) => d,
+        _ => s,
+    };
+    let digits = |t: &[u8]| !t.is_empty() && t.iter().all(u8::is_ascii_digit);
+    let (mant, exp) = match body.iter().position(|c| matches!(c, b'e' | b'E')) {
+        Some(i) => (&body[..i], Some(&body[i + 1..])),
+        None => (body, None),
+    };
+    let exp_ok = exp.is_none_or(|e| digits(e.strip_prefix(b"-").or_else(|| e.strip_prefix(b"+")).unwrap_or(e)));
+    let mant_ok = match mant.iter().position(|c| *c == b'.') {
+        Some(i) => digits(&mant[..i]) && digits(&mant[i + 1..]),
+        None => digits(mant) && exp.is_some(),
+    };
+    if !(exp_ok && mant_ok) || body.len() > 40 {
+        return None;
+    }
+    let x: f64 = core::str::from_utf8(s).ok()?.parse().ok()?;
+    #[allow(clippy::cast_possible_truncation)]
+    (x.is_finite() && x.abs() < 9.0e18).then(|| x.trunc() as i64)
 }
 
 /// What a string function made, and the bytes it handled.
