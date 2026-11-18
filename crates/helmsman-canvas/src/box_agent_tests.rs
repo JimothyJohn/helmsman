@@ -67,6 +67,16 @@ impl Relay {
                         );
                         continue;
                     }
+                    // The box asks which protocol the agent speaks (once).
+                    if head.starts_with("GET /v1/agents/") {
+                        let b = json!({"version":"helmsman/v1","protocol":1}).to_string();
+                        let _ = write!(
+                            s,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                            b.len()
+                        );
+                        continue;
+                    }
                     if let Some(body) = script.next() {
                         let _ = write!(
                             s,

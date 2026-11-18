@@ -113,7 +113,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds a model API key.
-  --relay-agent V      the agent version to ask the relay for (default v7)
+  --relay-agent V      the agent version to ask the relay for (default v7); a
+                       harness profile (v8 and later, the relay says which)
+                       runs on relay-held sessions
   --relay-explain-agent V
                        the agent version POST /api/explain asks for (an
                        explain profile; default explain-v2). The box runs
