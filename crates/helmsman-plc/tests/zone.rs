@@ -613,7 +613,15 @@ fn a_hostile_time_zone_on_the_command_line_stops_the_box_with_the_reason() {
         "Atlantis",
         "..",
     ] {
-        let out = plc(&["--time-zone", bad, "--api", "off", "--opcua", "off", "no-such-program.st"]);
+        let out = plc(&[
+            "--time-zone",
+            bad,
+            "--api",
+            "off",
+            "--opcua",
+            "off",
+            "no-such-program.st",
+        ]);
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{bad:?} started a box: {err}");
         assert!(err.contains("--time-zone"), "{bad:?}: {err}");
