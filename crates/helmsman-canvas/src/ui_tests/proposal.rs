@@ -679,7 +679,10 @@ fn nothing_is_sent_until_the_person_confirms_and_cancel_sends_nothing() {
     assert!(t.contains("Only this profile file is sent."), "{t}");
     h.press("proposal publish cancel");
     let reqs = sent(&mut h);
-    assert!(calls(&reqs, &PCall::ProposalPublish).is_empty());
+    assert!(
+        calls(&reqs, &PCall::ProposalPublish).is_empty(),
+        "cancelling sends nothing"
+    );
     assert!(h.has("proposal publish"), "back to the button");
     // Confirm: exactly one request, the project and the file name only.
     send(&mut h);
@@ -698,7 +701,10 @@ fn nothing_is_sent_until_the_person_confirms_and_cancel_sends_nothing() {
         "no second send while one is on its way"
     );
     assert!(all_text(&mut h).contains("Sending…"));
-    assert!(calls(&sent(&mut h), &PCall::ProposalPublish).is_empty());
+    assert!(
+        calls(&sent(&mut h), &PCall::ProposalPublish).is_empty(),
+        "nothing is sent"
+    );
 }
 
 #[test]
@@ -838,7 +844,10 @@ fn a_session_that_changes_takes_the_offer_away_until_the_project_is_read_again()
         !h.has("proposal publish"),
         "the project closed with the session: nothing is read back to publish"
     );
-    assert!(calls(&sent(&mut h), &PCall::ProposalPublish).is_empty());
+    assert!(
+        calls(&sent(&mut h), &PCall::ProposalPublish).is_empty(),
+        "nothing is sent"
+    );
 }
 
 #[test]
@@ -890,7 +899,7 @@ fn the_panel_keeps_its_default_width_while_publishing_every_state() {
         PCall::ProposalPublish,
         201,
         &sent_ok(
-            12345678,
+            12_345_678,
             "https://github.com/JimothyJohn/helmsman-devices/pull/12345678",
             true,
         ),
