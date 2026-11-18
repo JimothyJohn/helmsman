@@ -2,22 +2,8 @@
 
 Done cards were removed on 2026-11-06 (git history has them). Three sections up top: decisions only you can make, things only your hands can do, and what an agent builds next. The roadmap below is the long view.
 
-Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
-
 ## Open questions for Nick
 
-
-- [ ] **Keep `sha2` in the canvas for the spec's PDF fingerprint?** — #475 (spec mode on a box) records each PDF in `spec.md` by name, size and SHA-256, since a project file is text and cannot hold the PDF. Nothing in the canvas computed SHA-256, so it added `sha2` 0.11.1 with default features off: the version the box, its agent and the I/O crate already build, no new crate in Cargo.lock, and `wasm_deps` is green. Dropping it leaves name and size only, so two different PDFs of one name and size could not be told apart later.
-  options: keep | drop, name and size only
-  id: spec-pdf-sha2
-  asked: 2026-11-16
-  by: claude-session
-
-- [ ] **The MDrive kept moving when the controller went silent, and its utility shows Halt Motion on: what does Get say?** — Measured on the bench unit (2026-11-16): slewing at 5000 steps/s over the cyclic connection, it stops on a Forward_Close and when the run/idle header goes to idle, but when the controller simply stops sending (a pulled cable, a box that dies) it was still slewing 10 s later, until `SL 0` arrived over its MCode port. Your photo of the Configuration Utility's E.I.P. page (2026-11-17) shows "I/O Implicit connection tests: Halt Motion On", which reads like the setting for exactly this, so either the page was showing its own default and the drive has it off, or on does not cover a connection that times out. Please press Get beside Halt Motion and tell me what it shows; if it comes back Off, set it On and I repeat the test. If it really is On and the drive still runs, the stop has to be an MCode program on the drive (my pick then; it writes to the drive's flash) or a hardware input.
-  options: Get shows Off: I set it On, test again | Get shows On: write the MCode program | Get shows On: I wire a hardware stop | accept it on the bench for now
-  id: mdrive-comms-loss-stop
-  asked: 2026-11-16
-  by: claude-session
 
 ## Needs your hands
 
@@ -111,15 +97,16 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **Bring up the Novanta IMS Liberty MDrive over EtherNet/IP or Modbus TCP** — Why it matters: the first device on the bench that is not discrete I/O. A motor drive is where the device profile's "kinds" get decided (step (g) of `device-profiles`: a drive's enable, speed, position and fault as the same four channels whatever the vendor), and where a comms loss has to stop something that moves. PROFINET first is out (Nick, 2026-11-13), so this starts on the protocols plants run. What its files say (docs/devices/novanta-mdrive.md, read 2026-11-10): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1; its EDS is in the firmware zip. Steps: Modbus TCP as it ships (no vendor tool needed), read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested; then EtherNet/IP from its EDS, so one device compares two drivers; PROFINET later, if ever. Motion asks "cell clear?" once per session (hardware-guard).
-  needs: your answer to `mdrive-comms-loss-stop`; the drive on the bench at 192.168.33.1 (the Studio reaches it through `sudo ifconfig en0 alias 192.168.33.10 255.255.255.0`, gone at a reboot)
+  needs: the drive on the bench at 192.168.33.1 (the Studio reaches it through `sudo ifconfig en0 alias 192.168.33.10 255.255.255.0`, gone at a reboot)
   result: a device doc with citations, a profile and a library entry; an ST program that jogs and positions the axis and stops it on comms loss
   est: 2d
   difficulty: med
-  notes: 2026-11-16 night, on the bench unit (LMDCE853C, EtherNet/IP mode, identity revision 2.36, `LMDCM 6.013`): EtherNet/IP came first because that is the mode it arrived in. Done: the connection (docs/devices/novanta-mdrive.md "On the bench": a run/idle header its EDS does not declare, which `enip-io` now corrects from the refusal; it sends 1.3 to 1.5 times slower than the RPI it grants; it resets the TCP session after 2 to 3 s and keeps exchanging I/O; UDP 2222 only), the vendor's EDS resolving and connecting, a 20-minute hold, a slew at 5000 steps/s and a stop from the cyclic image, the library entry (helmsman-devices `devices/novanta/lexium-mdrive-ethernet/`). Found: the output assembly is not laid out as the manual says, and a silent controller does not stop a slew (both are questions above). 2026-11-17: the unit's mapping is known (Nick's photo of the Configuration Utility; docs/devices/novanta-mdrive.md has it, and it explains the move at the first Forward_Open). Not explained, for later: a small MA through bytes 28..31 and over MCode did not move the drive (errors 25, 30). Left: the profile and the kinds (a drive's enable, speed, position, fault), MA and MR, the ST program with the fault path, and Modbus TCP for the comparison (the drive speaks one protocol at a time).
+  notes: 2026-11-16 night, on the bench unit (LMDCE853C, EtherNet/IP mode, identity revision 2.36, `LMDCM 6.013`): EtherNet/IP came first because that is the mode it arrived in. Done: the connection (docs/devices/novanta-mdrive.md "On the bench": a run/idle header its EDS does not declare, which `enip-io` now corrects from the refusal; it sends 1.3 to 1.5 times slower than the RPI it grants; it resets the TCP session after 2 to 3 s and keeps exchanging I/O; UDP 2222 only), the vendor's EDS resolving and connecting, a 20-minute hold, a slew at 5000 steps/s and a stop from the cyclic image, the library entry (helmsman-devices `devices/novanta/lexium-mdrive-ethernet/`). Found: the output assembly is not laid out as the manual says, and a silent controller does not stop a slew (both are questions above). 2026-11-17: the unit's mapping is known (Nick's photo of the Configuration Utility; docs/devices/novanta-mdrive.md has it, and it explains the move at the first Forward_Open). Decided (Nick, 2026-11-17, on the board): that the drive keeps slewing when the controller goes silent is accepted on the bench for now; before it is shown or left running unattended it needs a stop of its own (the utility's Halt Motion setting read back with Get, an MCode program, or a hardware input). Not explained, for later: a small MA through bytes 28..31 and over MCode did not move the drive (errors 25, 30). Left: the profile and the kinds (a drive's enable, speed, position, fault), MA and MR, the ST program with the fault path, and Modbus TCP for the comparison (the drive speaks one protocol at a time).
   status: blocked
   id: mdrive-bringup
   asked: 2026-11-10
   by: claude-session
+  notes: 2026-11-17: Nick on the comms-loss stop: accept it on the bench for now. A silent controller does not stop a slew on this unit (it stops on a Forward_Close and on run/idle going to idle); what its Halt Motion setting really holds was not read. Open again before the drive runs anywhere but the bench: an MCode program on the drive or a hardware stop.
 
 - [ ] **Bring up a Universal Robot over EtherNet/IP and Modbus TCP** — Why it matters: the first device with a large mixed image (floats, 32-bit registers, bit fields), so it tests what a profile can say about a value beyond on and off, and a robot is something customers already own. PROFINET first is out (Nick, 2026-11-13). Read 2026-11-10 (docs/devices/universal-robots.md): EtherNet/IP input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); Modbus TCP server on 502, function codes 1..6, 15, 16, general purpose registers 128..255, robot state from 256, every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values converted by hand), the unit id ignored. EtherNet/IP and PROFINET cannot be on together. URSim is no stand-in: users report its Modbus registers stuck, so this needs the robot. PROFINET (its GSDML is read, slots 1..10) only if a customer asks.
   needs: the robot on 192.168.3.x, its model and PolyScope version, EtherNet/IP enabled under Installation > Fieldbus; a cleared cell before anything moves
@@ -755,17 +742,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: scl-import
   asked: 2026-11-08
   by: claude-session
-
-- [ ] **Diagram edits 5: on a box** — the same gestures on a box, on only for an engineer (`writable()`) and only while the diagram shows the open buffer, not the running module; otherwise off with a tooltip saying why. Nothing new on the box: Save and Deploy go through the existing policy, which sets the tier from the diff.
-  result: diagram edits on a Pi land like typed edits, approval and audit unchanged
-  notes: box_projects_tests: edit, Save, the stale-save 409, against the real API. A diagram edit runs on a box only after Deploy, the same as typing.
-  est: 4h
-  difficulty: low
-  depends: diagram-edit-canvas
-  id: diagram-edit-box
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
 
 - [ ] **Diagram edits 6: docs** — amend `canvas-edit-scope` in docs/ARCHITECTURE.md (the live ST view section: the diagram now writes ST through checked splices), docs/UI.md, and a help page in the floor-engineer voice.
   result: the docs say what the diagram can change and how it reaches the code
