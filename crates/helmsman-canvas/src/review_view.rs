@@ -503,6 +503,7 @@ impl ReviewView {
                 ui.label(RichText::new("Pick a proposal to review it.").color(t.muted));
             });
             self.rects.extend(out.rects);
+            self.act(out.act, now);
             return;
         };
         header(ui, o);
@@ -583,7 +584,12 @@ impl ReviewView {
             );
         }
         self.rects.extend(out.rects);
-        for a in out.act {
+        self.act(out.act, now);
+    }
+
+    /// Carries out what the frame's clicks asked for.
+    fn act(&mut self, acts: Vec<Act>, now: f64) {
+        for a in acts {
             match a {
                 Act::Replay(t) => self.state.replay(&t),
                 Act::Approve(t) => self.state.approve(&t, now),

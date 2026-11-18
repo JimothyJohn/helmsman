@@ -1905,6 +1905,27 @@ mod chrome {
                 "{state}: the result has its Dismiss"
             );
         }
+        // With no proposal open, "Install without a review" still works:
+        // a click on it sends the install again, going on.
+        let go = h
+            .app
+            .review
+            .as_ref()
+            .unwrap()
+            .rects
+            .iter()
+            .find(|(k, _)| k == "install go on")
+            .map(|(_, r)| r.center())
+            .expect("a missing review offers the way on");
+        h.app.review.as_mut().unwrap().sent.clear();
+        h.click(go);
+        h.frame(vec![]);
+        let sent = &h.app.review.as_ref().unwrap().sent;
+        assert!(
+            sent.iter().any(|r| r.call == crate::review::Call::Install
+                && r.body.as_deref().unwrap_or("").contains("without_review")),
+            "{sent:?}"
+        );
     }
 
     #[test]

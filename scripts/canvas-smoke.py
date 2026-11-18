@@ -61,7 +61,7 @@ S = 2
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 USER, PASSWORD = "alice", "alice-engineer-pw"
 # Console lines the smoke itself causes.
-EXPECTED = ("/__seed", "status of 404", "status of 401")
+EXPECTED = ("/__seed", "status of 404", "status of 401", "status of 409", "status of 422")
 
 
 # Every tab in the left pane, in its first order (2026-11-13: one pane, the
@@ -468,7 +468,7 @@ def start_market_box(dist, work, trust_key, port, relay_port):
     env = dict(os.environ, STATE_DIRECTORY=state)
     plc("account", "add", USER, "engineer", env=env, input=PASSWORD + "\n")
     plc("bundle", "trust", "--state-dir", state, "add", "acme", trust_key)
-    args = [PLC, "--module-dir", os.path.join(work, "conveyor"), "--io-map", os.path.join(work, "map.txt"), "--store", os.path.join(state, "store"),
+    args = [PLC, "--module-dir", os.path.join(work, "conveyor"), "--io-map", os.path.join(work, "map.txt"),
             "--api", f"127.0.0.1:{port}", "--https", "off", "--opcua", "off", "--ui", dist, "--bind", "127.0.0.1",
             "--encap-port", "0", "--io-port", "0", "--market-allow-local", "on"]
     if relay_port:
@@ -486,7 +486,6 @@ def start_market_box(dist, work, trust_key, port, relay_port):
 
 # On the Proposals screen at 1400x860: the install form is under the drafts
 # in the left panel (crates/helmsman-canvas/src/review_view.rs).
-INSTALL_INDEX = (140, 0)
 
 
 def market(browser, dist, out):
@@ -517,8 +516,8 @@ def market(browser, dist, out):
                     r.page.keyboard.type(PASSWORD)
                     r.key("Enter")
                 sign_in(); r.wait(6000)
-                r.click(*VIEW_MENU); r.wait(800)
-                r.click(279, 80); r.wait(1500)
+                r.click(*VIEW_MENU); r.wait(1500)
+                r.click(259, 135); r.wait(1500)
                 r.shot("proposals-screen")
                 problems += install_steps(r, index, label)
                 problems += r.problems()
@@ -537,7 +536,32 @@ def market(browser, dist, out):
     return problems
 
 
+def fill(r, field, text):
+    r.click(*field); r.key(f"{MOD}+a"); r.page.keyboard.type(text); r.wait(200)
+
+
+INSTALL_INDEX_FIELD = (133, 312)
+INSTALL_NAME_FIELD = (133, 374)
+INSTALL_BUTTON = (42, 410)
+
+
 def install_steps(r, index, label):
+    """Install horn-kit and siren-kit through the form, a screenshot each."""
+    fill(r, INSTALL_INDEX_FIELD, index)
+    fill(r, INSTALL_NAME_FIELD, "horn-kit")
+    r.click(*INSTALL_BUTTON); r.wait(4000)
+    r.shot("horn-kit")
+    if label == "review":
+        # The first install left a draft in the list: the form is lower.
+        r.click(330, 138); r.wait(300)
+        fill(r, (133, 374), index)
+        fill(r, (133, 435), "siren-kit")
+        r.click(42, 462); r.wait(4000)
+        r.shot("siren-kit-refused")
+    else:
+        r.page.mouse.move(395, 262); r.wait(400)
+        r.click(395, 262); r.wait(3000)
+        r.shot("went-on-without-a-review")
     return []
 
 
@@ -606,6 +630,7 @@ def main():
     ap.add_argument("--dist", default=os.path.join(ROOT, "target", "canvas-dist"))
     ap.add_argument("--out", default=os.path.join(ROOT, "target", "canvas-smoke"))
     ap.add_argument("--box", action="store_true", help="also start a loopback box and drive its page")
+    ap.add_argument("--market-only", action="store_true", help="only the marketplace install scenario (starts its own boxes)")
     a = ap.parse_args()
     global PLC
     PLC = os.path.join(ROOT, "target", "debug", "helmsman-plc")
@@ -618,22 +643,25 @@ def main():
     proc = None
     state = tempfile.mkdtemp(prefix="helmsman-smoke-")
     try:
-        if a.box:
+        if a.box and not a.market_only:
             box_port = free_port()
             proc = start_box(a.dist, state, box_port)
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
-            problems += playground(ctx, base, a.out)
-            ctx.close()
-            problems += phone(browser, base, "?playground&editor", a.out, "pg")
-            if proc:
-                bbase = f"http://127.0.0.1:{box_port}"
-                ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
-                problems += box(ctx, bbase, a.out)
-                ctx.close()
-                problems += phone(browser, bbase, "", a.out, "box")
+            if a.market_only:
                 problems += market(browser, a.dist, a.out)
+            else:
+                ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+                problems += playground(ctx, base, a.out)
+                ctx.close()
+                problems += phone(browser, base, "?playground&editor", a.out, "pg")
+                if proc:
+                    bbase = f"http://127.0.0.1:{box_port}"
+                    ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+                    problems += box(ctx, bbase, a.out)
+                    ctx.close()
+                    problems += phone(browser, bbase, "", a.out, "box")
+                    problems += market(browser, a.dist, a.out)
             browser.close()
     finally:
         srv.shutdown()
