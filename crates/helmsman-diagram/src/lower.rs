@@ -275,6 +275,7 @@ fn vars_of(decls: &[ast::VarDecl], fbs: &HashSet<String>) -> HashMap<String, Var
             let named = match ty {
                 TypeRef::Named(n, _) => n.to_ascii_uppercase(),
                 TypeRef::Array { .. } => String::new(),
+                TypeRef::Str(..) => "STRING".to_string(),
             };
             (
                 v.name.clone(),
@@ -367,7 +368,7 @@ impl Types {
                     Some(TypeDef::Alias(a, _)) => t = a,
                     _ => return t,
                 },
-                TypeRef::Array { .. } => return t,
+                TypeRef::Array { .. } | TypeRef::Str(..) => return t,
             }
         }
         t
@@ -999,6 +1000,7 @@ impl Lower<'_> {
             ExprKind::Real { value, .. } => self.konst(e, Some(Value::Real(*value))),
             ExprKind::Bool(b) => self.konst(e, Some(Value::Bool(*b))),
             ExprKind::Time(ns) => self.konst(e, Some(Value::Int(*ns))),
+            ExprKind::Str(_) => self.konst(e, None),
             ExprKind::EnumLit(..) => self.konst(e, None),
             ExprKind::Var(n) if !self.vars.contains_key(n) => {
                 // An enumeration value (or a constant the library knows).
