@@ -745,9 +745,14 @@ VAR_OUTPUT motor : BOOL; msg : STRING[20]; lamp : BOOL; END_VAR
 END_PROGRAM";
     let sim = rio();
     let m = map(&sim);
-    let mut table = SignalTable::new(&m, &BTreeMap::new()).unwrap();
+    let table = SignalTable::new(&m, &BTreeMap::new()).unwrap();
+    let mut links = links(&m, helmsman_io::open, Box::new(Channels::new())).unwrap();
     let mut rt = Runtime::with_signals(0, 0, vec![module("line", SRC)], &table).unwrap();
-    let faults = rt.tick_with(ms(0), &[], &mut table);
+    let table = Mutex::new(table);
+    for l in &mut links {
+        let _ = l.cycle(&table);
+    }
+    let faults = rt.tick_with(ms(0), &[], &mut table.lock().unwrap());
     assert_eq!(faults, NO_FAULTS);
     assert_eq!(rt.status("line"), Some(Status::Running));
     let ports: Vec<String> = rt
