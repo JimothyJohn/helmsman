@@ -179,7 +179,7 @@ END_PROGRAM";
     assert_eq!((s(&p, "q.k"), int(&p, "q.i")), ("ok".into(), 5));
     assert_eq!(
         (s(&p, "a[1]"), s(&p, "a[2]"), s(&p, "a[3]")),
-        ("".into(), "robot-".into(), "z".into())
+        (String::new(), "robot-".into(), "z".into())
     );
     assert_eq!(s(&p, "m[1,0]"), "c");
     assert_eq!(s(&p, "m[0, 1]"), "b");
@@ -699,10 +699,7 @@ fn arguments_by_value_are_cut_and_results_are_cut() {
          k := Pick('abcd', 'wxyz', TRUE);",
     );
     assert_eq!(s(&p, "r1"), "abcabc", "the argument is cut at 3, the result at 6");
-    assert_eq!(
-        s(&p, "r2"),
-        "xabcdeyzzabc"
-    );
+    assert_eq!(s(&p, "r2"), "xabcdeyzzabc");
     assert_eq!(s(&p, "k"), "abcd");
 }
 
@@ -990,7 +987,9 @@ fn building_strings_in_a_loop_meets_the_watchdog() {
 
 #[test]
 fn a_tiny_budget_stops_a_long_string_copy() {
-    let mut p = build("PROGRAM t VAR a : STRING[255]; b : STRING[255] := '$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41'; END_VAR a := b; b := a; END_PROGRAM");
+    let mut p = build(
+        "PROGRAM t VAR a : STRING[255]; b : STRING[255] := '$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41$41'; END_VAR a := b; b := a; END_PROGRAM",
+    );
     p.set_budget(3);
     assert_eq!(
         p.scan(&mut Image::new(SIZES)).unwrap_err().kind,

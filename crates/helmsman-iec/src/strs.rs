@@ -307,7 +307,8 @@ fn fraction(s: &[u8]) -> Option<i64> {
         Some(i) => (&body[..i], Some(&body[i + 1..])),
         None => (body, None),
     };
-    let exp_ok = exp.is_none_or(|e| digits(e.strip_prefix(b"-").or_else(|| e.strip_prefix(b"+")).unwrap_or(e)));
+    let exp_ok =
+        exp.is_none_or(|e| digits(e.strip_prefix(b"-").or_else(|| e.strip_prefix(b"+")).unwrap_or(e)));
     let mant_ok = match mant.iter().position(|c| *c == b'.') {
         Some(i) => digits(&mant[..i]) && digits(&mant[i + 1..]),
         None => digits(mant) && exp.is_some(),
@@ -317,7 +318,7 @@ fn fraction(s: &[u8]) -> Option<i64> {
     }
     let x: f64 = core::str::from_utf8(s).ok()?.parse().ok()?;
     #[allow(clippy::cast_possible_truncation)]
-    (x.is_finite() && x.abs() < 9.0e18).then(|| x.trunc() as i64)
+    (x.is_finite() && x.abs() < 9.0e18).then_some(x as i64)
 }
 
 /// What a string function made, and the bytes it handled.
@@ -330,6 +331,7 @@ pub enum Made {
 /// Applies `f`. `a` and `b` are the string arguments, `n` the integer
 /// arguments, `v` the number a [`StrFn::FromNum`] renders; a string result
 /// goes into `out`, cut at `cap`.
+#[allow(clippy::many_single_char_names)] // the standard's names: IN1, IN2, L, P
 pub fn apply(f: StrFn, a: &[u8], b: &[u8], n: &[Value], v: Value, cap: usize, out: &mut Buf) -> Made {
     let int = |k: usize| match n.get(k) {
         Some(Value::Int(i)) => *i,

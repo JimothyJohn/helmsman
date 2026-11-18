@@ -446,7 +446,10 @@ fn asserts(src: &str) -> Vec<Check> {
                 let _ = write!(text, " ({c})");
             }
             let kind = match &v.ty {
-                TypeRef::Named(n, _) => TYPED.iter().find(|(t, _)| n.eq_ignore_ascii_case(t)).map(|(_, k)| *k),
+                TypeRef::Named(n, _) => TYPED
+                    .iter()
+                    .find(|(t, _)| n.eq_ignore_ascii_case(t))
+                    .map(|(_, k)| *k),
                 _ => None,
             };
             (v.name.clone(), text, kind)
@@ -1021,13 +1024,22 @@ END_PROGRAM
     #[test]
     fn a_typed_check_that_holds_is_green() {
         for (decl, call) in [
-            ("ASSERT_EQ_INT", "EXPECTED := 40, ACTUAL := speed, MESSAGE := 'speed'"),
-            ("ASSERT_EQ_REAL", "EXPECTED := 0.5, ACTUAL := ratio, TOLERANCE := 0.001"),
+            (
+                "ASSERT_EQ_INT",
+                "EXPECTED := 40, ACTUAL := speed, MESSAGE := 'speed'",
+            ),
+            (
+                "ASSERT_EQ_REAL",
+                "EXPECTED := 0.5, ACTUAL := ratio, TOLERANCE := 0.001",
+            ),
             ("ASSERT_EQ_TIME", "EXPECTED := T#1s500ms, ACTUAL := hold"),
             ("ASSERT_EQ_BOOL", "EXPECTED := TRUE, ACTUAL := running"),
             // A STRING port is no signal yet (st-string-signals), so the
             // test compares text it builds itself.
-            ("ASSERT_EQ_STRING", "EXPECTED := '40 rpm', ACTUAL := CONCAT(INT_TO_STRING(speed), ' rpm')"),
+            (
+                "ASSERT_EQ_STRING",
+                "EXPECTED := '40 rpm', ACTUAL := CONCAT(INT_TO_STRING(speed), ' rpm')",
+            ),
         ] {
             let v = typed(decl, call);
             assert_eq!(v.outcome, Outcome::Passed, "{decl}: {}", v.why());
@@ -1042,7 +1054,11 @@ END_PROGRAM
                 "EXPECTED := 50, ACTUAL := speed, MESSAGE := 'speed'",
                 "speed was 40, expected 50",
             ),
-            ("ASSERT_EQ_INT", "EXPECTED := 50, ACTUAL := speed", "was 40, expected 50"),
+            (
+                "ASSERT_EQ_INT",
+                "EXPECTED := 50, ACTUAL := speed",
+                "was 40, expected 50",
+            ),
             (
                 "ASSERT_EQ_REAL",
                 "EXPECTED := 0.75, ACTUAL := ratio, TOLERANCE := 0.1, MESSAGE := 'ratio'",
@@ -1140,7 +1156,7 @@ END_PROGRAM
         let v = one(&broken, TEST_OK);
         match &v.outcome {
             Outcome::Failed { check, at, seen, got } => {
-                assert!(got.is_empty());
+                assert_eq!(got, "");
                 assert_eq!(check, "lamp on in time (on within 2 s)");
                 assert_eq!(seen, " (start pb=TRUE, lamp=FALSE)");
                 assert!(

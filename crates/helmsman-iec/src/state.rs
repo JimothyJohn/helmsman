@@ -632,7 +632,7 @@ impl Program {
 
     fn fits(&self, slot: Slot, v: Value) -> bool {
         match (slot, v) {
-            (Slot::Elem(Ty::Bool), Value::Bool(_)) => true,
+            (Slot::Elem(Ty::Bool), Value::Bool(_)) | (Slot::Text, Value::Int(_)) => true,
             (Slot::Elem(t), Value::Real(x)) if t.is_real() => {
                 x.is_finite() && round_real(t, x).to_bits() == x.to_bits()
             }
@@ -640,7 +640,6 @@ impl Program {
                 let (lo, hi) = t.range();
                 lo <= n && n <= hi
             }
-            (Slot::Text, Value::Int(_)) => true,
             (Slot::Enum(e), Value::Int(n)) => self.code.enums[e].values.iter().any(|(_, x)| *x == n),
             _ => false,
         }

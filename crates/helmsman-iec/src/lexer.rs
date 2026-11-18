@@ -417,6 +417,7 @@ impl Lexer<'_> {
     /// character: printable ASCII as written, anything else as a `$`
     /// escape (`$$`, `$'`, `$L` `$N` `$P` `$R` `$T` in either case, or
     /// `$HH` for any byte). Never longer than [`MAX_STRING`].
+    #[allow(clippy::many_single_char_names)] // c, e, h, l: a byte, an escape, hex digits
     fn string_literal(&mut self, start: Pos) -> Result<Tok, LexError> {
         let mut out: Vec<u8> = Vec::new();
         loop {

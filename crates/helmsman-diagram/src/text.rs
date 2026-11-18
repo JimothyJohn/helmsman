@@ -2,6 +2,8 @@
 //! Names come out upper-cased (the lexer folds them); parentheses only
 //! where precedence needs them.
 
+use core::fmt::Write;
+
 use helmsman_iec::ast::{BinOp, CaseLabel, Expr, ExprKind, LabelValue, UnOp};
 
 pub(crate) const fn prec(op: BinOp) -> u8 {
@@ -56,7 +58,9 @@ fn string_literal(bytes: &[u8]) -> String {
             b'$' => out.push_str("$$"),
             b'\'' => out.push_str("$'"),
             0x20..=0x7E => out.push(char::from(b)),
-            _ => out.push_str(&format!("${b:02X}")),
+            _ => {
+                let _ = write!(out, "${b:02X}");
+            }
         }
     }
     out.push('\'');
