@@ -792,6 +792,27 @@ fn the_system_prompt_is_long_enough_to_cache_and_names_the_dialect() {
 }
 
 #[test]
+fn the_prompt_says_strings_and_dates_work_and_what_it_shows_compiles() {
+    let (supported, unsupported) = claude::SYSTEM.split_once("Not supported (do not use):").unwrap();
+    let unsupported = unsupported.lines().next().unwrap();
+    for t in ["STRING", "DATE", "DT", "TOD", "TIME_OF_DAY", "DT_NOW()"] {
+        assert!(supported.contains(t), "{t} is not listed as supported");
+    }
+    // WSTRING stays refused; the plain types are no longer on the list.
+    assert!(unsupported.contains("WSTRING"));
+    for t in ["STRING and", " DATE,", " DT,", " TOD,"] {
+        assert!(!unsupported.contains(t), "{t:?} is still listed as unsupported");
+    }
+    // What the prompt teaches compiles in this playground.
+    let src = "PROGRAM p\nVAR late : BOOL; wd : INT; s : STRING[20]; d : DATE; t : TOD := TOD#22:00:00; x : DT; END_VAR\n\
+        x := DT_NOW();\n late := DT_TO_TOD(DT_NOW()) >= TOD#22:00:00;\n d := DT_TO_DATE(x); wd := SINT_TO_INT(DAY_OF_WEEK(d));\n\
+        t := t + T#1h; s := CONCAT('at ', TOD_TO_STRING(t)); d := CONCAT_DATE(2024, 2, 29); x := CONCAT_DATE_TOD(d, t);\n\
+        wd := LEN(s);\nEND_PROGRAM";
+    let s = crate::playground::Session::new(src);
+    assert!(s.diags.is_empty(), "{:?}", s.diags);
+}
+
+#[test]
 fn haiku_has_no_fallback_and_the_proxy_route_has_no_key() {
     let r = ask_for(&Route::Proxy, Model::Haiku, &ctx("x", &[]));
     assert_eq!(r.url, PROXY_URL);
