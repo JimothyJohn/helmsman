@@ -10,6 +10,10 @@
 //! from a calendar written independently of `dt.rs`: a loop over years
 //! and months, and Zeller's congruence for the weekday.
 
+// y, m, d, h are the calendar's own names.
+#![allow(clippy::many_single_char_names)]
+
+use core::fmt::Write as _;
 use core::time::Duration;
 
 use helmsman_iec::{FaultKind, Image, ImageSizes, Program, Ty, Value, compile};
@@ -674,7 +678,7 @@ fn they_are_not_a_case_selector_or_a_loop_counter() {
     let e = errors("t : TOD;", "CASE t OF 1: t := TOD#01:00:00; END_CASE;");
     assert!(e.contains("TOD") || e.contains("integer"), "{e}");
     let e = errors("d : DATE;", "FOR d := D#2024-01-01 TO D#2024-01-05 DO END_FOR;");
-    assert!(!e.is_empty());
+    assert!(e.contains("FOR"), "{e}");
 }
 
 // ---- the wall clock ----
@@ -825,6 +829,7 @@ proptest! {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn dt_difference_and_sum_undo_each_other(
         (y1, m1, d1) in valid_date(), (y2, m2, d2) in valid_date(), h in 0i128..24
     ) {
@@ -888,10 +893,12 @@ fn every_day_from_1678_to_2261_round_trips_through_text() {
         let mut want = Vec::new();
         for m in 1..=12 {
             for d in [1, month_len(y, m)] {
-                body.push_str(&format!(
+                write!(
+                    body,
                     "a[{}] := STRING_TO_DATE('D#{y:04}-{m:02}-{d:02}'); ",
                     want.len()
-                ));
+                )
+                .unwrap();
                 want.push(days(y, m, d) * DAY);
             }
         }

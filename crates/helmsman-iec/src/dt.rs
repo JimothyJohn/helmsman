@@ -10,6 +10,9 @@
 //! nanoseconds reaches); a literal or a conversion outside it is refused
 //! at compile time, and arithmetic that leaves it wraps like TIME does.
 
+// y, m, d, h, s are the calendar's own names.
+#![allow(clippy::many_single_char_names)]
+
 #[cfg(not(feature = "std"))]
 use crate::prelude::*;
 
@@ -344,10 +347,7 @@ pub fn format(kind: Kind, ns: i128, out: &mut [u8; TEXT_MAX]) -> usize {
             let mut digits = [b'0'; 9];
             let mut f = frac;
             for slot in digits.iter_mut().rev() {
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    *slot = b'0' + (f % 10) as u8;
-                }
+                *slot = b'0' + u8::try_from(f % 10).unwrap_or(0);
                 f /= 10;
             }
             let end = digits.iter().rposition(|&c| c != b'0').map_or(0, |p| p + 1);
