@@ -1,7 +1,7 @@
 //! The time zone behind `DT_NOW()` on a box: what "after 22:00" means to
 //! someone standing at the machine.
 //!
-//! No dependency reads it. The system's zone is the TZif file the OS
+//! No dependency reads it. The system's zone is the `TZif` file the OS
 //! points `/etc/localtime` at (RFC 8536: the transitions, then a POSIX TZ
 //! rule for the years after the last one); `--time-zone NAME` reads
 //! `NAME` from the same database, or is `UTC`, which needs no files. The
@@ -65,7 +65,7 @@ pub struct Zone {
     rule: Option<Rule>,
 }
 
-/// A POSIX TZ rule, as the TZif footer writes it (`CST6CDT,M3.2.0,M11.1.0`).
+/// A POSIX TZ rule, as the `TZif` footer writes it (`CST6CDT,M3.2.0,M11.1.0`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Rule {
     /// Seconds east of UTC (the TZ string counts west).
@@ -129,7 +129,7 @@ impl Zone {
         })
     }
 
-    /// A zone from the bytes of a TZif file (RFC 8536, versions 1 to 4).
+    /// A zone from the bytes of a `TZif` file (RFC 8536, versions 1 to 4).
     ///
     /// # Errors
     /// What is wrong with the file.
@@ -364,7 +364,7 @@ struct Counts {
     chars: u64,
 }
 
-fn header<'a>(r: &mut Reader<'a>) -> Result<(u8, Counts), &'static str> {
+fn header(r: &mut Reader<'_>) -> Result<(u8, Counts), &'static str> {
     let h = r.take(44)?;
     if &h[..4] != b"TZif" {
         return Err("no TZif header");
@@ -498,7 +498,7 @@ impl Cur<'_> {
         Some(v)
     }
 
-    /// `[+-]hh[:mm[:ss]]` in seconds, hours up to 167 (as the TZif footer
+    /// `[+-]hh[:mm[:ss]]` in seconds, hours up to 167 (as the `TZif` footer
     /// allows).
     fn hms(&mut self) -> Option<i64> {
         let sign = if self.eat('-') {

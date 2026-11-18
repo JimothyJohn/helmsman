@@ -2,7 +2,7 @@
 //! and the runtime handing it to every module it scans.
 //!
 //! Everything is an injected clock and a zone built in the test (a POSIX
-//! rule or TZif bytes written here), so nothing sleeps and nothing depends
+//! rule or `TZif` bytes written here), so nothing sleeps and nothing depends
 //! on the machine's zone; one test reads the machine's own database and
 //! compares it with the rule.
 
@@ -132,7 +132,7 @@ fn rules_that_are_not_rules_are_refused_without_a_panic() {
 
 // ---- TZif ----
 
-/// A version-2 TZif file: `types` as (offset, is_dst), `trans` as (utc
+/// A version-2 `TZif` file: `types` as (offset, `is_dst`), `trans` as (utc
 /// seconds, type), and a POSIX footer.
 fn tzif(types: &[(i32, bool)], trans: &[(i64, u8)], footer: &str) -> Vec<u8> {
     let block = |wide: bool| {
@@ -482,7 +482,8 @@ impl Bench {
     /// The system clock is at `t` (UTC seconds); one scan runs.
     fn at(&mut self, t: i64) -> i64 {
         self.utc.store(t * SEC, Ordering::SeqCst);
-        assert!(self.rt.tick_with(self.scan, &[], &mut self.table).is_empty());
+        let faults = self.rt.tick_with(self.scan, &[], &mut self.table);
+        assert_eq!(faults, [], "faults");
         self.scan += Duration::from_millis(10);
         dt(&self.rt, "clock")
     }
