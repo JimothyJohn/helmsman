@@ -528,3 +528,21 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn the_far_scale_makes_every_title_fit_at_the_smallest_zoom() {
+    use helmsman_diagram::fold::zoom::{FAR_FLOOR_PT, FAR_MIN_ZOOM, far_room, far_scale};
+    assert_eq!(far_scale([]), (1.0, 1.0));
+    // A block already big enough for its title changes nothing.
+    assert_eq!(far_scale([(5, 10_000.0, 10_000.0)]), (1.0, 1.0));
+    // Hostile sizes (zero, a very long title) give a finite scale.
+    let (sx, sy) = far_scale([(0, 0.0, 0.0), (10_000, 56.0, 40.0), (3, 56.0, 40.0)]);
+    assert!(sx.is_finite() && sx >= 1.0 && sy.is_finite() && sy >= 1.0);
+    for (chars, w, h) in [(5, 56.0_f32, 40.0_f32), (8, 120.0, 100.0), (30, 300.0, 60.0)] {
+        let (sx, sy) = far_scale([(chars, w, h)]);
+        let (need_w, need_h) = far_room(chars);
+        assert!(w * sx * FAR_MIN_ZOOM >= need_w, "{chars}");
+        assert!(h * sy * FAR_MIN_ZOOM >= need_h, "{chars}");
+        assert!(need_h >= FAR_FLOOR_PT);
+    }
+}

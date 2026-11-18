@@ -80,6 +80,66 @@ impl Level {
     }
 }
 
+/// The size, in screen points, a far block's title is drawn at whatever the
+/// camera's zoom: the repo's body size (UI rule: 18 pt, never under 16).
+pub const FAR_FLOOR_PT: f32 = 16.0;
+/// The smallest zoom the camera goes to. The far level is laid out so the
+/// title fits its block here, which is the worst case.
+pub const FAR_MIN_ZOOM: f32 = 0.15;
+/// A monospace character's advance, in ems (a little over, so a title that
+/// is budgeted to fit does).
+pub const FAR_CHAR_EM: f32 = 0.62;
+/// The longest title a far block draws (more is elided).
+pub const FAR_TITLE_CHARS: usize = 32;
+/// Room kept each side of a far title, in screen points.
+pub const FAR_PAD_PT: f32 = 8.0;
+
+/// The room, in screen points, a far block's title of `chars` characters
+/// needs: width, then height.
+#[must_use]
+pub fn far_room(chars: usize) -> (f32, f32) {
+    let n = chars.clamp(1, FAR_TITLE_CHARS) as f32;
+    (
+        n * FAR_FLOOR_PT * FAR_CHAR_EM + 2.0 * FAR_PAD_PT,
+        FAR_FLOOR_PT * 2.0,
+    )
+}
+
+/// The characters of a title that fit `width` screen points at the floor
+/// size, at most [`FAR_TITLE_CHARS`].
+#[must_use]
+pub fn far_chars(width: f32) -> usize {
+    let room = (width - 2.0 * FAR_PAD_PT).max(0.0);
+    // `room` is not negative and the count is capped: the cast is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = (room / (FAR_FLOOR_PT * FAR_CHAR_EM))
+        .floor()
+        .min(FAR_TITLE_CHARS as f32) as usize;
+    n
+}
+
+/// How much the far level's layout is magnified, across and down, so every
+/// title fits its block at [`FAR_MIN_ZOOM`]: the whole laid-out diagram is
+/// scaled by it (gaps with the blocks, so nothing starts to touch). `blocks`
+/// gives, per block that carries a title, its characters and its width and
+/// height in diagram units as laid out. `(1, 1)` for none.
+#[must_use]
+pub fn far_scale(blocks: impl IntoIterator<Item = (usize, f32, f32)>) -> (f32, f32) {
+    let (mut sx, mut sy) = (1.0_f32, 1.0_f32);
+    for (chars, w, h) in blocks {
+        let (need_w, need_h) = far_room(chars);
+        if w > 0.0 {
+            sx = sx.max(need_w / FAR_MIN_ZOOM / w);
+        }
+        if h > 0.0 {
+            sy = sy.max(need_h / FAR_MIN_ZOOM / h);
+        }
+    }
+    // A hair over, against rounding.
+    let hair = |s: f32| if s > 1.0 { s * 1.01 } else { s };
+    (hair(sx), hair(sy))
+}
+
 /// What the reader did to a fold by hand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hand {

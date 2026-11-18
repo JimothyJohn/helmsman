@@ -361,3 +361,43 @@ fn a_scope_switch_or_an_edit_keeps_the_viewer_at_a_level_it_can_draw() {
     assert_eq!(v.zoom_level(), Level::Near);
     let _: Cam = v.cams[0];
 }
+
+#[test]
+fn a_far_title_is_at_the_floor_size_and_inside_its_block_down_to_the_minimum_zoom() {
+    use helmsman_diagram::fold::zoom::FAR_FLOOR_PT;
+    let mut h = Harness::new(SRC);
+    for z in [0.29, 0.2, 0.15] {
+        h.zoom_to(z, Harness::centre());
+        assert_eq!(h.view.zoom_level(), Level::Far, "zoom {z}");
+        let titles = h.view.far_titles();
+        let names: Vec<&str> = titles.iter().map(|t| t.text.as_str()).collect();
+        assert!(
+            names.contains(&"Motor") && names.contains(&"Sequence"),
+            "{names:?}"
+        );
+        for t in &titles {
+            assert!(t.size >= FAR_FLOOR_PT, "{t:?} at {z}");
+            // A monospace character is about 0.6 em: the title must fit.
+            let wide = t.text.chars().count() as f32 * t.size * 0.6;
+            assert!(wide <= t.block.width(), "{t:?} at {z}: {wide} wide");
+            assert!(t.size * 1.2 <= t.block.height(), "{t:?} at {z}");
+        }
+        // The blocks do not run into each other.
+        for (i, a) in titles.iter().enumerate() {
+            for b in &titles[i + 1..] {
+                assert!(!a.block.intersects(b.block), "{a:?} {b:?} at {z}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_far_level_magnification_is_left_behind_going_in_and_is_no_edit() {
+    let mut h = Harness::new(SRC);
+    let near = h.view.shown().size;
+    h.zoom_to(0.2, Harness::centre());
+    assert_ne!(h.view.shown().size, near);
+    h.zoom_to(1.0, Harness::centre());
+    assert_eq!(h.view.shown().size, near);
+    assert!(!h.view.rearranged());
+}

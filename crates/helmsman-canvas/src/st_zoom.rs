@@ -31,6 +31,8 @@ pub(super) struct ZoomFolds {
     kept_open: BTreeSet<(String, String)>,
     /// The keys of the folds the zoom closes now, for each POU.
     shut: Vec<BTreeSet<String>>,
+    /// How much the view of each POU is magnified ([`Viewer::zoom_magnify`]).
+    scales: Vec<(f32, f32)>,
 }
 
 impl ZoomFolds {
@@ -42,6 +44,12 @@ impl ZoomFolds {
     /// Whether the reader opened that fold over the zoom.
     pub fn kept(&self, pou: &str, key: &str) -> bool {
         self.kept_open.contains(&(pou.to_string(), key.to_string()))
+    }
+
+    /// The magnification of the view of POU number `pou`: 1 but at the far
+    /// level.
+    pub fn scale(&self, pou: usize) -> (f32, f32) {
+        self.scales.get(pou).copied().unwrap_or((1.0, 1.0))
     }
 
     /// Forgets what the reader opened (every fold as the program starts it).
@@ -59,6 +67,33 @@ struct Anchor {
     /// Where the point is in what is drawn for them, as fractions of its size.
     at: (f32, f32),
     screen: Pos2,
+}
+
+#[cfg(test)]
+/// The title of a far block as it is drawn: at least
+/// [`zoom::FAR_FLOOR_PT`] points, inside the block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FarTitle {
+    pub text: String,
+    /// Font size in screen points, whatever the camera's zoom.
+    pub size: f32,
+    /// The block, on screen.
+    pub block: Rect,
+}
+
+/// `label` as a far block `width` screen points wide titles itself:
+/// elided to what fits at the floor size.
+pub(super) fn far_text(label: &str, width: f32) -> String {
+    let chars = zoom::far_chars(width);
+    if label.chars().count() <= chars {
+        label.to_string()
+    } else {
+        label
+            .chars()
+            .take(chars.saturating_sub(1))
+            .chain(Some('…'))
+            .collect()
+    }
 }
 
 impl Viewer {
@@ -93,6 +128,94 @@ impl Viewer {
             .map(|(p, folds)| zoom::closed(folds, self.zoom.level, &|f| self.hand_of(&p.name, f)))
             .collect();
         self.zoom.shut = shut;
+    }
+
+    #[cfg(test)]
+    /// Whether node `n` of the diagram shown is a block the far level
+    /// titles.
+    pub(super) fn far_titled(&self, n: &helmsman_diagram::Node) -> bool {
+        self.zoom.level == Level::Far
+            && matches!(n.kind, helmsman_diagram::NodeKind::Fold { kind, .. } if zoom::managed(kind))
+    }
+
+    /// Whether the level is the far one.
+    pub(super) fn zoom_far(&self) -> bool {
+        self.zoom.level == Level::Far
+    }
+
+    /// At the far level, magnifies the layout of `view` (POU number `pou`)
+    /// so each block's title, drawn at the floor size, fits it at the
+    /// smallest zoom; every other level is as laid out. Positions, sizes and
+    /// gaps scale together.
+    pub(super) fn zoom_magnify(&mut self, pou: usize, view: &mut helmsman_diagram::fold::View) {
+        let (sx, sy) = if self.zoom.level == Level::Far {
+            zoom::far_scale(
+                view.diagram
+                    .nodes
+                    .iter()
+                    .filter(|n| {
+                        matches!(n.kind, helmsman_diagram::NodeKind::Fold { kind, .. } if zoom::managed(kind))
+                    })
+                    .map(|n| (n.label.chars().count(), n.rect.w, n.rect.h)),
+            )
+        } else {
+            (1.0, 1.0)
+        };
+        if self.zoom.scales.len() <= pou {
+            self.zoom.scales.resize(pou + 1, (1.0, 1.0));
+        }
+        self.zoom.scales[pou] = (sx, sy);
+        if sx > 1.0 || sy > 1.0 {
+            let d = &mut view.diagram;
+            for r in d
+                .nodes
+                .iter_mut()
+                .map(|n| &mut n.rect)
+                .chain(d.regions.iter_mut().map(|r| &mut r.rect))
+            {
+                r.x *= sx;
+                r.y *= sy;
+                r.w *= sx;
+                r.h *= sy;
+            }
+            d.size = (d.size.0 * sx, d.size.1 * sy);
+        }
+    }
+
+    /// A reshow found no folded view for POU number `pou`.
+    pub(super) fn zoom_unmagnified(&mut self, pou: usize) {
+        if let Some(s) = self.zoom.scales.get_mut(pou) {
+            *s = (1.0, 1.0);
+        }
+    }
+
+    /// The magnification of the POU shown (what a drag on screen is divided
+    /// by to be a move of the diagram).
+    pub(super) fn zoom_scale(&self) -> eframe::egui::Vec2 {
+        let (sx, sy) = self.zoom.scale(self.scopes[self.scope].pou);
+        eframe::egui::Vec2::new(sx, sy)
+    }
+
+    #[cfg(test)]
+    /// The titles the far level draws, on screen with the camera as it is;
+    /// none at another level.
+    #[must_use]
+    pub fn far_titles(&self) -> Vec<FarTitle> {
+        let cam = self.cams[self.scope];
+        self.shown()
+            .nodes
+            .iter()
+            .filter(|n| self.far_titled(n))
+            .map(|n| {
+                let block = cam.rect(&n.rect);
+                let text = far_text(&n.label, block.width());
+                FarTitle {
+                    text,
+                    size: zoom::FAR_FLOOR_PT,
+                    block,
+                }
+            })
+            .collect()
     }
 
     /// Called as fold `key` of the POU shown is about to be drawn as its
@@ -166,6 +289,7 @@ impl Viewer {
         if let Some(a) = anchor {
             self.keep_anchor(&a, area);
         }
+        self.keep_in_view(area);
         self.cams[self.scope]
     }
 
@@ -220,6 +344,24 @@ impl Viewer {
         let cam = &mut self.cams[self.scope];
         cam.offset = a.screen - cam.origin - eframe::egui::Vec2::new(wx, wy) * cam.zoom;
         cam.clamp(area, size);
+    }
+
+    /// After a level change: a diagram that fits the view is brought wholly
+    /// into it (it was anchored at the pointer, which can leave a block
+    /// over the edge), moving no more than that takes. One larger than
+    /// the view stays as anchored.
+    fn keep_in_view(&mut self, area: Rect) {
+        let size = self.shown().size;
+        let cam = &mut self.cams[self.scope];
+        let (w, h) = (size.0 * cam.zoom, size.1 * cam.zoom);
+        let (left, top) = (cam.origin.x + cam.offset.x, cam.origin.y + cam.offset.y);
+        let pad = 8.0;
+        if w + 2.0 * pad <= area.width() {
+            cam.offset.x += (left.max(area.left() + pad)).min(area.right() - pad - w) - left;
+        }
+        if h + 2.0 * pad <= area.height() {
+            cam.offset.y += (top.max(area.top() + pad)).min(area.bottom() - pad - h) - top;
+        }
     }
 
     /// The bounds of what is drawn for blocks `nodes` of the diagram.
