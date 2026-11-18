@@ -238,22 +238,44 @@ impl Write for Text {
 pub const fn num_cap(ty: Ty) -> u16 {
     match ty {
         Ty::Bool => 5,
+        Ty::Date => 12,
+        Ty::Tod => 22,
+        Ty::Dt => 32,
         t if t.is_real() => 24,
         _ => 21,
     }
 }
 
-fn from_num(v: Value, out: &mut Buf) -> usize {
+fn calendar_kind(ty: Ty) -> Option<crate::dt::Kind> {
+    match ty {
+        Ty::Date => Some(crate::dt::Kind::Date),
+        Ty::Tod => Some(crate::dt::Kind::Tod),
+        Ty::Dt => Some(crate::dt::Kind::Dt),
+        _ => None,
+    }
+}
+
+fn from_num(ty: Ty, v: Value, out: &mut Buf) -> usize {
+    if let (Some(kind), Value::Int(ns)) = (calendar_kind(ty), v) {
+        let mut b = [0u8; crate::dt::TEXT_MAX];
+        let n = crate::dt::format(kind, ns, &mut b);
+        out[..n].copy_from_slice(&b[..n]);
+        return n;
+    }
     let mut t = Text { b: [0; 40], n: 0 };
     let _ = write!(t, "{v}");
     out[..t.n].copy_from_slice(&t.b[..t.n]);
     t.n
 }
 
-/// Text as a value of `ty`: BOOL is `TRUE` or `1` (any case), an integer
+/// Text as a value of `ty`: a DATE, TOD or DT is its literal (the prefix
+/// optional), 0 when it is not one; BOOL is `TRUE` or `1` (any case), an integer
 /// an optional sign and digits that fit `ty`, a real a plain decimal or
 /// exponent form that is finite. Anything else is 0, FALSE or 0.0.
 fn to_num(s: &[u8], ty: Ty) -> Value {
+    if let Some(kind) = calendar_kind(ty) {
+        return Value::Int(crate::dt::parse_text(kind, s).unwrap_or(0));
+    }
     if ty == Ty::Bool {
         return Value::Bool(s == b"1" || s.eq_ignore_ascii_case(b"TRUE"));
     }
@@ -353,8 +375,8 @@ pub fn apply(f: StrFn, a: &[u8], b: &[u8], n: &[Value], v: Value, cap: usize, ou
             }));
         }
         StrFn::ToNum(ty) => return Made::Num(to_num(a, ty)),
-        StrFn::FromNum(_) => {
-            return Made::Text(from_num(v, out).min(cap));
+        StrFn::FromNum(ty) => {
+            return Made::Text(from_num(ty, v, out).min(cap));
         }
         StrFn::Left => left(a, int(0)),
         StrFn::Right => right(a, int(0)),
