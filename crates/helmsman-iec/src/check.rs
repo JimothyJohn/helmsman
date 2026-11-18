@@ -26,6 +26,7 @@ use crate::parser::{
     self, Arg, BinOp, CaseLabel, Expr, ExprKind, Init, LabelValue, PouKind, Section, Stmt, StmtKind, TypeDef,
     TypeRef, UnOp,
 };
+use crate::strs::StrFn;
 use crate::types::{Ty, Value, round_real};
 
 /// A compile error.
@@ -157,6 +158,9 @@ pub enum Type {
     Enum(usize),
     /// Array, struct or function block; index into [`Checked::aggs`].
     Agg(usize),
+    /// `STRING[n]`: at most `n` characters, `n` in 0..=255 (0 only for the
+    /// type of the literal `''`). Held as a region of slots ([`crate::strs`]).
+    Str(u16),
 }
 
 #[derive(Debug, Clone)]
@@ -339,6 +343,20 @@ pub enum Ex {
     Call(Box<Call>),
     /// Operands per [`Builtin`]; `.2` is the operand type.
     Builtin(Builtin, Vec<Ex>, Ty),
+    /// A string variable: evaluates to the absolute slot its region starts
+    /// at (read in place, never copied).
+    StrLoad(Box<Place>),
+    /// A string literal: its region in the scratch area, filled at load.
+    StrConst(usize),
+    /// A string function over its arguments (strings evaluate to their
+    /// region, integers and the number a conversion renders as values):
+    /// a string result is written to the scratch region at `.2` (capacity
+    /// `.3`) and evaluates to it; any other result is the value.
+    Str(StrFn, Vec<Ex>, usize, u16),
+    /// A call of a function that returns a string: the result is copied
+    /// to the scratch region at `.1` (capacity `.2`), so the next call of
+    /// the same function cannot overwrite it.
+    StrCall(Box<Call>, usize, u16),
 }
 
 /// A value moved into a callee's frame before the call.
@@ -354,6 +372,12 @@ pub enum Move {
         off: usize,
         src: Place,
         len: usize,
+    },
+    /// A string by value: cut at the parameter's capacity `cap`.
+    Str {
+        off: usize,
+        ex: Ex,
+        cap: u16,
     },
     /// A `VAR_IN_OUT` argument: the callee's slot at `off` takes the
     /// absolute slot `src` resolves to, so the callee works on the
@@ -400,6 +424,8 @@ pub struct St {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StKind {
     Store(Place, Ty, Ex),
+    /// A string assigned: the value's text cut at the target's capacity.
+    StrStore(Place, u16, Ex),
     Copy(Place, Place, usize),
     Call(Call),
     If(Vec<(Ex, Vec<St>)>, Vec<St>),
@@ -433,6 +459,9 @@ pub struct Checked {
     pub library: usize,
     /// Initial contents of the whole slot array.
     pub mem_init: Vec<Value>,
+    /// Where the scratch area starts in `mem_init`: after every frame, the
+    /// regions string expressions write their results to (see [`Ex::Str`]).
+    pub scratch: usize,
     /// Located variables' initial values, written to the image at a cold
     /// start.
     pub loc_init: Vec<(Loc, Ty, Value)>,
@@ -463,6 +492,20 @@ type O<T> = Option<T>;
 pub(crate) fn is_builtin(upper: &str) -> bool {
     BUILTINS.iter().any(|(n, _)| *n == upper)
 }
+
+/// The standard string functions: name, function, string arguments (first)
+/// and integer arguments (after them). `CONCAT` takes two or more strings.
+const STRING_FNS: &[(&str, StrFn, usize, usize)] = &[
+    ("LEN", StrFn::Len, 1, 0),
+    ("LEFT", StrFn::Left, 1, 1),
+    ("RIGHT", StrFn::Right, 1, 1),
+    ("MID", StrFn::Mid, 1, 2),
+    ("CONCAT", StrFn::Concat, 2, 0),
+    ("FIND", StrFn::Find, 2, 0),
+    ("INSERT", StrFn::Insert, 2, 1),
+    ("DELETE", StrFn::Delete, 1, 2),
+    ("REPLACE", StrFn::Replace, 2, 2),
+];
 
 const BUILTINS: &[(&str, Builtin)] = &[
     ("ABS", Builtin::Abs),
@@ -544,7 +587,16 @@ struct Ck<'a> {
     diags: Vec<Diagnostic>,
     /// Shown, not blocking: the program still compiles.
     warnings: Vec<Diagnostic>,
+    /// The scratch area's initial contents: each string expression's result
+    /// region, its own, a literal's holding the literal.
+    scratch_init: Vec<Value>,
+    /// Whether the scratch area's size has been reported as too big.
+    scratch_big: bool,
 }
+
+/// The most slots of scratch a program's string expressions take: 64 KiB
+/// of text at 16 characters a slot, in about 130 KiB of memory.
+const MAX_SCRATCH: usize = 1 << 14;
 
 /// One step into a variable named by a call argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -652,12 +704,14 @@ impl<'a> Ck<'a> {
             Type::Elem(ty) => ty.to_string(),
             Type::Enum(e) => self.enums[e].name.clone(),
             Type::Agg(a) => self.aggs[a].name.clone(),
+            Type::Str(n) => format!("STRING[{n}]"),
         }
     }
 
     fn size_of(&self, t: Type) -> usize {
         match t {
             Type::Agg(a) => self.aggs[a].size,
+            Type::Str(n) => crate::strs::slots(usize::from(n)),
             _ => 1,
         }
     }
@@ -667,13 +721,46 @@ impl<'a> Ck<'a> {
             Type::Elem(ty) => vec![Value::zero(ty)],
             Type::Enum(e) => vec![Value::Int(self.enums[e].values[0].1)],
             Type::Agg(a) => self.aggs[a].init.clone(),
+            Type::Str(n) => crate::strs::encode(usize::from(n), &[]),
         }
+    }
+
+    /// Whether a value of type `t` holds a string anywhere inside.
+    fn holds_string(&self, t: Type) -> bool {
+        match t {
+            Type::Str(_) => true,
+            Type::Agg(a) => match &self.aggs[a].kind {
+                AggKind::Array { elem, .. } => self.holds_string(*elem),
+                AggKind::Struct { fields } => fields.iter().any(|f| self.holds_string(f.ty)),
+                AggKind::Fb(p) => self.pous[*p].vars.iter().any(|v| self.holds_string(v.ty)),
+            },
+            _ => false,
+        }
+    }
+
+    /// A scratch region for a string result of capacity `cap` holding
+    /// `text` to begin with (a literal); its offset in the scratch area.
+    fn scratch(&mut self, cap: u16, text: &[u8], pos: Pos) -> usize {
+        let off = self.scratch_init.len();
+        let slots = crate::strs::encode(usize::from(cap), text);
+        if off + slots.len() > MAX_SCRATCH && !self.scratch_big {
+            self.scratch_big = true;
+            self.err(
+                pos,
+                "too many string expressions: each takes room for its longest result, and this program's take more than the limit (about 64 KiB of text); fewer or shorter STRING expressions fit",
+            );
+        }
+        self.scratch_init.extend(slots);
+        off
     }
 
     // ---- declarations ----
 
     fn declare(&mut self, name: &str, pos: Pos, what: Named) {
-        if Ty::from_name(name).is_some() || self.named.contains_key(name) || self.pou_index.contains_key(name)
+        if Ty::from_name(name).is_some()
+            || name == "STRING"
+            || self.named.contains_key(name)
+            || self.pou_index.contains_key(name)
         {
             self.err(pos, format!("{name} is already defined"));
         } else {
@@ -734,12 +821,15 @@ impl<'a> Ck<'a> {
                 if let Some(ty) = Ty::from_name(n) {
                     return Some(Type::Elem(ty));
                 }
+                if n == "STRING" {
+                    return Some(Type::Str(crate::strs::DEFAULT_CAP));
+                }
                 match self.named.get(n).copied() {
                     Some(Named::Type(t)) => Some(t),
                     Some(Named::Alias(id)) => self.resolve_alias(id, *pos),
                     None => {
                         let hint = match n.as_str() {
-                            "STRING" | "WSTRING" => " (STRING is not supported yet)".to_string(),
+                            "WSTRING" => " (WSTRING is not supported: use STRING)".to_string(),
                             "DATE" | "DT" | "TOD" | "DATE_AND_TIME" | "TIME_OF_DAY" | "LDATE" | "LDT"
                             | "LTOD" | "LTIME" => format!(" ({n} is not supported yet)"),
                             _ => {
@@ -752,6 +842,16 @@ impl<'a> Ck<'a> {
                         None
                     }
                 }
+            }
+            TypeRef::Str(n, pos) => {
+                if !(1..=crate::strs::MAX as i128).contains(n) {
+                    self.err(
+                        *pos,
+                        format!("a STRING holds 1 to {} characters, not {n}", crate::strs::MAX),
+                    );
+                    return None;
+                }
+                Some(Type::Str(u16::try_from(*n).unwrap_or(0)))
             }
             TypeRef::Array { dims, elem, pos } => {
                 let elem = self.resolve(elem)?;
@@ -982,11 +1082,25 @@ impl<'a> Ck<'a> {
                     });
                     init.push(Value::Int(self.enums[e].values[0].1));
                 }
+                Some(t @ Type::Str(_)) => {
+                    // The result is the string region at the frame's start;
+                    // `result` stays `None`: it names scalar results.
+                    vars.push(VarInfo {
+                        name: src.name.clone(),
+                        ty: t,
+                        off: 0,
+                        section: Section::Output,
+                        constant: false,
+                        retain: false,
+                        loc: None,
+                    });
+                    init.extend(self.init_of(t));
+                }
                 Some(t) => {
                     let n = self.type_name(t);
                     self.err(
                         rt.pos(),
-                        format!("a FUNCTION must return an elementary type or enumeration, not {n}"),
+                        format!("a FUNCTION must return an elementary type, enumeration or STRING, not {n}"),
                     );
                     ok = false;
                 }
@@ -1118,7 +1232,9 @@ impl<'a> Ck<'a> {
             // A program's inputs and outputs are its ports: the host binds
             // them to signals by name, one scalar each.
             if kind == PouType::Program && matches!(d.section, Section::Input | Section::Output) {
-                let problem = if !matches!(ty, Type::Elem(_)) {
+                // A STRING port compiles but is no signal yet: the host
+                // skips it (`Program::ports`, card `st-string-signals`).
+                let problem = if !matches!(ty, Type::Elem(_) | Type::Str(_)) {
                     Some("a PROGRAM input or output must be an elementary type")
                 } else if d.at.is_some() {
                     Some("a PROGRAM input or output is bound by name, not located")
@@ -1238,6 +1354,17 @@ impl<'a> Ck<'a> {
                 }
             }
             let len = v.len();
+            if retain && self.holds_string(ty) {
+                self.err(
+                    d.pos,
+                    format!(
+                        "{}: a STRING cannot be RETAIN yet (strings are not kept across a restart: card st-string-signals)",
+                        d.name
+                    ),
+                );
+                ok = false;
+                continue;
+            }
             if retain {
                 retained += len;
                 if retained > crate::MAX_RETAIN && !too_big {
@@ -1363,6 +1490,23 @@ impl<'a> Ck<'a> {
     /// enclosing POU's constants (initialised so far in its `init`).
     fn init_value(&mut self, i: &Init, ty: Type, scope: Option<&Scope>) -> O<Vec<Value>> {
         match (i, ty) {
+            (Init::Expr(e), Type::Str(cap)) => {
+                let ExprKind::Str(text) = &e.kind else {
+                    self.err(e.pos, "a STRING's initial value must be a literal such as 'text'");
+                    return None;
+                };
+                if text.len() > usize::from(cap) {
+                    self.err(
+                        e.pos,
+                        format!(
+                            "this initial value has {} characters, STRING[{cap}] holds {cap}",
+                            text.len()
+                        ),
+                    );
+                    return None;
+                }
+                Some(crate::strs::encode(usize::from(cap), text))
+            }
             (Init::Expr(e), Type::Elem(_) | Type::Enum(_)) => {
                 let empty = Scope {
                     pou: usize::MAX,
@@ -1443,7 +1587,13 @@ impl<'a> Ck<'a> {
             Ex::Un(_, a, _) | Ex::Conv(a, _, _) => Self::is_const(a),
             Ex::Bin(_, a, b, _) | Ex::Scale(_, a, b) => Self::is_const(a) && Self::is_const(b),
             // CONSTANTs fold to `Const`, so any load reads a variable.
-            Ex::Load(..) | Ex::Call(_) | Ex::Builtin(..) => false,
+            Ex::Load(..)
+            | Ex::Call(_)
+            | Ex::Builtin(..)
+            | Ex::StrLoad(_)
+            | Ex::StrConst(_)
+            | Ex::Str(..)
+            | Ex::StrCall(..) => false,
         }
     }
 
@@ -1684,7 +1834,7 @@ impl<'a> Ck<'a> {
         match t {
             Type::Elem(ty) => Some(ty),
             Type::Enum(_) => Some(Ty::DInt),
-            Type::Agg(_) => None,
+            Type::Agg(_) | Type::Str(_) => None,
         }
     }
 
@@ -1735,6 +1885,12 @@ impl<'a> Ck<'a> {
                 Some((ex, T::Known(Type::Elem(ty))))
             }
             ExprKind::Bool(b) => Some((Ex::Const(Value::Bool(*b)), T::Known(Type::Elem(Ty::Bool)))),
+            ExprKind::Str(text) => {
+                // The lexer holds literals to 255 characters.
+                let cap = u16::try_from(text.len()).unwrap_or(255);
+                let off = self.scratch(cap, text, e.pos);
+                Some((Ex::StrConst(off), T::Known(Type::Str(cap))))
+            }
             ExprKind::Time(ns) => Some((Ex::Const(Value::Int(*ns)), T::Known(Type::Elem(Ty::Time)))),
             ExprKind::EnumLit(tn, v) => {
                 let Some(Named::Type(Type::Enum(id))) = self.named.get(tn).copied() else {
@@ -1760,6 +1916,9 @@ impl<'a> Ck<'a> {
             | ExprKind::Index(..)
             | ExprKind::Bit(..) => {
                 let (p, t, _) = self.place(e, sc)?;
+                if let Type::Str(_) = t {
+                    return Some((Ex::StrLoad(Box::new(p)), T::Known(t)));
+                }
                 let Some(rt) = Self::rt(t) else {
                     let n = self.type_name(t);
                     self.err(
@@ -1840,6 +1999,9 @@ impl<'a> Ck<'a> {
     fn coerce(&mut self, ex: Ex, t: T, to: Type, pos: Pos) -> O<Ex> {
         match (t, to) {
             (T::Known(from), to) if from == to => Some(ex),
+            // Any STRING goes where another STRING is wanted: the store or
+            // the by-value move cuts it at the destination's capacity.
+            (T::Known(Type::Str(_)), Type::Str(_)) => Some(ex),
             (T::Known(Type::Elem(f)), Type::Elem(t)) if f.widens_to(t) => Some(Ex::Conv(Box::new(ex), f, t)),
             (T::Known(Type::Elem(f)), Type::Elem(t)) => {
                 self.err(
@@ -1945,6 +2107,9 @@ impl<'a> Ck<'a> {
         let ra = self.synth(a, inner_want, sc);
         let rb = self.synth(b, inner_want, sc);
         let ((xa, ta), (xb, tb)) = (ra?, rb?);
+        if matches!(ta, T::Known(Type::Str(_))) || matches!(tb, T::Known(Type::Str(_))) {
+            return self.string_binary(op, (xa, ta), (xb, tb), pos);
+        }
         // Enumerations: = and <> only, same type.
         if let (T::Known(Type::Enum(x)), T::Known(Type::Enum(y))) = (ta, tb) {
             if x != y || !matches!(op, BinOp::Eq | BinOp::Ne) {
@@ -2003,6 +2168,45 @@ impl<'a> Ck<'a> {
         let xb = self.coerce(xb, tb, Type::Elem(ty), b.pos);
         let ex = Ex::Bin(op, Box::new(xa?), Box::new(xb?), ty);
         Some((ex, T::Known(Type::Elem(if cmp { Ty::Bool } else { ty }))))
+    }
+
+    /// A binary operator with a STRING operand: only the comparisons of
+    /// two strings are defined.
+    fn string_binary(&mut self, op: BinOp, a: (Ex, T), b: (Ex, T), pos: Pos) -> O<(Ex, T)> {
+        let (T::Known(x), T::Known(y)) = (a.1, b.1) else {
+            self.err(
+                pos,
+                format!(
+                    "{} cannot take a STRING and a number; convert with TO_STRING or STRING_TO_INT",
+                    op.symbol()
+                ),
+            );
+            return None;
+        };
+        let (Type::Str(_), Type::Str(_)) = (x, y) else {
+            let (n, m) = (self.type_name(x), self.type_name(y));
+            self.err(pos, format!("{} cannot take {n} and {m}", op.symbol()));
+            return None;
+        };
+        if !op.is_comparison() {
+            let hint = if op == BinOp::Add {
+                "; join strings with CONCAT(a, b)"
+            } else {
+                ""
+            };
+            self.err(
+                pos,
+                format!(
+                    "{} does not work on STRINGs (they compare with = <> < > <= >=){hint}",
+                    op.symbol()
+                ),
+            );
+            return None;
+        }
+        Some((
+            Ex::Str(StrFn::Cmp(op), vec![a.0, b.0], 0, 0),
+            T::Known(Type::Elem(Ty::Bool)),
+        ))
     }
 
     fn power(&mut self, a: &Expr, b: &Expr, want: Option<Type>, pos: Pos, sc: &Scope) -> O<(Ex, T)> {
@@ -2121,6 +2325,10 @@ impl<'a> Ck<'a> {
             }
             let call = self.fn_call(p, args, pos, sc)?;
             let rt = self.pous[p].vars[0].ty;
+            if let Type::Str(cap) = rt {
+                let off = self.scratch(cap, &[], pos);
+                return Some((Ex::StrCall(Box::new(call), off, cap), T::Known(rt)));
+            }
             return Some((Ex::Call(Box::new(call)), T::Known(rt)));
         }
         self.builtin(name, args, want, pos, sc, callee.pos)
@@ -2150,6 +2358,9 @@ impl<'a> Ck<'a> {
         sc: &Scope,
         at: Pos,
     ) -> O<(Ex, T)> {
+        if let Some(r) = self.string_fn(name, args, pos, sc) {
+            return r;
+        }
         if let Some(conv) = self.conversion(name, args, pos, sc) {
             return conv;
         }
@@ -2177,7 +2388,11 @@ impl<'a> Ck<'a> {
                     .iter()
                     .filter(|&(_, &p)| self.pous[p].kind == PouType::Function)
                     .map(|(n, _)| n.as_str());
-                let known = BUILTINS.iter().map(|(n, _)| *n).chain(["EXPT", "MOVE"]);
+                let known = BUILTINS
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .chain(["EXPT", "MOVE"])
+                    .chain(STRING_FNS.iter().map(|(n, ..)| *n));
                 let hint = crate::suggest::hint(name, known.chain(functions));
                 self.err(at, format!("unknown function {name}{hint}"));
             }
@@ -2337,6 +2552,171 @@ impl<'a> Ck<'a> {
         }
     }
 
+    /// The standard string functions and the conversions to and from
+    /// STRING; `None` if `name` is not one of them.
+    fn string_fn(&mut self, name: &str, args: &[Arg], pos: Pos, sc: &Scope) -> O<O<(Ex, T)>> {
+        if name == "TO_STRING" || name.ends_with("_TO_STRING") || name.starts_with("STRING_TO_") {
+            return self.string_conversion(name, args, pos, sc);
+        }
+        let &(_, f, strs, ints) = STRING_FNS.iter().find(|(n, ..)| *n == name)?;
+        if !self.positional(name, args, pos) {
+            return Some(None);
+        }
+        let want = strs + ints;
+        let arity_ok = if f == StrFn::Concat {
+            args.len() >= 2
+        } else {
+            args.len() == want
+        };
+        if !arity_ok {
+            let n = if f == StrFn::Concat {
+                "at least 2".to_string()
+            } else {
+                want.to_string()
+            };
+            self.err(pos, format!("{name} takes {n} argument(s), got {}", args.len()));
+            return Some(None);
+        }
+        let mut exs = Vec::new();
+        let mut caps = Vec::new();
+        let mut ok = true;
+        for (k, a) in args.iter().enumerate() {
+            let Some((x, t)) = self.synth(&a.value, None, sc) else {
+                ok = false;
+                continue;
+            };
+            if k < strs || f == StrFn::Concat {
+                if let T::Known(Type::Str(c)) = t {
+                    exs.push(x);
+                    caps.push(c);
+                } else {
+                    let found = match t {
+                        T::Known(k) => self.type_name(k),
+                        _ => "a number".to_string(),
+                    };
+                    self.err(
+                        a.pos,
+                        format!("{name} argument {} must be a STRING, found {found}", k + 1),
+                    );
+                    ok = false;
+                }
+            } else {
+                match t {
+                    T::IntLit(v) => exs.push(Ex::Const(Value::Int(v))),
+                    T::Known(Type::Elem(ty)) if ty.is_int() => exs.push(x),
+                    _ => {
+                        self.err(a.pos, format!("{name} argument {} must be an integer", k + 1));
+                        ok = false;
+                    }
+                }
+            }
+        }
+        if !ok {
+            return Some(None);
+        }
+        let join = |a: u16, b: u16| {
+            u16::try_from((usize::from(a) + usize::from(b)).min(crate::strs::MAX)).unwrap_or(255)
+        };
+        let result = match f {
+            StrFn::Len | StrFn::Find => {
+                return Some(Some((Ex::Str(f, exs, 0, 0), T::Known(Type::Elem(Ty::Int)))));
+            }
+            StrFn::Concat => {
+                // CONCAT(a, b, c) is CONCAT(CONCAT(a, b), c): each step
+                // its own scratch region.
+                let mut it = exs.into_iter().zip(caps);
+                let (mut acc, mut cap) = it.next()?;
+                for (x, c) in it {
+                    cap = join(cap, c);
+                    let off = self.scratch(cap, &[], pos);
+                    acc = Ex::Str(StrFn::Concat, vec![acc, x], off, cap);
+                }
+                return Some(Some((acc, T::Known(Type::Str(cap)))));
+            }
+            StrFn::Insert | StrFn::Replace => join(caps[0], caps[1]),
+            _ => caps[0],
+        };
+        let off = self.scratch(result, &[], pos);
+        Some(Some((Ex::Str(f, exs, off, result), T::Known(Type::Str(result)))))
+    }
+
+    /// `X_TO_STRING(x)`, `TO_STRING(x)` and `STRING_TO_X(s)`.
+    fn string_conversion(&mut self, name: &str, args: &[Arg], pos: Pos, sc: &Scope) -> O<O<(Ex, T)>> {
+        let from_text = name.strip_prefix("STRING_TO_");
+        let to_text = name != "TO_STRING" && name.ends_with("_TO_STRING");
+        let named = if let Some(t) = from_text {
+            Ty::from_name(t)?
+        } else if to_text {
+            Ty::from_name(name.strip_suffix("_TO_STRING")?)?
+        } else {
+            Ty::Bool
+        };
+        if !self.positional(name, args, pos) {
+            return Some(None);
+        }
+        if args.len() != 1 {
+            self.err(pos, format!("{name} takes 1 argument, got {}", args.len()));
+            return Some(None);
+        }
+        if named == Ty::Time {
+            self.err(
+                pos,
+                format!("{name} is not supported: TIME has no text form here"),
+            );
+            return Some(None);
+        }
+        let arg = &args[0].value;
+        if from_text.is_some() {
+            let (x, t) = self.synth(arg, None, sc)?;
+            let T::Known(Type::Str(_)) = t else {
+                let found = match t {
+                    T::Known(k) => self.type_name(k),
+                    _ => "a number".to_string(),
+                };
+                self.err(arg.pos, format!("{name} needs a STRING, found {found}"));
+                return Some(None);
+            };
+            return Some(Some((
+                Ex::Str(StrFn::ToNum(named), vec![x], 0, 0),
+                T::Known(Type::Elem(named)),
+            )));
+        }
+        let (x, from) = if to_text {
+            (self.coerced(arg, Type::Elem(named), sc)?, named)
+        } else {
+            let (x, t) = self.synth(arg, None, sc)?;
+            let from = match t {
+                T::Known(Type::Elem(f)) => f,
+                T::Known(Type::Enum(_)) => Ty::DInt,
+                T::Known(k) => {
+                    let n = self.type_name(k);
+                    self.err(arg.pos, format!("{name} cannot convert {n}"));
+                    return Some(None);
+                }
+                lit => Self::default_lit(lit, lit, None),
+            };
+            let x = if matches!(t, T::Known(Type::Enum(_))) {
+                x
+            } else {
+                self.coerce(x, t, Type::Elem(from), arg.pos)?
+            };
+            (x, from)
+        };
+        if from == Ty::Time {
+            self.err(
+                pos,
+                format!("{name} is not supported: TIME has no text form here"),
+            );
+            return Some(None);
+        }
+        let cap = crate::strs::num_cap(from);
+        let off = self.scratch(cap, &[], pos);
+        Some(Some((
+            Ex::Str(StrFn::FromNum(from), vec![x], off, cap),
+            T::Known(Type::Str(cap)),
+        )))
+    }
+
     /// Brings every argument to one elementary type (as for a binary operator).
     fn unify(
         &mut self,
@@ -2429,6 +2809,13 @@ impl<'a> Ck<'a> {
                 off,
                 src,
                 len: self.size_of(ty),
+            });
+        }
+        if let Type::Str(cap) = ty {
+            return Some(Move::Str {
+                off,
+                ex: self.coerced(value, ty, sc)?,
+                cap,
             });
         }
         Some(Move::Value {
@@ -2813,6 +3200,9 @@ impl<'a> Ck<'a> {
                 return None;
             }
             return Some(StKind::Copy(place, src, self.size_of(ty)));
+        }
+        if let Type::Str(cap) = ty {
+            return Some(StKind::StrStore(place, cap, self.coerced(v, ty, sc)?));
         }
         let rt = Self::rt(ty)?;
         Some(StKind::Store(place, rt, self.coerced(v, ty, sc)?))
@@ -3212,6 +3602,8 @@ pub fn check(
         global_dropped: BTreeSet::new(),
         diags: Vec::new(),
         warnings: Vec::new(),
+        scratch_init: Vec::new(),
+        scratch_big: false,
     };
     ck.register_types(&library.types);
     ck.register_types(&user.types);
@@ -3306,6 +3698,8 @@ pub fn check(
     for p in 0..ck.pous.len() {
         ck.check_body(p);
     }
+    let scratch = mem_init.len();
+    mem_init.append(&mut ck.scratch_init);
     ck.check_recursion();
     ck.warn_configured(&user.configured);
     ck.warnings.sort_by_key(|d| d.pos);
@@ -3319,6 +3713,7 @@ pub fn check(
             program,
             library: ck.srcs.iter().take_while(|s| s.system).count(),
             mem_init,
+            scratch,
             loc_init: ck.loc_init,
             warnings: ck.warnings,
         }),

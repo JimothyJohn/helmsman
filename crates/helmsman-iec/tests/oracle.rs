@@ -82,12 +82,17 @@ fn printable(ty: &str) -> bool {
             | "LWORD"
             | "REAL"
             | "LREAL"
-    )
+    ) || is_text(ty)
+}
+
+fn is_text(ty: &str) -> bool {
+    ty.starts_with("STRING")
 }
 
 /// printf conversion for a scalar type (C default argument promotion).
 fn fmt(ty: &str) -> &'static str {
     match ty {
+        t if is_text(t) => "%s",
         "LINT" => "%lld",
         "ULINT" | "LWORD" => "%llu",
         "SINT" | "INT" | "DINT" => "%d",
@@ -162,6 +167,7 @@ fn ours(c: &Case) -> Result<Vec<String>, String> {
     Ok(c.vars
         .iter()
         .map(|(n, t, _)| match p.get(n) {
+            _ if is_text(t) => p.get_str(n).unwrap_or_default(),
             Some(Value::Bool(b)) => u8::from(b).to_string(),
             Some(Value::Int(i)) => i.to_string(),
             Some(Value::Real(r)) if t == "REAL" || t == "LREAL" => format!("{r:?}"),
@@ -217,6 +223,127 @@ fn rusty() -> Option<String> {
         eprintln!("HELMSMAN_RUSTY not set; ruSTy oracle skipped");
     }
     cmd
+}
+
+// ---- strings ----
+
+/// STRING behaviour, one case per question: what an assignment cuts, what
+/// a count or position outside the string does, what a conversion makes of
+/// text that is no number. Every variable is compared, text as printed.
+#[allow(clippy::too_many_lines)]
+fn string_corpus() -> Vec<Case> {
+    let t = |n: &str| var(n, "STRING[8]");
+    vec![
+        // Assignment cuts at the declared length; LEN sees the cut text.
+        case(
+            "",
+            vec![t("a"), var("b", "STRING[3]"), var("c", "STRING"), var("n", "DINT"), var("m", "DINT")],
+            "a := 'abcdefghij'; b := a; c := 'x'; n := LEN(a); m := LEN(b);",
+        ),
+        case(
+            "",
+            vec![var_init("a", "STRING[8]", "'hello'"), var("e", "STRING[8]"), var("n", "DINT"), var("m", "DINT")],
+            "n := LEN(a); e := ''; m := LEN(e);",
+        ),
+        // LEFT, RIGHT, MID at every boundary of a 5-character string.
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[8]", "'abcde'"),
+                t("l0"), t("l1"), t("l4"), t("l5"), t("l6"),
+                t("r0"), t("r1"), t("r4"), t("r5"), t("r6"),
+            ],
+            "l0 := LEFT(a, 0); l1 := LEFT(a, 1); l4 := LEFT(a, 4); l5 := LEFT(a, 5); l6 := LEFT(a, 6);
+             r0 := RIGHT(a, 0); r1 := RIGHT(a, 1); r4 := RIGHT(a, 4); r5 := RIGHT(a, 5); r6 := RIGHT(a, 6);",
+        ),
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[8]", "'abcde'"),
+                t("m11"), t("m15"), t("m16"), t("m31"), t("m33"), t("m35"), t("m51"), t("m55"), t("m01"), t("m60"), t("m00"),
+            ],
+            "m11 := MID(a, 1, 1); m15 := MID(a, 5, 1); m16 := MID(a, 6, 1); m31 := MID(a, 1, 3); m33 := MID(a, 3, 3);
+             m35 := MID(a, 5, 3); m51 := MID(a, 1, 5); m55 := MID(a, 5, 5); m01 := MID(a, 1, 0); m60 := MID(a, 0, 6); m00 := MID(a, 0, 0);",
+        ),
+        // CONCAT, with truncation, with itself.
+        case(
+            "",
+            vec![var_init("a", "STRING[8]", "'abc'"), var("b", "STRING[4]"), t("c"), t("d"), var("e", "STRING")],
+            "c := CONCAT(a, 'def'); b := CONCAT(a, 'def'); d := CONCAT(a, a, a); a := CONCAT(a, a); e := CONCAT('x', a, 'y');",
+        ),
+        // FIND: position of the first match, 0 when none or when the pattern is empty.
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[8]", "'abcabc'"),
+                var("f1", "DINT"), var("f2", "DINT"), var("f3", "DINT"), var("f4", "DINT"), var("f5", "DINT"), var("f6", "DINT"),
+            ],
+            "f1 := FIND(a, 'abc'); f2 := FIND(a, 'ca'); f3 := FIND(a, 'x'); f4 := FIND(a, 'abcabcabc'); f5 := FIND(a, 'c'); f6 := FIND('', 'a');",
+        ),
+        // INSERT, DELETE, REPLACE.
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[10]", "'abcde'"),
+                t("i0"), t("i2"), t("i5"), t("d1"), t("d2"), t("d3"), t("r1"), t("r2"), t("r3"),
+            ],
+            "i0 := INSERT(a, 'XY', 0); i2 := INSERT(a, 'XY', 2); i5 := INSERT(a, 'XY', 5);
+             d1 := DELETE(a, 1, 1); d2 := DELETE(a, 2, 2); d3 := DELETE(a, 9, 4);
+             r1 := REPLACE(a, 'XY', 1, 1); r2 := REPLACE(a, 'XY', 2, 3); r3 := REPLACE(a, 'XY', 0, 5);",
+        ),
+        // Comparison, byte by byte, a prefix sorting first.
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[8]", "'abc'"),
+                var_init("b", "STRING[8]", "'abd'"),
+                var_init("c", "STRING[8]", "'ab'"),
+                var("eq", "BOOL"), var("ne", "BOOL"), var("lt", "BOOL"), var("gt", "BOOL"), var("le", "BOOL"), var("ge", "BOOL"),
+                var("p", "BOOL"), var("q", "BOOL"), var("z", "BOOL"),
+            ],
+            "eq := a = b; ne := a <> b; lt := a < b; gt := a > b; le := a <= b; ge := a >= b;
+             p := c < a; q := a > c; z := '' < c;",
+        ),
+        // Conversions.
+        case(
+            "",
+            vec![
+                var("i1", "STRING[8]"), var("i2", "STRING[8]"), var("i3", "STRING[3]"), var("b1", "STRING[8]"), var("b2", "STRING[8]"),
+                var("n1", "DINT"), var("n2", "DINT"), var("n3", "DINT"),
+            ],
+            "i1 := INT_TO_STRING(-42); i2 := DINT_TO_STRING(123456); i3 := DINT_TO_STRING(123456);
+             b1 := BOOL_TO_STRING(TRUE); b2 := BOOL_TO_STRING(FALSE);
+             n1 := STRING_TO_DINT('-17'); n2 := STRING_TO_DINT('300'); n3 := STRING_TO_DINT('12');",
+        ),
+        // Text that is no number, and one that does not fit the type.
+        case(
+            "",
+            vec![
+                var("a", "DINT"), var("b", "DINT"), var("c", "DINT"), var("d", "DINT"), var("e", "DINT"),
+                var("f", "DINT"), var("g", "DINT"), var("h", "DINT"), var("i", "SINT"), var("j", "DINT"),
+                var("k", "LINT"), var("l", "UDINT"),
+            ],
+            "a := STRING_TO_DINT('12x'); b := STRING_TO_DINT(''); c := STRING_TO_DINT(' 7'); d := STRING_TO_DINT('+5');
+             e := STRING_TO_DINT('0x10'); f := STRING_TO_DINT('1.5'); g := STRING_TO_DINT('abc'); h := STRING_TO_DINT('-');
+             i := STRING_TO_SINT('300'); j := STRING_TO_DINT('99999999999'); k := STRING_TO_LINT('-9223372036854775808');
+             l := STRING_TO_UDINT('-1');",
+        ),
+        // Fractions and exponents are cut toward zero; a dot with no digit
+        // beside it, a second dot or a space inside is no number.
+        case(
+            "",
+            vec![
+                var("a", "DINT"), var("b", "DINT"), var("c", "DINT"), var("d", "DINT"), var("e", "DINT"),
+                var("f", "DINT"), var("g", "DINT"), var("h", "DINT"), var("i", "DINT"), var("j", "DINT"),
+                var("k", "LINT"), var("l", "LINT"), var("m", "REAL"), var("n", "REAL"), var("o", "REAL"),
+            ],
+            "a := STRING_TO_DINT('1.9'); b := STRING_TO_DINT('-1.9'); c := STRING_TO_DINT('1e2'); d := STRING_TO_DINT('7 ');
+             e := STRING_TO_DINT('  -7'); f := STRING_TO_DINT('3000000000'); g := STRING_TO_DINT('1.'); h := STRING_TO_DINT('.5');
+             i := STRING_TO_DINT('1 2'); j := STRING_TO_DINT('1.5.5');
+             k := STRING_TO_LINT('9007199254740993'); l := STRING_TO_LINT('9223372036854775807');
+             m := STRING_TO_REAL('2.5e-1'); n := STRING_TO_REAL('.5'); o := STRING_TO_REAL('abc');",
+        ),
+    ]
 }
 
 // ---- the corpus: behaviours the standard leaves to the implementation ----
@@ -523,7 +650,7 @@ fn small_int_negation_is_dint_wide_on_both_sides() {
 /// case that only the oracle run would reject shows up in every `cargo test`.
 #[test]
 fn corpus_compiles_and_runs_here() {
-    for (k, c) in corpus().iter().enumerate() {
+    for (k, c) in corpus().iter().chain(&string_corpus()).enumerate() {
         ours(c).unwrap_or_else(|e| panic!("corpus case {k}: {e}\n{}", c.program("case")));
     }
 }
@@ -550,6 +677,12 @@ fn by_reference_cases_have_the_values_their_definitions_give() {
 fn corpus_agrees_with_rusty() {
     let Some(cmd) = rusty() else { return };
     compare(&cmd, &corpus());
+}
+
+#[test]
+fn strings_agree_with_rusty() {
+    let Some(cmd) = rusty() else { return };
+    compare(&cmd, &string_corpus());
 }
 
 // ---- seeded random programs ----

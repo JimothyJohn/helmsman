@@ -285,7 +285,6 @@ fn type_errors() {
         "field X appears twice",
         "LOOP contains itself",
         "a STRUCT cannot hold a function block instance",
-        "unknown type STRING (STRING is not supported yet)",
         "3 initial values for 2 elements",
         "a number cannot be a C",
         "expected C, found D",

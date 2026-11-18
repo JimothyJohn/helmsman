@@ -741,6 +741,7 @@ fn describe(e: &Expr) -> &'static str {
         ExprKind::Index(..) => "an array element",
         ExprKind::Call(..) => "a call",
         ExprKind::EnumLit(..) => "an enumeration value",
+        ExprKind::Str(_) => "a text literal",
         ExprKind::Unary(..) | ExprKind::Binary(..) => "an expression",
         _ => "a value",
     }

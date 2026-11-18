@@ -746,6 +746,16 @@ into the code.
     `st-lints`): a free PDF from https://www.plcopen.org/downloads
     (no login; checked 2026-11-08). The entry with its rule numbers
     arrives with that card.
+- **STRING (card `st-string`):** the behaviours below are pinned by the
+  oracle, not by a clause. Assignment cuts at the declared length, `LEN`
+  sees the cut text, `LEFT`/`RIGHT`/`MID`/`FIND`/`INSERT`/`DELETE`/`REPLACE`
+  at every boundary, comparisons and the `X_TO_STRING` / `STRING_TO_X`
+  conversions, including text that is no number (0), spaces around a
+  number (ignored) and a fraction or exponent for an integer type (cut
+  toward zero): `strings_agree_with_rusty` in oracle.rs (ruSTy 1.0.8). The
+  `$` escapes and the 255-character cap are not cited to any reference:
+  the escapes are pinned by tests/strings.rs (ruSTy reads `$N` in the same
+  literals), the cap is a one-byte length. WSTRING is not built.
 - **How to cite:** `IEC 61131-3 (secondary: Fernhill ST "<page>")`, never
   a `§` of the standard. A behaviour pinned by the oracle cites the oracle
   test by name.

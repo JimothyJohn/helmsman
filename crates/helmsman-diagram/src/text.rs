@@ -2,6 +2,8 @@
 //! Names come out upper-cased (the lexer folds them); parentheses only
 //! where precedence needs them.
 
+use core::fmt::Write;
+
 use helmsman_iec::ast::{BinOp, CaseLabel, Expr, ExprKind, LabelValue, UnOp};
 
 pub(crate) const fn prec(op: BinOp) -> u8 {
@@ -46,6 +48,25 @@ pub fn time(ns: i128) -> String {
     format!("T#{}{u}", ns / k)
 }
 
+/// A STRING literal as source: printable ASCII as it is, `$` and `'`
+/// escaped, every other byte as `$HH`, so the text lexes back to the
+/// same bytes.
+fn string_literal(bytes: &[u8]) -> String {
+    let mut out = String::from("'");
+    for &b in bytes {
+        match b {
+            b'$' => out.push_str("$$"),
+            b'\'' => out.push_str("$'"),
+            0x20..=0x7E => out.push(char::from(b)),
+            _ => {
+                let _ = write!(out, "${b:02X}");
+            }
+        }
+    }
+    out.push('\'');
+    out
+}
+
 /// Source text of `e`.
 #[must_use]
 pub fn expr(e: &Expr) -> String {
@@ -60,6 +81,7 @@ pub fn expr(e: &Expr) -> String {
         },
         ExprKind::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).to_string(),
         ExprKind::Time(ns) => time(*ns),
+        ExprKind::Str(bytes) => string_literal(bytes),
         ExprKind::EnumLit(t, v) => format!("{t}#{v}"),
         ExprKind::Var(v) => v.clone(),
         ExprKind::Direct(d) => format!("%{d}"),
