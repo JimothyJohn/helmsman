@@ -992,6 +992,8 @@ mod tests {
             ("POST", "/api/snapshots/ab/rollback"),
             ("POST", "/api/snapshots/ab/replay"),
             ("POST", "/api/bundles"),
+            ("POST", "/api/market/install"),
+            ("POST", "/api/market/list"),
             ("POST", "/api/chat"),
             ("POST", "/api/explain"),
             ("POST", "/api/dropins/3/plc"),

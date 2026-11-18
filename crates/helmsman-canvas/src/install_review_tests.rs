@@ -313,6 +313,35 @@ fn a_bundle_the_agent_does_not_refuse_becomes_a_draft_with_its_review_on_it() {
     // The approval is the box's own: output-affecting, an engineer, a replay.
     assert_eq!(o.tier(), Some("output-affecting"));
     assert_eq!(o.needs(), Some(("engineer".to_string(), true)));
+    // Approved by the engineer after a replay: the box's audit line for
+    // the approval carries what the Agent said.
+    let target = crate::review::Target::Proposal(id);
+    r.replay(&target);
+    settle(&b, &mut r, 1.0);
+    r.approve(&target, 2.0);
+    settle(&b, &mut r, 2.0);
+    let phase = &r.open.as_ref().unwrap().step.phase;
+    assert!(matches!(phase, crate::review::Phase::Applied(_)), "{phase:?}");
+    let log: Json = serde_json::from_str(&b.audit()).unwrap();
+    let approvals: Vec<&str> = log
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["path"].as_str().unwrap_or("").ends_with("/apply"))
+        .filter_map(|e| e["detail"].as_str())
+        .collect();
+    assert!(
+        approvals
+            .iter()
+            .any(|d| d.contains("applied") && d.contains("review: not refused, risk medium")),
+        "{approvals:?}"
+    );
+    assert!(
+        approvals
+            .iter()
+            .any(|d| d.contains("approved") && d.contains("review: not refused")),
+        "{approvals:?}"
+    );
     // The list names it as a bundle.
     assert!(
         r.list
