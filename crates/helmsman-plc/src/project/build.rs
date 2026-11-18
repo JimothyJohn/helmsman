@@ -473,7 +473,10 @@ fn build_into(
                 file: file.to_string(),
                 line,
                 col: if line == 0 { 0 } else { l.pos.col },
-                message: l.text(),
+                message: match &l.overridden {
+                    Some(r) => format!("{} (overridden: {r})", l.msg),
+                    None => l.msg.clone(),
+                },
                 id: Some(l.id.to_string()),
                 blocking: l.blocking,
                 overridden: l.overridden.clone(),

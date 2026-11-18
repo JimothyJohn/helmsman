@@ -3769,7 +3769,7 @@ fn a_check_answer_without_the_warnings_field_still_reads() {
     assert_eq!(d.len(), 2);
     assert!(d[0].is_warning() && d[0].id.as_deref() == Some("HELMSMAN-L1") && d[0].blocking);
     assert!(d[1].is_warning() && d[1].id.is_none() && !d[1].blocking && d[1].line == 0);
-    assert!(d[0].label().starts_with("warning HELMSMAN-L1  a.st:2:1"));
+    assert!(d[0].label().starts_with("warning HELMSMAN-L1 (holds the deploy)  a.st:2:1"));
 }
 
 /// A first visit, nobody signed in: the box refuses the page's own reads
