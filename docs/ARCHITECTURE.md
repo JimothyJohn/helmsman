@@ -976,6 +976,17 @@ one `<chat_about>` envelope after `<requirement_tests>`
 include `chat_about`), stay in the retries of that instruction, and are
 then empty.
 
+What the Agent's last change did is marked on the diagram
+(`Viewer::agent_change`, against the baseline the host keeps): the blocks
+it added are outlined green, and the ones it removed are red. A removed
+block whose old place is free on the diagram drawn now is a ghost there,
+with the old wires between two such ghosts. One whose old place is under
+a block drawn now would lie half over it, a little off, so it is a small
+red tag over that block's top right corner instead (`st_view::hosts`,
+`draw_ghosts`; Nick, 2026-11-17): `was = 1` on a block the change added
+(what took its place), `removed = 1` on any other, two names at most and
+a count of the rest.
+
 Selecting blocks (Nick, 2026-11-16, `ui_tests/multi_select.rs`) is the
 other way to point. `Viewer` keeps a selection beside `pick`: blocks of
 the diagram (a fold drawn as one block selects all it holds), cleared with

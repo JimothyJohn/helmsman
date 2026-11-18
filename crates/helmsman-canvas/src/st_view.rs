@@ -2992,14 +2992,80 @@ pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
 /// removed ones (the brand red, ghosted).
 const ADDED: Color32 = brand::GREEN;
 
-/// Blocks the Agent's change removed, drawn where they were in the old
-/// diagram: a faint red fill, a red outline and their label, and the old
-/// wires between two removed blocks, so what went is seen in place.
-fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[NodeId]) {
+/// The area two blocks' rectangles share, in diagram units squared.
+fn overlap(a: &helmsman_diagram::Rect, b: &helmsman_diagram::Rect) -> f32 {
+    // `min` and `max` step over a NaN, which would make an area of it.
+    if ![a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return 0.0;
+    }
+    let w = a.right().min(b.right()) - a.x.max(b.x);
+    let h = a.bottom().min(b.bottom()) - a.y.max(b.y);
+    if w > 0.0 && h > 0.0 { w * h } else { 0.0 }
+}
+
+/// For each removed block of `old`, the block of the diagram drawn now
+/// that its old place lies over, if any: the one it shares most area
+/// with, a block the change added before any other (that is what took
+/// its place). A removed block over nothing has `None`.
+fn hosts(old: &Diagram, removed: &[NodeId], new: &Diagram, added: &[NodeId]) -> Vec<Option<NodeId>> {
+    removed
+        .iter()
+        .map(|id| {
+            let was = &old.nodes.get(id.0 as usize)?.rect;
+            let most = |only_added: bool| {
+                new.nodes
+                    .iter()
+                    .filter(|n| !only_added || added.contains(&n.id))
+                    .map(|n| (n.id, overlap(was, &n.rect)))
+                    .filter(|(_, area)| *area > 0.0)
+                    .max_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(n, _)| n)
+            };
+            most(true).or_else(|| most(false))
+        })
+        .collect()
+}
+
+/// A removed block's name on a tag: its label on one line, cut short.
+fn ghost_name(label: &str) -> String {
+    let one: String = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() > 18 {
+        format!("{}…", one.chars().take(17).collect::<String>())
+    } else {
+        one
+    }
+}
+
+/// Blocks the Agent's change removed. One whose old place is free on the
+/// diagram drawn now is a ghost there: a faint red fill, a red outline
+/// and its label, with the old wires between two such ghosts. One whose
+/// old place is under a block of the new diagram (the layout moved, or
+/// that block replaced it) would lie half over it, a little off (Nick,
+/// 2026-11-17: "looks kinda janky"), so it is a small red tag over that
+/// block's top right corner instead: `was = 1` on a block the change
+/// added, `removed = 1` on one it did not.
+fn draw_ghosts(
+    painter: &egui::Painter,
+    cam: Cam,
+    old: &Diagram,
+    removed: &[NodeId],
+    new: &Diagram,
+    added: &[NodeId],
+) {
     let z = cam.zoom;
     let red = brand::RED;
+    let hosts = hosts(old, removed, new, added);
+    let free = |id: &NodeId| {
+        removed
+            .iter()
+            .position(|r| r == id)
+            .is_some_and(|k| hosts[k].is_none())
+    };
     for w in &old.wires {
-        if removed.contains(&w.from) && removed.contains(&w.to) {
+        if free(&w.from) && free(&w.to) {
             let (a, b) = (old.node(w.from), old.node(w.to));
             let (ax, ay) = out_port(a, w.out);
             let (bx, by) = in_port(b, w.inp);
@@ -3013,10 +3079,20 @@ fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[Node
             );
         }
     }
-    for id in removed {
+    // The tags of each host, in the order the blocks were removed.
+    let mut tags: Vec<(NodeId, Vec<String>)> = Vec::new();
+    for (id, host) in removed.iter().zip(&hosts) {
         let Some(n) = old.nodes.get(id.0 as usize) else {
             continue;
         };
+        if let Some(h) = host {
+            let name = ghost_name(&n.label);
+            match tags.iter_mut().find(|(t, _)| t == h) {
+                Some((_, names)) => names.push(name),
+                None => tags.push((*h, vec![name])),
+            }
+            continue;
+        }
         let r = cam.rect(&n.rect);
         painter.rect_filled(r, CornerRadius::same(4), red.gamma_multiply(0.12));
         painter.rect_stroke(
@@ -3034,6 +3110,27 @@ fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[Node
                 red.gamma_multiply(0.75),
             );
         }
+    }
+    if z <= 0.35 {
+        return;
+    }
+    for (host, names) in tags {
+        let r = cam.rect(&new.node(host).rect);
+        let word = if added.contains(&host) { "was" } else { "removed" };
+        let more = names.len().saturating_sub(2);
+        let shown = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+        let text = if more > 0 {
+            format!("{word} {shown} +{more}")
+        } else {
+            format!("{word} {shown}")
+        };
+        painter.text(
+            Pos2::new(r.max.x, r.min.y - 3.0 * z),
+            Align2::RIGHT_BOTTOM,
+            text,
+            font(9.5 * z),
+            red,
+        );
     }
 }
 
@@ -3692,9 +3789,9 @@ fn draw(
             }
         }
     }
-    // Last, so what the Agent removed shows over whatever took its place.
+    // Last, so what the Agent removed shows over the blocks drawn now.
     if let Some((old, removed)) = ghosts {
-        draw_ghosts(painter, cam, old, removed);
+        draw_ghosts(painter, cam, old, removed, d, added);
     }
 }
 
@@ -4291,5 +4388,102 @@ END_PROGRAM
         assert_eq!(h.sv.view.because, None);
         assert!(h.sv.view.highlighted().is_none());
         assert_eq!(h.lit(), Vec::<String>::new());
+    }
+}
+
+#[cfg(test)]
+mod ghost_tests {
+    //! Where a removed block is shown ([`hosts`]): as a ghost in its old
+    //! place when that is free, else as a tag on the block over it.
+
+    use helmsman_diagram::{Diagram, NodeId, NodeKind, Rect as Area};
+
+    use super::{ghost_name, hosts, overlap};
+
+    fn diagram(src: &str) -> Diagram {
+        let build = crate::playground::Build::new(src).0.expect("compiles");
+        build
+            .module
+            .expect("lowers")
+            .program()
+            .expect("a program")
+            .diagram
+            .clone()
+    }
+
+    fn area(x: f32, y: f32, w: f32, h: f32) -> Area {
+        Area { x, y, w, h }
+    }
+
+    #[test]
+    fn overlap_is_the_shared_area_and_never_negative() {
+        let a = area(0.0, 0.0, 10.0, 10.0);
+        assert!((overlap(&a, &area(5.0, 5.0, 10.0, 10.0)) - 25.0).abs() < 1e-3);
+        assert!((overlap(&a, &a) - 100.0).abs() < 1e-3);
+        assert!(
+            overlap(&a, &area(10.0, 0.0, 5.0, 5.0)).abs() < 1e-6,
+            "touching edges share nothing"
+        );
+        assert!(overlap(&a, &area(50.0, 50.0, 5.0, 5.0)).abs() < 1e-6);
+        assert!(
+            overlap(&a, &area(2.0, 2.0, -4.0, 3.0)).abs() < 1e-6,
+            "a negative size is no area"
+        );
+        assert!(
+            overlap(&a, &area(f32::NAN, 0.0, 5.0, 5.0)).abs() < 1e-6,
+            "NaN is no area"
+        );
+    }
+
+    #[test]
+    fn a_replaced_block_is_tagged_on_what_took_its_place_and_a_free_one_stays_a_ghost() {
+        let old = diagram(
+            "PROGRAM p\nVAR_INPUT a : BOOL; b : BOOL; END_VAR\nVAR_OUTPUT x : BOOL; END_VAR\nx := a AND b;\nEND_PROGRAM\n",
+        );
+        let new = diagram(
+            "PROGRAM p\nVAR_INPUT a : BOOL; b : BOOL; END_VAR\nVAR_OUTPUT x : BOOL; END_VAR\nx := a OR b;\nEND_PROGRAM\n",
+        );
+        let op = |d: &Diagram, label: &str| {
+            d.nodes
+                .iter()
+                .find(|n| {
+                    !matches!(n.kind, NodeKind::Read { .. } | NodeKind::Write { .. })
+                        && n.label.contains(label)
+                })
+                .unwrap_or_else(|| panic!("no {label} block"))
+                .id
+        };
+        let (and, or) = (op(&old, "AND"), op(&new, "OR"));
+        // The same shape of program: OR is laid out where AND was.
+        assert_eq!(
+            hosts(&old, &[and], &new, &[or]),
+            vec![Some(or)],
+            "on the block that replaced it"
+        );
+        // An unchanged block is over it too, but the added one is named.
+        let all: Vec<NodeId> = new.nodes.iter().map(|n| n.id).collect();
+        assert_eq!(hosts(&old, &[and], &new, &all), vec![Some(or)]);
+        // Nothing added: still tagged on whatever is drawn there now.
+        assert_eq!(hosts(&old, &[and], &new, &[]), vec![Some(or)]);
+        // The new diagram has nothing there: a ghost in its old place.
+        let mut moved = new.clone();
+        for n in &mut moved.nodes {
+            n.rect.x += 10_000.0;
+        }
+        assert_eq!(hosts(&old, &[and], &moved, &[or]), vec![None]);
+        // An id the old diagram does not have is skipped, not a panic.
+        assert_eq!(hosts(&old, &[NodeId(9_999)], &new, &[or]), vec![None]);
+        assert_eq!(hosts(&old, &[], &new, &[or]), Vec::<Option<NodeId>>::new());
+    }
+
+    #[test]
+    fn a_tag_names_the_block_on_one_short_line() {
+        assert_eq!(ghost_name("= 1"), "= 1");
+        assert_eq!(ghost_name("  a\n  b\tc "), "a b c");
+        let long = ghost_name("conveyor_section_12_motor_contactor");
+        assert_eq!(long.chars().count(), 18);
+        assert!(long.ends_with('…'));
+        assert_eq!(ghost_name("größenänderungswert_für_zone"), "größenänderungswe…");
+        assert_eq!(ghost_name(""), "");
     }
 }

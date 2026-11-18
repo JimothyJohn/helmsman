@@ -101,7 +101,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   result: a device doc with citations, a profile and a library entry; an ST program that jogs and positions the axis and stops it on comms loss
   est: 2d
   difficulty: med
-  notes: 2026-11-16 night, on the bench unit (LMDCE853C, EtherNet/IP mode, identity revision 2.36, `LMDCM 6.013`): EtherNet/IP came first because that is the mode it arrived in. Done: the connection (docs/devices/novanta-mdrive.md "On the bench": a run/idle header its EDS does not declare, which `enip-io` now corrects from the refusal; it sends 1.3 to 1.5 times slower than the RPI it grants; it resets the TCP session after 2 to 3 s and keeps exchanging I/O; UDP 2222 only), the vendor's EDS resolving and connecting, a 20-minute hold, a slew at 5000 steps/s and a stop from the cyclic image, the library entry (helmsman-devices `devices/novanta/lexium-mdrive-ethernet/`). Found: the output assembly is not laid out as the manual says, and a silent controller does not stop a slew (both are questions above). 2026-11-17: the unit's mapping is known (Nick's photo of the Configuration Utility; docs/devices/novanta-mdrive.md has it, and it explains the move at the first Forward_Open). Not explained, for later: a small MA through bytes 28..31 and over MCode did not move the drive (errors 25, 30). Left: the profile and the kinds (a drive's enable, speed, position, fault), MA and MR, the ST program with the fault path, and Modbus TCP for the comparison (the drive speaks one protocol at a time).
+  notes: 2026-11-16 night, on the bench unit (LMDCE853C, EtherNet/IP mode, identity revision 2.36, `LMDCM 6.013`): EtherNet/IP came first because that is the mode it arrived in. Done: the connection (docs/devices/novanta-mdrive.md "On the bench": a run/idle header its EDS does not declare, which `enip-io` now corrects from the refusal; it sends 1.3 to 1.5 times slower than the RPI it grants; it resets the TCP session after 2 to 3 s and keeps exchanging I/O; UDP 2222 only), the vendor's EDS resolving and connecting, a 20-minute hold, a slew at 5000 steps/s and a stop from the cyclic image, the library entry (helmsman-devices `devices/novanta/lexium-mdrive-ethernet/`). Found: the output assembly is not laid out as the manual says, and a silent controller does not stop a slew (both are questions above). 2026-11-17: the unit's mapping is known (Nick's photo of the Configuration Utility; docs/devices/novanta-mdrive.md has it, and it explains the move at the first Forward_Open). Decided (Nick, 2026-11-17, on the board): that the drive keeps slewing when the controller goes silent is accepted on the bench for now; before it is shown or left running unattended it needs a stop of its own (the utility's Halt Motion setting read back with Get, an MCode program, or a hardware input). Not explained, for later: a small MA through bytes 28..31 and over MCode did not move the drive (errors 25, 30). Left: the profile and the kinds (a drive's enable, speed, position, fault), MA and MR, the ST program with the fault path, and Modbus TCP for the comparison (the drive speaks one protocol at a time).
   status: blocked
   id: mdrive-bringup
   asked: 2026-11-10
@@ -734,17 +734,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: scl-import
   asked: 2026-11-08
   by: claude-session
-
-- [ ] **Diagram edits 5: on a box** — the same gestures on a box, on only for an engineer (`writable()`) and only while the diagram shows the open buffer, not the running module; otherwise off with a tooltip saying why. Nothing new on the box: Save and Deploy go through the existing policy, which sets the tier from the diff.
-  result: diagram edits on a Pi land like typed edits, approval and audit unchanged
-  notes: box_projects_tests: edit, Save, the stale-save 409, against the real API. A diagram edit runs on a box only after Deploy, the same as typing.
-  est: 4h
-  difficulty: low
-  depends: diagram-edit-canvas
-  id: diagram-edit-box
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
 
 - [ ] **Diagram edits 6: docs** — amend `canvas-edit-scope` in docs/ARCHITECTURE.md (the live ST view section: the diagram now writes ST through checked splices), docs/UI.md, and a help page in the floor-engineer voice.
   result: the docs say what the diagram can change and how it reaches the code
