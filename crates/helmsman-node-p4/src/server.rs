@@ -20,10 +20,13 @@ use esp_println::println;
 use helmsman_iec::ImageSizes;
 use helmsman_nodecore::api;
 use helmsman_nodecore::http::{self, Read as HttpRead, Response};
+use helmsman_nodecore::ota::request::Fetch as FetchRequest;
+use helmsman_nodecore::ota::status;
 use helmsman_nodecore::router::{self, Control, Effect, Outcome};
 use helmsman_nodecore::settings::Settings;
 
 use crate::flash::Store;
+use crate::ota;
 use crate::state::{self, Pending, Shared};
 
 /// Reads from a peer that stall longer than this end the connection.
@@ -166,6 +169,11 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
                 ),
             }
         }
+        Effect::FirmwareFetch { fetch } => (firmware_fetch(fetch, ctx), false),
+        Effect::FirmwareConfirm => match ota::confirm(ctx).await {
+            Ok(ended) => (router::firmware_confirmed(ended), false),
+            Err(why) => (router::firmware_not_started(&why), false),
+        },
         Effect::SaveIoMap { text, page } => {
             // Beside the program on flash; the restart makes the I/O task
             // drive the block it names.
@@ -186,6 +194,25 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
             }
         }
     }
+}
+
+/// Hands a validated request to the fetch task and answers at once: the
+/// image comes in over seconds, and the reply must not wait for it.
+fn firmware_fetch(fetch: FetchRequest, ctx: &Ctx) -> Response {
+    let taken = state::with(ctx.shared, |live| {
+        if live.fw.fetch.busy() {
+            false
+        } else {
+            live.fw.fetch = status::Fetch::Fetching { received: 0, size: 0 };
+            true
+        }
+    });
+    if !taken {
+        return router::firmware_not_started("a firmware update is already running");
+    }
+    let reply = router::firmware_accepted(&fetch);
+    ota::FETCH.signal(fetch);
+    reply
 }
 
 async fn deploy(name: String, source: String, ctx: &Ctx) -> Response {

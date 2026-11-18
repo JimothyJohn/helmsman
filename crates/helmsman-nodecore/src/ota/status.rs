@@ -50,6 +50,9 @@ impl Fetch {
 pub struct Firmware {
     /// The running image's version (the crate's).
     pub version: &'static str,
+    /// What the build says about itself beyond the version (`NODE_BUILD_TAG`
+    /// at build time); empty if it says nothing.
+    pub build: &'static str,
     pub chip: &'static str,
     /// The slot it runs from, 0 or 1; `None` if `otadata` could not be read.
     pub slot: Option<u8>,
@@ -77,6 +80,7 @@ impl Firmware {
         };
         json!({
             "version": self.version,
+            "build": (!self.build.is_empty()).then_some(self.build),
             "chip": self.chip,
             "slot": self.slot,
             "trial": trial,

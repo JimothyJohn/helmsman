@@ -660,6 +660,7 @@ pub(crate) fn sample_view() -> NodeView {
         io_map: "device rio modbus-tcp 192.168.3.60\n".into(),
         firmware: Some(crate::ota::status::Firmware {
             version: "0.1.0",
+            build: "",
             chip: "esp32p4",
             slot: Some(0),
             trial: crate::ota::status::Trial::Confirmed,
