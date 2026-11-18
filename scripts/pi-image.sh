@@ -71,7 +71,7 @@ bin="$repo/target/pi/release/helmsman-plc"
 file "$bin" | grep -q 'ARM aarch64' || die "build did not produce an aarch64 binary: $(file "$bin")"
 
 echo "==> build the canvas (wasm, trunk)"
-"$repo/scripts/canvas-web.sh" >/dev/null
+"$repo/scripts/canvas-web.sh"
 dist="$repo/target/canvas-dist"
 [ -f "$dist/index.html" ] || die "the canvas build left no index.html in $dist"
 
