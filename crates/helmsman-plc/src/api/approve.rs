@@ -231,6 +231,8 @@ struct Start<'c> {
     proposal: Option<Stored>,
     /// A project's red requirement tests, one line each: a warning.
     red: Vec<String>,
+    /// A project's lint overrides, as an audit line's tail.
+    overrides: String,
 }
 
 /// What every apply, rollback and replay starts with: the target exists
@@ -245,6 +247,7 @@ fn prelude<'c>(
     label: &str,
 ) -> Result<Start<'c>, Response> {
     let mut red = Vec::new();
+    let mut overrides = String::new();
     let (cs, proposal) = match target_ref {
         Target::Proposal(id) => {
             let Some(p) = super::proposal_id(id).and_then(|id| ctx.box_.proposals.get(id)) else {
@@ -282,6 +285,28 @@ fn prelude<'c>(
                 .and_then(|r| super::projects::built(ctx, name).map(|b| (b, r)))
             {
                 Ok((b, r)) => {
+                    // A blocking lint finding refuses, unlike a red test
+                    // (`helmsman_iec::lint`, card `st-lints`): the box says
+                    // which and how to override it, and changes nothing.
+                    let held = super::projects::held(&b);
+                    if !held.is_empty() {
+                        let lines: Vec<String> = held.iter().map(|d| d.to_string()).collect();
+                        let ids: Vec<&str> = held.iter().filter_map(|d| d.id.as_deref()).collect();
+                        return Err(refuse(
+                            ctx,
+                            req,
+                            422,
+                            &json!({
+                                "error": "the project holds a lint finding that blocks a deploy; fix it, or override it on its line with a pragma and a reason: {lint: off ID \"reason\"}",
+                                "changed": false,
+                                "held": lines,
+                                "warnings": super::projects::diags_json(&b.problems, "warning"),
+                            }),
+                            &format!("{label}: held by lint {}: {}", ids.join(", "), super::clean(&lines.join("; "))),
+                            Note::default(),
+                        ));
+                    }
+                    overrides = super::projects::override_note(&b);
                     red = r;
                     (Some(b.change), None)
                 }
@@ -327,6 +352,7 @@ fn prelude<'c>(
         target: cs,
         proposal,
         red,
+        overrides,
     })
 }
 
@@ -595,6 +621,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         target,
         proposal,
         red,
+        overrides,
     } = match prelude(req, ctx, target_ref, &label) {
         Ok(s) => s,
         Err(r) => return r,
@@ -926,6 +953,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         }
     }
     detail.push_str(&red_note(&red));
+    detail.push_str(&overrides);
     let _ = record(ctx, req, 200, &detail, note);
     Response::json(
         200,

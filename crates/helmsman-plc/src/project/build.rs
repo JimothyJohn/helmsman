@@ -42,12 +42,18 @@ use crate::store::{ChangeSet, ModuleFiles};
 
 /// A problem, where it is in the project. `line` 0: the project as a
 /// whole (no PROGRAM, say).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Diag {
     pub file: String,
     pub line: u32,
     pub col: u32,
     pub message: String,
+    /// The lint that raised it (`helmsman_iec::lint`), when one did.
+    pub id: Option<String>,
+    /// A lint that holds a deploy: blocking and not overridden.
+    pub blocking: bool,
+    /// The reason of the pragma that overrides this lint finding.
+    pub overridden: Option<String>,
 }
 
 impl std::fmt::Display for Diag {
@@ -66,6 +72,7 @@ fn diag(file: &str, line: usize, message: impl Into<String>) -> Diag {
         line: u32::try_from(line).unwrap_or(u32::MAX),
         col: 0,
         message: message.into(),
+        ..Diag::default()
     }
 }
 
@@ -213,6 +220,7 @@ fn programs(files: &Files, diags: &mut Vec<Diag>) -> Vec<Found> {
                     line: d.pos.line,
                     col: d.pos.col,
                     message: d.msg,
+                    ..Diag::default()
                 });
                 continue;
             }
@@ -227,6 +235,7 @@ fn programs(files: &Files, diags: &mut Vec<Diag>) -> Vec<Found> {
                         "PROGRAM {} is already defined in {} (line {})",
                         pou.name, first.file, first.pos.line
                     ),
+                    ..Diag::default()
                 });
                 continue;
             }
@@ -428,6 +437,7 @@ fn build_into(
                 line: p.pos.line,
                 col: p.pos.col,
                 message: "a PROGRAM's name is its module's: at most 64 characters".into(),
+                ..Diag::default()
             });
             continue;
         }
@@ -451,6 +461,22 @@ fn build_into(
                 line,
                 col: if line == 0 { 0 } else { w.pos.col },
                 message: w.msg,
+                ..Diag::default()
+            };
+            if warned.insert(d.clone()) {
+                problems.push(d);
+            }
+        }
+        for l in helmsman_iec::lint::lints(&src) {
+            let (file, line) = locate(&segments, l.pos.line).unwrap_or(("", 0));
+            let d = Diag {
+                file: file.to_string(),
+                line,
+                col: if line == 0 { 0 } else { l.pos.col },
+                message: l.text(),
+                id: Some(l.id.to_string()),
+                blocking: l.blocking,
+                overridden: l.overridden.clone(),
             };
             if warned.insert(d.clone()) {
                 problems.push(d);
@@ -466,6 +492,7 @@ fn build_into(
                         line,
                         col: if line == 0 { 0 } else { e.pos.col },
                         message: e.msg,
+                        ..Diag::default()
                     };
                     if seen.insert(d.clone()) {
                         diags.push(d);
