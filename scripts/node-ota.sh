@@ -59,6 +59,7 @@ cp "$image" "$dir/firmware.bin"
 sha="$(/usr/bin/shasum -a 256 "$dir/firmware.bin" | awk '{ print $1 }')"
 /usr/bin/python3 -I -m http.server "$serve_port" --bind "$host_ip" --directory "$dir" >"$dir/server.log" 2>&1 &
 server=$!
+disown "$server"
 sleep 1
 kill -0 "$server" 2>/dev/null || { echo "could not serve on $host_ip:$serve_port:"; cat "$dir/server.log"; exit 1; }
 
