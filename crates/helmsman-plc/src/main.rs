@@ -125,6 +125,13 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        design profile, which has no tools; default
                        helmsman/design-v1). A relay that does not serve it
                        answers the design step as not available.
+  --relay-review-agent V
+                       the agent version a marketplace install asks to read a
+                       bundle before it becomes a draft (a review profile with
+                       no tools that can only describe and refuse; default
+                       helmsman/review-v1). Without a relay, or when the relay
+                       does not serve it, an install stops as not reviewed
+                       until an engineer goes on without a review.
   --relay-tests-agent V
                        the agent version POST /api/projects/{p}/requirements
                        asks for (a tests profile; default tests-v1). The box
@@ -223,6 +230,7 @@ struct Opts {
     relay_agent: String,
     relay_explain_agent: Option<String>,
     relay_design_agent: Option<String>,
+    relay_review_agent: Option<String>,
     relay_tests_agent: Option<String>,
     relay_help_agent: Option<String>,
     ui: Option<PathBuf>,
@@ -250,7 +258,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
 }
 
 /// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`,
-/// `--relay-design-agent`,
+/// `--relay-design-agent`, `--relay-review-agent`,
 /// `--relay-tests-agent`, `--relay-help-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
@@ -262,6 +270,7 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
         _ if !relay::version_ok(v) => return Err(format!("{flag}: not an agent version: {v:?}")),
         "--relay-explain-agent" => o.relay_explain_agent = Some(v.to_string()),
         "--relay-design-agent" => o.relay_design_agent = Some(v.to_string()),
+        "--relay-review-agent" => o.relay_review_agent = Some(v.to_string()),
         "--relay-tests-agent" => o.relay_tests_agent = Some(v.to_string()),
         "--relay-help-agent" => o.relay_help_agent = Some(v.to_string()),
         _ => v.clone_into(&mut o.relay_agent),
@@ -293,6 +302,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_agent: "v7".into(),
         relay_explain_agent: None,
         relay_design_agent: None,
+        relay_review_agent: None,
         relay_tests_agent: None,
         relay_help_agent: None,
         ui: None,
@@ -385,6 +395,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             | "--relay-agent"
             | "--relay-explain-agent"
             | "--relay-design-agent"
+            | "--relay-review-agent"
             | "--relay-tests-agent"
             | "--relay-help-agent" => {
                 relay_flag(&mut o, flag, v)?;
@@ -1432,6 +1443,9 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
     );
     if let Some(v) = &o.relay_design_agent {
         setup.design_agent.clone_from(v);
+    }
+    if let Some(v) = &o.relay_review_agent {
+        setup.review_agent.clone_from(v);
     }
     setup.tests_agent = Some(o.relay_tests_agent.clone().unwrap_or_else(|| "tests-v1".into()));
     if let Some(v) = &o.relay_help_agent {
