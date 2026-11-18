@@ -81,6 +81,7 @@ pub fn expr(e: &Expr) -> String {
         },
         ExprKind::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).to_string(),
         ExprKind::Time(ns) => time(*ns),
+        ExprKind::Calendar(ty, ns) => helmsman_iec::dt::literal(*ty, *ns),
         ExprKind::Str(bytes) => string_literal(bytes),
         ExprKind::EnumLit(t, v) => format!("{t}#{v}"),
         ExprKind::Var(v) => v.clone(),

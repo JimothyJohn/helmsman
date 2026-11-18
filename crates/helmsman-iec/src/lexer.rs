@@ -38,6 +38,9 @@ pub enum Tok {
     Bool(bool),
     /// `T#1h30m`, `TIME#-5s`: nanoseconds.
     Time(i128),
+    /// `D#2024-02-29`, `TOD#22:00:00`, `DT#2024-02-29-22:00:00`: the type
+    /// and its nanoseconds (see `dt`).
+    Calendar(crate::types::Ty, i128),
     /// `Color#Red`: enumeration type and value.
     EnumLit(String, String),
     /// Directly represented variable: `%IX0.1`, `%QW2`, `%MD4`.
@@ -78,6 +81,7 @@ impl fmt::Display for Tok {
             Self::Real { value, .. } => write!(f, "{value}"),
             Self::Bool(b) => write!(f, "{}", if *b { "TRUE" } else { "FALSE" }),
             Self::Time(ns) => write!(f, "T#{ns}ns"),
+            Self::Calendar(ty, ns) => write!(f, "{ty}#{ns}ns"),
             Self::EnumLit(t, v) => write!(f, "{t}#{v}"),
             Self::Direct(d) => write!(f, "%{d}"),
             Self::Str(_) => f.write_str("a STRING literal"),
@@ -547,11 +551,36 @@ impl Lexer<'_> {
     /// After `TYPE#`: a number, TRUE/FALSE/0/1 for `BOOL#`, a duration for
     /// `T#`/`TIME#`, or a value name for an enumeration.
     fn typed_literal(&mut self, ty: String, start: Pos) -> Result<Tok, LexError> {
-        if matches!(
-            ty.as_str(),
-            "D" | "DATE" | "DT" | "DATE_AND_TIME" | "TOD" | "TIME_OF_DAY" | "LDATE" | "LDT" | "LTOD"
-        ) {
-            return Err(Self::err(start, format!("{ty} literals are not supported yet")));
+        let calendar = match ty.as_str() {
+            "D" | "DATE" => Some(crate::types::Ty::Date),
+            "TOD" | "TIME_OF_DAY" => Some(crate::types::Ty::Tod),
+            "DT" | "DATE_AND_TIME" => Some(crate::types::Ty::Dt),
+            "LDATE" | "LDT" | "LTOD" | "LTIME_OF_DAY" | "LDATE_AND_TIME" => {
+                return Err(Self::err(start, format!("{ty} literals are not supported yet")));
+            }
+            _ => None,
+        };
+        if let Some(cty) = calendar {
+            let mut body = Vec::new();
+            while let Some(c) = self
+                .peek(0)
+                .filter(|c| c.is_ascii_digit() || matches!(c, b'-' | b':' | b'.'))
+            {
+                if body.len() == 40 {
+                    return Err(Self::err(start, format!("bad {ty} literal: too long")));
+                }
+                body.push(c);
+                self.bump();
+            }
+            let parsed = match cty {
+                crate::types::Ty::Date => crate::dt::parse_date(&body),
+                crate::types::Ty::Tod => crate::dt::parse_tod(&body),
+                _ => crate::dt::parse_dt(&body),
+            };
+            return match parsed {
+                Ok(ns) => Ok(Tok::Calendar(cty, ns)),
+                Err(why) => Err(Self::err(start, format!("bad {ty} literal: {why}"))),
+            };
         }
         let neg = if self.peek(0) == Some(b'-') {
             self.bump();
