@@ -1583,6 +1583,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-compat"
+version = "0.1.0"
+dependencies = [
+ "helmsman-agent",
+ "serde_json",
+]
+
+[[package]]
 name = "helmsman-devconf"
 version = "0.1.0"
 dependencies = [
