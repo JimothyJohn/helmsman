@@ -28,8 +28,12 @@ box's own certificate, fingerprint in Help › About); every read needs a
 sign in (only `/api/health` answers a bare poll), every change needs an
 engineer. A fresh box has no accounts: its role PINs work
 until one exists (`helmsman-plc account add`, or `scripts/pi-account.sh`).
-SSH is on with the default user `helmsman` (set the password with
-Raspberry Pi Imager when flashing, or in `pi-gen`'s `FIRST_USER_PASS`).
+SSH is on. The image carries no password: the first boot asks for a user
+and password on the console, or takes them from Raspberry Pi Imager's
+settings or a `userconf.txt` on the boot partition, as any Raspberry Pi OS
+image does (the build leaves pi-gen's `FIRST_USER_PASS` unset, because pi-gen
+refuses to skip that step without one and a password baked into a public
+image is no password).
 
 ## First boot: pairing with the relay
 
