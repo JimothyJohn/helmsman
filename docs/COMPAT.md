@@ -87,9 +87,11 @@ from an old `master` is checked by the same code as one built at the tip.
   repository's tests hold to its generator), and the reset line must reach
   the switch's reset. The firmware must never name GPIO54, which on this
   board would release the module's radio from reset.
-- **CI**: the workflow runs on each candidate commit, from
-  `gh run list --commit`. A commit with no run is counted as unverified,
-  not as green.
+- **CI**: each workflow's newest run on each candidate commit, from
+  `gh run list --commit`. A merge that auto-merge made fires no push run
+  on dev (it merges with `GITHUB_TOKEN`), so a merge commit with no run is
+  judged by its PR head (the second parent), and the report says so. Any
+  other commit with no run counts as unverified, not as green.
 
 ## What it does not cover
 
