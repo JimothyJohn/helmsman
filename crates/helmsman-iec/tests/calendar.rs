@@ -611,7 +611,39 @@ fn text_never_reads_a_wrong_prefix_as_the_type() {
 
 #[test]
 fn they_live_in_structs_arrays_function_blocks_and_functions() {
-    let src = "
+    let src = SHIFTS;
+    let mut p = build(src);
+    let mut img = Image::new(SIZES);
+    p.scan_at(&mut img, Duration::ZERO).unwrap();
+    assert!(b(&p, "a"), "23:30 is inside the shift that crosses midnight");
+    assert!(!b(&p, "b"));
+    assert!(!b(&p, "c"), "02:00 is before 06:00");
+    assert_eq!(
+        int(&p, "nx"),
+        days(2024, 3, 1) * DAY,
+        "28 Feb + 2 days is 1 Mar in a leap year"
+    );
+    assert_eq!(
+        (int(&p, "first"), int(&p, "last")),
+        (tod_ns(1, 0, 0, 0), tod_ns(23, 30, 0, 0))
+    );
+}
+
+#[test]
+fn the_fixtures_pass_the_lints_with_nothing_blocking() {
+    // A finding here is a lint bug or a true finding: say which. Today the
+    // shift program, the wall-clock program and a DATE loop give none.
+    for src in [
+        SHIFTS,
+        "PROGRAM t\nVAR late : BOOL; day : DATE; x : DT; wd : SINT; END_VAR\n\
+         x := DT_NOW(); late := DT_TO_TOD(x) >= TOD#22:00:00; day := DT_TO_DATE(x); wd := DAY_OF_WEEK(day);\nEND_PROGRAM",
+    ] {
+        let found = helmsman_iec::lint::lints(src);
+        assert!(found.is_empty(), "{found:#?}\n{src}");
+    }
+}
+
+const SHIFTS: &str = "
 TYPE Shift : STRUCT start : TOD; stop : TOD; day : DATE; END_STRUCT; END_TYPE
 FUNCTION_BLOCK Window
 VAR_INPUT now : TOD; from : TOD; till : TOD; END_VAR
@@ -635,22 +667,6 @@ END_VAR
   nx := Next_day(Next_day(sh.day));
   first := hours[0]; last := hours[2];
 END_PROGRAM";
-    let mut p = build(src);
-    let mut img = Image::new(SIZES);
-    p.scan_at(&mut img, Duration::ZERO).unwrap();
-    assert!(b(&p, "a"), "23:30 is inside the shift that crosses midnight");
-    assert!(!b(&p, "b"));
-    assert!(!b(&p, "c"), "02:00 is before 06:00");
-    assert_eq!(
-        int(&p, "nx"),
-        days(2024, 3, 1) * DAY,
-        "28 Feb + 2 days is 1 Mar in a leap year"
-    );
-    assert_eq!(
-        (int(&p, "first"), int(&p, "last")),
-        (tod_ns(1, 0, 0, 0), tod_ns(23, 30, 0, 0))
-    );
-}
 
 #[test]
 fn constants_fold_and_initial_values_may_be_expressions_of_constants() {

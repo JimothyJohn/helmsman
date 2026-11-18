@@ -695,8 +695,8 @@ fn strings_agree_with_rusty() {
 /// `CONCAT_*` with a date that does not exist, `DAY_OF_WEEK`. ruSTy prints
 /// each as the 64-bit nanosecond count, which is what we hold.
 ///
-/// Written from ruSTy 1.0.8's source (typesystem.rs, libs/stdlib) on a
-/// machine without docker: not run against it yet.
+/// Written from ruSTy 1.0.8's source (typesystem.rs, libs/stdlib); it
+/// passed against ruSTy in CI's oracle job (PR #513).
 #[allow(clippy::too_many_lines)]
 fn calendar_corpus() -> Vec<Case> {
     let v = |n: &str, t: &str| var(n, t);

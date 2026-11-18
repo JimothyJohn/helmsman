@@ -695,7 +695,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **TOD, DATE and DT on the box** — the language half is built (ARCHITECTURE.md "Dates and times of day"): types, literals, arithmetic, `DT_NOW()`, text. What is left: the box never calls `Program::set_wall_clock`, so `DT_NOW()` counts from 1970 on a box; it needs the time zone the shift calendar uses (or UTC, say which), set at module start and after a hot swap. Also open: the playground `SYSTEM` prompt (crates/helmsman-canvas/src/claude.rs) still says DATE, DT and TOD are not supported, which means a new relay profile id; DATE/TOD/DT ports are no signals (like STRING, `st-string-signals`); `SPLIT_DATE`/`SPLIT_TOD`/`SPLIT_DT` and the `L` forms are not built; `calendar_agrees_with_rusty` was written from ruSTy's source and has not been run (no docker on that session): run `scripts/test-oracle.sh`.
+- [ ] **TOD, DATE and DT on the box** — the language half is built (ARCHITECTURE.md "Dates and times of day"): types, literals, arithmetic, `DT_NOW()`, text. What is left: the box never calls `Program::set_wall_clock`, so `DT_NOW()` counts from 1970 on a box; it needs the time zone the shift calendar uses (or UTC, say which), set at module start and after a hot swap. Also open: the playground `SYSTEM` prompt (crates/helmsman-canvas/src/claude.rs) still says DATE, DT and TOD are not supported, which means a new relay profile id; DATE/TOD/DT ports are no signals (like STRING, `st-string-signals`); `SPLIT_DATE`/`SPLIT_TOD`/`SPLIT_DT` and the `L` forms are not built.
   result: schedule logic written in ST ("after 22:00", "weekdays only") runs on the box in the plant's local time
   est: 4h
   difficulty: low

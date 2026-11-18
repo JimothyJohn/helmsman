@@ -789,9 +789,9 @@ into the code.
   (0 = Sunday) and `DT_TO_DATE` / `DT_TO_TOD` are ruSTy 1.0.8's
   (read in its `src/typesystem.rs`, `libs/stdlib/iec61131-st/*.st` and
   `libs/stdlib/src/date_time_*.rs` at tag v1.0.8, 2026-11-18) and are
-  pinned by `calendar_agrees_with_rusty` in oracle.rs, which could not be
-  run when the card was written (no docker): until it has been, the
-  agreement is from reading that source. Helmsman's own, pinned in
+  pinned by `calendar_agrees_with_rusty` in oracle.rs (7 cases), which passed
+  against ruSTy 1.0.8 in CI's oracle job on PR #513 (2026-11-18).
+  Helmsman's own, pinned in
   tests/calendar.rs against a calendar written independently of `dt.rs`:
   the literal syntax and its refusals, the text forms, the range, the
   wall clock. The `L` types and `SPLIT_*` are not built.
