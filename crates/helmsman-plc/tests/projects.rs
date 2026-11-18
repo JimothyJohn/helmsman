@@ -1487,6 +1487,7 @@ VAR_INPUT set : BOOL; reset : BOOL; END_VAR
 VAR_OUTPUT q : BOOL; END_VAR
 VAR RETAIN kept : INT; END_VAR
   q := (q OR set) AND NOT reset;
+  kept := kept + 1;
 END_FUNCTION_BLOCK
 ";
 
