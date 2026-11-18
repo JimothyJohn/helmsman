@@ -76,7 +76,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-devconf` | Configuration of third-party devices over their own configuration protocols, std only with no dependencies: `moxa_e1200` is the Moxa ioLogik E1200 web console (HTTP client, form and export readers, export / form / set / restart / import / change-password) and `moxa_e1200::sim` (feature `sim`) is a simulated console for tests. A library for now: nothing in the box calls it yet. | built: against its simulator only; the real console was mapped by hand (2026-11-12) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
-| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
+| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, and v2 relay-held sessions for harness profiles; HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
@@ -2195,6 +2195,50 @@ in `relay_usage`; the box treats it as a label.
   jittered). Budgets per message: 24 model turns, 200k output tokens, 16
   tool calls per turn, 15 minutes; a spent budget leaves the tool results
   last, so the next message continues.
+- **Relay-held sessions (protocol v2, `relay-v2-client`).**
+  `--relay-agent v8` (and v9 to v11, the harness profiles) puts the
+  conversation in the relay (`docs/relay-protocol-v2.md`,
+  `helmsman-agent/src/session.rs`, the v2 loop in `agent.rs`). Which
+  protocol an agent speaks is the relay's answer: the chat route asks
+  `GET /v1/agents/{agent}` once and keeps the `protocol` it names (a bare
+  name the relay does not know is asked again as `helmsman/{name}`, since
+  the aliases stop at `v7`); v7 and older answer 1 and run exactly as
+  above. The box opens a session (`POST /v2/sessions`) and keeps only its
+  id in the chat's `Conversation`; each message and each step sends new
+  input only: `user`, `tool_results` or `continue`
+  (`POST /v2/sessions/{id}/steps`). The stream's text goes to the chat
+  panel in the same `/api/chat` events, so the canvas is unchanged; tools
+  the relay ran (`harness_tool`) show as a call and a result "run by the
+  relay". The step ends in `harness_yield`: `tool_use` names the client
+  tools, which run through the same executor and `<box-data>` envelope
+  (a relay tool named in a yield is answered unrun, an unknown name too,
+  at most 16 run per step, at most 64 named), and their results go back
+  as one `tool_results` input; `continue` goes on; `end_turn`,
+  `max_tokens` and `stop_sequence` end the message, `refusal` runs
+  nothing. The box's 900 KiB history cap and its output-token budget do
+  not apply here (the relay compacts); the step count (24) and the time
+  (15 minutes) still bound one message. A message that stops before its
+  input is sent (a budget, a relay failure) leaves that input owed: it
+  goes first on the next message.
+  A `harness_document` (`fetch_document` stored a manual or an EDS) is
+  downloaded with `GET /v2/docs/{id}/raw` and kept as a drop-in under the
+  v1 fetch's rules (the kind's size cap, the SHA-256 the relay named, a
+  name the box accepts); anything else is refused in a chat line ("not
+  saved to the project: ...") and nothing is stored. The id must be `d` and
+  16 hex digits before it goes in a path. The model is not told the
+  drop-in's id (the relay's own `doc_read` reads the document); the drop-in
+  is for the person and the project. Failures behave like v1: unreachable,
+  5xx and a refused token take the agent offline (the watcher and the rule
+  fallback are unchanged); a failure after a step began asks the session
+  where it stands (`GET /v2/sessions/{id}`) and sends `continue` instead of
+  the input again; `session_busy` retries the same input. A session the
+  relay no longer has (any 404 on a step) is reopened once: a message that
+  started the run is sent again with a line saying what was lost, a task in
+  the middle is stopped with `session_lost` and the next message starts
+  clean. Not built: a bench run against a deployed relay
+  (`relay-deploy-v2` on the relay's board), deleting the session when a
+  chat is dropped (it expires on the relay in 7 days), the MCP route's
+  `fetch_document` on a v2 profile (that route is v1's).
 - **Tools** (the relay's `tools.json` names): `list_signals`,
   `read_signals` (`GET /api/signals`), `list_modules` (`GET /api/modules`),
   `read_module` (`GET /api/modules/{name}` and its `trace`),

@@ -179,6 +179,8 @@ pub struct Chat {
     running: AtomicUsize,
     link: Arc<Mutex<Link>>,
     designs: super::design::Designs,
+    /// What the relay said the chat's agent is (asked once, kept).
+    profile: Mutex<Option<relay::Profile>>,
 }
 
 impl Chat {
@@ -316,7 +318,33 @@ impl Chat {
                 seq: 0,
             })),
             designs: super::design::Designs::default(),
+            profile: Mutex::new(None),
         }
+    }
+
+    /// The relay config the chat runs with: the agent the relay names, and
+    /// the protocol it speaks (1: the box keeps the conversation; 2: the
+    /// relay does, so `--relay-agent v8` runs on relay-held sessions). The
+    /// relay is asked once ([`relay::lookup`]) and the answer kept; a
+    /// failed lookup is not kept.
+    ///
+    /// # Errors
+    /// The lookup's error when the relay cannot be asked.
+    fn chat_relay(&self) -> Result<relay::Config, relay::Error> {
+        let mut cfg = self.setup.relay.clone();
+        let known = lock(&self.profile).clone();
+        let p = if let Some(p) = known {
+            p
+        } else {
+            let p = relay::lookup(&cfg)?;
+            *lock(&self.profile) = Some(p.clone());
+            p
+        };
+        cfg.protocol = p.protocol;
+        if p.protocol >= 2 {
+            cfg.version = p.id;
+        }
+        Ok(cfg)
     }
 
     /// The agent's state, as `GET /api/chat/status` and the streams show
@@ -752,8 +780,26 @@ impl Chat {
             self.by_rule(&message, catalog, &mut send);
             return;
         }
+        let relay = match self.chat_relay() {
+            Ok(r) => r,
+            // The relay cannot be asked at all: the same offline turn a
+            // v1 message would have had, without sending anything.
+            Err(e) if e.offline() => {
+                self.give_back(id, conv);
+                let outcome = helmsman_agent::Outcome {
+                    stop: Stop::Relay(e),
+                    steps: 0,
+                    output_tokens: 0,
+                    proposals: Vec::new(),
+                };
+                self.finish(&outcome, &mut send);
+                return;
+            }
+            // Any other answer is the relay's to give on the turn itself.
+            Err(_) => self.setup.relay.clone(),
+        };
         let agent = Agent {
-            relay: self.setup.relay.clone(),
+            relay,
             api: self.api.clone(),
             budget: self.setup.budget,
             retry: self.setup.retry,

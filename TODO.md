@@ -400,11 +400,10 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   est: 2d
   difficulty: med
   depends: agent-on-box
-  notes: 2026-11-16: the relay now serves helmsman/v8, v9 and v10 (harness profiles, v2 sessions only); a box still has no /v2 client, so its default stays v7 and `propose_device_profile` (v10) is not reachable live from a box. Spec mode (#475) went through v7's chat for that reason.
+  notes: 2026-11-17, built (PR on feat/relay-v2-client): the box's v2 client (helmsman-agent session.rs and the v2 loop in agent.rs; docs/relay-protocol-v2.md vendored from agent-relay 26cd6dc9) and `--relay-agent v8`..`v11` on relay-held sessions; the chat route asks `GET /v1/agents/{agent}` once for the profile's `protocol` (a bare `v8` is retried as `helmsman/v8`), v7 and older stay on v1 and the default is still v7. Documents the relay stored are saved as drop-ins; a lost session is reopened once; the owed step goes first on the next message. Tested against a loopback relay scripted from the protocol doc (tests/session.rs, tests/agent.rs): no real relay has answered this client. Left: a bench run against the deployed relay (Nick's, relay card relay-deploy-v2), then v8 as the default; the model is not told a saved document's drop-in id; the MCP `fetch_document` route is still v1's; sessions are not deleted when a chat is dropped (7 days on the relay). agent-relay PR #7 merged 2026-11-07; spec mode (#475) went through v7's chat.
   id: relay-v2-client
   asked: 2026-11-05
   by: claude-session
-  notes: agent-relay PR #7 merged on 2026-11-07. Checked 2026-11-13: the relay's agents/helmsman has v1..v7 and explain-v1/v2, no v8, so nothing serves it yet (relay card relay-deploy-v2).
   status: ready
 
 - [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.

@@ -108,7 +108,7 @@ fn bad(why: impl Into<String>) -> Malformed {
     Malformed(why.into())
 }
 
-fn stream_error(data: &Json) -> StreamError {
+pub(crate) fn stream_error(data: &Json) -> StreamError {
     let e = &data["error"];
     let kind = e["type"].as_str().unwrap_or("error").to_string();
     let retryable = e["retryable"].as_bool().unwrap_or(matches!(
