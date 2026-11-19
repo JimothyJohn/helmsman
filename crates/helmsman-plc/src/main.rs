@@ -47,12 +47,18 @@ use helmsman_plc::store::{ChangeSet, Code, Kind, Store};
 use helmsman_plc::zone::{self, Zone};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
+mod pair;
+
 const USAGE: &str = "\
 usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-dir DIR ...] [options]
        helmsman-plc bundle COMMAND ...   (signed bundles: `helmsman-plc bundle help`)
        helmsman-plc account add USER ROLE | passwd USER | disable USER | enable USER | list
                     [--state-dir DIR]   (per-person logins; passwords on stdin. Once
                     any account exists, approvers log in and role PINs are refused)
+       helmsman-plc pair --relay URL --box-id ID --code-file FILE --out FILE [--wait SECS]
+                    (first boot: trades the relay's one-time pairing code, read
+                    from FILE, for this box's relay token, written to --out with
+                    mode 0600; neither is printed. Exit 3: the relay refused the code)
        helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE.st ...]
                     (first install only: with no project and nothing deployed,
                     makes NAME from the files for --projects; nothing runs
@@ -1975,6 +1981,18 @@ fn main() -> ExitCode {
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
+            }
+        };
+    }
+    if args.first().is_some_and(|a| a == "pair") {
+        return match pair::run(&args[1..]) {
+            Ok(out) => {
+                print!("{out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {}", e.message);
+                ExitCode::from(e.code)
             }
         };
     }
