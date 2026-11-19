@@ -609,8 +609,8 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **The diagram draws a VAR_IN_OUT argument as a read** — found while building `st-var-in-out` (#446, 2026-11-15): a function block can write through its in-out argument, but helmsman-diagram's lowering draws that argument as an input wire only, so the write the block makes is missing from the picture and the diagram edits (`edit.rs`, built before in-outs existed) have never been tried on such a call. Draw the in-out as both ways, extend the generators in crates/helmsman-diagram/tests/props.rs to call blocks with in-outs and functions with outputs, and make each edit either work on those calls or refuse in plain words.
-  result: a block that takes a buffer by reference shows that it changes it, and editing around it from the diagram is safe
+- [ ] **The diagram draws a VAR_IN_OUT argument as a read** — found while building `st-var-in-out` (#446, 2026-11-15): a function block can write through its in-out argument, but helmsman-diagram's lowering draws that argument as an input wire only, so the write the block makes is missing from the picture. Draw the in-out as both ways, and extend the generators in crates/helmsman-diagram/tests/props.rs to call blocks with in-outs and functions with outputs.
+  result: a block that takes a buffer by reference shows that it changes it
   est: 1d
   difficulty: med
   id: diagram-in-out
@@ -712,7 +712,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: st-lsp-formatter
   asked: 2026-11-08
   by: claude-session
-  status: ready
+  notes: 2026-11-17 Nick's pick: the lints are built (#509); the language server and the formatter stay parked.
 
 - [ ] **Siemens SCL import** — decided (Nick, 2026-11-08: `st-scl-import`): not for the early release. SCL (TIA Portal) is an ST dialect (`#local`, `"DB".member`, REGION, IEC_TIMER instances, its own instructions); a source-level converter would follow the L5X pattern. Carded here so it is not lost: pick it up when a customer brings TIA code, and estimate then (likely 1-2 weeks).
   needs: a customer with TIA Portal code to import
@@ -723,17 +723,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: scl-import
   asked: 2026-11-08
   by: claude-session
-
-- [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
-  result: building new logic from the diagram, not only changing it
-  notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
-  est: 1w
-  difficulty: high
-  depends: diagram-edit-docs
-  id: diagram-edit-v2-v3
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
 
 ### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
 
@@ -841,7 +830,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: machine-template
   asked: 2026-11-01
   by: claude-session
-  status: ready
+  notes: 2026-11-17 Nick's pick: skipped until real documents exist.
 
 - [ ] **Fleet console + OTA** — the relay grows into the fleet backbone: box registry, snapshot sync, signed updates of the core.
   est: 3w

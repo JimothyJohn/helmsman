@@ -999,17 +999,6 @@ pub fn view(d: &Diagram, folds: &[Fold]) -> View {
         stmts,
         top: map_stmts(&d.top),
         size: (0.0, 0.0),
-        pins: d
-            .pins
-            .iter()
-            .filter_map(|(&(n, k), &s)| Some(((own(n)?, k), s)))
-            .collect(),
-        gates: d
-            .gates
-            .iter()
-            .filter_map(|(&r, &s)| Some((region_shown[r.0 as usize]?, s)))
-            .collect(),
-        ops: d.ops.iter().filter_map(|(&n, &s)| Some((own(n)?, s))).collect(),
         bools: d.bools.iter().filter_map(|&n| own(n)).collect(),
     };
     let bodies: Vec<Body> = applied.iter().map(Fold::body).collect();
