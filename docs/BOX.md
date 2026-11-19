@@ -117,9 +117,9 @@ image, as the Pi deploy does) and the canvas, clones
 `deploy/pi-image/stage-helmsman` after stage2 (a Lite image, no desktop),
 runs pi-gen's own Docker build, and leaves `target/pi-image/*.img.xz` with
 a `.sha256` beside it. The script prints the pi-gen commit it built from;
-write it into `pi-gen.ref` to pin the build (the file ships naming the
-`arm64` branch, which the script refuses to build from unless
-`PI_GEN_UNPINNED=1`, so the first build is a deliberate choice).
+the ref is pinned to the commit CI built from (2026-11-19), and the script
+refuses a branch name unless `PI_GEN_UNPINNED=1`. To move it, put the commit
+the script prints into `pi-gen.ref` and let CI build it.
 
 Why pi-gen and not rpi-image-gen: pi-gen is the builder Raspberry Pi OS
 itself is made with, has a Docker path that runs on a Mac, and a custom

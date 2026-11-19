@@ -73,11 +73,8 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q qemu-system-arm qemu-utils mtools e2fsprogs kmod xz-utils
           qemu-system-aarch64 --version | head -1
-      # The ref names a branch until a build is worth keeping; the script
-      # prints the commit it built from so the ref can be pinned to it.
+      # deploy/pi-image/pi-gen.ref pins the pi-gen commit; a bump is a change to that file.
       - name: Build the image
-        env:
-          PI_GEN_UNPINNED: '1'
         run: ./scripts/pi-image.sh
       - name: Boot it under QEMU
         run: |
