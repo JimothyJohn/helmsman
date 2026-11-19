@@ -475,11 +475,7 @@ impl Instruct {
         let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
         // The collected chips go with an instruction (a run from a
         // specification keeps them for the next one).
-        self.about = if spec {
-            String::new()
-        } else {
-            self.take_about()
-        };
+        self.about = if spec { String::new() } else { self.take_about() };
         let message = env.message(text, &earlier, self.edits, &self.about);
         self.outcome = None;
         self.run = Some(Run {
