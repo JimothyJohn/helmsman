@@ -141,3 +141,11 @@ From the removed card `diagram-edit-v2-v3` (est. V2 3 to 4 days, V3 about 3):
 V2 was a palette to add a block, a new assignment or a new FB instance, which
 also edits the VAR section. V3 was regions: wrap statements in an IF, edit a
 condition, add ELSIF or ELSE, add CASE arms. Neither was started.
+
+Two answers from Nick's interview of 2026-11-18 (in chat, not in any file).
+Asked where a block added on the diagram should go in the program, he
+chose "Where the wiring needs it" (the earliest place where every input is
+already computed) over "after the clicked statement" and "end of the
+program". Asked how blocks would be added once the Palette tab was gone
+(#423), he answered that the user should only edit the layout and toggle the
+inputs, which led to this removal.
