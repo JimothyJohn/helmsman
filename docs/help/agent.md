@@ -228,8 +228,9 @@ The Agent tab then shows this project's design and **Build steps 1 to 6**.
 
 Build hands the design's build order to the Agent a few steps at a time.
 Each step is asked for with the design's own text: the step, the signal
-table, the parts it names and the requirements it must pass. The steps run
-on a copy, each checked like any answer, and the file changes once, when
+table, the parts it names and the requirements it must pass. Anything collected with **Chat about this**
+goes with every step of the batch, as it does with an instruction. The
+steps run on a copy, each checked like any answer, and the file changes once, when
 the batch has passed. A step that runs out of room pauses the run and is
 not split, because a smaller step would lose the parts and requirements it
 names. The next press builds the next batch, until every step is built. A
