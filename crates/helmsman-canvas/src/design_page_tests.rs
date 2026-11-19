@@ -508,3 +508,40 @@ fn a_big_design_goes_on_by_itself_and_every_turn_is_asked_through_the_same_link(
     let read = v.design.read.as_ref().unwrap();
     assert_eq!((read.turns, read.design.steps.len()), (2, 19));
 }
+
+/// "Chat about this" (`crate::chat_about`) goes with a design step's ask
+/// as it does with an instruction (the owner, 2026-11-18): what was
+/// collected is in every step of the batch, is spent with it, and with
+/// nothing collected the ask carries no envelope.
+#[test]
+fn what_was_collected_with_chat_about_this_goes_with_the_design_steps_asks() {
+    use crate::chat_about::{Chip, Kind as ChipKind};
+    let build = |v: &mut PlaygroundView| {
+        v.proj.files.insert(DESIGN_FILE.into(), LAMP_DESIGN.into());
+        v.build_design(&ctx());
+        last_user(v)
+    };
+    let mut plain = mine();
+    let none = build(&mut plain);
+    assert!(!none.contains("<chat_about>"), "{none}");
+
+    let mut v = mine();
+    v.instruct.add_chip(Chip::new(
+        "lamp",
+        ChipKind::Output,
+        "main.st",
+        7,
+        "lamp := start;",
+        vec!["start".into()],
+        vec![],
+    ));
+    let asked = build(&mut v);
+    assert_eq!(asked.matches("<chat_about>").count(), 1, "{asked}");
+    assert!(asked.contains("output `lamp` at main.st:7"), "{asked}");
+    assert!(v.instruct.chips.is_empty(), "they went with it");
+    assert_eq!(
+        asked.replace(&v.instruct.about, ""),
+        none,
+        "nothing else in the ask changes"
+    );
+}

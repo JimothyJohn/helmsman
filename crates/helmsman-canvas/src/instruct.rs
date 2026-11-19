@@ -452,6 +452,17 @@ impl Instruct {
         Ok(self.begin(env, &[], label.to_string(), text, false, true))
     }
 
+    /// The `<chat_about>` envelope of what was collected, which is spent
+    /// with it.
+    fn take_about(&mut self) -> String {
+        let mut all = self.chips.clone();
+        all.extend(self.focus.chips.iter().cloned());
+        all.truncate(crate::chat_about::MAX_CHIPS);
+        let about = crate::chat_about::envelope(&all, self.focus.more);
+        self.chips.clear();
+        about
+    }
+
     fn begin(
         &mut self,
         env: &Env<'_>,
@@ -467,12 +478,7 @@ impl Instruct {
         self.about = if spec {
             String::new()
         } else {
-            let mut all = self.chips.clone();
-            all.extend(self.focus.chips.iter().cloned());
-            all.truncate(crate::chat_about::MAX_CHIPS);
-            let about = crate::chat_about::envelope(&all, self.focus.more);
-            self.chips.clear();
-            about
+            self.take_about()
         };
         let message = env.message(text, &earlier, self.edits, &self.about);
         self.outcome = None;
@@ -604,6 +610,9 @@ impl Instruct {
             return Err("The design has no steps to build.".into());
         }
         self.outcome = None;
+        // What was collected with "Chat about this" goes with the batch's
+        // steps, as it does with an instruction.
+        self.about = self.take_about();
         let mut run = Run {
             instruction: label.to_string(),
             project: env.project.to_string(),
