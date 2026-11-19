@@ -619,8 +619,8 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **The diagram draws a VAR_IN_OUT argument as a read** — found while building `st-var-in-out` (#446, 2026-11-15): a function block can write through its in-out argument, but helmsman-diagram's lowering draws that argument as an input wire only, so the write the block makes is missing from the picture and the diagram edits (`edit.rs`, built before in-outs existed) have never been tried on such a call. Draw the in-out as both ways, extend the generators in crates/helmsman-diagram/tests/props.rs to call blocks with in-outs and functions with outputs, and make each edit either work on those calls or refuse in plain words.
-  result: a block that takes a buffer by reference shows that it changes it, and editing around it from the diagram is safe
+- [ ] **The diagram draws a VAR_IN_OUT argument as a read** — found while building `st-var-in-out` (#446, 2026-11-15): a function block can write through its in-out argument, but helmsman-diagram's lowering draws that argument as an input wire only, so the write the block makes is missing from the picture. Draw the in-out as both ways, and extend the generators in crates/helmsman-diagram/tests/props.rs to call blocks with in-outs and functions with outputs.
+  result: a block that takes a buffer by reference shows that it changes it
   est: 1d
   difficulty: med
   id: diagram-in-out

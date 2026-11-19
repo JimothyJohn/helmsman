@@ -11,7 +11,8 @@ this; change it here first when a decision changes.
   "on the diagram the user edits the layout and toggles inputs; code
   changes are typed or asked of the Agent"). The diagram's right-click menu
   holds Chat about this and the io.map items (Assign to device I/O…, Back
-  to simulated I/O), none of which changes the code. (The node-graph Lab
+  to simulated I/O), none of which changes the code. What was built and why it
+  went: docs/decisions/diagram-edits.md. (The node-graph Lab
   editor is gone.)
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the

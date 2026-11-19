@@ -3249,6 +3249,8 @@ the end of this section.
   code. On the diagram the user moves blocks (`diagram.layout`), folds,
   zooms, selects and switches inputs (the simulation's virtual inputs, a
   box's forces); code changes are typed or asked of the Agent.
+  The removed code edits, with what they taught, are recorded in
+  `docs/decisions/diagram-edits.md`.
 
 ## Explain mode (`explain-mode`, built)
 
