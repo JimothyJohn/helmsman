@@ -279,7 +279,7 @@ const CORPUS: &[Typo] = &[
         "PROGRAM t\nVAR t1 : TOM; END_VAR\nEND_PROGRAM",
         2,
         10,
-        "unknown type TOM (did you mean TOF or TON?)",
+        "unknown type TOM (did you mean TOD, TOF or TON?)",
     ),
     t(
         "a function misspelled",

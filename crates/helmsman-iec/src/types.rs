@@ -22,10 +22,16 @@ pub enum Ty {
     LReal,
     /// Duration, held as signed 64-bit nanoseconds.
     Time,
+    /// Calendar date: nanoseconds since 1970-01-01, at midnight (see `dt`).
+    Date,
+    /// Time of day: nanoseconds since midnight, 0 up to one day.
+    Tod,
+    /// Date and time of day: nanoseconds since 1970-01-01T00:00:00.
+    Dt,
 }
 
 /// Every type, in the order common supertypes are searched.
-const ALL: [Ty; 16] = [
+const ALL: [Ty; 19] = [
     Ty::Bool,
     Ty::SInt,
     Ty::USInt,
@@ -42,11 +48,19 @@ const ALL: [Ty; 16] = [
     Ty::LWord,
     Ty::LReal,
     Ty::Time,
+    Ty::Date,
+    Ty::Tod,
+    Ty::Dt,
 ];
 
 impl Ty {
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "TIME_OF_DAY" => return Some(Self::Tod),
+            "DATE_AND_TIME" => return Some(Self::Dt),
+            _ => {}
+        }
         ALL.into_iter().find(|t| t.name() == name)
     }
 
@@ -74,6 +88,9 @@ impl Ty {
             Self::Real => "REAL",
             Self::LReal => "LREAL",
             Self::Time => "TIME",
+            Self::Date => "DATE",
+            Self::Tod => "TOD",
+            Self::Dt => "DT",
         }
     }
 
@@ -85,7 +102,14 @@ impl Ty {
             Self::SInt | Self::USInt | Self::Byte => 8,
             Self::Int | Self::UInt | Self::Word => 16,
             Self::DInt | Self::UDInt | Self::DWord | Self::Real => 32,
-            Self::LInt | Self::ULInt | Self::LWord | Self::LReal | Self::Time => 64,
+            Self::LInt
+            | Self::ULInt
+            | Self::LWord
+            | Self::LReal
+            | Self::Time
+            | Self::Date
+            | Self::Tod
+            | Self::Dt => 64,
         }
     }
 
@@ -135,9 +159,17 @@ impl Ty {
         self.is_int() || self.is_bit()
     }
 
-    /// Signed two's-complement representation: the signed integers and TIME.
+    /// DATE, TOD and DT: calendar values, held like TIME as 64-bit
+    /// nanoseconds but not numbers (no conversion to or from one).
+    #[must_use]
+    pub const fn is_calendar(self) -> bool {
+        matches!(self, Self::Date | Self::Tod | Self::Dt)
+    }
+
+    /// Signed two's-complement representation: the signed integers, TIME
+    /// and the calendar types.
     const fn is_signed(self) -> bool {
-        self.is_signed_int() || matches!(self, Self::Time)
+        self.is_signed_int() || matches!(self, Self::Time) || self.is_calendar()
     }
 
     /// Inclusive value range of an integral type.

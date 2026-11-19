@@ -936,8 +936,8 @@ impl Lower<'_> {
             ExprKind::Real { value, .. } => self.konst(e, Some(Value::Real(*value))),
             ExprKind::Bool(b) => self.konst(e, Some(Value::Bool(*b))),
             ExprKind::Time(ns) => self.konst(e, Some(Value::Int(*ns))),
-            // A text or an enumeration value is drawn as a constant, with no number.
-            ExprKind::Str(_) | ExprKind::EnumLit(..) => self.konst(e, None),
+            // A text, a date or an enumeration value is drawn as a constant, with no number.
+            ExprKind::Str(_) | ExprKind::Calendar(..) | ExprKind::EnumLit(..) => self.konst(e, None),
             ExprKind::Var(n) if !self.vars.contains_key(n) => {
                 // An enumeration value (or a constant the library knows).
                 self.konst(e, None)

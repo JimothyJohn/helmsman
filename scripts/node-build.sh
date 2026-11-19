@@ -18,6 +18,11 @@
 #        NODE_BOARD=p4-eth scripts/node-build.sh [build|clippy]   (the P4: `modbus`, `enip`, `node` and `profinet`;
 #                                              E1213_ADDR, LOG_SINK, NODE_STATIC_IP=a.b.c.d/nn,
 #                                              ENIP_INPUT_ONLY=1 and NODE_SEED_CHASE=1 apply)
+#        NODE_BOARD=p4-eth scripts/node-build.sh image [node]   (build, then write target/node-images/<bin>.bin,
+#                                              the file a node takes over the network, and print its sha256;
+#                                              NODE_BUILD_TAG=text names the build in GET /api/firmware;
+#                                              NODE_OTA_BREAK=1 makes a bench image that panics after 12 s
+#                                              and so never confirms)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # NODE_BOARD=p4-eth: the Waveshare ESP32-P4-ETH (crates/helmsman-node-p4),
@@ -27,9 +32,9 @@ cd "$(dirname "$0")/.."
 if [ "${NODE_BOARD:-poe2}" = p4-eth ]; then
   cd crates/helmsman-node-p4
   case "${1:-build}" in
-    build|net) cargo build --release ;;
+    build|net|image) cargo build --release ;;
     clippy) cargo clippy --release -- -D warnings; exit 0 ;;
-    *) echo "usage: NODE_BOARD=p4-eth $0 [build|clippy]" >&2; exit 2 ;;
+    *) echo "usage: NODE_BOARD=p4-eth $0 [build|clippy|image [bin]]" >&2; exit 2 ;;
   esac
   # The main stack is what the statics leave of SRAM; refuse an image that
   # leaves less than MIN_STACK (the POE2 died on 1.7 KiB, 2026-11-03).
@@ -53,6 +58,19 @@ if [ "${NODE_BOARD:-poe2}" = p4-eth ]; then
         exit 1
       fi
     done
+  fi
+  if [ "${1:-build}" = image ]; then
+    bin="${2:-node}"
+    case "$bin" in
+      modbus|enip|node|profinet) ;;
+      *) echo "image: node, enip, modbus or profinet, not $bin" >&2; exit 2 ;;
+    esac
+    command -v espflash >/dev/null 2>&1 || { echo "espflash missing: cargo install espflash --locked" >&2; exit 1; }
+    out="$PWD/../../target/node-images"
+    mkdir -p "$out"
+    espflash save-image --chip esp32p4 --flash-size 32mb \
+      "target/riscv32imafc-unknown-none-elf/release/$bin" "$out/$bin.bin"
+    ( cd "$out" && echo "image: $PWD/$bin.bin" && shasum -a 256 "$bin.bin" && wc -c < "$bin.bin" | awk '{ print $1 " bytes (a slot holds 2097152)" }' )
   fi
   exit 0
 fi

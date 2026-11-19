@@ -248,7 +248,7 @@ impl core::fmt::Display for DecodeError {
 impl std::error::Error for DecodeError {}
 
 /// Every [`Ty`], by its code in the encoding (never reorder).
-const TYS: [Ty; 16] = [
+const TYS: [Ty; 19] = [
     Ty::Bool,
     Ty::SInt,
     Ty::Int,
@@ -265,6 +265,9 @@ const TYS: [Ty; 16] = [
     Ty::Real,
     Ty::LReal,
     Ty::Time,
+    Ty::Date,
+    Ty::Tod,
+    Ty::Dt,
 ];
 
 /// Every [`Section`], by its code in the encoding (never reorder).

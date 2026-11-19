@@ -1583,6 +1583,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-compat"
+version = "0.1.0"
+dependencies = [
+ "helmsman-agent",
+ "serde_json",
+]
+
+[[package]]
 name = "helmsman-devconf"
 version = "0.1.0"
 dependencies = [
@@ -1659,6 +1667,7 @@ dependencies = [
  "helmsman-iolink",
  "proptest",
  "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]
