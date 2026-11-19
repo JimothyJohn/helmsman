@@ -48,7 +48,7 @@ impl Default for BoxSpec {
 }
 
 /// A project name that is free among `taken`, starting from `want`.
-fn free_name(want: &str, taken: &[String]) -> String {
+pub(crate) fn free_name(want: &str, taken: &[String]) -> String {
     let base: String = want.chars().take(44).collect();
     let is_taken = |n: &str| taken.iter().any(|t| t.eq_ignore_ascii_case(n));
     if !is_taken(&base) {

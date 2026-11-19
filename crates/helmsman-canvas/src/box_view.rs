@@ -72,6 +72,19 @@ pub struct BoxView {
     pub instruct: crate::instruct::Instruct,
     /// Spec mode on this box (`crate::box_spec`).
     pub spec: crate::box_spec::BoxSpec,
+    /// The design step on this box (`crate::design_step`, `POST /api/design`).
+    pub design: crate::design_step::Designer,
+    #[cfg(target_arch = "wasm32")]
+    design_http: crate::web::ChatHttp,
+    /// Natively: the design requests asked for.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub design_sent: Vec<crate::box_agent::Request>,
+    /// The batch of the kept design the Agent is building: the project
+    /// and how many steps it holds.
+    design_building: Option<(String, usize)>,
+    /// Steps of each project's design built in this page.
+    design_built: std::collections::BTreeMap<String, usize>,
+    design_cache: crate::design_step::KeptCache,
     /// The Agent tab's Help mode (`POST /api/help`).
     pub help: crate::help::HelpUi,
     help_seq: u64,
@@ -362,6 +375,14 @@ impl BoxView {
             agent: crate::box_agent::BoxAgent::new(),
             instruct: crate::instruct::Instruct::default(),
             spec: crate::box_spec::BoxSpec::new(),
+            design: crate::design_step::Designer::boxed(),
+            #[cfg(target_arch = "wasm32")]
+            design_http: crate::web::ChatHttp::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            design_sent: Vec::new(),
+            design_building: None,
+            design_built: std::collections::BTreeMap::new(),
+            design_cache: crate::design_step::KeptCache::default(),
             help: crate::help::HelpUi::default(),
             help_seq: 0,
             #[cfg(target_arch = "wasm32")]
@@ -428,6 +449,7 @@ impl BoxView {
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
                 PCall::SpecPdf(name) => self.spec_pdf_answer(ctx, &name, &a),
                 PCall::SpecProject(name) => self.spec_project_answer(&name, &a),
+                PCall::DesignProject(name) => self.design_project_answer(&name, &a),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
         }
@@ -588,17 +610,23 @@ impl BoxView {
         let now = ctx.input(|i| i.time);
         let (msgs, answers) = self.inbox();
         self.step_all(ctx, msgs, answers, now);
-        self.chat_inbox();
+        self.chat_inbox(ctx);
         self.agent_at = now;
         self.settle_agent(ctx);
+        self.design_settle(ctx);
         self.watch(now);
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn chat_inbox(&mut self) {
+    fn chat_inbox(&mut self, ctx: &egui::Context) {
         for i in self.help_http.drain() {
             if let crate::web::ChatIn::Turn(inc) = i {
                 self.help_answer(inc);
+            }
+        }
+        for i in self.design_http.drain() {
+            if let crate::web::ChatIn::Turn(inc) = i {
+                self.design_feed(inc.into(), ctx);
             }
         }
         for i in self.chat.drain() {
@@ -620,7 +648,7 @@ impl BoxView {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::unused_self)]
-    const fn chat_inbox(&mut self) {}
+    const fn chat_inbox(&mut self, _ctx: &egui::Context) {}
 
     /// The project as the agent sees it, in the scope of an instruction:
     /// the open file (else its first program file), every file as read,
@@ -1136,6 +1164,295 @@ impl BoxView {
         self.log_agent();
     }
 
+    // ---- the design step (`crate::design_step`) ----
+
+    /// Why the design entry is off, if it is: the reasons the Agent tab's
+    /// other controls give, and a project to keep the design in.
+    pub fn design_blocked(&self) -> Option<String> {
+        if let Err(why) = self.writable() {
+            return Some(match why.as_str() {
+                "Open a project first." => {
+                    "Open a project first: the design is kept in it as design.md, and built there.".into()
+                }
+                _ => why,
+            });
+        }
+        if !self.agent.status.can_send() {
+            return Some(self.agent.status.line());
+        }
+        if self.instruct.busy() {
+            return Some("The Agent is still working on the last instruction.".into());
+        }
+        self.design
+            .busy()
+            .then(|| "A design is being written.".to_string())
+    }
+
+    /// One design request to the box.
+    fn design_send_req(&mut self, req: &crate::design_step::Req, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        self.design_http.send(req.for_box(), ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = ctx;
+            self.design_sent.push(req.for_box());
+        }
+    }
+
+    /// Asks the box for the design of the machine in the description
+    /// window: it adds its dialect, its modules, its devices and its
+    /// requirement tests itself.
+    pub fn send_design(&mut self, ctx: &egui::Context) {
+        if let Some(why) = self.design_blocked() {
+            self.design.error = Some(why);
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let description = self.design.description.clone();
+        match self.design.start_box(&description, now) {
+            Ok(req) => {
+                self.design.open = false;
+                self.design_send_req(&req, ctx);
+            }
+            Err(why) => self.design.error = Some(why),
+        }
+    }
+
+    /// What the box's design stream brought; the next turn goes out at once
+    /// while the design is cut at the output limit.
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn design_feed(&mut self, feed: crate::design_step::Feed, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if let Some(req) = self.design.receive(feed, now) {
+            self.design_send_req(&req, ctx);
+        }
+    }
+
+    /// Stop, or Discard of a cut design: nothing is kept.
+    pub fn stop_design(&mut self) {
+        self.design.stop();
+        #[cfg(target_arch = "wasm32")]
+        self.design_http.abort();
+    }
+
+    /// Keep: the box takes a kept file in a whole project only (the file
+    /// route writes the files a project uses), as the specification's
+    /// `spec.md` does. The design is kept in a copy of the open project, as
+    /// the box holds it, under a free name: one atomic request, nothing
+    /// written over, and the engineer's project as it was.
+    pub fn keep_design(&mut self) {
+        let Some(read) = self.design.read.clone() else {
+            return;
+        };
+        let why = self
+            .writable()
+            .err()
+            .or_else(|| {
+                self.instruct
+                    .busy()
+                    .then(|| "The Agent is still working on the last instruction.".into())
+            })
+            .or_else(|| {
+                self.projects.dirty().then(|| {
+                    "Save your edits first: the design is kept in a copy of the project as the box holds it."
+                        .into()
+                })
+            })
+            .or_else(|| read.keep_refusal());
+        if let Some(why) = why {
+            self.design.notice = Some(why);
+            return;
+        }
+        let taken: Vec<String> = self.projects.projects.iter().map(|p| p.name.clone()).collect();
+        let name = crate::box_spec::free_name(&crate::design_step::project_slug(&read.description), &taken);
+        let files = self
+            .projects
+            .saved_files((crate::design_step::DESIGN_FILE, &read.text));
+        let zip = helmsman_project::Files(files).to_zip();
+        match zip {
+            Ok(zip) => {
+                self.design.notice = None;
+                self.projects.design_project(&name, zip);
+            }
+            Err(e) => self.design.notice = Some(format!("The project could not be packed: {e}")),
+        }
+    }
+
+    /// The box's answer to the project the kept design makes.
+    fn design_project_answer(&mut self, name: &str, a: &Answer) {
+        if a.status != 201 {
+            let why = serde_json::from_str::<serde_json::Value>(&a.body)
+                .ok()
+                .and_then(|j| j["error"].as_str().map(str::to_string))
+                .unwrap_or_default();
+            let why = crate::device_proposal::clean(&why, 200, false);
+            self.design.notice = Some(match a.status {
+                409 => format!(
+                    "A project named {name} is already on the box. Keep it again for another name. Nothing was written."
+                ),
+                401 => {
+                    "The box no longer knows this page's session. Sign in again. Nothing was written.".into()
+                }
+                403 => "Only an engineer makes a project on the box. Nothing was written.".into(),
+                0 => {
+                    format!("The box did not answer. Nothing was written. Keep it again to try again. {why}")
+                }
+                s => format!("The box refused the project ({s}): {why}. Nothing was written."),
+            });
+            return;
+        }
+        self.projects.spec_made(name);
+        self.projects.note(
+            format!(
+                "Kept the design as {} in {name}, a copy of the project. Build runs in it.",
+                crate::design_step::DESIGN_FILE
+            ),
+            false,
+        );
+        self.design.discard();
+        self.design_built.remove(name);
+    }
+
+    /// The open project's kept design, as the tab shows it.
+    fn kept_design(&mut self) -> Option<crate::design_ui::Kept> {
+        let o = self.projects.open.as_ref()?;
+        let text = o
+            .bufs
+            .get(crate::design_step::DESIGN_FILE)
+            .filter(|b| b.loaded)
+            .map(|b| b.text.clone())?;
+        let built = self.design_built.get(&o.name).copied().unwrap_or(0);
+        let blocked = self.agent_blocked().or_else(|| {
+            self.instruct
+                .busy()
+                .then(|| "The Agent is still working on the last instruction.".to_string())
+        });
+        let (d, problems) = self.design_cache.get(&text);
+        Some(crate::design_step::kept_view(d, problems, built, blocked))
+    }
+
+    /// Build: the next batch of the kept design's build order goes to the
+    /// steps run on this box's Agent, `Design::step_brief` as each step's
+    /// instruction.
+    pub fn build_design(&mut self, ctx: &egui::Context) {
+        if self.agent_blocked().is_some() || self.instruct.busy() {
+            return;
+        }
+        let Some((project, text)) = self.projects.open.as_ref().and_then(|o| {
+            let b = o.bufs.get(crate::design_step::DESIGN_FILE).filter(|b| b.loaded)?;
+            Some((o.name.clone(), b.text.clone()))
+        }) else {
+            return;
+        };
+        let (design, problems) = self.design_cache.get(&text);
+        if !problems.is_empty() {
+            return;
+        }
+        let built = self.design_built.get(&project).copied().unwrap_or(0);
+        let Some(batch) = crate::design_step::batch(design, built) else {
+            return;
+        };
+        let label = batch.label(design);
+        let n = batch.to - batch.from;
+        let (from, total) = (batch.from, batch.total);
+        let main = helmsman_project::MAIN;
+        let scope = self.agent_files().map(|(_, s, files)| {
+            if files.contains_key(main) {
+                crate::scope::Scope::File(main.to_string())
+            } else {
+                s
+            }
+        });
+        let started = self.with_env(scope, |i, env| {
+            i.start_design_steps(env, &label, (batch.steps, batch.briefs), (from, total))
+        });
+        match started {
+            Some(Ok(ask)) => {
+                self.design_building = Some((project, n));
+                let message = format!("{}\n\n{}", crate::instruct::BOX_RULES, ask.message);
+                self.agent_send(&message, true, ctx);
+            }
+            Some(Err(why)) => self.instruct.failed(&why),
+            None => {}
+        }
+    }
+
+    /// [`Self::kept_design`], for the tests.
+    #[cfg(test)]
+    pub fn kept_design_for_test(&mut self) -> Option<crate::design_ui::Kept> {
+        self.kept_design()
+    }
+
+    /// [`Self::design_act`], for the tests.
+    #[cfg(test)]
+    pub fn design_act_for_test(&mut self, act: crate::design_ui::Act, ctx: &egui::Context) {
+        self.design_act(act, ctx);
+    }
+
+    /// A batch that ended counts its steps when it was written.
+    fn design_settle(&mut self, ctx: &egui::Context) {
+        if self.design_building.is_some() && !self.instruct.busy() {
+            let applied = self
+                .instruct
+                .outcome
+                .as_ref()
+                .is_some_and(|o| o.kind == crate::instruct::Kind::Applied);
+            if let Some((project, n)) = self.design_building.take()
+                && applied
+            {
+                *self.design_built.entry(project).or_default() += n;
+            }
+        }
+        if self.design.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
+    /// What an act of the design screens asks for.
+    fn design_act(&mut self, act: crate::design_ui::Act, ctx: &egui::Context) {
+        use crate::design_ui::Act;
+        match act {
+            Act::Send => self.send_design(ctx),
+            Act::Stop | Act::Discard => {
+                if self.design.busy() {
+                    self.stop_design();
+                } else {
+                    self.design.discard();
+                }
+            }
+            Act::CarryOn => {
+                let now = ctx.input(|i| i.time);
+                if let Some(req) = self.design.carry_on(now) {
+                    self.design_send_req(&req, ctx);
+                }
+            }
+            Act::Keep => self.keep_design(),
+            Act::Build => self.build_design(ctx),
+        }
+    }
+
+    /// The description window and the window the design is read in.
+    fn design_windows(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        let blocked = self.design_blocked();
+        let mut acts = Vec::new();
+        acts.extend(crate::design_ui::ask_window(
+            ctx,
+            chrome,
+            &mut self.design,
+            blocked.as_deref(),
+        ));
+        let keep = self.writable().err();
+        acts.extend(crate::design_ui::read_window(
+            ctx,
+            chrome,
+            &mut self.design,
+            keep.as_deref(),
+        ));
+        for a in acts {
+            self.design_act(a, ctx);
+        }
+    }
+
     /// The specification's window and the review of its draft.
     fn spec_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
         #[cfg(target_arch = "wasm32")]
@@ -1376,6 +1693,8 @@ impl BoxView {
             blocked: self.help_blocked(),
         };
         let spec_off = self.spec_entry_blocked();
+        let design_off = self.design_blocked();
+        let mut design_act = None;
         let (act, help_act) = egui::ScrollArea::vertical()
             .id_salt("box-agent")
             .show(ui, |ui| {
@@ -1407,12 +1726,24 @@ impl BoxView {
                                 self.spec.spec.open = true;
                             }
                         });
+                        let view = crate::design_ui::EntryView {
+                            now: ctx.input(|i| i.time),
+                            blocked: design_off.clone(),
+                            keep_blocked: self.writable().err(),
+                            kept: self.kept_design(),
+                        };
+                        if let Some(a) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
+                            design_act = Some(a);
+                        }
                         (act, None)
                     }
                     Mode::Help => (None, crate::help::ui(ui, chrome, &mut self.help, &help_view)),
                 }
             })
             .inner;
+        if let Some(a) = design_act {
+            self.design_act(a, &ctx);
+        }
         match help_act {
             Some(crate::help::Act::Ask) => self.ask_help(&ctx),
             Some(crate::help::Act::Stop) => {
@@ -1512,6 +1843,7 @@ impl BoxView {
         }
         self.vendor_file(&ui.ctx().clone());
         self.spec_ui(&ui.ctx().clone(), chrome);
+        self.design_windows(&ui.ctx().clone(), chrome);
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
         }

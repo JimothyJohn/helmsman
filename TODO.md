@@ -485,16 +485,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-15
   by: design-step session
 
-- [ ] **Design step on the canvas: ask for a design, read it, build from it** — done in #465: `crates/helmsman-canvas/src/design.rs` (`request`, `CONTINUE`, `join`, `parse`, `Design::problems`, `Design::step_brief`), registered with an expect on dead_code because nothing calls it yet. Left, once the agent-speed work on instruct.rs and claude.rs has landed: the Agent tab entry (on a box it posts to `POST /api/design` and posts `{"session"}` again while `done.more` is true; on the page it needs the playground's design entry, card `design-step-playground`), the thinking summary shown while a turn runs (a turn can take 8 minutes), the design kept with the project as `design.md` and shown readable at the panel's default width, `Design::problems` shown before Build is offered, and its Build order handed to the steps run (`steps.rs`) with `step_brief` as each step's instruction. Today a plan is at most 6 steps on one file (`MAX_STEPS`) and the bottling line's design has 19 steps over 11 parts: that limit, and one PROGRAM per project, are what the abstraction work has to lift; until then the step run takes the design in batches and says so. The page hides the design entry when the relay does not serve it.
-  needs: the relay serving design-v1 (`design-step-deploy`) to try it live; fixtures of the bottling-line turns for tests (the session's scratchpad has them; hold them as test data)
-  result: the Agent tab has a design entry; a design is a project file; Build runs its steps
-  depends: design-step
-  est: 2d
-  difficulty: high
-  id: design-step-canvas
-  asked: 2026-11-15
-  by: design-step session
-
 - [x] **Design step on a box: the box asks the relay for the design profile** — `POST /api/chat` reaches one agent profile today (`--relay-agent`, default v7). A design request goes to `helmsman/design-v1` with the box's dialect, its project files, `list_devices` output (wired devices included) and its requirement tests as the tagged blocks; the stream is forwarded as it is, and a `Continue` is one more request. An unknown-profile answer from the relay (it has no `best` tier) reaches the page as "the design step is not available on this relay", not as an error. The relay's function allows 600 s a turn: the box's own request timeout must not be shorter.
   needs: nothing to build; the relay deployed with a `best` tier to try it
   result: `--relay-design-agent design-v1` (or the default once deployed) and a design route the box page uses

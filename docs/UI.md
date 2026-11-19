@@ -264,7 +264,19 @@ this; change it here first when a decision changes.
   engineer with a project open or not, the window also takes `.pdf`
   files with the box's caps beside the total, the review lists the
   inputs that need a device, and Accept sends the project to the box as
-  one zip. A change that lands
+  one zip. "Design a machine…" (`crate::design_step`, `crate::design_ui`;
+  card `design-step-canvas`) asks a strong model for a whole machine's
+  control system design: a window takes the description, the tab shows
+  the elapsed time and the model's thinking summary while the turns come
+  (minutes; Stop keeps nothing, a stream that stops early offers Carry
+  on), then a card (parts, requirements, build steps, what stops the
+  Agent building from it) and a window that reads the design a section at
+  a time. Keep puts it in the project as `design.md`; the tab then offers
+  Build steps 1 to 6 of 19, the next six on the next press, each step
+  asked with the design's own brief. On a box it posts to `/api/design`;
+  in the simulation it asks the relay's design entry and shows the
+  entry only while that says it is open (and says when it is closed or
+  the hour's allowance is used). A change that lands
   runs at once and is seen on the canvas, marked, with nothing written in
   the tab (its reason goes to the Messages). One that does not is an
   error in the Messages (their red count, and they open), the box is

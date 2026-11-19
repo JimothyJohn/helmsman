@@ -190,6 +190,52 @@ Deploy is refused until each such input is assigned: open the project and
 use **Assign to device I/O** in the I/O tab. A true or false input and
 any output start on the box's own channels.
 
+## Design a machine
+
+For a whole machine, describe it and ask for a design before any code.
+**Design a machine…** is in the Agent tab, under the spec entry. It is
+there when the design entry is served: on a box, for an engineer with a
+project open; in the simulation, only when the relay says it serves it
+(during the early release it may not). When it is closed for now, or this
+hour's allowance is used up, the tab says so beside the button, with the
+time to wait, and the chat carries on as before.
+
+A window opens with a box for the description: the stations, the sensors
+and actuators, what must happen when something goes wrong. Press **Ask for
+a design**. A design takes minutes, and the tab shows the time, how much
+has been written and the model's own summary of what it is working out as
+it streams. **Stop** drops it and nothing is kept. If the stream stops
+before the end, the tab says so and offers **Carry on**, which asks for
+that turn again, or **Discard**. A large design takes several turns; they
+follow each other by themselves. In the simulation the relay takes at most
+five turns and 1 MiB in one go: past that the tab says the design is too
+large for the playground, and a smaller machine, or one part of it, fits.
+
+The design comes back with a card: how many parts, requirements and build
+steps it holds, its one-sentence summary, and anything that stops the
+Agent building from it (a step that names a requirement the design does
+not have, a requirement no step covers, a section missing). **Read the
+design** opens it one section at a time: Machine, Signals, Parts, Faults,
+Requirements, Build order and Open questions. When there is a problem,
+Build is not offered; ask again with the machine described more closely.
+
+**Keep** puts the design in the project as `design.md`, as one version in
+History. With a built-in example open, the simulation makes a project of
+its own named for the machine. On a box the file route writes only the
+files a project uses, so Keep makes a copy of the open project, as the box
+holds it, with `design.md` in it, in one request; save your edits first.
+The Agent tab then shows this project's design and **Build steps 1 to 6**.
+
+Build hands the design's build order to the Agent a few steps at a time.
+Each step is asked for with the design's own text: the step, the signal
+table, the parts it names and the requirements it must pass. Anything collected with **Chat about this**
+goes with every step of the batch, as it does with an instruction. The
+steps run on a copy, each checked like any answer, and the file changes once, when
+the batch has passed. A step that runs out of room pauses the run and is
+not split, because a smaller step would lose the parts and requirements it
+names. The next press builds the next batch, until every step is built. A
+design of 19 steps is built in four batches.
+
 ## In the simulation
 
 In the playground the Agent is free to try during the early release, with

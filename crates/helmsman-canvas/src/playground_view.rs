@@ -57,6 +57,9 @@ pub struct Link {
     /// The free chats asked whether they are open, by address.
     #[cfg(not(target_arch = "wasm32"))]
     pub free_checks: Vec<String>,
+    /// The design entries asked for their status, by address.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub design_checks: Vec<String>,
 }
 
 impl Link {
@@ -110,6 +113,18 @@ impl Link {
         crate::web::post_and_forget(req);
         #[cfg(not(target_arch = "wasm32"))]
         self.posted.push(req);
+    }
+
+    /// Asks the design entry at `base` for its status. Natively a test
+    /// hands the answer in through `inbox`.
+    fn check_design(&mut self, base: &str, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        self.web.check_design(base, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = ctx;
+            self.design_checks.push(base.to_string());
+        }
     }
 
     fn drain(&mut self) -> Vec<crate::claude::Incoming> {
@@ -252,6 +267,18 @@ pub struct PlaygroundView {
     /// The draft a spec run made, on review: nothing is written until
     /// Accept.
     pub spec_review: Option<crate::spec_mode::Review>,
+    /// The design step's entry (`crate::design_step`).
+    pub design: crate::design_step::Designer,
+    /// Its way to the relay's design entry.
+    pub design_link: Link,
+    /// The batch of the kept design the Agent is building: the project
+    /// and how many steps it holds.
+    design_building: Option<(String, usize)>,
+    /// Steps of each project's design built in this page.
+    design_built: std::collections::BTreeMap<String, usize>,
+    /// The open project's `design.md` as last read: its hash, the design
+    /// and what stops it being built from.
+    design_cache: crate::design_step::KeptCache,
     /// When to say what went wrong (`crate::watch`).
     watching: crate::watch::Watching,
     /// What the Agent noticed, said under the top bar this frame.
@@ -350,6 +377,11 @@ impl PlaygroundView {
             spec: crate::spec_mode::Spec::default(),
             spec_docs: None,
             spec_review: None,
+            design: crate::design_step::Designer::page(),
+            design_link: Link::default(),
+            design_building: None,
+            design_built: std::collections::BTreeMap::new(),
+            design_cache: crate::design_step::KeptCache::default(),
             watching: crate::watch::Watching::default(),
             noticed: None,
             selection: None,
@@ -1532,6 +1564,293 @@ impl PlaygroundView {
         self.log_outcome();
     }
 
+    // ---- the design step (`crate::design_step`) ----
+
+    /// Why a design cannot be asked for now, if it cannot: what is not the
+    /// design entry's own words (those are said beside the entry).
+    fn design_blocked(&self) -> Option<String> {
+        if self.instruct.busy() {
+            return Some("The Agent is still working on the last instruction.".into());
+        }
+        self.design
+            .busy()
+            .then(|| "A design is being written.".to_string())
+    }
+
+    /// Asks the relay's design entry for the design of the machine in the
+    /// description window: the project's program, I/O and requirement
+    /// tests go with it as data.
+    pub fn send_design(&mut self, ctx: &egui::Context) {
+        if let Some(why) = self.design_blocked() {
+            self.design.error = Some(why);
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let description = self.design.description.clone();
+        let is_agent = |n: &str| helmsman_project::agent::is_agent_file(n);
+        let files: Vec<(String, String)> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| {
+                helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St)
+                    && !helmsman_iec::spec::is_test(n)
+                    && !is_agent(n)
+            })
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let tests: Vec<(String, String)> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| helmsman_iec::spec::is_test(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let devices = self.devices_text();
+        let first = crate::design::request(&crate::design::Ask {
+            description: &description,
+            dialect: crate::design_step::PAGE_DIALECT,
+            files: &files,
+            devices: &devices,
+            tests: &tests,
+        });
+        match self.design.start_page(first, &description, now) {
+            Ok(req) => {
+                self.design.open = false;
+                self.design_link.send(req.seq, req.for_page(), ctx);
+            }
+            Err(why) => self.design.error = Some(why),
+        }
+    }
+
+    /// Stop, or Discard of a cut design: nothing is kept.
+    pub fn stop_design(&mut self) {
+        self.design.stop();
+        self.design_link.abort();
+    }
+
+    /// Carry on after a stream that stopped early.
+    pub fn carry_on_design(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if let Some(req) = self.design.carry_on(now) {
+            self.design_link.send(req.seq, req.for_page(), ctx);
+        }
+    }
+
+    /// Why the design on show cannot be kept now, if it cannot.
+    fn design_keep_blocked(&self) -> Option<String> {
+        self.instruct
+            .busy()
+            .then(|| "The Agent is still working on the last instruction.".to_string())
+    }
+
+    /// Keep: the design goes into the open project as `design.md`, one
+    /// revision. A built-in example is read-only: a project of its own is
+    /// made first, named for the machine.
+    pub fn keep_design(&mut self) {
+        let Some(read) = self.design.read.clone() else {
+            return;
+        };
+        if let Some(why) = self.design_keep_blocked().or_else(|| read.keep_refusal()) {
+            self.design.notice = Some(why);
+            return;
+        }
+        if self.proj.is_example() {
+            let name = self
+                .proj
+                .free(&crate::design_step::project_slug(&read.description));
+            self.proj.create(&name, None);
+        }
+        if self.proj.dirty() {
+            self.proj.save();
+        }
+        self.proj
+            .files
+            .insert(crate::design_step::DESIGN_FILE.to_string(), read.text.clone());
+        let what = if read.design.summary.is_empty() {
+            "Kept the design".to_string()
+        } else {
+            format!(
+                "Kept the design: {}",
+                read.design.summary.chars().take(100).collect::<String>()
+            )
+        };
+        self.proj.save_as(&what, None);
+        self.reload();
+        self.design.discard();
+        self.design_built.remove(&self.proj.open);
+        self.notice = Some(format!(
+            "Kept the design as {} in {}.",
+            crate::design_step::DESIGN_FILE,
+            self.proj.open
+        ));
+    }
+
+    /// The open project's kept design: what the tab shows of it. Read
+    /// again only when the file changed.
+    fn kept_design(&mut self) -> Option<crate::design_ui::Kept> {
+        let text = self.proj.files.get(crate::design_step::DESIGN_FILE)?;
+        let (d, problems) = self.design_cache.get(text);
+        let built = self.design_built.get(&self.proj.open).copied().unwrap_or(0);
+        let blocked = if self.instruct.busy() {
+            Some("The Agent is still working on the last instruction.".to_string())
+        } else {
+            self.chat.route().err().map(str::to_string)
+        };
+        Some(crate::design_step::kept_view(d, problems, built, blocked))
+    }
+
+    /// [`Self::kept_design`], for the tests.
+    #[cfg(test)]
+    pub fn kept_design_for_test(&mut self) -> Option<crate::design_ui::Kept> {
+        self.kept_design()
+    }
+
+    /// Sets how many steps of the open project's design are built, for
+    /// the tests.
+    #[cfg(test)]
+    pub fn design_built_for_test(&mut self, n: usize) {
+        self.design_built.insert(self.proj.open.clone(), n);
+    }
+
+    /// Build: the next batch of the kept design's build order goes to the
+    /// steps run, `Design::step_brief` as each step's instruction.
+    pub fn build_design(&mut self, ctx: &egui::Context) {
+        if self.instruct.busy() {
+            return;
+        }
+        if let Err(why) = self.chat.route() {
+            self.instruct.failed(why);
+            return;
+        }
+        let Some(text) = self.proj.files.get(crate::design_step::DESIGN_FILE) else {
+            return;
+        };
+        let (design, problems) = self.design_cache.get(text);
+        if !problems.is_empty() {
+            return;
+        }
+        let built = self.design_built.get(&self.proj.open).copied().unwrap_or(0);
+        let Some(batch) = crate::design_step::batch(design, built) else {
+            return;
+        };
+        let label = batch.label(design);
+        let file = if self.proj.files.contains_key(helmsman_project::MAIN) {
+            helmsman_project::MAIN.to_string()
+        } else {
+            self.proj.current.clone()
+        };
+        let (diags, devices, settings) = self.agent_env();
+        let env = crate::instruct::Env {
+            project: &self.proj.open,
+            scope: crate::scope::Scope::File(file),
+            files: &self.proj.files,
+            source: &self.session.src,
+            diagnostics: &diags,
+            devices: &devices,
+            settings,
+        };
+        self.instruct.edits = self.chat.serves(crate::instruct::AGENT);
+        let n = batch.to - batch.from;
+        let (from, total) = (batch.from, batch.total);
+        match self
+            .instruct
+            .start_design_steps(&env, &label, (batch.steps, batch.briefs), (from, total))
+        {
+            Ok(ask) => {
+                self.design_building = Some((self.proj.open.clone(), n));
+                self.asked_at = ctx.input(|i| i.time);
+                self.drop_question();
+                self.send_ask(&ask, ctx);
+            }
+            Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// Each frame: the design entry's status when it is not known, what
+    /// the transport brought, and a batch that ended.
+    fn design_tick(&mut self, ctx: &egui::Context) {
+        if let Some(base) = self.design.ask_status() {
+            self.design_link.check_design(&base, ctx);
+        }
+        let now = ctx.input(|i| i.time);
+        for m in self.design_link.drain() {
+            if let crate::claude::Incoming::DesignStatus(body) = &m {
+                self.design.status_body(body);
+            } else if let Some(feed) = crate::design_step::Feed::from_claude(m)
+                && let Some(req) = self.design.receive(feed, now)
+            {
+                self.design_link.send(req.seq, req.for_page(), ctx);
+            }
+        }
+        if self.design.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
+    /// A batch of the design that was written counts its steps; one that
+    /// was stopped or refused counts none.
+    fn design_count(&mut self) {
+        if self.design_building.is_none() || self.instruct.busy() {
+            return;
+        }
+        let applied = self
+            .instruct
+            .outcome
+            .as_ref()
+            .is_some_and(|o| o.kind == crate::instruct::Kind::Applied);
+        if let Some((project, n)) = self.design_building.take()
+            && applied
+        {
+            *self.design_built.entry(project).or_default() += n;
+        }
+    }
+
+    /// What an act of the design screens asks for.
+    fn design_act(&mut self, act: crate::design_ui::Act, ctx: &egui::Context) {
+        use crate::design_ui::Act;
+        match act {
+            Act::Send => self.send_design(ctx),
+            Act::Stop | Act::Discard => {
+                if self.design.busy() {
+                    self.stop_design();
+                } else {
+                    self.design.discard();
+                }
+            }
+            Act::CarryOn => self.carry_on_design(ctx),
+            Act::Keep => self.keep_design(),
+            Act::Build => self.build_design(ctx),
+        }
+    }
+
+    /// The description window and the window the design is read in.
+    fn design_windows(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        if !self.design.visible() {
+            return;
+        }
+        let blocked = self
+            .design_blocked()
+            .or_else(|| self.design.closed_line(ctx.input(|i| i.time)));
+        let mut acts = Vec::new();
+        acts.extend(crate::design_ui::ask_window(
+            ctx,
+            chrome,
+            &mut self.design,
+            blocked.as_deref(),
+        ));
+        let keep = self.design_keep_blocked();
+        acts.extend(crate::design_ui::read_window(
+            ctx,
+            chrome,
+            &mut self.design,
+            keep.as_deref(),
+        ));
+        for a in acts {
+            self.design_act(a, ctx);
+        }
+    }
+
     /// The specification's window, the files the browser's picker gave it
     /// and the review screen of a draft.
     fn spec_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
@@ -2476,6 +2795,7 @@ impl PlaygroundView {
         }
         self.program_name_ui(&ui.ctx().clone(), chrome);
         self.spec_ui(&ui.ctx().clone(), chrome);
+        self.design_windows(&ui.ctx().clone(), chrome);
         self.revision_ui(&ui.ctx().clone(), chrome);
         for (name, r) in std::mem::take(&mut self.input_rects) {
             chrome.hit(format!("input {name}"), r);
@@ -2751,10 +3071,12 @@ impl PlaygroundView {
         for m in self.link.drain() {
             self.chat.receive(m);
         }
+        self.design_tick(ctx);
         self.drop_run_of_another_project();
         self.side_settle(ctx);
         self.start_settle(ctx);
         self.settle(ctx);
+        self.design_count();
         self.tidy_question();
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
@@ -3756,6 +4078,15 @@ impl PlaygroundView {
                         self.spec.open = true;
                     }
                 });
+            }
+            let view = crate::design_ui::EntryView {
+                now: ctx.input(|i| i.time),
+                blocked: self.design_blocked(),
+                keep_blocked: self.design_keep_blocked(),
+                kept: self.kept_design(),
+            };
+            if let Some(act) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
+                self.design_act(act, &ctx);
             }
             let r = ui
                 .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")

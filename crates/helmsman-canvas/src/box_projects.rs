@@ -156,6 +156,10 @@ pub enum PCall {
     /// `POST /api/projects/{name}/zip`: the project a spec makes, whole;
     /// answered by the view (`box_spec.rs`).
     SpecProject(String),
+    /// `POST /api/projects/{name}/zip`: the open project with the kept
+    /// design in it, as a project of its own; answered by the view
+    /// (`box_view.rs`).
+    DesignProject(String),
     /// `GET /api/pane-layouts`: the pane layouts the box keeps (answered
     /// by `pane_layout::OnBox`).
     PaneLayouts,
@@ -1021,6 +1025,36 @@ impl BoxProjects {
             },
             file_url(&project, file),
         ));
+    }
+
+    /// The open project's files as the box holds them (what is saved,
+    /// not what is being typed), with `extra` among them: the files of a
+    /// project made from it. Agent pages and files not read yet are not in
+    /// it.
+    #[must_use]
+    pub fn saved_files(&self, extra: (&str, &str)) -> std::collections::BTreeMap<String, String> {
+        let mut files: std::collections::BTreeMap<String, String> = self
+            .open
+            .iter()
+            .flat_map(|o| o.bufs.iter())
+            .filter(|(n, b)| b.loaded && !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, b)| (n.clone(), b.base.clone()))
+            .collect();
+        files.insert(extra.0.to_string(), extra.1.to_string());
+        files
+    }
+
+    /// The project a kept design makes, as one zip (the one atomic write
+    /// of many files): a name the box has is refused (409) and nothing is
+    /// written. The answer goes to the view ([`PCall::DesignProject`]).
+    pub fn design_project(&mut self, name: &str, zip: Vec<u8>) {
+        self.queue.push(PReq {
+            call: PCall::DesignProject(name.into()),
+            method: "POST",
+            url: format!("{}/zip", project_url(name)),
+            body: Some(zip),
+            ctype: "application/zip",
+        });
     }
 
     /// The Agent's checked change (`crate::instruct`): `text` into `file`,
@@ -1929,6 +1963,7 @@ impl BoxProjects {
             | PCall::VendorFile
             | PCall::SpecPdf(_)
             | PCall::SpecProject(_)
+            | PCall::DesignProject(_)
             | PCall::PaneLayouts
             | PCall::KeepPaneLayout(_)
             | PCall::DropPaneLayout(_)
