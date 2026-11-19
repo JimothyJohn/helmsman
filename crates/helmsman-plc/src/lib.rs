@@ -40,10 +40,13 @@ pub mod store;
 pub mod tap;
 #[cfg(feature = "wasm")]
 pub mod wasm;
+#[cfg(feature = "box")]
+pub mod zone;
 
 pub use logic::Logic;
 pub use runtime::{
-    Clock, ConfigError, MAX_PERIOD, Module, Runtime, Spread, Stats, Status, TIMING_WINDOW, Timing, Window,
+    Clock, ConfigError, MAX_PERIOD, Module, Runtime, Spread, Stats, Status, TIMING_WINDOW, Timing, WallClock,
+    Window,
 };
 pub use signals::{BindError, SignalTable, TableError};
 pub use tap::{Sample, TraceTap};

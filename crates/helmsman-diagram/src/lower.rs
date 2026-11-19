@@ -51,7 +51,7 @@ use helmsman_iec::ast::{
 };
 use helmsman_iec::trace::{StmtId, TraceMap};
 
-use crate::model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Span, Stmt, Wire};
+use crate::model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Stmt, Wire};
 use crate::text;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,8 +237,6 @@ fn lower_by(src: &str, ids_of: impl Fn(&str) -> HashMap<(u32, u32), StmtId>) -> 
             },
             pou: &p.name,
             ids,
-            starts: line_starts(src),
-            src_len: src.len(),
             vars: &vars,
             region: None,
             stmt: StmtId(0),
@@ -310,17 +308,11 @@ type R<T> = Result<T, LowerError>;
 struct Feed {
     port: Port,
     neg: bool,
-    /// The operand's source text, when it came from an expression.
-    span: Option<Span>,
 }
 
 impl From<Port> for Feed {
     fn from(port: Port) -> Self {
-        Self {
-            port,
-            neg: false,
-            span: None,
-        }
+        Self { port, neg: false }
     }
 }
 
@@ -328,14 +320,14 @@ impl From<Port> for Feed {
 /// bitwise one: every POU's variables (user and library, so a block's
 /// ports), functions' results, and named types.
 #[derive(Default)]
-pub(crate) struct Types {
+struct Types {
     vars: HashMap<String, HashMap<String, TypeRef>>,
     funcs: HashMap<String, TypeRef>,
     defs: HashMap<String, TypeDef>,
 }
 
 impl Types {
-    pub(crate) fn of(units: &[&ast::Unit]) -> Self {
+    fn of(units: &[&ast::Unit]) -> Self {
         let mut t = Self::default();
         for u in units {
             for p in &u.pous {
@@ -361,7 +353,7 @@ impl Types {
     }
 
     /// `t` with aliases followed.
-    pub(crate) fn resolve<'t>(&'t self, mut t: &'t TypeRef) -> &'t TypeRef {
+    fn resolve<'t>(&'t self, mut t: &'t TypeRef) -> &'t TypeRef {
         for _ in 0..16 {
             match t {
                 TypeRef::Named(n, _) => match self.defs.get(n) {
@@ -376,7 +368,7 @@ impl Types {
 
     /// The type of member `m` of a value of type `t`: a block's port or
     /// a struct's field.
-    pub(crate) fn member(&self, t: &TypeRef, m: &str) -> Option<TypeRef> {
+    fn member(&self, t: &TypeRef, m: &str) -> Option<TypeRef> {
         let TypeRef::Named(n, _) = self.resolve(t) else {
             return None;
         };
@@ -393,16 +385,9 @@ impl Types {
         matches!(self.resolve(t), TypeRef::Named(n, _) if n == "BOOL")
     }
 
-    /// The declared type of port or variable `name` of the POU `pou`.
-    pub(crate) fn declared(&self, pou: &str, name: &str) -> Option<&TypeRef> {
-        self.vars
-            .get(&pou.to_ascii_uppercase())?
-            .get(&name.to_ascii_uppercase())
-    }
-
     /// The declared type of `e` read in the POU `pou`, when the
     /// declarations give it.
-    pub(crate) fn type_of(&self, pou: &str, e: &Expr) -> Option<TypeRef> {
+    fn type_of(&self, pou: &str, e: &Expr) -> Option<TypeRef> {
         let named = |n: &str| Some(TypeRef::Named(n.to_string(), e.pos));
         match &e.kind {
             ExprKind::Bool(_) | ExprKind::Bit(..) => named("BOOL"),
@@ -438,9 +423,6 @@ struct Lower<'a> {
     d: Diagram,
     pou: &'a str,
     ids: HashMap<(u32, u32), StmtId>,
-    /// The byte offset each source line starts at.
-    starts: Vec<usize>,
-    src_len: usize,
     vars: &'a HashMap<String, Var>,
     region: Option<RegionId>,
     stmt: StmtId,
@@ -461,7 +443,7 @@ pub const fn chains(op: BinOp) -> bool {
 
 /// A binary expression written in parentheses: its text starts before its
 /// left operand's does.
-pub(crate) fn parenthesised(e: &Expr) -> bool {
+fn parenthesised(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Binary(_, l, _) if e.start != l.start)
 }
 
@@ -471,7 +453,7 @@ pub(crate) fn parenthesised(e: &Expr) -> bool {
 /// parenthesised operand is the author's own grouping and stays a block of
 /// its own, as does any other operator. The order of evaluation is the
 /// source's.
-pub(crate) fn chain(e: &Expr) -> Vec<&Expr> {
+fn chain(e: &Expr) -> Vec<&Expr> {
     let ExprKind::Binary(op, l, r) = &e.kind else {
         return vec![e];
     };
@@ -488,17 +470,6 @@ pub(crate) fn chain(e: &Expr) -> Vec<&Expr> {
     rev.push(left);
     rev.reverse();
     rev
-}
-
-fn line_starts(src: &str) -> Vec<usize> {
-    std::iter::once(0)
-        .chain(
-            src.bytes()
-                .enumerate()
-                .filter(|(_, b)| *b == b'\n')
-                .map(|(i, _)| i + 1),
-        )
-        .collect()
 }
 
 /// A place in memory as text: `P.X`, `A[1,2]`, `%QX0.0`; plus the index
@@ -568,21 +539,6 @@ fn within(key: &str, path: &str) -> bool {
 }
 
 impl Lower<'_> {
-    /// The byte offset of a 1-based line and column (the lexer counts
-    /// bytes).
-    fn offset(&self, p: Pos) -> usize {
-        let line = (p.line as usize).saturating_sub(1).min(self.starts.len() - 1);
-        (self.starts[line] + (p.col as usize).saturating_sub(1)).min(self.src_len)
-    }
-
-    /// The source range of `e`, parentheses around it included.
-    fn span(&self, e: &Expr) -> Span {
-        Span {
-            start: self.offset(e.start),
-            end: self.offset(e.end),
-        }
-    }
-
     fn id_of(&self, pos: Pos) -> R<StmtId> {
         self.ids
             .get(&(pos.line, pos.col))
@@ -622,9 +578,6 @@ impl Lower<'_> {
 
     fn wire(&mut self, from: impl Into<Feed>, to: NodeId, inp: usize) {
         let f = from.into();
-        if let Some(span) = f.span {
-            self.d.pins.insert((to, inp), span);
-        }
         self.d.wires.push(Wire {
             from: f.port.0,
             out: f.port.1,
@@ -665,14 +618,6 @@ impl Lower<'_> {
     ) -> RegionId {
         #[allow(clippy::cast_possible_truncation)]
         let id = RegionId(self.d.regions.len() as u32);
-        if let Some(span) = gate.and_then(|g| g.span)
-            && matches!(
-                kind,
-                RegionKind::If | RegionKind::Elsif | RegionKind::While | RegionKind::Repeat
-            )
-        {
-            self.d.gates.insert(id, span);
-        }
         self.d.regions.push(Region {
             id,
             kind,
@@ -982,26 +927,17 @@ impl Lower<'_> {
         Ok(Feed {
             port: f.port,
             neg: !f.neg,
-            span: None,
         })
     }
 
-    /// Lowers `e` to the output feeding whatever consumes it, tagged with
-    /// `e`'s own source text (even when the output is an earlier write's).
     fn expr(&mut self, e: &Expr) -> R<Feed> {
-        let mut f = self.expr_of(e)?;
-        f.span = Some(self.span(e));
-        Ok(f)
-    }
-
-    fn expr_of(&mut self, e: &Expr) -> R<Feed> {
         Ok(match &e.kind {
             ExprKind::Int { value, .. } => self.konst(e, Some(Value::Int(*value))),
             ExprKind::Real { value, .. } => self.konst(e, Some(Value::Real(*value))),
             ExprKind::Bool(b) => self.konst(e, Some(Value::Bool(*b))),
             ExprKind::Time(ns) => self.konst(e, Some(Value::Int(*ns))),
-            // A text or an enumeration value is drawn as a constant, with no number.
-            ExprKind::Str(_) | ExprKind::EnumLit(..) => self.konst(e, None),
+            // A text, a date or an enumeration value is drawn as a constant, with no number.
+            ExprKind::Str(_) | ExprKind::Calendar(..) | ExprKind::EnumLit(..) => self.konst(e, None),
             ExprKind::Var(n) if !self.vars.contains_key(n) => {
                 // An enumeration value (or a constant the library knows).
                 self.konst(e, None)
@@ -1086,8 +1022,6 @@ impl Lower<'_> {
                 for (k, s) in srcs.into_iter().enumerate() {
                     self.wire(s, n, k);
                 }
-                let whole = self.span(e);
-                self.d.ops.insert(n, whole);
                 if matches!(op, BinOp::And | BinOp::Or) && self.is_bool(e) {
                     self.d.bools.insert(n);
                 }

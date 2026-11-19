@@ -28,6 +28,7 @@ pub mod api;
 pub mod http;
 pub mod iolink;
 pub mod iomap;
+pub mod ota;
 pub mod program;
 pub mod router;
 pub mod settings;

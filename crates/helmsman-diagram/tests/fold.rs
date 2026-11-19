@@ -79,10 +79,6 @@ fn a_fold_within_a_statement_keeps_the_wires_that_cross_its_edge() {
     assert_eq!(v.port(NodeId(2), 0), Some((NodeId(0), 0)));
     assert_eq!(v.port(NodeId(0), 0), None, "the read is inside the fold");
     assert_eq!(v.original(NodeId(2)), Some(NodeId(4)));
-    // Where the text is follows the blocks that are still themselves.
-    assert_eq!(v.diagram.ops.get(&NodeId(2)), d.ops.get(&NodeId(4)));
-    assert_eq!(v.diagram.pins.get(&(NodeId(2), 1)), d.pins.get(&(NodeId(4), 1)));
-    assert!(!v.diagram.ops.contains_key(&NodeId(0)));
 }
 
 #[test]

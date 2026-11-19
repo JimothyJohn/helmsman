@@ -155,16 +155,26 @@ mkdir -p scratch
 log="scratch/node-$bin-$(date -u +%Y%m%dT%H%M%SZ).log"
 echo "monitor output also goes to $log; Ctrl-C to leave the monitor"
 cd "$crate"
+# The P4 is flashed with its A/B partition table (crates/helmsman-node-p4/
+# partitions.csv): the image lands in ota_0, and otadata and the trial record
+# are erased so a fresh flash boots it and nothing is on trial. nvs keeps its
+# offset and size, so the settings and the program survive. A node that has
+# this table updates itself afterwards: docs/EDGE.md, "Updating a node
+# without a cable".
+table=()
+if [ "$board" = p4-eth ]; then
+  table=(--partition-table partitions.csv --erase-parts otadata,bootrec)
+fi
 # The interactive monitor needs a terminal; from an agent session (no tty)
 # flash alone, and read the console afterwards with
 #   espflash monitor --port PORT --non-interactive --before no-reset-no-sync --after no-reset
 # (with `--chip esp32p4` on the P4: without a reset espflash cannot ask
 # the chip what it is, and says "Chip argument not provided", 2026-11-11).
 if [ -t 0 ]; then
-  "$ESPFLASH" flash --monitor --port "$SERIAL_PORT" \
+  "$ESPFLASH" flash --monitor --port "$SERIAL_PORT" ${table[@]+"${table[@]}"} \
     "$target_dir/$bin" 2>&1 | tee "../../$log"
 else
-  "$ESPFLASH" flash --port "$SERIAL_PORT" \
+  "$ESPFLASH" flash --port "$SERIAL_PORT" ${table[@]+"${table[@]}"} \
     "$target_dir/$bin" 2>&1 | tee "../../$log"
   echo "no terminal: flashed without the monitor; read the console with"
   chip=""

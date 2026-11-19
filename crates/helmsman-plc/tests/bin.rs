@@ -617,6 +617,29 @@ fn bad_arguments_exit_2_with_usage() {
 }
 
 #[test]
+fn the_box_says_which_zone_its_wall_clock_reads() {
+    let prog = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let args: [&std::ffi::OsStr; 3] = [prog.as_os_str(), "--time-zone".as_ref(), "Etc/GMT+5".as_ref()];
+    let (mut plc, _, _) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
+    let mut said = String::new();
+    for _ in 0..20 {
+        let mut line = String::new();
+        if plc.stderr.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        if line.contains("DT_NOW()") {
+            said = line;
+            break;
+        }
+    }
+    assert!(
+        said.contains("reads Etc/GMT+5 time (--time-zone), UTC-05:00"),
+        "no zone line: {said:?}"
+    );
+}
+
+#[test]
 fn shipped_echo_program_echoes() {
     let prog = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();

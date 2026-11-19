@@ -166,6 +166,12 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
                 ),
             }
         }
+        // The Xtensa boards keep one app slot (the ESP32 boards are closed,
+        // card node-ota); the router answers 404 before it gets here.
+        Effect::FirmwareFetch { .. } | Effect::FirmwareConfirm => (
+            Response::error(404, "this board cannot update its firmware over the network"),
+            false,
+        ),
         Effect::SaveIoMap { text, page } => {
             // Beside the program on flash; the restart makes the I/O task
             // drive the block it names.

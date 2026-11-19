@@ -6,7 +6,7 @@ use core::fmt::Write;
 
 use helmsman_iec::ast::{BinOp, CaseLabel, Expr, ExprKind, LabelValue, UnOp};
 
-pub(crate) const fn prec(op: BinOp) -> u8 {
+const fn prec(op: BinOp) -> u8 {
     match op {
         BinOp::Or => 1,
         BinOp::Xor => 2,
@@ -19,9 +19,9 @@ pub(crate) const fn prec(op: BinOp) -> u8 {
     }
 }
 
-pub(crate) const UNARY: u8 = 9;
+const UNARY: u8 = 9;
 
-pub(crate) fn level(e: &Expr) -> u8 {
+fn level(e: &Expr) -> u8 {
     match &e.kind {
         ExprKind::Binary(op, ..) => prec(*op),
         ExprKind::Unary(..) => UNARY,
@@ -81,6 +81,7 @@ pub fn expr(e: &Expr) -> String {
         },
         ExprKind::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).to_string(),
         ExprKind::Time(ns) => time(*ns),
+        ExprKind::Calendar(ty, ns) => helmsman_iec::dt::literal(*ty, *ns),
         ExprKind::Str(bytes) => string_literal(bytes),
         ExprKind::EnumLit(t, v) => format!("{t}#{v}"),
         ExprKind::Var(v) => v.clone(),

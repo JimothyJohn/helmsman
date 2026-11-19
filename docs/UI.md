@@ -6,9 +6,14 @@ this; change it here first when a decision changes.
 ## Principles
 
 - **Structured Text and its live diagram, nothing else.** The diagram is a
-  view of the ST. It also changes the code through a few gestures (Editing
-  on the diagram, below); on a box they change the open file and leave Save
-  and Deploy to the engineer. (The node-graph Lab editor is gone.)
+  view of the ST. On it the user edits the layout and toggles inputs; code
+  changes are typed in the editor or asked of the Agent (Nick, 2026-11-18:
+  "on the diagram the user edits the layout and toggles inputs; code
+  changes are typed or asked of the Agent"). The diagram's right-click menu
+  holds Chat about this and the io.map items (Assign to device I/O…, Back
+  to simulated I/O), none of which changes the code. What was built and why it
+  went: docs/decisions/diagram-edits.md. (The node-graph Lab
+  editor is gone.)
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the
   page. Same screens, same buttons; the source is a setting, not a mode.
@@ -416,44 +421,6 @@ this; change it here first when a decision changes.
   or presses it, or takes a typed number (written on Enter). On a Pi, the same click **forces** the input, for an
   engineer only: the block shows FORCED in the warning colour, a banner
   lists every force with "release all", and forces end on logout or deploy.
-
-- **Editing on the diagram (the simulation and a box):** a right click on a block or on one of its input
-  pins (a long press on a touch screen) opens a menu of what can change
-  there, and only of what the code accepts: *Change operator ▸* (AND for
-  OR, one comparison for another, `+ - * /` for each other), *Negate
-  input* (a NOT in front of the operand, or taken off), *Connect to…* (a
-  list of the program's variables with a search field; a path such as
-  `T1.Q` can be typed whole), *Edit value…* (a number, TRUE or FALSE, a
-  time such as `T#5s`), *Rename…* (the variable, in every place the
-  program uses it) and *Delete statement*. A double click on a constant
-  edits its value in place (Enter sets it, Escape cancels). Each choice
-  becomes one exact splice of the code: only the characters that change
-  are written, and comments and layout stay as typed.
-  - **It deploys.** Typing waits for Deploy; a diagram gesture writes the
-    code and deploys it at once, with the same checks as the Deploy button
-    (a compile error leaves the change in the code and the program
-    running as it was, and the note under the top bar says why; a red
-    requirement test refuses nothing and is named in that note). What runs keeps its state as a Deploy carries it.
-  - **Undo.** Ctrl+Z undoes a diagram edit as it undoes typing, one step
-    each, and the program follows (Redo too) while the diagram still shows
-    the code as it stands.
-  - **Where it went.** The editor scrolls to the changed text and
-    highlights it for about a second and a half. The diagram keeps its
-    zoom and position, the picked block, and where blocks were dragged to,
-    also for a block whose text the edit changed.
-  - **When it says no.** A refused change (a name already used, a reserved
-    word, a value that does not fit, a variable of another type) shows the
-    reason in the popup, and the code is untouched. The gestures are off,
-    with the reason in a note where you clicked (and in the tooltip over a
-    constant), when the diagram shows other code than the editor holds (the
-    code was typed since the last Deploy, or does not compile), when the
-    project has more than one program file.
-  - **On a box** a gesture changes the open file only, as typing does:
-    one Undo step, unsaved, nothing sent. Save and Deploy stay the
-    engineer's, through the box's approval policy. It is on only for an
-    engineer, only while the diagram is the open file of the project the
-    box runs, and off after one gesture until that change is deployed and
-    running or undone (the diagram draws what runs).
 
 ## Projects
 

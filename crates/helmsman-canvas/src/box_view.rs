@@ -129,9 +129,9 @@ pub struct BoxView {
     last_pick: Option<Pick>,
     /// The points whose details are open in the I/O tab, lower case.
     io_open: std::collections::BTreeSet<String>,
-    /// The diagram's menu: on a box it offers only what io.map can take
-    /// (`crate::assign`), as the code is changed in the editor.
-    pub dedit: crate::diagram_edit::EditUi,
+    /// The diagram's right-click menu: the chat and what io.map can take
+    /// (`crate::assign`); the code is changed in the editor.
+    pub dmenu: crate::diagram_menu::Menu,
     /// The program's ports as last read, by the text they came from: the
     /// diagram and the I/O tab ask every frame.
     ports_memo: std::cell::RefCell<Option<(String, Vec<crate::device_form::Port>)>>,
@@ -361,7 +361,7 @@ impl BoxView {
             wants_sim: false,
             last_pick: None,
             io_open: std::collections::BTreeSet::new(),
-            dedit: crate::diagram_edit::EditUi::default(),
+            dmenu: crate::diagram_menu::Menu::default(),
             ports_memo: std::cell::RefCell::new(None),
             open_at: None,
             #[cfg(target_arch = "wasm32")]
@@ -1593,121 +1593,6 @@ impl BoxView {
             "That block's statement could not be placed: the diagram is of the project running, deploy the open one first.",
             chrome,
         );
-    }
-
-    /// The open project's one program file (tests aside), when it has
-    /// exactly one: the only file a diagram edit can write.
-    fn sole_program(&self) -> Option<String> {
-        let o = self.projects.open.as_ref()?;
-        let mut program = o
-            .bufs
-            .keys()
-            .filter(|f| crate::sim_projects::is_st(f) && !helmsman_iec::spec::is_test(f));
-        let one = program.next()?;
-        program.next().is_none().then(|| one.clone())
-    }
-
-    /// Whether the diagram's gestures change the open file now, and when
-    /// not, why, in words for the person at the diagram. On only for an
-    /// engineer, and only while the diagram is the open file: the box
-    /// draws the program it runs, so a project not deployed yet, a file
-    /// changed since (typed or from the diagram) or a project of several
-    /// program files each turn it off.
-    #[must_use]
-    pub fn edit_gate(&self) -> crate::diagram_edit::Gate {
-        use crate::diagram_edit::Gate;
-        if let Err(why) = self.writable() {
-            return Gate::Off(why);
-        }
-        let (Some(v), Some(o)) = (&self.view, &self.projects.open) else {
-            return Gate::Off("There is no diagram to edit.".into());
-        };
-        let Some(file) = self.sole_program() else {
-            return Gate::Off(
-                "Editing from the diagram works on projects with one program file for now. \
-                 This project has more: change the code in the editor."
-                    .into(),
-            );
-        };
-        if !self.diagram_running() {
-            return Gate::Off(format!(
-                "The diagram shows the program the box is running, not {0}, the project open in the editor. \
-                 Deploy {0} first, then edit from the diagram.",
-                o.name
-            ));
-        }
-        let Some(buf) = o.bufs.get(&file).filter(|b| b.loaded) else {
-            return Gate::Off("The file is still being read from the box.".into());
-        };
-        if file_start(&v.src, &file, &buf.text).is_none() {
-            return Gate::Off(
-                "The diagram shows the program as it runs, and the code in the editor has changed since. \
-                 Save and Deploy, then edit from the diagram."
-                    .into(),
-            );
-        }
-        Gate::On
-    }
-
-    /// Makes `edit` on the open file, as typing would: the text changes in
-    /// the editor, one Undo brings it back, and the file is unsaved. Nothing
-    /// is saved or deployed: Save and Deploy are the person's, through the
-    /// box's own policy, which sets the approval from what changed. The
-    /// diagram keeps showing the program as it runs, so its gestures are
-    /// off until the change is deployed.
-    ///
-    /// # Errors
-    /// Why nothing was changed, in words: the engine's refusal of the
-    /// edit, or why the diagram's gestures are off.
-    pub fn diagram_edit(
-        &mut self,
-        edit: helmsman_diagram::edit::Edit,
-        ctx: &egui::Context,
-        chrome: &mut Chrome,
-    ) -> Result<(), String> {
-        if let crate::diagram_edit::Gate::Off(why) = self.edit_gate() {
-            return Err(why);
-        }
-        let (Some(v), Some(file)) = (&self.view, self.sole_program()) else {
-            return Err("There is no diagram to edit.".into());
-        };
-        let patch = helmsman_diagram::edit::apply(&v.src, &v.module, edit)
-            .map_err(|refusal| format!("Not changed: {refusal}."))?;
-        let Some(o) = &mut self.projects.open else {
-            return Err("Open a project first.".into());
-        };
-        let name = o.name.clone();
-        let Some(buf) = o.bufs.get_mut(&file) else {
-            return Err("There is no program file to edit.".into());
-        };
-        // The diagram's source is the file under the box's header lines.
-        let Some(at) = file_start(&v.src, &file, &buf.text) else {
-            return Err("The diagram shows other code than the editor. Deploy first.".into());
-        };
-        let (Some(start), Some(end)) = (patch.start.checked_sub(at), patch.end.checked_sub(at)) else {
-            return Err("Not changed: that is not in the file.".into());
-        };
-        let patch = helmsman_diagram::edit::Patch {
-            start,
-            end,
-            text: patch.text,
-        };
-        let new = patch.apply_to(&buf.text);
-        if new.len() > MAX_FILE {
-            return Err(format!(
-                "Not changed: the code would be over {MAX_FILE} characters, the most a file takes."
-            ));
-        }
-        let now = ctx.input(|i| i.time);
-        editor::push_undo(ctx, editor::source_id("box-st", &name, &file), &buf.text);
-        buf.text.clone_from(&new);
-        o.current = Some(file);
-        chrome.flash(
-            &new,
-            patch.start..patch.start + patch.text.len(),
-            now + Chrome::FLASH,
-        );
-        Ok(())
     }
 
     /// Whether the project open is the one the box runs: the diagram's
@@ -3567,14 +3452,11 @@ impl Body for BoxView {
             .filter(|b| b.loaded)
             .map(|b| b.text.clone());
         let menus = self.devices_ui.port_menus(&self.assign_write());
-        let gate = self.edit_gate();
-        let mut asked = None;
         match &mut self.view {
             Some(v) if v.drawable() => {
-                v.edit_gate = gate;
                 v.icons.update(icons.as_deref());
                 v.assign = menus;
-                v.menu_open = self.dedit.is_open();
+                v.menu_open = self.dmenu.is_open();
                 // The block's own lines are placed (or refused with a notice) by the chat item.
                 v.chat_ok = true;
                 let outer = vec![
@@ -3590,10 +3472,10 @@ impl Body for BoxView {
                 // The force buttons over the Read blocks take the right-click first.
                 v.secondary_on_controls(ui, &reads);
                 if let Some(g) = v.gesture.take() {
-                    self.dedit.open(v, g);
+                    self.dmenu.open(v, g);
                 }
-                self.dedit.chat_full = self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS;
-                asked = self.dedit.show(ui.ctx(), chrome, area, v);
+                self.dmenu.chat_full = self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS;
+                self.dmenu.show(ui.ctx(), chrome, area);
                 if v.pick != self.last_pick {
                     self.last_pick = v.pick;
                     if let Some((line, _)) = v.picked() {
@@ -3607,17 +3489,11 @@ impl Body for BoxView {
             }
         }
         self.sync_focus();
-        if let Some((port, ask)) = self.dedit.take_assign() {
+        if let Some((port, ask)) = self.dmenu.take_assign() {
             self.assign_ask(port, ask);
         }
-        if let Some(n) = self.dedit.take_chat() {
+        if let Some(n) = self.dmenu.take_chat() {
             self.chat_about_node(n, chrome);
-        }
-        if let Some(edit) = asked {
-            match self.diagram_edit(edit, ui.ctx(), chrome) {
-                Ok(()) => self.dedit.close(),
-                Err(why) => self.dedit.fail(why),
-            }
         }
         if let Some((at, line)) = jump {
             match at {
@@ -3637,21 +3513,6 @@ impl Body for BoxView {
             self.input_controls(ui, area, &reads, chrome);
         }
     }
-}
-
-/// Where in the diagram's source `src` the text of `file` starts, when
-/// the source is that file as `text` holds it: the box builds a project
-/// under a comment and a `(* file NAME *)` line, even of one file. `None`
-/// when the file has changed since, or is not what the diagram shows.
-fn file_start(src: &str, file: &str, text: &str) -> Option<usize> {
-    let mark = format!("(* file {file} *)\n");
-    let at = if src.trim_end() == text.trim_end() {
-        0
-    } else {
-        let at = src.find(&mark)?;
-        (at == 0 || src[..at].ends_with('\n')).then_some(at + mark.len())?
-    };
-    (src[at..].trim_end() == text.trim_end()).then_some(at)
 }
 
 /// Where a line of the diagram built from `src` is in `files`: its place

@@ -781,6 +781,20 @@ into the code.
   `$` escapes and the 255-character cap are not cited to any reference:
   the escapes are pinned by tests/strings.rs (ruSTy reads `$N` in the same
   literals), the cap is a one-byte length. WSTRING is not built.
+- **DATE, TOD and DT (card `st-tod-date`):** no clause is cited. The
+  representation (64-bit nanoseconds, DATE and DT from 1970-01-01, TOD
+  from midnight), the arithmetic table (`TOD +/- TIME` wrapping at
+  midnight, `DT +/- TIME`, the differences as TIME, and nothing else),
+  `CONCAT_DATE_TOD`, `CONCAT_DATE`, `CONCAT_TOD`, `DAY_OF_WEEK`
+  (0 = Sunday) and `DT_TO_DATE` / `DT_TO_TOD` are ruSTy 1.0.8's
+  (read in its `src/typesystem.rs`, `libs/stdlib/iec61131-st/*.st` and
+  `libs/stdlib/src/date_time_*.rs` at tag v1.0.8, 2026-11-18) and are
+  pinned by `calendar_agrees_with_rusty` in oracle.rs (7 cases), which passed
+  against ruSTy 1.0.8 in CI's oracle job on PR #513 (2026-11-18).
+  Helmsman's own, pinned in
+  tests/calendar.rs against a calendar written independently of `dt.rs`:
+  the literal syntax and its refusals, the text forms, the range, the
+  wall clock. The `L` types and `SPLIT_*` are not built.
 - **How to cite:** `IEC 61131-3 (secondary: Fernhill ST "<page>")`, never
   a `§` of the standard. A behaviour pinned by the oracle cites the oracle
   test by name.

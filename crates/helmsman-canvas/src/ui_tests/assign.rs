@@ -318,9 +318,9 @@ fn the_diagram_blocks_of_a_port_assign_it_with_the_code_menu_on() {
 }
 
 #[test]
-fn the_diagram_menu_assigns_while_the_code_is_ahead_of_the_diagram_and_says_why_the_rest_is_off() {
+fn the_diagram_menu_assigns_while_the_code_is_ahead_of_the_diagram_and_offers_nothing_on_other_blocks() {
     let mut h = project(MAP);
-    // The code moves on; the diagram keeps what was deployed: its edits are off.
+    // The code moves on; the diagram keeps what was deployed.
     h.app
         .sim
         .as_mut()
@@ -331,23 +331,14 @@ fn the_diagram_menu_assigns_while_the_code_is_ahead_of_the_diagram_and_says_why_
         .unwrap()
         .push_str("\n(* a note not deployed yet *)\n");
     h.wait(0.3);
-    assert!(
-        matches!(
-            h.app.sim.as_ref().unwrap().edit_gate(),
-            crate::diagram_edit::Gate::Off(_)
-        ),
-        "the gate is off"
-    );
     h.right_click(block(&h, "start"));
     assert!(h.has("diagram menu assign"), "the io.map item is there anyway");
-    assert!(!h.has("diagram menu rename") && !h.has("diagram menu delete"));
-    assert!(h.drew("Deploy first"), "the code's items say why they are off");
     h.press("diagram menu assign");
     h.wait(0.2);
     h.press("assign channel rio ch:DI-05");
     h.wait(0.3);
     assert!(map(&h).contains("in  start bool rio ch:DI-05"));
-    // Any other block still says why, and offers nothing.
+    // Any other block offers nothing: no menu opens.
     let and = {
         let v = sim_view(&h);
         let n = v
@@ -359,14 +350,8 @@ fn the_diagram_menu_assigns_while_the_code_is_ahead_of_the_diagram_and_says_why_
         v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
     };
     h.right_click(and);
-    assert!(!h.has("diagram menu assign"));
-    assert!(
-        sim_view(&h)
-            .off_note
-            .as_ref()
-            .is_some_and(|(_, t)| t.contains("Deploy first")),
-        "the note says why nothing opened"
-    );
+    assert!(!h.has("diagram menu assign") && !h.has("diagram menu chat"));
+    assert!(!h.app.sim.as_ref().unwrap().dmenu.is_open(), "no menu opened");
 }
 
 #[test]

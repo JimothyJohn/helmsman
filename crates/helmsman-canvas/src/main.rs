@@ -69,7 +69,7 @@ mod device_io;
 mod device_proposal;
 mod device_vendor;
 mod devices;
-mod diagram_edit;
+mod diagram_menu;
 mod diff_ui;
 mod editor;
 mod edits;

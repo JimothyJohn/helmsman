@@ -866,10 +866,99 @@ status is scan health, memory and fieldbus links. What exists:
 - **Bench topology.** The Studio is on 10.0.0.0/24 twice (a wired alias and
   Wi-Fi) and answers wired nodes through the access point; nodes live on
   the 192.168.3.x link with the E1213 and the Studio's en0, static.
-- **Left in this phase:** firmware OTA (supervictor's installer and
-  rollback policy); an I/O map setting for the block's address and point
+- **Firmware OTA** is built for the P4 (2026-11-18, below: "Updating a node
+  without a cable"). **Left in this phase:** an I/O map setting for the block's address and point
   names; writes from the canvas (deploy, controls) need a token field in
   the canvas, today they are `curl` with the bearer.
+
+### Updating a node without a cable (2026-11-18)
+
+A node in a cabinet takes new firmware over its network connection. You
+give it the address of a file and the SHA-256 that file must have. The
+node fetches the file, writes it into the program slot it is not running
+from, checks it against the SHA-256 as it arrives and once more from flash,
+and restarts into it. The new image is on trial until it confirms itself,
+which it does after 30 s of running with its link up and its scan loop
+publishing, or when it is told to (`POST /api/firmware/confirm`). An image
+that boots and then fails to confirm is taken out again by the node: at the
+fourth boot without a confirmation it selects the previous image and
+restarts into that. A bad image therefore costs a few restarts, and the old
+program comes back with the settings, the program and the I/O map it had.
+
+**Once per board, over USB.** The flash layout changes to two 2 MiB program
+slots, the boot selector and a small record of the trial (`partitions.csv`
+in the P4 node's folder, written by `scripts/node-flash.sh`). The 24 KiB area
+that holds the settings, the program and the I/O map keeps its place, so
+the flash leaves them as they were: on the bench node the name, address,
+token, program and map were all there after each USB flash. A node on the
+old layout answers 404 on `/api/firmware`; flash it once with
+`NODE_BOARD=p4-eth scripts/node-flash.sh node`.
+
+**Every update after that:**
+
+```sh
+NODE_BOARD=p4-eth NODE_BUILD_TAG=2026-11-20 scripts/node-build.sh image node
+NODE=192.168.3.56 NODE_TOKEN=... scripts/node-ota.sh
+```
+
+The first line builds `target/node-images/node.bin` and prints its SHA-256
+(`NODE_BUILD_TAG` is any text; the node reports it as `build`). The second
+serves that file from this machine, tells the node to fetch it, and waits
+for the restart and the confirmation (`CONFIRM_NOW=1` confirms as soon as
+the node is up). It reports the other outcome too: if the new image never
+confirms, the script says the node is back on the old one. By hand, with any
+file server on the same network:
+
+```sh
+curl -X POST http://192.168.3.56:8080/api/firmware \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"url":"http://192.168.3.10:8000/node.bin","sha256":"<64 hex>"}'
+curl http://192.168.3.56:8080/api/firmware
+```
+
+| Call | Token | What it does |
+| --- | --- | --- |
+| `GET /api/firmware` | no | The running build, its slot (0 or 1), the trial (`confirmed`, or `on_trial` with the boot count of 3), and the fetch (`idle`, `fetching` with bytes received and size, `restarting`, or `failed` with the reason). 404 on a node with the old layout. |
+| `POST /api/firmware` `{url, sha256}` | yes | Starts a fetch. 202 at once, 409 while one is running, 422 for a URL or digest the node will not use. The URL is `http://` and an IPv4 address; a node has no name server and no TLS. |
+| `POST /api/firmware/confirm` | yes | Ends the running image's trial now. |
+
+A request without the token, or with a wrong one, is 401 and changes
+nothing. The node refuses a file that is not an application image, one made
+for another chip, one larger than the slot, one that stops short or runs
+long, a response framed with chunked encoding, and one whose SHA-256 is not
+the one in the request. In each case the running image keeps running, its
+slot is not selected, and `fetch` says why.
+
+**What an update costs the program.** Writing flash stalls the scan: in the
+10 s window that held an 8.8 s transfer, 464 of 1000 scans of the 10 ms
+chase were late, and none afterwards. The program keeps running and the
+outputs keep their last values, so update a node while its machine is at a
+standstill. A new image is carried in 8.5 to 8.9 s (838 KB).
+
+**What it does not do yet.** The image is trusted because the request that
+names its SHA-256 carries the token; images are not signed and the transfer
+is not encrypted. A fetch that breaks starts again from the start. An image
+that hangs before it reaches its first boot step, or that hangs without
+restarting, is not counted: it stays until the node is power-cycled, and the
+third power cycle after that puts the old image back.
+
+**On the bench (P4, press-5, 2026-11-18).** Flashed over USB with the new
+layout, then updated over the network: a build that confirmed itself after
+30 s; a wrong SHA-256 (`fetch` failed, nothing selected); an explicit
+`POST /api/firmware/confirm`; and a build that panics 12 s after it starts
+and so never confirms, which ran boots 1, 2 and 3 and was replaced at the
+fourth by the build before it (`ota: the new image never confirmed; slot 0
+selected again`), 40 s after its first boot. The bench found one fault that
+the host tests had not: the old image's confirm timer, firing in the seconds
+between the update selecting the new slot and the restart, ended the new
+image's trial, so a crashing build was never replaced. A confirmation now
+names the slot its own image booted from (a regression test holds it).
+
+The logic (the slot state machine, the installer, the response parser, the
+trial record) runs on the host against simulated flash with
+the power cut at every write of a whole update, in each of the ways a write
+can be cut; the proptests cover hostile URLs, response heads, truncated,
+oversized and corrupted images.
 
 ### PROFINET on the P4 (2026-11-11)
 
