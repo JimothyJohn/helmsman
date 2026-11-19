@@ -28,12 +28,16 @@ box's own certificate, fingerprint in Help › About); every read needs a
 sign in (only `/api/health` answers a bare poll), every change needs an
 engineer. A fresh box has no accounts: its role PINs work
 until one exists (`helmsman-plc account add`, or `scripts/pi-account.sh`).
-SSH is on. The image carries no password: the first boot asks for a user
-and password on the console, or takes them from Raspberry Pi Imager's
-settings or a `userconf.txt` on the boot partition, as any Raspberry Pi OS
-image does (the build leaves pi-gen's `FIRST_USER_PASS` unset, because pi-gen
-refuses to skip that step without one and a password baked into a public
-image is no password).
+SSH is on, but the image carries no password and asks nobody for one: the
+two first-boot wizards that would hold a headless box at its console
+(systemd's, and Raspberry Pi OS's first-user step) are masked, and locale,
+keyboard, timezone and hostname come from the build. The box is reached
+through its API after pairing. To get a shell, put a cloud-init `user-data`
+file on the boot partition before first boot, with a user and your public
+SSH key (what Raspberry Pi Imager's settings write for you); cloud-init is
+on the image and reads it. No password is baked in: the build leaves
+pi-gen's `FIRST_USER_PASS` unset, and a password in a public image is no
+password. CI does not exercise this path.
 
 ## First boot: pairing with the relay
 
@@ -132,16 +136,23 @@ arm64 runner (pi-gen builds natively there) with a 150 minute cap. It runs
 when the image's inputs change (`deploy/`, the build and boot scripts, the
 pairing client), every Monday, and on demand. It is not a required check.
 `scripts/box-boot-test.sh IMAGE` is the same boot on your own machine, with
-`qemu-system-aarch64`, `mtools`, `python3` and `curl`:
+`qemu-system-aarch64`, `mtools`, `python3`, `curl` and `bsdtar` or
+`dpkg-deb`:
 
-1. It copies the image, takes `kernel8.img` and `bcm2710-rpi-3-b.dtb` off
-   its boot partition, and puts `relay-url` (a scripted relay on the host),
-   `relay-allow-http`, `relay-box-id` and `pairing-code` under `helmsman/`.
-2. It boots `qemu-system-aarch64 -M raspi3b` with the image as the SD card
-   and a USB network card forwarding host port 18080 to the box's 8080.
-3. `scripts/box-boot-relay.py` plays the relay: it hands out one token for
+1. It fetches Debian trixie's arm64 cloud kernel package (pinned by version
+   and SHA-256 in `deploy/pi-image/qemu-kernel.env`) and unpacks it.
+2. It copies the image and puts `relay-url` (a scripted relay on the host),
+   `relay-allow-http`, `relay-box-id` and `pairing-code` under `helmsman/`
+   on the copy's boot partition. In CI (`EXPAND=1`, which needs Linux and
+   sudo) it also grows the copy's root partition to 4 GB and adds the
+   kernel package's modules to it (below).
+3. It boots `qemu-system-aarch64 -M virt -cpu cortex-a72 -m 2G -smp 4` with
+   the Debian kernel, the image's disk as an NVMe drive, and virtio-net with
+   QEMU's user networking (DHCP from QEMU, host port 18080 forwarded to the
+   box's 8080).
+4. `scripts/box-boot-relay.py` plays the relay: it hands out one token for
    the one code, once, for the one id, and records it.
-4. The script polls `https://127.0.0.1:18080/api/health` until it answers
+5. The script polls `https://127.0.0.1:18080/api/health` until it answers
    `{"up":true,"build":...}` or 25 minutes pass, then fetches `/` and checks
    it is the canvas page, that the relay saw exactly one redeem, and that
    neither the code nor the token is in the serial log.
@@ -149,24 +160,37 @@ pairing client), every Monday, and on demand. It is not a required check.
 A failure prints the end of the serial console, and CI keeps the whole
 console and the relay's record as the `box-boot` artifact.
 
-**Status (2026-11-18): the image builds in CI (about 45 minutes) and the
-kernel boots into systemd, but the guest then stops after about 30 KB of
-console output with the vCPUs idle, before the box's service is up, on both
-CI's arm64 runner and a Mac, with the image and with a stock Raspberry Pi OS
-image (`PAIR=0 HEALTH=0`), and with single-thread TCG too. The API wait
-therefore times out. Not yet known whether it is the emulated PL011 console
-(output stops, the guest blocks writing to it) or the guest waiting on a
-device; see the `box-sku` card.**
+**What this proves, and what it does not.** It proves the image's userland
+and the box's first boot on a generic arm64 machine: the root filesystem,
+systemd and the units, `helmsman-firstboot` redeeming a pairing code, the
+PLC service coming up, the API and the canvas answering. It does not run
+the Pi's own kernel, firmware, bootloader or device tree, a Pi's network
+hardware, or a Pi's SD card. The first boot of this image on a real Pi is
+still owed (the `box-sku` card).
 
-Why `raspi3b`: it is the Pi machine QEMU 8.2 (Ubuntu's) can boot the
-image's own kernel on with a working network. `raspi4b` arrives in QEMU 9
-and has no working network; `virt` cannot take the image's kernel (no
-virtio driver built in, no initramfs). The Pi 3's SoC is close enough to
-the 4's for what this checks (first boot, the service, the API); it is not
-a hardware test. The emulated BCM2835 watchdog starts armed and resets the
-guest every few seconds, so the script keeps that driver out
-(`initcall_blacklist=bcm2835_wdt_driver_init`). The boot is slow (software
-emulation, minutes), which is why it does not run on every change.
+**Why this machine.** QEMU's Pi machines were tried first and set aside:
+`raspi3b` (the one Ubuntu's QEMU 8.2 can boot the image's own kernel on)
+froze the whole guest in sysinit after about 30 KB of console output, on a
+stock Raspberry Pi OS image as well as on this one, with the vCPUs idle and
+the network silent from then on; the cause was not found (CI run
+44347130885; not the first-boot wizard, DMA, audit or threaded emulation).
+`raspi4b` needs QEMU 9 and has no working network. The generic `virt`
+machine boots the same root filesystem with a stock Debian kernel, which is
+what a Raspberry Pi OS userland (Debian trixie) runs on anyway.
+
+**Modules, and why not an initramfs.** The Debian cloud kernel has NVMe and
+ext4 built in, so the root filesystem mounts with no initramfs. Its
+virtio-net driver, and vfat (the image's `/boot/firmware`), loop, zram and
+nftables, are modules, and the image carries the Pi kernel's modules, which
+do not match. The script therefore copies the Debian package's
+`/usr/lib/modules/VERSION` into the CI copy of the image by loop mount and
+runs `depmod` there. An initramfs would need building for another
+architecture's userland on the runner. The image's `/etc/fstab` names its
+partitions by PARTUUID, and the NVMe disk carries the image's partition
+table, so it needs no change. The shipped image is never touched. Without
+`EXPAND=1` (a Mac) the modules are not added, the boot ends in emergency
+mode at `/boot/firmware`, and only the kernel, the disk and the console are
+checked.
 
 ### By hand
 

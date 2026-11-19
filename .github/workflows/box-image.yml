@@ -1,6 +1,7 @@
 # The box image, built and booted. scripts/pi-image.sh builds the Raspberry
 # Pi OS image (pi-gen in Docker, the box binary and the canvas inside),
-# scripts/box-boot-test.sh boots it under QEMU, lets first boot pair with a
+# scripts/box-boot-test.sh boots its root filesystem under QEMU's generic
+# `virt` machine with a pinned Debian kernel, lets first boot pair with a
 # scripted relay by code, and waits for the box's API to answer on a
 # forwarded port (health, the canvas page). docs/BOX.md says how and why.
 #
@@ -70,7 +71,7 @@ jobs:
       - name: Tools the boot test needs
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q qemu-system-arm qemu-utils mtools e2fsprogs xz-utils
+          sudo apt-get install -y -q qemu-system-arm qemu-utils mtools e2fsprogs kmod xz-utils
           qemu-system-aarch64 --version | head -1
       # The ref names a branch until a build is worth keeping; the script
       # prints the commit it built from so the ref can be pinned to it.

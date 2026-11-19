@@ -48,6 +48,12 @@ and run: sudo systemctl start helmsman-firstboot
 EOF
 
 on_chroot <<'EOF'
+# A headless box has nobody at its console to answer the two first-boot
+# wizards that would hold it: systemd-firstboot (locale, keymap, timezone,
+# root password: pi-gen has already set the first three from its config)
+# and Raspberry Pi OS's first-user step. Neither is needed; a shell comes
+# from cloud-init's user-data on the boot partition (docs/BOX.md).
+systemctl mask systemd-firstboot.service userconfig.service
 systemctl enable helmsman-firstboot.service
 systemctl enable helmsman-plc.service
 EOF
