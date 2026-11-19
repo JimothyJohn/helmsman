@@ -64,9 +64,18 @@ toolchain="${toolchain%%-*}"
 # root and the canvas build could not write its dist next to it.
 mkdir -p "$repo/target"
 
-echo "==> build linux/arm64 helmsman-plc in $image"
+# The box's build stamp (crates/build_stamp.rs) is `git describe` of the
+# checkout, and the build image has no git: pass the stamp in, or the box in
+# the image would answer "unknown" and the canvas could not tell it from
+# another build. The canvas below is built on the host and stamps itself the
+# same way.
+stamp="$(git -C "$repo" describe --always --abbrev=9 2>/dev/null || true)"
+[ -n "$stamp" ] || echo "warning: no git checkout here, the box will report build \"unknown\""
+
+echo "==> build linux/arm64 helmsman-plc in $image (build $stamp)"
 docker run --rm --platform linux/arm64 \
     -v "$repo:/src" -w /src \
+    ${stamp:+-e HELMSMAN_BUILD="$stamp"} \
     -v helmsman-cargo-registry:/usr/local/cargo/registry \
     -e CARGO_TARGET_DIR=/src/target/pi \
     -e RUSTUP_TOOLCHAIN="$toolchain" \

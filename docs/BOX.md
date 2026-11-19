@@ -153,9 +153,12 @@ pairing client), every Monday, and on demand. It is not a required check.
 4. `scripts/box-boot-relay.py` plays the relay: it hands out one token for
    the one code, once, for the one id, and records it.
 5. The script polls `https://127.0.0.1:18080/api/health` until it answers
-   `{"up":true,"build":...}` or 25 minutes pass, then fetches `/` and checks
-   it is the canvas page, that the relay saw exactly one redeem, and that
-   neither the code nor the token is in the serial log.
+   `{"up":true,"build":...}` or 25 minutes pass, then checks that `build` is
+   the checkout's `git describe --always --abbrev=9` (`pi-image.sh` passes it
+   into the build as `HELMSMAN_BUILD`, so the box reports the commit it was
+   built from), fetches `/` and checks it is the canvas page, that the relay
+   saw exactly one redeem, and that neither the code nor the token is in the
+   serial log.
 
 A failure prints the end of the serial console, and CI keeps the whole
 console and the relay's record as the `box-boot` artifact.

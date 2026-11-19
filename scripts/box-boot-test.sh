@@ -49,6 +49,8 @@
 #        BOOT_DEADLINE=seconds (default 1500)  HOST_PORT=18080  EXPAND=1
 #        PAIR=0 skips the pairing files and the relay check (a stock image)
 #        HEALTH=0 only waits for the login prompt (a stock image)
+#        EXPECT_BUILD=STAMP the build the box must report (default: this
+#        checkout's `git describe --always --abbrev=9`; empty skips the match)
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 work="${WORK:-$repo/target/box-boot}"
@@ -220,7 +222,13 @@ if [ "$health" = 1 ]; then
         sleep 5
     done
     echo "==> up after $(( $(date +%s) - started ))s: $answer"
-    case "$answer" in *'"build":"'?*) ;; *) fail "health carries no build: $answer" ;; esac
+    # The box must report the commit the image was built from (pi-image.sh
+    # stamps it): the same `git describe` as crates/build_stamp.rs, in this
+    # checkout. EXPECT_BUILD overrides it; empty skips the match.
+    expect="${EXPECT_BUILD-$(git -C "$repo" describe --always --abbrev=9 2>/dev/null || true)}"
+    got="$(printf '%s' "$answer" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || true)"
+    if [ -n "$expect" ] && [ "$got" != "$expect" ]; then fail "the box reports build \"$got\", the image was built from \"$expect\""; fi
+    case "$got" in "" | unknown) fail "the box reports no build stamp: $answer" ;; esac
     page="$(curl -sk --max-time 20 -w '\n%{http_code} %{content_type}' "https://127.0.0.1:$host_port/")" || fail "GET / failed"
     status="$(printf '%s' "$page" | tail -n 1)"
     case "$status" in "200 text/html"*) ;; *) fail "GET / answered $status, not 200 text/html" ;; esac
