@@ -88,6 +88,8 @@ helmsman-nodecore = { path = "../helmsman-nodecore" }
 helmsman-agent = { path = "../helmsman-agent" }
 proptest = "1.12"
 helmsman-io = { path = "../helmsman-io" }
+# docs/FEATURES.md, held to the tabs (src/features_tests.rs).
+helmsman-compat = { path = "../helmsman-compat" }
 
 [lints]
 workspace = true

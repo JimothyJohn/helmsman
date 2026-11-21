@@ -72,6 +72,8 @@ mod devices;
 mod diagram_menu;
 mod diff_ui;
 mod editor;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod features_tests;
 mod edits;
 #[cfg(test)]
 mod edits_tests;

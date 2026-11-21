@@ -26,6 +26,7 @@
 pub mod boxp;
 pub mod client;
 pub mod devices;
+pub mod features;
 pub mod hardware;
 pub mod relay;
 pub mod report;

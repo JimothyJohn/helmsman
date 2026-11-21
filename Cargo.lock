@@ -1566,6 +1566,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "helmsman-agent",
+ "helmsman-compat",
  "helmsman-diagram",
  "helmsman-iec",
  "helmsman-io",
@@ -1677,6 +1678,7 @@ dependencies = [
  "async-opcua",
  "helmsman-adapter",
  "helmsman-agent",
+ "helmsman-compat",
  "helmsman-devconf",
  "helmsman-dhcp",
  "helmsman-diagram",
