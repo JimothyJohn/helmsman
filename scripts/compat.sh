@@ -32,6 +32,9 @@
 # agent-relay and helmsman-hardware) is used for those two only, as an
 # http.extraheader in the environment of their git and gh commands. It is never put in a URL, a
 # git config file or an argument list, and is unset before any build runs.
+#
+# CI still running on a candidate commit is waited for, up to COMPAT_CI_WAIT
+# seconds (default 1800; 0 judges it at once, as not ready).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -242,7 +245,17 @@ for pair in "helmsman $H_DEV" "agent-relay $R_DEV" "helmsman-devices $D_DEV" "he
       --jq 'group_by(.workflowName) | map(max_by(.createdAt)) | map(.workflowName + "=" + (if .status == "completed" then .conclusion else .status end)) | join(" ")' \
       2>/dev/null
   }
-  line=$(runs "$1" "$2") || line="unknown: gh could not list runs (signed in?)"
+  # A run still going is waited for (COMPAT_CI_WAIT seconds, default 30 min)
+  # rather than judged: while other sessions merge into dev, a ship nearly
+  # always meets a tip whose CI has not finished (2026-11-21, three times).
+  waited=0
+  while :; do
+    line=$(runs "$1" "$2") || line="unknown: gh could not list runs (signed in?)"
+    case "$line" in *=in_progress*|*=queued*|*=waiting*|*=pending*|*=requested*) ;; *) break ;; esac
+    [ "$waited" -lt "${COMPAT_CI_WAIT:-1800}" ] || break
+    [ "$waited" = 0 ] && echo "  $1@${2:0:12}: $line; waiting for it" >&2
+    sleep 30; waited=$((waited + 30))
+  done
   if [ -z "$line" ]; then
     head=$(git -C "$(src_of "$1")" rev-parse -q --verify "$2^2" 2>/dev/null || true)
     if [ -n "$head" ] && hl=$(runs "$1" "$head") && [ -n "$hl" ]; then
