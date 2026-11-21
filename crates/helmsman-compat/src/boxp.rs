@@ -175,23 +175,6 @@ pub fn help_text(bin: &Path) -> Result<String, String> {
     Ok(text)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tokens_never_reach_a_report() {
-        let t = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let line = format!("API token (new): {t}; relay hmr1_{t}; port 8080, sha 4a6d37aa");
-        let r = redact(&line);
-        assert!(!r.contains(t), "{r}");
-        assert_eq!(
-            r,
-            "API token (new): [redacted]; relay hmr1_[redacted]; port 8080, sha 4a6d37aa"
-        );
-    }
-}
-
 /// `bin account add USER ROLE` on the state directory `state`, the
 /// password given on stdin as the box reads it.
 ///
@@ -222,5 +205,22 @@ pub fn add_account(bin: &Path, state: &Path, user: &str, role: &str, password: &
             "account add {user} {role}: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_never_reach_a_report() {
+        let t = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let line = format!("API token (new): {t}; relay hmr1_{t}; port 8080, sha 4a6d37aa");
+        let r = redact(&line);
+        assert!(!r.contains(t), "{r}");
+        assert_eq!(
+            r,
+            "API token (new): [redacted]; relay hmr1_[redacted]; port 8080, sha 4a6d37aa"
+        );
     }
 }
