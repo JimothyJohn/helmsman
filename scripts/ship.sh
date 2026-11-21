@@ -12,6 +12,9 @@
 #   scripts/ship.sh --report    the report again from target/ship/ (runs
 #                               nothing, opens no pull request)
 #
+# Ship refuses to start unless the scripts and the checker it runs from this
+# checkout are origin/dev's (SHIP_LOCAL_SCRIPTS=1 runs local copies).
+#
 # Steps:
 #   0. playground: when the canvas has changed since dev's committed page
 #      was built, the page is rebuilt at the dev tip
@@ -70,6 +73,23 @@ done
 mkdir -p "$OUT"
 say() { printf '\n== %s\n' "$*"; }
 die() { echo "ship.sh: $*" >&2; exit 2; }
+
+# Ship runs these from this checkout, so they must be dev's. On 2026-11-21
+# two runs used an old ship.sh: the checkout was behind dev, then on master.
+# Refused rather than pulled: the checkout may hold someone else's work.
+# SHIP_LOCAL_SCRIPTS=1 runs local copies (for changing ship itself).
+SHIP_FILES="Makefile scripts/ship.sh scripts/compat.sh scripts/live-state.sh scripts/parity-tabs.py scripts/build-playground.sh crates/helmsman-compat"
+if [ "$REPORT_ONLY" = 0 ] && [ "${SHIP_LOCAL_SCRIPTS:-0}" != 1 ]; then
+  git -C "$ROOT" fetch -q origin dev || die "fetching helmsman's dev failed"
+  # shellcheck disable=SC2086 # SHIP_FILES is a list of paths
+  stale=$(git -C "$ROOT" diff --name-only origin/dev -- $SHIP_FILES)
+  if [ -n "$stale" ]; then
+    echo "ship.sh: this checkout's ship differs from origin/dev ($(git -C "$ROOT" rev-parse --abbrev-ref HEAD) at $(git -C "$ROOT" rev-parse --short=12 HEAD)):" >&2
+    printf '  %s\n' $stale >&2
+    echo "ship.sh: nothing done. Update it and run again:  git -C $ROOT checkout dev && git -C $ROOT pull --ff-only && make -C $ROOT ship" >&2
+    exit 2
+  fi
+fi
 
 default_of() {
   case "$1" in
