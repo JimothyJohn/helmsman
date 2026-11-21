@@ -73,8 +73,9 @@ impl Agent {
 
 /// The relay (and stub) of a run, alive while it is held.
 pub struct Behind {
-    _stub: Option<Server>,
-    _relay: Option<RelayProc>,
+    /// The stub model and the relay in front of it: held, never read, so
+    /// they stop when the run's `Behind` drops.
+    _held: Option<(Server, RelayProc)>,
     log: Option<Arc<Mutex<StubLog>>>,
     flags: Vec<OsString>,
     live: bool,
@@ -104,8 +105,7 @@ impl Behind {
 /// The stub, the relay or the token file could not be made.
 pub fn start(side: &AgentSide, work: &Path) -> Result<Behind, String> {
     let mut behind = Behind {
-        _stub: None,
-        _relay: None,
+        _held: None,
         log: None,
         flags: Vec::new(),
         live: false,
@@ -123,8 +123,10 @@ pub fn start(side: &AgentSide, work: &Path) -> Result<Behind, String> {
                 token.into(),
             ];
             behind.log = Some(log);
-            behind._stub = Some(stub);
-            behind._relay = Some(proc);
+            behind = Behind {
+                _held: Some((stub, proc)),
+                ..behind
+            };
         }
         AgentSide::Live { url, token } => {
             behind.flags = vec![
