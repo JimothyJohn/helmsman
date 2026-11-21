@@ -128,4 +128,76 @@ fn every_written_journey_passes_on_this_box() {
         .filter(|(_, o)| matches!(o, Outcome::Pass(_)))
         .count();
     assert!(passed >= 6, "only {passed} journeys passed: {outcomes:?}");
+    // No relay stands behind this box: the agent journeys are not run,
+    // which is neither a pass nor a failure.
+    for id in AGENT {
+        let o = outcomes.iter().find(|(j, _)| j == id).map(|(_, o)| o);
+        assert!(
+            matches!(o, Some(Outcome::NotRun(why)) if why.contains("needs a relay")),
+            "{id} without a relay: {o:?}"
+        );
+    }
+}
+
+const AGENT: [&str; 5] = ["explain", "requirements", "chat", "design", "help"];
+
+/// `agent-relay-local`, the way scripts/compat.sh looks for the relay: the
+/// `COMPAT_RELAY_BIN` it is given, else a build in the `agent-relay`
+/// checkout beside the main helmsman checkout.
+fn relay_bin() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("COMPAT_RELAY_BIN") {
+        return Some(PathBuf::from(p));
+    }
+    let root = root().canonicalize().ok()?;
+    root.ancestors().find_map(|dir| {
+        ["debug", "release"].iter().find_map(|profile| {
+            let p = dir.join(format!("agent-relay/target/{profile}/agent-relay-local"));
+            p.is_file().then_some(p)
+        })
+    })
+}
+
+/// The agent journeys (explain, requirements, chat, design, help) on this
+/// checkout's box with a candidate relay in front of the stub model. It
+/// does not run, and says so, when there is no relay program to find:
+/// build one (`cargo build -p agent-relay-local` in agent-relay at dev)
+/// and give it as `COMPAT_RELAY_BIN`; `HELMSMAN_REQUIRE_RELAY=1` turns
+/// "not found" into a failure.
+#[test]
+fn every_agent_journey_passes_on_this_box_behind_the_stub() {
+    use helmsman_compat::parity::{self, AgentSide, Outcome};
+    let Some(relay_bin) = relay_bin() else {
+        assert!(
+            std::env::var_os("HELMSMAN_REQUIRE_RELAY").is_none(),
+            "no agent-relay-local to run the agent journeys against (COMPAT_RELAY_BIN)"
+        );
+        eprintln!(
+            "NOT RUN: the agent journeys need agent-relay-local (set COMPAT_RELAY_BIN, or build agent-relay beside this checkout)"
+        );
+        return;
+    };
+    let bin = Path::new(env!("CARGO_BIN_EXE_helmsman-plc"));
+    let outcomes = parity::check_with(
+        bin,
+        &root().join(FILE),
+        &work("agent"),
+        &[],
+        &AgentSide::Stub { relay_bin },
+    )
+    .unwrap();
+    let report: Vec<String> = AGENT
+        .iter()
+        .map(|id| {
+            let o = outcomes.iter().find(|(j, _)| j == id).map(|(_, o)| o);
+            match o {
+                Some(Outcome::Pass(_)) => format!("{id}: ok"),
+                other => format!("{id}: {other:?}"),
+            }
+        })
+        .collect();
+    assert!(
+        report.iter().all(|r| r.ends_with(": ok")),
+        "agent journeys on the stub:\n{}",
+        report.join("\n\n")
+    );
 }

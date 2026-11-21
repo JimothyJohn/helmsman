@@ -128,16 +128,16 @@ and the report; `target/compat/report.md` and `cells/` are uploaded as the
 - **A schedule fires only from the default branch**, so the nightly starts
   once dev is promoted; before that, run it by hand (`gh workflow run
   compat.yml --ref <branch>`).
-- **The relay token.** agent-relay is private, so the job needs the
-  repository secret `COMPAT_RELAY_TOKEN`: a fine-grained token for that one
-  repository with Contents, Metadata and Actions read-only, 90-day expiry
+- **The relay token.** agent-relay and helmsman-hardware are private, so
+  the job needs the repository secret `COMPAT_RELAY_TOKEN`: a fine-grained
+  token for those two repositories with Contents, Metadata and Actions read-only, 90-day expiry
   (`scratch/33-compat-token.sh` prints the settings, checks the token and
   stores it). Without the secret the job writes one line to its summary
   and passes without running. An expired token fails the clone.
 - **The token stays out of files and logs.** `scripts/compat.sh` takes it
   from `COMPAT_RELAY_TOKEN` and unsets it at once. It is sent only as an
-  `http.extraheader` in the environment of agent-relay's own `git` and `gh`
-  commands, never in a URL, an argument list or a clone's `.git/config`, and
+  `http.extraheader` in the environment of the two private repositories'
+  own `git` and `gh` commands, never in a URL, an argument list or a clone's `.git/config`, and
   no build sees it. `scripts/compat-scrub.sh` then fails the job if the token
   or its header form is in the report, the cells, the run log, the build
   logs or a clone's git config; the upload runs only after it passes.
