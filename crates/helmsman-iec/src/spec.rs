@@ -229,6 +229,9 @@ pub enum Outcome {
     Failed {
         check: String,
         at: Duration,
+        /// What a typed check (`ASSERT_EQ_INT` ...) saw: `speed was 40,
+        /// expected 50`; empty for a plain `ASSERT`.
+        got: String,
         seen: String,
     },
     /// `DONE` never went TRUE within the limit.
@@ -321,10 +324,13 @@ impl Verdict {
         match &self.outcome {
             Outcome::Passed => String::new(),
             Outcome::Untested => "no test yet: nothing checks this requirement".into(),
-            Outcome::Failed { check, at, seen } if at.is_zero() => format!(
-                "{check} failed on the first scan (0.00 s), before the program had run once: what a test reads is one scan old, so check from the second scan on{seen}"
+            Outcome::Failed { check, at, got, seen } if at.is_zero() => format!(
+                "{check} failed on the first scan (0.00 s), before the program had run once: what a test reads is one scan old, so check from the second scan on{}{seen}",
+                detail(got)
             ),
-            Outcome::Failed { check, at, seen } => format!("{check} failed at {}{seen}", secs(*at)),
+            Outcome::Failed { check, at, got, seen } => {
+                format!("{check} failed at {}{}{seen}", secs(*at), detail(got))
+            }
             Outcome::NeverDone => format!(
                 "never set done within {}: set done := TRUE at the last check",
                 secs(self.elapsed)
@@ -350,6 +356,62 @@ impl Verdict {
     }
 }
 
+/// `: speed was 40, expected 50` after the time of a typed check's failure.
+fn detail(got: &str) -> String {
+    if got.is_empty() {
+        String::new()
+    } else {
+        format!(": {got}")
+    }
+}
+
+/// The typed asserts: the block's name and the kind of value it compares.
+const TYPED: [(&str, Kind); 5] = [
+    ("ASSERT_EQ_BOOL", Kind::Bool),
+    ("ASSERT_EQ_INT", Kind::Int),
+    ("ASSERT_EQ_REAL", Kind::Real),
+    ("ASSERT_EQ_TIME", Kind::Time),
+    ("ASSERT_EQ_STRING", Kind::Text),
+];
+
+/// What a check compares; `None` in [`Check`] is the plain `ASSERT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Bool,
+    Int,
+    Real,
+    Time,
+    Text,
+}
+
+/// A check the test declares: its variable's path, its words, its kind.
+type Check = (String, String, Option<Kind>);
+
+/// `was 40, expected 50` for the failed typed check at `path`, with the
+/// check's message in front (`speed was 40, expected 50`).
+fn got_wanted(t: &crate::Program, path: &str, kind: Kind) -> String {
+    let show = |field: &str| -> Option<String> {
+        let p = format!("{path}.{field}");
+        Some(match kind {
+            Kind::Text => format!("'{}'", t.get_str(&p)?),
+            Kind::Time => match t.get(&p)? {
+                Value::Int(ns) => crate::check::time_words(ns),
+                v => v.to_string(),
+            },
+            _ => t.get(&p)?.to_string(),
+        })
+    };
+    let (Some(got), Some(want)) = (show("GOT"), show("WANT")) else {
+        return String::new();
+    };
+    let what = t.get_str(&format!("{path}.WHAT")).unwrap_or_default();
+    if what.is_empty() {
+        format!("was {got}, expected {want}")
+    } else {
+        format!("{what} was {got}, expected {want}")
+    }
+}
+
 fn first(d: &[Diagnostic]) -> String {
     d.first().map_or_else(String::new, ToString::to_string)
 }
@@ -361,7 +423,7 @@ fn secs(d: Duration) -> String {
 /// The `ASSERT` instances a test program declares at its top level: the
 /// variable's path and the words for it (its name, plus the comment on
 /// its declaration line if there is one).
-fn asserts(src: &str) -> Vec<(String, String)> {
+fn asserts(src: &str) -> Vec<Check> {
     let Ok(unit) = ast::parse(src) else {
         return Vec::new();
     };
@@ -373,7 +435,8 @@ fn asserts(src: &str) -> Vec<(String, String)> {
         .iter()
         .filter(|v| {
             v.section == Section::Var
-                && matches!(&v.ty, TypeRef::Named(n, _) if n.eq_ignore_ascii_case(ASSERT))
+                && matches!(&v.ty, TypeRef::Named(n, _)
+                    if n.eq_ignore_ascii_case(ASSERT) || TYPED.iter().any(|(t, _)| n.eq_ignore_ascii_case(t)))
         })
         .map(|v| {
             let line = usize::try_from(v.pos.line).unwrap_or(0).saturating_sub(1);
@@ -382,9 +445,67 @@ fn asserts(src: &str) -> Vec<(String, String)> {
             if let Some(c) = first_comment(line) {
                 let _ = write!(text, " ({c})");
             }
-            (v.name.clone(), text)
+            let kind = match &v.ty {
+                TypeRef::Named(n, _) => TYPED
+                    .iter()
+                    .find(|(t, _)| n.eq_ignore_ascii_case(t))
+                    .map(|(_, k)| *k),
+                _ => None,
+            };
+            (v.name.clone(), text, kind)
         })
         .collect()
+}
+
+/// One `VAR_INPUT` or `VAR_OUTPUT` of a program, as declared: what
+/// [`declared_ports`] reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declared {
+    /// Upper case, as the parser holds an ST name.
+    pub name: String,
+    /// `VAR_INPUT` (else `VAR_OUTPUT`).
+    pub input: bool,
+    /// The type as written, upper case (`BOOL`; `ARRAY` for an array).
+    pub ty: String,
+    /// The `(* ... *)` comment on its declaration line, one line: what
+    /// the port is. Read the way an `ASSERT`'s words are ([`asserts`]).
+    pub what: Option<String>,
+}
+
+/// The inputs, then the outputs, of the first PROGRAM in `src`, each with
+/// the comment on its declaration line. Empty when `src` does not parse
+/// or holds no PROGRAM.
+#[must_use]
+pub fn declared_ports(src: &str) -> Vec<Declared> {
+    let Ok(unit) = ast::parse(src) else {
+        return Vec::new();
+    };
+    let Some(prog) = unit.pous.iter().find(|p| matches!(p.kind, PouKind::Program)) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = src.lines().collect();
+    let read = |section: Section| {
+        prog.vars
+            .iter()
+            .filter(move |v| v.section == section)
+            .map(|v| {
+                let line = usize::try_from(v.pos.line).unwrap_or(0).saturating_sub(1);
+                Declared {
+                    name: v.name.clone(),
+                    input: section == Section::Input,
+                    ty: match &v.ty {
+                        TypeRef::Named(n, _) => n.to_ascii_uppercase(),
+                        TypeRef::Array { .. } => "ARRAY".to_string(),
+                        TypeRef::Str(..) => "STRING".to_string(),
+                    },
+                    what: lines.get(line).and_then(|l| first_comment(l)),
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut out = read(Section::Input);
+    out.extend(read(Section::Output));
+    out
 }
 
 /// A port of the program declared in the test's wrong section
@@ -409,6 +530,7 @@ fn misdeclared(src: &str, ports: &[Port]) -> Option<Outcome> {
             Section::Input => "VAR_INPUT",
             Section::Output => "VAR_OUTPUT",
             Section::InOut => "VAR_IN_OUT",
+            Section::External => "VAR_EXTERNAL",
         };
         let fix = match p.dir {
             PortDir::Input => format!(
@@ -644,7 +766,7 @@ pub fn run_with(
             }
         }
         scans += 1;
-        for (path, check) in &checks {
+        for (path, check, kind) in &checks {
             if t.get(&format!("{path}.FAILED")) == Some(Value::Bool(true)) {
                 let at = match t.get(&format!("{path}.FAILED_AT")) {
                     Some(Value::Int(ns)) => Duration::from_nanos(u64::try_from(ns).unwrap_or(0)),
@@ -652,13 +774,14 @@ pub fn run_with(
                 };
                 let check = check.clone();
                 let seen = seen(&t, &shared);
-                return verdict(Outcome::Failed { check, at, seen }, scans, now);
+                let got = kind.map_or_else(String::new, |k| got_wanted(&t, path, k));
+                return verdict(Outcome::Failed { check, at, got, seen }, scans, now);
             }
         }
         if t.get(end) == Some(Value::Bool(true)) {
-            if let Some((_, check)) = checks
+            if let Some((_, check, _)) = checks
                 .iter()
-                .find(|(path, _)| t.get(&format!("{path}.CHECKED")) != Some(Value::Bool(true)))
+                .find(|(path, _, _)| t.get(&format!("{path}.CHECKED")) != Some(Value::Bool(true)))
             {
                 let check = check.clone();
                 return verdict(Outcome::NeverChecked { check }, scans, now);
@@ -867,6 +990,140 @@ END_PROGRAM
         assert_eq!(one(LAMP, TEST_OK).outcome, Outcome::Passed);
     }
 
+    const MACHINE: &str = "PROGRAM machine
+VAR_INPUT go : BOOL; END_VAR
+VAR_OUTPUT speed : INT; ratio : REAL; hold : TIME; running : BOOL; name : STRING[8]; END_VAR
+speed := 40;
+ratio := 0.5;
+hold := T#1500ms;
+running := go;
+name := 'pump';
+END_PROGRAM
+";
+
+    /// A test of MACHINE with one typed check (`decl`, called as `call`).
+    fn typed(decl: &str, call: &str) -> Verdict {
+        let test = format!(
+            "(* The machine reports its state. *)
+PROGRAM test_m
+VAR_INPUT speed : INT; ratio : REAL; hold : TIME; running : BOOL; name : STRING[8]; END_VAR
+VAR_OUTPUT go : BOOL; done : BOOL; END_VAR
+VAR n : INT; c : {decl}; END_VAR
+go := TRUE;
+n := n + 1;
+IF n > 320 THEN
+  c({call});
+  done := TRUE;
+END_IF;
+END_PROGRAM
+"
+        );
+        one(MACHINE, &test)
+    }
+
+    #[test]
+    fn a_typed_check_that_holds_is_green() {
+        for (decl, call) in [
+            (
+                "ASSERT_EQ_INT",
+                "EXPECTED := 40, ACTUAL := speed, MESSAGE := 'speed'",
+            ),
+            (
+                "ASSERT_EQ_REAL",
+                "EXPECTED := 0.5, ACTUAL := ratio, TOLERANCE := 0.001",
+            ),
+            ("ASSERT_EQ_TIME", "EXPECTED := T#1s500ms, ACTUAL := hold"),
+            ("ASSERT_EQ_BOOL", "EXPECTED := TRUE, ACTUAL := running"),
+            // A STRING port is no signal yet (st-string-signals), so the
+            // test compares text it builds itself.
+            (
+                "ASSERT_EQ_STRING",
+                "EXPECTED := '40 rpm', ACTUAL := CONCAT(INT_TO_STRING(speed), ' rpm')",
+            ),
+        ] {
+            let v = typed(decl, call);
+            assert_eq!(v.outcome, Outcome::Passed, "{decl}: {}", v.why());
+        }
+    }
+
+    #[test]
+    fn a_typed_check_that_fails_says_what_it_saw_and_expected() {
+        for (decl, call, said) in [
+            (
+                "ASSERT_EQ_INT",
+                "EXPECTED := 50, ACTUAL := speed, MESSAGE := 'speed'",
+                "speed was 40, expected 50",
+            ),
+            (
+                "ASSERT_EQ_INT",
+                "EXPECTED := 50, ACTUAL := speed",
+                "was 40, expected 50",
+            ),
+            (
+                "ASSERT_EQ_REAL",
+                "EXPECTED := 0.75, ACTUAL := ratio, TOLERANCE := 0.1, MESSAGE := 'ratio'",
+                "ratio was 0.5, expected 0.75",
+            ),
+            (
+                "ASSERT_EQ_TIME",
+                "EXPECTED := T#2s, ACTUAL := hold, MESSAGE := 'hold'",
+                "hold was T#1s500ms, expected T#2s",
+            ),
+            (
+                "ASSERT_EQ_BOOL",
+                "EXPECTED := FALSE, ACTUAL := running, MESSAGE := 'running'",
+                "running was TRUE, expected FALSE",
+            ),
+            (
+                "ASSERT_EQ_STRING",
+                "EXPECTED := 'valve', ACTUAL := INT_TO_STRING(speed), MESSAGE := 'name'",
+                "name was '40', expected 'valve'",
+            ),
+        ] {
+            let v = typed(decl, call);
+            assert!(v.red(), "{decl}: {:?}", v.outcome);
+            let why = v.why();
+            assert!(
+                why.starts_with("c failed at 3.2") && why.contains(&format!(": {said} (")),
+                "{decl}: {why}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_typed_check_reads_like_the_plain_one_on_the_first_scan_and_exactly() {
+        let v = typed(
+            "ASSERT_EQ_INT",
+            "EXPECTED := 50, ACTUAL := speed, MESSAGE := 'speed'",
+        );
+        assert_eq!(
+            v.why(),
+            "c failed at 3.20 s: speed was 40, expected 50 (go=TRUE, speed=40, ratio=0.5, hold=1500000000, running=TRUE)"
+        );
+    }
+
+    #[test]
+    fn a_nan_never_passes_a_real_check_and_an_uncalled_typed_check_is_never_checked() {
+        let v = typed(
+            "ASSERT_EQ_REAL",
+            "EXPECTED := 0.5, ACTUAL := 0.0 / 0.0, TOLERANCE := 1000.0, MESSAGE := 'x'",
+        );
+        assert!(v.red(), "{:?}", v.outcome);
+        let test = "(* x. *)
+PROGRAM test_m
+VAR_INPUT running : BOOL; END_VAR
+VAR_OUTPUT go : BOOL; done : BOOL; END_VAR
+VAR c : ASSERT_EQ_INT; END_VAR
+go := TRUE;
+done := TRUE;
+END_PROGRAM
+";
+        assert_eq!(
+            one(MACHINE, test).outcome,
+            Outcome::NeverChecked { check: "c".into() }
+        );
+    }
+
     #[test]
     fn test_file_names() {
         assert!(is_test("test_lamp.st"));
@@ -898,7 +1155,8 @@ END_PROGRAM
         let broken = LAMP.replace("lamp := t.Q;", "lamp := FALSE;");
         let v = one(&broken, TEST_OK);
         match &v.outcome {
-            Outcome::Failed { check, at, seen } => {
+            Outcome::Failed { check, at, seen, got } => {
+                assert_eq!(got, "");
                 assert_eq!(check, "lamp on in time (on within 2 s)");
                 assert_eq!(seen, " (start pb=TRUE, lamp=FALSE)");
                 assert!(
@@ -1348,6 +1606,28 @@ END_PROGRAM
         let single = super::plan([("main.st", main)]);
         assert_eq!(single.main, main);
         assert_eq!(single.tests, []);
+    }
+
+    #[test]
+    fn declared_ports_read_each_declaration_lines_comment() {
+        let src = "PROGRAM p\nVAR_INPUT\n  start : BOOL; (* on while start is pressed *)\n  level : INT;\nEND_VAR\nVAR_OUTPUT\n  pump : BOOL; // not a block comment\n  speed : REAL; (* set point,\n    in rpm *)\nEND_VAR\nVAR hidden : BOOL; (* not a port *) END_VAR\nEND_PROGRAM\n";
+        let ports = declared_ports(src);
+        let got: Vec<(&str, bool, &str, Option<&str>)> = ports
+            .iter()
+            .map(|p| (p.name.as_str(), p.input, p.ty.as_str(), p.what.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("START", true, "BOOL", Some("on while start is pressed")),
+                ("LEVEL", true, "INT", None),
+                ("PUMP", false, "BOOL", None),
+                // A comment that ends on a later line is not read.
+                ("SPEED", false, "REAL", None),
+            ]
+        );
+        assert_eq!(declared_ports("not st at all"), []);
+        assert_eq!(declared_ports(""), []);
     }
 
     #[test]

@@ -62,10 +62,10 @@ use super::chat::event;
 use super::http::{self, Conn, Request, Response};
 use super::{Ctx, audit, audit_full, audited};
 
-/// The relay profile Help mode asks for: its prompt and its one tool,
-/// `submit_issue`. Not served by the relay yet (card `help-mode-relay`);
-/// until it is, the relay answers `unknown_agent_version` and the box
-/// writes the issue alone.
+/// The relay profile Help mode asks for: its prompt and its two tools,
+/// [`SUBMIT`] and [`ANSWER`] (agent-relay `agents/helmsman/help-v1`, from
+/// agent-relay #55). A relay that does not serve it answers
+/// `unknown_agent_version`, and the box then writes the issue alone.
 pub const PROFILE: &str = "helmsman/help-v1";
 
 /// The tool that writes the issue.

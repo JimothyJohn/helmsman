@@ -2,18 +2,36 @@
 
 Done cards were removed on 2026-11-06 (git history has them). Three sections up top: decisions only you can make, things only your hands can do, and what an agent builds next. The roadmap below is the long view.
 
-Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built) is live and holds up, nothing new merges outside it and the Agent's reliability. Bug fixes only on every other card.
-
 ## Open questions for Nick
 
-- [ ] **IO-Link: join the community, or ship as "based on the specification"?** — Why it matters: it decides what the product may say and whether a master of ours can carry a vendor id. The specification's notice (V1.1.5, "USE OF TRADEMARKS", quoted in docs/SOURCES.md) restricts the IO-Link mark to members of the IO-Link Community, lets only certified products claim compliance, and lets an uncertified one say it "was based on a PNO specification". Vendor ids are assigned by the community. Nothing a user reads says IO-Link today; the crate (helmsman-iolink) and the docs for developers do. My position: stay "based on" until a real sensor has run on our master, then decide on membership with a product in hand; fees and the test specification (order no. 10.032) are not read yet.
-  options: based-on for now | join now | drop the name from the docs too
-  result: the wording the site, the datasheet and the Devices tab may use for this protocol
-  id: iolink-membership
-  asked: 2026-11-14
-  by: claude-session (iolink)
 
 ## Needs your hands
+
+- [ ] **Watch the IMPACT67's LEDs while a session switches it, and wire one output to one input** — Why it matters: the block was driven on 2026-11-16 with nothing on its ports and nobody looking, so no channel is confirmed and nobody knows what its outputs do when the controller goes away (after a Forward_Close its output assembly still read the last values written). Steps: (1) put an M12 jumper from pin 4 of port 0 to pin 4 of port 1 (or tell the session which channels you joined); (2) tell a session "watch the Murr with me": it sets port 0 pin 4 as an output, switches it, and asks what the channel LEDs do, then closes the connection and stops sending in turn and asks again.
+  needs: the block powered at its DHCP address (10.0.0.73 on 2026-11-16; a session finds it by ListIdentity)
+  result: the library entry's channels confirmed on a unit, and its question about outputs after a lost connection answered
+  est: 15m
+  difficulty: low
+  id: murr-outputs-watch
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **Run spec mode against a real model, in the simulation and on a box** — #471 and #475 are tested with scripted answers only; no model has yet read a scope of work and answered in the format (a `Why:` line, the PROGRAM with a comment on each input and output, one scenario a requirement, a `requirements` block). Paste a real scope of work into "From a spec…" in the Agent tab of the playground, then the same with a PDF on a box whose agent is online, and note what comes back: names, comments, how many requirements are tested, whether the retries are used up.
+  needs: a scope of work or a product document you would really build from; a box with its agent reachable for the PDF half (the try box, started for this and stopped after)
+  result: spec mode is known to work on real documents, or the first real failures are on the board
+  est: 30m
+  difficulty: low
+  id: spec-mode-real-run
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **Deploy the relay so the Agent's edits and its one question go live** — Why it matters: the page on dev answers a long program with only the lines that change and asks one question while it works, but only where the relay serves those agents; the deployed relay does not yet, so the published page behaves as before. agent-relay #40 (merged to its dev when green) adds the demo's `edits`, `ask` and `check` agents; nothing in template.yaml changes. Steps: (1) promote agent-relay dev to its default branch; (2) deploy as usual (`scripts/deploy.sh`) with `RELAY_MODEL=deepseek/deepseek-v4.1-flash-1017` (decided 2026-11-16 from the ladder: 45 of 45, fastest and cheapest of the four, a dated snapshot) and `DemoAddressTurnsPerHour` raised from 40 to about 120: one instruction is now up to three turns (the question, the change, the check), so the old limit closes the free chat for everyone about three times sooner; (3) `curl -s -H "Origin: <the page's origin>" <demo url>/demo/v1/status` should list `"agents":["ask","check","edits"]`; (4) tell a session, which then runs the ladder against the deployed demo and looks at the card in a browser.
+  needs: agent-relay #40 merged, your promote and deploy
+  result: the published playground answers a one-line change to a long program in about a third of the time, and asks its question
+  notes: 2026-11-18: the same promote and deploy also serves helmsman/v12 and helmsman/playground-v6 (agent-relay #48, in its dev): the Agent writes one short comment above each part of a program, which the diagram shows as that section's name. A box asks for it with `--relay-agent v12` (it needs the v2 client, in dev since #506); the playground gets it when RELAY_DEMO_AGENTS maps `edits` to helmsman/playground-v6. v12 passed its live eval and v11 failed the same one as a control; playground-v6 has offline tests only.
+  id: agent-edits-deploy
+  asked: 2026-11-15
+  by: claude-session
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — Why it matters: a node in a cabinet is powered by its Ethernet cable alone, and today no run has proven that. The PoE module turns the cable's 48 V into the board's supply; if its output is not isolated from the cable side, a USB cable plugged in at the same time ties the laptop's ground to the PoE supply's return, and current can flow through the laptop's USB port. Nobody knows yet which it is, so `scripts/node-flash.sh` makes you pull Ethernet before every USB flash. One measurement settles it: the prompt goes away, or becomes a hard rule. the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
   needs: the PoE module on the board, a meter, a PoE port
@@ -69,25 +87,27 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   difficulty: low
   id: canvas-try
 
-- [ ] **Open raw Ethernet to your user on the Studio (one sudo script)** — Why it matters: only once a device has to be reached over PROFINET, and that is no longer first (Nick, 2026-11-13: EtherNet/IP and Modbus TCP are what plants run). PROFINET's cyclic data is raw Ethernet frames, not IP, and on macOS a program sends those through `/dev/bpf*`, which only root can open. Parked with the PROFINET cards. PROFINET's cyclic data, alarms and station discovery are Ethernet frames, not IP, and on macOS a program sends them through `/dev/bpf*`, which is root-only here (`/dev/bpf0` is root:wheel 0600; you are already in `access_bpf`, so Wireshark's helper was installed once and is gone). Until this runs, everything PROFINET is proven against the simulated device only: the BPF code has compiled and parsed synthetic buffers and has never carried a frame.
+- [x] **Open raw Ethernet to your user on the Studio (one sudo script)** — Why it matters: only once a device has to be reached over PROFINET, and that is no longer first (Nick, 2026-11-13: EtherNet/IP and Modbus TCP are what plants run). PROFINET's cyclic data is raw Ethernet frames, not IP, and on macOS a program sends those through `/dev/bpf*`, which only root can open. Parked with the PROFINET cards. PROFINET's cyclic data, alarms and station discovery are Ethernet frames, not IP, and on macOS a program sends them through `/dev/bpf*`, which is root-only here (`/dev/bpf0` is root:wheel 0600; you are already in `access_bpf`, so Wireshark's helper was installed once and is gone). Until this runs, everything PROFINET is proven against the simulated device only: the BPF code has compiled and parsed synthetic buffers and has never carried a frame.
   needs: a device that has to be reached over PROFINET; then `~/github/helmsman/scratch/27-bpf-access.sh` in the native terminal (sudo; again after each reboot), then `! ~/github/helmsman/scratch/28-profinet-scan.sh` here
   result: the scan lists the PROFINET stations on en0 (none is a fine answer with nothing plugged in: it proves frames go out and the listen works); a session can then run a box against a real device without sudo
+  done: 2026-11-15: /dev/bpf* are root:access_bpf 0660 (Wireshark's ChmodBPF LaunchDaemon is installed, so it holds across reboots; no sudo step needed). `scratch/28-profinet-scan.sh en0` from a session, no sudo: raw Ethernet 0x8892 opens, DCP Identify sent, 0 stations (nothing PROFINET on the wire).
   est: 5m
   difficulty: low
   id: profinet-raw-access
   asked: 2026-11-10
   by: claude-session
-  status: blocked
 
 - [ ] **Bring up the Novanta IMS Liberty MDrive over EtherNet/IP or Modbus TCP** — Why it matters: the first device on the bench that is not discrete I/O. A motor drive is where the device profile's "kinds" get decided (step (g) of `device-profiles`: a drive's enable, speed, position and fault as the same four channels whatever the vendor), and where a comms loss has to stop something that moves. PROFINET first is out (Nick, 2026-11-13), so this starts on the protocols plants run. What its files say (docs/devices/novanta-mdrive.md, read 2026-11-10): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1; its EDS is in the firmware zip. Steps: Modbus TCP as it ships (no vendor tool needed), read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested; then EtherNet/IP from its EDS, so one device compares two drivers; PROFINET later, if ever. Motion asks "cell clear?" once per session (hardware-guard).
-  needs: the MDrive on 192.168.3.x with its DC supply and a free shaft (it was due the week of 2026-11-10: is it here?); its part number and firmware version (2.4.0.7 or later); the Modbus register map from Novanta's manual
+  needs: the drive on the bench at 192.168.33.1 (the Studio reaches it through `sudo ifconfig en0 alias 192.168.33.10 255.255.255.0`, gone at a reboot)
   result: a device doc with citations, a profile and a library entry; an ST program that jogs and positions the axis and stops it on comms loss
   est: 2d
   difficulty: med
+  notes: 2026-11-16 night, on the bench unit (LMDCE853C, EtherNet/IP mode, identity revision 2.36, `LMDCM 6.013`): EtherNet/IP came first because that is the mode it arrived in. Done: the connection (docs/devices/novanta-mdrive.md "On the bench": a run/idle header its EDS does not declare, which `enip-io` now corrects from the refusal; it sends 1.3 to 1.5 times slower than the RPI it grants; it resets the TCP session after 2 to 3 s and keeps exchanging I/O; UDP 2222 only), the vendor's EDS resolving and connecting, a 20-minute hold, a slew at 5000 steps/s and a stop from the cyclic image, the library entry (helmsman-devices `devices/novanta/lexium-mdrive-ethernet/`). Found: the output assembly is not laid out as the manual says, and a silent controller does not stop a slew (both are questions above). 2026-11-17: the unit's mapping is known (Nick's photo of the Configuration Utility; docs/devices/novanta-mdrive.md has it, and it explains the move at the first Forward_Open). Decided (Nick, 2026-11-17, on the board): that the drive keeps slewing when the controller goes silent is accepted on the bench for now; before it is shown or left running unattended it needs a stop of its own (the utility's Halt Motion setting read back with Get, an MCode program, or a hardware input). Not explained, for later: a small MA through bytes 28..31 and over MCode did not move the drive (errors 25, 30). Left: the profile and the kinds (a drive's enable, speed, position, fault), MA and MR, the ST program with the fault path, and Modbus TCP for the comparison (the drive speaks one protocol at a time).
   status: blocked
   id: mdrive-bringup
   asked: 2026-11-10
   by: claude-session
+  notes: 2026-11-17: Nick on the comms-loss stop: accept it on the bench for now. A silent controller does not stop a slew on this unit (it stops on a Forward_Close and on run/idle going to idle); what its Halt Motion setting really holds was not read. Open again before the drive runs anywhere but the bench: an MCode program on the drive or a hardware stop.
 
 - [ ] **Bring up a Universal Robot over EtherNet/IP and Modbus TCP** — Why it matters: the first device with a large mixed image (floats, 32-bit registers, bit fields), so it tests what a profile can say about a value beyond on and off, and a robot is something customers already own. PROFINET first is out (Nick, 2026-11-13). Read 2026-11-10 (docs/devices/universal-robots.md): EtherNet/IP input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); Modbus TCP server on 502, function codes 1..6, 15, 16, general purpose registers 128..255, robot state from 256, every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values converted by hand), the unit id ignored. EtherNet/IP and PROFINET cannot be on together. URSim is no stand-in: users report its Modbus registers stuck, so this needs the robot. PROFINET (its GSDML is read, slots 1..10) only if a customer asks.
   needs: the robot on 192.168.3.x, its model and PolyScope version, EtherNet/IP enabled under Installation > Fieldbus; a cleared cell before anything moves
@@ -100,10 +120,11 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
 
 - [ ] **Bring up the Murrelektronik IMPACT67 E DI8 DO8 (55086)** — Why it matters: every implicit-messaging finding so far is against one Moxa unit on one old firmware; a second vendor's block is what shows whether the EtherNet/IP driver is right or only right for that Moxa. A second unit also ends the contention for the E1213's single connection: the P4 owns one, a Studio box the other. What is already done without the unit (helmsman-devices `devices/murrelektronik/`, from its EDS and handbook, 2026-11-12): the 55086 is EtherNet/IP only, vendor 640, product code 55086, input instance 100 (4 bytes), output 112 (2 bytes), RPI 10 ms by default; its folder has the doc, an enip map and a `.device` profile. It ships at rotary 000, DHCP/BOOTP, so it is also the first device `box-dhcp-server` can address with nobody touching it. Left for the bench: power it, let it take an address, Scan, add by click, and record what its Forward_Open accepts.
-  needs: the block on 192.168.3.x with 24 VDC (US and UA on its 7/8" connector)
+  needs: `murr-outputs-watch` (a jumper and your eyes) for the channels
   result: the block found, added and driven from the library's profile with no hand-written map; its doc gains "On the bench"
   est: 4h
   difficulty: med
+  notes: 2026-11-16 night: the block that arrived is a **55089** (DIO8), not a 55086, at 10.0.0.73 by DHCP, revision 1.2. Done (docs/devices/murrelektronik-impact67-e.md, helmsman-devices `impact67-e-dio8-dio8`): identity and assemblies confirmed, the connection opened from the library's sizes and held 20 minutes at 10 ms, its setup sent as configuration data (`config=109 config_data=00ff00`, new in `enip-io`: out of its box it refuses instance 110 with 0x0119). Left: Scan and add by click from the canvas, a channel seen switching, what the outputs do on a lost connection.
   status: blocked
   id: murr-block-bringup
   asked: 2026-11-10
@@ -120,14 +141,60 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
 
 ## Next to build
 
+- [ ] **Named start states for the simulation: set a machine up once, pick it again** — Nick, 2026-11-16: "the user should be able to rapidly configure the state of the machine for various scenarios manually and with the agent before starting." Built first (#493): an input set by hand while the program is stopped is what it starts with, the values outlive Stop, and a quiet line says nothing reacts yet. Decided by interview that day: this card follows, simulation only; a stopped box only reminds. Left: a start state gets a name ("part seated, guard open") and is saved in the project as a text file the diff shows, one `input = value` a line; the I/O tab lists them above Inputs and a click sets every input of one while the program is stopped (running: asked first, since it moves the machine); the Agent writes one on request, checked against the program's inputs and their types before it is offered. Open in the design: whether a start state also names kept values (a step number, a latch), which the panel cannot set today. The Agent's first half is built (2026-11-17, PR feat/agent-start-state with agent-relay `start-v1`): a field above the Inputs takes the state in words, the Agent proposes input values, and nothing is set until Set these; it works once the relay is deployed with the `start` agent, and it is not yet a saved, named state.
+  needs: #492 and #493 in dev; the Agent's part needs a relay profile with the new block (a new id, Nick's deploy)
+  result: a list of named start states in the I/O tab, saved with the project, that the Agent can add to
+  est: 8h
+  difficulty: med
+  id: sim-start-states
+  asked: 2026-11-16
+  by: claude-session 4a05a85d
+
+- [ ] **A spec run into the project that is open** — spec mode (#471, #475) always makes a new project; Nick's ask was to "parse and add it". Left out because a kept file (`spec.md`) cannot be saved one at a time: `Projects::save` on a box and `SimProjects::add_file` in the page take only names `file_name` knows, and a box has no atomic write of several files short of a whole-project zip. Shape: the same window with a project open offers "Add to this project"; the spec goes in as an instruction on the open program file (`Scope::File`), the review shows what changes (I/O added, requirements added or replaced), and Accept writes the file, the tests and the new section of `spec.md` together.
+  needs: nothing
+  result: more documentation dumped in later lands in the same project, with its spec kept beside the first
+  est: 2d
+  difficulty: med
+  id: spec-into-open-project
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **PDFs in the playground's spec window** — on a box a spec can be a PDF (#475, a drop-in on `/api/chat`); in the page it is pasted text, `.md` or `.txt` (#471). The page's free route carries no documents at all (the relay's demo function refuses them, 256 KiB a request), so this is for a visitor's own key and the local proxy: `claude.rs` builds `content` as a string today and would send a `document` block.
+  needs: nothing
+  result: a PDF scope of work builds a project in the page with a key, and the window says why not on the free route
+  est: 1d
+  difficulty: med
+  id: spec-pdf-in-page
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **History says "From a spec" for a project made on a box** — the page's revision is labelled "From a spec: <document names>"; a box's shows "uploaded a zip", because Accept is `POST /api/projects/{name}/zip` and that route takes no label. Give the zip route an optional label (bounded, one line, audited as any save) and have spec mode send it.
+  needs: nothing
+  result: a spec-made project's first revision names its documents on a box as in the page
+  est: 3h
+  difficulty: low
+  id: spec-zip-label
+  asked: 2026-11-16
+  by: claude-session
+
+- [ ] **A starter io.map a box loads: no screen tile for a number input** — `sim_projects::example_io_map` writes `in NAME int screen NAME` for a numeric input, and a box refuses that map (`IoMap::validate`: "a screen tile is something the box shows: an out signal"). Nothing loads io.map in the page, so it shows only when such a project reaches a box: an example with a numeric input copied by "Use this device", a download and upload. Spec mode on a box avoids it (`sim_projects::box_io_map` writes no line and the review lists the inputs that need a device); the page's examples and its spec mode still write the bad line.
+  needs: nothing
+  result: every io.map the page writes loads on a box, checked in a test with `helmsman_io::text::parse` and `validate`
+  est: 3h
+  difficulty: low
+  id: starter-io-map-loads
+  asked: 2026-11-16
+  by: claude-session
+
 - [ ] **helmsman-dhcp: a client moves off its running lease (found by its own property test)** — Why it matters: the DHCP server's promise is that an address handed out in an ACK stays that client's while the lease runs; a block that is moved to another address mid-lease drops its fieldbus connection. On 2026-11-15 `cargo test --workspace` failed once in `crates/helmsman-dhcp/tests/hostile.rs`, `no_request_sequence_breaks_the_invariants`: "00-07-46-00-00-03 moved off its running lease", left 192.168.3.102, right 192.168.3.101. It is rare (the next three runs of that test passed), so CI can fail on it at random on any PR. To reproduce every time, add this line to `crates/helmsman-dhcp/tests/hostile.proptest-regressions`: `cc 32024c1c7cf224596c6941b14f9b5192e7b4dba694ca7a7b2831f9d34cc24c4b`. The shrunk case begins with a DHCPREQUEST from that client with ciaddr 192.168.3.100 and ends with its DHCPDISCOVER. Not fixed here: it was found while gating an unrelated change (the Devices tab's wired line), the crate is another task's, and the seed was left out of that branch so dev stays green until the fix lands with it, regression first.
   needs: nothing
   result: the seed is in the regressions file, the test passes with it, and the lease rule holds
   id: dhcp-lease-moves
   by: claude-session (iodd-meta)
 
-- [ ] **A sensor's IODD as its metadata: from the library to the point it is wired to** — Why it matters: Nick, 2026-11-14: "ioLink is a core part of this but may fundamentally be different so let's focus on it for digital input and output device metadata more than anything else", and of sensors that day: "Their output? It should be deeply known ahead of time." A prox or a valve sits on a digital channel of a remote I/O block and is never spoken to; its vendor's IODD (every IO-Link device has one) says who makes it, its variants, how each connector is wired, whether it switches without a master, and what its signals and their states are called. Built: helmsman-devices `scripts/iodd-draft.py` drafts a library record from an IODD (`[identity.iolink]`, the order numbers, `[wired]` with each connector's wires, `[[signals]]` with `on` / `off` names, `[[settings]]` with factory values such as PNP and high active; helmsman-devices #33, #38), with five real records as drafts (ifm IF6123, O5D100, PN7092, KQ6005, SICK WTB4FP; IODDs from IODDfinder through `docs-fetch.py`). In Helmsman a map line names what is on a point, `in part_present bool rio di:3 wired=ifm/if6123`: the box keeps it, the Agent's `list_devices` gives it, and `devlib` finds the record by it, by an order number or by the IO-Link identity. Nothing is live: the box reads the library's `main`, and the records are on its `dev`. Left, in order: (1) `wired.switching` for each record (which signal the switching wire carries with no master, normally open or closed): an IODD does not say and the Smart Sensor Profile leaves it to the vendor, so it comes from each data sheet with its page; none could be fetched on 2026-11-14 (ifm's pages are rendered by script, its asset service answered 404 and 403), so this needs the PDFs by hand or a vendor source that can be fetched; (2) done: the library builds `record.json` beside each wired device's `device.toml` (helmsman-devices #39), `helmsman_project::devrecord` reads it, the box serves its brief from `GET /api/devices/library?wired=VENDOR/MODEL`, and the Agent's `list_devices` brings it for every wired point; (3) half done: on a box the Devices tab says what is wired under the point (vendor, model, kind; on/off names, factory settings and the draft note in the tooltip), tested at the panel's default width. Left of it: the same in the playground (it has no box, so the canvas fetches the index and the record itself), the I/O tab, and a picker that searches the library by the number on the label and writes `wired=` into the map line; (4) `agent-names-io` uses it: a sensor picked from the library comes with what it is and what on means, and only its function is asked; the box has the tool for it, `list_library_devices` (search by vendor, model or label number; each match's `wired` value and brief), which MCP clients can call today; the relay's Agent cannot until a new profile id lists it and says what `wired` and `wired_devices` are and that `propose_io_map` may write `wired=VENDOR/MODEL` on a point's line (agent-relay: profiles are pinned, its dev is at helmsman/v10 while the box asks for v7 by default, and a deploy is Nick's, so that is its own piece of work there); (5) the simulation's plant takes the sensor's kind and states from the record; (6) more records, sorted by what Nick's benches and customers use.
-  needs: the vendors' data sheets for (1); nothing for (2) and (3); a relay profile id for (4)
+- [ ] **A sensor's IODD as its metadata: from the library to the point it is wired to** — Why it matters: Nick, 2026-11-14: "ioLink is a core part of this but may fundamentally be different so let's focus on it for digital input and output device metadata more than anything else", and of sensors that day: "Their output? It should be deeply known ahead of time." A prox or a valve sits on a digital channel of a remote I/O block and is never spoken to; its vendor's IODD (every IO-Link device has one) says who makes it, its variants, how each connector is wired, whether it switches without a master, and what its signals and their states are called. Built: helmsman-devices `scripts/iodd-draft.py` drafts a library record from an IODD (`[identity.iolink]`, the order numbers, `[wired]` with each connector's wires, `[[signals]]` with `on` / `off` names, `[[settings]]` with factory values such as PNP and high active; helmsman-devices #33, #38), with five real records as drafts (ifm IF6123, O5D100, PN7092, KQ6005, SICK WTB4FP; IODDs from IODDfinder through `docs-fetch.py`). In Helmsman a map line names what is on a point, `in part_present bool rio di:3 wired=ifm/if6123`: the box keeps it, the Agent's `list_devices` gives it, and `devlib` finds the record by it, by an order number or by the IO-Link identity. The records are on the library's `main` (checked 2026-11-15), which the box and the playground read. Left, in order: (1) `wired.switching` for each record (which signal the switching wire carries with no master, normally open or closed): an IODD does not say and the Smart Sensor Profile leaves it to the vendor, so it comes from each data sheet with its page; none could be fetched on 2026-11-14 (ifm's pages are rendered by script, its asset service answered 404 and 403), so this needs the PDFs by hand or a vendor source that can be fetched; (2) done: the library builds `record.json` beside each wired device's `device.toml` (helmsman-devices #39), `helmsman_project::devrecord` reads it, the box serves its brief from `GET /api/devices/library?wired=VENDOR/MODEL`, and the Agent's `list_devices` brings it for every wired point; (3) done: the Devices and I/O tabs say what is wired under the point (vendor, model, kind; on/off names, factory settings and the draft note in the tooltip), on a box and in the playground (which reads the index and `record.json` itself), and "What is wired here…" on a point searches the library by the number on the label and writes or clears `wired=` on its map line (canvas `wired.rs`), tested at the panes' default widths; (4) `agent-names-io` uses it: a sensor picked from the library comes with what it is and what on means, and only its function is asked; the box has the tool for it, `list_library_devices` (search by vendor, model or label number; each match's `wired` value and brief), which MCP clients can call today; the relay's profile for it is `helmsman/v11` (agent-relay #38: v10 plus the tool and a prompt section on `wired=`, `wired_devices`, `switching_wire_carries` and recording it through `propose_io_map`; evals `wired-sensor-by-label` and `wired-sensor-not-in-library` pass live in every regime). Left of it: Nick's relay deploy, then a box opts in with `--relay-agent v11` (the box's default is still v7; moving it is a box change after the deploy); (5) the simulation's plant takes the sensor's kind and states from the record; (6) more records, sorted by what Nick's benches and customers use.
+  notes: 2026-11-15, (1), a session's search (not yet checked page by page). ifm IF6123/IF6124/IG6615, KQ6005 and PN7092: the data sheets give pin 4 = OUT (and PN7092 pin 2 = OUT2) but only "NO/NC, PNP/NPN configurable" with no factory value, so the default has to come from the IODD's parameter defaults (already in the records' `settings`) or the operating instructions' factory table. ifm O5D100 instructions (11457730/00, p. 6): pin 4 = OUT1 normally open, pin 2 = OUT2 normally closed; its 2013 data sheet says DC PNP. SICK 1105505 is WTB4FP-32161120A00; its sheet (2024-03-28, p. 4) says pin 4 = QL1 light switching (HIGH with an object), pin 2 = dark switching, push-pull. 1122374 (same type family as 1222998) says the same; 1223017, 1123751 and 1123757 were not found by their own type code, and other WTB4FP variants differ on pin 2, so each needs its own sheet. Readable hosts: media.ifm.com/dam, automatyka24.pl, assets.alliedelec.com; ifm.com itself answers 403/404 to scripts.
+  needs: the vendors' data sheets for (1); the relay deploy of helmsman/v11 for (4)
   result: a wired sensor is picked from the library by name, and the program, the I/O list and the Agent know what it is and what its signal means without anyone typing it
   id: iodd-metadata
   by: claude-session (iolink)
@@ -168,6 +235,34 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
   notes: 2026-11-13: built as #374 (draft). Its last CI run failed in helmsman-plc tests/agent.rs:2152 `an_unreachable_relay_still_gives_the_boxs_explanation_then_an_error`; not looked into yet. Then `gh pr ready 374 && gh pr merge 374 --auto --merge` (classifier-denied once).
 
+- [ ] **The library says what has not been proven on a unit, entry by entry** — Nick, 2026-11-17: an entry is finalized by the first user who implements the device, so until then the library has to flag that it has not been proven out and exactly what has not. Today that is spread over three places a reader has to know: no `checked_on` means "from documents", a point's `source` may end "confirmed on a unit", and `[[questions]]` and the README's "Not run" hold the rest. The two entries of 2026-11-16 show the gap: the IMPACT67 55089 has `checked_on` although no channel was ever seen switching, and the Lexium MDrive has it although its output layout as delivered is unchecked. Shape to build (my recommendation, yours to change): a `[proof]` table in `device.toml` with one line per thing a unit can prove (identity, connection, each point group, outputs on a lost connection, each protocol), each `proven` with date and firmware or `unproven` with why; `checked_on` stays as the date of the last unit contact and stops meaning "done"; `build-index.py` carries a summary (`proven: 3 of 7`) and the list of what is open into `index.json`; `build-review.py` already walks every claim and gets the same marks; the site's library table and check page show "proven on a unit / not yet: channels, outputs on a lost connection" instead of one date; AGENTS.md step 5 tells the first implementer's agent to turn `unproven` lines into `proven` ones in the pull request that reports them. Backfill: all 45 entries, most of them entirely unproven, generated from what each file already says.
+  needs: later (Nick, 2026-11-17); nothing else
+  result: anyone picking a device sees at a glance what a unit has shown and what is still only on paper, and the first implementer's pull request closes those lines one by one
+  est: 2d
+  difficulty: med
+  id: library-unproven-flags
+  asked: 2026-11-17
+  by: claude-session
+
+- [ ] **Configure a device by talking to an agent, not through the vendor's tool** — Nick, 2026-11-17: come up with ways to configure devices agentically in the device library, casually and conversationally, so nobody has to use the vendor's software. What exists: helmsman-devconf reads and writes a Moxa E1200's settings through its web console, with the box's engineer gate as the only way a unit is changed (`devconf-agent-tools` is its read-only agent side). What the bench of 2026-11-16 showed is reachable without any vendor tool: the MDrive answers MCode on TCP 503 beside EtherNet/IP (every register read; `SL 0` stopped it), and its EtherNet/IP assembly mapping, protocol choice and "Halt Motion" setting live behind Novanta's Configuration Utility, which talks to that same port; the IMPACT67 takes its channel setup as configuration data in the Forward_Open (built: `config_data=`), and its address mode and parameterization mode through its web server; every EtherNet/IP device has the TCP/IP Interface object for its address. Shape to explore first, as an interview: a `configure` recipe per library entry (which channel reaches the setting: a CIP attribute, a web form, a vendor text port; what each setting is called in the vendor's words and in plain words; what is safe to change live and what needs a restart), read by one generic agent tool that proposes a change in words, shows the before and after, and applies it only through the engineer gate; settings the recipe cannot reach are listed as "needs the vendor's tool" so the gap is visible. First targets, because the bench has them: the MDrive's mapping page over MCode (capture what the utility sends, a hand-off `tcpdump`), the IMPACT67's parameterization mode, any device's IP address over CIP.
+  needs: later (Nick, 2026-11-17); an interview on the shape before anything is built; the MDrive and the IMPACT67 on the bench
+  result: "make pin 4 of every port an output" or "put the drive's mapping back to the default" is said to the agent and done, with the change shown first and recorded
+  est: 1w
+  difficulty: high
+  depends: devconf-agent-tools
+  id: agentic-device-config
+  asked: 2026-11-17
+  by: claude-session
+
+- [ ] **`enip-io`: pick which of an EDS's exclusive owners to open** — Why it matters: from an EDS the driver opens the first exclusive owner. The IMPACT67 55089's EDS has four (without and with diagnosis, each for two configuration instances), and the first has no diagnosis bytes, so `eds=` alone cannot reach the short-circuit and overload bits; the library's profile works around it by giving the sizes itself. Shape: `connection=N` (the EDS's `ConnectionN`) beside `exclusive-owner` and `input-only`, refused when N is not an owner of the kind asked for, with the Devices tab's import offering the EDS's own connection names.
+  needs: later (Nick, 2026-11-17); nothing else
+  result: a device with several owning connections is driven from its EDS alone
+  est: 4h
+  difficulty: low
+  id: enip-eds-owner-choice
+  asked: 2026-11-17
+  by: claude-session
+
 - [ ] **A DHCP server on the box's device port: a block out of the box needs no vendor tool** — Nick, 2026-11-13: users won't preconfigure devices themselves, and PROFINET-first is out (EtherNet/IP and Modbus TCP are what plants run). Turck TBEN blocks ship at rotary position 600 (PGM-DHCP, a DHCP client until given an address) and Murrelektronik IMPACT67 E at 000 (DHCP/BOOTP, helmsman-devices `devices/murrelektronik/impact67-e-series.md`), so a box that answers DHCP on its own I/O network gets them addressed with nobody touching the device. Shape: a DHCPv4 server (RFC 2131 subset: DISCOVER/OFFER/REQUEST/ACK/NAK/RELEASE, plus BOOTP replies for blocks that only send BOOTP), std only like the other protocol crates, a pure state machine with the socket outside it (the `helmsman-profinet` pattern), a fixed lease per MAC kept in the state dir, addresses from a pool the project settings name. A new device's lease shows up as `found` in the Scan (ListIdentity from that address, matched to the library by `cip=`), and the map line the box suggests is `mac=` (`helmsman_io::resolve`), so the lease can move without the project changing. Off by default and per interface: decision (4) of `device-profiles` says the I/O network may be IT's, and a second DHCP server on a plant network is an outage. Before it answers anything it listens for another server's OFFER (sends one DISCOVER of its own) and refuses to start if one exists, says so on the Devices tab, and stops if one appears later. Tests: hostile packets (truncated, option overflow, wrong magic cookie, a flood of DISCOVERs with random MACs against pool exhaustion), the rogue-server check, lease persistence across restarts, and one bench script that gives a TBEN out of the box its address (auto mode refuses LAN listeners: the bench run is Nick's).
   notes: 2026-11-13: the server itself is crate `helmsman-dhcp` (feat/dhcp-server): the message, the server state machine, the lease file and `guard` (the probe and the other-server check), with property tests; the property test found the pool's take-back handing out another client's reservation, fixed with its regression. Left: the box half (UDP 67 on the named interface, the probe before serving, the lease file in the state dir, the settings and the Devices tab's word for a refused start), then the Scan's `found` from a lease and the `mac=` suggestion.
   notes: 2026-11-13: Nick: a box setting, not a project's ("a personal preference that will be global to all devices"). The box half is `--dhcp IFACE` (`--dhcp-pool A-B`, default .100-.199 of a /24; `--dhcp-lease S`, default a day): helmsman-plc `dhcp`, both sockets tied to IFACE (helmsman-l2 `bind_to_interface`), a 4 s probe before serving, a stop when another server is heard later, leases in `<state-dir>/dhcp/leases`, `GET /api/dhcp`; tested on loopback. Left: (1) deploy/helmsman-plc.service has `CapabilityBoundingSet=` empty and says every port is above 1024, so `--dhcp` on the Pi needs `CAP_NET_BIND_SERVICE` granted there (Nick's deploy line); (2) the bench run against a TBEN out of the box (Nick: auto mode refuses LAN listeners); (3) the Devices tab's word for a refused or failed server, and leases in the Scan's `found` with a `mac=` line suggested; (4) reservations from the running project's `mac=` device lines.
@@ -179,24 +274,15 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **The box half of the agent's device profile: propose, check, rename, save** — PROTOCOLS.md step 5. The relay half is merged (agent-relay #20, 2026-11-13, by the helmsman-devices-8d session): agent helmsman/v10 has the client tool `propose_device_profile {name, text, summary}`, and on the real Murrelektronik 55086 EDS and handbook every bit address it proposed matched the hand-made `.device` (it chose true lengths of 3 and 1 bytes against the hand-made 4 and 2, and said so). Left here: helmsman-agent executes `propose_device_profile` by running the text through `Profile::parse` and returns the parse errors or the channel list to the model; a box opts into v10 (`--relay-agent v10`); the Devices tab shows the proposed channels for the user to rename and saves `NAME.device` into the project; an upload route holds the EDS or manual the agent reads.
-  needs: nothing
-  result: a device the library does not know gets a profile the user checked, from its vendor's file, without a hand-written map
-  est: 2d
-  difficulty: med
-  id: device-profile-propose-box
-  asked: 2026-11-12
-  by: claude-session
-
-- [ ] **Publish a checked device profile to the library** — the second tool, on the relay (it holds the only token that can push): a pull request into helmsman-devices' `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`, opened from what the user checked on the Devices tab.
-  needs: a fine-grained GitHub token held by the relay alone (Nick, 2026-11-13: only the relay can push), limited to pull requests on helmsman-devices and kept in Secrets Manager; you create it from a hand-off script that names the scopes. No box ever holds a GitHub credential
-  result: the library grows by a pull request each time a user maps a new device
-  depends: device-profile-propose-box
-  est: 1d
-  difficulty: med
+- [ ] **Publish a checked device profile to the library: the token, the deploy, the first real one** — built 2026-11-18 (helmsman PR for the box route and the Devices tab's "Publish to the library…", agent-relay PR #51 for the tool `publish_device_profile` and profile `helmsman/v13`), both drafts; nothing has met the real GitHub, only a scripted one. What it does: an engineer saves a profile, the tab offers the button, the box sends the saved file to the relay, the relay opens a DRAFT pull request into helmsman-devices `dev` (`NAME.device` beside the device's `device.toml`, which gains `profile = "NAME.device"`, and `index.json` gaining `profile`, byte for byte what `build-index.py` writes; drafts because the library's auto-merge merges non-draft PRs from you). Only for a device the library's index already lists (44 of 45 entries have no profile yet); one it lacks is refused with the pointer to a "New device:" issue. Left: (1) your steps, in order: review and merge the relay PR (a new template parameter `GithubSecretName` and one IAM statement reading that one secret), `./scripts/deploy.sh` there, run `scratch/31-github-publish-token.sh` (prints the token settings to make, takes it at a hidden prompt, stores it with `scripts/put-github-key.sh`, checks it sees helmsman-devices and not another repository), merge this PR and start a box with `--relay-publish-agent` left at its default `helmsman/v13` (or `--relay-agent v13`); until the token is stored every publish answers "publishing is not set up" and nothing else changes; (2) the first real publish, from the E1213 or an E1210 profile, to see the PR, its CI (`build-index.py --check`) and the draft; fix what the real GitHub shows and keep it as a test in the relay; (3) a device the library lacks: a minimal folder (`device.toml` with vendor, model, kind and profile only) is a small step on the relay, a decision on what the library accepts without an EDS or citations (its AGENTS.md says every field is read or seen); (4) the tool is listed to the model too (the route needs the profile to list it, and a model's call does nothing); a tool flag that keeps it out of the model's list is a relay-core change.
+  needs: you: the steps in (1); a unit-checked profile is not required (the PR says no unit has proven it)
+  result: the library grows by a pull request each time a user maps a device it has no profile for
+  est: 2h of yours, then 2h for what the first real publish shows
+  difficulty: low
   id: device-profile-publish
   asked: 2026-11-13
   by: claude-session
+  status: blocked
 
 - [ ] **PROFINET from the node: a real device, then the node image** — Why it matters: only once a device has to be reached over PROFINET. Parked with `profinet-raw-access` (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first; PROFINET when a customer or a device needs it). the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block.
   needs: a device that has to be reached over PROFINET
@@ -301,10 +387,11 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   est: 2d
   difficulty: med
   depends: agent-on-box
+  notes: 2026-11-17, built (PR on feat/relay-v2-client): the box's v2 client (helmsman-agent session.rs and the v2 loop in agent.rs; docs/relay-protocol-v2.md vendored from agent-relay 26cd6dc9) and `--relay-agent v8`..`v11` on relay-held sessions; the chat route asks `GET /v1/agents/{agent}` once for the profile's `protocol` (a bare `v8` is retried as `helmsman/v8`), v7 and older stay on v1 and the default is still v7. Documents the relay stored are saved as drop-ins; a lost session is reopened once; the owed step goes first on the next message. Tested against a loopback relay scripted from the protocol doc (tests/session.rs, tests/agent.rs): no real relay has answered this client. Left: a bench run against the deployed relay (Nick's, relay card relay-deploy-v2), then v8 as the default; the model is not told a saved document's drop-in id; the MCP `fetch_document` route is still v1's; sessions are not deleted when a chat is dropped (7 days on the relay). agent-relay PR #7 merged 2026-11-07; spec mode (#475) went through v7's chat.
   id: relay-v2-client
   asked: 2026-11-05
   by: claude-session
-  notes: agent-relay PR #7 merged on 2026-11-07. Checked 2026-11-13: the relay's agents/helmsman has v1..v7 and explain-v1/v2, no v8, so nothing serves it yet (relay card relay-deploy-v2).
+  status: ready
 
 - [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.
   needs: a Modbus device that answers FC 43/14 to test on (does the E1213? check on the bench; the simulator answers it either way)
@@ -316,7 +403,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   by: claude-session
   notes: box side merged in #219 (FC 43/14 codec and probe, modbus= endpoints, discover ?modbus=1, spec §6.21). Left: the Devices tab asking ?modbus=1 and showing the list; identity.modbus in helmsman-devices build-index.py; a Modbus-identity query on GET /api/devices/library; whether the E1213 answers FC 43/14 (unchecked: it was off the LAN 2026-11-04).
 
-- [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (separate repo and session; SAM deploy, deploy-chain edits as a draft PR): a new profile id (e.g. helmsman/help-v1; a served profile never changes) whose model gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
+- [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (SAM deploy, deploy-chain edits as a draft PR): helmsman/help-v1 (agent-relay #55, 2026-11-18) answers from the box data and help pages alone; this is the next id (helmsman/help-v2, and the box's `--relay-help-agent` default moved to it), whose model also gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
   needs: a session in ../agent-relay (this repo's sessions cannot write there); Nick's go for the deploy
   result: the relay serves the Help profile the box's Help mode asks for
   est: 2d
@@ -339,16 +426,6 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   difficulty: low
   id: kept-files-in-canvas
   asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — Why it matters: today a node's firmware changes only over a USB cable from a laptop, so a node in a cabinet has to be opened to update it. This lets it take a new image over the network and fall back to the old one by itself if the new one does not come up, so a bad build cannot leave a machine without its controller. #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. On the P4 (helmsman-node-p4); the ESP32 boards are closed (Nick, 2026-11-13). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
-  needs: the P4 on the bench (192.168.3.56, /dev/cu.usbmodem5C930154551): the node board since 2026-11-13, the ESP32 boards closed
-  result: a node on the plant network takes a new firmware from a laptop without a USB cable, and a bad image cannot brick it
-  notes: sized 2026-11-09 (not started, needs the bench): (1) a new partition table, nvs / otadata / phy_init / ota_0 / ota_1 on supervictor/edge/partitions.csv's model, one USB flash per board (espflash --partition-table, --erase-parts otadata; it moves the nvs region the settings and program live in, so the node is commissioned again); (2) port supervictor/edge/src/ota/{install,policy,http,manifest}.rs into nodecore (Slot trait installer with sector buffering, digest and read-back; the checksummed RTC record with MAX_PENDING_BOOTS; the strict response-head parser; 2.4k lines with their proptests, tied to supervictor_common::firmware types to replace); (3) the fetch task on embassy-net (Range + If-Match) writing through esp-bootloader-esp-idf 0.5's OtaUpdater (next_partition, activate_next_partition, set_current_ota_state), the boot policy at start, GET /api/firmware, POST /api/firmware {url, sha256}, POST /api/firmware/confirm; (4) on the P4: a push, a confirm, a forced rollback.
-  est: 2d
-  difficulty: high
-  id: node-ota
-  asked: 2026-11-09
   by: claude-session
 
 - [ ] **A Studio box with the device links off, beside the P4** — your answer to `try-box-keep-or-retire` (2026-11-13): the Studio is for app and interface work, the P4 for runtime and embedded work, and the two should not both be on the devices; but the Studio box should still be programmable with everything except device comms, so it can run while the P4 has them. Today a box opens every link its project's map names, and the only way off the E1213 is to stop the box. Build a box setting (`--links off`, and the same as a switch an engineer can flip): the program, the canvas, the agent, proposals, history and the Monitor all work; no link opens; each input reads as the simulation would give it (the same plant model the page's simulation runs) and outputs go nowhere; the Devices tab and the Monitor say "device links off on this box" so nobody reads simulated values as the plant's. Then the try box runs that way during P4 work, and CLAUDE.md's try box entry says so.
@@ -383,7 +460,7 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   result: the P4 node runs on PoE alone, shares the E1213, and has its G4 and G5 numbers in docs/EDGE.md
   est: 1d
   difficulty: med
-  notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash 4.7.0). A program over the flash slot runs but is not kept (12 KB did not fit): the larger slot comes with node-ota's partition table.
+  notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash 4.7.0). A program over the flash slot runs but is not kept (12 KB did not fit): node-ota's partition table kept the settings area at its 24 KiB, so a larger program slot is still open (it moves the settings, so the node is commissioned again).
   depends: p4-poe-isolation, e1213-firmware-update
   id: node-p4-followups
   asked: 2026-11-10
@@ -399,32 +476,52 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **Agent speed: less thinking on small asks** — Nick, 2026-11-13: the Agent is slow; approved lever. Measured on the free chat: on a simple instruction the model thinks for 5 to 10 s and writes the whole file in 1 to 2 s, so thinking is most of the wait. A new relay profile (a served profile never changes): thinking off or at its lowest for one-line changes (a rename, a time, a constant) and kept for new logic, chosen by the page from the instruction and the scope, or by the relay from the request. Kept only if the agent ladder still passes 14 of 14 (`cargo test -p helmsman-canvas agent_ladder -- --ignored`, against a relay serving the profile); the ladder's seconds before and after go in the PR.
-  needs: a session in ../agent-relay for the profile, your deploy
-  result: small instructions answer in a few seconds instead of 8 to 20
+- [ ] **The design step: a strong model designs the system, the everyday agent builds it** — Nick, 2026-11-15: "I need Opus 5.5 equivalent jumping in for hardcore system designs in one-shot for you to build from. Something so absurd that more abstraction will need to be added." Interview the same day: a design step the engineer asks for (not an escalation the cheap model decides, not the whole chat on the strong model); Opus 5.5 on the Anthropic key behind the relay's `best` tier; reachable from boxes with a token and, capped, from the playground. The session's own call: the playground runs it on the free chat's own capped key, never the Anthropic key, so the hard bound on public spend stays. Built: the relay profile `helmsman/design-v1` (agent-relay #39). It answers with no program: Machine, Signals, Parts (each with its ST interface and state table), Faults, numbered testable Requirements, a Build order whose steps name the requirements they must pass, Open questions with the value assumed. The dialect, the project, its I/O and its requirement tests go in the request as `<dialect>`, `<project>`, `<io_devices>`, `<requirement_tests>`. A big design takes several turns: after an answer that stopped at max_tokens the client sends the one word `Continue` with the assistant turn (its thinking block included) and the answer carries on from the exact character. Measured on a bottling line: 472 s for the first turn, 230 s for the second, about 78,000 output tokens, 11 parts, 81 requirements, 19 build steps. Since built: the page's half of the contract (`crates/helmsman-canvas/src/design.rs`, #465: the request, Continue and join, the reader, the brief for one build step, tested against the recorded bottling line and lamp), the box route (`POST /api/design`, #467) and the relay's tier grant (agent-relay #41: a token needs `--tier-daily-tokens N --tiers best` to be served a profile off the default tier, refused past that many tokens a day; `agent-relay-admin grant <client> ...` amends a live token in place). Left: the Agent tab entry (`design-step-canvas`), the playground (`design-step-playground`), the deploy (`design-step-deploy`).
+  result: an engineer describes a whole machine, reads its design, and the Agent builds it step by step against the design's requirements
+  est: 4d
+  difficulty: high
+  id: design-step
+  asked: 2026-11-15
+  by: design-step session
+
+- [x] **Design step on a box: the box asks the relay for the design profile** — `POST /api/chat` reaches one agent profile today (`--relay-agent`, default v7). A design request goes to `helmsman/design-v1` with the box's dialect, its project files, `list_devices` output (wired devices included) and its requirement tests as the tagged blocks; the stream is forwarded as it is, and a `Continue` is one more request. An unknown-profile answer from the relay (it has no `best` tier) reaches the page as "the design step is not available on this relay", not as an error. The relay's function allows 600 s a turn: the box's own request timeout must not be shorter.
+  needs: nothing to build; the relay deployed with a `best` tier to try it
+  result: `--relay-design-agent design-v1` (or the default once deployed) and a design route the box page uses
+  depends: design-step
   est: 1d
   difficulty: med
-  id: agent-less-thinking
-  asked: 2026-11-13
-  by: claude-session
+  id: design-step-box
+  asked: 2026-11-15
+  by: design-step session
 
-- [ ] **Agent speed: edits instead of the whole file** — Nick, 2026-11-13: approved lever. The model rewrites the whole file every time; for a long program that is most of the output. A new relay profile whose answer is anchored edits (the lines replaced and the text they become, refused when the anchor no longer matches), applied by the page and checked as today; the draft then shows the edit in place. Also the first step of `agent-acceptance-signal` (edits anchored to a base hash). Ladder before and after, as above, plus a long-program rung.
-  needs: a session in ../agent-relay for the profile, your deploy
-  result: an instruction on a 300-line program answers about as fast as one on 20 lines
-  depends: agent-less-thinking
+- [ ] **The playground's design entry, on a key of its own** — decided 2026-11-16: the design entry on the playground runs on a second capped key ($3 a day: two large designs or many small ones), checked by `put-demo-key.sh` like the chat's, with an allowance of 6 design turns an hour per address. When the design key is spent only the design entry says so and the chat carries on. In the relay: the `design` demo agent on that key, its own request shape (a continued design sends the model's reasoning back, which the chat's text-only requests cannot carry) and body cap, a Timeout a design turn fits (one ran 472 s against the chat's 120 s), status that reports the design entry by itself. On the page: the Agent tab's design entry talks to it (`design-step-canvas`) and is hidden when the relay does not serve it. Yours afterwards: create the second key with its cap, run `put-demo-key.sh` for it, deploy.
+  needs: the relay's draft PR reviewed and deployed with the second key before it can be tried live
+  result: a visitor asks for a design on the playground and the free chat stays open for everyone else
+  depends: design-step
   est: 2d
   difficulty: high
-  id: agent-edits-not-files
-  asked: 2026-11-13
+  id: design-step-playground
+  asked: 2026-11-16
   by: claude-session
 
-- [ ] **Agent speed: compare faster models on the ladder** — Nick, 2026-11-13: approved lever. Two or three candidates through OpenRouter, each on the ladder for seconds, pass rate and cost, the table in the PR; the one picked is the relay's `RELAY_MODEL`, a deployment setting you change.
-  needs: a relay serving each candidate (a local relay, or a test stage); your deploy for the one picked
-  result: a model choice backed by the ladder's numbers
-  est: 4h
+- [ ] **Deploy the relay with a `best` tier** — the live relay (stack `agent-relay`, checked 2026-11-15 with `aws cloudformation describe-stacks`) has one model, `deepseek/deepseek-v4.1-flash`, and no `Tiers` parameter; its `main` is 29 commits behind `dev` (tiers, #24 on, are not on it). The Anthropic key is in Secrets Manager already (`agent-relay/anthropic-api-key`, 2026-11-04). Order: agent-relay #39 lands on dev; your merge of the relay's dev into main; then from the deploy checkout `SECOND_UPSTREAM_SECRET=agent-relay/anthropic-api-key RELAY_TIERS='{"upstreams":{"or":{"kind":"openrouter"},"ant":{"kind":"anthropic"}},"tiers":{"default":{"upstream":"or","model":"deepseek/deepseek-v4.1-flash-1017"},"best":{"upstream":"ant","model":"claude-opus-5-5"}}}' ./scripts/deploy.sh`. Then each box that should have the design step gets the grant on its live token, no new token: `RELAY_TABLE=agent-relay cargo run -q -p agent-relay-aws --bin agent-relay-admin -- grant <client> --tier-daily-tokens 2000000 --tiers best` (agent-relay #41; 2,000,000 tokens a day is about 25 large designs, at most about $40). Without the tiers the same build still starts and leaves design-v1 out (it says so in its log). First live turn: watch that the stream does not go silent while the model thinks (summarized thinking is there to prevent it; the trials ran through OpenRouter, never Anthropic's own API), and the DynamoDB path of `grant` has only been read, not run (no Docker for `make test-integration` that night). A design turn ran 472 s against the function's 600 s Timeout; the free chat's function allows 120 s, which no design turn fits, so its Timeout rises with the playground's design profile (a draft PR in the relay, deploy chain). Cost seen: about 78,000 output tokens for a large design, $20 a million on Opus 5.5.
+  needs: your merge of agent-relay dev into main, then the deploy (a hand-off script will carry the one line)
+  result: `GET /v1/agents` on the live relay lists helmsman/design-v1 served by claude-opus-5-5
+  depends: design-step
+  est: 1h
   difficulty: low
-  id: agent-faster-model
-  asked: 2026-11-13
+  id: design-step-deploy
+  asked: 2026-11-15
+  by: design-step session
+
+- [ ] **The Agent's edits and its question, where they are not yet** — built for the page on the free chat (2026-11-15: `crate::edits`, `crate::ask`, agent-relay #40). Measured on the ladder: a one-line change to a 250-line program in 7.3 s and one call, was 23.7 s and two; no difference on short programs; 48 of 48 either way. Asking without extended thinking was measured too and left out (`HELMSMAN_LADDER_QUICK` in agent_ladder_tests.rs says why). Left: (1) a box: `instruct::BOX_RULES` still asks for the whole file and the box's Agent tab shows no question (after `agent-progress-box`; needs a served relay profile for each, which is a new id and a deploy); (2) a visitor's own key and the local proxy still get whole files (`claude::SYSTEM`); (3) while an answer streams as edit blocks the Code tab keeps showing the file as it is, and the tab says "Writing main.st" with no draft: show the edits in place; (4) the question card has not been seen in a browser (the smoke run has no relay that serves `ask`); (5) the ladder has no rung for the question (no question on a clear instruction, the answer honoured on an open one): the page-level tests in ask_tests.rs script the relay.
+  needs: `agent-edits-deploy` for (4); `agent-progress-box` for (1)
+  result: the same speed and the same question on a box and with a key
+  depends: agent-progress-box
+  est: 3d
+  difficulty: high
+  id: agent-edits-everywhere
+  asked: 2026-11-15
   by: claude-session
 
 - [ ] **The box's Agent tab shows its progress too** — the page shows the time, the latest thought and the draft as it streams (feat/agent-progress); the box's Agent tab goes through `POST /api/chat` and still shows only a spinner (`instruct::View::progress` is `None` there). Needs the thinking and text deltas through the box's chat stream to the canvas, then the same `Progress`.
@@ -472,52 +569,26 @@ Freeze (Nick, 2026-11-14): until the front door (the promotion of what is built)
   asked: 2026-11-14
   by: claude-session
 
+- [ ] **The browser smoke run shows a found device the library does not know** — Why it matters: the Devices tab's row for such a device, with its "Build from vendor file…" button, the notes beside it and the Add it offers after a profile is saved (#452, 2026-11-15), has only ever been drawn by the headless UI tests, which check geometry and text and not what a browser shows. `scripts/canvas-smoke.py` never scans a device the library lacks, so no screenshot holds that row. Give the box page's smoke run (`make canvas-smoke BOX=1`) a found device with no library profile (a scripted scan answer or a loopback device the smoke box can find, never a bench device), and take a screenshot of the row, of the note after a file is picked, and of the row once a profile is saved.
+  result: the vendor-file path is looked at in a real browser on every smoke run, at the panel's default width
+  est: 3h
+  difficulty: low
+  id: smoke-unknown-device
+  asked: 2026-11-15
+  by: claude-session (board run)
+
+- [ ] **Feature parity, dev against live, and `make ship`** — Nick, 2026-11-20: a vertical test layer beside `make compat` (which is horizontal: the four repositories against each other's contracts), so a promotion is one step and every feature that works on dev is shown to work live. Decided by interview that day: `make ship` is one command Nick runs (the dev→master merge stays his); "live" is the site's playground, the deployed relay and a fresh loopback box built from master (never the try box); journeys go through the box API and the relay, with a thin browser pass that reaches every tab; a features manifest lists every API route, canvas tab and default relay profile with its journey, and a test fails when a surface has none; device journeys run on simulators only (Moxa sim, OpENer), never the E1213; candidate runs use the stub model, live runs spend one short real turn per agent route (chat, design, help, explain, tests); a journey green on candidate and red live after a ship gets a report and a draft revert PR on master, never a reset. Milestones: (1) manifest + coverage test, (2) `helmsman-compat parity --target candidate|live` with target/parity/report.md, (3) browser pass over every manifest tab, (4) `make ship` (candidate parity + compat, promote, relay deploy, live-state, live parity, revert draft), (5) docs/PARITY.md. All PRs drafts (they reach prod).
+  result: one command promotes all four repositories and reports, per feature, whether live matches dev
+  est: 3d
+  difficulty: high
+  id: parity-ship
+  status: doing
+  asked: 2026-11-20
+  by: claude-session 44a269b3
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
-
-- [ ] **ST corpus test and refusal ranking** — `tests/st_corpus.rs` in helmsman-iec plus `scripts/st-corpus.sh`, the `plcopen-corpus.sh` pattern: fetch real ST by pinned commit and SHA-256 into `target/st-corpus/`, never vendor it, and report per file whether it lexes, parses, checks and compiles, with a total and the refusals ranked by cause ("STRING: n files, VAR_IN_OUT: m, METHOD: k, ..."). Sources, in INVESTIGATION.md §3: `WengerAG/structured-text-utilities` (MIT) and `tkucic/UniTest` (MIT) can be fetched freely; the test directories of ruSTy (LGPL), matiec (GPL), iec-checker (LGPL) and blark (GPL-2.0) are fetch-by-hash only; OSCAT BASIC only after its license and download terms are read (unverified: skip it if that takes more than a look). Each source gets a docs/SOURCES.md entry under "Test corpora". The ranking is printed by the test and pasted into INVESTIGATION.md §3 so the dialect cards below can be reordered by it.
-  result: the order of the dialect work is measured, not guessed
-  est: 1d
-  difficulty: low
-  id: st-corpus
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **PLCopen guideline lints in the checker, the first 6-8** — in `crates/helmsman-iec/src/check.rs` as `Diagnostic`s with stable IDs (`PLCOPEN-CP<n>` where the guideline has a number, `HELMSMAN-L<n>` otherwise), on the warnings path #346 built (the check answer's `warnings`, the canvas rows and the CLI lines; its parser already reads an `id` and a `blocking` flag), fed into the agent's retry message in `verify::next` beside compile errors. The picks (INVESTIGATION.md §1): an FB instance called inside a conditional (the TON-inside-IF bug), an output written in more than one place, a variable read before it is assigned with no initial value, `=` or `<>` on REAL, a FOR variable or its bounds changed in the body, unused variables and unreachable code, recursion. Decided (Nick, 2026-11-07): every lint is shown and goes to the agent; the first two block "Use this code" and Deploy the way a red requirement test does; a blocking lint is overridden on its line by a pragma with a reason (`{lint: off CP-x "imported, the branch is the enable"}`: the lexer skips `{ }` pragmas today, so it has to keep this one), and the override is written to the audit trail with the reason. The others stay advisory until `st-corpus` shows how noisy they are. Source: the PLCopen Coding Guidelines v1.0 PDF, a free download from plcopen.org (checked 2026-11-08, no login: `https://www.plcopen.org/download_file/force/ff60e817-eee5-442d-b718-a357a7279c7e/342/`); a docs/SOURCES.md entry with the rule number and page per lint ID. iec-checker in docker as a dev-time cross-check (both tools flag the same corpus files) is optional.
-  result: the agent's first retry already knows about the timer-in-IF and the double-written output; an engineer sees why a draft is held, and can override with a reason on record
-  est: 3d
-  difficulty: med
-  id: st-lints
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **VAR_IN_OUT and VAR_OUTPUT on FUNCTION** — the two cheap "yes" rows of the §4 table. VAR_IN_OUT on a FUNCTION_BLOCK passes a struct or array by reference inside one module (the standard way every library takes a buffer); a FUNCTION gets VAR_OUTPUT beside its return value. Oracle cases in tests/oracle.rs (ruSTy accepts both), property tests, the no_std build, the playground SYSTEM prompt and a new relay profile id listing them. Refuse anything that would alias across modules (the isolation claim).
-  result: imported FB libraries and agent-written helpers stop failing on the most common refusal
-  est: 2d
-  difficulty: med
-  depends: st-corpus
-  id: st-var-in-out
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **VAR_GLOBAL inside one module** — decided (Nick, 2026-11-08: `st-dialect-line`): VAR_GLOBAL is accepted at CONFIGURATION / RESOURCE scope inside one module and refused across modules, with a message that says signals are how modules talk. Imported CODESYS and Beremiz code uses it everywhere; the corpus will show how often. Oracle cases, property tests, the PLCopen importer's lowering of global variable lists, a relay profile id.
-  result: a CODESYS or Beremiz project with globals imports into one module unchanged
-  est: 1d
-  difficulty: med
-  depends: st-corpus
-  id: st-var-global
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **STRING[n], then typed asserts** — fixed-length `STRING[n]` (default 80 as the standard), with concatenation, LEN, LEFT/RIGHT/MID, CONCAT, FIND, comparisons and the conversions, bounded so the scan stays bounded and the edge node still builds (no_std: no heap). WSTRING later. Then the TcUnit idea from §5: `ASSERT_EQ_<TYPE>(Expected, Actual, Message)` (one block per type, no generics) so a red requirement test reads "speed was 40, expected 50 at 3.2 s" in the Requirements tab and in the agent's retry message. Oracle cases, property tests (every length boundary, invalid UTF-8 refused at the lexer), relay profile id.
-  result: messages, recipe names, device IDs and OPC UA / webhook payloads can be written in ST; a failed test says what it saw
-  est: 4d
-  difficulty: high
-  depends: st-var-in-out
-  id: st-string
-  asked: 2026-11-08
-  by: claude-session
 
 - [ ] **Process-control library: 10-15 blocks with tests** — in `crates/helmsman-iec/src/library.st`, written here (OSCAT's license is unverified and it leans on pointers): `PID` with anti-windup and bumpless manual/auto transfer, `RAMP`, `HYST`, `SCALE` (raw to engineering units, using the signal's `unit`), `LIMIT_ALARM`, `FILTER_PT1`, `DEBOUNCE`, `PULSE_COUNT` and a rate, sequence helpers. Decided (Nick, 2026-11-08: `st-library-names`): OSCAT's pin and block names where they exist, the standard's otherwise, no aliases; the plain-words explanation of every block and pin goes in its tooltip and its help page, the way the UI rule "tooltips on everything" already works. Each block gets requirement tests of its own, the non-IEC ones are marked in the docs as `BLINK_PATTERN` is, and the agent's profile gets the list (a new id).
   result: an analog loop the agent writes calls a tested PID instead of a hand-rolled PI with its own windup bug
@@ -534,6 +605,32 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   difficulty: med
   id: matiec-oracle
   asked: 2026-11-08
+  by: claude-session
+
+- [ ] **The diagram draws a VAR_IN_OUT argument as a read** — found while building `st-var-in-out` (#446, 2026-11-15): a function block can write through its in-out argument, but helmsman-diagram's lowering draws that argument as an input wire only, so the write the block makes is missing from the picture. Draw the in-out as both ways, and extend the generators in crates/helmsman-diagram/tests/props.rs to call blocks with in-outs and functions with outputs.
+  result: a block that takes a buffer by reference shows that it changes it
+  est: 1d
+  difficulty: med
+  id: diagram-in-out
+  asked: 2026-11-15
+  by: claude-session (board run)
+
+- [ ] **A relay profile that knows VAR_IN_OUT, function outputs and VAR_GLOBAL** — the box and the playground accept them (#446 and this card's PR, 2026-11-15) but the served agent profiles still tell the model they are refused. A new profile id in ../agent-relay must say: VAR_IN_OUT on a FUNCTION_BLOCK only, given by name at every call, a plain variable, element or member of exactly the same type, never a located variable, a PROGRAM input, an expression or a constant, never the same variable twice in one call; VAR_OUTPUT on a FUNCTION, every one bound with `=>` at every call (a call that leaves one out is refused, as ruSTy does: Nick, 2026-11-15); VAR_GLOBAL blocks stand before the first POU (or in a CONFIGURATION and its one RESOURCE), every POU of the module reads and writes a global by name, VAR_EXTERNAL may name one with exactly its type and no initial value (VAR_EXTERNAL CONSTANT for a CONSTANT global, or to read only). Refused: a local with a global's name, a global passed as a VAR_IN_OUT, VAR_GLOBAL inside a POU, VAR_ACCESS and VAR_CONFIG (a CONFIGURATION's TASK lines and program instances are read past with a warning); a global is never a port and no other module sees it. A served profile never changes, so this is a new id and the box's and the playground's default moves to it.
+  needs: a session in ../agent-relay for the profile, then your deploy
+  result: the agent writes and repairs programs with the syntax the compiler now takes
+  est: 3h
+  difficulty: low
+  id: relay-profile-dialect-2
+  asked: 2026-11-15
+  by: claude-session (board run)
+
+- [ ] **Strings as box signals** — `STRING[n]` is in the language (card `st-string`) but only inside a program: `Program::ports()` skips a STRING port, so it is no signal. Left for here, each with the skip it has today: `/api/signals` and the values stream, trend records, OPC UA, `RETAIN` (state.rs format; the checker refuses RETAIN on a string and names this card), I/O binding, `helmsman_io::Value`, nodecore `SignalValue`, helmsman-sim and its panel controls, and a requirement test sharing a STRING port with its program (`spec.rs` only shares ports `ports()` lists, so `ASSERT_EQ_STRING` can compare text the test builds but not a program output). Also the playground's `SYSTEM` prompt (helmsman-canvas/src/claude.rs, "Not supported: STRING and WSTRING") and a new relay profile id that tell the agent STRING, ASSERT_EQ_* and the string functions exist; a served profile never changes, so that is a new id in ../agent-relay.
+  needs: your call on the signal type for text (a bounded string of at most 255 bytes, as in the language), then a session in ../agent-relay for the profile and your deploy
+  result: a program's text outputs show on the desk, in trends and over OPC UA, survive a restart, and a requirement test reads them; the agent knows the syntax
+  est: 4d
+  difficulty: high
+  id: st-string-signals
+  asked: 2026-11-17
   by: claude-session
 
 ## From user feedback: plan for later
@@ -586,14 +683,15 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **TOD, DATE and DT** — the last "yes" row of INVESTIGATION.md §4: time-of-day and date types and their arithmetic, from the clock `scan_at` already has (the shift calendar uses it), so "after 22:00" can be written in ST. Oracle cases (ruSTy accepts them), property tests across midnight and the year end, no_std, a relay profile id. After `st-string`, which the formatting functions need.
-  result: schedule logic is written in ST instead of worked around with the calendar
-  est: 2d
-  difficulty: med
-  depends: st-string
+- [ ] **TOD, DATE and DT: the rest** — built: the language, the box's wall clock in its system time zone (`--time-zone`), the canvas simulation's browser time, and the prompts (relay PR agent-relay#54: `helmsman/v14`, `playground-v7`, `tests-v2`). Left: point the box (`--relay-agent`), the demo (`RELAY_DEMO_AGENTS`) and the test writer at those ids once the relay is deployed; DATE/TOD/DT ports are no signals (with STRING: `st-string-signals`); `SPLIT_DATE`/`SPLIT_TOD`/`SPLIT_DT` and the `L` forms are not built.
+  result: a controls engineer can read a DATE, TOD or DT port beside the other signals, and the agents write with the new ids
+  est: 4h
+  difficulty: low
+  depends: st-string-signals
   id: st-tod-date
   asked: 2026-11-08
   by: claude-session
+  status: ready
 
 - [ ] **TwinCAT .TcPOU / .TcDUT / .TcGVL import** — INVESTIGATION.md §8: XML wrapping ST in CDATA, so the ST parser does the work and the importer is small; the L5X pattern (convert, refuse what does not map, list every problem). Beckhoff code leans on METHOD / PROPERTY and VAR_GLOBAL, so wait for `st-corpus` to say how much of it would import before spending the day.
   result: a TwinCAT project's POUs open in the editor with every refusal listed
@@ -612,6 +710,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: st-lsp-formatter
   asked: 2026-11-08
   by: claude-session
+  notes: 2026-11-17 Nick's pick: the lints are built (#509); the language server and the formatter stay parked.
 
 - [ ] **Siemens SCL import** — decided (Nick, 2026-11-08: `st-scl-import`): not for the early release. SCL (TIA Portal) is an ST dialect (`#local`, `"DB".member`, REGION, IEC_TIMER instances, its own instructions); a source-level converter would follow the L5X pattern. Carded here so it is not lost: pick it up when a customer brings TIA code, and estimate then (likely 1-2 weeks).
   needs: a customer with TIA Portal code to import
@@ -623,73 +722,12 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Diagram edits 1: end positions in the parse tree** — first step of editing the program from the diagram (interview 2026-11-07: splice edits into the ST, ST stays the source of truth; V1 is rewire and values; sim and box through the normal Save; the ST updates live and the changed span flashes). `Expr` and `Stmt` carry only a start `Pos`; add `end: Pos` to both in helmsman-iec's parser (14 constructions in parser.rs, 1 in ladder/rung.rs; also check lower.rs and model.rs).
-  result: every statement and expression knows its exact source range, so a diagram edit can replace just that text
-  notes: property test: for every statement and expression in generated programs and the corpus, the source between start and end parses back to the same tree (ignoring positions). The tree drops comments and upper-cases names, which is why edits splice text instead of printing the tree.
-  est: 4h
-  difficulty: med
-  id: diagram-edit-spans
-  asked: 2026-11-07
-  by: claude-session
+### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
 
-- [ ] **Diagram edits 2: `helmsman_diagram::edit` with values, NOT and operators** — lowering records a source span per input pin (`(NodeId, inp)` → the operand's range; a read wired from an earlier write keeps the read's own text in this statement). New pure, wasm-safe `edit::apply(src, &Module, Edit) -> Result<Patch, Refusal>` (Patch = byte range + new text), depending only on helmsman-iec. First edits: SetConst (literals, TIME presets), ToggleNegation (the bubble on a pin or region gate), SwapOp (AND/OR, comparisons, + - * /).
-  result: a diagram gesture becomes an exact, checked text edit; nothing outside the patch changes
-  notes: brackets only where precedence needs them (`text::expr`'s levels); names written as declared, taken from the declaration's source text. Each edit is checked: splice, compile, re-lower, and `diff` must show exactly the intended block changed, else refused with the reason. Property tests over props.rs generators with comments mixed in: compiles, bytes outside the patch unchanged, the inverse edit restores the original bytes. `wasm_deps.rs` stays green.
-  est: 1.5d
-  difficulty: high
-  depends: diagram-edit-spans
-  id: diagram-edit-core
-  asked: 2026-11-07
-  by: claude-session
+Built: n-input gates, the fold layer (`helmsman_diagram::fold`) with the canvas drawing it, the comparison with its literal, range, latch, edge, selector and set/reset (on as the diagram opens), and sections named by a comment and arms (fold on request). Each card below is one more rule or renderer. Gates,
+chips and idioms are on as the diagram opens; arms, sections and output
+cards fold on request and the choice is kept in `diagram.layout`.
 
-- [ ] **Diagram edits 3: rewire, FB arguments, delete, rename** — Rewire (a pin to a variable, a constant or an earlier write), SetFbArg (`PT := T#5s`), DeleteStmt (the whole statement by its range), Rename (reuses `rename_ident`).
-  result: V1's full set of logic edits from the diagram
-  notes: refusals, each in plain words: type mismatch (the compiled program's types, as the NOT bubble uses), a source not yet written at that point, library POUs (`system`), a diagram whose source no longer matches the buffer (hash), a keyword as a name. `rename_ident`'s `ident()` accepts keywords today (`IF` passes), so refuse that up front.
-  est: 1d
-  difficulty: med
-  depends: diagram-edit-core
-  id: diagram-edit-rewire
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Diagram edits 4: editing on the canvas, simulation** — st_view.rs gestures: right-click a block or pin for Change operator ▸, Negate input, Connect to… (a searchable variable list, works on touch), Edit value…, Rename…, Delete statement; double-click a constant to edit it in place. Commit: push the old text into the same `TextEditState` undoer the editor uses (`add_undo`, its own entry), so Ctrl+Z undoes a diagram edit like typing; mark dirty; scroll the ST to the patch and highlight it about 1.5 s; rebuild the `Viewer` keeping the camera and the picked block.
-  result: in the playground and browser projects an engineer changes logic on the diagram and the code follows
-  notes: the edited block keeps its dragged position: the patch returns old key → new key for arrange.rs (blocks match by POU, label, text, ordinal, and the text changes). Tooltips on everything, 18 pt text, popups capped to the column; `every_tab_leaves_the_panels_their_width` stays green. Headless tests: gesture → buffer text, Undo restores it, the position carries over.
-  est: 1.5d
-  difficulty: high
-  depends: diagram-edit-rewire
-  id: diagram-edit-canvas
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Diagram edits 5: on a box** — the same gestures on a box, on only for an engineer (`writable()`) and only while the diagram shows the open buffer, not the running module; otherwise off with a tooltip saying why. Nothing new on the box: Save and Deploy go through the existing policy, which sets the tier from the diff.
-  result: diagram edits on a Pi land like typed edits, approval and audit unchanged
-  notes: box_projects_tests: edit, Save, the stale-save 409, against the real API. A diagram edit runs on a box only after Deploy, the same as typing.
-  est: 4h
-  difficulty: low
-  depends: diagram-edit-canvas
-  id: diagram-edit-box
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Diagram edits 6: docs** — amend `canvas-edit-scope` in docs/ARCHITECTURE.md (the live ST view section: the diagram now writes ST through checked splices), docs/UI.md, and a help page in the floor-engineer voice.
-  result: the docs say what the diagram can change and how it reaches the code
-  est: 2h
-  difficulty: low
-  depends: diagram-edit-box
-  id: diagram-edit-docs
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
-  result: building new logic from the diagram, not only changing it
-  notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
-  est: 1w
-  difficulty: high
-  depends: diagram-edit-docs
-  id: diagram-edit-v2-v3
-  asked: 2026-11-07
-  by: claude-session
 
 ## Product vision (interview 2026-10-29)
 
@@ -790,6 +828,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: machine-template
   asked: 2026-11-01
   by: claude-session
+  notes: 2026-11-17 Nick's pick: skipped until real documents exist.
 
 - [ ] **Fleet console + OTA** — the relay grows into the fleet backbone: box registry, snapshot sync, signed updates of the core.
   est: 3w
@@ -797,7 +836,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: 2026-11-02 night: the node half moved: helmsman-node runs the scan bench and Modbus (PRs #193, #199); its own API + site beacon and the Site view across nodes are what this card is now.
   id: fleet-console
   needs: a decision taken (interview 2026-11-02): no console host at all; see notes
-  notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
+  notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (A/B slots and the rollback are built, card node-ota, 2026-11-18: the node pulls an image from a URL; signed images are what is left); depends on the edge spike (`node-modbus`) for the node half.
   status: ready
 
 - [ ] **TLS on a node's data port** — your answer to `node-tls-first-peer` (2026-11-13): needed eventually to push production data out over a second network port, with strict isolation between the control runtime and the data publication; not until there is a board with more than one Ethernet port. The recipe (mbedtls-rs at the fork's main with Homebrew clang) compiles for the P4 (docs/EDGE.md Phase 3) and is all that exists.
@@ -820,20 +859,20 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 - [ ] **Community marketplace** — publish/browse/install bundles; floor per market-floor, then an AI review on install that explains risk in plain words and can only refuse.
   est: 3w
   difficulty: high
-  notes: walking skeleton done 2026-11-02 night, PR #196: bundle::index (signed canonical JSON), bundle::market fetch (public hosts only), CLI bundle index/fetch, POST /api/market/list and /api/market/install through the bundle import and approval policy, --market-allow-local. Card stays open for accounts, payments, the AI review.
+  notes: built: the walking skeleton (2026-11-02, PR #196: signed index, bundle fetch, CLI bundle index/fetch, POST /api/market/list and /install through the bundle import and the approval policy, --market-allow-local) and the AI review on install (2026-11-18, feat/marketplace-install-review here and feat/install-review-profile in agent-relay, both drafts): the relay profile helmsman/review-v1 (no tools, strict JSON verdict, three evals), the box's review stage between the bundle's checks and the proposal (a refusal stops it, a clean review goes on the proposal and the audit lines, no review stops at 409 until an engineer's session sends without_review), and the canvas's Install form and review panel on the Proposals screen. Left: nothing is live until the relay is promoted to main and deployed, then one make eval-live run of the three review scenarios on the deployed model; accounts, publisher uploads and payments (Nick, 2026-11-17: none of them yet); mirrors.
   id: marketplace
-  needs: the walking skeleton only, for now
-  notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a static, signed index of bundles (a JSON file and the bundles in a public repo, signed by trusted publishers), a box lists it and installs from it through the existing bundle path and approval policy; no accounts, no payments, no AI review yet. Est for the skeleton: 2d.
+  needs: the relay deploy (Nick: agent-relay dev to main, then the deploy) before the review is live; accounts and payments stay out until asked
+  notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a static, signed index of bundles (a JSON file and the bundles in a public repo, signed by trusted publishers), a box lists it and installs from it through the existing bundle path and approval policy. Nick 2026-11-17 (interview): the next slice is the AI review on install, no money or account infrastructure.
   status: ready
 
 - [ ] **Box SKU** — reproducible Pi image, first-boot pairing with the relay, provisioning script, enclosure/BOM for the preloaded kit.
   est: 2w
   difficulty: high
-  notes: walking skeleton done 2026-11-02 night, PR #198: scripts/pi-image.sh (pi-gen in Docker, pinned ref), helmsman-firstboot pairing files → LoadCredential, docs/BOX.md; not booted. Pairing by code needs a relay endpoint (relay card). Card stays open for enclosure/BOM and a booted image.
+  notes: walking skeleton done 2026-11-02 night, PR #198: scripts/pi-image.sh (pi-gen in Docker, pinned ref), helmsman-firstboot pairing files → LoadCredential, docs/BOX.md; not booted. 2026-11-18 slice (branch feat/box-image-ci, draft; relay half agent-relay feat/pair-by-code, draft): BUILT: .github/workflows/box-image.yml builds the image on an arm64 runner and scripts/box-boot-test.sh boots it under QEMU raspi3b (the image's own kernel; watchdog driver kept out), a scripted relay answers the redeem, the job waits for /api/health and the canvas page and keeps the serial log; `helmsman-plc pair` + helmsman-firstboot take a pairing-code, relay-box-id and relay-url (relay-allow-http for an http relay) off the boot partition; relay: POST /v1/pairings (admin token named in PairAdmins) and POST /v1/pair, tests on memory and SQLite. DONE 2026-11-19: the CI boot is green (run 44445977754: build, boot, API up after 205 s, canvas served, one pairing redeem; 23 min); pi-gen.ref is pinned. CHANGED 2026-11-18: QEMU's raspi3b froze the guest in sysinit (cause not found), so CI boots the image's rootfs on the generic `virt` machine with a pinned Debian cloud kernel (deploy/pi-image/qemu-kernel.env; its modules copied into the CI copy), which proves the userland and first boot, not the Pi's kernel/firmware/device tree. LEFT: enclosure and BOM; deploying the relay half (PairAdmins parameter, an admin token, `make test-integration` for the DynamoDB test nobody has run, maybe a WAF on /v1/pair); the first boot of the image on a real Pi (OWED: CI no longer runs a Pi machine); a console prompt for the code was left out.
   id: box-sku
   needs: the walking skeleton only, for now
   notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a reproducible Pi image build script (pi-gen or rpi-image-gen, the box binary and the canvas preinstalled, the systemd unit, first boot pairs with the relay from a one-time code) checked by booting it in QEMU in CI; no enclosure or BOM yet. Est for the skeleton: 2d.
-  status: ready
+  notes: the ready mark is dropped on 2026-11-18: what is left (enclosure, BOM, the relay deploy) is Nick's, not a worker's.
 
 - [ ] **EtherCAT master via ethercrab** — ethercrab (MIT/Apache-2.0, pure Rust) as the driver; EtherCAT slaves' PDOs mapped into the runtime's %I/%Q. Master only: a Pi cannot be an EtherCAT slave (needs an ESC chip).
   needs: a USB 3 gigabit NIC for the Pi (its one port is the Studio link) and one EtherCAT I/O slave to test against (e.g. a bus coupler + digital I/O terminal)

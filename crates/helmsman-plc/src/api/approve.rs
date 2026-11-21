@@ -224,16 +224,86 @@ fn err(why: &str) -> Json {
     json!({ "error": why, "changed": false })
 }
 
+/// What [`prelude`] found.
+struct Start<'c> {
+    appr: &'c Approval,
+    target: ChangeSet,
+    proposal: Option<Stored>,
+    /// A project's red requirement tests, one line each: a warning.
+    red: Vec<String>,
+    /// A project's lint overrides, as an audit line's tail.
+    overrides: String,
+}
+
+/// The refusal of a deploy of project build `b` that a blocking lint
+/// finding holds (`helmsman_iec::lint`, card `st-lints`): 422 with the
+/// findings and how to override one, audited, nothing changed. `None` when
+/// nothing holds it.
+fn held_by_lint(ctx: &Ctx, req: &Request, label: &str, b: &crate::project::build::Built) -> Option<Response> {
+    let held = super::projects::held(b);
+    if held.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = held.iter().map(ToString::to_string).collect();
+    let ids: Vec<&str> = held.iter().filter_map(|d| d.id.as_deref()).collect();
+    Some(refuse(
+        ctx,
+        req,
+        422,
+        &json!({
+            "error": "the project holds a lint finding that blocks a deploy; fix it, or override it on its line with a pragma and a reason: {lint: off ID \"reason\"}",
+            "changed": false,
+            "held": lines,
+            "warnings": super::projects::diags_json(&b.problems, "warning"),
+        }),
+        &format!(
+            "{label}: held by lint {}: {}",
+            ids.join(", "),
+            super::clean(&lines.join("; "))
+        ),
+        Note::default(),
+    ))
+}
+
+/// A bundle proposal whose modules hold a blocking lint finding: the 422
+/// refusal and its audit line, or `None` when nothing blocks it.
+fn bundle_held_by_lint(ctx: &Ctx, req: &Request, label: &str, cs: &ChangeSet) -> Option<Response> {
+    let (held, _) = super::bundle::lint_findings(cs);
+    if held.is_empty() {
+        return None;
+    }
+    let ids: Vec<&str> = held
+        .iter()
+        .filter_map(|h| h.split_whitespace().nth(1))
+        .map(|i| i.trim_end_matches(':'))
+        .collect();
+    Some(refuse(
+        ctx,
+        req,
+        422,
+        &super::bundle::lint_refusal(&held),
+        &format!(
+            "{label}: held by lint {}: {}",
+            ids.join(", "),
+            super::clean(&held.join("; "))
+        ),
+        Note::default(),
+    ))
+}
+
 /// What every apply, rollback and replay starts with: the target exists
 /// (404), the box has an approval path (501), and the target has a change
-/// set (409). The approval path, the target change set, and the proposal
-/// it came from.
+/// set (409). The approval path, the target change set, the proposal it
+/// came from, and a project's red requirement tests (a warning: they
+/// refuse nothing).
 fn prelude<'c>(
     req: &Request,
     ctx: &'c Ctx,
     target_ref: Target<'_>,
     label: &str,
-) -> Result<(&'c Approval, ChangeSet, Option<Stored>), Response> {
+) -> Result<Start<'c>, Response> {
+    let mut red = Vec::new();
+    let mut overrides = String::new();
     let (cs, proposal) = match target_ref {
         Target::Proposal(id) => {
             let Some(p) = super::proposal_id(id).and_then(|id| ctx.box_.proposals.get(id)) else {
@@ -247,6 +317,14 @@ fn prelude<'c>(
                     Note::default(),
                 ));
             };
+            // A bundle's modules are held by the same blocking lints as a
+            // project's deploy, whenever it was drafted.
+            if p.json["kind"] == "bundle"
+                && let Some(cs) = &p.change
+                && let Some(r) = bundle_held_by_lint(ctx, req, label, cs)
+            {
+                return Err(r);
+            }
             (p.change.clone(), Some(p))
         }
         Target::Snapshot(id) => match super::snapshot(ctx, id) {
@@ -263,11 +341,22 @@ fn prelude<'c>(
                 ));
             }
         },
-        // A red requirement test refuses the deploy before anything builds
-        // (`helmsman_iec::spec`; TODO.md spec-tests).
+        // The project's requirement tests run before it builds
+        // (`helmsman_iec::spec`); a red one is carried to the answer and
+        // the audit trail, and refuses nothing.
         Target::Project(name) => {
-            match super::projects::red_tests(ctx, name).and_then(|()| super::projects::built(ctx, name)) {
-                Ok(b) => (Some(b.change), None),
+            match super::projects::red_tests(ctx, name)
+                .and_then(|r| super::projects::built(ctx, name).map(|b| (b, r)))
+            {
+                Ok((b, r)) => {
+                    // A blocking lint finding refuses, unlike a red test.
+                    if let Some(r) = held_by_lint(ctx, req, label, &b) {
+                        return Err(r);
+                    }
+                    overrides = super::projects::override_note(&b);
+                    red = r;
+                    (Some(b.change), None)
+                }
                 Err((status, body, why)) => {
                     return Err(refuse(
                         ctx,
@@ -305,7 +394,13 @@ fn prelude<'c>(
             note,
         ));
     };
-    Ok((appr, cs, proposal))
+    Ok(Start {
+        appr,
+        target: cs,
+        proposal,
+        red,
+        overrides,
+    })
 }
 
 fn what(target_ref: Target<'_>) -> String {
@@ -322,8 +417,8 @@ fn what(target_ref: Target<'_>) -> String {
 #[allow(clippy::too_many_lines)]
 pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Response {
     let label = format!("replay of {}", what(target_ref));
-    let (appr, target, _) = match prelude(req, ctx, target_ref, &label) {
-        Ok(x) => x,
+    let (appr, target) = match prelude(req, ctx, target_ref, &label) {
+        Ok(s) => (s.appr, s.target),
         Err(r) => return r,
     };
     let content = target.id();
@@ -568,8 +663,14 @@ fn meta(target: Target<'_>, p: Option<&Stored>, by: &Approver) -> Meta {
 #[allow(clippy::too_many_lines)]
 pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Response {
     let label = what(target_ref);
-    let (appr, target, proposal) = match prelude(req, ctx, target_ref, &label) {
-        Ok(x) => x,
+    let Start {
+        appr,
+        target,
+        proposal,
+        red,
+        overrides,
+    } = match prelude(req, ctx, target_ref, &label) {
+        Ok(s) => s,
         Err(r) => return r,
     };
     let content = target.id();
@@ -605,6 +706,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     };
     let role = by.role();
     let who = by.who();
+    // What the install review said, for the approval's audit lines.
+    let review_note = proposal
+        .as_ref()
+        .map_or_else(String::new, |p| super::review::audit_note(&p.json));
     if ctx.box_.snapshots.is_none() {
         return refuse(
             ctx,
@@ -778,7 +883,11 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         ctx,
         req,
         202,
-        &format!("{label}: approved ({tier}) by {who}; applying"),
+        &format!(
+            "{label}: approved ({tier}) by {who}{}{}; applying",
+            red_note(&red),
+            review_note
+        ),
         note,
     )
     .is_none()
@@ -898,11 +1007,15 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             let _ = write!(detail, "; {n}");
         }
     }
+    detail.push_str(&red_note(&red));
+    detail.push_str(&overrides);
+    detail.push_str(&review_note);
     let _ = record(ctx, req, 200, &detail, note);
     Response::json(
         200,
         &json!({
             "applied": true,
+            "red": red,
             "tier": tier.as_str(),
             "reasons": reasons,
             "role": role.as_str(),
@@ -915,6 +1028,20 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "state": state,
         }),
     )
+}
+
+/// The red requirement tests a project was deployed with, for an audit
+/// line; empty when none is red.
+fn red_note(red: &[String]) -> String {
+    if red.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; deployed with {} requirement test(s) red: {}",
+            red.len(),
+            red.join("; ")
+        )
+    }
 }
 
 /// The commit failed after the box took the change: puts `running` back

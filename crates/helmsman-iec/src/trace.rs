@@ -76,7 +76,7 @@ impl Shape {
 
     fn of(kind: &StKind) -> Self {
         match kind {
-            StKind::Store(..) | StKind::Copy(..) => Self::Assign,
+            StKind::Store(..) | StKind::StrStore(..) | StKind::Copy(..) => Self::Assign,
             StKind::Call(_) => Self::Call,
             StKind::If(arms, _) => Self::If { arms: arms.len() },
             StKind::Case(_, arms, _) => Self::Case { arms: arms.len() },
@@ -129,6 +129,8 @@ pub struct TraceMap {
     stmts: Vec<StmtInfo>,
     leaves: Vec<Leaf>,
     by_path: BTreeMap<String, usize>,
+    /// The program's strings: path and frame slot of each.
+    strings: Vec<(String, usize)>,
 }
 
 impl TraceMap {
@@ -158,6 +160,13 @@ impl TraceMap {
             let s = &self.stmts[id.0 as usize];
             !s.system && s.pou == pou
         })
+    }
+
+    /// The paths of the program's string variables (`NAME`, `JOB.TEXT`,
+    /// `LABELS[2]`), which are not among [`Self::vars`]: their text is
+    /// [`Trace::text`].
+    pub fn string_paths(&self) -> impl Iterator<Item = &str> {
+        self.strings.iter().map(|(p, _)| p.as_str())
     }
 
     fn ids(&self) -> impl Iterator<Item = StmtId> {
@@ -193,6 +202,7 @@ impl TraceMap {
             walk(pou, p < code.library, &pou.body, None, &mut stmts);
         }
         let mut leaves = Vec::new();
+        let mut strings = Vec::new();
         let prog = &code.pous[code.program];
         for v in &prog.vars {
             match v.loc {
@@ -205,7 +215,7 @@ impl TraceMap {
                         });
                     }
                 }
-                None => flatten(code, &v.name, v.ty, v.off, &mut leaves),
+                None => flatten(code, &v.name, v.ty, v.off, &mut leaves, &mut strings),
             }
         }
         let by_path = leaves
@@ -217,6 +227,7 @@ impl TraceMap {
             stmts,
             leaves,
             by_path,
+            strings,
         }
     }
 }
@@ -288,7 +299,14 @@ fn walk(pou: &PouCode, system: bool, body: &[St], parent: Option<(StmtId, usize)
 }
 
 /// Every scalar under `path` of type `ty` at frame slot `off`.
-fn flatten(code: &Checked, path: &str, ty: Type, off: usize, out: &mut Vec<Leaf>) {
+fn flatten(
+    code: &Checked,
+    path: &str,
+    ty: Type,
+    off: usize,
+    out: &mut Vec<Leaf>,
+    strs: &mut Vec<(String, usize)>,
+) {
     let a = match ty {
         Type::Elem(ty) => {
             out.push(Leaf {
@@ -306,22 +324,35 @@ fn flatten(code: &Checked, path: &str, ty: Type, off: usize, out: &mut Vec<Leaf>
             });
             return;
         }
+        // A string is no scalar `Value`: it is listed apart, and read with
+        // `Trace::text`.
+        Type::Str(_) => {
+            strs.push((path.to_string(), off));
+            return;
+        }
         Type::Agg(a) => a,
     };
     match &code.aggs[a].kind {
         AggKind::Struct { fields } => {
             for f in fields {
-                flatten(code, &format!("{path}.{}", f.name), f.ty, off + f.off, out);
+                flatten(code, &format!("{path}.{}", f.name), f.ty, off + f.off, out, strs);
             }
         }
         AggKind::Fb(fb) => {
-            for v in &code.pous[*fb].vars {
-                flatten(code, &format!("{path}.{}", v.name), v.ty, off + v.off, out);
+            // A VAR_IN_OUT holds a reference, not a value: its referent is
+            // listed under the caller's own variable.
+            for v in code.pous[*fb]
+                .vars
+                .iter()
+                .filter(|v| v.section != crate::parser::Section::InOut)
+            {
+                flatten(code, &format!("{path}.{}", v.name), v.ty, off + v.off, out, strs);
             }
         }
         AggKind::Array { elem, dims } => {
             let esize = match elem {
                 Type::Agg(e) => code.aggs[*e].size,
+                Type::Str(n) => crate::strs::slots(usize::from(*n)),
                 _ => 1,
             };
             let mut ix: Vec<i128> = dims.iter().map(|&(lo, _)| lo).collect();
@@ -331,7 +362,14 @@ fn flatten(code: &Checked, path: &str, ty: Type, off: usize, out: &mut Vec<Leaf>
             }
             loop {
                 let index: Vec<String> = ix.iter().map(ToString::to_string).collect();
-                flatten(code, &format!("{path}[{}]", index.join(",")), *elem, slot, out);
+                flatten(
+                    code,
+                    &format!("{path}[{}]", index.join(",")),
+                    *elem,
+                    slot,
+                    out,
+                    strs,
+                );
                 slot += esize;
                 // Row-major: the last index moves fastest.
                 let mut k = dims.len();
@@ -571,6 +609,26 @@ impl Trace {
             .collect();
         let &i = self.map.by_path.get(&key)?;
         Some(self.value(&self.map.leaves[i]))
+    }
+
+    /// A string variable's text when the scan ended, by the path
+    /// [`TraceMap::string_paths`] lists (case-insensitive); one byte per
+    /// character, bytes above 127 as Latin-1. `None` for a path that is not
+    /// a string.
+    #[must_use]
+    pub fn text(&self, path: &str) -> Option<String> {
+        let key: String = path
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .map(|c| c.to_ascii_uppercase())
+            .collect();
+        let (_, off) = self.map.strings.iter().find(|(p, _)| *p == key)?;
+        Some(
+            crate::strs::read(&self.frame, *off)
+                .into_iter()
+                .map(char::from)
+                .collect(),
+        )
     }
 
     /// Every scalar of the program and its value when the scan ended, in

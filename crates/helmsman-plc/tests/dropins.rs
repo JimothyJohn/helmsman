@@ -189,6 +189,16 @@ impl FakeRelay {
                         );
                         continue;
                     }
+                    // Which protocol the agent speaks: answered apart from the script.
+                    if req.head.starts_with("GET /v1/agents/") {
+                        let b = json!({"version":"helmsman/v1","protocol":1}).to_string();
+                        let _ = write!(
+                            s,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                            b.len()
+                        );
+                        continue;
+                    }
                     lock(&seen).push(req);
                     let reply = script.next().unwrap_or_else(|| {
                         Reply::Status(400, json!({"type":"error","error":{"type":"invalid_request","message":"script exhausted","retryable":false}}))
@@ -2450,5 +2460,53 @@ fn a_watch_only_conversation_proposes_no_map() {
     let r = &results(&relay.seen(), 2)[0];
     assert_eq!(r["is_error"], true, "{r}");
     assert!(data(r)["error"].as_str().unwrap().contains("watch"), "{r}");
+    assert_eq!(b.proposals(), Vec::<Json>::new());
+}
+
+#[test]
+fn an_eds_drop_in_becomes_a_held_device_profile_after_the_box_refuses_a_bad_one() {
+    // The agent v10 turns: read the vendor's file, a first profile with a
+    // type the box does not know (refused, with its line), the fixed one
+    // (held for the user, no file anywhere).
+    const EDS: &str = include_str!("../../helmsman-proto/tests/fixtures/e1213-facts.eds");
+    const PROFILE: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
+    let bad = PROFILE.replace("in  DI-05        bool", "in  DI-05        word");
+    let line = PROFILE.lines().position(|l| l.starts_with("in  DI-05 ")).unwrap() + 1;
+    let relay = FakeRelay::start(vec![
+        tools(&[("t1", "read_dropin", json!({ "dropin_id": 1, "chunk": 0 }))]),
+        tools(&[(
+            "t2",
+            "propose_device_profile",
+            json!({ "name": "moxa-e1213-copy", "text": bad, "summary": "EDS sizes, manual map" }),
+        )]),
+        tools(&[(
+            "t3",
+            "propose_device_profile",
+            json!({ "name": "moxa-e1213-copy", "text": PROFILE, "summary": "EDS sizes, manual map" }),
+        )]),
+        text("Proposed the profile; check the channel names on the box."),
+    ]);
+    let b = Bench::new(with_relay(&relay));
+    let id = upload_ok(&b, "?name=e1213.eds", "text/plain", EDS);
+    let evs = b.say_with("add this device, here is its EDS", &[id]);
+    assert_eq!(last(&evs, "done")["stop"], "end_turn", "{evs:?}");
+    let seen = relay.seen();
+    let r = &results(&seen, 1)[0];
+    assert_enveloped(r);
+    assert!(data(r).to_string().contains("E1213"), "{r}");
+    let r = &results(&seen, 2)[0];
+    assert_eq!(r["is_error"], true, "{r}");
+    assert_eq!(data(r)["problems"][0]["line"], line, "{r}");
+    let r = &results(&seen, 3)[0];
+    assert_ne!(r["is_error"], true, "{r}");
+    assert_eq!(data(r)["held"], true, "{r}");
+    assert_eq!(data(r)["channels"][0]["name"], "DI-00", "{r}");
+    assert_eq!(
+        last(&evs, "done")["proposals"],
+        json!([]),
+        "a profile is no change proposal"
+    );
+    let held = b.get("/api/device-profile/proposal");
+    assert_eq!(held["name"], "moxa-e1213-copy", "{held}");
     assert_eq!(b.proposals(), Vec::<Json>::new());
 }

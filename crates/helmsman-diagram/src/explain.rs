@@ -433,7 +433,7 @@ fn gate_text(d: &Diagram, r: RegionId) -> (String, NodeId) {
     let text = if region.negated {
         // NOT binds tighter than any binary operator.
         match &n.kind {
-            NodeKind::Op { .. } if n.ins.len() == 2 => format!("NOT ({base})"),
+            NodeKind::Op { .. } if n.ins.len() >= 2 => format!("NOT ({base})"),
             _ => format!("NOT {base}"),
         }
     } else {
@@ -482,7 +482,7 @@ fn collect(d: &Diagram, n: NodeId, port: usize, out: &mut Vec<String>) {
         NodeKind::For { var } => Some(var.clone()),
         NodeKind::Fb { instance, .. } => node.outs.get(port).map(|o| format!("{instance}.{o}")),
         NodeKind::Const { .. } | NodeKind::Jump => None,
-        NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } => {
+        NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } | NodeKind::Fold { .. } => {
             for w in d.inputs(n) {
                 collect(d, w.from, w.out, out);
             }
@@ -706,6 +706,208 @@ pub fn drivers(m: &Module, t: &dyn Scan, pou: usize, prefix: &str, path: &str) -
     out
 }
 
+/// What a source of an output is, for [`signals`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SourceKind {
+    /// Read from outside: an input, a located bit, a field of a struct.
+    Input,
+    /// State the program carries from one scan to the next: a variable
+    /// read before the scan sets it, or that depends on itself (a latch,
+    /// a step counter).
+    Kept,
+    /// A function block instance whose output is read (a timer, a
+    /// counter, an edge detector), named by the instance.
+    Block,
+}
+
+/// One source an output finally depends on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+    /// Upper-case, as the diagram spells it; an instance's own name.
+    pub name: String,
+    pub kind: SourceKind,
+    /// The function block type of a [`SourceKind::Block`]: `TON`, `CTU`.
+    pub fb: String,
+}
+
+/// The sources variable `path` finally depends on in POU `pou`'s diagram,
+/// with no scan needed: the leaves of everything that sets it.
+///
+/// Walks back from every assignment to it through operators, functions,
+/// function block calls (their arguments), earlier assignments, other
+/// program variables (their assignments in turn) and the gates around
+/// each (an IF arm's condition and the earlier arms', a CASE selector, a
+/// loop head), and names, each once:
+///
+/// - [`SourceKind::Input`]: a variable no assignment sets (an input, a
+///   located bit, a field of a struct);
+/// - [`SourceKind::Kept`]: a variable some assignment sets that is read
+///   as the scan finds it, from the scan before: a latch reads itself, a
+///   step counter, a variable read ahead of its assignment. It is a
+///   source in its own right and the walk goes on through what sets it;
+/// - [`SourceKind::Block`]: an instance whose output is read, and the
+///   walk goes on through its arguments.
+///
+/// Literals, `VAR CONSTANT`s and a loop's own variable are not sources.
+/// Inputs first, then kept state, then blocks, each in source order of
+/// the first read. Linear in the diagram and every variable is visited
+/// once, so a cycle ends. Empty for a variable nothing sets.
+#[must_use]
+pub fn signals(m: &Module, pou: usize, path: &str) -> Vec<Source> {
+    let Some(p) = m.pous.get(pou) else {
+        return Vec::new();
+    };
+    let d = &p.diagram;
+    let path = path.to_ascii_uppercase();
+    let mut into: Vec<Vec<usize>> = vec![Vec::new(); d.nodes.len()];
+    for (k, w) in d.wires.iter().enumerate() {
+        into[w.to.0 as usize].push(k);
+    }
+    let mut seen_nodes = vec![false; d.nodes.len()];
+    let mut seen_vars: HashSet<String> = HashSet::new();
+    // First read of each variable, as a node number: the order they come in.
+    let mut reads: HashMap<String, u32> = HashMap::new();
+    // Each instance reached, the same way.
+    let mut blocks: HashMap<String, u32> = HashMap::new();
+    let mut vars = vec![path.clone()];
+    let mut nodes: Vec<NodeId> = Vec::new();
+    let mut regions_seen = vec![false; d.regions.len()];
+    let sets = |v: &str| {
+        d.nodes
+            .iter()
+            .any(|n| matches!(&n.kind, NodeKind::Write { path } if path == v))
+    };
+    loop {
+        if let Some(n) = nodes.pop() {
+            let k = n.0 as usize;
+            if std::mem::replace(&mut seen_nodes[k], true) {
+                continue;
+            }
+            for &w in &into[k] {
+                nodes.push(d.wires[w].from);
+            }
+            let node = d.node(n);
+            match &node.kind {
+                NodeKind::Read { path: v } | NodeKind::Access { path: v } => {
+                    let is_loop_var = d
+                        .nodes
+                        .iter()
+                        .any(|x| matches!(&x.kind, NodeKind::For { var } if var == v));
+                    if !is_loop_var {
+                        vars.push(v.clone());
+                        reads
+                            .entry(v.clone())
+                            .and_modify(|f| *f = (*f).min(n.0))
+                            .or_insert(n.0);
+                    }
+                }
+                NodeKind::Fb { instance, .. } => {
+                    blocks
+                        .entry(instance.clone())
+                        .and_modify(|f| *f = (*f).min(n.0))
+                        .or_insert(n.0);
+                }
+                _ => {}
+            }
+            let mut at = node.region;
+            while let Some(r) = at {
+                if std::mem::replace(&mut regions_seen[r.0 as usize], true) {
+                    break;
+                }
+                let region = d.region(r);
+                if matches!(region.kind, RegionKind::Elsif | RegionKind::Else) {
+                    for s in &d.regions {
+                        if s.stmt == region.stmt
+                            && s.arm < region.arm
+                            && let Some((g, _)) = s.gate
+                        {
+                            nodes.push(g);
+                        }
+                    }
+                }
+                if let Some((g, _)) = region.gate {
+                    nodes.push(g);
+                }
+                at = region.parent;
+            }
+        } else if let Some(v) = vars.pop() {
+            if !seen_vars.insert(v.clone()) {
+                continue;
+            }
+            let writes: Vec<NodeId> = d
+                .nodes
+                .iter()
+                .filter(|n| matches!(&n.kind, NodeKind::Write { path } if *path == v))
+                .map(|n| n.id)
+                .collect();
+            if !writes.is_empty() {
+                nodes.extend(writes);
+                continue;
+            }
+            // An instance's output: its calls drive it.
+            if let Some(dot) = v.rfind('.') {
+                let inst = &v[..dot];
+                if p.vars
+                    .get(crate::lower::root_of(inst))
+                    .is_some_and(|x| x.fb.is_some())
+                {
+                    let at = reads.get(&v).copied().unwrap_or(0);
+                    blocks.entry(inst.to_string()).or_insert(at);
+                    for n in &d.nodes {
+                        if matches!(&n.kind, NodeKind::Fb { instance, .. } if instance == inst) {
+                            nodes.push(n.id);
+                        }
+                    }
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    let mut out: Vec<(SourceKind, u32, Source)> = Vec::new();
+    for (v, id) in reads {
+        let root = crate::lower::root_of(&v);
+        let is_block_output = v.rfind('.').is_some_and(|dot| {
+            p.vars
+                .get(crate::lower::root_of(&v[..dot]))
+                .is_some_and(|x| x.fb.is_some())
+        });
+        let kind = if sets(&v) {
+            SourceKind::Kept
+        } else if is_block_output || p.vars.get(root).is_some_and(|x| x.constant) {
+            continue;
+        } else {
+            SourceKind::Input
+        };
+        out.push((
+            kind,
+            id,
+            Source {
+                name: v,
+                kind,
+                fb: String::new(),
+            },
+        ));
+    }
+    for (inst, id) in blocks {
+        let fb = p
+            .vars
+            .get(crate::lower::root_of(&inst))
+            .and_then(|x| x.fb.clone())
+            .unwrap_or_default();
+        out.push((
+            SourceKind::Block,
+            id,
+            Source {
+                name: inst,
+                kind: SourceKind::Block,
+                fb,
+            },
+        ));
+    }
+    out.sort_by(|a, b| (a.0, a.1, &a.2.name).cmp(&(b.0, b.1, &b.2.name)));
+    out.into_iter().map(|(_, _, s)| s).collect()
+}
 struct Walk<'a, 'o> {
     d: &'a Diagram,
     t: &'a dyn Scan,

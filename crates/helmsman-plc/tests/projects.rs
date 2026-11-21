@@ -627,6 +627,14 @@ fn projects_and_files_are_made_saved_read_and_deleted_by_an_engineer() {
     let list = get(b.addr, "/api/projects").json();
     assert_eq!(list["projects"][0]["name"], "line3", "{list}");
     let p = get(b.addr, "/api/projects/line3").json();
+    // The list says how a project made now would be checked, the same as
+    // a project's own answer does (a page with no project yet learns it
+    // here).
+    assert_eq!(list["tests"], p["tests"], "{list}");
+    assert!(
+        list["tests"]["scan_ms"].as_u64().is_some_and(|ms| ms > 0),
+        "{list}"
+    );
     let names: Vec<&str> = p["files"]
         .as_array()
         .unwrap()
@@ -1479,6 +1487,7 @@ VAR_INPUT set : BOOL; reset : BOOL; END_VAR
 VAR_OUTPUT q : BOOL; END_VAR
 VAR RETAIN kept : INT; END_VAR
   q := (q OR set) AND NOT reset;
+  kept := kept + 1;
 END_FUNCTION_BLOCK
 ";
 
@@ -2370,10 +2379,10 @@ END_PROGRAM
 
 /// Requirement tests (TODO.md spec-tests): `test_*.st` files run on the
 /// box through `POST /api/projects/{p}/tests` (token or session, nothing
-/// changes), never build into a module, and a red one refuses the deploy
-/// with 409 naming the requirement, nothing changed; green, it deploys.
+/// changes), never build into a module, and a red one refuses no deploy
+/// (Nick, 2026-11-15): the deploy's answer and its audit line name it.
 #[test]
-fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
+fn requirement_tests_run_on_the_box_and_a_red_one_is_named_by_the_deploy_it_does_not_refuse() {
     let b = Bench::new();
     let s = b.alice();
     b.project(
@@ -2426,15 +2435,16 @@ fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
         401,
         "no credential, no run"
     );
-    // The deploy is refused before anything builds or runs.
+    // A red test refuses nothing: the deploy lands, and its answer names
+    // the test so the page can say so.
     let r = b.deploy(&s, "line3");
-    assert_eq!(r.status, 409, "{r:?}");
+    assert_eq!(r.status, 200, "{r:?}");
     let j = r.json();
-    assert!(j["error"].as_str().unwrap().contains("requirement test"), "{j}");
-    assert!(j["error"].as_str().unwrap().contains("test_lamp"), "{j}");
-    assert_eq!(j["changed"], false, "{j}");
-    assert_eq!(j["tests"][0]["passed"], false, "{j}");
-    assert_eq!(b.head(), before, "nothing committed");
+    assert_eq!(j["applied"], true, "{j}");
+    assert_eq!(j["red"].as_array().unwrap().len(), 1, "{j}");
+    assert!(j["red"][0].as_str().unwrap().contains("test_lamp"), "{j}");
+    assert_ne!(b.head(), before, "committed");
+    wait("the module running", || b.modules() == ["conveyor"]);
     // Fixed: green, and the deploy goes through.
     let r = put_file(b.addr, &s, "line3", "test_lamp.st", TEST_GREEN, None);
     assert_eq!(r.status, 200, "{r:?}");
@@ -2444,8 +2454,9 @@ fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
     assert_eq!(j["tests"][0]["why"], "", "{j}");
     let r = b.deploy(&s, "line3");
     assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["red"], json!([]), "{r:?}");
     wait("the module running", || b.modules() == ["conveyor"]);
-    // The refusal and the runs are audited.
+    // The runs, and the deploy made with a test red, are audited.
     let audit = get(b.addr, "/api/audit?limit=1000").json();
     let detail: Vec<String> = audit["entries"]
         .as_array()
@@ -2461,8 +2472,10 @@ fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
         "the red run is audited: {detail:?}"
     );
     assert!(
-        detail.iter().any(|d| d.contains("requirement test(s) red")),
-        "the refusal is audited: {detail:?}"
+        detail.iter().any(
+            |d| d.contains("applied") && d.contains("deployed with 1 requirement test(s) red: test_lamp")
+        ),
+        "the deploy with a red test is audited: {detail:?}"
     );
 }
 
@@ -2849,4 +2862,72 @@ fn a_deploy_keeps_a_stopped_module_stopped() {
     wait("the new program drives the lamp", || {
         b.cmd("lamp") == Some(Value::Bool(true))
     });
+}
+
+/// A timer called inside an IF (`HELMSMAN-L1`), as a PROGRAM's body.
+const TIMER_IN_IF: &str = "\
+PROGRAM conveyor
+VAR_INPUT start : BOOL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
+VAR t : TON; END_VAR
+  IF start THEN
+    t(IN := TRUE, PT := T#1s);{PRAGMA}
+  END_IF;
+  lamp := t.Q;
+END_PROGRAM
+";
+
+/// A blocking lint (`st-lints`) refuses a deploy on the box itself, with the
+/// finding and how to override it; the same program with a pragma that
+/// gives a reason deploys, and the audit trail carries the reason. A pragma with no reason overrides nothing.
+#[test]
+fn a_blocking_lint_refuses_the_deploy_and_a_reasoned_pragma_lets_it_through_on_record() {
+    let b = Bench::new();
+    let s = b.alice();
+    let bare = TIMER_IN_IF.replace("{PRAGMA}", "");
+    b.project(&s, "held", &[("main.st", bare.as_str()), ("io.map", MAP)]);
+    let before = b.head();
+    // The check lists it, held.
+    let check = post_json(b.addr, "/api/projects/held/check", Some(&s), &json!({})).json();
+    assert_eq!(check["ok"], true, "{check}");
+    assert_eq!(check["held"].as_array().unwrap().len(), 1, "{check}");
+    let w = check["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "HELMSMAN-L1")
+        .unwrap_or_else(|| panic!("{check}"));
+    assert_eq!(w["blocking"], true, "{w}");
+    assert_eq!(w["line"], 6, "{w}");
+    // The deploy refuses: nothing changes, and the answer says why.
+    let r = b.deploy(&s, "held");
+    assert_eq!(r.status, 422, "{r:?}");
+    let j = r.json();
+    assert_eq!(j["changed"], false, "{j}");
+    assert!(j["held"][0].as_str().unwrap().contains("HELMSMAN-L1"), "{j}");
+    assert!(j["error"].as_str().unwrap().contains("pragma"), "{j}");
+    assert_eq!(b.head(), before, "nothing committed");
+    assert!(b.audited("held by lint HELMSMAN-L1"), "the refusal is audited");
+    // No reason: still held, and the pragma is itself reported.
+    let no_reason = TIMER_IN_IF.replace("{PRAGMA}", " {lint: off HELMSMAN-L1}");
+    let r = put_file(b.addr, &s, "held", "main.st", &no_reason, None);
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(b.deploy(&s, "held").status, 422);
+    // A reason.
+    let reasoned = TIMER_IN_IF.replace(
+        "{PRAGMA}",
+        " {lint: off HELMSMAN-L1 \"the branch is the enable\"}",
+    );
+    let r = put_file(b.addr, &s, "held", "main.st", &reasoned, None);
+    assert_eq!(r.status, 200, "{r:?}");
+    let check = post_json(b.addr, "/api/projects/held/check", Some(&s), &json!({})).json();
+    assert_eq!(check["held"], json!([]), "{check}");
+    let r = b.deploy(&s, "held");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["applied"], true, "{r:?}");
+    assert_ne!(b.head(), before, "committed");
+    assert!(
+        b.audited("HELMSMAN-L1 at main.st:6 overridden: \"the branch is the enable\""),
+        "the reason is on the audit trail"
+    );
 }

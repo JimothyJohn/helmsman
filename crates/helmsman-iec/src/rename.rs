@@ -9,16 +9,26 @@ use crate::prelude::*;
 
 use crate::lexer::{Tok, lex};
 
+/// Whether `s` is a word of the language (`IF`, `END_VAR`, `TRUE`, ...) in
+/// any letter case: no variable can be called that.
+fn is_reserved_word(s: &str) -> bool {
+    let up = s.to_ascii_uppercase();
+    crate::parser::is_reserved(&up) || up == "TRUE" || up == "FALSE"
+}
+
 /// `src` with every use of `old` written `new`, and how many there were.
 ///
 /// # Errors
 /// When `src` does not lex (the editor shows why), or `new` is not a
-/// plain identifier.
+/// plain identifier or is a reserved word.
 pub fn rename_ident(src: &str, old: &str, new: &str) -> Result<(String, usize), String> {
     if !ident(new) {
         return Err(format!(
             "{new:?} is not a name: a letter, then letters, digits or _"
         ));
+    }
+    if is_reserved_word(new) {
+        return Err(format!("{new:?} is a reserved word of the language, not a name"));
     }
     let want = old.to_ascii_uppercase();
     let toks = lex(src, false).map_err(|e| format!("{e:?}"))?;
@@ -101,7 +111,17 @@ mod tests {
         assert!(rename_ident(SRC, "start", "1go").is_err());
         assert!(rename_ident(SRC, "start", "go button").is_err());
         assert!(rename_ident(SRC, "start", "").is_err());
-        assert!(rename_ident("PROGRAM p\nx := 'str';\nEND_PROGRAM\n", "x", "y").is_err());
+        assert!(rename_ident("PROGRAM p\nx := 'str;\nEND_PROGRAM\n", "x", "y").is_err());
+    }
+
+    /// A reserved word is no name: `IF` passed `ident()` until 2026-11-15.
+    #[test]
+    fn refuses_a_reserved_word_as_a_name() {
+        for w in ["IF", "if", "End_If", "AND", "VAR_INPUT", "ARRAY", "mod"] {
+            let r = rename_ident(SRC, "start", w);
+            assert!(r.is_err(), "{w} was accepted: {r:?}");
+        }
+        assert!(rename_ident(SRC, "start", "iff").is_ok());
     }
 
     /// Whatever the source, a rename never panics and changes only the

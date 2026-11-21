@@ -45,8 +45,8 @@ use crate::remote::{Cmd, Msg, Stream};
 use crate::review::Session;
 use crate::review_view::ReviewView;
 
-const ALICE: &str = "alice-engineer-pw";
-const BOB: &str = "bob-operator-pw";
+pub(crate) const ALICE: &str = "alice-engineer-pw";
+pub(crate) const BOB: &str = "bob-operator-pw";
 
 const MANIFEST: &str = "\
 name     conveyor
@@ -337,7 +337,9 @@ impl Bench {
         let mut s = TcpStream::connect(self.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
         s.write_all(head.as_bytes()).unwrap();
-        s.write_all(body).unwrap();
+        // A box that refuses a body too large for it may answer and close
+        // before the whole body is sent: the answer is still read.
+        let _ = s.write_all(body);
         let mut out = Vec::new();
         let _ = s.read_to_end(&mut out);
         let split = out.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(out.len());
@@ -501,7 +503,7 @@ pub fn settle(b: &Bench, jar: &Jar, p: &mut BoxProjects) {
 }
 
 /// A page with projects open, signed in as `who` (`None`: signed out).
-fn page(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> BoxView {
+pub(crate) fn page(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> BoxView {
     let mut v = BoxView::new();
     v.session = who.map(|(u, p)| b.login(jar, u, p));
     settle(b, jar, &mut v.projects);
@@ -510,7 +512,7 @@ fn page(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> BoxView {
 
 /// One request queue of `v` (state and projects) carried out, as the
 /// browser's transports would, at page time `now`.
-fn pump(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context, now: f64) {
+pub(crate) fn pump(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context, now: f64) {
     let cmds = std::mem::take(&mut v.sent);
     let reqs = std::mem::take(&mut v.psent);
     let mut msgs = Vec::new();
@@ -566,7 +568,7 @@ fn files(p: &BoxProjects) -> Vec<String> {
 }
 
 /// Makes project `name` with `files` through the page, as an engineer.
-fn make(b: &Bench, jar: &Jar, p: &mut BoxProjects, name: &str, with: &[(&str, &str)]) {
+pub(crate) fn make(b: &Bench, jar: &Jar, p: &mut BoxProjects, name: &str, with: &[(&str, &str)]) {
     p.create(name, None);
     settle(b, jar, p);
     assert_eq!(
@@ -1015,11 +1017,11 @@ END_PROGRAM
 
 /// Requirement tests on a box (TODO.md spec-tests): opening a project runs
 /// its `test_*.st` files on the box, red or green with why; a red one
-/// refuses the deploy, saying which; a save runs them again, and green,
-/// the deploy goes through. (The tab that listed them is archived,
-/// 2026-11-08; the gate stays.)
+/// refuses no deploy (Nick, 2026-11-15) and is named beside what runs; a
+/// save runs them again, and green, the deploy says nothing of them. (The
+/// tab that listed them is archived, 2026-11-08.)
 #[test]
-fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
+fn requirement_tests_show_on_the_box_and_a_red_one_is_named_by_the_deploy_it_does_not_refuse() {
     let b = Bench::new();
     let jar = Jar::default();
     let mut v = page(&b, &jar, Some(("alice", ALICE)));
@@ -1051,17 +1053,19 @@ fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
     );
     assert_eq!(p.tests.red().len(), 1);
 
-    // Deploy: refused by the box, naming the test; nothing runs from it.
+    // Deploy: it runs, and what is said of it names the red test.
     p.deploy();
     settle(&b, &jar, p);
-    let Deploy::Failed(why) = &p.deploy else {
-        panic!("deployed past a red test: {:?}", p.deploy);
+    let Deploy::Done(what) = &p.deploy else {
+        panic!("a red test refused the deploy: {:?}", p.deploy);
     };
     assert!(
-        why.contains("requirement test") && why.contains("test_lamp"),
-        "{why}"
+        what.contains("line is running")
+            && what.contains("Requirement test test_lamp")
+            && what.contains("is red"),
+        "{what}"
     );
-    assert!(p.running.is_none());
+    assert_eq!(p.running.as_deref(), Some("line"));
 
     // Fixed and saved: the box runs them again, green, and deploys.
     let p = &mut v.projects;
@@ -1072,12 +1076,10 @@ fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
     assert!(p.tests.rows[0].passed(), "{:?}", p.tests);
     p.deploy();
     settle(&b, &jar, p);
-    assert!(
-        matches!(p.deploy, Deploy::Done(_)),
-        "{:?} {:?}",
-        p.deploy,
-        p.tests
-    );
+    let Deploy::Done(what) = &p.deploy else {
+        panic!("{:?} {:?}", p.deploy, p.tests);
+    };
+    assert!(!what.contains("red"), "green says nothing of tests: {what}");
     assert_eq!(p.running.as_deref(), Some("line"));
 }
 
@@ -1407,6 +1409,55 @@ fn ctrl_shift_f_forces_the_picked_input_and_ctrl_shift_u_releases_all() {
     }
     settle(&b, &jar, &mut h.bv().projects);
     assert_eq!(b.json("/api/forces")["forces"], serde_json::json!([]));
+}
+
+/// A stopped or faulted program reads no input (Nick, 2026-11-16): the
+/// click on an input's block says so and sends no force; any other state
+/// forces as before.
+#[test]
+fn forcing_an_input_of_a_program_that_is_not_running_reminds_and_sends_nothing() {
+    for (state, forces) in [
+        ("stopped", false),
+        ("faulted", false),
+        ("STOPPED", true),
+        ("held", true),
+        ("running", true),
+    ] {
+        let b = Bench::new();
+        let jar = Jar::default();
+        let mut v = drawn(&b, &jar);
+        let shown = v.state.selected.clone().expect("a module is shown");
+        for m in &mut v.state.modules {
+            if m.name == shown {
+                m.state = state.into();
+            }
+        }
+        let session = v.session.clone();
+        let mut h = Harness::new(v, session);
+        h.frame(vec![]);
+        h.sent();
+        h.press("force start");
+        let reqs = h.sent();
+        assert_eq!(
+            reqs.iter().any(|q| q.url.starts_with("/api/forces")),
+            forces,
+            "{state}: {reqs:?}"
+        );
+        let note = h.bv().projects.notice.clone();
+        if forces {
+            assert!(
+                !note.as_ref().is_some_and(|(n, _)| n.contains("forcing")),
+                "{state}: {note:?}"
+            );
+        } else {
+            let (text, error) = note.expect("a reminder");
+            assert!(
+                text.contains(&format!("{shown} is {state}")) && text.contains("forcing start"),
+                "{text}"
+            );
+            assert!(!error, "a reminder, not an error");
+        }
+    }
 }
 
 #[test]
@@ -2033,7 +2084,8 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     );
 
     // A follow-up: the earlier instruction comes from the box's History;
-    // a red answer goes back in the same conversation, then is refused.
+    // a red answer goes back in the same conversation; still red after
+    // the retries, it is written with what did not pass said.
     run(&b, &jar, &mut v, &ctx);
     v.instruct.draft = "now invert it".into();
     v.send_instruction(&ctx);
@@ -2064,12 +2116,15 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     answer(&mut v, &red);
     run(&b, &jar, &mut v, &ctx);
     let o = v.instruct.outcome.clone().unwrap();
-    assert_eq!(o.kind, Kind::Refused, "{o:?}");
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert!(o.status.contains("did not pass"), "{o:?}");
     assert!(o.problems.iter().any(|p| p.contains("lamp on failed")), "{o:?}");
-    assert_eq!(
-        b.json("/api/projects/line/files/main.st")["text"],
-        LAMP,
-        "never written"
+    assert!(
+        b.json("/api/projects/line/files/main.st")["text"]
+            .as_str()
+            .unwrap()
+            .contains("lamp := NOT start;"),
+        "written: a red test refuses nothing"
     );
 }
 
@@ -3137,7 +3192,10 @@ fn the_conversation_and_the_device_form_follow_the_person_to_another_screen() {
     let mut studio = mid_conversation(&b, &studio_jar, &ctx);
     let mut f = NewDevice::from_eds("e1213.eds", "[Device]\nProdName = \"E1213\";\n");
     f.endpoint = "192.168.1.60".into();
-    f.points[2].on = true;
+    f.points.push(crate::device_form::PointRow::custom(
+        crate::device_form::Dir::In,
+        2,
+    ));
     f.params = format!("{} password=hunter2-device", f.params);
     studio.devices_ui.adding = Some(f.clone());
 
@@ -3592,6 +3650,7 @@ VAR RETAIN
   kept : INT;
 END_VAR
 q := (q OR set) AND NOT reset;
+kept := kept + 1;
 END_FUNCTION_BLOCK
 ";
 
@@ -3711,7 +3770,10 @@ fn a_check_answer_without_the_warnings_field_still_reads() {
     assert_eq!(d.len(), 2);
     assert!(d[0].is_warning() && d[0].id.as_deref() == Some("HELMSMAN-L1") && d[0].blocking);
     assert!(d[1].is_warning() && d[1].id.is_none() && !d[1].blocking && d[1].line == 0);
-    assert!(d[0].label().starts_with("warning HELMSMAN-L1  a.st:2:1"));
+    assert!(
+        d[0].label()
+            .starts_with("warning HELMSMAN-L1 (holds the deploy)  a.st:2:1")
+    );
 }
 
 /// A first visit, nobody signed in: the box refuses the page's own reads
@@ -3763,8 +3825,8 @@ fn messy_main() -> String {
         "VAR_OUTPUT lamp : BOOL; END_VAR",
     )
     .replace(
-        "l(set := start, reset := FALSE);\n",
-        "if start then l(set := start, reset := FALSE); end_if;\n",
+        "lamp := l.q;\n",
+        "if start then lamp := l.q; else lamp := false; end_if;\n",
     )
     .trim_end()
     .to_string()
@@ -3899,4 +3961,826 @@ fn a_file_that_does_not_compile_is_still_saved_to_the_box_with_everything_in_it(
     assert_ne!(stored, broken, "and its layout was tidied: {stored}");
     assert!(stored.ends_with('\n'), "{stored:?}");
     assert_eq!(text_of(p, "main.st"), stored);
+}
+
+// ---- the agent's device profile, on the Devices tab ----
+
+/// The E1213's profile, as the agent would propose it.
+const E1213_PROFILE: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
+
+impl Bench {
+    /// The agent's `propose_device_profile`: the box token posts it.
+    fn propose(&self, name: &str, text: &str, summary: &str) -> u16 {
+        let body = serde_json::json!({ "name": name, "text": text, "summary": summary }).to_string();
+        let head = format!(
+            "POST /api/device-profile/proposal HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            crate::box_tests::TOKEN,
+            body.len()
+        );
+        self.raw(&head, body.as_bytes()).0
+    }
+}
+
+/// Frames and the box's answers, a poll's worth of page time at a time,
+/// until `done` holds (a deadline, no sleeps).
+fn pump_until(b: &Bench, jar: &Jar, h: &mut Harness, what: &str, mut done: impl FnMut(&mut Harness) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        h.frame(vec![]);
+        let Harness { ctx, app, time } = h;
+        pump(b, jar, app.boxv.as_mut().unwrap(), ctx, *time);
+        h.frame(vec![]);
+        if done(h) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        // The next read of the proposal is due.
+        h.time += crate::device_proposal::POLL_S + 0.1;
+    }
+}
+
+#[test]
+fn a_proposed_profile_is_shown_renamed_and_saved_into_the_open_project_on_a_real_box() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line3", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.press("pane devices");
+    h.wait(0.3);
+
+    // Nothing pending: the first read comes back 404 and nothing is shown.
+    let mut rounds = 0;
+    pump_until(&b, &jar, &mut h, "the first read", |_| {
+        rounds += 1;
+        rounds >= 2
+    });
+    assert!(h.app.chrome.rect("proposal").is_none());
+
+    // The agent proposes; the tab shows it.
+    assert_eq!(
+        b.propose("e1213-copy", E1213_PROFILE, "Read from the E1213's manual."),
+        201
+    );
+    pump_until(&b, &jar, &mut h, "the proposal on the tab", |h| {
+        h.app.chrome.rect("proposal save").is_some()
+    });
+    assert!(h.app.chrome.rect("proposal channel DI-00").is_some());
+    assert_eq!(
+        h.bv().devices_ui.proposal.held.as_ref().unwrap().channels.len(),
+        40
+    );
+
+    // The engineer renames a channel and saves.
+    h.press("proposal channel DI-00");
+    for pressed in [true, false] {
+        h.frame(vec![Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }]);
+    }
+    h.frame(vec![Event::Text("part_present".into())]);
+    h.frame(vec![]);
+    h.press("proposal save");
+    pump_until(&b, &jar, &mut h, "the saved file in the open project", |h| {
+        h.bv()
+            .projects
+            .open
+            .as_ref()
+            .and_then(|o| o.bufs.get("e1213-copy.device"))
+            .is_some_and(|f| f.loaded)
+    });
+    let saved = b.json("/api/projects/line3/files/e1213-copy.device");
+    let text = saved["text"].as_str().unwrap();
+    assert!(text.contains("in part_present"), "{text}");
+    assert!(!text.contains("in DI-00 "), "the old name is gone: {text}");
+    assert!(text.contains("DI-01"), "the others are as proposed");
+    assert_eq!(
+        h.bv().projects.open.as_ref().unwrap().bufs["e1213-copy.device"].text,
+        text
+    );
+    // The proposal is gone from the box and from the tab, and the tab
+    // says what was saved.
+    let (status, _) = b.get("/api/device-profile/proposal");
+    assert_eq!(status, 404);
+    h.frame(vec![]);
+    assert!(h.app.chrome.rect("proposal save").is_none());
+    assert!(
+        h.app.chrome.rect("proposal done").is_some(),
+        "the note of what was saved"
+    );
+    assert_eq!(h.bv().devices_ui.proposal.saved_file(), Some("e1213-copy.device"));
+
+    // A second proposal under the same name: the file is not replaced.
+    assert_eq!(b.propose("e1213-copy", E1213_PROFILE, "Again."), 201);
+    pump_until(&b, &jar, &mut h, "the second proposal", |h| {
+        h.app.chrome.rect("proposal save").is_some()
+    });
+    h.press("proposal save");
+    pump_until(&b, &jar, &mut h, "the refusal beside the name", |h| {
+        h.bv().devices_ui.proposal.refusals.name.is_some()
+    });
+    assert_eq!(
+        b.json("/api/projects/line3/files/e1213-copy.device")["text"]
+            .as_str()
+            .unwrap(),
+        text,
+        "the file that was there is untouched"
+    );
+    assert!(
+        h.app.chrome.rect("proposal save").is_some(),
+        "kept, to save under another name"
+    );
+}
+
+// ---- the vendor's file for the agent, on the Devices tab ----
+
+/// A found device the library lacks, on the tab of a real box.
+fn unknown_found() -> crate::devices::Found {
+    let mut f = crate::devices::Found::simulated_e1213(&helmsman_project::iomap::MapText::default());
+    f.address = "192.168.3.77".into();
+    f.library = None;
+    f.mapped = None;
+    f.simulated = false;
+    f
+}
+
+#[test]
+fn a_vendor_file_becomes_a_dropin_on_a_real_box_and_the_chat_carries_its_id() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line3", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.press("pane devices");
+    h.wait(0.3);
+    h.bv().devices_ui.found = vec![unknown_found()];
+    h.bv().devices_ui.scan = crate::devices::Scan::Done;
+    h.frame(vec![]);
+    assert_eq!(
+        b.json("/api/dropins"),
+        serde_json::json!([]),
+        "the box holds none"
+    );
+
+    // The button opens the picker; the file arrives as the browser reads it.
+    h.press("vendor file 192.168.3.77");
+    assert!(h.bv().devices_ui.vendor.is_picking());
+    let eds = "$ EZ-EDS\n[File]\n  DescText = \"Acme Rio\";\n[Device]\n  ProdName = \"Rio\";\n";
+    h.bv()
+        .devices_ui
+        .vendor
+        .picked("../Acme Rio\n.eds", eds.as_bytes().to_vec());
+    // Nothing goes to the agent until the box has kept the file.
+    assert!(h.bv().chat_sent.is_empty(), "the agent was not asked");
+    pump_until(&b, &jar, &mut h, "the chat request", |h| {
+        !h.bv().chat_sent.is_empty()
+    });
+
+    // The box holds the file, read as prose, under the safe name.
+    let list: Json = b.json("/api/dropins");
+    assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+    let id = list[0]["id"].as_u64().unwrap();
+    assert_eq!(list[0]["name"], "Acme_Rio_.eds");
+    assert_eq!(list[0]["kind"], "prose");
+    let chunk: Json = b.json(&format!("/api/dropins/{id}?chunk=0"));
+    assert!(chunk.to_string().contains("Acme Rio"), "{chunk}");
+
+    // The request to the agent is what the box's chat route reads, and
+    // names that drop-in.
+    let reqs = std::mem::take(&mut h.bv().chat_sent);
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert_eq!(reqs[0].url, "/api/chat");
+    let ask: helmsman_plc::api::chat::Ask = serde_json::from_str(&reqs[0].body).expect("the box reads it");
+    assert_eq!(ask.dropins, Some(vec![id]));
+    assert_eq!(ask.session, None);
+    assert!(
+        ask.message.contains(&format!("drop-in {id} (a text file)"))
+            && ask.message.contains("propose_device_profile"),
+        "{}",
+        ask.message
+    );
+    assert!(
+        !ask.message.contains("Acme"),
+        "the file's name stays out of the message"
+    );
+    assert!(
+        h.app.chrome.rect("vendor note 192.168.3.77").is_some(),
+        "the note beside the button"
+    );
+}
+
+#[test]
+fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line3", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.press("pane devices");
+    h.wait(0.3);
+    h.bv().devices_ui.found = vec![unknown_found()];
+    h.bv().devices_ui.scan = crate::devices::Scan::Done;
+    h.frame(vec![]);
+    // Bytes that are not UTF-8: the box says so (422).
+    h.press("vendor file 192.168.3.77");
+    h.bv()
+        .devices_ui
+        .vendor
+        .picked("latin1.eds", vec![b'a', 0xE9, b'b']);
+    pump_until(&b, &jar, &mut h, "the refusal", |h| {
+        h.bv()
+            .devices_ui
+            .vendor
+            .note
+            .as_ref()
+            .is_some_and(|n| n.text.contains("could not read"))
+    });
+    let note = h.bv().devices_ui.vendor.note.clone().unwrap().text;
+    assert_eq!(
+        note,
+        "The box could not read latin1.eds: the document is not UTF-8 text. Nothing was sent to the agent."
+    );
+    // Control characters inside: 422 as well.
+    h.press("vendor file 192.168.3.77");
+    h.bv().devices_ui.vendor.picked("ctl.eds", b"a\x07b".to_vec());
+    pump_until(&b, &jar, &mut h, "the second refusal", |h| {
+        h.bv()
+            .devices_ui
+            .vendor
+            .note
+            .as_ref()
+            .is_some_and(|n| n.text.contains("ctl.eds"))
+            && h.bv().devices_ui.vendor.offer().is_ok()
+    });
+    assert!(h.bv().chat_sent.is_empty(), "nothing was sent to the agent");
+    assert_eq!(
+        b.json("/api/dropins"),
+        serde_json::json!([]),
+        "the box kept neither"
+    );
+    // A signed-out page: the box answers 401, in words.
+    jar.set(None);
+    h.press("vendor file 192.168.3.77");
+    h.bv().devices_ui.vendor.picked("ok.eds", b"fine".to_vec());
+    pump_until(&b, &jar, &mut h, "the 401", |h| {
+        h.bv()
+            .devices_ui
+            .vendor
+            .note
+            .as_ref()
+            .is_some_and(|n| n.text.contains("no longer knows this page's session"))
+    });
+    assert!(h.bv().chat_sent.is_empty(), "the agent was not asked");
+}
+
+// ---- assigning a program port to a device channel (crate::assign) ----
+
+/// The conveyor program and a map that adds a device with free channels
+/// beside the box's own `start` and `lamp`.
+const ASSIGN_MAP: &str = "\
+device rio modbus-tcp 127.0.0.1:9 unit=1 timeout_ms=200
+in  rio_di_04 bool rio di:4  # the button
+in  rio_di_05 bool rio di:5
+out rio_do_00 bool rio coil:0 safe=false
+
+in  start bool box di:0
+out lamp  bool box do:0 safe=false
+out horn  bool box do:1 safe=false
+";
+
+/// What the box's signals say `name` is bound to, once it says it: the
+/// binding's kind, device and point.
+fn binding_of(b: &Bench, name: &str) -> Option<(String, String, String)> {
+    let j = b.json("/api/signals");
+    let all = j
+        .as_array()
+        .cloned()
+        .or_else(|| j["signals"].as_array().cloned())?;
+    let s = all.iter().find(|s| s["name"] == name)?;
+    let text = |k: &str| s["binding"][k].as_str().unwrap_or_default().to_string();
+    Some((text("kind"), text("device"), text("point")))
+}
+
+/// A page signed in as an engineer, drawn, with project `line` made and
+/// open, and the I/O tab docked.
+fn assigning(b: &Bench, jar: &Jar) -> Harness {
+    let mut v = drawn(b, jar);
+    make(
+        b,
+        jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", SOURCE), ("io.map", ASSIGN_MAP)],
+    );
+    values(b, &mut v, 0.0);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.app.chrome.dock(crate::editor::Pane::Io, true);
+    h.wait(0.3);
+    h
+}
+
+fn buffer(h: &mut Harness) -> String {
+    h.bv().projects.open.as_ref().unwrap().bufs["io.map"].text.clone()
+}
+
+#[test]
+fn an_engineer_assigns_from_the_devices_tab_saves_deploys_and_the_box_binds_it() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.press("pane devices");
+    h.wait(0.4);
+    h.right_click(h.rect("point rio_di_04").center());
+    h.press("menu assign channel");
+    h.wait(0.2);
+    assert!(
+        h.rect("assign port start").width() > 0.0,
+        "the unassigned bool input"
+    );
+    assert!(
+        h.app.chrome.rect("assign port lamp").is_none(),
+        "an output is not offered to an input channel"
+    );
+    h.press("assign port start");
+    h.wait(0.3);
+    let want = ASSIGN_MAP
+        .replace(
+            "in  rio_di_04 bool rio di:4  # the button",
+            "in  start bool rio di:4  # the button",
+        )
+        .replace("in  start bool box di:0\n", "");
+    assert_eq!(buffer(&mut h), want);
+    assert!(
+        h.bv().projects.dirty(),
+        "an unsaved edit: it goes to the box with Save"
+    );
+    assert_eq!(
+        b.json("/api/projects/line/files/io.map")["text"],
+        ASSIGN_MAP,
+        "the box still has the old map"
+    );
+    // Save: the box holds what the page showed.
+    h.bv().projects.save();
+    settle(&b, &jar, &mut h.bv().projects);
+    assert!(!h.bv().projects.dirty());
+    assert_eq!(b.json("/api/projects/line/files/io.map")["text"], want.as_str());
+    // Deploy: the box's signals say start is on the device.
+    h.bv().projects.deploy();
+    settle(&b, &jar, &mut h.bv().projects);
+    let deployed = h.bv().projects.deploy.clone();
+    assert!(matches!(deployed, Deploy::Done(_)), "{deployed:?}");
+    wait("start bound to rio on the box", || {
+        binding_of(&b, "start") == Some(("device".into(), "rio".into(), "di:4".into()))
+    });
+    assert_eq!(
+        binding_of(&b, "lamp").map(|(k, ..)| k).as_deref(),
+        Some("box"),
+        "the output stayed where it was"
+    );
+}
+
+#[test]
+fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.press("tab io");
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("io row start").is_some(),
+        "the live row of a program input"
+    );
+    assert!(
+        h.app.chrome.rect("io row horn").is_some(),
+        "a signal the program does not have is listed too"
+    );
+    // `horn` is no port of the program: no menu on it.
+    h.right_click(h.rect("io row horn").center());
+    assert!(h.app.chrome.rect("menu assign port").is_none());
+    // An output port, to the device's coil.
+    h.right_click(h.rect("io row lamp").center());
+    h.press("menu assign port");
+    h.wait(0.2);
+    assert!(
+        h.app.chrome.rect("assign channel rio di:4").is_none(),
+        "wrong direction"
+    );
+    h.press("assign channel rio coil:0");
+    h.wait(0.3);
+    let moved = ASSIGN_MAP
+        .replace(
+            "out rio_do_00 bool rio coil:0 safe=false",
+            "out lamp bool rio coil:0 safe=false",
+        )
+        .replace("out lamp  bool box do:0 safe=false\n", "");
+    assert_eq!(buffer(&mut h), moved);
+    // And an input.
+    h.right_click(h.rect("io row start").center());
+    h.press("menu assign port");
+    h.wait(0.2);
+    h.press("assign channel rio di:5");
+    h.wait(0.3);
+    let both = moved
+        .replace("in  rio_di_05 bool rio di:5", "in  start bool rio di:5")
+        .replace("in  start bool box di:0\n", "");
+    assert_eq!(buffer(&mut h), both);
+    h.bv().projects.save();
+    settle(&b, &jar, &mut h.bv().projects);
+    assert_eq!(b.json("/api/projects/line/files/io.map")["text"], both.as_str());
+    h.bv().projects.deploy();
+    settle(&b, &jar, &mut h.bv().projects);
+    let deployed = h.bv().projects.deploy.clone();
+    assert!(matches!(deployed, Deploy::Done(_)), "{deployed:?}");
+    wait("start and lamp bound to rio on the box", || {
+        binding_of(&b, "start") == Some(("device".into(), "rio".into(), "di:5".into()))
+            && binding_of(&b, "lamp") == Some(("device".into(), "rio".into(), "coil:0".into()))
+    });
+    // Back to simulated I/O: the lamp goes to the box's first free output.
+    h.right_click(h.rect("io row lamp").center());
+    assert!(h.app.chrome.rect("menu back to simulated").is_some());
+    h.press("menu back to simulated");
+    h.wait(0.3);
+    let back = buffer(&mut h);
+    assert!(
+        !back.contains("coil:0"),
+        "the line goes, as Remove takes it: {back}"
+    );
+    assert!(back.ends_with("out lamp bool box do:0 safe=false\n"), "{back}");
+    assert!(h.bv().projects.dirty());
+}
+
+#[test]
+fn the_diagram_of_a_box_offers_assign_on_a_port_block_with_its_code_edits_off() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.wait(0.3);
+    // The lamp's Write block on the diagram of the program running.
+    let at = {
+        let v = h.bv().view.as_ref().expect("the diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, helmsman_diagram::NodeKind::Write { path } if path.eq_ignore_ascii_case("lamp"))
+            })
+            .expect("the lamp's block");
+        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    };
+    h.right_click(at);
+    assert!(
+        h.app.chrome.rect("diagram menu assign").is_some(),
+        "offered on a box"
+    );
+    assert!(
+        h.app.chrome.rect("diagram menu rename").is_none()
+            && h.app.chrome.rect("diagram menu delete").is_none(),
+        "the code's own edits stay off on a box"
+    );
+    h.press("diagram menu assign");
+    h.wait(0.2);
+    h.press("assign channel rio coil:0");
+    h.wait(0.3);
+    assert!(buffer(&mut h).contains("out lamp bool rio coil:0 safe=false"));
+    assert!(h.bv().projects.dirty());
+}
+
+/// "Chat about this" on a box (Nick, 2026-11-16): the diagram's menu has
+/// it though the code's edits are off, it collects a chip for the Agent
+/// tab and sends nothing, and the chip goes with the instruction.
+#[test]
+fn the_diagram_of_a_box_collects_a_block_for_the_agent_and_sends_nothing() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut h = assigning(&b, &jar);
+    h.wait(0.3);
+    let at = {
+        let v = h.bv().view.as_ref().expect("the diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, helmsman_diagram::NodeKind::Write { path } if path.eq_ignore_ascii_case("lamp"))
+            })
+            .expect("the lamp's block");
+        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    };
+    h.app.chrome.show(crate::editor::Pane::Code);
+    h.wait(0.2);
+    h.right_click(at);
+    assert!(
+        h.app.chrome.rect("diagram menu chat").is_some(),
+        "offered on a box"
+    );
+    h.press("diagram menu chat");
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.showing(crate::editor::Pane::Claude),
+        "the Agent tab opens"
+    );
+    let chips = h.bv().instruct.chips.clone();
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    assert_eq!(
+        (chips[0].name.as_str(), chips[0].file.as_str(), chips[0].line),
+        ("lamp", "main.st", 8)
+    );
+    assert_eq!(chips[0].text, "lamp := start;");
+    assert_eq!(chips[0].driven_by, vec!["start".to_string()]);
+    assert!(h.app.chrome.rect("chat chip 0").is_some());
+    // Chat about a signal by name, as the I/O rows will: a second chip.
+    let mut chrome = std::mem::take(&mut h.app.chrome);
+    h.bv().chat_about_signal("start", &mut chrome);
+    h.app.chrome = chrome;
+    assert_eq!(h.bv().instruct.chips.len(), 2);
+    assert_eq!(
+        (h.bv().instruct.chips[1].kind, h.bv().instruct.chips[1].line),
+        (crate::chat_about::Kind::Input, 3)
+    );
+    // The instruction goes with both, once.
+    h.bv().instruct.draft = "latch the lamp".into();
+    h.bv().send_instruction(&egui::Context::default());
+    assert_eq!(h.bv().instruct.chips.len(), 0);
+    let sent = h.bv().instruct.run.as_ref().expect("under way").asked.clone();
+    assert_eq!(sent.matches("<chat_about>").count(), 1, "{sent}");
+    assert!(
+        sent.contains("output `lamp` at main.st:8") || sent.contains("block `lamp` at main.st:8"),
+        "{sent}"
+    );
+    assert!(sent.contains("input `start` at main.st:3"), "{sent}");
+}
+
+#[test]
+fn an_operator_sees_the_items_off_and_nothing_is_written() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut eng = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut eng.projects,
+        "line",
+        &[("main.st", SOURCE), ("io.map", ASSIGN_MAP)],
+    );
+    let jar2 = Jar::default();
+    let v = page(&b, &jar2, Some(("bob", BOB)));
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.wait(0.3);
+    h.press("pane devices");
+    h.wait(0.4);
+    h.right_click(h.rect("point rio_di_04").center());
+    assert!(
+        h.app.chrome.rect("menu assign channel").is_some(),
+        "shown, but off"
+    );
+    h.press("menu assign channel");
+    h.wait(0.2);
+    assert!(h.app.chrome.rect("assign form").is_none(), "nothing opens");
+    assert_eq!(buffer(&mut h), ASSIGN_MAP);
+    assert!(!h.bv().projects.dirty());
+    // The reason is the neighbouring items' own: why this person cannot write.
+    let why = h.bv().writable().unwrap_err();
+    assert!(why.contains("only an engineer"), "{why}");
+}
+
+/// A device added alone: its line and its profile, no signal on it.
+const FRESH_MAP: &str = "\
+device rio device:moxa-iologik-e1213 127.0.0.1
+in  start bool box di:0
+out lamp  bool box do:0 safe=false
+out horn  bool box do:1 safe=false
+";
+
+const E1213: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
+
+#[test]
+fn a_port_goes_to_a_channel_with_no_line_on_the_box_and_the_box_binds_it() {
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut v = drawn(&b, &jar);
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", SOURCE),
+            ("io.map", FRESH_MAP),
+            ("moxa-iologik-e1213.device", E1213),
+        ],
+    );
+    values(&b, &mut v, 0.0);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.app.chrome.dock(crate::editor::Pane::Io, true);
+    h.wait(0.3);
+    h.press("tab io");
+    h.wait(0.3);
+    // The I/O tab's row: the device has channels though the map has no line.
+    h.right_click(h.rect("io row start").center());
+    h.press("menu assign port");
+    h.wait(0.2);
+    assert!(
+        h.app.chrome.rect("assign channel rio ch:DI-04").is_some(),
+        "a channel with no line"
+    );
+    assert!(
+        h.app.chrome.rect("assign channel rio ch:DO-00").is_none(),
+        "wrong direction"
+    );
+    h.press("assign channel rio ch:DI-04");
+    h.wait(0.3);
+    let got = buffer(&mut h);
+    assert!(got.contains(" start bool rio ch:DI-04"), "{got}");
+    assert!(!got.contains("start bool box"), "{got}");
+    crate::assign::testing::loads_with(&got, E1213);
+    // The lamp, from the diagram's block.
+    let at = {
+        let v = h.bv().view.as_ref().expect("the diagram");
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, helmsman_diagram::NodeKind::Write { path } if path.eq_ignore_ascii_case("lamp"))
+            })
+            .expect("the lamp's block");
+        v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    };
+    h.right_click(at);
+    h.press("diagram menu assign");
+    h.wait(0.2);
+    h.press("assign channel rio ch:DO-02");
+    h.wait(0.3);
+    let both = buffer(&mut h);
+    assert!(
+        both.contains(" lamp bool rio ch:DO-02") && both.contains("safe=false"),
+        "{both}"
+    );
+    assert!(!both.contains("out lamp  bool box"), "{both}");
+    crate::assign::testing::loads_with(&both, E1213);
+    // Save: the box holds what the page showed; deploy: its signals say so.
+    h.bv().projects.save();
+    settle(&b, &jar, &mut h.bv().projects);
+    assert_eq!(b.json("/api/projects/line/files/io.map")["text"], both.as_str());
+    h.bv().projects.deploy();
+    settle(&b, &jar, &mut h.bv().projects);
+    let deployed = h.bv().projects.deploy.clone();
+    assert!(
+        matches!(deployed, Deploy::Done(_)),
+        "{deployed:?} {:?}",
+        h.bv().projects.diags
+    );
+    wait("start and lamp bound to rio on the box", || {
+        binding_of(&b, "start") == Some(("device".into(), "rio".into(), "ch:DI-04".into()))
+            && binding_of(&b, "lamp") == Some(("device".into(), "rio".into(), "ch:DO-02".into()))
+    });
+}
+
+/// Nick, 2026-11-15: "a box also keeps layouts, so any browser that opens
+/// it offers them". An engineer keeps a layout of theirs on the box; an
+/// operator on another screen is offered it, exactly as it was (tabs,
+/// hidden ones, sizes), and is refused a change of the box's list; the
+/// engineer deletes it and it is gone for both.
+#[test]
+fn a_pane_layout_kept_on_the_box_is_offered_on_another_screen() {
+    use crate::editor::{Chrome, Pane};
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let (jar_a, jar_b) = (Jar::default(), Jar::default());
+    let mut alice = page(&b, &jar_a, Some(("alice", ALICE)));
+    let mut bob = page(&b, &jar_b, Some(("bob", BOB)));
+    let now = std::cell::Cell::new(0.0);
+    let tick = || {
+        now.set(now.get() + 0.5);
+        now.get()
+    };
+    // What the popup does while it is open, until the box has answered.
+    let read = |v: &mut BoxView, jar: &Jar| {
+        v.pane_layouts.shut();
+        for _ in 0..6 {
+            v.pane_layouts.want();
+            pump(&b, jar, v, &ctx, tick());
+        }
+    };
+    read(&mut alice, &jar_a);
+    assert_eq!(alice.pane_layouts.list, []);
+    assert_eq!(alice.pane_layouts.note, None, "an empty list is no problem");
+
+    let mut c = Chrome::default();
+    c.dock(Pane::Io, true);
+    c.hide(Pane::History);
+    c.place(Pane::Devices, false, Some(Pane::Claude));
+    c.sizes.left = Some(400.0);
+    c.sizes.bottom = Some(200.0);
+    let mine = c.layout();
+    let name = "Line 3 start-up / é";
+    alice.pane_layouts.keep(name, &mine);
+    read(&mut alice, &jar_a);
+    assert_eq!(alice.pane_layouts.list, [(name.to_string(), mine.clone())]);
+
+    // The operator's screen: offered, the same; a change is refused and
+    // says why; the box's list stands.
+    read(&mut bob, &jar_b);
+    assert_eq!(bob.pane_layouts.list, [(name.to_string(), mine.clone())]);
+    bob.pane_layouts.keep("Bob's", &mine);
+    bob.pane_layouts.forget(name);
+    for _ in 0..4 {
+        pump(&b, &jar_b, &mut bob, &ctx, tick());
+    }
+    let (note, bad) = bob.pane_layouts.note.clone().expect("the refusal is said");
+    assert!(bad && note.contains("engineer"), "{note}");
+    read(&mut bob, &jar_b);
+    assert_eq!(bob.pane_layouts.list.len(), 1);
+
+    // Signed out: the box's reads need a sign-in, and the popup says so.
+    let jar_c = Jar::default();
+    let mut nobody = page(&b, &jar_c, None);
+    read(&mut nobody, &jar_c);
+    assert_eq!(nobody.pane_layouts.list, []);
+    assert!(nobody.pane_layouts.note.clone().is_some_and(|(_, bad)| bad));
+
+    // The same name again replaces; a name with a slash deletes by its path.
+    let mut other = mine.clone();
+    other.trend = !other.trend;
+    // (Names match without regard to the case of ASCII letters.)
+    alice.pane_layouts.keep(&name.to_ascii_uppercase(), &other);
+    read(&mut alice, &jar_a);
+    assert_eq!(alice.pane_layouts.list, [(name.to_ascii_uppercase(), other)]);
+    alice.pane_layouts.forget(name);
+    read(&mut alice, &jar_a);
+    assert_eq!(alice.pane_layouts.list, []);
+    read(&mut bob, &jar_b);
+    assert_eq!(bob.pane_layouts.list, []);
+    // Deleting what is gone already is no error.
+    alice.pane_layouts.forget(name);
+    for _ in 0..4 {
+        pump(&b, &jar_a, &mut alice, &ctx, tick());
+    }
+    assert!(alice.pane_layouts.note.clone().is_some_and(|(_, bad)| !bad));
+}
+
+/// What a box answers is read as a file is: a list that is not one says
+/// so and keeps the last good one, and a hostile one is held to the rules.
+#[test]
+fn a_boxs_pane_layouts_answer_is_read_as_hostile() {
+    use crate::box_projects::{Answer, PCall};
+    use crate::pane_layout::{FORMAT, MAX_LAYOUTS, OnBox};
+    let answer = |status: u16, body: &str| Answer {
+        status,
+        retry_after: None,
+        body: body.into(),
+    };
+    let mut o = OnBox::default();
+    o.want();
+    o.want();
+    assert_eq!(o.poll().len(), 1, "asked once while the popup is open");
+    let good = format!(
+        r#"{{"format":"{FORMAT}","layouts":[{{"name":"A"}},{{"name":"a"}},{{"name":"B","left":["nope","code"]}}]}}"#
+    );
+    o.answer(&PCall::PaneLayouts, &answer(200, &good));
+    let names: Vec<&str> = o.list.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["A", "B"], "a name once");
+    assert_eq!(o.note, None);
+    for (status, body) in [
+        (200, "<html>a proxy's page</html>"),
+        (200, r#"{"format":"helmsman-pane-layouts 9","layouts":[]}"#),
+        (500, "oops"),
+        (0, "connection refused"),
+        (401, r#"{"error":"sign in"}"#),
+    ] {
+        o.answer(&PCall::PaneLayouts, &answer(status, body));
+        assert!(o.note.take().is_some_and(|(_, bad)| bad), "{status} {body}");
+        assert_eq!(o.list.len(), 2, "the last good list stays");
+    }
+    let many: Vec<String> = (0..MAX_LAYOUTS + 9)
+        .map(|k| format!(r#"{{"name":"n{k}"}}"#))
+        .collect();
+    let body = format!(r#"{{"format":"{FORMAT}","layouts":[{}]}}"#, many.join(","));
+    o.answer(&PCall::PaneLayouts, &answer(200, &body));
+    assert_eq!(o.list.len(), MAX_LAYOUTS);
+    // A change answered: the list is read again; a refusal is said.
+    let _ = o.poll();
+    o.answer(&PCall::KeepPaneLayout("A".into()), &answer(200, "{}"));
+    o.want();
+    assert_eq!(o.poll().len(), 1);
+    o.answer(
+        &PCall::KeepPaneLayout("A".into()),
+        &answer(507, r#"{"error":"the box keeps at most 32"}"#),
+    );
+    let (note, bad) = o.note.clone().unwrap();
+    assert!(
+        bad && note.contains("at most 32") && note.starts_with("A was not kept"),
+        "{note}"
+    );
 }

@@ -20,9 +20,9 @@
 #        target/pi-image/pi-gen; write its config; copy the stage in;
 #        run pi-gen; copy the image to target/pi-image/*.img.xz with its
 #        SHA-256 beside it.
-# Verifies: the stage's manifest (what went in) and the image file; a boot
-#        in QEMU is not part of the skeleton (docs/BOX.md says how to check
-#        the image by hand).
+# Verifies: the stage's manifest (what went in) and the image file. Booting
+#        it is scripts/box-boot-test.sh (QEMU), which CI runs on this
+#        script's output (.github/workflows/box-image.yml).
 # Runs in your own shell (long; Docker): scripts/pi-image.sh
 #
 # Usage: scripts/pi-image.sh [SEED.st]
@@ -60,9 +60,22 @@ esac
 toolchain="${image#rust:}"
 toolchain="${toolchain%%-*}"
 
-echo "==> build linux/arm64 helmsman-plc in $image"
+# Made here, as the user running the script: on Linux Docker would make it as
+# root and the canvas build could not write its dist next to it.
+mkdir -p "$repo/target"
+
+# The box's build stamp (crates/build_stamp.rs) is `git describe` of the
+# checkout, and the build image has no git: pass the stamp in, or the box in
+# the image would answer "unknown" and the canvas could not tell it from
+# another build. The canvas below is built on the host and stamps itself the
+# same way.
+stamp="$(git -C "$repo" describe --always --abbrev=9 2>/dev/null || true)"
+[ -n "$stamp" ] || echo "warning: no git checkout here, the box will report build \"unknown\""
+
+echo "==> build linux/arm64 helmsman-plc in $image (build $stamp)"
 docker run --rm --platform linux/arm64 \
     -v "$repo:/src" -w /src \
+    ${stamp:+-e HELMSMAN_BUILD="$stamp"} \
     -v helmsman-cargo-registry:/usr/local/cargo/registry \
     -e CARGO_TARGET_DIR=/src/target/pi \
     -e RUSTUP_TOOLCHAIN="$toolchain" \
@@ -71,7 +84,7 @@ bin="$repo/target/pi/release/helmsman-plc"
 file "$bin" | grep -q 'ARM aarch64' || die "build did not produce an aarch64 binary: $(file "$bin")"
 
 echo "==> build the canvas (wasm, trunk)"
-"$repo/scripts/canvas-web.sh" >/dev/null
+"$repo/scripts/canvas-web.sh"
 dist="$repo/target/canvas-dist"
 [ -f "$dist/index.html" ] || die "the canvas build left no index.html in $dist"
 
@@ -121,7 +134,6 @@ IMG_NAME=helmsman
 RELEASE=trixie
 TARGET_HOSTNAME=helmsman
 FIRST_USER_NAME=helmsman
-DISABLE_FIRST_BOOT_USER_RENAME=1
 ENABLE_SSH=1
 LOCALE_DEFAULT=en_US.UTF-8
 KEYBOARD_KEYMAP=us

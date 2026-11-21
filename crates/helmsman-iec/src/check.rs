@@ -6,6 +6,10 @@
 //! function block instance is a contiguous run of slots inside whoever
 //! declares it. Code addresses its own variables relative to the current
 //! frame base, so one compiled FB body serves every instance.
+//!
+//! A module's `VAR_GLOBAL` variables are the first variables of the
+//! program's frame: the program sees them as its own, and every other POU
+//! reaches them at their slot from the start of memory ([`Base::Global`]).
 
 // Operands are `a`/`b`, their typed forms `x`/`t`: the idiom of type
 // checkers, and clearer here than longer names.
@@ -22,6 +26,7 @@ use crate::parser::{
     self, Arg, BinOp, CaseLabel, Expr, ExprKind, Init, LabelValue, PouKind, Section, Stmt, StmtKind, TypeDef,
     TypeRef, UnOp,
 };
+use crate::strs::StrFn;
 use crate::types::{Ty, Value, round_real};
 
 /// A compile error.
@@ -153,6 +158,9 @@ pub enum Type {
     Enum(usize),
     /// Array, struct or function block; index into [`Checked::aggs`].
     Agg(usize),
+    /// `STRING[n]`: at most `n` characters, `n` in 0..=255 (0 only for the
+    /// type of the literal `''`). Held as a region of slots ([`crate::strs`]).
+    Str(u16),
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +247,13 @@ pub enum Base {
     Frame,
     /// The process image.
     Image(Loc),
+    /// Through a `VAR_IN_OUT` of the running function block: the frame slot
+    /// at this offset holds the absolute slot of the caller's variable
+    /// (stored by [`Move::Ref`] at each call), and `off` counts on from it.
+    Ref(usize),
+    /// A module `VAR_GLOBAL` seen from a function or function block: `off`
+    /// is its slot in the program's frame, which starts the memory.
+    Global,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -255,6 +270,27 @@ impl Place {
         Self {
             base: Base::Frame,
             off,
+            dims: Vec::new(),
+            bit: None,
+        }
+    }
+
+    /// A module global at `off` in the program's frame.
+    const fn global(off: usize) -> Self {
+        Self {
+            base: Base::Global,
+            off,
+            dims: Vec::new(),
+            bit: None,
+        }
+    }
+
+    /// The caller's variable behind the in-out parameter held at frame
+    /// slot `slot`.
+    const fn through(slot: usize) -> Self {
+        Self {
+            base: Base::Ref(slot),
+            off: 0,
             dims: Vec::new(),
             bit: None,
         }
@@ -286,6 +322,16 @@ pub enum Builtin {
     Trunc,
     /// Time since the program started (the built-in library's clock).
     Now,
+    /// `DT_NOW()`: the wall clock, a DT.
+    Wall,
+    /// `DAY_OF_WEEK(d)`: 0 (Sunday) to 6, a SINT.
+    DayOfWeek,
+    /// `CONCAT_DATE_TOD(date, tod)`: a DT.
+    ConcatDateTod,
+    /// `CONCAT_DATE(y, m, d)`: a DATE, 0 when there is no such date.
+    ConcatDate,
+    /// `CONCAT_TOD(h, m, s, ms)`: a TOD, 0 when there is no such time.
+    ConcatTod,
     /// Faults the scan with [`crate::interp::BadParam`]: how a built-in
     /// library block refuses a parameter (library code only, like `__NOW`).
     /// Typed BOOL so it can stand where a value goes; it never returns one.
@@ -307,6 +353,20 @@ pub enum Ex {
     Call(Box<Call>),
     /// Operands per [`Builtin`]; `.2` is the operand type.
     Builtin(Builtin, Vec<Ex>, Ty),
+    /// A string variable: evaluates to the absolute slot its region starts
+    /// at (read in place, never copied).
+    StrLoad(Box<Place>),
+    /// A string literal: its region in the scratch area, filled at load.
+    StrConst(usize),
+    /// A string function over its arguments (strings evaluate to their
+    /// region, integers and the number a conversion renders as values):
+    /// a string result is written to the scratch region at `.2` (capacity
+    /// `.3`) and evaluates to it; any other result is the value.
+    Str(StrFn, Vec<Ex>, usize, u16),
+    /// A call of a function that returns a string: the result is copied
+    /// to the scratch region at `.1` (capacity `.2`), so the next call of
+    /// the same function cannot overwrite it.
+    StrCall(Box<Call>, usize, u16),
 }
 
 /// A value moved into a callee's frame before the call.
@@ -322,6 +382,19 @@ pub enum Move {
         off: usize,
         src: Place,
         len: usize,
+    },
+    /// A string by value: cut at the parameter's capacity `cap`.
+    Str {
+        off: usize,
+        ex: Ex,
+        cap: u16,
+    },
+    /// A `VAR_IN_OUT` argument: the callee's slot at `off` takes the
+    /// absolute slot `src` resolves to, so the callee works on the
+    /// caller's variable itself.
+    Ref {
+        off: usize,
+        src: Place,
     },
 }
 
@@ -361,6 +434,8 @@ pub struct St {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StKind {
     Store(Place, Ty, Ex),
+    /// A string assigned: the value's text cut at the target's capacity.
+    StrStore(Place, u16, Ex),
     Copy(Place, Place, usize),
     Call(Call),
     If(Vec<(Ex, Vec<St>)>, Vec<St>),
@@ -394,6 +469,9 @@ pub struct Checked {
     pub library: usize,
     /// Initial contents of the whole slot array.
     pub mem_init: Vec<Value>,
+    /// Where the scratch area starts in `mem_init`: after every frame, the
+    /// regions string expressions write their results to (see [`Ex::Str`]).
+    pub scratch: usize,
     /// Located variables' initial values, written to the image at a cold
     /// start.
     pub loc_init: Vec<(Loc, Ty, Value)>,
@@ -424,6 +502,20 @@ type O<T> = Option<T>;
 pub(crate) fn is_builtin(upper: &str) -> bool {
     BUILTINS.iter().any(|(n, _)| *n == upper)
 }
+
+/// The standard string functions: name, function, string arguments (first)
+/// and integer arguments (after them). `CONCAT` takes two or more strings.
+const STRING_FNS: &[(&str, StrFn, usize, usize)] = &[
+    ("LEN", StrFn::Len, 1, 0),
+    ("LEFT", StrFn::Left, 1, 1),
+    ("RIGHT", StrFn::Right, 1, 1),
+    ("MID", StrFn::Mid, 1, 2),
+    ("CONCAT", StrFn::Concat, 2, 0),
+    ("FIND", StrFn::Find, 2, 0),
+    ("INSERT", StrFn::Insert, 2, 1),
+    ("DELETE", StrFn::Delete, 1, 2),
+    ("REPLACE", StrFn::Replace, 2, 2),
+];
 
 const BUILTINS: &[(&str, Builtin)] = &[
     ("ABS", Builtin::Abs),
@@ -489,9 +581,55 @@ struct Ck<'a> {
     dropped: BTreeMap<usize, BTreeSet<String>>,
     /// Initial values of located variables: (where, type, value).
     loc_init: Vec<(Loc, Ty, Value)>,
+    /// The program, or the first of several: the one whose frame holds
+    /// the module's globals.
+    program: Option<usize>,
+    /// The module's `VAR_GLOBAL` declarations.
+    globals_src: &'a [parser::VarDecl],
+    /// The laid-out globals (offsets in the program's frame), once the
+    /// program has laid them out.
+    globals: Vec<VarInfo>,
+    global_ix: BTreeMap<String, usize>,
+    /// The globals' initial values, which start the program's frame.
+    global_init: Vec<Value>,
+    /// Globals whose declaration failed (already reported).
+    global_dropped: BTreeSet<String>,
     diags: Vec<Diagnostic>,
     /// Shown, not blocking: the program still compiles.
     warnings: Vec<Diagnostic>,
+    /// The scratch area's initial contents: each string expression's result
+    /// region, its own, a literal's holding the literal.
+    scratch_init: Vec<Value>,
+    /// Whether the scratch area's size has been reported as too big.
+    scratch_big: bool,
+}
+
+/// The most slots of scratch a program's string expressions take: 64 KiB
+/// of text at 16 characters a slot, in about 130 KiB of memory.
+const MAX_SCRATCH: usize = 1 << 14;
+
+/// One step into a variable named by a call argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Step {
+    Field(String),
+    /// One entry per dimension: its value when the index is a literal.
+    Index(Vec<Option<i128>>),
+}
+
+impl Step {
+    /// Whether two ways into the same variable can never reach the same
+    /// slot: some step takes different fields or provably different
+    /// elements. A way that ends where the other goes on is its whole.
+    fn apart(a: &[Self], b: &[Self]) -> bool {
+        a.iter().zip(b).any(|pair| match pair {
+            (Self::Field(x), Self::Field(y)) => x != y,
+            (Self::Index(x), Self::Index(y)) => x
+                .iter()
+                .zip(y)
+                .any(|(i, j)| matches!((i, j), (Some(i), Some(j)) if i != j)),
+            _ => false,
+        })
+    }
 }
 
 /// Per-body context.
@@ -499,6 +637,12 @@ struct Scope {
     pou: usize,
     vars: BTreeMap<String, usize>,
     loops: usize,
+    /// Whether the module's globals are visible beside `vars`: in every
+    /// user POU but the program, whose own variables they already are.
+    globals: bool,
+    /// Globals this POU declares `VAR_EXTERNAL CONSTANT`: it may only read
+    /// them.
+    read_only: BTreeSet<String>,
 }
 
 impl<'a> Ck<'a> {
@@ -510,9 +654,59 @@ impl<'a> Ck<'a> {
         self.warnings.push(Diagnostic { pos, msg: msg.into() });
     }
 
+    /// A `TASK` or a program instance of the `CONFIGURATION` was read and
+    /// nothing runs from it. Every one is told, whatever it names: its type
+    /// is not looked up, and two tasks of one name are two warnings.
+    fn warn_configured(&mut self, items: &[parser::Configured]) {
+        for item in items {
+            let msg = match &item.kind {
+                parser::ConfiguredKind::Task { name, interval_ns } => {
+                    let at =
+                        interval_ns.map_or_else(String::new, |ns| format!(" (interval {})", time_words(ns)));
+                    format!(
+                        "TASK {name}{at} was not taken from this file: a module's scan rate is set where the module is deployed"
+                    )
+                }
+                parser::ConfiguredKind::Instance { name, ty } => format!(
+                    "program instance {name} of {ty} was not taken from this file: a module runs its one PROGRAM"
+                ),
+            };
+            self.warn(item.pos, msg);
+        }
+    }
+
     /// Whether `name` in POU `pou` failed to declare (and was reported).
     fn was_dropped(&self, pou: usize, name: &str) -> bool {
-        self.dropped.get(&pou).is_some_and(|d| d.contains(name))
+        self.dropped.get(&pou).is_some_and(|d| d.contains(name)) || self.global_dropped.contains(name)
+    }
+
+    /// The variable `name` means in `sc`: the POU's own, else a module
+    /// global. The flag says it is a global reached from outside the
+    /// program's frame.
+    fn find_var(&self, sc: &Scope, name: &str) -> Option<(VarInfo, bool)> {
+        if let Some(&k) = sc.vars.get(name) {
+            return Some((self.pous[sc.pou].vars[k].clone(), false));
+        }
+        if sc.globals
+            && let Some(&g) = self.global_ix.get(name)
+        {
+            return Some((self.globals[g].clone(), true));
+        }
+        None
+    }
+
+    fn has_var(&self, sc: &Scope, name: &str) -> bool {
+        sc.vars.contains_key(name) || (sc.globals && self.global_ix.contains_key(name))
+    }
+
+    /// The value of a CONSTANT that [`Self::find_var`] returned.
+    fn constant_value(&self, sc: &Scope, v: &VarInfo, global: bool) -> Option<Value> {
+        let init = if global {
+            &self.global_init
+        } else {
+            &self.pous[sc.pou].init
+        };
+        init.get(v.off).copied()
     }
 
     fn type_name(&self, t: Type) -> String {
@@ -520,12 +714,14 @@ impl<'a> Ck<'a> {
             Type::Elem(ty) => ty.to_string(),
             Type::Enum(e) => self.enums[e].name.clone(),
             Type::Agg(a) => self.aggs[a].name.clone(),
+            Type::Str(n) => format!("STRING[{n}]"),
         }
     }
 
     fn size_of(&self, t: Type) -> usize {
         match t {
             Type::Agg(a) => self.aggs[a].size,
+            Type::Str(n) => crate::strs::slots(usize::from(n)),
             _ => 1,
         }
     }
@@ -535,13 +731,46 @@ impl<'a> Ck<'a> {
             Type::Elem(ty) => vec![Value::zero(ty)],
             Type::Enum(e) => vec![Value::Int(self.enums[e].values[0].1)],
             Type::Agg(a) => self.aggs[a].init.clone(),
+            Type::Str(n) => crate::strs::encode(usize::from(n), &[]),
         }
+    }
+
+    /// Whether a value of type `t` holds a string anywhere inside.
+    fn holds_string(&self, t: Type) -> bool {
+        match t {
+            Type::Str(_) => true,
+            Type::Agg(a) => match &self.aggs[a].kind {
+                AggKind::Array { elem, .. } => self.holds_string(*elem),
+                AggKind::Struct { fields } => fields.iter().any(|f| self.holds_string(f.ty)),
+                AggKind::Fb(p) => self.pous[*p].vars.iter().any(|v| self.holds_string(v.ty)),
+            },
+            _ => false,
+        }
+    }
+
+    /// A scratch region for a string result of capacity `cap` holding
+    /// `text` to begin with (a literal); its offset in the scratch area.
+    fn scratch(&mut self, cap: u16, text: &[u8], pos: Pos) -> usize {
+        let off = self.scratch_init.len();
+        let slots = crate::strs::encode(usize::from(cap), text);
+        if off + slots.len() > MAX_SCRATCH && !self.scratch_big {
+            self.scratch_big = true;
+            self.err(
+                pos,
+                "too many string expressions: each takes room for its longest result, and this program's take more than the limit (about 64 KiB of text); fewer or shorter STRING expressions fit",
+            );
+        }
+        self.scratch_init.extend(slots);
+        off
     }
 
     // ---- declarations ----
 
     fn declare(&mut self, name: &str, pos: Pos, what: Named) {
-        if Ty::from_name(name).is_some() || self.named.contains_key(name) || self.pou_index.contains_key(name)
+        if Ty::from_name(name).is_some()
+            || name == "STRING"
+            || self.named.contains_key(name)
+            || self.pou_index.contains_key(name)
         {
             self.err(pos, format!("{name} is already defined"));
         } else {
@@ -602,14 +831,18 @@ impl<'a> Ck<'a> {
                 if let Some(ty) = Ty::from_name(n) {
                     return Some(Type::Elem(ty));
                 }
+                if n == "STRING" {
+                    return Some(Type::Str(crate::strs::DEFAULT_CAP));
+                }
                 match self.named.get(n).copied() {
                     Some(Named::Type(t)) => Some(t),
                     Some(Named::Alias(id)) => self.resolve_alias(id, *pos),
                     None => {
                         let hint = match n.as_str() {
-                            "STRING" | "WSTRING" => " (STRING is not supported yet)".to_string(),
-                            "DATE" | "DT" | "TOD" | "DATE_AND_TIME" | "TIME_OF_DAY" | "LDATE" | "LDT"
-                            | "LTOD" | "LTIME" => format!(" ({n} is not supported yet)"),
+                            "WSTRING" => " (WSTRING is not supported: use STRING)".to_string(),
+                            "LDATE" | "LDT" | "LTOD" | "LTIME" | "LTIME_OF_DAY" | "LDATE_AND_TIME" => {
+                                format!(" ({n} is not supported yet)")
+                            }
                             _ => {
                                 let mut known: Vec<&str> = Ty::names().collect();
                                 known.extend(self.named.keys().map(String::as_str));
@@ -620,6 +853,16 @@ impl<'a> Ck<'a> {
                         None
                     }
                 }
+            }
+            TypeRef::Str(n, pos) => {
+                if !(1..=crate::strs::MAX as i128).contains(n) {
+                    self.err(
+                        *pos,
+                        format!("a STRING holds 1 to {} characters, not {n}", crate::strs::MAX),
+                    );
+                    return None;
+                }
+                Some(Type::Str(u16::try_from(*n).unwrap_or(0)))
             }
             TypeRef::Array { dims, elem, pos } => {
                 let elem = self.resolve(elem)?;
@@ -800,8 +1043,29 @@ impl<'a> Ck<'a> {
         let mut temps = Vec::new();
         let mut ok = true;
         let (mut retained, mut too_big) = (0usize, false);
+        // The program's frame starts with the module's globals: they are
+        // declared by the same rules as its own variables, first.
+        let system = self.srcs[p].system;
+        let first_global = if self.program == Some(p) && !system {
+            self.globals_src
+        } else {
+            &[]
+        };
+        let ng = first_global.len();
+        let decls: Vec<&parser::VarDecl> = first_global.iter().chain(src.vars.iter()).collect();
+        let global_names: BTreeSet<&str> = self.globals_src.iter().map(|d| d.name.as_str()).collect();
         // A function's result is slot 0, named after the function.
         if let PouKind::Function(rt) = &src.kind {
+            if !system && global_names.contains(src.name.as_str()) {
+                self.err(
+                    src.pos,
+                    format!(
+                        "{}: a global variable of this module has the name of this function",
+                        src.name
+                    ),
+                );
+                ok = false;
+            }
             match self.resolve(rt) {
                 Some(Type::Elem(ty)) => {
                     self.pous[p].result = Some(ty);
@@ -829,26 +1093,55 @@ impl<'a> Ck<'a> {
                     });
                     init.push(Value::Int(self.enums[e].values[0].1));
                 }
+                Some(t @ Type::Str(_)) => {
+                    // The result is the string region at the frame's start;
+                    // `result` stays `None`: it names scalar results.
+                    vars.push(VarInfo {
+                        name: src.name.clone(),
+                        ty: t,
+                        off: 0,
+                        section: Section::Output,
+                        constant: false,
+                        retain: false,
+                        loc: None,
+                    });
+                    init.extend(self.init_of(t));
+                }
                 Some(t) => {
                     let n = self.type_name(t);
                     self.err(
                         rt.pos(),
-                        format!("a FUNCTION must return an elementary type or enumeration, not {n}"),
+                        format!("a FUNCTION must return an elementary type, enumeration or STRING, not {n}"),
                     );
                     ok = false;
                 }
                 None => ok = false,
             }
         }
-        for d in &src.vars {
+        for (i, d) in decls.iter().copied().enumerate() {
+            if i == ng {
+                self.publish_globals(p, &vars, &init, ng);
+            }
+            if d.section == Section::External {
+                // Checked with the bodies, once every POU has its place.
+                continue;
+            }
+            if i >= ng && !system && global_names.contains(d.name.as_str()) {
+                self.err(
+                    d.pos,
+                    format!(
+                        "{} is a global variable of this module; a variable of the same name here would \
+                         hide it, so give this one another name",
+                        d.name
+                    ),
+                );
+                ok = false;
+                continue;
+            }
             let allowed = matches!(
                 (kind, d.section),
-                (_, Section::Var | Section::Temp)
-                    | (
-                        PouType::FunctionBlock | PouType::Program,
-                        Section::Input | Section::Output
-                    )
-                    | (PouType::Function, Section::Input)
+                (_, Section::Var | Section::Temp | Section::Input | Section::Output)
+                    | (PouType::FunctionBlock, Section::InOut)
             );
             if !allowed {
                 let what = match d.section {
@@ -862,8 +1155,32 @@ impl<'a> Ck<'a> {
                     PouType::Function => "a FUNCTION",
                     PouType::FunctionBlock => "a FUNCTION_BLOCK",
                 };
-                self.err(d.pos, format!("{what} is not supported in {pk} yet"));
+                let why = match (kind, d.section) {
+                    (PouType::Program, Section::InOut) => {
+                        ": a program's inputs and outputs are signals that other modules share, \
+                         so nothing of it can be passed by reference. Use VAR_INPUT and VAR_OUTPUT, \
+                         or put the buffer in a FUNCTION_BLOCK"
+                    }
+                    (PouType::Function, Section::InOut) => {
+                        " yet: use a FUNCTION_BLOCK to take a struct or array by reference"
+                    }
+                    _ => " yet",
+                };
+                self.err(d.pos, format!("{what} is not supported in {pk}{why}"));
                 ok = false;
+                continue;
+            }
+            if d.section == Section::InOut {
+                match self.in_out_decl(d, &vars) {
+                    Some(v) => {
+                        // One slot holds the reference; `Move::Ref` fills it
+                        // at every call.
+                        let off = init.len();
+                        init.push(Value::Int(0));
+                        vars.push(VarInfo { off, ..v });
+                    }
+                    None => ok = false,
+                }
                 continue;
             }
             // RETAIN where it is not kept is a warning, not an error: it
@@ -926,7 +1243,9 @@ impl<'a> Ck<'a> {
             // A program's inputs and outputs are its ports: the host binds
             // them to signals by name, one scalar each.
             if kind == PouType::Program && matches!(d.section, Section::Input | Section::Output) {
-                let problem = if !matches!(ty, Type::Elem(_)) {
+                // A STRING port compiles but is no signal yet: the host
+                // skips it (`Program::ports`, card `st-string-signals`).
+                let problem = if !matches!(ty, Type::Elem(_) | Type::Str(_)) {
                     Some("a PROGRAM input or output must be an elementary type")
                 } else if d.at.is_some() {
                     Some("a PROGRAM input or output is bound by name, not located")
@@ -988,6 +1307,8 @@ impl<'a> Ck<'a> {
                                     .map(|(k, v)| (v.name.clone(), k))
                                     .collect(),
                                 loops: 0,
+                                globals: self.program != Some(p) && !system,
+                                read_only: BTreeSet::new(),
                             };
                             self.pous[p].vars.clone_from(&vars);
                             self.pous[p].init.clone_from(&init);
@@ -1033,6 +1354,8 @@ impl<'a> Ck<'a> {
                         .map(|(k, v)| (v.name.clone(), k))
                         .collect(),
                     loops: 0,
+                    globals: self.program != Some(p) && !system,
+                    read_only: BTreeSet::new(),
                 };
                 self.pous[p].vars.clone_from(&vars);
                 self.pous[p].init.clone_from(&init);
@@ -1042,6 +1365,17 @@ impl<'a> Ck<'a> {
                 }
             }
             let len = v.len();
+            if retain && self.holds_string(ty) {
+                self.err(
+                    d.pos,
+                    format!(
+                        "{}: a STRING cannot be RETAIN yet (strings are not kept across a restart: card st-string-signals)",
+                        d.name
+                    ),
+                );
+                ok = false;
+                continue;
+            }
             if retain {
                 retained += len;
                 if retained > crate::MAX_RETAIN && !too_big {
@@ -1071,10 +1405,12 @@ impl<'a> Ck<'a> {
                 loc: None,
             });
         }
-        let dropped: BTreeSet<String> = src
-            .vars
+        if ng == decls.len() && ng > 0 {
+            self.publish_globals(p, &vars, &init, ng);
+        }
+        let dropped: BTreeSet<String> = decls[ng..]
             .iter()
-            .filter(|d| !vars.iter().any(|v| v.name == d.name))
+            .filter(|d| d.section != Section::External && !vars.iter().any(|v| v.name == d.name))
             .map(|d| d.name.clone())
             .collect();
         if !dropped.is_empty() {
@@ -1089,15 +1425,106 @@ impl<'a> Ck<'a> {
         ok
     }
 
+    /// Records the program's first `n` variables as the module's globals,
+    /// for the POUs that reach them from outside its frame.
+    fn publish_globals(&mut self, p: usize, vars: &[VarInfo], init: &[Value], n: usize) {
+        if n == 0 || self.program != Some(p) {
+            return;
+        }
+        self.globals = vars.iter().take(n).cloned().collect();
+        self.global_ix = self
+            .globals
+            .iter()
+            .enumerate()
+            .map(|(k, v)| (v.name.clone(), k))
+            .collect();
+        // At this point `init` holds exactly the globals' slots.
+        self.global_init = init.to_vec();
+        self.global_dropped = self
+            .globals_src
+            .iter()
+            .filter(|d| !self.global_ix.contains_key(&d.name))
+            .map(|d| d.name.clone())
+            .collect();
+    }
+
+    /// Checks one `VAR_IN_OUT` declaration of a function block: its
+    /// [`VarInfo`] (offset still to place) when it is allowed.
+    fn in_out_decl(&mut self, d: &parser::VarDecl, vars: &[VarInfo]) -> O<VarInfo> {
+        let n = &d.name;
+        if vars.iter().any(|v| &v.name == n) {
+            self.err(d.pos, format!("{n} is declared twice"));
+            return None;
+        }
+        let problem = if d.init.is_some() {
+            Some("takes no initial value: it is the caller's variable")
+        } else if d.constant {
+            Some("cannot be CONSTANT yet")
+        } else if d.retain {
+            Some("cannot be RETAIN: it is the caller's variable")
+        } else if d.at.is_some() {
+            Some("cannot be located: it is the caller's variable")
+        } else {
+            None
+        };
+        if let Some(m) = problem {
+            self.err(d.pos, format!("{n}: a VAR_IN_OUT {m}"));
+            return None;
+        }
+        let ty = self.resolve(&d.ty)?;
+        if !self.layout_type(ty, d.pos) {
+            return None;
+        }
+        if let Type::Agg(a) = ty
+            && matches!(self.aggs[a].kind, AggKind::Fb(_))
+        {
+            self.err(
+                d.pos,
+                format!(
+                    "{n}: a VAR_IN_OUT cannot be a function block instance; pass what it outputs as inputs"
+                ),
+            );
+            return None;
+        }
+        Some(VarInfo {
+            name: n.clone(),
+            ty,
+            off: 0,
+            section: Section::InOut,
+            constant: false,
+            retain: false,
+            loc: None,
+        })
+    }
+
     /// Initial slots for a value of type `ty`. `scope` gives access to the
     /// enclosing POU's constants (initialised so far in its `init`).
     fn init_value(&mut self, i: &Init, ty: Type, scope: Option<&Scope>) -> O<Vec<Value>> {
         match (i, ty) {
+            (Init::Expr(e), Type::Str(cap)) => {
+                let ExprKind::Str(text) = &e.kind else {
+                    self.err(e.pos, "a STRING's initial value must be a literal such as 'text'");
+                    return None;
+                };
+                if text.len() > usize::from(cap) {
+                    self.err(
+                        e.pos,
+                        format!(
+                            "this initial value has {} characters, STRING[{cap}] holds {cap}",
+                            text.len()
+                        ),
+                    );
+                    return None;
+                }
+                Some(crate::strs::encode(usize::from(cap), text))
+            }
             (Init::Expr(e), Type::Elem(_) | Type::Enum(_)) => {
                 let empty = Scope {
                     pou: usize::MAX,
                     vars: BTreeMap::new(),
                     loops: 0,
+                    globals: false,
+                    read_only: BTreeSet::new(),
                 };
                 let sc = scope.unwrap_or(&empty);
                 let ex = self.coerced(e, ty, sc)?;
@@ -1171,7 +1598,13 @@ impl<'a> Ck<'a> {
             Ex::Un(_, a, _) | Ex::Conv(a, _, _) => Self::is_const(a),
             Ex::Bin(_, a, b, _) | Ex::Scale(_, a, b) => Self::is_const(a) && Self::is_const(b),
             // CONSTANTs fold to `Const`, so any load reads a variable.
-            Ex::Load(..) | Ex::Call(_) | Ex::Builtin(..) => false,
+            Ex::Load(..)
+            | Ex::Call(_)
+            | Ex::Builtin(..)
+            | Ex::StrLoad(_)
+            | Ex::StrConst(_)
+            | Ex::Str(..)
+            | Ex::StrCall(..) => false,
         }
     }
 
@@ -1182,14 +1615,19 @@ impl<'a> Ck<'a> {
     fn place(&mut self, e: &Expr, sc: &Scope) -> O<(Place, Type, Access)> {
         match &e.kind {
             ExprKind::Var(name) => {
-                let Some(&k) = sc.vars.get(name) else {
+                let Some((v, global)) = self.find_var(sc, name) else {
                     if self.was_dropped(sc.pou, name) {
                         return None;
                     }
                     let hint = if self.pou_index.contains_key(name) {
                         " (a function is called with parentheses)".to_string()
                     } else {
-                        let near = crate::suggest::hint(name, sc.vars.keys().map(String::as_str));
+                        let names = sc
+                            .vars
+                            .keys()
+                            .chain(self.global_ix.keys().filter(|_| sc.globals))
+                            .map(String::as_str);
+                        let near = crate::suggest::hint(name, names);
                         if near.is_empty() {
                             " (declare it in a VAR block)".to_string()
                         } else {
@@ -1199,9 +1637,10 @@ impl<'a> Ck<'a> {
                     self.err(e.pos, format!("undeclared variable {name}{hint}"));
                     return None;
                 };
-                let v = &self.pous[sc.pou].vars[k];
                 let acc = if v.constant {
                     Access::ReadOnly("is a CONSTANT")
+                } else if sc.read_only.contains(name) {
+                    Access::ReadOnly("is declared VAR_EXTERNAL CONSTANT in this POU, which can only read it")
                 } else {
                     Access::ReadWrite
                 };
@@ -1223,6 +1662,8 @@ impl<'a> Ck<'a> {
                             acc,
                         )
                     }
+                    None if v.section == Section::InOut => (Place::through(v.off), v.ty, acc),
+                    None if global => (Place::global(v.off), v.ty, acc),
                     None => (Place::frame(v.off), v.ty, acc),
                 })
             }
@@ -1404,7 +1845,7 @@ impl<'a> Ck<'a> {
         match t {
             Type::Elem(ty) => Some(ty),
             Type::Enum(_) => Some(Ty::DInt),
-            Type::Agg(_) => None,
+            Type::Agg(_) | Type::Str(_) => None,
         }
     }
 
@@ -1455,7 +1896,14 @@ impl<'a> Ck<'a> {
                 Some((ex, T::Known(Type::Elem(ty))))
             }
             ExprKind::Bool(b) => Some((Ex::Const(Value::Bool(*b)), T::Known(Type::Elem(Ty::Bool)))),
+            ExprKind::Str(text) => {
+                // The lexer holds literals to 255 characters.
+                let cap = u16::try_from(text.len()).unwrap_or(255);
+                let off = self.scratch(cap, text, e.pos);
+                Some((Ex::StrConst(off), T::Known(Type::Str(cap))))
+            }
             ExprKind::Time(ns) => Some((Ex::Const(Value::Int(*ns)), T::Known(Type::Elem(Ty::Time)))),
+            ExprKind::Calendar(ty, ns) => Some((Ex::Const(Value::Int(*ns)), T::Known(Type::Elem(*ty)))),
             ExprKind::EnumLit(tn, v) => {
                 let Some(Named::Type(Type::Enum(id))) = self.named.get(tn).copied() else {
                     self.err(e.pos, format!("{tn} is not an enumeration type"));
@@ -1467,7 +1915,7 @@ impl<'a> Ck<'a> {
                 };
                 Some((Ex::Const(Value::Int(*val)), T::Known(Type::Enum(id))))
             }
-            ExprKind::Var(name) if !sc.vars.contains_key(name) => {
+            ExprKind::Var(name) if !self.has_var(sc, name) => {
                 if let Some((id, val)) = self.enum_value(name, e.pos) {
                     return Some((Ex::Const(Value::Int(val)), T::Known(Type::Enum(id))));
                 }
@@ -1480,6 +1928,9 @@ impl<'a> Ck<'a> {
             | ExprKind::Index(..)
             | ExprKind::Bit(..) => {
                 let (p, t, _) = self.place(e, sc)?;
+                if let Type::Str(_) = t {
+                    return Some((Ex::StrLoad(Box::new(p)), T::Known(t)));
+                }
                 let Some(rt) = Self::rt(t) else {
                     let n = self.type_name(t);
                     self.err(
@@ -1489,15 +1940,15 @@ impl<'a> Ck<'a> {
                     return None;
                 };
                 // A constant scalar folds to its value (keeps initialisers constant).
-                if p.base == Base::Frame
+                if matches!(p.base, Base::Frame | Base::Global)
                     && p.dims.is_empty()
                     && p.bit.is_none()
                     && let ExprKind::Var(n) = &e.kind
-                    && let Some(&k) = sc.vars.get(n)
-                    && self.pous[sc.pou].vars[k].constant
-                    && let Some(v) = self.pous[sc.pou].init.get(p.off)
+                    && let Some((v, global)) = self.find_var(sc, n)
+                    && v.constant
+                    && let Some(v) = self.constant_value(sc, &v, global)
                 {
-                    return Some((Ex::Const(*v), T::Known(t)));
+                    return Some((Ex::Const(v), T::Known(t)));
                 }
                 Some((Ex::Load(Box::new(p), rt), T::Known(t)))
             }
@@ -1560,6 +2011,9 @@ impl<'a> Ck<'a> {
     fn coerce(&mut self, ex: Ex, t: T, to: Type, pos: Pos) -> O<Ex> {
         match (t, to) {
             (T::Known(from), to) if from == to => Some(ex),
+            // Any STRING goes where another STRING is wanted: the store or
+            // the by-value move cuts it at the destination's capacity.
+            (T::Known(Type::Str(_)), Type::Str(_)) => Some(ex),
             (T::Known(Type::Elem(f)), Type::Elem(t)) if f.widens_to(t) => Some(Ex::Conv(Box::new(ex), f, t)),
             (T::Known(Type::Elem(f)), Type::Elem(t)) => {
                 self.err(
@@ -1665,6 +2119,9 @@ impl<'a> Ck<'a> {
         let ra = self.synth(a, inner_want, sc);
         let rb = self.synth(b, inner_want, sc);
         let ((xa, ta), (xb, tb)) = (ra?, rb?);
+        if matches!(ta, T::Known(Type::Str(_))) || matches!(tb, T::Known(Type::Str(_))) {
+            return self.string_binary(op, (xa, ta), (xb, tb), pos);
+        }
         // Enumerations: = and <> only, same type.
         if let (T::Known(Type::Enum(x)), T::Known(Type::Enum(y))) = (ta, tb) {
             if x != y || !matches!(op, BinOp::Eq | BinOp::Ne) {
@@ -1676,6 +2133,9 @@ impl<'a> Ck<'a> {
                 Ex::Bin(op, Box::new(xa), Box::new(xb), Ty::DInt),
                 T::Known(Type::Elem(Ty::Bool)),
             ));
+        }
+        if matches!(op, BinOp::Add | BinOp::Sub) && (Self::is_calendar(ta) || Self::is_calendar(tb)) {
+            return self.calendar_arith(op, Box::new(xa), ta, Box::new(xb), tb, pos);
         }
         // TIME scaled by a number.
         let is_time = |t: T| t == T::Known(Type::Elem(Ty::Time));
@@ -1723,6 +2183,82 @@ impl<'a> Ck<'a> {
         let xb = self.coerce(xb, tb, Type::Elem(ty), b.pos);
         let ex = Ex::Bin(op, Box::new(xa?), Box::new(xb?), ty);
         Some((ex, T::Known(Type::Elem(if cmp { Ty::Bool } else { ty }))))
+    }
+
+    /// `+` and `-` with a DATE, TOD or DT operand. Only the combinations
+    /// ruSTy defines: TOD or DT plus or minus a TIME, and the difference
+    /// of two values of one type, which is a TIME. A TOD wraps at midnight.
+    fn is_calendar(t: T) -> bool {
+        matches!(t, T::Known(Type::Elem(k)) if k.is_calendar())
+    }
+
+    #[inline(never)]
+    fn calendar_arith(&mut self, op: BinOp, xa: Box<Ex>, ta: T, xb: Box<Ex>, tb: T, pos: Pos) -> O<(Ex, T)> {
+        let result = match (ta, tb) {
+            (T::Known(Type::Elem(x)), T::Known(Type::Elem(y))) => match (x, op, y) {
+                (Ty::Tod, _, Ty::Time) => Some(Ty::Tod),
+                (Ty::Dt, _, Ty::Time) => Some(Ty::Dt),
+                (Ty::Date | Ty::Tod | Ty::Dt, BinOp::Sub, _) if x == y => Some(Ty::Time),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(ty) = result else {
+            let name = |me: &Self, t: T| match t {
+                T::Known(k) => me.type_name(k),
+                _ => "a number".to_string(),
+            };
+            let (x, y) = (name(self, ta), name(self, tb));
+            self.err(
+                pos,
+                format!(
+                    "{} cannot take {x} and {y}: a TOD or DT plus or minus a TIME, or two DATEs, TODs or DTs subtracted (giving a TIME), are the only date arithmetic",
+                    op.symbol()
+                ),
+            );
+            return None;
+        };
+        let t = T::Known(Type::Elem(ty));
+        Some((Ex::Bin(op, xa, xb, ty), t))
+    }
+
+    /// A binary operator with a STRING operand: only the comparisons of
+    /// two strings are defined.
+    fn string_binary(&mut self, op: BinOp, a: (Ex, T), b: (Ex, T), pos: Pos) -> O<(Ex, T)> {
+        let (T::Known(x), T::Known(y)) = (a.1, b.1) else {
+            self.err(
+                pos,
+                format!(
+                    "{} cannot take a STRING and a number; convert with TO_STRING or STRING_TO_INT",
+                    op.symbol()
+                ),
+            );
+            return None;
+        };
+        let (Type::Str(_), Type::Str(_)) = (x, y) else {
+            let (n, m) = (self.type_name(x), self.type_name(y));
+            self.err(pos, format!("{} cannot take {n} and {m}", op.symbol()));
+            return None;
+        };
+        if !op.is_comparison() {
+            let hint = if op == BinOp::Add {
+                "; join strings with CONCAT(a, b)"
+            } else {
+                ""
+            };
+            self.err(
+                pos,
+                format!(
+                    "{} does not work on STRINGs (they compare with = <> < > <= >=){hint}",
+                    op.symbol()
+                ),
+            );
+            return None;
+        }
+        Some((
+            Ex::Str(StrFn::Cmp(op), vec![a.0, b.0], 0, 0),
+            T::Known(Type::Elem(Ty::Bool)),
+        ))
     }
 
     fn power(&mut self, a: &Expr, b: &Expr, want: Option<Type>, pos: Pos, sc: &Scope) -> O<(Ex, T)> {
@@ -1824,7 +2360,7 @@ impl<'a> Ck<'a> {
             );
             return None;
         };
-        if sc.vars.contains_key(name) {
+        if self.has_var(sc, name) {
             self.err(
                 pos,
                 format!("{name} is a variable; a function block call is a statement"),
@@ -1839,8 +2375,12 @@ impl<'a> Ck<'a> {
                 );
                 return None;
             }
-            let call = self.fn_call(p, args, sc)?;
+            let call = self.fn_call(p, args, pos, sc)?;
             let rt = self.pous[p].vars[0].ty;
+            if let Type::Str(cap) = rt {
+                let off = self.scratch(cap, &[], pos);
+                return Some((Ex::StrCall(Box::new(call), off, cap), T::Known(rt)));
+            }
             return Some((Ex::Call(Box::new(call)), T::Known(rt)));
         }
         self.builtin(name, args, want, pos, sc, callee.pos)
@@ -1870,6 +2410,12 @@ impl<'a> Ck<'a> {
         sc: &Scope,
         at: Pos,
     ) -> O<(Ex, T)> {
+        if let Some(r) = self.string_fn(name, args, pos, sc) {
+            return r;
+        }
+        if let Some(r) = self.calendar_fn(name, args, pos, sc) {
+            return r;
+        }
         if let Some(conv) = self.conversion(name, args, pos, sc) {
             return conv;
         }
@@ -1897,7 +2443,19 @@ impl<'a> Ck<'a> {
                     .iter()
                     .filter(|&(_, &p)| self.pous[p].kind == PouType::Function)
                     .map(|(n, _)| n.as_str());
-                let known = BUILTINS.iter().map(|(n, _)| *n).chain(["EXPT", "MOVE"]);
+                let known = BUILTINS
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .chain([
+                        "EXPT",
+                        "MOVE",
+                        "DT_NOW",
+                        "DAY_OF_WEEK",
+                        "CONCAT_DATE_TOD",
+                        "CONCAT_DATE",
+                        "CONCAT_TOD",
+                    ])
+                    .chain(STRING_FNS.iter().map(|(n, ..)| *n));
                 let hint = crate::suggest::hint(name, known.chain(functions));
                 self.err(at, format!("unknown function {name}{hint}"));
             }
@@ -1923,6 +2481,11 @@ impl<'a> Ck<'a> {
                     T::Known(Type::Elem(Ty::Time)),
                 ))
             }
+            Builtin::Wall
+            | Builtin::DayOfWeek
+            | Builtin::ConcatDateTod
+            | Builtin::ConcatDate
+            | Builtin::ConcatTod => unreachable!("calendar_fn handles these before the table"),
             Builtin::Fault(_) => {
                 if !arity(0, args.is_empty(), self) {
                     return None;
@@ -2057,6 +2620,231 @@ impl<'a> Ck<'a> {
         }
     }
 
+    /// The date and time functions: `DT_NOW`, `DAY_OF_WEEK`,
+    /// `CONCAT_DATE_TOD`, `CONCAT_DATE` and `CONCAT_TOD`; `None` if `name`
+    /// is not one of them.
+    fn calendar_fn(&mut self, name: &str, args: &[Arg], pos: Pos, sc: &Scope) -> O<O<(Ex, T)>> {
+        let (b, ret, want): (Builtin, Ty, &[Ty]) = match name {
+            "DT_NOW" => (Builtin::Wall, Ty::Dt, &[]),
+            "DAY_OF_WEEK" => (Builtin::DayOfWeek, Ty::SInt, &[Ty::Date]),
+            "CONCAT_DATE_TOD" => (Builtin::ConcatDateTod, Ty::Dt, &[Ty::Date, Ty::Tod]),
+            "CONCAT_DATE" => (Builtin::ConcatDate, Ty::Date, &[Ty::LInt; 3]),
+            "CONCAT_TOD" => (Builtin::ConcatTod, Ty::Tod, &[Ty::LInt; 4]),
+            _ => return None,
+        };
+        if !self.positional_or_none(name, args, pos) {
+            return Some(None);
+        }
+        if args.len() != want.len() {
+            self.err(
+                pos,
+                format!("{name} takes {} argument(s), got {}", want.len(), args.len()),
+            );
+            return Some(None);
+        }
+        let mut exs = Vec::new();
+        let mut ok = true;
+        for (a, &w) in args.iter().zip(want) {
+            let x = if b == Builtin::DayOfWeek {
+                // A DATE, or a DT (its day).
+                self.synth(&a.value, None, sc).and_then(|(x, t)| match t {
+                    T::Known(Type::Elem(Ty::Date | Ty::Dt)) => Some(x),
+                    other => {
+                        let found = match other {
+                            T::Known(k) => self.type_name(k),
+                            _ => "a number".to_string(),
+                        };
+                        self.err(a.value.pos, format!("{name} needs a DATE or a DT, found {found}"));
+                        None
+                    }
+                })
+            } else {
+                self.coerced(&a.value, Type::Elem(w), sc)
+            };
+            match x {
+                Some(x) => exs.push(x),
+                None => ok = false,
+            }
+        }
+        if !ok {
+            return Some(None);
+        }
+        Some(Some((Ex::Builtin(b, exs, ret), T::Known(Type::Elem(ret)))))
+    }
+
+    /// Like [`Self::positional`], but a call with no arguments is fine.
+    fn positional_or_none(&mut self, name: &str, args: &[Arg], pos: Pos) -> bool {
+        if args.is_empty() {
+            return true;
+        }
+        self.positional(name, args, pos)
+    }
+
+    /// The standard string functions and the conversions to and from
+    /// STRING; `None` if `name` is not one of them.
+    fn string_fn(&mut self, name: &str, args: &[Arg], pos: Pos, sc: &Scope) -> O<O<(Ex, T)>> {
+        if name == "TO_STRING" || name.ends_with("_TO_STRING") || name.starts_with("STRING_TO_") {
+            return self.string_conversion(name, args, pos, sc);
+        }
+        let &(_, f, strs, ints) = STRING_FNS.iter().find(|(n, ..)| *n == name)?;
+        if !self.positional(name, args, pos) {
+            return Some(None);
+        }
+        let want = strs + ints;
+        let arity_ok = if f == StrFn::Concat {
+            args.len() >= 2
+        } else {
+            args.len() == want
+        };
+        if !arity_ok {
+            let n = if f == StrFn::Concat {
+                "at least 2".to_string()
+            } else {
+                want.to_string()
+            };
+            self.err(pos, format!("{name} takes {n} argument(s), got {}", args.len()));
+            return Some(None);
+        }
+        let mut exs = Vec::new();
+        let mut caps = Vec::new();
+        let mut ok = true;
+        for (k, a) in args.iter().enumerate() {
+            let Some((x, t)) = self.synth(&a.value, None, sc) else {
+                ok = false;
+                continue;
+            };
+            if k < strs || f == StrFn::Concat {
+                if let T::Known(Type::Str(c)) = t {
+                    exs.push(x);
+                    caps.push(c);
+                } else {
+                    let found = match t {
+                        T::Known(k) => self.type_name(k),
+                        _ => "a number".to_string(),
+                    };
+                    self.err(
+                        a.pos,
+                        format!("{name} argument {} must be a STRING, found {found}", k + 1),
+                    );
+                    ok = false;
+                }
+            } else {
+                match t {
+                    T::IntLit(v) => exs.push(Ex::Const(Value::Int(v))),
+                    T::Known(Type::Elem(ty)) if ty.is_int() => exs.push(x),
+                    _ => {
+                        self.err(a.pos, format!("{name} argument {} must be an integer", k + 1));
+                        ok = false;
+                    }
+                }
+            }
+        }
+        if !ok {
+            return Some(None);
+        }
+        let join = |a: u16, b: u16| {
+            u16::try_from((usize::from(a) + usize::from(b)).min(crate::strs::MAX)).unwrap_or(255)
+        };
+        let result = match f {
+            StrFn::Len | StrFn::Find => {
+                return Some(Some((Ex::Str(f, exs, 0, 0), T::Known(Type::Elem(Ty::Int)))));
+            }
+            StrFn::Concat => {
+                // CONCAT(a, b, c) is CONCAT(CONCAT(a, b), c): each step
+                // its own scratch region.
+                let mut it = exs.into_iter().zip(caps);
+                let (mut acc, mut cap) = it.next()?;
+                for (x, c) in it {
+                    cap = join(cap, c);
+                    let off = self.scratch(cap, &[], pos);
+                    acc = Ex::Str(StrFn::Concat, vec![acc, x], off, cap);
+                }
+                return Some(Some((acc, T::Known(Type::Str(cap)))));
+            }
+            StrFn::Insert | StrFn::Replace => join(caps[0], caps[1]),
+            _ => caps[0],
+        };
+        let off = self.scratch(result, &[], pos);
+        Some(Some((Ex::Str(f, exs, off, result), T::Known(Type::Str(result)))))
+    }
+
+    /// `X_TO_STRING(x)`, `TO_STRING(x)` and `STRING_TO_X(s)`.
+    fn string_conversion(&mut self, name: &str, args: &[Arg], pos: Pos, sc: &Scope) -> O<O<(Ex, T)>> {
+        let from_text = name.strip_prefix("STRING_TO_");
+        let to_text = name != "TO_STRING" && name.ends_with("_TO_STRING");
+        let named = if let Some(t) = from_text {
+            Ty::from_name(t)?
+        } else if to_text {
+            Ty::from_name(name.strip_suffix("_TO_STRING")?)?
+        } else {
+            Ty::Bool
+        };
+        if !self.positional(name, args, pos) {
+            return Some(None);
+        }
+        if args.len() != 1 {
+            self.err(pos, format!("{name} takes 1 argument, got {}", args.len()));
+            return Some(None);
+        }
+        if named == Ty::Time {
+            self.err(
+                pos,
+                format!("{name} is not supported: TIME has no text form here"),
+            );
+            return Some(None);
+        }
+        let arg = &args[0].value;
+        if from_text.is_some() {
+            let (x, t) = self.synth(arg, None, sc)?;
+            let T::Known(Type::Str(_)) = t else {
+                let found = match t {
+                    T::Known(k) => self.type_name(k),
+                    _ => "a number".to_string(),
+                };
+                self.err(arg.pos, format!("{name} needs a STRING, found {found}"));
+                return Some(None);
+            };
+            return Some(Some((
+                Ex::Str(StrFn::ToNum(named), vec![x], 0, 0),
+                T::Known(Type::Elem(named)),
+            )));
+        }
+        let (x, from) = if to_text {
+            (self.coerced(arg, Type::Elem(named), sc)?, named)
+        } else {
+            let (x, t) = self.synth(arg, None, sc)?;
+            let from = match t {
+                T::Known(Type::Elem(f)) => f,
+                T::Known(Type::Enum(_)) => Ty::DInt,
+                T::Known(k) => {
+                    let n = self.type_name(k);
+                    self.err(arg.pos, format!("{name} cannot convert {n}"));
+                    return Some(None);
+                }
+                lit => Self::default_lit(lit, lit, None),
+            };
+            let x = if matches!(t, T::Known(Type::Enum(_))) {
+                x
+            } else {
+                self.coerce(x, t, Type::Elem(from), arg.pos)?
+            };
+            (x, from)
+        };
+        if from == Ty::Time {
+            self.err(
+                pos,
+                format!("{name} is not supported: TIME has no text form here"),
+            );
+            return Some(None);
+        }
+        let cap = crate::strs::num_cap(from);
+        let off = self.scratch(cap, &[], pos);
+        Some(Some((
+            Ex::Str(StrFn::FromNum(from), vec![x], off, cap),
+            T::Known(Type::Str(cap)),
+        )))
+    }
+
     /// Brings every argument to one elementary type (as for a binary operator).
     fn unify(
         &mut self,
@@ -2128,6 +2916,19 @@ impl<'a> Ck<'a> {
                 Some((x, f))
             })
         };
+        let r = r.and_then(|(x, f)| {
+            let kept = f == to || matches!((f, to), (Ty::Dt, Ty::Date | Ty::Tod) | (Ty::Date, Ty::Dt));
+            if (f.is_calendar() || to.is_calendar()) && !kept {
+                self.err(
+                    pos,
+                    format!(
+                        "{name}: {f} does not convert to {to}. A DT converts to a DATE or a TOD (DT_TO_DATE, DT_TO_TOD) and a DATE to a DT; a TOD is TOD#00:00:00 plus a TIME, and a TIME is a TOD minus TOD#00:00:00"
+                    ),
+                );
+                return None;
+            }
+            Some((x, f))
+        });
         Some(r.map(|(x, f)| {
             (
                 if f == to { x } else { Ex::Conv(Box::new(x), f, to) },
@@ -2151,6 +2952,13 @@ impl<'a> Ck<'a> {
                 len: self.size_of(ty),
             });
         }
+        if let Type::Str(cap) = ty {
+            return Some(Move::Str {
+                off,
+                ex: self.coerced(value, ty, sc)?,
+                cap,
+            });
+        }
         Some(Move::Value {
             off,
             ex: self.coerced(value, ty, sc)?,
@@ -2158,9 +2966,21 @@ impl<'a> Ck<'a> {
         })
     }
 
-    /// Matches call arguments to the callee's inputs (and, for FBs, outputs).
-    fn bind_args(&mut self, p: usize, args: &[Arg], sc: &Scope) -> O<(Vec<Move>, Vec<Out>)> {
+    /// Matches call arguments to the callee's inputs, in-outs and outputs.
+    /// `inst` is the instance expression of a function block call.
+    #[allow(clippy::too_many_lines)]
+    fn bind_args<'e>(
+        &mut self,
+        p: usize,
+        args: &'e [Arg],
+        inst: Option<&Expr>,
+        at: Pos,
+        sc: &Scope,
+    ) -> O<(Vec<Move>, Vec<Out>)> {
         let callee = self.pous[p].name.clone();
+        let kind = self.pous[p].kind;
+        // The in-out arguments given, to refuse two names for one variable.
+        let mut given: Vec<(String, &'e Expr)> = Vec::new();
         let inputs: Vec<(String, Type, usize)> = self.pous[p]
             .vars
             .iter()
@@ -2207,11 +3027,30 @@ impl<'a> Ck<'a> {
                     Some(m) => moves.push(m),
                     None => ok = false,
                 },
-                (true, Section::Output) if self.pous[p].kind == PouType::FunctionBlock => {
-                    match self.out_binding(&v, &a.value, sc) {
-                        Some(o) => outs.push(o),
-                        None => ok = false,
+                (false, Section::InOut) => match self.in_out_move(&callee, &v, &a.value, sc) {
+                    Some(m) => {
+                        moves.push(m);
+                        given.push((n.clone(), &a.value));
                     }
+                    None => ok = false,
+                },
+                (true, Section::Output) if kind == PouType::Function && v.off == 0 => {
+                    self.err(
+                        a.pos,
+                        format!("{n} is the result of the function: read it from the call, not with =>"),
+                    );
+                    ok = false;
+                }
+                (true, Section::Output) => match self.out_binding(&v, &a.value, sc) {
+                    Some(o) => outs.push(o),
+                    None => ok = false,
+                },
+                (true, Section::InOut) => {
+                    self.err(
+                        a.pos,
+                        format!("{n} is a VAR_IN_OUT of {callee}, not an output: pass it with :="),
+                    );
+                    ok = false;
                 }
                 (false, _) => {
                     self.err(
@@ -2226,7 +3065,215 @@ impl<'a> Ck<'a> {
                 }
             }
         }
+        for v in self.pous[p]
+            .vars
+            .clone()
+            .iter()
+            .filter(|v| v.section == Section::InOut)
+        {
+            if !seen.contains(&v.name) {
+                self.err(
+                    at,
+                    format!(
+                        "{callee}: VAR_IN_OUT {n} needs a variable at every call ({n} := variable)",
+                        n = v.name
+                    ),
+                );
+                ok = false;
+            }
+        }
+        // A function has no instance to read an output from afterwards, so
+        // a call binds every one (slot 0 is the result, which the call is).
+        if kind == PouType::Function {
+            for v in self.pous[p]
+                .vars
+                .clone()
+                .iter()
+                .filter(|v| v.section == Section::Output && v.off != 0 && !seen.contains(&v.name))
+            {
+                self.err(
+                    at,
+                    format!(
+                        "{callee}: output {n} must be bound at every call ({n} => variable)",
+                        n = v.name
+                    ),
+                );
+                ok = false;
+            }
+        }
+        ok &= self.no_shared_names(&callee, &given, inst);
         ok.then_some((moves, outs))
+    }
+
+    /// A `VAR_IN_OUT` argument: the caller's own variable, by reference.
+    /// Anything that would make the callee write somewhere else than the
+    /// calling module's variables is refused: process-image variables and
+    /// a program's inputs are shared with other modules.
+    fn in_out_move(&mut self, callee: &str, v: &VarInfo, value: &Expr, sc: &Scope) -> O<Move> {
+        let n = &v.name;
+        let head = format!("{n} is a VAR_IN_OUT of {callee}:");
+        match &value.kind {
+            ExprKind::Var(_) | ExprKind::Member(..) | ExprKind::Index(..) => {}
+            ExprKind::Direct(addr) => {
+                self.err(
+                    value.pos,
+                    format!(
+                        "{head} %{addr} is in the process image, which other modules share; \
+                         copy it into a variable first"
+                    ),
+                );
+                return None;
+            }
+            ExprKind::Bit(..) => {
+                self.err(
+                    value.pos,
+                    format!("{head} a single bit cannot be passed by reference"),
+                );
+                return None;
+            }
+            _ => {
+                self.err(
+                    value.pos,
+                    format!("{head} pass a variable, not an expression or a constant"),
+                );
+                return None;
+            }
+        }
+        let (src, ty, acc) = self.place(value, sc)?;
+        let root = Self::arg_path(value).map(|(r, _)| r);
+        let shown = root.clone().unwrap_or_default();
+        if root.as_ref().is_some_and(|r| self.global_ix.contains_key(r)) {
+            self.err(
+                value.pos,
+                format!(
+                    "{head} {shown} is a global of this module, which the callee can also reach by its \
+                     own name; copy it into a variable first"
+                ),
+            );
+            return None;
+        }
+        if matches!(src.base, Base::Image(_)) {
+            self.err(
+                value.pos,
+                format!(
+                    "{head} {shown} is located in the process image, which other modules share; \
+                     copy it into a variable first"
+                ),
+            );
+            return None;
+        }
+        if let Access::ReadOnly(why) = acc {
+            self.err(
+                value.pos,
+                format!("{head} the call may write it, but {shown} {why}"),
+            );
+            return None;
+        }
+        if self.pous[sc.pou].kind == PouType::Program
+            && let Some(&k) = root.as_ref().and_then(|r| sc.vars.get(r))
+            && self.pous[sc.pou].vars[k].section == Section::Input
+        {
+            self.err(
+                value.pos,
+                format!(
+                    "{head} {shown} is an input of the program, a signal another module writes; \
+                     copy it into a variable first"
+                ),
+            );
+            return None;
+        }
+        if !self.same_type(ty, v.ty) {
+            let (a, b) = (self.type_name(v.ty), self.type_name(ty));
+            self.err(
+                value.pos,
+                format!("{head} it is {a} and the argument is {b}; a VAR_IN_OUT takes exactly its own type"),
+            );
+            return None;
+        }
+        Some(Move::Ref { off: v.off, src })
+    }
+
+    /// Whether two types are one: the same type, or arrays of the same
+    /// bounds over one element type (each `ARRAY[..] OF` written out is its
+    /// own entry in the tables).
+    fn same_type(&self, a: Type, b: Type) -> bool {
+        if a == b {
+            return true;
+        }
+        let (Type::Agg(x), Type::Agg(y)) = (a, b) else {
+            return false;
+        };
+        match (&self.aggs[x].kind, &self.aggs[y].kind) {
+            (AggKind::Array { elem: e1, dims: d1 }, AggKind::Array { elem: e2, dims: d2 }) => {
+                d1 == d2 && self.same_type(*e1, *e2)
+            }
+            _ => false,
+        }
+    }
+
+    /// The variable an argument names and the way into it: members and
+    /// indices, an index being its value when it is a literal.
+    fn arg_path(e: &Expr) -> Option<(String, Vec<Step>)> {
+        match &e.kind {
+            ExprKind::Var(n) => Some((n.clone(), Vec::new())),
+            ExprKind::Member(b, m) => {
+                let (r, mut steps) = Self::arg_path(b)?;
+                steps.push(Step::Field(m.clone()));
+                Some((r, steps))
+            }
+            ExprKind::Index(b, idx) => {
+                let (r, mut steps) = Self::arg_path(b)?;
+                steps.push(Step::Index(
+                    idx.iter()
+                        .map(|i| match &i.kind {
+                            ExprKind::Int { value, prefix: None } => Some(*value),
+                            _ => None,
+                        })
+                        .collect(),
+                ));
+                Some((r, steps))
+            }
+            _ => None,
+        }
+    }
+
+    /// Two in-out arguments of one call must be different variables, and
+    /// an instance cannot be given part of itself: either would be two
+    /// names for one value inside the callee.
+    fn no_shared_names(&mut self, callee: &str, given: &[(String, &Expr)], inst: Option<&Expr>) -> bool {
+        let mut ok = true;
+        let paths: Vec<Option<(String, Vec<Step>)>> = given.iter().map(|(_, e)| Self::arg_path(e)).collect();
+        for (i, a) in given.iter().enumerate() {
+            if let (Some(inst), Some((root, _))) = (inst, &paths[i])
+                && Self::arg_path(inst).is_some_and(|(r, _)| &r == root)
+            {
+                self.err(
+                    a.1.pos,
+                    format!(
+                        "{callee}: {} is part of the instance being called; give it a variable of its own",
+                        a.0
+                    ),
+                );
+                ok = false;
+            }
+            for (j, b) in given.iter().enumerate().skip(i + 1) {
+                let (Some((ra, sa)), Some((rb, sb))) = (&paths[i], &paths[j]) else {
+                    continue;
+                };
+                if ra == rb && !Step::apart(sa, sb) {
+                    self.err(
+                        b.1.pos,
+                        format!(
+                            "{callee}: {} and {} would be two names for the same variable {ra}; \
+                             give each VAR_IN_OUT a different variable",
+                            a.0, b.0
+                        ),
+                    );
+                    ok = false;
+                }
+            }
+        }
+        ok
     }
 
     fn out_binding(&mut self, v: &VarInfo, dst: &Expr, sc: &Scope) -> O<Out> {
@@ -2253,9 +3300,9 @@ impl<'a> Ck<'a> {
         })
     }
 
-    fn fn_call(&mut self, p: usize, args: &[Arg], sc: &Scope) -> O<Call> {
+    fn fn_call(&mut self, p: usize, args: &[Arg], at: Pos, sc: &Scope) -> O<Call> {
         self.calls[sc.pou].insert(p);
-        let (moves, outs) = self.bind_args(p, args, sc)?;
+        let (moves, outs) = self.bind_args(p, args, None, at, sc)?;
         Some(Call {
             pou: p,
             inst: None,
@@ -2295,6 +3342,9 @@ impl<'a> Ck<'a> {
             }
             return Some(StKind::Copy(place, src, self.size_of(ty)));
         }
+        if let Type::Str(cap) = ty {
+            return Some(StKind::StrStore(place, cap, self.coerced(v, ty, sc)?));
+        }
         let rt = Self::rt(ty)?;
         Some(StKind::Store(place, rt, self.coerced(v, ty, sc)?))
     }
@@ -2304,12 +3354,12 @@ impl<'a> Ck<'a> {
             unreachable!("parser only builds call statements from calls")
         };
         if let ExprKind::Var(name) = &callee.kind
-            && !sc.vars.contains_key(name)
+            && !self.has_var(sc, name)
         {
             if let Some(&p) = self.pou_index.get(name)
                 && self.pous[p].kind == PouType::Function
             {
-                return self.fn_call(p, args, sc).map(StKind::Call);
+                return self.fn_call(p, args, e.pos, sc).map(StKind::Call);
             }
             if self.pou_index.contains_key(name) {
                 self.err(
@@ -2337,13 +3387,53 @@ impl<'a> Ck<'a> {
             return None;
         };
         self.calls[sc.pou].insert(fb);
-        let (moves, outs) = self.bind_args(fb, args, sc)?;
+        let (moves, outs) = self.bind_args(fb, args, Some(callee), e.pos, sc)?;
         Some(StKind::Call(Call {
             pou: fb,
             inst: Some(inst),
             moves,
             outs,
         }))
+    }
+
+    /// The variable a FOR counts in: where it is, its type, and that type
+    /// as the integer it must be. A POU's own variable or a module global
+    /// it may write.
+    fn for_var(&mut self, pos: Pos, var: &str, sc: &Scope) -> O<(Place, Type, Ty)> {
+        let Some((v, global)) = self.find_var(sc, var) else {
+            if !self.was_dropped(sc.pou, var) {
+                self.err(pos, format!("undeclared variable {var}"));
+            }
+            return None;
+        };
+        let Type::Elem(ty) = v.ty else {
+            return self.for_var_refused(pos, var, v.ty);
+        };
+        if !ty.is_int() || v.constant || v.loc.is_some() {
+            return self.for_var_refused(pos, var, v.ty);
+        }
+        if sc.read_only.contains(var) {
+            self.err(
+                pos,
+                format!("{var} is declared VAR_EXTERNAL CONSTANT in this POU, which can only read it"),
+            );
+            return None;
+        }
+        let place = if global {
+            Place::global(v.off)
+        } else {
+            Place::frame(v.off)
+        };
+        Some((place, v.ty, ty))
+    }
+
+    fn for_var_refused<T>(&mut self, pos: Pos, var: &str, ty: Type) -> O<T> {
+        let n = self.type_name(ty);
+        self.err(
+            pos,
+            format!("FOR variable {var} must be a non-CONSTANT, non-located integer, found {n}"),
+        );
+        None
     }
 
     fn stmt(&mut self, s: &Stmt, sc: &mut Scope) -> O<St> {
@@ -2376,37 +3466,18 @@ impl<'a> Ck<'a> {
                 by,
                 body,
             } => {
-                let Some(&k) = sc.vars.get(var) else {
-                    if !self.was_dropped(sc.pou, var) {
-                        self.err(s.pos, format!("undeclared variable {var}"));
-                    }
-                    return None;
-                };
-                let v = self.pous[sc.pou].vars[k].clone();
-                let ty = match v.ty {
-                    Type::Elem(t) if t.is_int() && !v.constant && v.loc.is_none() => t,
-                    _ => {
-                        let n = self.type_name(v.ty);
-                        self.err(
-                            s.pos,
-                            format!(
-                                "FOR variable {var} must be a non-CONSTANT, non-located integer, found {n}"
-                            ),
-                        );
-                        return None;
-                    }
-                };
-                let from = self.coerced(from, v.ty, sc);
-                let to = self.coerced(to, v.ty, sc);
+                let (place, vty, ty) = self.for_var(s.pos, var, sc)?;
+                let from = self.coerced(from, vty, sc);
+                let to = self.coerced(to, vty, sc);
                 let by = match by {
-                    Some(b) => self.coerced(b, v.ty, sc),
+                    Some(b) => self.coerced(b, vty, sc),
                     None => Some(Ex::Const(Value::Int(1))),
                 };
                 sc.loops += 1;
                 let body = self.block(body, sc);
                 sc.loops -= 1;
                 StKind::For {
-                    var: Place::frame(v.off),
+                    var: place,
                     ty,
                     from: from?,
                     to: to?,
@@ -2456,11 +3527,8 @@ impl<'a> Ck<'a> {
             }
             (LabelValue::Name(n), Type::Elem(_)) => {
                 // A CONSTANT integer may label a CASE arm.
-                let k = sc.vars.get(n).copied();
-                let c = k
-                    .map(|k| self.pous[sc.pou].vars[k].clone())
-                    .filter(|v| v.constant);
-                if let Some(Value::Int(x)) = c.and_then(|v| self.pous[sc.pou].init.get(v.off).copied()) {
+                let c = self.find_var(sc, n).filter(|(v, _)| v.constant);
+                if let Some(Value::Int(x)) = c.and_then(|(v, g)| self.constant_value(sc, &v, g)) {
                     Some(x)
                 } else {
                     self.err(pos, format!("CASE label {n} is not an integer CONSTANT"));
@@ -2528,13 +3596,82 @@ impl<'a> Ck<'a> {
             .enumerate()
             .map(|(k, v)| (v.name.clone(), k))
             .collect();
+        let system = self.srcs[p].system;
         let mut sc = Scope {
             pou: p,
             vars,
             loops: 0,
+            globals: self.program != Some(p) && !system,
+            read_only: BTreeSet::new(),
         };
+        self.externals(p, &mut sc);
         let body = self.block(&src.body, &mut sc);
         self.pous[p].body = body;
+    }
+
+    /// Checks the `VAR_EXTERNAL` declarations of POU `p`: each names a
+    /// global of this module, of its own type, and a global that is a
+    /// CONSTANT is declared so. `VAR_EXTERNAL CONSTANT` makes the POU a
+    /// reader of it.
+    fn externals(&mut self, p: usize, sc: &mut Scope) {
+        let src = self.srcs[p].pou;
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for d in src.vars.iter().filter(|d| d.section == Section::External) {
+            let n = &d.name;
+            if !seen.insert(n.as_str()) {
+                self.err(d.pos, format!("{n} is declared twice"));
+                continue;
+            }
+            let Some(&g) = self.global_ix.get(n) else {
+                if !self.global_dropped.contains(n) {
+                    self.err(
+                        d.pos,
+                        format!(
+                            "VAR_EXTERNAL {n}: this module has no VAR_GLOBAL {n}. A global belongs to one \
+                             module; signals are how modules talk"
+                        ),
+                    );
+                }
+                // Said once here, not again at every use in the body.
+                self.dropped.entry(p).or_default().insert(n.clone());
+                continue;
+            };
+            let problem = if d.init.is_some() {
+                Some("takes no initial value: the VAR_GLOBAL gives it")
+            } else if d.retain {
+                Some("cannot be RETAIN: the VAR_GLOBAL decides")
+            } else if d.at.is_some() {
+                Some("cannot be located: the VAR_GLOBAL decides")
+            } else {
+                None
+            };
+            if let Some(m) = problem {
+                self.err(d.pos, format!("{n}: a VAR_EXTERNAL {m}"));
+                continue;
+            }
+            let Some(ty) = self.resolve(&d.ty) else { continue };
+            let global = self.globals[g].clone();
+            if !self.same_type(ty, global.ty) {
+                let (a, b) = (self.type_name(ty), self.type_name(global.ty));
+                self.err(
+                    d.pos,
+                    format!(
+                        "VAR_EXTERNAL {n} is {a} here and {b} in its VAR_GLOBAL; it takes exactly that type"
+                    ),
+                );
+                continue;
+            }
+            if global.constant && !d.constant {
+                self.err(
+                    d.pos,
+                    format!("{n} is a CONSTANT global: declare it VAR_EXTERNAL CONSTANT"),
+                );
+                continue;
+            }
+            if d.constant {
+                sc.read_only.insert(n.clone());
+            }
+        }
     }
 
     /// Reports a cycle among function and FB calls.
@@ -2598,8 +3735,16 @@ pub fn check(
         calls: Vec::new(),
         dropped: BTreeMap::new(),
         loc_init: Vec::new(),
+        program: None,
+        globals_src: &user.globals,
+        globals: Vec::new(),
+        global_ix: BTreeMap::new(),
+        global_init: Vec::new(),
+        global_dropped: BTreeSet::new(),
         diags: Vec::new(),
         warnings: Vec::new(),
+        scratch_init: Vec::new(),
+        scratch_big: false,
     };
     ck.register_types(&library.types);
     ck.register_types(&user.types);
@@ -2667,6 +3812,12 @@ pub fn check(
             None
         }
     };
+    // The program first: it lays out the module's globals, which the other
+    // POUs then see.
+    ck.program = program.or_else(|| programs.first().copied());
+    if let Some(p) = ck.program {
+        ck.layout_pou(p);
+    }
     // Layout everything, including types nothing uses (to report their errors).
     for a in 0..ck.aggs.len() {
         ck.layout_agg(a, Pos::default());
@@ -2688,7 +3839,10 @@ pub fn check(
     for p in 0..ck.pous.len() {
         ck.check_body(p);
     }
+    let scratch = mem_init.len();
+    mem_init.append(&mut ck.scratch_init);
     ck.check_recursion();
+    ck.warn_configured(&user.configured);
     ck.warnings.sort_by_key(|d| d.pos);
     ck.warnings.dedup();
     let warnings = ck.warnings.clone();
@@ -2700,6 +3854,7 @@ pub fn check(
             program,
             library: ck.srcs.iter().take_while(|s| s.system).count(),
             mem_init,
+            scratch,
             loc_init: ck.loc_init,
             warnings: ck.warnings,
         }),
@@ -2710,6 +3865,35 @@ pub fn check(
         }
     };
     (result, warnings)
+}
+
+/// A duration in the words an engineer writes it: `T#1s`, `T#20ms`,
+/// `T#1h30m`.
+pub(crate) fn time_words(ns: i128) -> String {
+    let mut out = String::from("T#");
+    if ns < 0 {
+        out.push('-');
+    }
+    let mut rest = ns.unsigned_abs();
+    for (unit, size) in [
+        ("d", 86_400_000_000_000u128),
+        ("h", 3_600_000_000_000),
+        ("m", 60_000_000_000),
+        ("s", 1_000_000_000),
+        ("ms", 1_000_000),
+        ("us", 1_000),
+        ("ns", 1),
+    ] {
+        if rest >= size {
+            out.push_str(&(rest / size).to_string());
+            out.push_str(unit);
+            rest %= size;
+        }
+    }
+    if out.ends_with('#') || out.ends_with('-') {
+        out.push_str("0s");
+    }
+    out
 }
 
 #[cfg(test)]

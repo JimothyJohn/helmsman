@@ -186,6 +186,17 @@ pub struct Context<'a> {
     pub earlier: &'a [String],
 }
 
+/// A `POST` of JSON to `url` with nothing else in it: no key, no other
+/// header (the design entry, `crate::design_step`).
+#[must_use]
+pub fn json_post(url: String, body: String) -> Request {
+    Request {
+        url,
+        headers: vec![("content-type", "application/json".to_string())],
+        body,
+    }
+}
+
 /// An HTTP request ready for `fetch`. `Debug` hides the key.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Request {
@@ -297,7 +308,7 @@ fn one_line(text: &str) -> String {
 /// own envelope, or another, early. White space inside the tag (`</ tag>`,
 /// `< /tag >`) and more after the name do not get past; the `<` of the
 /// tag gets a backslash after it: `<\/tag>`.
-fn neutralize(text: &str) -> String {
+pub(crate) fn neutralize(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(k) = rest.find('<') {
@@ -356,11 +367,24 @@ fn finish(route: &Route, model: Model, mut body: Json) -> Request {
     }
 }
 
-/// The free chat's request: the turns and nothing else. The relay there
-/// pins the prompt, the model and the output cap, and refuses a body that
-/// names any of them. Earlier turns are dropped, oldest first, until the
-/// body fits [`FREE_MAX_BODY`] and [`FREE_MAX_MESSAGES`].
-fn free_request(base: &str, history: &[Exchange], user: &str) -> Request {
+/// How one turn is asked of the free chat, beside its messages. Each is
+/// sent only where the relay's status said it takes it ([`Takes`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Turn<'a> {
+    /// Which of the relay's agents answers; `None`: the chat.
+    pub agent: Option<&'a str>,
+    /// Answer without extended thinking. The page never asks for it (the
+    /// agent ladder measured no gain, `agent_ladder_tests`); the ladder
+    /// does, to measure it.
+    pub quick: bool,
+}
+
+/// The free chat's request: the turns, and what `turn` asks beside them.
+/// The relay there pins the prompt, the model and the output cap, and
+/// refuses a body that names any of them. Earlier turns are dropped,
+/// oldest first, until the body fits [`FREE_MAX_BODY`] and
+/// [`FREE_MAX_MESSAGES`].
+fn free_request(base: &str, history: &[Exchange], user: &str, turn: Turn<'_>) -> Request {
     // Measured as sent: JSON escaping makes a program longer than it is.
     let body_from = |from: usize| {
         let mut messages = Vec::new();
@@ -369,7 +393,14 @@ fn free_request(base: &str, history: &[Exchange], user: &str) -> Request {
             messages.push(json!({"role": "assistant", "content": e.answer}));
         }
         messages.push(json!({"role": "user", "content": user}));
-        json!({"messages": messages}).to_string()
+        let mut body = json!({"messages": messages});
+        if let Some(agent) = turn.agent {
+            body["agent"] = json!(agent);
+        }
+        if turn.quick {
+            body["thinking"] = json!("off");
+        }
+        body.to_string()
     };
     let mut from = history.len().saturating_sub((FREE_MAX_MESSAGES - 1) / 2);
     let mut body = body_from(from);
@@ -405,10 +436,24 @@ pub fn survey_request(base: &str, choice: &str, other: &str) -> Request {
 /// The Messages API request for the user message `user`, after the
 /// earlier turns ([`context_pages`]), streamed, with the fixed system
 /// prompt cached.
+#[cfg(test)]
 #[must_use]
 pub fn request(route: &Route, model: Model, history: &[Exchange], user: &str) -> Request {
+    request_turn(route, model, history, user, Turn::default())
+}
+
+/// [`request`], asked as `turn` says where the route is the free chat (a
+/// key or the proxy answers every turn the same way).
+#[must_use]
+pub fn request_turn(
+    route: &Route,
+    model: Model,
+    history: &[Exchange],
+    user: &str,
+    turn: Turn<'_>,
+) -> Request {
     if let Route::Free(base) = route {
-        return free_request(base, history, user);
+        return free_request(base, history, user, turn);
     }
     let mut messages = Vec::new();
     for e in context_pages(history) {
@@ -883,16 +928,20 @@ How the playground works:
 - The page draws the running program as a live diagram and explains why any output is in its state, so clear assignments (one place that writes each output) make better explanations.
 
 Supported by helmsman-iec:
-- POUs: PROGRAM, FUNCTION, FUNCTION_BLOCK; sections VAR, VAR_TEMP, VAR_INPUT, VAR_OUTPUT, VAR CONSTANT; initial values.
+- POUs: PROGRAM, FUNCTION, FUNCTION_BLOCK; sections VAR, VAR_TEMP, VAR_INPUT, VAR_OUTPUT, VAR CONSTANT; initial values. VAR_IN_OUT is allowed in a FUNCTION_BLOCK only (a struct, array or variable the caller owns, passed by reference). A FUNCTION may also have VAR_OUTPUT beside its result. VAR_GLOBAL blocks may stand before the first POU (`VAR_GLOBAL count : INT; END_VAR`, also VAR_GLOBAL CONSTANT with initial values): every POU of this program can read and write a global by its name, and a FUNCTION or FUNCTION_BLOCK may also name it in VAR_EXTERNAL with exactly the same type and no initial value (VAR_EXTERNAL CONSTANT for a CONSTANT global). A local variable cannot have a global's name, and a global is never passed as a VAR_IN_OUT. Globals stay inside this program: they are not inputs or outputs, and another module cannot see them.
 - TYPE declarations: STRUCT, enumerations, aliases; ARRAYs (including multi-dimensional).
 - Elementary types: BOOL, SINT, INT, DINT, LINT, USINT, UINT, UDINT, ULINT, BYTE, WORD, DWORD, LWORD, REAL, LREAL, TIME. Literals: TRUE/FALSE, 16#FF, 2#1010, INT#5, 1.5, T#500ms, T#1h30m.
-- Statements: assignment, IF/ELSIF/ELSE, CASE (with ranges and lists), FOR, WHILE, REPEAT, EXIT, RETURN; function block calls with named arguments `t(IN := x, PT := T#1s);` and reading outputs as `t.Q`.
+- Statements: assignment, IF/ELSIF/ELSE, CASE (with ranges and lists), FOR, WHILE, REPEAT, EXIT, RETURN; function block calls with named arguments `t(IN := x, PT := T#1s);` and reading outputs as `t.Q`; a VAR_IN_OUT is passed by name with a variable, never an expression, a constant, a located variable (%I, %Q, %M) or a PROGRAM input, and every call must give it (`b(step := 1, buf := samples);`); two in-outs of one call cannot be the same variable; every output of a function is bound with `=>` at every call, as in `q := divmod(17, 5, rem => r);` (a call that leaves one out is refused).
 - Operators: arithmetic, MOD, **, comparisons, AND/&, OR, XOR, NOT; partial bit access `w.3`.
 - Standard functions: ABS, SQRT, LN, LOG, EXP, SIN, COS, TAN, ASIN, ACOS, ATAN, EXPT, MIN, MAX, LIMIT, SEL, MUX, SHL, SHR, ROL, ROR, TRUNC, MOVE, and type conversions such as INT_TO_REAL and REAL_TO_INT.
 - Standard function blocks: TON, TOF, TP (IN, PT -> Q, ET), CTU (CU, R, PV -> Q, CV), CTD (CD, LD, PV -> Q, CV), CTUD, R_TRIG and F_TRIG (CLK -> Q), SR (S1, R -> Q1), RS (S, R1 -> Q1).
 - A stack-light block of this dialect's own (not IEC): BLINK_PATTERN (EN : BOOL, MODE : INT, PERIOD : TIME -> Q). MODE 0 off, 1 steady, 2 slow blink (on for the first half of each PERIOD), 3 fast blink (four times as fast), 4 double flash (two PERIOD/8 flashes, then off for the rest of PERIOD). EN FALSE is off. A blinking MODE (2-4) needs a PERIOD above 0: T#0s or less faults the module.
 
-Not supported (do not use): STRING and WSTRING, DATE, DT, TOD, VAR_IN_OUT, VAR_GLOBAL, VAR_EXTERNAL, function outputs other than the return value, pointers and references, OOP (METHOD, INTERFACE, EXTENDS), multi-level addresses like %QW0.1.2, word or byte located I/O in the panel (only %IX/%QX bits get controls), and vendor libraries. If a request needs one of these, say so and use a supported alternative (for example an INT state code instead of a string).
+- Text: STRING[n] (1 to 255 characters; a bare STRING is STRING[80]) in every VAR section, struct member, array element and function result, with single-quoted literals ('ok', `$N` and `$$` escapes, printable ASCII only), assignment (cut at the declared length), the six comparisons, LEN, LEFT, RIGHT, MID, CONCAT, FIND, INSERT, DELETE, REPLACE, and TO_STRING, X_TO_STRING and STRING_TO_X for numbers and BOOL.
+- Dates and times of day: DATE (`D#2024-02-29`), TOD or TIME_OF_DAY (`TOD#22:00:00`, fractions allowed) and DT or DATE_AND_TIME (`DT#2024-02-29-22:00:00`). Compare two of one type (= <> < > <= >=); MIN, MAX, LIMIT, SEL and MUX work too. Arithmetic is only TOD +/- TIME (wraps at midnight), DT +/- TIME, DATE - DATE, TOD - TOD and DT - DT (each a TIME); anything else, such as DATE + TIME or a conversion to an integer, is refused. Functions: DT_NOW() (the wall clock, here the browser's local time at the moment the simulation starts, then running at the simulation's pace), DT_TO_DATE, DT_TO_TOD, DATE_TO_DT, CONCAT_DATE_TOD, CONCAT_DATE(y, m, d), CONCAT_TOD(h, m, s, ms), DAY_OF_WEEK (0 is Sunday), and DATE_TO_STRING, TOD_TO_STRING, DT_TO_STRING with STRING_TO_DATE, STRING_TO_TOD and STRING_TO_DT. A schedule is `late := DT_TO_TOD(DT_NOW()) >= TOD#22:00:00;`.
+- STRING, DATE, TOD and DT work inside the program only: a VAR_INPUT or VAR_OUTPUT of one of them gets no control or readout, so show a result through a BOOL or a number (for example the weekday as an INT), and RETAIN on a STRING is refused.
+
+Not supported (do not use): WSTRING, the L forms (LDATE, LTOD, LDT, LTIME), SPLIT_DATE, SPLIT_TOD and SPLIT_DT, VAR_IN_OUT in a PROGRAM or a FUNCTION, VAR_GLOBAL inside a POU, VAR_ACCESS, VAR_CONFIG, pointers and references, OOP (METHOD, INTERFACE, EXTENDS), multi-level addresses like %QW0.1.2, word or byte located I/O in the panel (only %IX/%QX bits get controls), and vendor libraries. A CONFIGURATION's TASK lines and program instances are read past and not used. If a request needs one of these, say so and use a supported alternative (for example an INT state code instead of a WSTRING).
 
 Good habits for this dialect:
 - A timer that restarts itself: `t(IN := NOT t.Q, PT := T#500ms);` then act on `t.Q`.
@@ -1039,6 +1088,45 @@ impl Free {
     }
 }
 
+/// What the free chat takes in a turn's body beside the messages: its
+/// status lists it, and a relay that lists nothing is sent nothing (an
+/// older one refuses a body with any other field).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Takes {
+    /// `"thinking": "off"`.
+    pub thinking_off: bool,
+    /// The agents it serves beside the chat, by the key a turn names.
+    pub agents: Vec<String>,
+}
+
+impl Takes {
+    /// From the status reply's body (`"thinking": ["off"]`, `"agents":
+    /// ["ask", ...]`); anything else reads as nothing.
+    #[must_use]
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn from_status(body: &str) -> Self {
+        let v = serde_json::from_str::<Json>(body).unwrap_or(Json::Null);
+        let strings = |v: &Json| -> Vec<String> {
+            v.as_array()
+                .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+                .unwrap_or_default()
+        };
+        Self {
+            thinking_off: strings(&v["thinking"]).iter().any(|t| t == "off"),
+            agents: strings(&v["agents"]),
+        }
+    }
+
+    /// `turn` with what this relay does not take left out.
+    #[must_use]
+    pub fn allow<'a>(&self, turn: Turn<'a>) -> Turn<'a> {
+        Turn {
+            agent: turn.agent.filter(|a| self.agents.iter().any(|s| s == a)),
+            quick: turn.quick && self.thinking_off,
+        }
+    }
+}
+
 /// What the transport hands back. `seq` ties a reply to its question, so
 /// a stopped or superseded one is dropped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1048,6 +1136,11 @@ pub enum Incoming {
     /// What the free chat said about itself (`GET /demo/v1/status`), or
     /// that it could not be asked.
     Free(Free),
+    /// What its status said a turn may ask for.
+    Takes(Takes),
+    /// The design entry's status reply, as the relay sent it (empty when
+    /// it could not be asked): `crate::design_step::Avail::from_status`.
+    DesignStatus(String),
     /// A non-200 answer and its body.
     Status {
         seq: u64,
@@ -1065,6 +1158,66 @@ pub enum Incoming {
         seq: u64,
         why: String,
     },
+}
+
+/// A second answer beside the Agent's, for the question card's requests
+/// (`crate::ask`): assembled the way the Agent's is, shown only once it
+/// is whole.
+#[derive(Default)]
+pub struct Side {
+    seq: u64,
+    sse: Sse,
+    answer: Option<Answer>,
+}
+
+impl Side {
+    /// A new request: its number, for the transport.
+    pub fn start(&mut self) -> u64 {
+        self.seq += 1;
+        self.sse = Sse::default();
+        self.answer = Some(Answer::default());
+        self.seq
+    }
+
+    /// Stops listening: what still arrives for the request is dropped.
+    pub fn stop(&mut self) {
+        self.seq += 1;
+        self.answer = None;
+    }
+
+    /// Applies what the transport brought for the request under way.
+    pub fn receive(&mut self, msg: Incoming) {
+        let now = self.seq;
+        let Some(a) = &mut self.answer else { return };
+        match msg {
+            Incoming::Status { seq, status, body } if seq == now => a.refused(status, &body),
+            Incoming::Chunk { seq, text } if seq == now => match self.sse.push(&text) {
+                Ok(events) => {
+                    for e in &events {
+                        a.apply(e);
+                    }
+                }
+                Err(e) => a.phase = Phase::Failed(e),
+            },
+            Incoming::End { seq } if seq == now => a.end(),
+            Incoming::Unreachable { seq, why } if seq == now => a.unreachable(&why),
+            _ => {}
+        }
+    }
+
+    /// The request's whole answer, once it has ended: its text, or why it
+    /// failed. `None` while it runs or when there is none.
+    pub fn take(&mut self) -> Option<Result<String, String>> {
+        match &self.answer.as_ref()?.phase {
+            Phase::Waiting | Phase::Streaming => None,
+            Phase::Done => self.answer.take().map(|a| Ok(a.text)),
+            Phase::Failed(why) => {
+                let why = why.clone();
+                self.answer = None;
+                Some(Err(why))
+            }
+        }
+    }
 }
 
 /// The way to the model for the Agent tab: the
@@ -1085,6 +1238,8 @@ pub struct Chat {
     free_base: Option<String>,
     /// What the free chat last said about itself.
     pub free: Free,
+    /// What it last said a turn may ask for.
+    pub takes: Takes,
     /// The survey answer went out (it is asked once).
     pub surveyed: bool,
     seq: u64,
@@ -1128,6 +1283,7 @@ impl Chat {
                 .map(|u| u.trim().trim_end_matches('/').to_string())
                 .filter(|u| !u.is_empty()),
             free: Free::Checking,
+            takes: Takes::default(),
             surveyed: false,
             seq: 0,
             sse: Sse::default(),
@@ -1262,16 +1418,38 @@ impl Chat {
     ///
     /// # Errors
     /// No route, or an answer still running.
+    #[cfg(test)]
     pub fn send(&mut self, message: &str, context: &[Exchange]) -> Result<(u64, Request), String> {
+        self.send_turn(message, context, Turn::default())
+    }
+
+    /// [`Self::send`], asked as `turn` says, as far as the free chat takes
+    /// it ([`Takes::allow`]).
+    ///
+    /// # Errors
+    /// No route, or an answer still running.
+    pub fn send_turn(
+        &mut self,
+        message: &str,
+        context: &[Exchange],
+        turn: Turn<'_>,
+    ) -> Result<(u64, Request), String> {
         if self.busy() {
             return Err("Wait for the answer, or stop it.".into());
         }
         let route = self.route()?;
-        let req = request(&route, self.model, context, message);
+        let req = request_turn(&route, self.model, context, message, self.takes.allow(turn));
         self.seq += 1;
         self.sse = Sse::default();
         self.answer = Some(Answer::default());
         Ok((self.seq, req))
+    }
+
+    /// Whether a turn that names `agent` is answered by it: the route is
+    /// the free chat and its status lists the agent.
+    #[must_use]
+    pub fn serves(&self, agent: &str) -> bool {
+        matches!(self.route(), Ok(Route::Free(_))) && self.takes.agents.iter().any(|a| a == agent)
     }
 
     /// The current answer's number: a new question or a retry moves it.
@@ -1296,6 +1474,7 @@ impl Chat {
         match msg {
             Incoming::Proxy(yes) => self.proxy = if yes { Proxy::Yes } else { Proxy::No },
             Incoming::Free(state) => self.free = state,
+            Incoming::Takes(takes) => self.takes = takes,
             Incoming::Status { seq, status, body } if seq == now => {
                 // A turn the free chat turned away because it closed
                 // meanwhile: the tab shows the closed message from here on.

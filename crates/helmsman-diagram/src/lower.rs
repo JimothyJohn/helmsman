@@ -33,6 +33,14 @@
 //!   ports, struct fields, function results); an operand whose type the
 //!   declarations do not give (a generic function's result, an enumeration
 //!   value) keeps the block, which is never wrong, only less compact.
+//!
+//! ## A run of one operator is one block
+//!
+//! `a AND b AND c AND d` is one AND block with four inputs, not three
+//! blocks in a row: the FBD convention for AND, OR, XOR, `+` and `*`
+//! ([`chains`]). Only a run as written is joined (see [`chain`]), so the
+//! inputs are evaluated in the source's order and a parenthesised operand
+//! keeps its own block.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -210,9 +218,16 @@ fn lower_by(src: &str, ids_of: impl Fn(&str) -> HashMap<(u32, u32), StmtId>) -> 
             .map(|p| p.name.clone()),
     );
     let types = Types::of(&[ast::library(), &unit]);
+    let mut globals = vars_of(&unit.globals, &fbs);
+    for g in globals.values_mut() {
+        g.section = Section::External;
+    }
     let mut pous = Vec::new();
     for p in &unit.pous {
-        let vars = vars(p, &fbs);
+        // The module's globals are there in every POU, named VAR_EXTERNAL
+        // or not: as the POU's own declaration says where it has one.
+        let mut vars = globals.clone();
+        vars.extend(vars_of(&p.vars, &fbs));
         let ids = ids_of(&p.name);
         let mut l = Lower {
             types: &types,
@@ -242,8 +257,8 @@ fn lower_by(src: &str, ids_of: impl Fn(&str) -> HashMap<(u32, u32), StmtId>) -> 
     Ok(Module { pous })
 }
 
-fn vars(p: &ast::Pou, fbs: &HashSet<String>) -> HashMap<String, Var> {
-    p.vars
+fn vars_of(decls: &[ast::VarDecl], fbs: &HashSet<String>) -> HashMap<String, Var> {
+    decls
         .iter()
         .map(|v| {
             let mut ty = &v.ty;
@@ -258,6 +273,7 @@ fn vars(p: &ast::Pou, fbs: &HashSet<String>) -> HashMap<String, Var> {
             let named = match ty {
                 TypeRef::Named(n, _) => n.to_ascii_uppercase(),
                 TypeRef::Array { .. } => String::new(),
+                TypeRef::Str(..) => "STRING".to_string(),
             };
             (
                 v.name.clone(),
@@ -315,9 +331,15 @@ impl Types {
         let mut t = Self::default();
         for u in units {
             for p in &u.pous {
+                // Globals first: a POU's own declaration of one (VAR_EXTERNAL)
+                // has the same type.
                 t.vars.insert(
                     p.name.clone(),
-                    p.vars.iter().map(|v| (v.name.clone(), v.ty.clone())).collect(),
+                    u.globals
+                        .iter()
+                        .chain(&p.vars)
+                        .map(|v| (v.name.clone(), v.ty.clone()))
+                        .collect(),
                 );
                 if let PouKind::Function(r) = &p.kind {
                     t.funcs.insert(p.name.clone(), r.clone());
@@ -338,7 +360,7 @@ impl Types {
                     Some(TypeDef::Alias(a, _)) => t = a,
                     _ => return t,
                 },
-                TypeRef::Array { .. } => return t,
+                TypeRef::Array { .. } | TypeRef::Str(..) => return t,
             }
         }
         t
@@ -362,6 +384,38 @@ impl Types {
     fn is_bool(&self, t: &TypeRef) -> bool {
         matches!(self.resolve(t), TypeRef::Named(n, _) if n == "BOOL")
     }
+
+    /// The declared type of `e` read in the POU `pou`, when the
+    /// declarations give it.
+    fn type_of(&self, pou: &str, e: &Expr) -> Option<TypeRef> {
+        let named = |n: &str| Some(TypeRef::Named(n.to_string(), e.pos));
+        match &e.kind {
+            ExprKind::Bool(_) | ExprKind::Bit(..) => named("BOOL"),
+            ExprKind::Var(n) => self.vars.get(pou)?.get(n).cloned(),
+            ExprKind::Member(b, m) => self.member(&self.type_of(pou, b)?, m),
+            ExprKind::Index(b, ix) => match self.resolve(&self.type_of(pou, b)?) {
+                TypeRef::Array { dims, elem, .. } if dims.len() == ix.len() => Some((**elem).clone()),
+                _ => None,
+            },
+            // `%IX0.0`, `%Q0.1`: a bit; any other size is not BOOL.
+            ExprKind::Direct(d) => match d.as_bytes().get(1) {
+                Some(b'X') => named("BOOL"),
+                Some(c) if c.is_ascii_digit() => named("BOOL"),
+                _ => None,
+            },
+            ExprKind::Unary(_, a) => self.type_of(pou, a),
+            ExprKind::Binary(op, a, b) => match op {
+                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => named("BOOL"),
+                _ => self.type_of(pou, a).or_else(|| self.type_of(pou, b)),
+            },
+            ExprKind::Call(f, _) => match &f.kind {
+                ExprKind::Var(n) if n.ends_with("_TO_BOOL") => named("BOOL"),
+                ExprKind::Var(n) => self.funcs.get(n).cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 struct Lower<'a> {
@@ -378,6 +432,44 @@ struct Lower<'a> {
     written: Vec<String>,
     /// This statement's reads, so a variable read twice is one node.
     reads: HashMap<String, NodeId>,
+}
+
+/// Whether a run of `op` is one block with an input per operand: the
+/// operators FBD draws with any number of inputs.
+#[must_use]
+pub const fn chains(op: BinOp) -> bool {
+    matches!(op, BinOp::And | BinOp::Or | BinOp::Xor | BinOp::Add | BinOp::Mul)
+}
+
+/// A binary expression written in parentheses: its text starts before its
+/// left operand's does.
+fn parenthesised(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Binary(_, l, _) if e.start != l.start)
+}
+
+/// The operands of the binary expression `e`, left to right. A run of one
+/// chaining operator as written (`a AND b AND c`, which parses as
+/// `(a AND b) AND c`) gives all of them, so it lowers to one block; a
+/// parenthesised operand is the author's own grouping and stays a block of
+/// its own, as does any other operator. The order of evaluation is the
+/// source's.
+fn chain(e: &Expr) -> Vec<&Expr> {
+    let ExprKind::Binary(op, l, r) = &e.kind else {
+        return vec![e];
+    };
+    let mut rev = vec![&**r];
+    let mut left = &**l;
+    while chains(*op)
+        && let ExprKind::Binary(o, ll, lr) = &left.kind
+        && o == op
+        && !parenthesised(left)
+    {
+        rev.push(lr);
+        left = ll;
+    }
+    rev.push(left);
+    rev.reverse();
+    rev
 }
 
 /// A place in memory as text: `P.X`, `A[1,2]`, `%QX0.0`; plus the index
@@ -808,33 +900,7 @@ impl Lower<'_> {
 
     /// The declared type of `e`, when the declarations give it.
     fn ty(&self, e: &Expr) -> Option<TypeRef> {
-        let named = |n: &str| Some(TypeRef::Named(n.to_string(), e.pos));
-        match &e.kind {
-            ExprKind::Bool(_) | ExprKind::Bit(..) => named("BOOL"),
-            ExprKind::Var(n) => self.types.vars.get(self.pou)?.get(n).cloned(),
-            ExprKind::Member(b, m) => self.types.member(&self.ty(b)?, m),
-            ExprKind::Index(b, ix) => match self.types.resolve(&self.ty(b)?) {
-                TypeRef::Array { dims, elem, .. } if dims.len() == ix.len() => Some((**elem).clone()),
-                _ => None,
-            },
-            // `%IX0.0`, `%Q0.1`: a bit; any other size is not BOOL.
-            ExprKind::Direct(d) => match d.as_bytes().get(1) {
-                Some(b'X') => named("BOOL"),
-                Some(c) if c.is_ascii_digit() => named("BOOL"),
-                _ => None,
-            },
-            ExprKind::Unary(_, a) => self.ty(a),
-            ExprKind::Binary(op, a, b) => match op {
-                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => named("BOOL"),
-                _ => self.ty(a).or_else(|| self.ty(b)),
-            },
-            ExprKind::Call(f, _) => match &f.kind {
-                ExprKind::Var(n) if n.ends_with("_TO_BOOL") => named("BOOL"),
-                ExprKind::Var(n) => self.types.funcs.get(n).cloned(),
-                _ => None,
-            },
-            _ => None,
-        }
+        self.types.type_of(self.pou, e)
     }
 
     fn is_bool(&self, e: &Expr) -> bool {
@@ -870,7 +936,8 @@ impl Lower<'_> {
             ExprKind::Real { value, .. } => self.konst(e, Some(Value::Real(*value))),
             ExprKind::Bool(b) => self.konst(e, Some(Value::Bool(*b))),
             ExprKind::Time(ns) => self.konst(e, Some(Value::Int(*ns))),
-            ExprKind::EnumLit(..) => self.konst(e, None),
+            // A text, a date or an enumeration value is drawn as a constant, with no number.
+            ExprKind::Str(_) | ExprKind::Calendar(..) | ExprKind::EnumLit(..) => self.konst(e, None),
             ExprKind::Var(n) if !self.vars.contains_key(n) => {
                 // An enumeration value (or a constant the library knows).
                 self.konst(e, None)
@@ -937,20 +1004,27 @@ impl Lower<'_> {
                 self.wire(s, n, 0);
                 (n, 0).into()
             }
-            ExprKind::Binary(op, a, b) => {
-                let sa = self.expr(a)?;
-                let sb = self.expr(b)?;
+            ExprKind::Binary(op, ..) => {
+                let operands = chain(e);
+                let mut srcs = Vec::with_capacity(operands.len());
+                for x in &operands {
+                    srcs.push(self.expr(x)?);
+                }
                 let sym = op.symbol();
                 let n = self.node(
                     NodeKind::Op { op: sym.into() },
                     sym.into(),
                     text::expr(e),
-                    vec![String::new(), String::new()],
+                    vec![String::new(); operands.len()],
                     vec![String::new()],
                     e.pos,
                 );
-                self.wire(sa, n, 0);
-                self.wire(sb, n, 1);
+                for (k, s) in srcs.into_iter().enumerate() {
+                    self.wire(s, n, k);
+                }
+                if matches!(op, BinOp::And | BinOp::Or) && self.is_bool(e) {
+                    self.d.bools.insert(n);
+                }
                 (n, 0).into()
             }
             ExprKind::Call(..) => {

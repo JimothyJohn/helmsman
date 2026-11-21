@@ -729,3 +729,42 @@ fn after_a_reload_every_module_scans_on_the_very_next_tick() {
     // And it keeps its period from there, without counting an overrun.
     assert_eq!(rt.stats("m").unwrap().overruns, 0);
 }
+
+/// A STRING port compiles and works inside its program but is no signal
+/// yet (card `st-string-signals`): the runtime binds only the other ports,
+/// and neither the table nor the scan trips over the string one.
+#[test]
+fn a_string_port_is_no_signal_and_costs_the_others_nothing() {
+    const SRC: &str = "
+PROGRAM line
+VAR_INPUT start : BOOL; label : STRING[8]; level : INT; END_VAR
+VAR_OUTPUT motor : BOOL; msg : STRING[20]; lamp : BOOL; END_VAR
+  motor := start;
+  lamp := level > 10;
+  msg := CONCAT('label ', label);
+END_PROGRAM";
+    let sim = rio();
+    let m = map(&sim);
+    let table = SignalTable::new(&m, &BTreeMap::new()).unwrap();
+    let mut links = links(&m, helmsman_io::open, Box::new(Channels::new())).unwrap();
+    let mut rt = Runtime::with_signals(0, 0, vec![module("line", SRC)], &table).unwrap();
+    let table = Mutex::new(table);
+    for l in &mut links {
+        let _ = l.cycle(&table);
+    }
+    let faults = rt.tick_with(ms(0), &[], &mut table.lock().unwrap());
+    assert_eq!(faults, NO_FAULTS);
+    assert_eq!(rt.status("line"), Some(Status::Running));
+    let ports: Vec<String> = rt
+        .program("line")
+        .unwrap()
+        .ports()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert_eq!(ports, ["START", "LEVEL", "MOTOR", "LAMP"]);
+    assert_eq!(
+        rt.program("line").unwrap().get_str("msg").as_deref(),
+        Some("label ")
+    );
+}

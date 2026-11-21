@@ -123,9 +123,12 @@ proptest! {
         Just("FOR"), Just("TO"), Just("BY"), Just("END_FOR"), Just("EXIT"), Just("0"), Just("1"), Just("-1"),
         Just("127"), Just("2.5"), Just("TRUE"), Just("%QX0.0"), Just("%IW1"), Just("%MD2"), Just("INT_TO_SINT"),
         Just("CASE"), Just("OF"), Just(":"), Just(".."), Just(","), Just("END_CASE"),
+        Just("s"), Just("u"), Just("'ab'"), Just("''"), Just("'a$$b$'c$N$4A'"), Just("'"), Just("$"),
+        Just("LEN"), Just("LEFT"), Just("MID"), Just("CONCAT"), Just("FIND"), Just("INSERT"),
+        Just("DELETE"), Just("REPLACE"), Just("INT_TO_STRING"), Just("STRING_TO_INT"), Just("TO_STRING"),
     ], 0..40)) {
         let src = format!(
-            "PROGRAM t VAR x, y : INT; b : BOOL; END_VAR {} END_PROGRAM",
+            "PROGRAM t VAR x, y : INT; b : BOOL; s : STRING[8]; u : STRING; END_VAR {} END_PROGRAM",
             words.join(" ")
         );
         if let Ok(mut p) = compile(&src, SIZES) {
@@ -458,35 +461,35 @@ fn zero_and_one_are_bool_literals() {
 #[test]
 fn unsupported_features_say_so() {
     for (vars, body, want) in [
-        ("x : INT;", "x := 'abc';", "STRING literals are not supported yet"),
+        ("x : INT;", "x := \"abc\";", "WSTRING literals"),
+        ("x : WSTRING;", "", "WSTRING is not supported"),
         (
             "x : INT;",
-            "x := \"abc\";",
-            "STRING literals are not supported yet",
+            "x := LDT#2013-02-23-22:35:46;",
+            "LDT literals are not supported yet",
         ),
         (
             "x : INT;",
-            "x := DT#2013-02-23-22:35:46;",
-            "DT literals are not supported yet",
+            "x := LTOD#12:00:00;",
+            "LTOD literals are not supported yet",
         ),
         (
             "x : INT;",
-            "x := TOD#12:00:00;",
-            "TOD literals are not supported yet",
+            "x := LDATE#2020-01-01;",
+            "LDATE literals are not supported yet",
         ),
         (
             "x : INT;",
-            "x := D#2020-01-01;",
-            "D literals are not supported yet",
+            "x := LDATE_AND_TIME#2020-01-01-00:00:00;",
+            "LDATE_AND_TIME literals are not supported yet",
         ),
+        ("d : LDT;", "", "unknown type LDT (LDT is not supported yet)"),
+        ("d : LTOD;", "", "unknown type LTOD (LTOD is not supported yet)"),
         (
-            "x : INT;",
-            "x := DATE_AND_TIME#2020-01-01-00:00:00;",
-            "DATE_AND_TIME literals are not supported yet",
+            "d : LDATE;",
+            "",
+            "unknown type LDATE (LDATE is not supported yet)",
         ),
-        ("d : DT;", "", "unknown type DT (DT is not supported yet)"),
-        ("d : TOD;", "", "unknown type TOD (TOD is not supported yet)"),
-        ("d : DATE;", "", "unknown type DATE (DATE is not supported yet)"),
         (
             "w AT %QW0.1.8192.0 : WORD;",
             "",

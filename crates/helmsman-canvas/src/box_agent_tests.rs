@@ -67,6 +67,16 @@ impl Relay {
                         );
                         continue;
                     }
+                    // The box asks which protocol the agent speaks (once).
+                    if head.starts_with("GET /v1/agents/") {
+                        let b = json!({"version":"helmsman/v1","protocol":1}).to_string();
+                        let _ = write!(
+                            s,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                            b.len()
+                        );
+                        continue;
+                    }
                     if let Some(body) = script.next() {
                         let _ = write!(
                             s,
@@ -607,4 +617,28 @@ fn the_status_dot_is_green_online_red_offline_grey_unknown() {
     assert_eq!(Status::Unconfigured(String::new()).dot(), RED);
     assert_eq!(Status::Unread.dot(), STEEL);
     assert_eq!(Status::Unknown.dot(), STEEL);
+}
+
+/// `dropins` is in the chat body only when a message attaches some: the
+/// body of every other message stays what it was, and the box's own
+/// request type reads both.
+#[test]
+fn a_message_carries_dropins_only_when_it_attaches_some() {
+    let mut a = BoxAgent::new();
+    let plain = a.send("hello", false).unwrap();
+    let j: Json = serde_json::from_str(&plain.body).unwrap();
+    assert_eq!(j, json!({ "message": "hello", "session": null }));
+    a.stop();
+    let with = a.send_with("see the file", &[3, 9], true).unwrap();
+    let j: Json = serde_json::from_str(&with.body).unwrap();
+    assert_eq!(
+        j,
+        json!({ "message": "see the file", "session": null, "dropins": [3, 9] })
+    );
+    let ask: chat::Ask = serde_json::from_str(&with.body).unwrap();
+    assert_eq!(ask.dropins, Some(vec![3, 9]));
+    assert_eq!(ask.message, "see the file");
+    a.stop();
+    let none = a.send_with("again", &[], false).unwrap();
+    assert!(!none.body.contains("dropins"), "{}", none.body);
 }

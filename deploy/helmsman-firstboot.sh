@@ -6,6 +6,12 @@
 #   relay-url    -> --relay URL in PLC_RELAY_ARGS (/etc/helmsman-plc/env)
 #   relay-token  -> /etc/helmsman-plc/relay-token (root, 0600), which the
 #                   unit loads as a systemd credential; then deleted here
+#   pairing-code -> traded with the relay for a token (`helmsman-plc pair`),
+#                   written where relay-token goes, then deleted here; needs
+#                   relay-url and relay-box-id beside it, and is not used when
+#                   a relay-token is there too (the file wins)
+#   relay-box-id -> the id the operator made the code for: 1 to 64 of
+#                   a-z 0-9 -, not starting with -
 #   site         -> --site NAME in PLC_RELAY_ARGS (the site this box joins)
 #   box-name     -> --box-name NAME in PLC_RELAY_ARGS, only with a site: the
 #                   box refuses --box-name without --site and would not start
@@ -19,11 +25,15 @@
 #
 # HELMSMAN_FIRSTBOOT_ROOT prefixes every path (tests run it in a temp dir).
 #
-# The relay issues a token out of band today (agent-relay
-# scripts/issue-box-token.sh); a pairing code the box exchanges for a token
-# is relay work, noted on the box-sku card.
+# A token reaches the box two ways: the operator copies one onto the card
+# (agent-relay scripts/issue-box-token.sh, `relay-token`), or makes a
+# one-time code (agent-relay scripts/pair-code.sh) the box trades for its
+# own (`pairing-code`). Neither the code nor the token is ever printed.
+#
+# HELMSMAN_PLC_BIN names the box binary (tests point it at the one they built).
 set -euo pipefail
 root="${HELMSMAN_FIRSTBOOT_ROOT:-}"
+plc="${HELMSMAN_PLC_BIN:-/usr/local/bin/helmsman-plc}"
 boot="$root/boot/firmware/helmsman"
 env="$root/etc/helmsman-plc/env"
 token_file="$root/etc/helmsman-plc/relay-token"
@@ -44,10 +54,19 @@ trim() {
 }
 
 # https://HOST[:PORT][/PATH]: a shape the box's URL parser always takes.
+# http:// only with a relay-allow-http file beside it: a relay on the plant's
+# own network (agent-relay-local) has no certificate, and the file says the
+# person who flashed the card knows the pairing code and the token then
+# cross that network in the clear. The image's CI boot uses it too.
+allow_http=0
+[ -e "$boot/relay-allow-http" ] && allow_http=1
 url_ok() {
     local rest authority host port path
-    case "$1" in https://*) ;; *) return 1 ;; esac
-    rest="${1#https://}"
+    case "$1" in
+        https://*) rest="${1#https://}" ;;
+        http://*) [ "$allow_http" = 1 ] || return 1; rest="${1#http://}" ;;
+        *) return 1 ;;
+    esac
     authority="${rest%%/*}"
     path="${rest#"$authority"}"
     host="${authority%%:*}"
@@ -69,7 +88,7 @@ if [ -f "$boot/relay-url" ]; then
         if url_ok "$url"; then
             relay="$url"
         else
-            echo "helmsman-firstboot: relay-url is not https://HOST[:PORT][/PATH] (letters, digits, . - in the host), ignored" >&2
+            echo "helmsman-firstboot: relay-url is not https://HOST[:PORT][/PATH] (letters, digits, . - in the host; http:// needs a relay-allow-http file), ignored" >&2
         fi
     fi
 fi
@@ -90,6 +109,47 @@ if [ -f "$boot/relay-token" ]; then
         "") ;;
         *) echo "helmsman-firstboot: relay-token is not an hmr1_ token, ignored" >&2 ;;
     esac
+fi
+# A pairing code, when no token is installed yet: the box trades it with
+# the relay for its own. The relay counts wrong tries against the code, so
+# a code the relay refused is dropped here, not retried at every boot; one
+# that could not be tried (no network yet, a relay that failed) stays for
+# the next start (`systemctl start helmsman-firstboot`).
+if [ -f "$boot/pairing-code" ]; then
+    drop_code() { shred -u "$boot/pairing-code" 2>/dev/null || rm -f "$boot/pairing-code"; }
+    if [ -s "$token_file" ]; then
+        echo "helmsman-firstboot: a relay token is already installed; the pairing code is not used and was removed" >&2
+        drop_code
+    elif [ -z "$relay" ]; then
+        echo "helmsman-firstboot: pairing-code needs a valid relay-url beside it, not used yet" >&2
+    else
+        box_id=""
+        [ -f "$boot/relay-box-id" ] && box_id="$(trim "$boot/relay-box-id")"
+        case "$box_id" in
+            "" | -* | *[!a-z0-9-]*)
+                echo "helmsman-firstboot: pairing-code needs relay-box-id beside it (1 to 64 of a-z 0-9 -), not used yet" >&2
+                ;;
+            *)
+                if [ "${#box_id}" -gt 64 ]; then
+                    echo "helmsman-firstboot: relay-box-id is longer than 64, not used yet" >&2
+                else
+                    umask 077
+                    rc=0
+                    "$plc" pair --relay "$relay" --box-id "$box_id" \
+                        --code-file "$boot/pairing-code" --out "$token_file" --wait 30 || rc=$?
+                    if [ "$rc" -eq 0 ]; then
+                        drop_code
+                        echo "helmsman-firstboot: paired by code; the code is removed from the boot partition"
+                    elif [ "$rc" -eq 3 ]; then
+                        drop_code
+                        echo "helmsman-firstboot: the relay refused the pairing code; it is removed. Put a new pairing-code and run: sudo systemctl start helmsman-firstboot" >&2
+                    else
+                        echo "helmsman-firstboot: pairing did not finish (exit $rc); the code stays for the next start" >&2
+                    fi
+                fi
+                ;;
+        esac
+    fi
 fi
 # --relay and --relay-token go together or the box will not start. The
 # token file outlives the boot partition's copy, so a later boot (the token

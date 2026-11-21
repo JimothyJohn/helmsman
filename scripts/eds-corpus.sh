@@ -8,6 +8,14 @@
 #     file at the repo root, where Nick keeps it untracked). Its terms don't
 #     say it may be redistributed (TODO.md `e1213-eds-license`), so it is
 #     never committed. Without it, the E1213 half of the test is skipped.
+#   - Novanta's MDrive EDS (SEM_MDrivever1_2.eds, in the firmware zip),
+#     copied from $MDRIVE_EDS (default: the device library's store,
+#     ../helmsman-devices/cache/sha256/<its hash>, where
+#     scripts/docs-fetch.py puts it). No licence text, so never committed.
+#     Without it that half is skipped.
+#   - Murrelektronik's two EDS files for the IMPACT67 E DIO8 (art. no.
+#     55089), from the same store ($IMPACT67_EDS_DIR to look elsewhere).
+#     Without them that half is skipped.
 # Provenance in docs/SOURCES.md ("Device sources"). Data only: nothing in them
 # is executed.
 #
@@ -18,6 +26,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 corpus="${HELMSMAN_EDS_CORPUS:-$PWD/target/eds-corpus}"
+# The device library's checkout sits beside the main checkout of this
+# repository, which a worktree under .claude/worktrees/ is three levels
+# below: ask git where the main checkout is.
+library="$(cd "$(git rev-parse --git-common-dir)/../.." && pwd)/helmsman-devices"
 mkdir -p "$corpus"
 
 sha256() {
@@ -28,6 +40,8 @@ opener_ref=0e1ab7ee5c272950c0dc8daf7793008d7a518912
 opener_sha=0e0da5ddd62f571ea319dc29254be08cac5134236b389174983d80f0e370760f
 e1213_name=moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds
 e1213_sha=3895fbca8bb036c1b31a9d6b68dea69eca6892fe0a6bce7409ab76311cfd470d
+mdrive_name=SEM_MDrivever1_2.eds
+mdrive_sha=b14f0fe268df5b37e9dcee6bd0288a88e59d428dbe6044b49dba8beaaeb86041
 
 dest="$corpus/opener_sample_app.eds"
 if [ ! -f "$dest" ] || [ "$(sha256 "$dest")" != "$opener_sha" ]; then
@@ -54,5 +68,38 @@ if [ -f "$src" ]; then
 else
   echo "no E1213 EDS at $src (set E1213_EDS=PATH): checking OpENer's only" >&2
 fi
+
+src="${MDRIVE_EDS:-$library/cache/sha256/$mdrive_sha}"
+if [ -f "$src" ]; then
+  got="$(sha256 "$src")"
+  if [ "$got" != "$mdrive_sha" ]; then
+    echo "$src: SHA-256 $got, want $mdrive_sha (another revision of the EDS?" \
+      "docs/devices/novanta-mdrive.md cites revision 1.2's lines)" >&2
+    exit 1
+  fi
+  cp "$src" "$corpus/$mdrive_name"
+else
+  echo "no MDrive EDS at $src (set MDRIVE_EDS=PATH): skipping it" >&2
+fi
+
+# name:sha256, as the vendor names them.
+for entry in \
+  55089_Impact67_E_DIO16.eds:6eb94568f8b5fc73420611ac1633073da2c6e8cda75d81593bd73631807bef3d \
+  55089_Impact67_E_DIO16_Omron.eds:2320dbc1dded11586c969412e8e0e11182c010325a598af4bd823fc4c1c1f225; do
+  name="${entry%%:*}"
+  want="${entry##*:}"
+  src="${IMPACT67_EDS_DIR:-$library/cache/sha256}/$want"
+  [ -f "$src" ] || src="${IMPACT67_EDS_DIR:-$library/scratch}/$name"
+  if [ -f "$src" ]; then
+    got="$(sha256 "$src")"
+    if [ "$got" != "$want" ]; then
+      echo "$src: SHA-256 $got, want $want" >&2
+      exit 1
+    fi
+    cp "$src" "$corpus/$name"
+  else
+    echo "no $name (set IMPACT67_EDS_DIR=DIR): skipping it" >&2
+  fi
+done
 
 HELMSMAN_EDS_CORPUS="$corpus" cargo test --locked -p helmsman-io --test eds_corpus -- --nocapture

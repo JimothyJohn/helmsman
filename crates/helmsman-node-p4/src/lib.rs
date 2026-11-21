@@ -21,6 +21,7 @@ pub mod ethernet;
 pub mod flash;
 pub mod io;
 pub mod modbus;
+pub mod ota;
 pub mod profinet;
 pub mod report;
 pub mod server;

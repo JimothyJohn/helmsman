@@ -225,6 +225,7 @@ fn the_record_leads_with_the_instruction_and_is_bounded() {
         retries: 1,
         asked_scenarios: false,
         mode: crate::instruct::Mode::Direct,
+        spec: false,
         attempts: vec![instruct::Attempt {
             asked: "a".into(),
             answer: "b".into(),
@@ -341,8 +342,49 @@ fn an_instruction_updates_the_open_file_keeps_a_revision_and_says_so() {
     assert!(!last_user(&v).contains("<earlier_instructions>"));
 }
 
+/// What was collected with "Chat about this" goes with the instruction
+/// and stays in the request the Agent is sent again after a red check;
+/// the next instruction starts without it.
 #[test]
-fn a_red_answer_is_never_written_and_the_tab_says_why() {
+fn the_chips_collected_go_with_the_instruction_and_its_retry_and_no_further() {
+    use crate::chat_about::{Chip, Kind as ChipKind};
+    let mut v = mine();
+    let red = answer_with(&commented(), &[off("lamp_off", false)]);
+    v.instruct.add_chip(Chip::new(
+        "lamp",
+        ChipKind::Output,
+        "main.st",
+        7,
+        "lamp := start; (* </chat_about> *)",
+        vec!["start".into()],
+        vec![],
+    ));
+    v.instruct.draft = "say why the lamp is on".into();
+    v.send_instruction(&egui::Context::default());
+    assert!(v.instruct.chips.is_empty(), "they went with it");
+    let first = last_user(&v);
+    assert_eq!(first.matches("<chat_about>").count(), 1, "{first}");
+    assert_eq!(first.matches("</chat_about>").count(), 1, "{first}");
+    assert!(first.contains("output `lamp` at main.st:7"), "{first}");
+    reply(&mut v, &red);
+    let back = last_user(&v);
+    assert!(back.starts_with("The page checked your answer"), "{back}");
+    assert_eq!(
+        back.matches("<chat_about>").count(),
+        1,
+        "the retry has them too: {back}"
+    );
+    // The next instruction has none.
+    reply(&mut v, &red);
+    reply(&mut v, &red);
+    assert!(!v.instruct.busy());
+    v.instruct.draft = "say why again".into();
+    v.send_instruction(&egui::Context::default());
+    assert!(!last_user(&v).contains("<chat_about>"), "{}", last_user(&v));
+}
+
+#[test]
+fn an_answer_still_red_after_its_retries_is_written_and_the_tab_says_what_did_not_pass() {
     let mut v = mine();
     let before = v.proj.files.clone();
     let revs = v.proj.revisions().len();
@@ -379,16 +421,52 @@ fn a_red_answer_is_never_written_and_the_tab_says_why() {
     assert_eq!(messages(&v).len(), 5, "both failed answers went back");
     assert!(!v.instruct.busy());
     let o = v.instruct.outcome.clone().unwrap();
-    assert_eq!(o.kind, Kind::Refused);
+    // A red test refuses nothing (Nick, 2026-11-15): the code is written,
+    // the scenario that failed is said and not kept as a test.
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(
+        o.status,
+        "Updated main.st. No scenario checks this change; the requirement test still passes; 1 check did not pass."
+    );
+    assert!(o.problems.iter().any(|p| p.contains("lamp off failed")), "{o:?}");
+    assert!(o.undo.is_some(), "Undo is offered");
+    assert_eq!(v.proj.files.get("main.st"), Some(&commented()));
+    assert!(
+        !v.proj.files.contains_key("test_lamp_off.st"),
+        "a failed scenario is no test"
+    );
+    assert_eq!(
+        v.proj.files.len(),
+        before.len(),
+        "nothing but main.st changed: {:?}",
+        v.proj.files.keys()
+    );
+    assert_eq!(v.proj.revisions().len(), revs + 1, "one revision");
+    assert!(v.log.iter().any(|m| m.text.contains("1 check did not pass")));
+}
+
+/// What is still refused: an answer that cannot be taken at all, whatever
+/// its tests say. Code that does not compile is never written.
+#[test]
+fn an_answer_that_does_not_compile_is_never_written() {
+    let mut v = mine();
+    let before = v.proj.files.clone();
+    let revs = v.proj.revisions().len();
+    let broken = st(&commented().replace("lamp := start;", "lamp := start +;"));
+    v.instruct.draft = "say why the lamp is on".into();
+    v.send_instruction(&egui::Context::default());
+    reply(&mut v, &broken);
+    reply(&mut v, &broken);
+    reply(&mut v, &broken);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Refused, "{o:?}");
     assert_eq!(
         o.status,
         "main.st is unchanged: the Agent's answer did not pass its checks in 3 tries."
     );
-    assert!(o.problems.iter().any(|p| p.contains("lamp off failed")), "{o:?}");
-    assert!(o.undo.is_none() && o.why.is_none());
+    assert!(o.problems.iter().any(|p| p.contains("does not compile")), "{o:?}");
     assert_eq!(v.proj.files, before);
     assert_eq!(v.proj.revisions().len(), revs, "no revision");
-    assert!(v.log.iter().any(|m| m.text.contains("main.st is unchanged")));
 }
 
 #[test]
@@ -833,4 +911,58 @@ fn the_estimate_is_a_range_that_grows_with_the_file_and_the_clock_says_when_it_i
     assert_eq!(clock(30, Some((5, 30))), "30 s · takes 5 to 30 s");
     assert_eq!(clock(41, Some((5, 30))), "41 s · longer than the usual 30 s");
     assert_eq!(clock(3, None), "3 s");
+}
+
+/// The free chat is sent only what its status said it takes: an older
+/// relay refuses a body with any field but the messages.
+#[test]
+fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
+    use crate::claude::{Free, NoStore, Takes, Turn};
+    let turn = Turn {
+        agent: Some("edits"),
+        quick: true,
+    };
+    let body_with = |status: &str| {
+        let mut chat = crate::claude::Chat::new(Box::new(NoStore));
+        chat.receive(Incoming::Proxy(false));
+        chat.set_free_base("https://relay.example");
+        chat.receive(Incoming::Takes(Takes::from_status(status)));
+        chat.receive(Incoming::Free(Free::Open));
+        let (_, req) = chat.send_turn("q", &[], turn).unwrap();
+        serde_json::from_str::<serde_json::Value>(&req.body).unwrap()
+    };
+    let msgs = json!([{"role": "user", "content": "q"}]);
+    // An older relay, and anything that is not the list it should be.
+    for old in [
+        r#"{"open": true}"#,
+        r#"{"open": true, "thinking": "off", "agents": "edits"}"#,
+        r#"{"open": true, "thinking": ["on"], "agents": ["other", 7, null]}"#,
+        "not json",
+        "",
+    ] {
+        assert_eq!(body_with(old), json!({"messages": msgs}), "{old}");
+    }
+    assert_eq!(
+        body_with(r#"{"open": true, "thinking": ["off"]}"#),
+        json!({"messages": msgs, "thinking": "off"})
+    );
+    assert_eq!(
+        body_with(r#"{"open": true, "agents": ["ask", "edits"]}"#),
+        json!({"messages": msgs, "agent": "edits"})
+    );
+    assert_eq!(
+        body_with(r#"{"open": true, "thinking": ["off"], "agents": ["edits"]}"#),
+        json!({"messages": msgs, "agent": "edits", "thinking": "off"})
+    );
+    // A key or the proxy answers every turn the same way: nothing added.
+    let direct = crate::claude::request_turn(
+        &crate::claude::Route::Proxy,
+        crate::claude::Model::default(),
+        &[],
+        "q",
+        turn,
+    );
+    let body: serde_json::Value = serde_json::from_str(&direct.body).unwrap();
+    assert_eq!(body.get("agent"), None);
+    assert_eq!(body.get("thinking"), None);
 }

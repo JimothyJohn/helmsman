@@ -244,6 +244,9 @@ pub struct App {
     routed: bool,
     /// Help › About is open.
     pub about: bool,
+    /// This browser's named pane layouts and their popup (View › Pane
+    /// layouts…).
+    pub layouts: crate::pane_layout::Layouts,
     /// The page fell back to the simulation by itself (no box answered);
     /// once, so ⋯ › Back to this box is not undone.
     fell_back: bool,
@@ -271,6 +274,26 @@ pub struct App {
     /// The visitor went on to the editor: kept, so the next visit opens
     /// there.
     front_seen: bool,
+}
+
+/// A click this frame that lets the diagram's selection go (Nick,
+/// 2026-11-17): anywhere off the diagram, except the Agent tab and its
+/// tab button, where the selection is being used (its chips, the
+/// instruction typed about it).
+fn clicked_off_the_diagram(ctx: &egui::Context, chrome: &Chrome) -> bool {
+    let Some(p) = ctx.input(|i| {
+        i.pointer
+            .primary_clicked()
+            .then(|| i.pointer.interact_pos())
+            .flatten()
+    }) else {
+        return false;
+    };
+    !chrome.diagram.contains(p)
+        && !chrome
+            .hits
+            .iter()
+            .any(|(k, r)| matches!(k.as_str(), "agent tab" | "tab claude" | "pane claude") && r.contains(p))
 }
 
 impl App {
@@ -303,6 +326,12 @@ impl App {
         let mut app = Self::sim();
         if let Some(saved) = cc.storage.and_then(|s| s.get_string(CHROME_KEY)) {
             app.chrome = Chrome::restored(&saved);
+        }
+        if let Some(saved) = cc
+            .storage
+            .and_then(|s| s.get_string(crate::pane_layout::LAYOUTS_KEY))
+        {
+            app.layouts = crate::pane_layout::Layouts::restored(&saved);
         }
         // Dark by default; the light mode this browser chose, from the
         // first frame.
@@ -346,6 +375,7 @@ impl App {
             monitor: Monitor::default(),
             routed: false,
             about: false,
+            layouts: crate::pane_layout::Layouts::default(),
             fell_back: false,
             asking: crate::box_popup::Asking::None,
             found_shown: false,
@@ -572,6 +602,12 @@ impl App {
         {
             self.uploaded(crate::web::take_picked());
             self.pick_failed(crate::web::take_pick_errors(), ctx.input(|i| i.time));
+            for (name, bytes) in crate::web::take_layouts_picked() {
+                self.layouts.imported(&name, &bytes);
+            }
+            if let Some(why) = crate::web::take_layouts_errors().pop() {
+                self.layouts.note = Some((why, true));
+            }
         }
         let session = self.session();
         let engineer = is_engineer(session.as_ref()).is_ok();
@@ -641,6 +677,11 @@ impl App {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.session = session;
                 b.show(ui, &mut self.chrome);
+                if clicked_off_the_diagram(&ctx, &self.chrome)
+                    && let Some(v) = &mut b.view
+                {
+                    v.release_selection();
+                }
                 if std::mem::take(&mut b.wants_sim) {
                     self.source = Source::Sim;
                 }
@@ -658,9 +699,13 @@ impl App {
                 }
             }
             (Screen::Editor, Source::Sim) => {
-                self.sim
-                    .get_or_insert_with(PlaygroundView::new)
-                    .show(ui, &mut self.chrome);
+                let sim = self.sim.get_or_insert_with(PlaygroundView::new);
+                sim.show(ui, &mut self.chrome);
+                if clicked_off_the_diagram(&ctx, &self.chrome)
+                    && let Some(v) = &mut sim.viewer
+                {
+                    v.release_selection();
+                }
             }
             (Screen::Monitor, Source::Box) => {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
@@ -1066,6 +1111,9 @@ impl App {
         if self.about {
             self.about_ui(ui.ctx(), &mut hits);
         }
+        if self.layouts.open && self.screen == Screen::Editor {
+            self.layouts_ui(ui.ctx(), &mut hits);
+        }
         hits
     }
 
@@ -1393,6 +1441,55 @@ impl App {
             }
         }
         self.chrome.hits.extend(hits);
+    }
+
+    /// View › Pane layouts…: the popup, and the browser's side of its
+    /// Export and Import.
+    fn layouts_ui(&mut self, ctx: &egui::Context, hits: &mut Vec<(String, Rect)>) {
+        use crate::pane_layout::{Act, BoxSide};
+        // On a box's page the popup also lists what the box keeps.
+        let boxv = match self.source {
+            Source::Box => self.boxv.as_mut(),
+            Source::Sim => None,
+        };
+        let side = boxv.map(|b| {
+            b.pane_layouts.want();
+            BoxSide {
+                list: &b.pane_layouts.list,
+                note: b.pane_layouts.note.as_ref(),
+                can: is_engineer(b.session.as_ref()),
+            }
+        });
+        let act = self.layouts.popup(ctx, &mut self.chrome, hits, side.as_ref());
+        let boxv = self.boxv.as_mut();
+        match act {
+            Some(Act::Keep(name)) => {
+                if let (Some(b), Some(l)) = (boxv, self.layouts.get(&name)) {
+                    b.pane_layouts.keep(&name, l);
+                }
+            }
+            Some(Act::Forget(name)) => {
+                if let Some(b) = boxv {
+                    b.pane_layouts.forget(&name);
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            Some(Act::Export) => crate::web::download_bytes(
+                crate::pane_layout::FILE,
+                &self.layouts.export(),
+                "application/json",
+            ),
+            #[cfg(target_arch = "wasm32")]
+            Some(Act::Import) => crate::web::pick_layouts_file(ctx),
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(Act::Export | Act::Import) => {}
+            None => {}
+        }
+        if !self.layouts.open
+            && let Some(b) = self.boxv.as_mut()
+        {
+            b.pane_layouts.shut();
+        }
     }
 
     /// Help › About: the product, its version and build, the licence, the site.
@@ -1752,6 +1849,17 @@ impl App {
                     Source::Sim => self.sim.as_ref().map_or(&[], |s| s.tabs()),
                 };
                 crate::editor::view_menu(ui, &mut chrome, tabs);
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "view layouts",
+                    "Pane layouts…",
+                    false,
+                    "Ready-made arrangements of the side tabs and panes, and your own: save the panes as they are by name, export them to a file, import them in another browser.",
+                ) {
+                    self.screen = Screen::Editor;
+                    self.layouts.open = true;
+                }
                 ui.separator();
                 if menu_item(
                     ui,
@@ -2012,6 +2120,7 @@ impl eframe::App for App {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(CHROME_KEY, self.chrome.saved());
+        storage.set_string(crate::pane_layout::LAYOUTS_KEY, self.layouts.saved());
         if self.front_seen {
             storage.set_string(FRONT_KEY, "seen".into());
         }

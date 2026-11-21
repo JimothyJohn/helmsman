@@ -86,11 +86,16 @@ impl Bottom {
         }
     }
 
-    const fn key(self) -> &'static str {
+    /// Its name in the saved layout.
+    pub(crate) const fn key(self) -> &'static str {
         match self {
             Self::Trend => "trend",
             Self::Messages => "messages",
         }
+    }
+
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| b.key() == key)
     }
 }
 
@@ -172,8 +177,21 @@ impl Pane {
         }
     }
 
+    /// The tab's name, as the View menu has it.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Files => "Files",
+            Self::Devices => "Devices",
+            Self::Code => "Structured Text",
+            Self::History => "History",
+            Self::Claude => Tab::Claude.label(),
+            Self::Io => Tab::Io.label(),
+        }
+    }
+
     /// Its name in the saved layout.
-    const fn key(self) -> &'static str {
+    pub(crate) const fn key(self) -> &'static str {
         match self {
             Self::Files => "files",
             Self::Devices => "devices",
@@ -184,7 +202,7 @@ impl Pane {
         }
     }
 
-    fn from_key(key: &str) -> Option<Self> {
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.key() == key)
     }
 
@@ -213,6 +231,10 @@ pub const LEFT_W: f32 = 320.0;
 /// the panel grows every frame; the Requirements tab is archived since
 /// 2026-11-08, the width kept).
 pub const RIGHT_W: f32 = 236.0;
+/// The bottom panel's height when first opened, points: its tabs, the
+/// signals' row and the slider take about 110 pt, and at 200 the plot
+/// under them had 50.
+pub const BOTTOM_H: f32 = 280.0;
 /// How many trend colour picks a browser keeps.
 pub const MAX_COLORS: usize = 64;
 
@@ -231,6 +253,14 @@ pub struct Chrome {
     /// The tabs docked in the right pane, in order: none by default, and
     /// then the right pane is not drawn at all.
     pub rights: Vec<Pane>,
+    /// The tabs in neither pane (a tab's own menu hides it; the View
+    /// menu and anything that opens the tab bring it back): none by
+    /// default.
+    pub hidden: Vec<Pane>,
+    /// The panes' sizes as last drawn open (`crate::pane_layout`).
+    pub sizes: crate::pane_layout::Sizes,
+    /// Sizes a layout asked for, given to the panes on the next frame.
+    pub resize: Option<crate::pane_layout::Sizes>,
     /// Which of the left pane's tabs shows.
     pub pane: Pane,
     /// Which of the right pane's tabs shows.
@@ -282,6 +312,13 @@ pub struct Chrome {
     /// the program stopped with every variable at its initial value, to
     /// be run from scratch; off, it runs at once. Remembered per browser.
     pub agent_resets: bool,
+    /// The I/O tab shows its points as tiles, not one to a row
+    /// ([`crate::io_cards`]). Remembered.
+    pub io_grid: bool,
+    /// The I/O tab's Inputs are folded away. Remembered.
+    pub io_fold_in: bool,
+    /// The I/O tab's Outputs are folded away. Remembered.
+    pub io_fold_out: bool,
 }
 
 impl Default for Chrome {
@@ -291,6 +328,9 @@ impl Default for Chrome {
             right: true,
             lefts: Pane::ALL.to_vec(),
             rights: Vec::new(),
+            hidden: Vec::new(),
+            sizes: crate::pane_layout::Sizes::default(),
+            resize: None,
             pane: Pane::Claude,
             side: Pane::Claude,
             trend: true,
@@ -309,6 +349,9 @@ impl Default for Chrome {
             folds: crate::st_fold::Folds::default(),
             advanced: false,
             agent_resets: true,
+            io_grid: false,
+            io_fold_in: false,
+            io_fold_out: false,
         }
     }
 }
@@ -331,8 +374,13 @@ impl Chrome {
         } else {
             format!(" rights={} side={}", list(&self.rights), self.side.key())
         };
+        let hidden = if self.hidden.is_empty() {
+            String::new()
+        } else {
+            format!(" hidden={}", list(&self.hidden))
+        };
         format!(
-            "dock=2 left={} right={} lefts={} pane={}{rights} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={}{colors}",
+            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={} iogrid={} iofold={}{}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             list(&self.lefts),
@@ -343,7 +391,10 @@ impl Chrome {
             u8::from(self.light),
             u8::from(self.wrap),
             u8::from(self.advanced),
-            u8::from(self.agent_resets)
+            u8::from(self.agent_resets),
+            u8::from(self.io_grid),
+            u8::from(self.io_fold_in),
+            u8::from(self.io_fold_out)
         )
     }
 
@@ -359,6 +410,7 @@ impl Chrome {
                 Some(("right", v)) if docked => c.right = v == "1",
                 Some(("lefts", v)) if docked => c.lefts = list(v),
                 Some(("rights", v)) if docked => c.rights = list(v),
+                Some(("hidden", v)) if docked => c.hidden = list(v),
                 Some(("pane", v)) if docked => c.pane = Pane::from_key(v).unwrap_or_default(),
                 Some(("side", v)) if docked => c.side = Pane::from_key(v).unwrap_or_default(),
                 Some(("scan", v)) => c.scan = v == "1",
@@ -367,6 +419,11 @@ impl Chrome {
                 Some(("wrap", v)) => c.wrap = v == "1",
                 Some(("advanced", v)) => c.advanced = v == "1",
                 Some(("reset", v)) => c.agent_resets = v == "1",
+                Some(("iogrid", v)) => c.io_grid = v == "1",
+                Some(("iofold", v)) => {
+                    c.io_fold_in = v.starts_with('1');
+                    c.io_fold_out = v.ends_with('1') && v.len() == 2;
+                }
                 Some(("colors", v)) => {
                     c.colors = v
                         .split(',')
@@ -385,12 +442,12 @@ impl Chrome {
         c
     }
 
-    /// Every tab in exactly one pane, the shown ones among their pane's:
-    /// a tab twice keeps its first place, a tab in neither (one a later
-    /// release added) goes to the end of the left pane.
-    fn tidy(&mut self) {
+    /// Every tab in exactly one place (a pane, or hidden), the shown ones
+    /// among their pane's: a tab twice keeps its first place, a tab in
+    /// none (one a later release added) goes to the end of the left pane.
+    pub(crate) fn tidy(&mut self) {
         let mut seen = Vec::new();
-        for list in [&mut self.lefts, &mut self.rights] {
+        for list in [&mut self.lefts, &mut self.rights, &mut self.hidden] {
             list.retain(|p| {
                 let fresh = !seen.contains(p);
                 seen.push(*p);
@@ -452,8 +509,13 @@ impl Chrome {
             || (self.right && self.side == p && self.rights.contains(&p))
     }
 
-    /// Opens tab `p` in the pane it is docked in.
+    /// Opens tab `p` in the pane it is docked in; a hidden one comes
+    /// back at the end of the left pane.
     pub fn show(&mut self, p: Pane) {
+        if let Some(at) = self.hidden.iter().position(|&q| q == p) {
+            self.hidden.remove(at);
+            self.lefts.push(p);
+        }
         if self.rights.contains(&p) {
             self.right = true;
             self.side = p;
@@ -474,11 +536,54 @@ impl Chrome {
         }
     }
 
+    /// Takes tab `p` out of its pane. When it was the tab the pane
+    /// showed, the pane shows the one that was under it, or the one
+    /// before when it was the last.
+    pub fn hide(&mut self, p: Pane) {
+        for (list, shown) in [
+            (&mut self.lefts, &mut self.pane),
+            (&mut self.rights, &mut self.side),
+        ] {
+            if let Some(at) = list.iter().position(|&q| q == p) {
+                list.remove(at);
+                if *shown == p {
+                    *shown = list.get(at).or_else(|| list.last()).copied().unwrap_or_default();
+                }
+            }
+        }
+        if !self.hidden.contains(&p) {
+            self.hidden.push(p);
+        }
+    }
+
     /// Docks tab `p` in the right pane (`right`) or the left one, at the
     /// end, showing it there. When it was the tab its old pane showed,
     /// that pane shows the one that was under it, or the one before when
     /// it was the last.
     pub fn dock(&mut self, p: Pane, right: bool) {
+        self.place(p, right, None);
+    }
+
+    /// Puts tab `p` in the right pane (`right`) or the left one, before
+    /// tab `before` there, or at the end. Within its own pane that is a
+    /// reorder and the shown tab stays; from the other pane it is
+    /// [`Self::dock`] at that place. A hidden tab stays hidden.
+    pub fn place(&mut self, p: Pane, right: bool, before: Option<Pane>) {
+        if before == Some(p) {
+            return;
+        }
+        let slot = |list: &[Pane]| {
+            before
+                .and_then(|b| list.iter().position(|&q| q == b))
+                .unwrap_or(list.len())
+        };
+        let own = if right { &mut self.rights } else { &mut self.lefts };
+        if let Some(at) = own.iter().position(|&q| q == p) {
+            own.remove(at);
+            let to = slot(own);
+            own.insert(to, p);
+            return;
+        }
         let (from, to) = if right {
             (&mut self.lefts, &mut self.rights)
         } else {
@@ -489,7 +594,8 @@ impl Chrome {
         };
         from.remove(at);
         let next = from.get(at).or_else(|| from.last()).copied();
-        to.push(p);
+        let k = slot(to);
+        to.insert(k, p);
         let next = next.unwrap_or_default();
         if right {
             if self.pane == p {
@@ -647,6 +753,17 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Shows or hides the I/O map's devices.",
     ) {
         chrome.toggle_devices();
+    }
+    let history = chrome.showing(Pane::History);
+    if menu_item(
+        ui,
+        chrome,
+        "view history",
+        "History",
+        history,
+        "Shows or hides the open project's saved versions.",
+    ) {
+        chrome.toggle(Pane::History);
     }
     if menu_item_keyed(
         ui,
@@ -901,9 +1018,16 @@ fn pane_body(ui: &mut egui::Ui, p: Pane, body: &mut dyn Body, chrome: &mut Chrom
     }
 }
 
+/// A side pane as drawn: where, and its tabs' buttons along the top
+/// while it is open (the places a dragged tab can be dropped between).
+struct Side {
+    rect: Rect,
+    tabs: Vec<(Pane, Rect)>,
+}
+
 /// One side pane, `right` or left: its tabs along the top, each one
-/// draggable to the other side, the hide chevron, and the shown tab;
-/// shut, its strip. Where it was drawn.
+/// draggable along the row or to the other side and hidden from its own
+/// menu, the hide chevron, and the shown tab; shut, its strip.
 fn side_pane(
     ui: &mut egui::Ui,
     right: bool,
@@ -911,7 +1035,9 @@ fn side_pane(
     body: &mut dyn Body,
     chrome: &mut Chrome,
     hits: &mut Vec<(String, Rect)>,
-) -> Rect {
+) -> Side {
+    let mut row_tabs = Vec::new();
+    let mut hidden = None;
     let (mut open, mut on) = if right {
         (chrome.right, chrome.side)
     } else {
@@ -924,16 +1050,14 @@ fn side_pane(
             egui::Panel::right("ed-side-strip")
                 .exact_size(STRIP)
                 .resizable(false),
-            egui::Panel::right("ed-side")
-                .resizable(true)
-                .default_size(RIGHT_W),
+            egui::Panel::right(RIGHT_ID).resizable(true).default_size(RIGHT_W),
         )
     } else {
         (
             egui::Panel::left("ed-files-strip")
                 .exact_size(STRIP)
                 .resizable(false),
-            egui::Panel::left("ed-files")
+            egui::Panel::left(LEFT_ID)
                 .resizable(true)
                 .default_size(LEFT_W)
                 .min_size(120.0),
@@ -966,10 +1090,25 @@ fn side_pane(
                     let r =
                         crate::glyphs::tab_sensed(ui, p.icon(), size, on == p, None, Sense::click_and_drag())
                             .tip(format!(
-                                "{} Drag it to {other} to dock it there; double-click hides the pane.",
+                                "{} Drag it along the row to reorder, or to {other} to dock it there; right-click to hide the tab; double-click hides the pane.",
                                 p.tip()
                             ));
                     r.dnd_set_drag_payload(p);
+                    row_tabs.push((p, r.rect));
+                    r.context_menu(|ui| {
+                        let b = ui
+                            .add(egui::Button::new("Hide tab").min_size(Vec2::new(74.0, TAP * 0.7)))
+                            .tip(format!(
+                                "Takes {} out of the pane. View › {} brings it back.",
+                                p.label(),
+                                p.label()
+                            ));
+                        hits.push((format!("hide {}", p.key()), b.rect));
+                        if b.clicked() {
+                            hidden = Some(p);
+                            ui.close();
+                        }
+                    });
                     // A tab is a control first: the finger, not the grab
                     // hand a draggable thing gets (`theme::pointer_cursor`
                     // leaves the dragged ones alone).
@@ -1040,16 +1179,110 @@ fn side_pane(
     if *on_now == on0 {
         *on_now = on;
     }
-    shown.response.rect
+    if let Some(p) = hidden {
+        chrome.hide(p);
+    }
+    // The size a saved layout keeps: the open pane's, not its strip's.
+    if open0
+        && open
+        && let Some(state) = egui::containers::panel::PanelState::load(ui.ctx(), pane_id(ui, right))
+    {
+        let w = Some(state.size().x.round());
+        if right {
+            chrome.sizes.right = w;
+        } else {
+            chrome.sizes.left = w;
+        }
+    }
+    Side {
+        rect: shown.response.rect,
+        tabs: row_tabs,
+    }
 }
 
-/// A tab dragged out of its pane: where it would dock lit, the tab under
-/// the pointer, and on release over that place, the tab docked there.
-fn dock_drop(ui: &egui::Ui, chrome: &mut Chrome, left: Option<Rect>, right: Option<Rect>) {
+const LEFT_ID: &str = "ed-files";
+const RIGHT_ID: &str = "ed-side";
+const BOTTOM_ID: &str = "ed-trend";
+
+/// The id egui keeps a side pane's size under.
+fn pane_id(ui: &egui::Ui, right: bool) -> egui::Id {
+    ui.scope_id().with(if right { RIGHT_ID } else { LEFT_ID })
+}
+
+/// Gives the panes the sizes a layout asked for, before they are drawn:
+/// egui sizes a panel from the rectangle it kept of the last frame.
+fn resize(ui: &egui::Ui, sizes: crate::pane_layout::Sizes) {
+    use egui::containers::panel::PanelState;
+    let put = |id: egui::Id, size: Option<f32>, across: bool| {
+        let Some(size) = size else { return };
+        let was = PanelState::load(ui.ctx(), id)
+            .map_or(Rect::from_min_size(Pos2::ZERO, Vec2::ZERO), |s| s.outer_rect);
+        let size = if across {
+            Vec2::new(size, was.height())
+        } else {
+            Vec2::new(was.width(), size)
+        };
+        let outer_rect = Rect::from_min_size(was.min, size);
+        ui.ctx()
+            .data_mut(|d| d.insert_persisted(id, PanelState { outer_rect }));
+    };
+    put(pane_id(ui, false), sizes.left, true);
+    put(pane_id(ui, true), sizes.right, true);
+    put(ui.scope_id().with(BOTTOM_ID), sizes.bottom, false);
+}
+
+/// The place in a row of tab buttons the pointer `at` is over: the tab
+/// a dropped one goes before (`None`: the end), and the edge to mark.
+fn slot(tabs: &[(Pane, Rect)], at: Pos2) -> Option<(Option<Pane>, f32, egui::Rangef)> {
+    let band = tabs.iter().map(|(_, r)| *r).reduce(Rect::union)?;
+    if !band.expand(6.0).contains(at) {
+        return None;
+    }
+    let (k, (_, r)) = tabs
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.1.distance_to_pos(at).total_cmp(&b.1.1.distance_to_pos(at)))?;
+    if at.x > r.center().x {
+        Some((tabs.get(k + 1).map(|t| t.0), r.right() + 2.0, r.y_range()))
+    } else {
+        Some((Some(tabs[k].0), r.left() - 2.0, r.y_range()))
+    }
+}
+
+/// A tab being dragged: over a pane's row of tabs, the place it would
+/// take marked, and on release the tab put there (a reorder in its own
+/// pane, a dock at that place in the other); elsewhere, where it would
+/// dock lit, and on release over that place, the tab docked there. The
+/// tab is drawn under the pointer all the while.
+fn dock_drop(ui: &egui::Ui, chrome: &mut Chrome, left: Option<&Side>, right: Option<&Side>) {
     let ctx = ui.ctx();
+    for (key, side) in [("tabs left", left), ("tabs right", right)] {
+        if let Some(row) = side.and_then(|s| s.tabs.iter().map(|(_, r)| *r).reduce(Rect::union)) {
+            chrome.hit(key, row);
+        }
+    }
     let Some(p) = egui::DragAndDrop::payload::<Pane>(ctx).map(|p| *p) else {
         return;
     };
+    let at = ctx.pointer_interact_pos();
+    let t = theme(ui);
+    let in_row = [(false, left), (true, right)]
+        .into_iter()
+        .find_map(|(to_right, side)| {
+            let (before, x, ys) = slot(&side?.tabs, at?)?;
+            Some((to_right, before, x, ys))
+        });
+    if let Some((to_right, before, x, ys)) = in_row {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dock-slot"));
+        ctx.layer_painter(layer).vline(x, ys, Stroke::new(3.0, t.accent));
+        drag_ghost(ctx, at, p, &t);
+        if ctx.input(|i| i.pointer.any_released()) {
+            egui::DragAndDrop::clear_payload(ctx);
+            chrome.place(p, to_right, before);
+        }
+        return;
+    }
+    let (left, right) = (left.map(|s| s.rect), right.map(|s| s.rect));
     let screen = ctx.content_rect();
     let to_right = !chrome.rights.contains(&p);
     let zone = if to_right {
@@ -1066,9 +1299,7 @@ fn dock_drop(ui: &egui::Ui, chrome: &mut Chrome, left: Option<Rect>, right: Opti
         left.map_or(edge, |r| r.union(edge))
     };
     chrome.hit("dock zone", zone);
-    let at = ctx.pointer_interact_pos();
     let over = at.is_some_and(|a| zone.contains(a));
-    let t = theme(ui);
     let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("dock-zone"));
     let painter = ctx.layer_painter(layer);
     painter.rect_filled(
@@ -1082,17 +1313,21 @@ fn dock_drop(ui: &egui::Ui, chrome: &mut Chrome, left: Option<Rect>, right: Opti
         Stroke::new(2.0, t.accent.gamma_multiply(if over { 0.9 } else { 0.4 })),
         egui::StrokeKind::Inside,
     );
-    if let Some(a) = at {
-        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("dock-drag"));
-        let painter = ctx.layer_painter(layer);
-        let r = Rect::from_center_size(a, Vec2::splat(TAB));
-        painter.rect_filled(r, CornerRadius::same(5), t.shade.gamma_multiply(0.9));
-        crate::glyphs::paint(&painter, r.shrink(TAB * 0.24), p.icon(), t.fg);
-    }
+    drag_ghost(ctx, at, p, &t);
     if over && ctx.input(|i| i.pointer.any_released()) {
         egui::DragAndDrop::clear_payload(ctx);
         chrome.dock(p, to_right);
     }
+}
+
+/// The dragged tab `p` drawn under the pointer.
+fn drag_ghost(ctx: &egui::Context, at: Option<Pos2>, p: Pane, t: &Theme) {
+    let Some(a) = at else { return };
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("dock-drag"));
+    let painter = ctx.layer_painter(layer);
+    let r = Rect::from_center_size(a, Vec2::splat(TAB));
+    painter.rect_filled(r, CornerRadius::same(5), t.shade.gamma_multiply(0.9));
+    crate::glyphs::paint(&painter, r.shrink(TAB * 0.24), p.icon(), t.fg);
 }
 
 /// One frame of the Editor.
@@ -1112,10 +1347,13 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     {
         chrome.side = p;
     }
+    if let Some(sizes) = chrome.resize.take() {
+        resize(ui, sizes);
+    }
     let left = (!lefts.is_empty()).then(|| side_pane(ui, false, &lefts, body, chrome, &mut hits));
     let right = (!rights.is_empty()).then(|| side_pane(ui, true, &rights, body, chrome, &mut hits));
     chrome.hits.extend(hits);
-    dock_drop(ui, chrome, left, right);
+    dock_drop(ui, chrome, left.as_ref(), right.as_ref());
 
     // The Messages tab is where every notice and error is (Nick,
     // 2026-11-11): red while an error stands or has come in unread, and
@@ -1133,11 +1371,9 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     }
     let errors = body.messages().errors();
     let mut trend = chrome.trend;
-    egui::Panel::bottom("ed-trend")
+    egui::Panel::bottom(BOTTOM_ID)
         .resizable(true)
-        // Tabs, the signals' row and the slider take about 110 pt: at
-        // 200 the plot under them had 50.
-        .default_size(280.0)
+        .default_size(BOTTOM_H)
         .show_collapsible(ui, &mut trend, |ui| {
             ui.horizontal(|ui| {
                 for b in Bottom::ALL {
@@ -1172,6 +1408,13 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 }
             }
         });
+    if trend
+        && chrome.trend
+        && let Some(state) =
+            egui::containers::panel::PanelState::load(ui.ctx(), ui.scope_id().with(BOTTOM_ID))
+    {
+        chrome.sizes.bottom = Some(state.size().y.round());
+    }
     chrome.trend = trend;
     // The open file's style hints, once the typing has settled.
     if let Some(line) = chrome.hints.settled(now) {

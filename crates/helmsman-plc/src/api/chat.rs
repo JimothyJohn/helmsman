@@ -96,6 +96,20 @@ pub struct Setup {
     pub help_agent: String,
     /// What one help request may cost.
     pub help_budget: Budget,
+    /// The agent version `POST /api/design` asks the relay for (a design
+    /// profile: no tools). See [`super::design`].
+    pub design_agent: String,
+    /// The agent version a marketplace install asks to review a bundle
+    /// (a profile with no tools that can only describe and refuse). See
+    /// [`super::review`].
+    pub review_agent: String,
+    /// The agent version `POST /api/device-profile/publish` asks the relay
+    /// for: a profile that lists the relay's `publish_device_profile` tool
+    /// ([`super::device_profile::PUBLISH_AGENT`]).
+    pub publish_agent: String,
+    /// How long a publish may wait on the relay: it makes a few calls to
+    /// GitHub (`idle` is the longest silence, `total` the whole call).
+    pub publish_wait: (Duration, Duration),
     /// How often the relay is probed while the agent is not online.
     pub probe_every: Duration,
 }
@@ -117,6 +131,13 @@ impl Setup {
             tests_budget: super::requirements::budget(),
             help_agent: super::help::PROFILE.into(),
             help_budget: super::help::budget(),
+            design_agent: super::design::PROFILE.into(),
+            review_agent: super::review::PROFILE.into(),
+            publish_agent: super::device_profile::PUBLISH_AGENT.into(),
+            publish_wait: (
+                super::device_profile::PUBLISH_IDLE,
+                super::device_profile::PUBLISH_TOTAL,
+            ),
             probe_every: Duration::from_secs(15),
         }
     }
@@ -174,6 +195,9 @@ pub struct Chat {
     next: AtomicU64,
     running: AtomicUsize,
     link: Arc<Mutex<Link>>,
+    designs: super::design::Designs,
+    /// What the relay said the chat's agent is (asked once, kept).
+    profile: Mutex<Option<relay::Profile>>,
 }
 
 impl Chat {
@@ -310,7 +334,34 @@ impl Chat {
                 reason: None,
                 seq: 0,
             })),
+            designs: super::design::Designs::default(),
+            profile: Mutex::new(None),
         }
+    }
+
+    /// The relay config the chat runs with: the agent the relay names, and
+    /// the protocol it speaks (1: the box keeps the conversation; 2: the
+    /// relay does, so `--relay-agent v8` runs on relay-held sessions). The
+    /// relay is asked once ([`relay::lookup`]) and the answer kept; a
+    /// failed lookup is not kept.
+    ///
+    /// # Errors
+    /// The lookup's error when the relay cannot be asked.
+    fn chat_relay(&self) -> Result<relay::Config, relay::Error> {
+        let mut cfg = self.setup.relay.clone();
+        let known = lock(&self.profile).clone();
+        let p = if let Some(p) = known {
+            p
+        } else {
+            let p = relay::lookup(&cfg)?;
+            *lock(&self.profile) = Some(p.clone());
+            p
+        };
+        cfg.protocol = p.protocol;
+        if p.protocol >= 2 {
+            cfg.version = p.id;
+        }
+        Ok(cfg)
     }
 
     /// The agent's state, as `GET /api/chat/status` and the streams show
@@ -646,6 +697,57 @@ impl Chat {
         }
     }
 
+    /// The relay as the install review uses it: the review profile, short
+    /// timeouts ([`super::review::relay_config`]).
+    pub(super) fn review_relay(&self) -> relay::Config {
+        super::review::relay_config(&self.setup.relay, &self.setup.review_agent)
+    }
+
+    /// The design step's conversations.
+    pub(super) fn designs(&self) -> &super::design::Designs {
+        &self.designs
+    }
+
+    /// How long an unused conversation (chat or design) is kept.
+    pub(super) fn idle(&self) -> Duration {
+        self.setup.idle
+    }
+
+    /// The relay as the design route uses it: the design profile, and
+    /// timeouts for a turn that thinks for minutes.
+    pub(super) fn design_relay(&self) -> relay::Config {
+        let mut cfg = self.setup.relay.clone();
+        cfg.version.clone_from(&self.setup.design_agent);
+        cfg.timeouts.idle = cfg.timeouts.idle.max(super::design::IDLE);
+        cfg.timeouts.total = cfg.timeouts.total.max(super::design::TOTAL);
+        cfg
+    }
+
+    /// The relay as publishing a device profile uses it: the publish
+    /// agent's version, and timeouts for a call that makes a few
+    /// requests to GitHub.
+    pub(super) fn publish_relay(&self) -> relay::Config {
+        let mut cfg = self.setup.relay.clone();
+        cfg.version.clone_from(&self.setup.publish_agent);
+        (cfg.timeouts.idle, cfg.timeouts.total) = self.setup.publish_wait;
+        cfg
+    }
+
+    /// The history limit of one conversation, bytes.
+    pub(super) fn history_bytes(&self) -> usize {
+        self.setup.limits.history_bytes
+    }
+
+    /// What the agent's `list_devices` tool returns, run on this box.
+    pub(super) fn list_devices(&self) -> helmsman_agent::tools::Outcome {
+        helmsman_agent::tools::run(
+            &self.api,
+            &mut helmsman_agent::tools::Drafts::default(),
+            "list_devices",
+            &json!({}),
+        )
+    }
+
     /// Probes the relay once when the agent is offline; whether it is
     /// offline after.
     pub(super) fn still_offline(&self) -> bool {
@@ -711,8 +813,26 @@ impl Chat {
             self.by_rule(&message, catalog, &mut send);
             return;
         }
+        let relay = match self.chat_relay() {
+            Ok(r) => r,
+            // The relay cannot be asked at all: the same offline turn a
+            // v1 message would have had, without sending anything.
+            Err(e) if e.offline() => {
+                self.give_back(id, conv);
+                let outcome = helmsman_agent::Outcome {
+                    stop: Stop::Relay(e),
+                    steps: 0,
+                    output_tokens: 0,
+                    proposals: Vec::new(),
+                };
+                self.finish(&outcome, &mut send);
+                return;
+            }
+            // Any other answer is the relay's to give on the turn itself.
+            Err(_) => self.setup.relay.clone(),
+        };
         let agent = Agent {
-            relay: self.setup.relay.clone(),
+            relay,
             api: self.api.clone(),
             budget: self.setup.budget,
             retry: self.setup.retry,

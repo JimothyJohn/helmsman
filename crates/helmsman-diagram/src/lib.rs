@@ -14,6 +14,8 @@
 //!   gates open or closed).
 //! - [`explain()`]: "on because …" for any variable, as data;
 //!   [`drivers()`]: the same as the blocks, wires and regions to highlight.
+//! - [`fold`]: a set of blocks shown as one (a condition, a latch, an IF
+//!   arm, a commented section), as a view that maps back to the diagram.
 //! - [`diff`]: what a proposal changes, line by line in the source and
 //!   block by block in the diagram, for the review screen.
 //!
@@ -47,6 +49,7 @@
 
 pub mod diff;
 pub mod explain;
+pub mod fold;
 pub mod layout;
 pub mod live;
 pub mod lower;
@@ -54,7 +57,7 @@ pub mod model;
 pub mod phrase;
 pub mod text;
 
-pub use explain::{Because, Drivers, Why, drivers, explain};
+pub use explain::{Because, Drivers, Source, SourceKind, Why, drivers, explain, signals};
 pub use live::{Gate, Live, Scan, annotate};
 pub use lower::{LowerError, Module, Pou, StmtPos, lower, lower_table};
 pub use model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Stmt, Wire};

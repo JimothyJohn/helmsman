@@ -134,9 +134,42 @@ pub enum PCall {
     /// knows of the sensor or actuator a point is wired to (answered by
     /// the view, not here).
     Wired(String),
+    /// `GET /api/devices/library?q=`: the picker's search by the number
+    /// on a label (answered by the view, not here).
+    FindWired,
     /// A device's own configuration (`/api/devices/{id}/config...`),
     /// answered by the Devices tab (`device_config.rs`).
     Config(String, crate::device_config::ConfigOp),
+    /// `GET /api/device-profile/proposal`: the profile the agent proposed
+    /// (answered by the Devices tab, `device_proposal.rs`).
+    Proposal,
+    /// `POST /api/device-profile/proposal/accept`: save it into a project.
+    ProposalAccept,
+    /// `DELETE /api/device-profile/proposal`: throw it away.
+    ProposalDiscard,
+    /// `POST /api/device-profile/publish`: send the saved profile to the
+    /// device library for review (answered by the Devices tab).
+    ProposalPublish,
+    /// `POST /api/dropins`: the vendor's file for the agent
+    /// (answered by the Devices tab, `device_vendor.rs`).
+    VendorFile,
+    /// `POST /api/dropins`: a PDF of a specification (the name it was
+    /// sent under); answered by the view (`box_spec.rs`).
+    SpecPdf(String),
+    /// `POST /api/projects/{name}/zip`: the project a spec makes, whole;
+    /// answered by the view (`box_spec.rs`).
+    SpecProject(String),
+    /// `POST /api/projects/{name}/zip`: the open project with the kept
+    /// design in it, as a project of its own; answered by the view
+    /// (`box_view.rs`).
+    DesignProject(String),
+    /// `GET /api/pane-layouts`: the pane layouts the box keeps (answered
+    /// by `pane_layout::OnBox`).
+    PaneLayouts,
+    /// `PUT /api/pane-layouts`: one of them kept, by name.
+    KeepPaneLayout(String),
+    /// `DELETE /api/pane-layouts/{name}`.
+    DropPaneLayout(String),
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -199,7 +232,7 @@ impl PReq {
         }
     }
 
-    fn delete(call: PCall, url: String) -> Self {
+    pub(crate) fn delete(call: PCall, url: String) -> Self {
         Self {
             call,
             method: "DELETE",
@@ -371,6 +404,10 @@ pub struct BoxProjects {
     saving_layout: Option<String>,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
+    /// How the box would check a project made now (its image sizes and
+    /// scan period), from the project list: what a spec run is checked
+    /// against before there is a project to ask.
+    pub new_runs: Option<Runs>,
     /// The open project's requirement tests as the box last ran them
     /// (`crate::requirements`): asked when the project opens, after each
     /// save, on Run, and reported by a refused deploy.
@@ -397,7 +434,7 @@ pub struct Restore {
     pub drafts: BTreeMap<String, BTreeMap<String, crate::desk::Draft>>,
 }
 
-fn error_of(a: &Answer) -> String {
+pub(crate) fn error_of(a: &Answer) -> String {
     serde_json::from_str::<Json>(&a.body)
         .ok()
         .and_then(|j| j["error"].as_str().map(str::to_string))
@@ -449,6 +486,45 @@ fn has_ext(file: &str, ext: &str) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
+/// The ports a box's refusal says have no signal (`port LEVEL: no signal of
+/// that name`, `BindError::UnknownSignal` on the box), lower case as
+/// `io.map` names them, each once.
+fn unbound_ports(text: &str) -> Vec<String> {
+    const SAYS: &str = ": no signal of that name";
+    let mut out: Vec<String> = Vec::new();
+    for (at, _) in text.match_indices(SAYS) {
+        let before = &text[..at];
+        let name: String = before
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let named_a_port = before[..before.len() - name.len()].ends_with("port ");
+        let name = name.to_ascii_lowercase();
+        if named_a_port && !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// `why`, a box's refusal of a deploy, with what to do about an input that
+/// has no signal added: the box's check is as it was, only the words
+/// after it say how to go on.
+pub(crate) fn deploy_words(why: String) -> String {
+    let ports = unbound_ports(&why);
+    if ports.is_empty() {
+        return why;
+    }
+    let (names, verb) = (ports.join(", "), if ports.len() == 1 { "has" } else { "have" });
+    format!(
+        "{why}. Input {names} {verb} no signal on this box: assign each to a device channel (Assign to device I/O in the I/O tab), then deploy again."
+    )
+}
+
 fn short(s: &str) -> &str {
     s.get(..8).unwrap_or(s)
 }
@@ -470,6 +546,15 @@ impl BoxProjects {
     /// What to send now.
     pub fn poll(&mut self) -> Vec<PReq> {
         std::mem::take(&mut self.queue)
+    }
+
+    /// Reads the open project's files again (a file the box made, such as
+    /// a saved device profile, joins it; edits not saved are kept).
+    pub fn reread(&mut self, project: &str) {
+        if self.open.as_ref().is_some_and(|o| o.name == project) {
+            self.queue
+                .push(PReq::get(PCall::Project(project.into()), project_url(project)));
+        }
     }
 
     /// Asks the box for a fresh network scan (the Devices tab's Scan).
@@ -498,6 +583,14 @@ impl BoxProjects {
         self.queue.push(PReq::get(
             PCall::Wired(wired.to_string()),
             format!("/api/devices/library?wired={wired}"),
+        ));
+    }
+
+    /// Searches the device library for the picker (`wired.rs`).
+    pub fn find_wired(&mut self, query: &str) {
+        self.queue.push(PReq::get(
+            PCall::FindWired,
+            format!("/api/devices/library?q={}", crate::remote::segment(query)),
         ));
     }
 
@@ -937,6 +1030,36 @@ impl BoxProjects {
         ));
     }
 
+    /// The open project's files as the box holds them (what is saved,
+    /// not what is being typed), with `extra` among them: the files of a
+    /// project made from it. Agent pages and files not read yet are not in
+    /// it.
+    #[must_use]
+    pub fn saved_files(&self, extra: (&str, &str)) -> std::collections::BTreeMap<String, String> {
+        let mut files: std::collections::BTreeMap<String, String> = self
+            .open
+            .iter()
+            .flat_map(|o| o.bufs.iter())
+            .filter(|(n, b)| b.loaded && !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, b)| (n.clone(), b.base.clone()))
+            .collect();
+        files.insert(extra.0.to_string(), extra.1.to_string());
+        files
+    }
+
+    /// The project a kept design makes, as one zip (the one atomic write
+    /// of many files): a name the box has is refused (409) and nothing is
+    /// written. The answer goes to the view ([`PCall::DesignProject`]).
+    pub fn design_project(&mut self, name: &str, zip: Vec<u8>) {
+        self.queue.push(PReq {
+            call: PCall::DesignProject(name.into()),
+            method: "POST",
+            url: format!("{}/zip", project_url(name)),
+            body: Some(zip),
+            ctype: "application/zip",
+        });
+    }
+
     /// The Agent's checked change (`crate::instruct`): `text` into `file`,
     /// saved with the version it was read as and with `page`, the change's
     /// History entry; then each scenario it passed as a requirement test
@@ -1157,6 +1280,27 @@ impl BoxProjects {
         });
     }
 
+    /// The project a spec makes, as one zip (the one atomic write of many
+    /// files): a name the box has is refused (409) and nothing is written.
+    /// The answer goes to the view ([`PCall::SpecProject`]).
+    pub fn spec_project(&mut self, name: &str, zip: Vec<u8>) {
+        self.queue.push(PReq {
+            call: PCall::SpecProject(name.into()),
+            method: "POST",
+            url: format!("{}/zip", project_url(name)),
+            body: Some(zip),
+            ctype: "application/zip",
+        });
+    }
+
+    /// The box made project `name` from a spec: it opens, and the list is
+    /// read again.
+    pub fn spec_made(&mut self, name: &str) {
+        self.note(format!("Made {name} on the box."), false);
+        self.open_keeping_edits(name);
+        self.relist();
+    }
+
     /// Sends the upload the box refused as taken again, replacing.
     pub fn replace(&mut self) {
         let Some(p) = self.pending.take() else { return };
@@ -1301,6 +1445,7 @@ impl BoxProjects {
                     return;
                 }
                 self.available = Some(true);
+                self.new_runs = Runs::parse(&j["tests"]);
                 let current = j["running"]["current"].as_bool() == Some(true);
                 self.running = j["running"]["project"]
                     .as_str()
@@ -1700,7 +1845,10 @@ impl BoxProjects {
             PCall::Replay(name) => match j["replay"].as_u64().filter(|_| a.status == 201) {
                 Some(n) => self.deploy_now(&name, Some(n)),
                 None => {
-                    self.deploy = Deploy::Failed(format!("the sim replay did not run: {}", error_of(a)));
+                    self.deploy = Deploy::Failed(deploy_words(format!(
+                        "the sim replay did not run: {}",
+                        error_of(a)
+                    )));
                 }
             },
             PCall::Deploy { project, replay } => {
@@ -1711,8 +1859,23 @@ impl BoxProjects {
                     } else {
                         self.modules.join(", ")
                     };
-                    self.deploy =
-                        Deploy::Done(format!("{project} is running: {mods} (snapshot {})", short(snap)));
+                    // A red requirement test refuses nothing: the box
+                    // names it in its answer, said after what runs.
+                    let red: Vec<&str> = j["red"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Json::as_str)
+                        .collect();
+                    let red = match red.len() {
+                        0 => String::new(),
+                        1 => format!(". Requirement test {} is red", red[0]),
+                        n => format!(". {n} requirement tests are red: {}", red.join("; ")),
+                    };
+                    self.deploy = Deploy::Done(format!(
+                        "{project} is running: {mods} (snapshot {}){red}",
+                        short(snap)
+                    ));
                     self.running = Some(project);
                     self.deployed = true;
                     self.relist();
@@ -1720,15 +1883,14 @@ impl BoxProjects {
                 } else if a.status == 428 && replay.is_none() {
                     // The policy wants a replay the check did not say.
                     self.replay(&project);
-                } else if a.status == 422 {
-                    self.diags = diags_of(&j);
-                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
-                } else if a.status == 409 && j["tests"].is_array() {
-                    // A red requirement test: the tab shows which.
-                    self.tests = crate::requirements::Results::from_json(&j);
-                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 } else {
-                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
+                    if a.status == 422 {
+                        self.diags = diags_of(&j);
+                    }
+                    self.deploy = Deploy::Failed(deploy_words(format!(
+                        "{project} was not deployed: {}",
+                        error_of(a)
+                    )));
                 }
             }
             PCall::Upload(project) => {
@@ -1796,7 +1958,19 @@ impl BoxProjects {
             | PCall::Discover
             | PCall::Library
             | PCall::Wired(_)
+            | PCall::FindWired
             | PCall::Config(..)
+            | PCall::Proposal
+            | PCall::ProposalAccept
+            | PCall::ProposalDiscard
+            | PCall::ProposalPublish
+            | PCall::VendorFile
+            | PCall::SpecPdf(_)
+            | PCall::SpecProject(_)
+            | PCall::DesignProject(_)
+            | PCall::PaneLayouts
+            | PCall::KeepPaneLayout(_)
+            | PCall::DropPaneLayout(_)
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {

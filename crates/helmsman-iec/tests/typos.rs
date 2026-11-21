@@ -279,7 +279,7 @@ const CORPUS: &[Typo] = &[
         "PROGRAM t\nVAR t1 : TOM; END_VAR\nEND_PROGRAM",
         2,
         10,
-        "unknown type TOM (did you mean TOF or TON?)",
+        "unknown type TOM (did you mean TOD, TOF or TON?)",
     ),
     t(
         "a function misspelled",
@@ -330,14 +330,13 @@ const CORPUS: &[Typo] = &[
         9,
         "comments are written (* like this *)",
     ),
-    // There are no string literals yet, so a missing quote is reported as
-    // that, at the quote.
+    // A missing closing quote is reported at the opening one.
     t(
         "a string missing its quote",
         "PROGRAM t\nVAR a : INT; END_VAR\na := 'hello;\nEND_PROGRAM",
         3,
         6,
-        "STRING literals are not supported yet",
+        "unterminated STRING literal",
     ),
 ];
 

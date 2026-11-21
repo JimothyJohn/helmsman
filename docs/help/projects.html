@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="projects">Projects</h1>
 <p>A project is a folder of files: the program's Structured Text (one or
@@ -183,10 +183,12 @@ stays the test's until the test makes it misbehave.</p>
 <p>The page runs the tests whenever the project's build changes; a box
 runs them when a project opens, after each save and before every deploy
 (<code>POST /api/projects/{p}/tests</code> runs them on demand).
-<strong>A red test refuses Deploy and the Agent's "Use this
-code"</strong>, naming the requirement, so a change cannot land past a
-requirement it breaks. The Agent writes the tests with each change; edit
-them like any file.</p>
+<strong>A red test never stops a deploy or a change from the
+Agent.</strong> The deploy goes ahead and the note beside it names the
+test and why it failed; on a box the same line is written to the audit
+trail. The Agent writes the tests with each change and fixes what fails
+before it answers; a check it could not get to pass is listed with its
+answer. Edit the tests like any file.</p>
 <h2 id="upload-and-download">Upload and download</h2>
 <p><strong>Download</strong> (the glyph, File › Download) gives you the
 project as a <code>.zip</code>. <strong>Upload</strong> takes a

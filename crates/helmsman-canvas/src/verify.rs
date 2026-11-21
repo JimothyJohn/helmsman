@@ -5,10 +5,15 @@
 //! into a copy of the project through the scope rules ([`crate::scope::apply`]),
 //! adds the scenarios, compiles it, and runs the scenarios and the
 //! project's own requirement tests ([`check`]). An answer that fails goes
-//! back to the Agent with what failed, up to [`RETRIES`] times ([`next`]);
-//! one still failing is shown red and "Use this code" refuses it. On "Use
-//! this code" every scenario of a green answer is kept as a requirement
-//! test, its first comment the requirement in plain words.
+//! back to the Agent with what failed, up to [`RETRIES`] times ([`next`]).
+//! What the tests still say after that is a warning (Nick, 2026-11-15:
+//! "just do automated testing and don't let random requirements get in the
+//! way of the flow"): the code is written and the checks that did not pass
+//! are named ([`Check::warnings`]). Only an answer that cannot be taken
+//! at all is refused ([`Check::blocked`]): cut off, outside its scope,
+//! not the whole file, or code that does not compile. Every scenario that
+//! passed is kept as a requirement test, its first comment the requirement
+//! in plain words; one that failed is not kept.
 //!
 //! **The whole file comes back** (Nick, 2026-11-05): code for a file, some
 //! lines or a block is the whole open file with the edits made in place,
@@ -378,11 +383,18 @@ pub struct Ran {
 pub struct Check {
     /// It gives code (an explanation alone needs no check).
     pub code: bool,
-    /// What failed besides the scenarios: the scope rules, the full copy,
-    /// a scenario that cannot be one, the compile, a requirement test.
+    /// Why the answer cannot be taken: the scope rules, the full copy, the
+    /// compile. Nothing is written while one stands.
     pub failures: Vec<String>,
+    /// What the tests say against it besides its own scenarios failing: a
+    /// scenario that cannot be one, a requirement test red with the code,
+    /// a replacement of a test that still passes, scenarios that do not
+    /// tell the change from no change. Sent back while retries last, then
+    /// a warning.
+    pub tests: Vec<String>,
     pub scenarios: Vec<Ran>,
-    /// The scenario files (name, text) "Use this code" adds.
+    /// The scenario files (name, text) kept as tests: the ones that
+    /// passed.
     pub add: Vec<(String, String)>,
     /// How many of the project's own requirement tests ran green with it.
     pub tests_green: usize,
@@ -421,7 +433,32 @@ impl Check {
     /// Everything passed (scenarios, if any, all green).
     #[must_use]
     pub fn green(&self) -> bool {
-        self.failures.is_empty() && self.scenarios.iter().all(|s| s.passed)
+        self.failures.is_empty() && self.tests.is_empty() && self.scenarios.iter().all(|s| s.passed)
+    }
+
+    /// Code that cannot be written whatever its tests say.
+    #[must_use]
+    pub fn blocked(&self) -> bool {
+        self.code && !self.failures.is_empty()
+    }
+
+    /// What the tests say against code that can be written, one line
+    /// each: empty for a green answer and for a blocked one.
+    #[must_use]
+    pub fn warnings(&self) -> Vec<String> {
+        if self.blocked() {
+            return Vec::new();
+        }
+        let mut out = self.tests.clone();
+        out.extend(self.failed_scenarios());
+        out
+    }
+
+    fn failed_scenarios(&self) -> impl Iterator<Item = String> + '_ {
+        self.scenarios
+            .iter()
+            .filter(|s| !s.passed)
+            .map(|s| format!("Scenario {} ({}) failed: {}", s.requirement, s.file, s.why))
     }
 
     /// Code with nothing wrong and no scenario to prove it.
@@ -440,12 +477,8 @@ impl Check {
     #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let mut out = self.failures.clone();
-        out.extend(
-            self.scenarios
-                .iter()
-                .filter(|s| !s.passed)
-                .map(|s| format!("Scenario {} ({}) failed: {}", s.requirement, s.file, s.why)),
-        );
+        out.extend(self.tests.iter().cloned());
+        out.extend(self.failed_scenarios());
         out
     }
 }
@@ -519,8 +552,8 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
     };
     let taken: Vec<String> = landed.keys().cloned().collect();
     let (scen, problems) = scenarios(answer, &taken);
-    c.failures.extend(problems);
-    let (scen, replaced) = contradicted(&landed, scen, settings, &mut c.failures);
+    c.tests.extend(problems);
+    let (scen, replaced) = contradicted(&landed, scen, settings, &mut c.tests);
     let mut all = landed;
     for s in &scen {
         all.insert(s.file.clone(), s.text.clone());
@@ -535,6 +568,9 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
         c.failures.push(format!("The code does not compile: {first}"));
         return c;
     }
+    let (held, advice) = lint_findings(files, &plan.main);
+    c.failures.extend(held);
+    c.tests.extend(advice);
     for v in helmsman_sim::iec::run_all(&plan, settings, plant_of(&all)) {
         if let Some(s) = scen.iter().find(|s| s.file == v.file) {
             c.scenarios.push(Ran {
@@ -549,7 +585,7 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
             });
         } else if v.red() {
             let name = v.file.trim_end_matches(".st");
-            c.failures.push(format!(
+            c.tests.push(format!(
                 "Requirement test {name} is red with this code: {}. If the instruction changes what it checks, send its replacement in a block marked ```st scenario replaces {name}; else keep it passing.",
                 v.why()
             ));
@@ -557,15 +593,72 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
             c.tests_green += 1;
         }
     }
-    if c.failures.is_empty() && c.scenarios.iter().all(|r| r.passed) {
+    if c.tests.is_empty() && c.scenarios.iter().all(|r| r.passed) {
         c.unchanged = claims_unchanged(answer);
         if !c.unchanged {
-            c.failures.extend(indistinct(scope, files, &all, &scen, settings));
+            c.tests.extend(indistinct(scope, files, &all, &scen, settings));
         }
     }
-    c.replaced = replaced;
-    c.add = scen.into_iter().map(|s| (s.file, s.text)).collect();
+    // Only a scenario that passed is kept, and only a kept one replaces.
+    let passed = |file: &str| c.scenarios.iter().any(|r| r.file == file && r.passed);
+    c.replaced = replaced.into_iter().filter(|r| passed(&r.file)).collect();
+    c.add = scen
+        .into_iter()
+        .filter(|s| passed(&s.file))
+        .map(|s| (s.file, s.text))
+        .collect();
     c
+}
+
+/// The lint findings (`helmsman_iec::lint`) the answer adds: those of the
+/// project with it that the project as it was did not have, as `(held,
+/// advice)`. A blocking one that no pragma overrides holds the answer like
+/// a compile error (it could not be deployed); the others go back to the
+/// Agent and are a warning after the retries. A finding the project
+/// already had is not the answer's to fix.
+fn lint_findings(old: &Files, main: &str) -> (Vec<String>, Vec<String>) {
+    let before = spec::plan(
+        old.iter()
+            .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
+            .map(|(n, t)| (n.as_str(), t.as_str())),
+    );
+    let mut had: Vec<(&'static str, String)> = helmsman_iec::lint::lints(&before.main)
+        .into_iter()
+        .map(|l| (l.id, l.msg))
+        .collect();
+    let (mut held, mut advice) = (Vec::new(), Vec::new());
+    for l in helmsman_iec::lint::lints(main) {
+        if l.overridden.is_some() {
+            continue;
+        }
+        if let Some(i) = had.iter().position(|(id, m)| *id == l.id && *m == l.msg) {
+            had.swap_remove(i);
+            continue;
+        }
+        let (file, line) = lint_place(main, l.pos.line);
+        let said = format!("{} at {file}:{line}: {}", l.id, l.msg);
+        if l.blocking {
+            held.push(format!(
+                "Lint {said} This blocks the code from being used or deployed until it is fixed."
+            ));
+        } else {
+            advice.push(format!("Lint {said}"));
+        }
+    }
+    (held, advice)
+}
+
+/// The file and line of `line` in a build's source, which holds each file
+/// under a `(* file NAME *)` line when there are several.
+fn lint_place(main: &str, line: u32) -> (String, u32) {
+    let (mut file, mut start) = ("the code".to_string(), 0u32);
+    for (i, l) in main.lines().enumerate().take(line as usize) {
+        if let Some(n) = l.strip_prefix("(* file ").and_then(|r| r.strip_suffix(" *)")) {
+            file = n.to_string();
+            start = u32::try_from(i + 1).unwrap_or(0);
+        }
+    }
+    (file, line - start)
 }
 
 /// The code of `text` with comments and white space gone: what it does.
@@ -688,6 +781,13 @@ fn indistinct(
     ))
 }
 
+/// How a retry asks for the code again, from an agent that sends whole
+/// files; one that sends the lines that change is asked in its own form
+/// (`crate::edits::retry_words`).
+pub const FIXED_FILE: &str = "the whole file with the fix made in it, in one ```st block,";
+/// [`FIXED_FILE`], when the code itself was not what failed.
+pub const SAME_FILE: &str = "the same whole file in one ```st block,";
+
 /// What the page does with a checked answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Next {
@@ -717,16 +817,15 @@ pub fn next(check: &Check, retries: u8, asked: bool) -> Next {
                 "A failed scenario lists, in brackets, the values it held at the failing scan: the inputs it drove then and the outputs it read. If those inputs are not the case the check is about, the scenario's timing is wrong, so fix the scenario; if they are, fix the code.\n",
             );
         }
-        m.push_str(
-            "Answer again in full: the whole file with the fix made in it, in one ```st block, and the ```st scenario blocks that check it.",
-        );
+        m.push_str("Answer again in full: ");
+        m.push_str(FIXED_FILE);
+        m.push_str(" and the ```st scenario blocks that check it.");
         return Next::Retry(m);
     }
     if check.unchecked() && !asked {
-        return Next::Retry(
-            "Your answer gives code but no scenario to check it. Answer again in full: the same whole file in one ```st block, and one or more ```st scenario blocks that prove it does what was asked."
-                .into(),
-        );
+        return Next::Retry(format!(
+            "Your answer gives code but no scenario to check it. Answer again in full: {SAME_FILE} and one or more ```st scenario blocks that prove it does what was asked."
+        ));
     }
     Next::Show
 }

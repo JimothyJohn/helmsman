@@ -38,10 +38,15 @@ pub enum Tok {
     Bool(bool),
     /// `T#1h30m`, `TIME#-5s`: nanoseconds.
     Time(i128),
+    /// `D#2024-02-29`, `TOD#22:00:00`, `DT#2024-02-29-22:00:00`: the type
+    /// and its nanoseconds (see `dt`).
+    Calendar(crate::types::Ty, i128),
     /// `Color#Red`: enumeration type and value.
     EnumLit(String, String),
     /// Directly represented variable: `%IX0.1`, `%QW2`, `%MD4`.
     Direct(String),
+    /// `'text'`: the bytes of a STRING literal, `$` escapes resolved.
+    Str(Vec<u8>),
     Assign, // :=
     Arrow,  // =>
     Colon,
@@ -76,8 +81,10 @@ impl fmt::Display for Tok {
             Self::Real { value, .. } => write!(f, "{value}"),
             Self::Bool(b) => write!(f, "{}", if *b { "TRUE" } else { "FALSE" }),
             Self::Time(ns) => write!(f, "T#{ns}ns"),
+            Self::Calendar(ty, ns) => write!(f, "{ty}#{ns}ns"),
             Self::EnumLit(t, v) => write!(f, "{t}#{v}"),
             Self::Direct(d) => write!(f, "%{d}"),
+            Self::Str(_) => f.write_str("a STRING literal"),
             Self::Eof => write!(f, "end of input"),
             other => {
                 let s = match other {
@@ -124,6 +131,10 @@ struct Lexer<'a> {
     /// The built-in library may use `__` names; user code may not.
     system: bool,
 }
+
+/// The most characters a STRING holds (a one-byte length), and so the
+/// longest STRING literal.
+pub const MAX_STRING: usize = 255;
 
 /// Nanoseconds per duration unit.
 const UNITS: [(&str, i128); 7] = [
@@ -382,8 +393,12 @@ impl Lexer<'_> {
                 _ => Tok::Lt,
             },
             b'>' => two(self, b'=', Tok::Ge, Tok::Gt),
-            b'\'' | b'"' => {
-                return Err(Self::err(start, "STRING literals are not supported yet"));
+            b'\'' => return self.string_literal(start).map(|t| (t, start)),
+            b'"' => {
+                return Err(Self::err(
+                    start,
+                    "WSTRING literals (\"...\") are not supported: write a STRING literal in single quotes",
+                ));
             }
             _ => {
                 let hint = match (c, self.peek(0)) {
@@ -400,6 +415,77 @@ impl Lexer<'_> {
             }
         };
         Ok((tok, start))
+    }
+
+    /// The rest of a STRING literal, after its opening `'`. One byte per
+    /// character: printable ASCII as written, anything else as a `$`
+    /// escape (`$$`, `$'`, `$L` `$N` `$P` `$R` `$T` in either case, or
+    /// `$HH` for any byte). Never longer than [`MAX_STRING`].
+    #[allow(clippy::many_single_char_names)] // c, e, h, l: a byte, an escape, hex digits
+    fn string_literal(&mut self, start: Pos) -> Result<Tok, LexError> {
+        let mut out: Vec<u8> = Vec::new();
+        loop {
+            let at = self.pos;
+            let Some(c) = self.bump() else {
+                return Err(Self::err(start, "unterminated STRING literal: no closing '"));
+            };
+            let byte = match c {
+                b'\'' => break,
+                b'\n' | b'\r' => {
+                    return Err(Self::err(
+                        start,
+                        "unterminated STRING literal: a literal ends on its line (write $N for a line break)",
+                    ));
+                }
+                b'$' => {
+                    let Some(e) = self.bump() else {
+                        return Err(Self::err(start, "unterminated STRING literal: no closing '"));
+                    };
+                    match e {
+                        b'$' | b'\'' => e,
+                        b'L' | b'l' | b'N' | b'n' => b'\n',
+                        b'P' | b'p' => 0x0C,
+                        b'R' | b'r' => b'\r',
+                        b'T' | b't' => b'\t',
+                        h if h.is_ascii_hexdigit() => {
+                            let Some(l) = self.peek(0).filter(u8::is_ascii_hexdigit) else {
+                                return Err(Self::err(at, "bad $ escape: $HH takes two hex digits"));
+                            };
+                            self.bump();
+                            let v = |d: u8| char::from(d).to_digit(16).unwrap_or(0);
+                            u8::try_from(v(h) * 16 + v(l)).unwrap_or(0)
+                        }
+                        _ => {
+                            return Err(Self::err(
+                                at,
+                                "bad $ escape: use $$, $', $L, $N, $P, $R, $T or $ and two hex digits",
+                            ));
+                        }
+                    }
+                }
+                0x20..=0x7E => c,
+                0x80..=0xFF => {
+                    return Err(Self::err(
+                        at,
+                        "a STRING holds single-byte characters, ASCII as written: write other bytes as $HH",
+                    ));
+                }
+                _ => {
+                    return Err(Self::err(
+                        at,
+                        "a control character cannot be written in a STRING literal: use a $ escape ($T, $N, $HH)",
+                    ));
+                }
+            };
+            if out.len() == MAX_STRING {
+                return Err(Self::err(
+                    start,
+                    format!("a STRING literal holds at most {MAX_STRING} characters"),
+                ));
+            }
+            out.push(byte);
+        }
+        Ok(Tok::Str(out))
     }
 
     /// `1d2h3m4s5ms6us7ns` after `T#`, with optional `_` between parts and
@@ -465,11 +551,36 @@ impl Lexer<'_> {
     /// After `TYPE#`: a number, TRUE/FALSE/0/1 for `BOOL#`, a duration for
     /// `T#`/`TIME#`, or a value name for an enumeration.
     fn typed_literal(&mut self, ty: String, start: Pos) -> Result<Tok, LexError> {
-        if matches!(
-            ty.as_str(),
-            "D" | "DATE" | "DT" | "DATE_AND_TIME" | "TOD" | "TIME_OF_DAY" | "LDATE" | "LDT" | "LTOD"
-        ) {
-            return Err(Self::err(start, format!("{ty} literals are not supported yet")));
+        let calendar = match ty.as_str() {
+            "D" | "DATE" => Some(crate::types::Ty::Date),
+            "TOD" | "TIME_OF_DAY" => Some(crate::types::Ty::Tod),
+            "DT" | "DATE_AND_TIME" => Some(crate::types::Ty::Dt),
+            "LDATE" | "LDT" | "LTOD" | "LTIME_OF_DAY" | "LDATE_AND_TIME" => {
+                return Err(Self::err(start, format!("{ty} literals are not supported yet")));
+            }
+            _ => None,
+        };
+        if let Some(cty) = calendar {
+            let mut body = Vec::new();
+            while let Some(c) = self
+                .peek(0)
+                .filter(|c| c.is_ascii_digit() || matches!(c, b'-' | b':' | b'.'))
+            {
+                if body.len() == 40 {
+                    return Err(Self::err(start, format!("bad {ty} literal: too long")));
+                }
+                body.push(c);
+                self.bump();
+            }
+            let parsed = match cty {
+                crate::types::Ty::Date => crate::dt::parse_date(&body),
+                crate::types::Ty::Tod => crate::dt::parse_tod(&body),
+                _ => crate::dt::parse_dt(&body),
+            };
+            return match parsed {
+                Ok(ns) => Ok(Tok::Calendar(cty, ns)),
+                Err(why) => Err(Self::err(start, format!("bad {ty} literal: {why}"))),
+            };
         }
         let neg = if self.peek(0) == Some(b'-') {
             self.bump();

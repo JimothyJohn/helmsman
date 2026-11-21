@@ -273,11 +273,9 @@ fn sim_view(h: &Harness) -> &Viewer {
 /// Screen centre and on-screen width of the first node matching `f`.
 fn node(v: &Viewer, f: impl Fn(&NodeKind) -> bool) -> (Pos2, f32) {
     let n = v.diagram().nodes.iter().find(|n| f(&n.kind)).expect("the node");
-    let cam = v.cams[v.scope];
-    (
-        cam.to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0),
-        n.rect.w * cam.zoom,
-    )
+    // Where it is drawn (inside a fold: the fold's box).
+    let r = v.block_on_screen(n.id).expect("the node is drawn");
+    (r.center(), r.width())
 }
 
 /// The bounds of the line and path strokes the last frame drew inside
@@ -1749,6 +1747,7 @@ END_PROGRAM",
             retries: 1,
             asked_scenarios: false,
             mode: crate::instruct::Mode::Direct,
+            spec: false,
             attempts: vec![Attempt {
                 asked: String::new(),
                 answer: String::new(),
@@ -1827,6 +1826,106 @@ mod chrome {
         h.press("bar view");
         h.click(Pos2::new(700.0, 500.0));
         assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    /// The install form sits in the review screen's resizable left panel,
+    /// and a stopped install draws the Agent's long words in the centre:
+    /// neither may push the panel wider than it opens (the egui panel
+    /// rule in CLAUDE.md).
+    #[test]
+    fn the_install_form_and_a_stopped_install_leave_the_review_panel_its_width() {
+        use crate::install_review::{BundleReview, Stopped};
+        use crate::review::Session;
+        let mut h = Harness::new(App::boxed());
+        h.press("bar view");
+        h.press("view proposals");
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: None,
+            role: "engineer".into(),
+        });
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let width = |h: &Harness, key: &str| {
+            h.app
+                .review
+                .as_ref()
+                .unwrap()
+                .rects
+                .iter()
+                .find(|(k, _)| k == key)
+                .map_or_else(|| panic!("no {key} drawn"), |(_, r)| r.width())
+        };
+        let (index0, name0) = (width(&h, "install index"), width(&h, "install name"));
+        assert!(
+            index0 <= 280.0 && name0 <= 280.0,
+            "{index0} {name0}: wider than the panel"
+        );
+        let long = "x".repeat(600);
+        {
+            let v = h.app.review.as_mut().unwrap();
+            v.state.install.index = format!("https://{long}/index.json");
+            v.state.install.name = long.clone();
+        }
+        let verdict = serde_json::json!({
+            "summary": long, "reads": [long.clone()], "writes": [long.clone()], "devices": [long.clone()],
+            "access": [long.clone()], "at_start": [long.clone()], "undeclared": [long.clone()],
+            "risk": "high", "refuse": true, "reason": long,
+        });
+        for state in ["refused", "not_reviewed"] {
+            let review =
+                BundleReview::parse(&serde_json::json!({ "state": state, "why": long, "verdict": verdict }))
+                    .unwrap();
+            h.app.review.as_mut().unwrap().state.install.stopped = Some(Stopped {
+                bundle: long.clone(),
+                error: long.clone(),
+                review,
+                index: "i".into(),
+                name: "n".into(),
+            });
+            for _ in 0..3 {
+                h.frame(vec![]);
+            }
+            let (index, name) = (width(&h, "install index"), width(&h, "install name"));
+            assert!(
+                (index - index0).abs() <= 8.0,
+                "{state}: the index field went from {index0} to {index}"
+            );
+            assert!(
+                (name - name0).abs() <= 8.0,
+                "{state}: the name field went from {name0} to {name}"
+            );
+            assert!(
+                h.app
+                    .review
+                    .as_ref()
+                    .unwrap()
+                    .rects
+                    .iter()
+                    .any(|(k, _)| k == "install dismiss"),
+                "{state}: the result has its Dismiss"
+            );
+        }
+        // With no proposal open, "Install without a review" still works:
+        // a click on it sends the install again, going on.
+        let go = h
+            .app
+            .review
+            .as_ref()
+            .unwrap()
+            .rects
+            .iter()
+            .find(|(k, _)| k == "install go on")
+            .map(|(_, r)| r.center())
+            .expect("a missing review offers the way on");
+        h.app.review.as_mut().unwrap().sent.clear();
+        h.click(go);
+        h.frame(vec![]);
+        let sent = &h.app.review.as_ref().unwrap().sent;
+        assert!(
+            sent.iter().any(|r| r.call == crate::review::Call::Install
+                && r.body.as_deref().unwrap_or("").contains("without_review")),
+            "{sent:?}"
+        );
     }
 
     #[test]
@@ -2621,19 +2720,11 @@ mod chrome {
             map.contains("device iologik_e1213 device:moxa-iologik-e1213 cip=991:515:0x00e12130\n"),
             "{map}"
         );
-        assert!(
-            map.contains("in  iologik_e1213_di_04 bool iologik_e1213 ch:DI-04\n"),
-            "{map}"
+        assert_eq!(
+            map.matches(" iologik_e1213 ch:").count(),
+            0,
+            "the device alone: no channel is in the project until it is added: {map}"
         );
-        assert!(
-            map.contains("out iologik_e1213_do_00 bool iologik_e1213 ch:DO-00 safe=false\n"),
-            "{map}"
-        );
-        assert!(
-            map.contains("in  iologik_e1213_di_04_count int iologik_e1213 ch:DI-04-count\n"),
-            "{map}"
-        );
-        assert_eq!(map.matches(" iologik_e1213 ch:").count(), 40, "{map}");
         assert!(
             !map.contains("enip-io") && !map.contains("modbus-tcp"),
             "no protocol: {map}"
@@ -2644,8 +2735,16 @@ mod chrome {
             "wired at once"
         );
         assert!(!h.has("add network 192.168.127.254"), "a wired device has no Add");
-        // The listing shows it with its forty points.
+        // The listing shows it with no point, and its forty one row away.
         assert!(h.has("device iologik_e1213"));
+        assert!(!h.has("point iologik_e1213_di_04"));
+        assert!(h.has("add io iologik_e1213"), "+ Add I/O under the device");
+        // The agent reads what the device has beyond the project's points.
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(
+            text.contains("  iologik_e1213 (40): in bool ch:DI-00; "),
+            "{text}"
+        );
         h.press("devices scan");
         h.wait(0.3);
         assert_eq!(
@@ -2717,18 +2816,41 @@ mod chrome {
         assert_eq!(d.name, "iologik_e1213", "named by the library's model");
         assert_eq!(d.endpoint, "cip=991:515:0x00e12130");
         assert_eq!(d.protocol, 1, "EtherNet/IP");
-        // The E1213's channels are listed; the program's lamp (on the box's
-        // own channel) is bound to the first output already.
-        assert_eq!(d.points.len(), 20, "12 inputs, 8 outputs");
-        let on: Vec<(&str, &str)> = d
-            .points
-            .iter()
-            .filter(|r| r.on)
-            .map(|r| (r.name.as_str(), r.point.as_str()))
-            .collect();
-        assert_eq!(on, [("run", "di:0"), ("lamp", "do:0")]);
+        // The form holds the device's settings and none of its channels.
+        assert!(d.points.is_empty(), "{:?}", d.points);
+        assert!(!h.has("point 0 on"));
         h.press("device ok");
         h.wait(0.3);
+        assert!(!h.has("device form"));
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert_eq!(
+            map.matches(" iologik_e1213 ").count(),
+            1,
+            "the device line alone: {map}"
+        );
+        // The program's lamp takes the first output in + Add I/O.
+        h.press("add io iologik_e1213");
+        h.wait(0.3);
+        assert!(
+            h.has("io form") && h.has("io for"),
+            "the program has variables to wire"
+        );
+        assert!(h.has("io add DI0") && h.has("io add DO0"));
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .devices_ui
+            .adding_io
+            .as_mut()
+            .unwrap()
+            .for_var = Some("lamp".into());
+        h.wait(0.2);
+        assert!(!h.has("io add DI0"), "an output variable is offered outputs only");
+        h.press("io add DO0");
+        h.wait(0.3);
+        h.press("io done");
+        h.wait(0.2);
         let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
         assert!(
             map.contains("out lamp bool iologik_e1213 do:0 safe=false"),
@@ -2809,47 +2931,6 @@ mod chrome {
             assert!(map.contains(" bool box di:0"), "{map}");
         }
         assert!(h.has("device form"));
-        // Start and stop on DI-00/01, the motor on DO-00, from the program.
-        let rows = h
-            .app
-            .sim
-            .as_ref()
-            .unwrap()
-            .devices_ui
-            .adding
-            .clone()
-            .unwrap()
-            .points;
-        let on: Vec<(&str, &str)> = rows
-            .iter()
-            .filter(|r| r.on)
-            .map(|r| (r.name.as_str(), r.point.as_str()))
-            .collect();
-        assert_eq!(on, [("start", "di:0"), ("stop", "di:1"), ("motor", "do:0")]);
-        // Tick DI-05 and name it: a new variable.
-        h.press("point 5 on");
-        h.press("point 5 name");
-        h.frame(vec![Event::Key {
-            key: egui::Key::A,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        }]);
-        h.frame(vec![Event::Text("door".into())]);
-        h.wait(0.2);
-        let r5 = h
-            .app
-            .sim
-            .as_ref()
-            .unwrap()
-            .devices_ui
-            .adding
-            .clone()
-            .unwrap()
-            .points[5]
-            .clone();
-        assert!(r5.on && r5.name == "door", "{r5:?}");
         h.press("device ok");
         h.wait(0.3);
         assert!(
@@ -2857,14 +2938,49 @@ mod chrome {
             "{:?}",
             h.app.sim.as_ref().unwrap().devices_ui.adding
         );
+        // Start on DI-00 from the program, then DI-05 as a new variable.
+        h.press("add io iologik_e1213");
+        h.wait(0.3);
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .devices_ui
+            .adding_io
+            .as_mut()
+            .unwrap()
+            .for_var = Some("start".into());
+        h.wait(0.2);
+        h.press("io add DI0");
+        h.wait(0.3);
+        assert_eq!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .devices_ui
+                .adding_io
+                .as_ref()
+                .unwrap()
+                .for_var,
+            None,
+            "the next channel is a new variable again"
+        );
+        h.press("io add DI5");
+        h.wait(0.3);
+        h.press("io done");
+        h.wait(0.2);
         {
             let sim = h.app.sim.as_ref().unwrap();
             let map = &sim.proj.files["io.map"];
-            assert!(!map.contains(" box di:") && !map.contains(" box do:"), "{map}");
+            assert!(!map.contains(" box di:0"), "start moved off the box: {map}");
             assert!(map.contains("in  start bool iologik_e1213 di:0\n"), "{map}");
-            assert!(map.contains("in  door bool iologik_e1213 di:5\n"), "{map}");
+            assert!(
+                map.contains("in  iologik_e1213_di5 bool iologik_e1213 di:5\n"),
+                "{map}"
+            );
             let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
-            assert!(st.contains("  door : BOOL;"), "{st}");
+            assert!(st.contains("  iologik_e1213_di5 : BOOL;"), "{st}");
             assert!(helmsman_iec::ast::parse(st).is_ok(), "{st}");
         }
         // The I/O wiring link opens the file in the editor.
@@ -2996,33 +3112,14 @@ mod chrome {
         let d = h.app.sim.as_ref().unwrap().devices_ui.adding.clone().unwrap();
         assert_eq!(d.editing.as_deref(), Some("e1213"));
         assert!(d.params.contains("profile=moxa-e1213"), "{}", d.params);
-        assert_eq!(d.points.iter().filter(|r| r.on).count(), 1, "run on DI-00");
-        // Tick DO-00 for the lamp (the program's own), then Save.
-        h.app
-            .sim
-            .as_mut()
-            .unwrap()
-            .devices_ui
-            .adding
-            .as_mut()
-            .unwrap()
-            .points[12]
-            .use_ = crate::device_form::Use::Existing("lamp".into());
-        {
-            let r = &mut h
-                .app
-                .sim
-                .as_mut()
-                .unwrap()
-                .devices_ui
-                .adding
-                .as_mut()
-                .unwrap()
-                .points[12];
-            r.on = true;
-            r.name = "lamp".into();
-        }
-        h.wait(0.2);
+        assert_eq!(
+            d.points.len(),
+            1,
+            "run, kept for Save; no row for a channel not added"
+        );
+        // The name and nothing else: no point to tick, and how the device
+        // is reached is Advanced's.
+        assert!(h.has("device name") && !h.has("device endpoint") && !h.has("point 0 on"));
         h.press("device ok");
         h.wait(0.3);
         assert!(
@@ -3050,11 +3147,16 @@ mod chrome {
             "{map}"
         );
         assert!(
-            map.contains("in  run bool e1213 di:0\n")
-                && map.contains("out lamp bool e1213 do:0 safe=false\n"),
-            "{map}"
+            map.contains("in  run bool e1213 di:0\n") && map.contains("out lamp bool box do:0 safe=false\n"),
+            "its point and the box's own line are as they were: {map}"
         );
-        assert!(!map.contains("box do:0"), "{map}");
+        // With Advanced on, the same form has the address and the timing.
+        h.app.chrome.advanced = true;
+        h.press("edit device e1213");
+        h.wait(0.3);
+        assert!(h.has("device endpoint"));
+        h.press("device cancel");
+        h.wait(0.2);
         // Delete: asks, then the device and its lines are gone.
         h.press("delete device e1213");
         h.wait(0.2);
@@ -3393,12 +3495,12 @@ mod chrome {
 
     /// Requirement tests in the simulation (TODO.md spec-tests): the
     /// project's `test_*.st` files run green or red with why; a red one
-    /// refuses Deploy and a block answer's "Use this code", naming it; a
-    /// test file never builds into the program; fixed, the deploy goes
-    /// through. (The Requirements tab that listed them is archived,
-    /// 2026-11-08; the gate stays.)
+    /// refuses nothing (Nick, 2026-11-15): Deploy and a block answer's
+    /// "Use this code" go ahead and name it; a test file never builds into
+    /// the program; fixed, the deploy says nothing of tests. (The
+    /// Requirements tab that listed them is archived, 2026-11-08.)
     #[test]
-    fn requirement_tests_gate_deploy_and_use_this_code_in_the_simulation() {
+    fn a_red_requirement_test_is_named_by_deploy_and_use_this_code_and_refuses_neither() {
         let mut h = Harness::new(App::sim());
         h.wait(0.3);
         assert!(
@@ -3427,16 +3529,24 @@ mod chrome {
             !sim.session.src.contains("PROGRAM test_lamp"),
             "the test is not in the build"
         );
-        // Deploy: refused, with the test named.
+        // Deploy: it runs, with the red test named after what runs.
         h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Enter);
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
         let notice = sim.notice.clone().unwrap_or_default();
         assert!(
-            notice.starts_with("Refused: requirement test test_lamp:"),
+            notice.starts_with("mine is running in this page")
+                && notice.contains("Requirement test test_lamp:")
+                && notice.ends_with("is red."),
             "{notice}"
         );
-        // A block answer into this project: refused too; nothing added.
+        assert!(
+            sim.log
+                .iter()
+                .any(|m| m.text.starts_with("Deployed mine with a test red.")),
+            "said in Messages too"
+        );
+        // A block answer into this project: taken too, the test named.
         let before = sim.proj.files.len();
         h.app.sim.as_mut().unwrap().take_code(
             "FUNCTION_BLOCK helper\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT y : BOOL; END_VAR\ny := x;\nEND_FUNCTION_BLOCK\n"
@@ -3444,8 +3554,14 @@ mod chrome {
         );
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
-        assert_eq!(sim.proj.files.len(), before, "{:?}", sim.proj.files.keys());
-        assert!(sim.notice.clone().unwrap_or_default().starts_with("Refused:"));
+        assert_eq!(sim.proj.files.len(), before + 1, "{:?}", sim.proj.files.keys());
+        let notice = sim.notice.clone().unwrap_or_default();
+        assert!(
+            notice.contains("opened from the Agent's answer")
+                && notice.contains("test_lamp")
+                && notice.ends_with("is red."),
+            "{notice}"
+        );
         // Fixed: green, Deploy goes through.
         {
             let sim = h.app.sim.as_mut().unwrap();
@@ -4545,6 +4661,120 @@ mod simulated {
         assert_eq!(sim.link.posted[0].body, r#"{"choice":"own-hardware"}"#);
         assert!(h.has("agent free closed") && !h.has("survey google"));
         grew(&h, "answered");
+    }
+
+    /// The question card (`crate::ask`): the longest question and answers
+    /// a card can hold wrap inside the Agent tab at the right panel's
+    /// default width, unanswered and in every state after a click, and a
+    /// click on an answer is taken once.
+    #[test]
+    fn the_question_card_wraps_inside_the_panel_and_takes_one_click() {
+        use crate::ask::{Card, MAX_ANSWER, MAX_QUESTION, Question, State};
+        let mut h = Harness::new(App::sim());
+        // Docked right: the Agent at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        h.wait(0.3);
+        let right = h.rect("right");
+        h.press("tab claude");
+        h.wait(0.3);
+        assert!(!h.has("agent card"), "no question: no card");
+        let grew = |h: &Harness, what: &str| {
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&r), "{what}: the right panel grew {r} pt");
+            // The card and everything on it stay inside the panel's
+            // default width (236 pt) and on the screen.
+            let card = h.rect("agent card");
+            assert!(
+                card.width() <= 236.0,
+                "{what}: the card is {} pt wide",
+                card.width()
+            );
+            assert!(
+                card.bottom() <= 860.0,
+                "{what}: the card ends at {} pt, off the screen",
+                card.bottom()
+            );
+            for key in [
+                "agent question",
+                "agent answer 0",
+                "agent answer 1",
+                "agent answered",
+                "agent answer status",
+            ] {
+                if h.has(key) {
+                    let r = h.rect(key);
+                    assert!(
+                        r.left() >= card.left() && r.right() <= card.right(),
+                        "{what}: {key} {r:?} is inside the card {card:?}"
+                    );
+                }
+            }
+        };
+        let long = |n: usize| {
+            "does the motor stay off "
+                .repeat(n)
+                .chars()
+                .take(n)
+                .collect::<String>()
+        };
+        // An instruction is under way: a question goes with one.
+        let open = h.app.sim.as_ref().unwrap().proj.open.clone();
+        h.app.sim.as_mut().unwrap().instruct.run = Some(crate::instruct::Run {
+            instruction: "Add an emergency stop.".into(),
+            project: open,
+            scope: crate::scope::Scope::File("main.st".into()),
+            earlier: Vec::new(),
+            asked: String::new(),
+            retries: 0,
+            asked_scenarios: false,
+            mode: crate::instruct::Mode::Direct,
+            attempts: Vec::new(),
+            spec: false,
+        });
+        h.app.sim.as_mut().unwrap().card = Some(Card {
+            question: Some(Question {
+                text: long(MAX_QUESTION),
+                // One answer with no space in it: it cannot wrap at a word.
+                answers: vec![long(MAX_ANSWER), "W".repeat(MAX_ANSWER), "Short".into()],
+            }),
+            picked: None,
+            state: State::Open,
+        });
+        h.wait(0.3);
+        for key in [
+            "agent question",
+            "agent answer 0",
+            "agent answer 1",
+            "agent answer 2",
+        ] {
+            assert!(h.has(key), "{key}");
+        }
+        assert!(!h.has("agent answered"));
+        grew(&h, "unanswered");
+        h.press("agent answer 0");
+        h.wait(0.3);
+        let card = h.app.sim.as_ref().unwrap().card.clone().unwrap();
+        assert_eq!(card.picked, Some(0));
+        assert!(h.has("agent answered") && h.has("agent answer status"));
+        assert!(!h.has("agent answer 0"), "answered: the buttons are gone");
+        grew(&h, "answered");
+        for state in [
+            State::Sent,
+            State::Waiting,
+            State::Checking,
+            State::Covered,
+            State::Amending,
+            State::Kept,
+            State::Unchecked,
+        ] {
+            let sim = h.app.sim.as_mut().unwrap();
+            let card = sim.card.as_mut().unwrap();
+            card.picked = Some(0);
+            card.state = state.clone();
+            h.wait(0.3);
+            assert!(h.has("agent answer status"), "{state:?}");
+            grew(&h, &format!("{state:?}"));
+        }
     }
 
     #[test]
@@ -6130,7 +6360,7 @@ mod tour {
         card_is_fair(&h, "outputs");
         // The lamp, the first output.
         let outs = h.rect("io outputs");
-        h.click(outs.left_center() + egui::vec2(30.0, 0.0));
+        h.click(outs.left_top() + egui::vec2(30.0, 14.0));
         h.wait(0.3);
         assert_eq!(step(&h), Step::Trend);
         assert_eq!(anchor(&h).as_deref(), Some("trend window"));
@@ -6764,7 +6994,21 @@ mod devconf {
     }
 }
 
+mod assign;
+mod chat_about;
+mod design;
+mod device_io;
+mod diagram_menu;
 mod front;
+mod io_cards;
 mod io_names;
+mod layouts;
+mod multi_select;
+mod outputs;
+mod proposal;
 mod shell;
 mod sim_popup;
+mod spec_mode;
+mod start_state;
+mod vendor;
+mod wired;

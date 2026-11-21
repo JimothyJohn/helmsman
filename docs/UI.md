@@ -6,7 +6,13 @@ this; change it here first when a decision changes.
 ## Principles
 
 - **Structured Text and its live diagram, nothing else.** The diagram is a
-  read-only view of the ST: it never edits the program. (The node-graph Lab
+  view of the ST. On it the user edits the layout and toggles inputs; code
+  changes are typed in the editor or asked of the Agent (Nick, 2026-11-18:
+  "on the diagram the user edits the layout and toggles inputs; code
+  changes are typed or asked of the Agent"). The diagram's right-click menu
+  holds Chat about this and the io.map items (Assign to device I/O…, Back
+  to simulated I/O), none of which changes the code. What was built and why it
+  went: docs/decisions/diagram-edits.md. (The node-graph Lab
   editor is gone.)
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the
@@ -62,6 +68,29 @@ this; change it here first when a decision changes.
   The tabs shrink to share one row with the chevron (24 pt at the least,
   then they wrap). Kept per browser (`dock=2` in the layout text; a
   layout from before is read with its panes reset).
+- **Tabs reorder, hide, and the arrangement saves by name** (Nick,
+  2026-11-15; `pane_layout.rs`). A tab's glyph dragged along a row of
+  tabs takes the place marked there (in its own pane a reorder, in the
+  other pane a dock at that place). A tab's right-click menu hides it
+  (`hidden=` in the layout text); its View item, or anything that opens
+  the tab, brings it back at the end of the left pane. View › Pane
+  layouts… lists four ready-made layouts (Default, Programming,
+  Commissioning, Monitoring) and the browser's own (at most 32, names up
+  to 40 characters, `helmsman-canvas/pane-layouts`): each is where every
+  tab sits, which tab each side shows, which panes are open, the bottom
+  panel's tab, and the three pane sizes. Light mode, word wrap, trend
+  colours and the diagram's arrangement are not part of one. Export
+  downloads the browser's own as `helmsman-pane-layouts.json`
+  (`helmsman-pane-layouts 1`); Import reads such a file as hostile (64 KB
+  at most, unknown tabs dropped, sizes held to 120..1600 pt, a name
+  already kept replaced, a ready-made layout's name taken in as "NAME
+  (imported)"). Names match without regard to the case of ASCII letters.
+  On a box's page the popup has a third list, On this box: the layouts
+  the box keeps (`GET /api/pane-layouts`, read when the popup opens and
+  after each change, and read as a file is), so any browser that opens
+  the box offers them. An engineer puts one of their own there with To
+  box and deletes one with Delete; for anyone else both are greyed and
+  say why.
 - **Panes collapse** from their chevron, their Alt key, or a double click
   on any of their tabs (Nick, 2026-11-07), on either side.
 - **The tabs (left pane 320 pt):** Files (the projects, the
@@ -95,14 +124,69 @@ this; change it here first when a decision changes.
   then by vendor and model text; `--devices-index` points a box at
   another). **Add by click** (2026-11-12, PROTOCOLS.md step 3): a device
   the library knows, whose entry names a profile (`NAME.device`), offers
-  Add: a small form asks one thing, the device's name, and lists the
-  channels it will get; Add copies the profile into the project as
+  Add: a small form asks one thing, the device's name, and says how many
+  channels it has; Add copies the profile into the project as
   `NAME.device` (the box fetches and checks it, `GET
-  /api/devices/library`; the simulation carries its E1213's), writes
-  `device NAME device:PROFILE IDENTITY` with the identity the scan saw,
-  and one `ch:` signal per channel named `NAME_channel`. No protocol,
-  address, byte order or cycle time is asked. A device the library does
-  not know says so and offers Advanced. **Device configuration**
+  /api/devices/library`; the simulation carries its E1213's) and writes
+  `device NAME device:PROFILE IDENTITY` with the identity the scan saw.
+  No signal is written and no protocol, address, byte order or cycle
+  time is asked. **A device's I/O is added one point at a time**
+  (`device_io.rs`, Nick, 2026-11-15: every channel is available, and
+  none shows in the project until it is added). Under a device's name a
+  row offers **+ Add I/O** with the count of channels left, known from
+  the profile the project holds (or the form's catalog for an E1213 on a
+  typed protocol). The picker lists them as Inputs and Outputs, narrowed
+  by a search field (every word in the channel's name, direction or
+  type); a click writes one `ch:` signal after the device's lines, named
+  `NAME_channel`, and declares that variable in the program, and the
+  picker stays open. "For" gives the next channel to a program variable
+  that is on no device or on the box's own channels (its old line goes).
+  A device nobody knows the channels of, and any device under Advanced,
+  takes a point by its address. A point's right-click has Remove… (asks;
+  the variable stays). A device with signals the program has no variable
+  for (every channel, as Add wrote them until 2026-11-15) offers Remove N
+  unused, which asks first. The New device and Edit forms hold settings
+  only: Edit is the name alone unless Advanced is on, and Save writes
+  the device's signals back as they were. The agent's listing in the
+  playground names the channels not added (`device_io::describe_free`);
+  the box's `list_devices` does not yet. A device the library does
+  not know says so and offers Advanced, and, on a box with an agent, a
+  button **Build from vendor file…** (`device_vendor.rs`, Nick,
+  2026-11-15). It picks the vendor's file (an EDS, an IODD, a PDF manual
+  or a text file: text up to 1 MB, a PDF up to 2 MB), posts it to the box
+  as a drop-in (`POST /api/dropins`, the file name cut to `A-Z a-z 0-9 . _ -`
+  and 100 characters, read as prose or as a PDF) and, once the box has
+  answered 201 with the drop-in's id, sends the agent one chat message
+  asking for a device profile with `dropins: [id]` (`POST /api/chat`, a
+  new conversation). The message names the drop-in by its id and kind and
+  the device by its numbers and address, never by the file's name or the
+  name the device sent. Every refusal is said in words beside the button
+  (too large, wrong type, not UTF-8, 401, 403, no answer) and says that
+  nothing was sent to the agent; the button is offered to an engineer or
+  integrator on a box whose agent can be asked, and everyone else reads
+  why it is not. While the agent works the note says so, and when its turn
+  ends the note carries what it said or why it failed. The profile it
+  proposes appears in the section below. After that profile is saved, the
+  found device's row offers **Add** with it (the project's own file, its
+  channels listed in the same form as a library device's); the match is
+  the device the file was sent for, kept for the page's session.
+  **A profile the agent proposed**
+  (`device_proposal.rs`): while the box holds one (`GET
+  /api/device-profile/proposal`, read every 3 s while someone is signed in
+  and the tab is open), a section at the top of the tab shows the device's
+  maker and model, its name, Save profile and Discard, the agent's summary
+  and the channels (name, direction, type, unit, safe value; each point on
+  each protocol in the hover). The device's name and every channel's name
+  are edited in place. Save sends the id it read, the open project, the
+  name when changed and the renames (`POST .../accept`); the box reads the
+  renamed text again and writes `NAME.device` as a new file, never over
+  one that exists. The tab then reads the project again and lists the
+  saved file's channels as the project holds them. A refusal is shown
+  where it belongs: a problem at a line beside the channel on that line, a
+  bad or taken name beside the name, the rest above the buttons; a newer
+  proposal (409, or a different id on a read) replaces the one shown and
+  keeps the names typed where the channel remains. Only an engineer is
+  offered Save and Discard. **Device configuration**
   (2026-11-13, `devconf-canvas`, `device_config.rs`): under an open
   device whose profile has `configure moxa-e1200`, a Configuration section
   reads first, in words: the firmware, what the outputs do if the box stops
@@ -170,7 +254,29 @@ this; change it here first when a decision changes.
   2026-11-13) the box takes the tab's height and scrolls past it; Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
-  instruction sent, greyed. A change that lands
+  instruction sent, greyed. On a new project (a built-in example
+  open) "From a spec…" opens a window (Nick, 2026-11-15, `crate::spec_mode`):
+  paste a scope of work or add `.md` and `.txt` files, with the total
+  against the one request's cap, and Build; the draft comes back on a
+  review screen (the name, the I/O, each requirement passed or not, the
+  untested ones, the reason) and nothing is made until Accept. On a box
+  (Nick, 2026-11-15; `crate::box_spec`) the Agent tab offers it to an
+  engineer with a project open or not, the window also takes `.pdf`
+  files with the box's caps beside the total, the review lists the
+  inputs that need a device, and Accept sends the project to the box as
+  one zip. "Design a machine…" (`crate::design_step`, `crate::design_ui`;
+  card `design-step-canvas`) asks a strong model for a whole machine's
+  control system design: a window takes the description, the tab shows
+  the elapsed time and the model's thinking summary while the turns come
+  (minutes; Stop keeps nothing, a stream that stops early offers Carry
+  on), then a card (parts, requirements, build steps, what stops the
+  Agent building from it) and a window that reads the design a section at
+  a time. Keep puts it in the project as `design.md`; the tab then offers
+  Build steps 1 to 6 of 19, the next six on the next press, each step
+  asked with the design's own brief. On a box it posts to `/api/design`;
+  in the simulation it asks the relay's design entry and shows the
+  entry only while that says it is open (and says when it is closed or
+  the hour's allowance is used). A change that lands
   runs at once and is seen on the canvas, marked, with nothing written in
   the tab (its reason goes to the Messages). One that does not is an
   error in the Messages (their red count, and they open), the box is
@@ -223,6 +329,21 @@ this; change it here first when a decision changes.
   diagram too big for the view at that zoom shows its left part and you
   pan, instead of shrinking to one-letter labels. Controls on blocks cut
   their text instead of wrapping it.
+- **Selecting blocks (Nick, 2026-11-16).** Drag on empty space to draw a
+  box; the blocks it touches are selected (Shift or Ctrl/Cmd adds). Shift
+  or Ctrl/Cmd and a click toggles one block. A plain click on a block
+  selects that block alone; a click on empty space, a click anywhere off
+  the diagram (the Agent tab aside, where the selection is used) or Esc
+  deselects (Nick, 2026-11-17). Only a released click changes the
+  selection: while the button is down the highlights stay, and a box
+  being drawn shows what it touches. The proposal review's diagram takes
+  the same gestures. The selected blocks are outlined blue and are the
+  Agent's focus: they show as chips after the collected ones (an x
+  deselects), go with the next instruction, and say how many more are
+  selected than the eight an instruction carries. Dragging empty space no
+  longer pans the diagram: Space and a drag, or the middle button, do; the
+  arrow keys and W A S D too, and the wheel zooms. Hovering empty space
+  says so.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).
@@ -241,6 +362,61 @@ this; change it here first when a decision changes.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
+- **I/O as cards (2026-11-16, `io_cards.rs`):** every input and output
+  in the I/O tab is one card, not a fold on the diagram (an output's logic
+  is spread over statements that are not next to each other). Nick,
+  2026-11-16: "You just need to know their name, what triggers them in the
+  real-world, and what the influence in the control scheme." So a card has
+  the point, one line for what is wired to it, and one line for the first
+  thing that drives it or that it affects, with "…" when there are more.
+  A double-click opens the rest in place. The `< >` glyph finds the point
+  in the code and steps through its uses; the diagram glyph lights and
+  frames its blocks, running or not. A tap on an output lights the path
+  that sets it, framed as the Q/E jump frames, no closer than the current
+  zoom. List or tiles at the top; Inputs and Outputs fold behind their
+  arrows. The diagram stays in source order.
+- **Assign to device I/O (2026-11-15, `assign.rs`, `assign_ui.rs`):** a
+  program's inputs and outputs start on simulated or on-screen I/O
+  (`in start bool box di:0`, `out speed int screen speed safe=0`). A device
+  is added alone, and its channels join the project one at a time under
+  + Add I/O (`device_io.rs`); the box binds a program port to the map signal
+  of the same name. So assigning a port to a channel is a change of io.map
+  lines, and every other line stays as typed. A channel with no line yet
+  (one the device has and + Add I/O still lists) gets its line from the
+  same code the picker's *For* uses (`device_io::add`: the options of that
+  channel, its place after the device's other lines), named for the port,
+  and the port's simulated line is removed. A channel that has a line no
+  port is named after (a point added earlier under a generated name) is
+  renamed to the port's name, keeping its type, point, options and comment.
+  Three places, in the simulation and on a box alike. (1) The I/O tab: a
+  right-click on a program input's or output's row offers *Assign to device
+  I/O…*, which lists the free channels of that direction and type, those
+  with a line and those without. (2) The diagram: a right-click on the Read
+  block of an input or the Write block of an output offers the same item,
+  whatever the diagram's edit gate says: it changes io.map and not the
+  code, so on a box, or while the code is ahead of the diagram, the menu
+  holds only it and says why the code's own items are off. On an input's
+  block the click reaches the menu through the switch (or the box's force
+  button) drawn over it. (3) The Devices tab: a right-click on a point
+  already in the project offers *Assign to program input…* or *…output…*,
+  which lists the unassigned ports (no map line, or one on the box or the
+  screen) of its direction and type. A channel without a line is not on
+  that tab, so there the picker's *For* is the way and this item is for the
+  point that is. A port that is on a device offers *Back to simulated I/O*
+  (also on the point that feeds it): as Remove does, the channel's line goes
+  out of io.map and the channel is under + Add I/O again, and the port gets a
+  box line as a new project's map writes it at the end of the file (a bool
+  the box's next free `di:N` or `do:N`, an output of another type a `screen`
+  line). An int or real input gets no line: a box accepts none for a
+  simulated one, and the simulation shows its control. An item that cannot
+  work is shown off with the reason in its tooltip: no free channel (add a
+  device in the Devices tab first), the port or channel already assigned, a
+  read-only example, or no engineer signed in on a box. A refusal that is
+  reached anyway is a sentence in the notice and changes nothing. In the
+  simulation the new text goes into the project's io.map and the project is
+  unsaved; on a box into the open project's io.map buffer, which goes to the
+  box with Save or Deploy. An I/O tab row's tooltip says where the point is:
+  "On rio, DI-04" or "Simulated: not assigned to a device yet".
 - **Inputs on the diagram:** in the simulation, an input's block switches
   or presses it, or takes a typed number (written on Enter). On a Pi, the same click **forces** the input, for an
   engineer only: the block shows FORCED in the warning colour, a banner
@@ -378,6 +554,7 @@ focused text field alone, never to the editor's history as well
 | Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
 | Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |
+| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (pointer over the diagram, nothing typed in) | (keys of our own, beside W A S D) |
 
 Each menu item prints its key. Reserved, not built (TODO card
 `hotkey-agent-reserved`): F2 / Shift F2 the Agent.

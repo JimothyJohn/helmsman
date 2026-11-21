@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use helmsman_project::layout::{self, HEADER, MAX_MOVES, MAX_TEXT, Move};
+use helmsman_project::layout::{
+    self, FoldMove, FoldRef, HEADER, Layout, MAX_FOLDS, MAX_MOVES, MAX_TEXT, Move,
+};
 use helmsman_project::{FileKind, Files, LAYOUT, check_file, file_name, read_zip};
 use proptest::prelude::*;
 
@@ -37,10 +39,13 @@ fn a_layout_reads_what_it_says() {
 #[test]
 fn a_bad_layout_is_refused_whole_with_its_line() {
     for (src, want) in [
-        ("helmsman-layout 2\n", "line 1: expected `helmsman-layout 1`"),
+        (
+            "helmsman-layout 3\n",
+            "line 1: expected `helmsman-layout 1` or `helmsman-layout 2`",
+        ),
         (
             "move\tmain\t0\t1\t1\ta\tb\n",
-            "line 1: expected `helmsman-layout 1`",
+            "line 1: expected `helmsman-layout 1` or",
         ),
         (
             "helmsman-layout 1\nmove\tmain\t0\t1\t1\ta\n",
@@ -140,6 +145,148 @@ fn a_build_does_not_hold_the_layout_to_its_syntax() {
         files.check_buildable().unwrap_err()[0].starts_with("diagram.layout:"),
         "still text within the limits"
     );
+}
+
+const V1_FILE: &str = "helmsman-layout 1\nmove\tmain\t0\t40\t-12.5\tTON\tt1\n";
+
+fn folded() -> Layout {
+    Layout {
+        moves: vec![mv("main", "TON", "t1", 0, 40.0, -12.5)],
+        opened: vec![FoldRef {
+            pou: "main".into(),
+            key: "latch:q".into(),
+        }],
+        collapsed: vec![
+            FoldRef {
+                pou: "main".into(),
+                key: "sec\t1\\".into(),
+            },
+            FoldRef {
+                pou: "Latch".into(),
+                key: "arm:0".into(),
+            },
+        ],
+        fold_moves: vec![FoldMove {
+            pou: "main".into(),
+            key: "latch:q".into(),
+            dx: 3.5,
+            dy: -8.0,
+        }],
+    }
+}
+
+#[test]
+fn fold_state_round_trips_as_version_2() {
+    let l = folded();
+    let text = layout::render_all(&l);
+    assert!(text.starts_with("helmsman-layout 2\n"), "{text:?}");
+    assert_eq!(layout::parse_all(&text).unwrap(), l);
+    assert_eq!(
+        layout::parse(&text).unwrap(),
+        l.moves,
+        "old callers still get the moves"
+    );
+    assert!(check_file(LAYOUT, text.as_bytes()).is_ok());
+}
+
+#[test]
+fn version_1_is_unchanged_and_written_byte_for_byte_without_fold_state() {
+    let l = layout::parse_all(V1_FILE).unwrap();
+    assert!(!l.has_folds());
+    assert_eq!(l.moves.len(), 1);
+    assert_eq!(layout::render_all(&l), V1_FILE);
+    assert_eq!(layout::render(&l.moves), V1_FILE);
+    assert_eq!(layout::render_all(&Layout::default()), "helmsman-layout 1\n");
+    // A version 2 file with only moves is read the same.
+    let v2 = V1_FILE.replace("layout 1", "layout 2");
+    assert_eq!(layout::parse_all(&v2).unwrap(), l);
+}
+
+#[test]
+fn fold_lines_need_version_2_and_unknown_lines_are_named() {
+    for (src, want) in [
+        (
+            "helmsman-layout 1\nopen\tmain\tk\n",
+            "line 2: `open` needs `helmsman-layout 2`",
+        ),
+        (
+            "helmsman-layout 1\nfoldmove\tmain\tk\t1\t1\n",
+            "line 2: `foldmove` needs",
+        ),
+        (
+            "helmsman-layout 2\nhello there\n",
+            "line 2: expected move, open, collapse or foldmove, got hello there",
+        ),
+        (
+            "helmsman-layout 2\nmove\tmain\t0\t1\t1\ta\tb\nfold\tmain\tk\n",
+            "line 3: expected move, open",
+        ),
+        (
+            "helmsman-layout 2\nopen\tmain\n",
+            "line 2: expected open or collapse",
+        ),
+        ("helmsman-layout 2\nopen\t\tk\n", "line 2: no POU name"),
+        ("helmsman-layout 2\nopen\tmain\t\n", "line 2: no fold key"),
+        (
+            "helmsman-layout 2\nopen\tmain\tk\nopen\tmain\tk\n",
+            "line 3: k is already listed under open",
+        ),
+        (
+            "helmsman-layout 2\ncollapse\tmain\tk\ncollapse\tmain\tk\n",
+            "line 3:",
+        ),
+        (
+            "helmsman-layout 2\nfoldmove\tmain\tk\t1\t1\nfoldmove\tmain\tk\t2\t2\n",
+            "line 3: k is already moved",
+        ),
+        (
+            "helmsman-layout 2\nfoldmove\tmain\tk\tNaN\t1\n",
+            "line 2: offset NaN",
+        ),
+        (
+            "helmsman-layout 2\nfoldmove\tmain\tk\t1\t9e99\n",
+            "line 2: offset",
+        ),
+        (
+            "helmsman-layout 2\nfoldmove\tmain\tk\t1\n",
+            "line 2: expected foldmove",
+        ),
+        ("helmsman-layout 2\nopen\tmain\tk\\x\n", "line 2: unknown escape"),
+    ] {
+        let e = layout::parse_all(src).unwrap_err();
+        assert!(e.iter().any(|e| e.starts_with(want)), "{src:?}: {e:?}");
+    }
+}
+
+#[test]
+fn hostile_fold_files() {
+    // Empty, CRLF, trailing whitespace on the header, comments before it.
+    assert_eq!(layout::parse_all("").unwrap(), Layout::default());
+    assert_eq!(layout::parse_all("# c\r\n\r\n").unwrap(), Layout::default());
+    let crlf = "helmsman-layout 2\r\nopen\tmain\tk\r\ncollapse\tmain\tj\r\nfoldmove\tmain\tk\t1\t2\r\n";
+    let l = layout::parse_all(crlf).unwrap();
+    assert_eq!((l.opened.len(), l.collapsed.len(), l.fold_moves.len()), (1, 1, 1));
+    assert_eq!(
+        layout::parse_all("helmsman-layout 2  \nopen\tmain\tk\n")
+            .unwrap()
+            .opened
+            .len(),
+        1
+    );
+    // The same key may be open in one POU and another.
+    assert!(layout::parse_all("helmsman-layout 2\nopen\ta\tk\nopen\tb\tk\n").is_ok());
+    // A huge key and too many fold lines are refused whole.
+    let long = format!("helmsman-layout 2\nopen\tmain\t{}\n", "x".repeat(MAX_TEXT + 1));
+    assert!(layout::parse_all(&long).unwrap_err()[0].contains("longer than"));
+    let mut many = String::from("helmsman-layout 2\n");
+    for k in 0..=MAX_FOLDS {
+        let _ = writeln!(many, "open\tmain\tk{k}");
+    }
+    assert!(layout::parse_all(&many).unwrap_err()[0].contains(&format!("more than {MAX_FOLDS} fold lines")));
+    for token in ["inf", "-inf", "nan", "1e40", "0x10", "+", ""] {
+        let src = format!("helmsman-layout 2\nfoldmove\tmain\tk\t{token}\t0\n");
+        assert!(layout::parse_all(&src).is_err(), "{token}");
+    }
 }
 
 fn any_text() -> impl Strategy<Value = String> {

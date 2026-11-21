@@ -8,8 +8,9 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use esp_bootloader_esp_idf::ota_updater::OtaUpdater;
 use esp_bootloader_esp_idf::partitions::{
-    self, DataPartitionSubType, PARTITION_TABLE_MAX_LEN, PartitionType,
+    self, AppPartitionSubType, DataPartitionSubType, PARTITION_TABLE_MAX_LEN, PartitionType,
 };
 use esp_println::println;
 use esp_storage::FlashStorage;
@@ -40,10 +41,21 @@ impl core::fmt::Display for StoreError {
     }
 }
 
+/// Where the two app slots and the trial record sit in flash (the
+/// partition table, `partitions.csv`): `(offset, length)` of each, absolute.
+/// Read once at boot; `None` on a board flashed with a table that has one
+/// app partition, which then has no network update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    pub slots: [(u32, u32); 2],
+    pub record: (u32, u32),
+}
+
 /// The partition, its contents as last read, and the flash driver.
 pub struct Store {
     flash: FlashStorage<'static>,
     table: Vec<u8>,
+    layout: Option<Layout>,
     settings: Option<Found>,
     program: Option<Stored>,
 }
@@ -75,12 +87,87 @@ impl Store {
                 .map_err(|_| StoreError::Flash)?;
             (settings::choose(&a, &b), program::choose(&pa, &pb))
         };
+        let layout = find_layout(&mut flash, &mut table);
         Ok(Self {
             flash,
             table,
+            layout,
             settings,
             program,
         })
+    }
+
+    /// Where the OTA slots are, if this board's table has them.
+    #[must_use]
+    pub fn layout(&self) -> Option<Layout> {
+        self.layout
+    }
+
+    /// Reads `buf.len()` bytes at `offset` inside `part` (`(offset,
+    /// length)`, absolute).
+    ///
+    /// # Errors
+    /// Outside the partition, or the flash failing.
+    pub fn part_read(&mut self, part: (u32, u32), offset: u32, buf: &mut [u8]) -> Result<(), StoreError> {
+        check_span(part, offset, buf.len())?;
+        self.flash
+            .read(part.0 + offset, buf)
+            .map_err(|_| StoreError::Flash)
+    }
+
+    /// Erases and programs the sector `data` starts in, at `offset` inside
+    /// `part`. esp-storage reads, erases and rewrites each sector it
+    /// touches, so what `data` does not cover keeps what it had.
+    ///
+    /// # Errors
+    /// Outside the partition, or the flash failing.
+    pub fn part_write(&mut self, part: (u32, u32), offset: u32, data: &[u8]) -> Result<(), StoreError> {
+        check_span(part, offset, data.len())?;
+        self.flash
+            .write(part.0 + offset, data)
+            .map_err(|_| StoreError::Flash)
+    }
+
+    /// The slot, 0 or 1, the bootloader boots next. A table whose `otadata`
+    /// is erased (a fresh USB flash) boots the first app partition; this
+    /// writes that choice down, because the library's step from "nothing
+    /// chosen" to the second slot starts its sequence at zero.
+    ///
+    /// # Errors
+    /// No `otadata`, or the flash failing.
+    pub fn selected_slot(&mut self) -> Result<u8, StoreError> {
+        let buf = table_buf(&mut self.table)?;
+        let mut updater = OtaUpdater::new(&mut self.flash, buf).map_err(|_| StoreError::NoPartition)?;
+        match updater.selected_partition().map_err(|_| StoreError::Flash)? {
+            AppPartitionSubType::Ota0 => Ok(0),
+            AppPartitionSubType::Ota1 => Ok(1),
+            AppPartitionSubType::Factory => {
+                updater
+                    .ota_data()
+                    .and_then(|mut o| o.set_current_app_partition(AppPartitionSubType::Ota0))
+                    .map_err(|_| StoreError::Flash)?;
+                Ok(0)
+            }
+            _ => Err(StoreError::NoPartition),
+        }
+    }
+
+    /// Makes the bootloader boot `slot` next.
+    ///
+    /// # Errors
+    /// No `otadata`, a slot other than 0 or 1, or the flash failing.
+    pub fn select_slot(&mut self, slot: u8) -> Result<(), StoreError> {
+        let app = match slot {
+            0 => AppPartitionSubType::Ota0,
+            1 => AppPartitionSubType::Ota1,
+            _ => return Err(StoreError::NoPartition),
+        };
+        let buf = table_buf(&mut self.table)?;
+        let mut updater = OtaUpdater::new(&mut self.flash, buf).map_err(|_| StoreError::NoPartition)?;
+        updater
+            .ota_data()
+            .and_then(|mut o| o.set_current_app_partition(app))
+            .map_err(|_| StoreError::Flash)
     }
 
     #[must_use]
@@ -174,6 +261,42 @@ impl Store {
         });
         Ok(())
     }
+}
+
+fn check_span(part: (u32, u32), offset: u32, len: usize) -> Result<(), StoreError> {
+    if u64::from(offset) + len as u64 > u64::from(part.1) {
+        return Err(StoreError::TooBig);
+    }
+    Ok(())
+}
+
+fn table_buf(table: &mut [u8]) -> Result<&mut [u8; PARTITION_TABLE_MAX_LEN], StoreError> {
+    table.try_into().map_err(|_| StoreError::NoPartition)
+}
+
+/// The two OTA slots and the trial record from the partition table. The
+/// record is the data partition labelled `bootrec`. `None` unless all
+/// three are there and the record holds its two sectors.
+fn find_layout(flash: &mut FlashStorage<'static>, table: &mut [u8]) -> Option<Layout> {
+    let buf = table_buf(table).ok()?;
+    let table = partitions::read_partition_table(flash, buf).ok()?;
+    let mut slots = [None; 2];
+    let mut record = None;
+    for entry in table.iter() {
+        match entry.partition_type() {
+            PartitionType::App(AppPartitionSubType::Ota0) => slots[0] = Some((entry.offset(), entry.len())),
+            PartitionType::App(AppPartitionSubType::Ota1) => slots[1] = Some((entry.offset(), entry.len())),
+            PartitionType::Data(DataPartitionSubType::Undefined) if entry.label_as_str() == "bootrec" => {
+                record = Some((entry.offset(), entry.len()));
+            }
+            _ => {}
+        }
+    }
+    let record = record.filter(|r| r.1 >= helmsman_nodecore::ota::record::SPAN)?;
+    Some(Layout {
+        slots: [slots[0]?, slots[1]?],
+        record,
+    })
 }
 
 fn region<'a>(

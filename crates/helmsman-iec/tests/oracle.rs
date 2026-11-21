@@ -82,13 +82,21 @@ fn printable(ty: &str) -> bool {
             | "LWORD"
             | "REAL"
             | "LREAL"
-    )
+            | "DATE"
+            | "TOD"
+            | "DT"
+    ) || is_text(ty)
+}
+
+fn is_text(ty: &str) -> bool {
+    ty.starts_with("STRING")
 }
 
 /// printf conversion for a scalar type (C default argument promotion).
 fn fmt(ty: &str) -> &'static str {
     match ty {
-        "LINT" => "%lld",
+        t if is_text(t) => "%s",
+        "LINT" | "DATE" | "TOD" | "DT" => "%lld",
         "ULINT" | "LWORD" => "%llu",
         "SINT" | "INT" | "DINT" => "%d",
         "REAL" | "LREAL" => "%.17g",
@@ -162,6 +170,7 @@ fn ours(c: &Case) -> Result<Vec<String>, String> {
     Ok(c.vars
         .iter()
         .map(|(n, t, _)| match p.get(n) {
+            _ if is_text(t) => p.get_str(n).unwrap_or_default(),
             Some(Value::Bool(b)) => u8::from(b).to_string(),
             Some(Value::Int(i)) => i.to_string(),
             Some(Value::Real(r)) if t == "REAL" || t == "LREAL" => format!("{r:?}"),
@@ -217,6 +226,127 @@ fn rusty() -> Option<String> {
         eprintln!("HELMSMAN_RUSTY not set; ruSTy oracle skipped");
     }
     cmd
+}
+
+// ---- strings ----
+
+/// STRING behaviour, one case per question: what an assignment cuts, what
+/// a count or position outside the string does, what a conversion makes of
+/// text that is no number. Every variable is compared, text as printed.
+#[allow(clippy::too_many_lines)]
+fn string_corpus() -> Vec<Case> {
+    let t = |n: &str| var(n, "STRING[8]");
+    vec![
+        // Assignment cuts at the declared length; LEN sees the cut text.
+        case(
+            "",
+            vec![t("a"), var("b", "STRING[3]"), var("c", "STRING"), var("n", "DINT"), var("m", "DINT")],
+            "a := 'abcdefghij'; b := a; c := 'x'; n := LEN(a); m := LEN(b);",
+        ),
+        case(
+            "",
+            vec![var_init("a", "STRING[8]", "'hello'"), var("e", "STRING[8]"), var("n", "DINT"), var("m", "DINT")],
+            "n := LEN(a); e := ''; m := LEN(e);",
+        ),
+        // LEFT, RIGHT, MID at every boundary of a 5-character string.
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[8]", "'abcde'"),
+                t("l0"), t("l1"), t("l4"), t("l5"), t("l6"),
+                t("r0"), t("r1"), t("r4"), t("r5"), t("r6"),
+            ],
+            "l0 := LEFT(a, 0); l1 := LEFT(a, 1); l4 := LEFT(a, 4); l5 := LEFT(a, 5); l6 := LEFT(a, 6);
+             r0 := RIGHT(a, 0); r1 := RIGHT(a, 1); r4 := RIGHT(a, 4); r5 := RIGHT(a, 5); r6 := RIGHT(a, 6);",
+        ),
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[8]", "'abcde'"),
+                t("m11"), t("m15"), t("m16"), t("m31"), t("m33"), t("m35"), t("m51"), t("m55"), t("m01"), t("m60"), t("m00"),
+            ],
+            "m11 := MID(a, 1, 1); m15 := MID(a, 5, 1); m16 := MID(a, 6, 1); m31 := MID(a, 1, 3); m33 := MID(a, 3, 3);
+             m35 := MID(a, 5, 3); m51 := MID(a, 1, 5); m55 := MID(a, 5, 5); m01 := MID(a, 1, 0); m60 := MID(a, 0, 6); m00 := MID(a, 0, 0);",
+        ),
+        // CONCAT, with truncation, with itself.
+        case(
+            "",
+            vec![var_init("a", "STRING[8]", "'abc'"), var("b", "STRING[4]"), t("c"), t("d"), var("e", "STRING")],
+            "c := CONCAT(a, 'def'); b := CONCAT(a, 'def'); d := CONCAT(a, a, a); a := CONCAT(a, a); e := CONCAT('x', a, 'y');",
+        ),
+        // FIND: position of the first match, 0 when none or when the pattern is empty.
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[8]", "'abcabc'"),
+                var("f1", "DINT"), var("f2", "DINT"), var("f3", "DINT"), var("f4", "DINT"), var("f5", "DINT"), var("f6", "DINT"),
+            ],
+            "f1 := FIND(a, 'abc'); f2 := FIND(a, 'ca'); f3 := FIND(a, 'x'); f4 := FIND(a, 'abcabcabc'); f5 := FIND(a, 'c'); f6 := FIND('', 'a');",
+        ),
+        // INSERT, DELETE, REPLACE.
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[10]", "'abcde'"),
+                t("i0"), t("i2"), t("i5"), t("d1"), t("d2"), t("d3"), t("r1"), t("r2"), t("r3"),
+            ],
+            "i0 := INSERT(a, 'XY', 0); i2 := INSERT(a, 'XY', 2); i5 := INSERT(a, 'XY', 5);
+             d1 := DELETE(a, 1, 1); d2 := DELETE(a, 2, 2); d3 := DELETE(a, 9, 4);
+             r1 := REPLACE(a, 'XY', 1, 1); r2 := REPLACE(a, 'XY', 2, 3); r3 := REPLACE(a, 'XY', 0, 5);",
+        ),
+        // Comparison, byte by byte, a prefix sorting first.
+        case(
+            "",
+            vec![
+                var_init("a", "STRING[8]", "'abc'"),
+                var_init("b", "STRING[8]", "'abd'"),
+                var_init("c", "STRING[8]", "'ab'"),
+                var("eq", "BOOL"), var("ne", "BOOL"), var("lt", "BOOL"), var("gt", "BOOL"), var("le", "BOOL"), var("ge", "BOOL"),
+                var("p", "BOOL"), var("q", "BOOL"), var("z", "BOOL"),
+            ],
+            "eq := a = b; ne := a <> b; lt := a < b; gt := a > b; le := a <= b; ge := a >= b;
+             p := c < a; q := a > c; z := '' < c;",
+        ),
+        // Conversions.
+        case(
+            "",
+            vec![
+                var("i1", "STRING[8]"), var("i2", "STRING[8]"), var("i3", "STRING[3]"), var("b1", "STRING[8]"), var("b2", "STRING[8]"),
+                var("n1", "DINT"), var("n2", "DINT"), var("n3", "DINT"),
+            ],
+            "i1 := INT_TO_STRING(-42); i2 := DINT_TO_STRING(123456); i3 := DINT_TO_STRING(123456);
+             b1 := BOOL_TO_STRING(TRUE); b2 := BOOL_TO_STRING(FALSE);
+             n1 := STRING_TO_DINT('-17'); n2 := STRING_TO_DINT('300'); n3 := STRING_TO_DINT('12');",
+        ),
+        // Text that is no number, and one that does not fit the type.
+        case(
+            "",
+            vec![
+                var("a", "DINT"), var("b", "DINT"), var("c", "DINT"), var("d", "DINT"), var("e", "DINT"),
+                var("f", "DINT"), var("g", "DINT"), var("h", "DINT"), var("i", "SINT"), var("j", "DINT"),
+                var("k", "LINT"), var("l", "UDINT"),
+            ],
+            "a := STRING_TO_DINT('12x'); b := STRING_TO_DINT(''); c := STRING_TO_DINT(' 7'); d := STRING_TO_DINT('+5');
+             e := STRING_TO_DINT('0x10'); f := STRING_TO_DINT('1.5'); g := STRING_TO_DINT('abc'); h := STRING_TO_DINT('-');
+             i := STRING_TO_SINT('300'); j := STRING_TO_DINT('99999999999'); k := STRING_TO_LINT('-9223372036854775808');
+             l := STRING_TO_UDINT('-1');",
+        ),
+        // Fractions and exponents are cut toward zero; a dot with no digit
+        // beside it, a second dot or a space inside is no number.
+        case(
+            "",
+            vec![
+                var("a", "DINT"), var("b", "DINT"), var("c", "DINT"), var("d", "DINT"), var("e", "DINT"),
+                var("f", "DINT"), var("g", "DINT"), var("h", "DINT"), var("i", "DINT"), var("j", "DINT"),
+                var("k", "LINT"), var("l", "LINT"), var("m", "REAL"), var("n", "REAL"), var("o", "REAL"),
+            ],
+            "a := STRING_TO_DINT('1.9'); b := STRING_TO_DINT('-1.9'); c := STRING_TO_DINT('1e2'); d := STRING_TO_DINT('7 ');
+             e := STRING_TO_DINT('  -7'); f := STRING_TO_DINT('3000000000'); g := STRING_TO_DINT('1.'); h := STRING_TO_DINT('.5');
+             i := STRING_TO_DINT('1 2'); j := STRING_TO_DINT('1.5.5');
+             k := STRING_TO_LINT('9007199254740993'); l := STRING_TO_LINT('9223372036854775807');
+             m := STRING_TO_REAL('2.5e-1'); n := STRING_TO_REAL('.5'); o := STRING_TO_REAL('abc');",
+        ),
+    ]
 }
 
 // ---- the corpus: behaviours the standard leaves to the implementation ----
@@ -309,6 +439,116 @@ fn corpus() -> Vec<Case> {
                 var("px", "INT"),
             ],
             "FOR j := 1 TO 5 DO s := s + a[j]; END_FOR; a[5] := s; p.y := p.y + p.x; px := p.y;",
+        ),
+        // VAR_IN_OUT on a function block: an array and a scalar by
+        // reference, the block's writes seen by the caller, state per
+        // instance. The expected values come from ruSTy, as for every case.
+        case(
+            "FUNCTION_BLOCK oracle_bump
+               VAR_INPUT add : DINT; END_VAR
+               VAR_IN_OUT buf : ARRAY[0..3] OF DINT; n : DINT; END_VAR
+               VAR_OUTPUT first : DINT; END_VAR
+               VAR j : DINT; END_VAR
+               FOR j := 0 TO 3 DO buf[j] := buf[j] + add; END_FOR;
+               n := n * 2 + 1;
+               first := buf[0];
+             END_FUNCTION_BLOCK",
+            vec![
+                var_init("a", "ARRAY[0..3] OF DINT", "[1, 2, 3, 4]"),
+                var("b", "ARRAY[0..3] OF DINT"),
+                var_init("k", "DINT", "5"),
+                var("p", "oracle_bump"),
+                var("q", "oracle_bump"),
+                var("a0", "DINT"),
+                var("a3", "DINT"),
+                var("b0", "DINT"),
+                var("f", "DINT"),
+            ],
+            "p(add := 10, buf := a, n := k); q(add := 1, buf := b, n := k); p(add := 10, buf := a, n := k);
+             a0 := a[0]; a3 := a[3]; b0 := b[0]; f := p.first;",
+        ),
+        // VAR_OUTPUT on a function, bound with =>. Every call binds both
+        // outputs: ruSTy refuses a call that leaves one out, with named
+        // inputs or positional ones (E032, "this POU takes 4 arguments but
+        // 2 arguments were supplied"), and so does Helmsman (Nick,
+        // 2026-11-15; the refusal is in tests/in_out.rs).
+        case(
+            "FUNCTION oracle_divmod : DINT
+               VAR_INPUT a, b : DINT; END_VAR
+               VAR_OUTPUT rem : DINT; ok : BOOL; END_VAR
+               IF b = 0 THEN oracle_divmod := 0; rem := a; ok := FALSE; RETURN; END_IF;
+               oracle_divmod := a / b;
+               rem := a MOD b;
+               ok := TRUE;
+             END_FUNCTION",
+            vec![
+                var("q1", "DINT"),
+                var("r1", "DINT"),
+                var("g1", "BOOL"),
+                var("q2", "DINT"),
+                var("r2", "DINT"),
+                var("g2", "BOOL"),
+                var("q3", "DINT"),
+                var("r3", "DINT"),
+                var("g3", "BOOL"),
+            ],
+            "q1 := oracle_divmod(17, 5, rem => r1, ok => g1); q2 := oracle_divmod(a := 9, b := 0, rem => r2, ok => g2);
+             q3 := oracle_divmod(-17, 5, rem => r3, ok => g3);",
+        ),
+        // VAR_GLOBAL, as ruSTy's own tests write it. The names are unique
+        // across the corpus because ruSTy gets every case in one source and
+        // a global is visible to all of it. Three forms, each taken from a
+        // ruSTy lit test (tests/lit/single/ of PLC-lang/rusty, in the
+        // fetched corpus under target/st-corpus/rusty):
+        // type_promotion/bit_string/constants/constant_operands.st: a
+        // CONSTANT global block, and a global initialised from it (ruSTy divides
+        // the DWORD by 2 there; Helmsman has no `/` on bit strings, so AND).
+        case(
+            "VAR_GLOBAL CONSTANT
+                 oracle_mask : DWORD := 16#FFFF_FFFF;
+             END_VAR
+             VAR_GLOBAL
+                 oracle_half : DWORD := oracle_mask AND 16#0FFF_FFFF;
+             END_VAR",
+            vec![var("a", "DWORD"), var("b", "BOOL")],
+            "a := oracle_half; b := oracle_mask > 1;",
+        ),
+        // var_external/var_external.st: a global array, reached by name in
+        // a body with no declaration, and by a function that declares it
+        // `VAR_EXTERNAL CONSTANT` (ruSTy's test writes through that; here
+        // the function only reads, which Helmsman allows).
+        case(
+            "VAR_GLOBAL
+                 oracle_arr : ARRAY [0..10] OF DINT;
+             END_VAR
+             FUNCTION oracle_total : DINT
+             VAR_EXTERNAL CONSTANT
+                 oracle_arr : ARRAY [0..10] OF DINT;
+             END_VAR
+             VAR i : DINT; END_VAR
+                 FOR i := 0 TO 10 DO
+                     oracle_total := oracle_total + oracle_arr[i];
+                 END_FOR;
+             END_FUNCTION",
+            vec![var("i", "DINT"), var("t", "DINT"), var("e3", "DINT")],
+            "FOR i := 0 TO 10 DO oracle_arr[i] := oracle_arr[i] + i; END_FOR; t := oracle_total(); e3 := oracle_arr[3];",
+        ),
+        // var_external/var_external_initializer_has_no_effect.st: a global
+        // with an initial value, and a function that names it VAR_EXTERNAL
+        // (ruSTy's file also gives the VAR_EXTERNAL an initial value, which
+        // Helmsman refuses; this one leaves it out).
+        case(
+            "VAR_GLOBAL
+                 oracle_i : DINT := 42;
+             END_VAR
+             FUNCTION oracle_twice : DINT
+             VAR_EXTERNAL
+                 oracle_i : DINT;
+             END_VAR
+                 oracle_twice := oracle_i * 2;
+             END_FUNCTION",
+            vec![var("a", "DINT"), var("b", "DINT")],
+            "a := oracle_twice(); b := oracle_i + 1;",
         ),
         // Standard functions.
         case(
@@ -409,10 +649,160 @@ fn small_int_negation_is_dint_wide_on_both_sides() {
     );
 }
 
+/// Without ruSTy at hand the corpus still has to compile and run here, so a
+/// case that only the oracle run would reject shows up in every `cargo test`.
+#[test]
+fn corpus_compiles_and_runs_here() {
+    for (k, c) in corpus().iter().chain(&string_corpus()).enumerate() {
+        ours(c).unwrap_or_else(|e| panic!("corpus case {k}: {e}\n{}", c.program("case")));
+    }
+}
+
+/// The in-out and function-output cases, by value: what ruSTy is expected
+/// to print for them is what these definitions give (a block adds to the
+/// caller's array through the reference, `n` doubles and gains one).
+#[test]
+fn by_reference_cases_have_the_values_their_definitions_give() {
+    let corpus = corpus();
+    let get = |decl: &str| corpus.iter().find(|c| c.decls.contains(decl)).unwrap();
+    let bump = ours(get("oracle_bump")).unwrap();
+    // Three scans of: p adds 10 twice, q adds 1 to b. a = [1,2,3,4] + 60,
+    // so a0 = 61, a3 = 64; b0 = 3; p.first = a[0] after its last call.
+    assert_eq!(bump[5..], ["61", "64", "3", "61"]);
+    // k is doubled and increased by one at each of the 9 calls:
+    // (5 + 1) * 2^9 - 1.
+    assert_eq!(bump[2], "3071");
+    let divmod = ours(get("oracle_divmod")).unwrap();
+    assert_eq!(divmod, ["3", "2", "1", "0", "9", "0", "-3", "-2", "1"]);
+}
+
 #[test]
 fn corpus_agrees_with_rusty() {
     let Some(cmd) = rusty() else { return };
     compare(&cmd, &corpus());
+}
+
+#[test]
+fn strings_agree_with_rusty() {
+    let Some(cmd) = rusty() else { return };
+    compare(&cmd, &string_corpus());
+}
+
+// ---- dates and times of day ----
+
+/// DATE, TOD and DT, one case per question: what a literal counts, what
+/// the arithmetic table gives (and where a TOD wraps), the conversions,
+/// `CONCAT_*` with a date that does not exist, `DAY_OF_WEEK`. ruSTy prints
+/// each as the 64-bit nanosecond count, which is what we hold.
+///
+/// Written from ruSTy 1.0.8's source (typesystem.rs, libs/stdlib); it
+/// passed against ruSTy in CI's oracle job (PR #513).
+#[allow(clippy::too_many_lines)]
+fn calendar_corpus() -> Vec<Case> {
+    let v = |n: &str, t: &str| var(n, t);
+    vec![
+        case(
+            "",
+            vec![
+                var_init("d", "DATE", "D#2024-02-29"),
+                var_init("t", "TOD", "TOD#08:30:15.5"),
+                var_init("x", "DT", "DT#2024-02-29-08:30:00"),
+                var_init("e", "DT", "DT#1969-12-31-23:59:59"),
+                var_init("d0", "DATE", "D#1970-01-01"),
+            ],
+            "",
+        ),
+        case(
+            "",
+            vec![
+                var_init("a", "TOD", "TOD#23:59:59.999"),
+                var_init("b", "TOD", "TOD#00:00:00"),
+                v("c", "TOD"),
+                v("d", "TOD"),
+                v("e", "TOD"),
+                v("f", "TOD"),
+            ],
+            "c := a + T#1s; d := b - T#1ms; e := a + T#49h; f := b - T#25h;",
+        ),
+        case(
+            "",
+            vec![
+                var_init("a", "DT", "DT#2023-12-31-23:59:59"),
+                var_init("b", "DT", "DT#2024-02-28-12:00:00"),
+                v("a1", "DT"),
+                v("b1", "DT"),
+                v("b2", "DT"),
+                v("gap", "TIME"),
+            ],
+            "a1 := a + T#1s; b1 := b + T#1d; b2 := b1 - T#36h; gap := a1 - b;",
+        ),
+        case(
+            "",
+            vec![
+                var_init("d1", "DATE", "D#2024-03-01"),
+                var_init("d0", "DATE", "D#2023-03-01"),
+                var_init("t1", "TOD", "TOD#06:00:00"),
+                var_init("t0", "TOD", "TOD#18:30:00"),
+                v("y", "TIME"),
+                v("w", "TIME"),
+            ],
+            "y := d1 - d0; w := t1 - t0;",
+        ),
+        case(
+            "",
+            vec![
+                var_init("x", "DT", "DT#2024-02-29-08:30:15"),
+                var_init("y", "DT", "DT#1969-12-31-23:00:00"),
+                v("d", "DATE"),
+                v("t", "TOD"),
+                v("dy", "DATE"),
+                v("ty", "TOD"),
+            ],
+            "d := DT_TO_DATE(x); t := DT_TO_TOD(x); dy := DT_TO_DATE(y); ty := DT_TO_TOD(y);",
+        ),
+        case(
+            "",
+            vec![
+                var_init("d", "DATE", "D#2024-02-29"),
+                var_init("t", "TOD", "TOD#13:05:00"),
+                v("x", "DT"),
+                v("w", "SINT"),
+                v("w0", "SINT"),
+                v("c", "DATE"),
+                v("ct", "TOD"),
+                v("bad", "DATE"),
+                v("badt", "TOD"),
+            ],
+            "x := CONCAT_DATE_TOD(d, t); w := DAY_OF_WEEK(d); w0 := DAY_OF_WEEK(D#1970-01-01); \
+             c := CONCAT_DATE(2024, 3, 31); ct := CONCAT_TOD(23, 59, 59, 999); \
+             bad := CONCAT_DATE(2023, 2, 29); badt := CONCAT_TOD(24, 0, 0, 0);",
+        ),
+        case(
+            "",
+            vec![
+                var_init("a", "DT", "DT#2024-02-29-08:30:00"),
+                var_init("z", "DT", "DT#2024-02-29-08:30:01"),
+                v("lt", "BOOL"),
+                v("ge", "BOOL"),
+                v("eq", "BOOL"),
+                v("ne", "BOOL"),
+            ],
+            "lt := a < z; ge := a >= z; eq := a = a; ne := a <> z;",
+        ),
+    ]
+}
+
+#[test]
+fn calendar_corpus_compiles_and_runs_here() {
+    for c in calendar_corpus() {
+        ours(&c).unwrap_or_else(|e| panic!("{e}\n{}", c.program("case")));
+    }
+}
+
+#[test]
+fn calendar_agrees_with_rusty() {
+    let Some(cmd) = rusty() else { return };
+    compare(&cmd, &calendar_corpus());
 }
 
 // ---- seeded random programs ----

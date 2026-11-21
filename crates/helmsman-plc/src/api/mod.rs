@@ -36,13 +36,14 @@
 //! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
 //! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
 //! POST /api/market/list                   token: {index}: the signed index at that URL, verified, its bundles (see [`market`])
-//! POST /api/market/install                token: {index, name, version?}: that bundle fetched, checked against the index, imported as POST /api/bundles
+//! POST /api/market/install                token: {index, name, version?, without_review?}: that bundle fetched, checked against the index, reviewed by the Agent (it can only refuse), then imported as POST /api/bundles; without a review it stops (409) until an engineer session sends without_review (see [`review`])
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
 //! POST /api/snapshots/{id}/rollback       as apply: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
 //! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
+//! POST /api/design                        token: describe a machine, or continue a design cut at max_tokens {description} | {session}; the relay's design profile answers with a control system design in Markdown, one turn per request, streamed
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
 //! POST /api/help                          token or session: what went wrong, or a question, in words; a diagnosis and a Markdown issue with the box's context, redacted, or an answer from the help pages (see [`help`])
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
@@ -53,11 +54,17 @@
 //! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
 //! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
 //! POST /api/devices/{name}/browse         token: an observed controller's tag list, read-only
+//! GET  /api/device-profile/proposal       the device profile the agent proposed for a device the library lacks: channels, text, summary (404 when none; see [`device_profile`])
+//! POST /api/device-profile/proposal       token or session: {name, text, summary}, read by the profile checker; held for a person, or 422 with the problems and their lines
+//! POST /api/device-profile/proposal/accept engineer session: {id, project, name?, channels?}: the channels renamed, checked again, `NAME.device` saved into the project
+//! DELETE /api/device-profile/proposal     engineer session: drop the proposal
+//! POST /api/device-profile/publish        engineer session: {project, file}: the saved NAME.device, checked again, sent to the relay, which opens a draft pull request into the public device library (needs --relay; see [`device_profile`])
 //! GET  /api/projects ...                  the editor's projects; PUT, DELETE, deploy and uploads need an engineer session (see [`projects`])
 //! POST /api/projects/{p}/requirements    engineer session: one requirement in words; the agent writes its test (see [`requirements`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
 //! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
 //! GET  /api/desk                        a session: that person's desk; PUT sets it (see [`desk`])
+//! GET  /api/pane-layouts                the box's named pane layouts; PUT and DELETE need an engineer session (see [`pane_layouts`])
 //! GET  /api/drivers ...                   the box's WASM driver files; list, PUT and DELETE need an engineer session (see [`drivers`])
 //! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
@@ -119,9 +126,11 @@ mod carry;
 pub mod catalog;
 pub mod chat;
 mod control;
+pub mod design;
 pub mod desk;
 #[cfg(feature = "box")]
 pub mod devconf;
+mod device_profile;
 pub mod discover;
 pub mod drivers;
 pub mod dropin;
@@ -133,12 +142,14 @@ pub mod live;
 pub mod login;
 pub mod market;
 pub mod mcp;
+pub mod pane_layouts;
 pub mod pdf;
 pub mod photo;
 pub mod projects;
 pub mod proposal;
 pub mod render;
 pub mod requirements;
+pub mod review;
 pub mod sim;
 pub mod store;
 pub mod swap;
@@ -276,6 +287,10 @@ pub struct More {
     /// (`<state-dir>/desks/`, [`desk::Desks::in_dir`]). `None`: memory
     /// only.
     pub desks: Option<std::path::PathBuf>,
+    /// Where the box's pane layouts are kept across restarts
+    /// (`<state-dir>/pane-layouts.json`, [`pane_layouts::Kept::in_file`]).
+    /// `None`: memory only.
+    pub pane_layouts: Option<std::path::PathBuf>,
     /// Configuring devices through their own protocols
     /// ([`devconf`]); `None`: those routes answer 404.
     pub devconf: Option<devconf::Setup>,
@@ -362,6 +377,8 @@ struct Ctx {
     adapter: Option<SocketAddr>,
     /// Drop-in documents (see [`dropin`]).
     dropins: Mutex<dropin::Store>,
+    /// The device profile the agent proposed, for a person to check (see [`device_profile`]).
+    device_profile: Mutex<device_profile::Held>,
     /// Held while a device browse runs (one at a time).
     browsing: Mutex<()>,
     /// The network scan and the device library (see [`discover`]).
@@ -387,6 +404,8 @@ struct Ctx {
     trends: Mutex<trend::Trends>,
     /// Each person's desk ([`desk`]).
     desks: Mutex<desk::Desks>,
+    /// The box's pane layouts ([`pane_layouts`]).
+    pane_layouts: Mutex<pane_layouts::Kept>,
     /// The box's HTTPS ([`Api::start_secure`]); `None`: plain HTTP only.
     tls: Option<Tls>,
     /// Device configuration (see [`devconf`]); `None`: 404.
@@ -406,6 +425,14 @@ impl Ctx {
 
     fn desks(&self) -> MutexGuard<'_, desk::Desks> {
         self.desks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn pane_layouts(&self) -> MutexGuard<'_, pane_layouts::Kept> {
+        self.pane_layouts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn device_profile(&self) -> MutexGuard<'_, device_profile::Held> {
+        self.device_profile.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn dropins(&self) -> MutexGuard<'_, dropin::Store> {
@@ -655,6 +682,7 @@ impl Api {
             running_drivers,
             trend_pins,
             desks,
+            pane_layouts,
             devconf,
             dhcp,
             discovery,
@@ -689,6 +717,7 @@ impl Api {
             market_local,
             adapter,
             dropins: Mutex::new(dropin::Store::default()),
+            device_profile: Mutex::new(device_profile::Held::default()),
             browsing: Mutex::new(()),
             discovery: discover::State::new(discovery),
             site,
@@ -700,6 +729,9 @@ impl Api {
             running_drivers: Mutex::new(running_drivers),
             trends: Mutex::new(trend_pins.map_or_else(trend::Trends::default, trend::Trends::in_file)),
             desks: Mutex::new(desks.map_or_else(desk::Desks::default, desk::Desks::in_dir)),
+            pane_layouts: Mutex::new(
+                pane_layouts.map_or_else(pane_layouts::Kept::default, pane_layouts::Kept::in_file),
+            ),
             tls,
             devconf: devconf.map(devconf::State::new),
             dhcp,
@@ -814,6 +846,8 @@ enum Reply {
     Chat(chat::Taken),
     /// One explanation for the agent.
     Explain(explain::Job),
+    /// One turn of a design.
+    Design(design::Job),
     /// One requirement: the agent writes its test.
     Requirement(Box<requirements::Job>),
     /// One help request: a diagnosis and an issue.
@@ -949,6 +983,11 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 explain::serve(chat, &mut stream, job);
             }
         }
+        Reply::Design(job) => {
+            if let Some(chat) = &ctx.chat {
+                design::serve(ctx, chat, &mut stream, job);
+            }
+        }
         Reply::Chat(taken) => {
             if let Some(chat) = &ctx.chat {
                 chat.serve(&mut stream, taken, &ctx.catalog());
@@ -971,6 +1010,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 Reply::Once(_)
                 | Reply::Chat(_)
                 | Reply::Explain(_)
+                | Reply::Design(_)
                 | Reply::Requirement(_)
                 | Reply::Help(_)
                 | Reply::File(_) => Ok(()),
@@ -1115,6 +1155,9 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
     {
         return start_explain(req, ctx);
     }
+    if req.method == "POST" && req.segments == ["api", "design"] {
+        return start_design(req, ctx);
+    }
     if req.method == "POST" && req.segments == ["api", "help"] {
         return match help::start(req, ctx) {
             Ok(job) => Reply::Help(Box::new(job)),
@@ -1235,6 +1278,35 @@ fn start_chat(req: &Request, ctx: &Ctx) -> Reply {
                 return Reply::Once(audit_full());
             }
             Reply::Chat(taken)
+        }
+    }
+}
+
+/// `POST /api/design`: checked and its design taken here (a bad request is
+/// a plain 4xx), audited, then one turn streamed.
+fn start_design(req: &Request, ctx: &Ctx) -> Reply {
+    let Some(chat) = &ctx.chat else {
+        let r = Response::error(
+            503,
+            "no relay configured on this box (--relay); the design step needs the agent",
+        );
+        return Reply::Once(match audit(ctx, req, 503, "design: no relay configured") {
+            Some(_) => r,
+            None => audit_full(),
+        });
+    };
+    match design::take(chat, &req.body) {
+        Err((r, detail)) => Reply::Once(match audit(ctx, req, r.status, &detail) {
+            Some(_) => r,
+            None => audit_full(),
+        }),
+        Ok(job) => {
+            let detail = format!("design: session {}", job.id());
+            if audit(ctx, req, 200, &detail).is_none() {
+                design::release(chat, job);
+                return Reply::Once(audit_full());
+            }
+            Reply::Design(job)
         }
     }
 }
@@ -1406,8 +1478,11 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         (_, ["api", "forces", ..]) => return forces::mutate(req, ctx, &segs[1..]),
         ("POST", ["api", "modules", name, op]) if *op != "trace" => return control::post(req, ctx, name, op),
         (_, ["api", "drivers", ..]) => return drivers::mutate(req, ctx, &segs[1..]),
+        (_, ["api", "device-profile", ..]) => return device_profile::mutate(req, ctx, &segs[2..]),
         ("PUT", ["api", "trends", "pins"]) => return trend::put_pins(req, ctx),
         ("PUT", ["api", "desk"]) => return desk::put(req, ctx),
+        ("PUT", ["api", "pane-layouts"]) => return pane_layouts::put(req, ctx),
+        ("DELETE", ["api", "pane-layouts", name]) => return pane_layouts::delete(req, ctx, name),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1455,12 +1530,12 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
     }
     match path {
         ["api", "forces"] => return Some("GET, POST, DELETE"),
-        ["api", "forces", _] => return Some("DELETE"),
+        ["api", "forces" | "pane-layouts", _] => return Some("DELETE"),
         ["api", "modules", _, "stop" | "run" | "restart"] => return Some("POST"),
         ["api", "drivers" | "trends"] => return Some("GET"),
         ["api", "devices", _, "config", "password"] => return Some("PUT, DELETE, POST"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
-        ["api", "trends", "pins"] | ["api", "desk"] => return Some("GET, PUT"),
+        ["api", "trends", "pins"] | ["api", "desk" | "pane-layouts"] => return Some("GET, PUT"),
         _ => {}
     }
     match path {
@@ -1468,7 +1543,10 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat" | "explain" | "help" | "bundles" | "logout"]
+        | [
+            "api",
+            "chat" | "explain" | "design" | "help" | "bundles" | "logout",
+        ]
         | ["api", "devices", "discover"]
         | ["api", "market", "list" | "install"]
         | ["api", "devices", _, "browse"]
@@ -1827,6 +1905,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "devices", id, "config"] => devconf::get(ctx, id),
         ["api", "adapter"] => Response::json(200, &adapter_json(ctx.adapter)),
         ["api", "io_map"] => io_map(ctx),
+        ["api", "device-profile", "proposal"] => device_profile::get(ctx),
         ["api", "proposals"] => Response::json(
             200,
             &Json::Array(ctx.box_.proposals.list().into_iter().map(|p| p.json).collect()),
@@ -1865,6 +1944,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "drivers"] => drivers::list(req, ctx),
         ["api", "trends", rest @ ..] => trend::get(req, ctx, rest),
         ["api", "desk"] => desk::get(req, ctx),
+        ["api", "pane-layouts"] => pane_layouts::get(ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "site"] => site_route(ctx, c, &view),
@@ -1979,6 +2059,11 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/devices/{id}/config/snapshot", true, "engineer session: {version?}: save the unit's export as ID.devconf in the running project"),
             e("GET", "/api/adapter", true, "the EtherNet/IP adapter: {protocol, bind, on}"),
             e("GET", "/api/io_map", true, "the running I/O map file and its snapshot id"),
+            e("GET", "/api/device-profile/proposal", true, "the device profile the agent proposed: id, name, summary, text, vendor, model, transports, channels (name, dir, type, unit, safe, points); 404 when none"),
+            e("POST", "/api/device-profile/proposal", true, "token or session: {name, text, summary}: the text is read by the profile checker; 201 holds it and lists its channels, 422 lists problems with lines"),
+            e("POST", "/api/device-profile/proposal/accept", true, "engineer session: {id, project, name?, channels?: {FROM: TO}}: rename, check again and save NAME.device into the project as a new file"),
+            e("DELETE", "/api/device-profile/proposal", true, "engineer session: drop the proposal"),
+            e("POST", "/api/device-profile/publish", true, "engineer session: {project, file}: the saved NAME.device, read again by the profile checker and sent to the agent service, which opens a draft pull request into the device library; 201 with {number, url, created, draft, folder}, 200 when it already has one open, 422 with the reason or the profile's problems"),
             e("GET", "/api/proposals", true, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", true, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),
@@ -1997,13 +2082,14 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/snapshots/{id}/bundle", true, "that snapshot as an unsigned bundle file (sign it off the box)"),
             e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/market/list", true, "{index}: the signed marketplace index at that URL, verified against the trusted publishers, and its bundles"),
-            e("POST", "/api/market/install", true, "{index, name, version?}: that bundle fetched from the index's site, checked against the index, then imported as POST /api/bundles"),
+            e("POST", "/api/market/install", true, "{index, name, version?, without_review?}: that bundle fetched from the index's site, checked against the index, reviewed by the Agent (422 if it advises against installing; 409 if it could not be reviewed, until an engineer's login session sends without_review: true), then imported as POST /api/bundles"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
             e("GET", "/api/replays/{n}", true, "a replay kept as evidence"),
             e("GET", "/api/policy", true, "the approval policy this box enforces, and its transport: https and the certificate's SHA-256 fingerprint"),
             e("GET", "/api/events", true, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
+            e("POST", "/api/design", true, "{description} to start a design of a machine, or {session} to continue one cut at max_tokens: one relay turn per request, an event stream: session, thinking, text, then done {stop, output_tokens, turns, more} (more: post {session} again) or error; the box adds its dialect, running modules, devices and requirement tests"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
             e("POST", "/api/help", true, "{question, messages?}: what went wrong, in words (1 to 2000 characters) with the page's recent messages; the box attaches its build, the running project, its devices and their errors, all redacted of secrets. An event stream: help, text, tool_call, tool_result, retrying, issue (a diagnosis and a Markdown issue to copy; nothing is filed), done or error"),
             e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB), a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side) or a PDF (at most 2 MiB, passed to the model unread): stored in memory, 201 with its id"),
@@ -2035,6 +2121,9 @@ fn index(agent: bool) -> Json {
             e("PUT", "/api/trends/pins", true, "a login session: {signals: [...]} (at most 16), that person's pins"),
             e("GET", "/api/desk", true, "the signed-in person's desk (open project and file, unsaved edits, inputs), or null"),
             e("PUT", "/api/desk", true, "a login session: that person's desk (at most 512 KiB; an older saved_at than the box's is refused, 409)"),
+            e("GET", "/api/pane-layouts", true, "the box's named pane layouts (the editor's side tabs and panes): {format, layouts}"),
+            e("PUT", "/api/pane-layouts", true, "engineer session: one pane layout, kept under its name (at most 32; 4 KiB each)"),
+            e("DELETE", "/api/pane-layouts/{name}", true, "engineer session: drop a pane layout"),
             e("GET", "/api/forces", true, "active forced inputs: {id, signal | address, value, by, at}"),
             e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
             e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),

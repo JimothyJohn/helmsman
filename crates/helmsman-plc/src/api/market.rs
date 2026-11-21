@@ -11,6 +11,16 @@
 //!   name, stored as a draft for the policy to classify. Nothing runs
 //!   without the approval the policy asks for.
 //!
+//!   Between the bundle's checks and the proposal sits the review
+//!   ([`super::review`]): the bundle's contents go to the relay's review
+//!   profile, which can describe and refuse. A refusal stops the install
+//!   (`422`); no refusal is a note on the proposal for whoever approves;
+//!   no review (no relay, unreachable, an answer that does not parse)
+//!   stops it too (`409`, `review.state` `not_reviewed`) until an engineer
+//!   sends the same call with `"without_review": true`, which needs a login
+//!   session of the engineer role and is audited as installed without a
+//!   review. The body takes `without_review` as a plain boolean.
+//!
 //! Both make the box fetch a URL a client chose, so they take the token
 //! (never a read) and refuse hosts that are not public unless the box was
 //! started with `--market-allow-local` ([`crate::bundle::market`]). Every
@@ -19,8 +29,10 @@
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
+use super::bundle::Gate;
 use super::{Ctx, Request, Response, audit, audit_full};
 use crate::bundle::market;
+use crate::policy::Role;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +46,10 @@ struct Install {
     index: String,
     name: String,
     version: Option<String>,
+    /// Go on when the bundle could not be reviewed (an engineer's login
+    /// session).
+    #[serde(default)]
+    without_review: bool,
 }
 
 /// Longest URL or name a request may carry.
@@ -118,6 +134,13 @@ pub(super) fn install(req: &Request, ctx: &Ctx) -> Response {
     if b.name.len() > MAX_FIELD || b.version.as_ref().is_some_and(|v| v.len() > MAX_FIELD) {
         return refused(400, "name or version too long", "market install: bad request");
     }
+    if b.without_review && req.session.as_ref().is_none_or(|p| p.role < Role::Engineer) {
+        return refused(
+            403,
+            "going on without a review needs an engineer's login session; the box token cannot",
+            "market install: without_review refused, not an engineer",
+        );
+    }
     let l = match listing(ctx, &b.index) {
         Ok(l) => l,
         Err((status, e)) => {
@@ -156,5 +179,13 @@ pub(super) fn install(req: &Request, ctx: &Ctx) -> Response {
         "market {} ({} {} from {}, index signed by {})",
         l.url, entry.name, entry.version, entry.file, l.publisher
     );
-    super::bundle::import_bytes(req, ctx, &bytes, &via)
+    super::bundle::import_bytes(
+        req,
+        ctx,
+        &bytes,
+        &via,
+        Gate::Review {
+            without_review: b.without_review,
+        },
+    )
 }

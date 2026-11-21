@@ -14,7 +14,21 @@ use crate::prelude::*;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
     pub kind: ExprKind,
+    /// Where diagnostics point: the operator of a binary, the `.`, `[` or
+    /// `(` of a member, index or call, the first token of anything else.
     pub pos: Pos,
+    /// The first token of the expression's text, so `start..end` is the
+    /// whole of it. Differs from `pos` for a binary, member, index, bit or
+    /// call (their `pos` is the operator or bracket). Parentheses around
+    /// an expression belong to it: `(a + b)` starts at the `(`. A unary
+    /// `+`, which leaves no node of its own, is likewise part of its
+    /// operand's text.
+    pub start: Pos,
+    /// Exclusive: the position just past the expression's last token (a
+    /// closing `)` or `]` included), before any whitespace or comment that
+    /// follows it. The text from `start` to `end` parses back to this
+    /// tree, positions aside.
+    pub end: Pos,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +108,10 @@ pub enum ExprKind {
     },
     Bool(bool),
     Time(i128),
+    /// A DATE, TOD or DT literal: its type and nanoseconds.
+    Calendar(crate::types::Ty, i128),
+    /// A STRING literal: its bytes, escapes resolved (at most 255).
+    Str(Vec<u8>),
     EnumLit(String, String),
     /// A name: a variable, an enumeration value or a function.
     Var(String),
@@ -126,7 +144,13 @@ pub type Block = Vec<Stmt>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stmt {
     pub kind: StmtKind,
+    /// The statement's first token, so `pos..end` is the whole of it.
     pub pos: Pos,
+    /// Exclusive: the position just past the statement's last token, its
+    /// terminating `;` (`END_IF;` included for a block statement), before
+    /// any whitespace or comment that follows. The text from `pos` to `end`
+    /// parses back to this statement, positions aside.
+    pub end: Pos,
 }
 
 /// One arm of a CASE: its labels and statements.
@@ -162,13 +186,16 @@ pub enum TypeRef {
         elem: Box<TypeRef>,
         pos: Pos,
     },
+    /// `STRING[n]` or `STRING(n)`: a fixed-length string of at most `n`
+    /// characters. Plain `STRING` is `Named`.
+    Str(i128, Pos),
 }
 
 impl TypeRef {
     #[must_use]
     pub const fn pos(&self) -> Pos {
         match self {
-            Self::Named(_, p) | Self::Array { pos: p, .. } => *p,
+            Self::Named(_, p) | Self::Array { pos: p, .. } | Self::Str(_, p) => *p,
         }
     }
 }
@@ -202,6 +229,9 @@ pub enum Section {
     Input,
     Output,
     InOut,
+    /// `VAR_EXTERNAL`: names a module global (see [`Unit::globals`]) for use
+    /// in this POU; it adds no variable of its own.
+    External,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -261,6 +291,30 @@ pub struct TypeDecl {
 pub struct Unit {
     pub types: Vec<TypeDecl>,
     pub pous: Vec<Pou>,
+    /// The module's `VAR_GLOBAL` variables, in source order: those written
+    /// before the first POU and those inside a `CONFIGURATION` or its
+    /// `RESOURCE`, which all go into one namespace.
+    pub globals: Vec<VarDecl>,
+    /// The `TASK` lines and program instances of the `CONFIGURATION` and its
+    /// `RESOURCE`, in source order. They are read past: the checker reports
+    /// each as a warning and nothing runs from them.
+    pub configured: Vec<Configured>,
+}
+
+/// A `TASK` or a program instance standing in a `CONFIGURATION`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Configured {
+    pub pos: Pos,
+    pub kind: ConfiguredKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfiguredKind {
+    /// `TASK name (...)`, with its `INTERVAL` when that is a time literal,
+    /// in nanoseconds.
+    Task { name: String, interval_ns: Option<i128> },
+    /// `PROGRAM name [WITH task] : type [(connections)]`.
+    Instance { name: String, ty: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,7 +339,7 @@ const MISSING_END_VAR: &str = "missing END_VAR: add END_VAR before this line to 
 
 /// Words that start a compilation unit's next POU or TYPE block, so end
 /// whatever is still open before them.
-const POU_START: &[&str] = &["PROGRAM", "FUNCTION", "FUNCTION_BLOCK", "TYPE"];
+const POU_START: &[&str] = &["PROGRAM", "FUNCTION", "FUNCTION_BLOCK", "TYPE", "VAR_GLOBAL"];
 
 /// Words that end a statement list.
 const BLOCK_END: &[&str] = &[
@@ -666,6 +720,7 @@ impl Parser {
 
     fn unit(&mut self) -> R<Unit> {
         let mut u = Unit::default();
+        let mut configured = false;
         loop {
             if *self.tok() == Tok::Eof {
                 return Ok(u);
@@ -674,6 +729,21 @@ impl Parser {
                 while !self.eat_kw("END_TYPE") {
                     u.types.push(self.type_decl()?);
                 }
+                continue;
+            }
+            if self.eat_kw("VAR_GLOBAL") {
+                self.var_block(Section::Var, &mut u.globals)?;
+                continue;
+            }
+            if self.is_kw("CONFIGURATION") && matches!(self.tok_at(1), Tok::Ident(_)) {
+                if configured {
+                    return self.err(
+                        "a module has one CONFIGURATION: this file already has one, so move this \
+                         one's VAR_GLOBAL blocks into it",
+                    );
+                }
+                configured = true;
+                self.configuration(&mut u)?;
                 continue;
             }
             let pos = self.pos();
@@ -685,13 +755,21 @@ impl Parser {
                 (Some(Some(())), "END_FUNCTION")
             } else {
                 let hint = match self.tok() {
-                    Tok::Ident(w) => {
-                        Self::keyword_hint(w, &["PROGRAM", "FUNCTION", "FUNCTION_BLOCK", "TYPE"])
-                    }
+                    Tok::Ident(w) => Self::keyword_hint(
+                        w,
+                        &[
+                            "PROGRAM",
+                            "FUNCTION",
+                            "FUNCTION_BLOCK",
+                            "TYPE",
+                            "VAR_GLOBAL",
+                            "CONFIGURATION",
+                        ],
+                    ),
                     _ => String::new(),
                 };
                 return self.err(format!(
-                    "expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found {}{hint}",
+                    "expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found {}{hint}",
                     self.tok()
                 ));
             };
@@ -723,6 +801,140 @@ impl Parser {
                 body,
             });
         }
+    }
+
+    /// `CONFIGURATION name ... END_CONFIGURATION`: the `VAR_GLOBAL` blocks of
+    /// the configuration and of its one `RESOURCE` are read and used. Tasks
+    /// and program instances say how a controller runs several programs; a
+    /// module is one program, whose scan rate is set where it is deployed,
+    /// so they are read past and the checker warns about each.
+    fn configuration(&mut self, u: &mut Unit) -> R<()> {
+        self.advance();
+        self.ident()?;
+        let mut resource = false;
+        loop {
+            if self.is_kw("RESOURCE") && matches!(self.tok_at(1), Tok::Ident(_)) {
+                if resource {
+                    return self.err("a module has one RESOURCE: put every VAR_GLOBAL block in this one");
+                }
+                resource = true;
+                self.resource(u)?;
+            } else if self.eat_kw("END_CONFIGURATION") {
+                return Ok(());
+            } else if !self.config_item(u)? {
+                return self.config_refusal("CONFIGURATION");
+            }
+        }
+    }
+
+    fn resource(&mut self, u: &mut Unit) -> R<()> {
+        self.advance();
+        self.ident()?;
+        if self.eat_kw("ON") {
+            self.ident()?;
+        }
+        loop {
+            if self.eat_kw("END_RESOURCE") {
+                return Ok(());
+            }
+            if !self.config_item(u)? {
+                return self.config_refusal("RESOURCE");
+            }
+        }
+    }
+
+    /// One `VAR_GLOBAL` block, `TASK` or program instance where a
+    /// `CONFIGURATION` or `RESOURCE` takes them; false when the token is
+    /// none of them.
+    fn config_item(&mut self, u: &mut Unit) -> R<bool> {
+        if self.eat_kw("VAR_GLOBAL") {
+            self.var_block(Section::Var, &mut u.globals)?;
+        } else if self.is_kw("TASK") {
+            let item = self.task()?;
+            u.configured.push(item);
+        } else if self.is_kw("PROGRAM") {
+            let item = self.instance()?;
+            u.configured.push(item);
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// `TASK name [(INTERVAL := t, PRIORITY := n, SINGLE := x)];`
+    fn task(&mut self) -> R<Configured> {
+        let pos = self.pos();
+        self.advance();
+        let (name, _) = self.ident()?;
+        let mut interval_ns = None;
+        if self.eat(&Tok::LParen) && !self.eat(&Tok::RParen) {
+            loop {
+                let word = match self.tok().clone() {
+                    Tok::Ident(w) if matches!(w.as_str(), "INTERVAL" | "PRIORITY" | "SINGLE") => w,
+                    t => {
+                        return self.err(format!(
+                            "expected INTERVAL, PRIORITY or SINGLE in a TASK, found {t}"
+                        ));
+                    }
+                };
+                self.advance();
+                self.expect(&Tok::Assign)?;
+                let value = self.expr()?;
+                if word == "INTERVAL"
+                    && let ExprKind::Time(ns) = value.kind
+                {
+                    interval_ns = Some(ns);
+                }
+                if self.eat(&Tok::RParen) {
+                    break;
+                }
+                self.expect(&Tok::Comma)?;
+            }
+        }
+        self.expect(&Tok::Semi)?;
+        Ok(Configured {
+            pos,
+            kind: ConfiguredKind::Task { name, interval_ns },
+        })
+    }
+
+    /// `PROGRAM name [WITH task] : type [(connections)];` The type is not
+    /// looked up: nothing is run from an instance.
+    fn instance(&mut self) -> R<Configured> {
+        let pos = self.pos();
+        self.advance();
+        if !self.eat_kw("RETAIN") {
+            self.eat_kw("NON_RETAIN");
+        }
+        let (name, _) = self.ident()?;
+        if self.eat_kw("WITH") {
+            self.ident()?;
+        }
+        self.expect(&Tok::Colon)?;
+        let (ty, _) = self.ident()?;
+        if self.eat(&Tok::LParen) {
+            self.args()?;
+        }
+        self.expect(&Tok::Semi)?;
+        Ok(Configured {
+            pos,
+            kind: ConfiguredKind::Instance { name, ty },
+        })
+    }
+
+    /// What stands where only the items above or the end can: said in plain
+    /// words, so an imported configuration shows what a module leaves out.
+    fn config_refusal<T>(&self, within: &str) -> R<T> {
+        let msg = match self.tok() {
+            Tok::Ident(w) if w == "VAR_ACCESS" || w == "VAR_CONFIG" => {
+                format!("{w} is not supported: modules do not share variables, signals are how modules talk")
+            }
+            Tok::Eof => format!("this {within} is never closed: add END_{within}"),
+            t => format!(
+                "expected VAR_GLOBAL, TASK, PROGRAM or END_{within}, found {t}: only global variables are used from a {within}; its tasks and program instances are read past"
+            ),
+        };
+        self.err(msg)
     }
 
     fn type_decl(&mut self) -> R<TypeDecl> {
@@ -804,6 +1016,17 @@ impl Parser {
             return Ok(TypeRef::Array { dims, elem, pos });
         }
         match self.advance().0 {
+            Tok::Ident(s) if s == "STRING" && matches!(self.tok(), Tok::LBracket | Tok::LParen) => {
+                let close = if self.eat(&Tok::LBracket) {
+                    Tok::RBracket
+                } else {
+                    self.advance();
+                    Tok::RParen
+                };
+                let n = self.signed_int()?;
+                self.expect(&close)?;
+                Ok(TypeRef::Str(n, pos))
+            }
             Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => Ok(TypeRef::Named(s, pos)),
             t => Err(ParseError {
                 pos,
@@ -878,8 +1101,18 @@ impl Parser {
                     "VAR_INPUT" => Section::Input,
                     "VAR_OUTPUT" => Section::Output,
                     "VAR_IN_OUT" => Section::InOut,
-                    "VAR_GLOBAL" | "VAR_EXTERNAL" | "VAR_ACCESS" | "VAR_CONFIG" => {
-                        return self.err(format!("{s} is not supported yet"));
+                    "VAR_EXTERNAL" => Section::External,
+                    "VAR_GLOBAL" => {
+                        return self.err(
+                            "VAR_GLOBAL goes before the first PROGRAM, or in a CONFIGURATION, not \
+                             inside a POU: move it out so every POU of the module can see it",
+                        );
+                    }
+                    "VAR_ACCESS" | "VAR_CONFIG" => {
+                        return self.err(format!(
+                            "{s} is not supported: modules do not share variables, signals are how \
+                             modules talk"
+                        ));
                     }
                     _ => return Ok(vars),
                 },
@@ -1043,6 +1276,7 @@ impl Parser {
                 return Ok(Stmt {
                     kind: StmtKind::Empty,
                     pos,
+                    end: self.prev_end(),
                 });
             }
             Tok::Ident(kw) => match kw.as_str() {
@@ -1085,7 +1319,11 @@ impl Parser {
             t => return self.err(format!("expected a statement, found {t}")),
         };
         self.expect_semi("statement")?;
-        Ok(Stmt { kind, pos })
+        Ok(Stmt {
+            kind,
+            pos,
+            end: self.prev_end(),
+        })
     }
 
     fn assign_or_call(&mut self) -> R<StmtKind> {
@@ -1300,6 +1538,8 @@ impl Parser {
             chain += 1;
             let rhs = self.binary(level + 1)?;
             lhs = Expr {
+                start: lhs.start,
+                end: rhs.end,
                 kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
                 pos,
             };
@@ -1321,6 +1561,8 @@ impl Parser {
                             prefix: None,
                         },
                         pos,
+                        start: pos,
+                        end: self.prev_end(),
                     });
                 }
                 Tok::Real { value, prefix: None } => {
@@ -1331,6 +1573,8 @@ impl Parser {
                             prefix: None,
                         },
                         pos,
+                        start: pos,
+                        end: self.prev_end(),
                     });
                 }
                 _ => {}
@@ -1339,14 +1583,17 @@ impl Parser {
             let e = self.unary()?;
             self.depth -= 1;
             return Ok(Expr {
+                end: e.end,
                 kind: ExprKind::Unary(UnOp::Neg, Box::new(e)),
                 pos,
+                start: pos,
             });
         }
         if self.eat(&Tok::Plus) {
             self.deeper(1)?;
-            let e = self.unary()?;
+            let mut e = self.unary()?;
             self.depth -= 1;
+            e.start = pos;
             return Ok(e);
         }
         if self.eat_kw("NOT") {
@@ -1354,8 +1601,10 @@ impl Parser {
             let e = self.unary()?;
             self.depth -= 1;
             return Ok(Expr {
+                end: e.end,
                 kind: ExprKind::Unary(UnOp::Not, Box::new(e)),
                 pos,
+                start: pos,
             });
         }
         self.postfix()
@@ -1371,6 +1620,8 @@ impl Parser {
             chain += 1;
             let rhs = self.unary()?;
             lhs = Expr {
+                start: lhs.start,
+                end: rhs.end,
                 kind: ExprKind::Binary(BinOp::Pow, Box::new(lhs), Box::new(rhs)),
                 pos,
             };
@@ -1430,6 +1681,8 @@ impl Parser {
                     match self.advance().0 {
                         Tok::Ident(m) => {
                             e = Expr {
+                                start: e.start,
+                                end: self.prev_end(),
                                 kind: ExprKind::Member(Box::new(e), m),
                                 pos,
                             }
@@ -1437,6 +1690,8 @@ impl Parser {
                         Tok::Int { value, prefix: None } if (0..64).contains(&value) => {
                             let bit = u8::try_from(value).unwrap_or(0);
                             e = Expr {
+                                start: e.start,
+                                end: self.prev_end(),
                                 kind: ExprKind::Bit(Box::new(e), bit),
                                 pos,
                             };
@@ -1457,6 +1712,8 @@ impl Parser {
                     }
                     self.expect(&Tok::RBracket)?;
                     e = Expr {
+                        start: e.start,
+                        end: self.prev_end(),
                         kind: ExprKind::Index(Box::new(e), idx),
                         pos,
                     };
@@ -1470,6 +1727,8 @@ impl Parser {
                     self.advance();
                     let args = self.args()?;
                     e = Expr {
+                        start: e.start,
+                        end: self.prev_end(),
                         kind: ExprKind::Call(Box::new(e), args),
                         pos,
                     };
@@ -1489,6 +1748,8 @@ impl Parser {
             Tok::Real { value, prefix } => ExprKind::Real { value, prefix },
             Tok::Bool(b) => ExprKind::Bool(b),
             Tok::Time(ns) => ExprKind::Time(ns),
+            Tok::Calendar(ty, ns) => ExprKind::Calendar(ty, ns),
+            Tok::Str(bytes) => ExprKind::Str(bytes),
             Tok::EnumLit(t, v) => ExprKind::EnumLit(t, v),
             Tok::Direct(d) => ExprKind::Direct(d),
             Tok::LParen => {
@@ -1501,6 +1762,9 @@ impl Parser {
                     };
                     return Self::err_at(at, format!("missing ): the ( at {pos} is never closed"));
                 }
+                let mut e = e;
+                e.start = pos;
+                e.end = self.prev_end();
                 return Ok(e);
             }
             Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => ExprKind::Var(s),
@@ -1511,7 +1775,12 @@ impl Parser {
                 });
             }
         };
-        Ok(Expr { kind, pos })
+        Ok(Expr {
+            kind,
+            pos,
+            start: pos,
+            end: self.prev_end(),
+        })
     }
 }
 
@@ -1548,6 +1817,8 @@ mod tests {
             ExprKind::Real { value, .. } => format!("{value:?}"),
             ExprKind::Bool(b) => b.to_string(),
             ExprKind::Time(ns) => format!("T#{ns}ns"),
+            ExprKind::Calendar(ty, ns) => format!("{ty}#{ns}ns"),
+            ExprKind::Str(b) => format!("{:?}", String::from_utf8_lossy(b)),
             ExprKind::EnumLit(t, v) => format!("{t}#{v}"),
             ExprKind::Var(v) => v.clone(),
             ExprKind::Direct(d) => format!("%{d}"),
@@ -1704,7 +1975,7 @@ mod tests {
         assert!(
             e("PROGRAM p VAR_GLOBAL a : INT; END_VAR END_PROGRAM")
                 .msg
-                .contains("not supported")
+                .contains("before the first PROGRAM")
         );
         assert!(
             e("PROGRAM p VAR a, b AT %IX0.0 : BOOL; END_VAR END_PROGRAM")

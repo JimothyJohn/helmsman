@@ -98,7 +98,9 @@ watchdog). The headline is agentic programming: you write specs and
 validate results, you don't write code. Proven IEC 61131-3 Structured Text,
 no ladder and proud of it. EtherNet/IP (CIP) and Modbus TCP, Ethernet only;
 a pure soft PLC with I/O in remote modules (e.g. Moxa ioLogik). Say "early
-release". Never mention Rust, crates, the Raspberry Pi or the model vendor
+release". IO-Link is named only as "based on the IO-Link specification"
+(Nick, 2026-11-15; docs/SOURCES.md has the notice): no compliance or
+conformance claim and no logo. Never mention Rust, crates, the Raspberry Pi or the model vendor
 by name. Claims must be true of what is built. Write like an engineer, with
 no AI tells: no "you don't X, you Y", "X, not Y" contrasts used as flourish,
 staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
@@ -181,6 +183,50 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   beside it gets a bare 0x01 with no extended status (2026-11-10,
   docs/devices/moxa-iologik-e1213.md). Probe a unit with
   `/usr/bin/python3 -I`, a few requests at a time.
+
+## Bench network (2026-11-20)
+
+One unmanaged PoE switch carries the bench, supervictor's PoE rack and the
+uplink to the house router since 2026-11-19, so 192.168.3.0/24 and the
+house DHCP LAN (10.0.0.0/24) share one wire. The Studio is 192.168.3.10
+static on en0 (Wi-Fi en1 is on 10.0.0.x). Ports are not recorded: an
+unmanaged switch has no table to read.
+
+| Device | Address | MAC |
+|---|---|---|
+| P4 node | 192.168.3.56 (:8080) | e8:f6:0a:e8:16:e1 |
+| Moxa E1213 | 192.168.3.60 | 00:90:e8:7e:af:be |
+| Novanta MDrive | 192.168.33.1, its default (reach it with the en0 alias above) | 8c:1f:64:ad:89:20 |
+| Bench Pi (parked) | 192.168.3.20, and 10.0.0.56 on the same port | 98:fe:54:51:5c:7d |
+| Murrelektronik 55089, Balluff | not seen on 2026-11-20 (no frame in 25 s) | |
+
+- **Don't run a box with `--dhcp en0` on the bench.** Its server would
+  answer the house's clients beside the router's.
+- **Find a device that will not answer** with a hand-off that aliases en0
+  onto the factory subnets (192.168.100, .33, .127, .1, .0), sweeps them,
+  sends a ListIdentity and captures 25 s; a unit that sends nothing in that
+  time is unpowered or unlinked, not at an unknown address.
+
+## Briefing workers (Nick, 2026-11-18)
+
+A reboot on 2026-11-17 killed four workers at once; one had 40 minutes of
+work and no commit, and two finished PRs would have merged unlooked-at.
+Every worker brief in this repo says:
+
+- **Open the PR as a draft** (`gh pr create --draft --base dev`).
+  .github/workflows/automerge.yml turns auto-merge on for every non-draft
+  PR into dev, so "no auto-merge" in a brief means nothing: the main
+  session marks it ready once it has looked.
+- **Commit at major milestones, and by about 40 minutes of work at the
+  latest.** No stream of small `wip:` commits. Commit before the gate
+  starts, not while it builds: the canvas and the box are stamped with
+  the commit, and a commit made mid-build fails
+  `the_canvas_and_the_box_of_one_checkout_carry_one_stamp`.
+- **Long runs write into the worktree's `target/` or the checkout's
+  `scratch/`**, never the session's /tmp scratch, which a reboot empties.
+- **The brief itself is recoverable**: the card id, the branch and the
+  worktree go into .claude/handoff.md when the worker starts, so a new
+  session can hand the same work to a new worker.
 
 ## Next door
 

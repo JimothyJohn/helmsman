@@ -249,6 +249,10 @@ fn the_check_runs_the_scenarios_and_the_projects_tests_on_a_copy() {
         p.contains("Scenario The lamp stays off while start is not pressed. (test_lamp_off.st) failed: lamp off failed"),
         "{p}"
     );
+    // It does not stop the code, and a scenario that failed is no test.
+    assert!(!c.blocked(), "{c:?}");
+    assert_eq!(c.warnings().len(), 1, "{c:?}");
+    assert!(c.add.is_empty(), "{c:?}");
     // A scenario with no ASSERT checks nothing: red.
     let idle =
         "(* Nothing. *)\nPROGRAM test_idle\nVAR_OUTPUT done : BOOL; END_VAR\ndone := TRUE;\nEND_PROGRAM"
@@ -258,7 +262,10 @@ fn the_check_runs_the_scenarios_and_the_projects_tests_on_a_copy() {
     // The project's own test goes red with the code: named.
     let invert = LAMP.replace("lamp := start;", "lamp := NOT start;");
     let c = check(&file(), &files, &answer_with(&invert, &[]), settings());
-    assert!(c.failures.iter().any(|f| f.contains("test_lamp is red")), "{c:?}");
+    assert!(c.tests.iter().any(|f| f.contains("test_lamp is red")), "{c:?}");
+    // What the tests say is a warning: the code can still be written.
+    assert!(c.red() && !c.blocked(), "{c:?}");
+    assert_eq!(c.warnings(), c.problems());
     // Code that does not compile, with or without tests.
     let broken = LAMP.replace("lamp := start;", "lamp := strat;");
     let c = check(
@@ -566,4 +573,65 @@ fn an_answer_cut_off_inside_a_block_is_red_not_checked_without_it() {
         commented()
     );
     assert!(check(&file(), &project(), &half, settings()).red());
+}
+
+// ---- the ST lints (`helmsman_iec::lint`, card `st-lints`) ----
+
+const TIMER_IN_IF: &str = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nVAR\n  t : TON;\nEND_VAR\nIF start THEN\n  t(IN := TRUE, PT := T#1s);PRAGMA\nEND_IF;\nlamp := t.Q;\nEND_PROGRAM\n";
+
+/// A blocking lint finding in the answer holds it like a compile error and
+/// goes back to the Agent in the retry message beside the others; a pragma
+/// with a reason on its line lets it through; a finding the project
+/// already had is not the answer's.
+#[test]
+fn a_blocking_lint_holds_the_answer_and_a_reasoned_pragma_releases_it() {
+    let code = TIMER_IN_IF.replace("PRAGMA", "");
+    let c = check(&file(), &project(), &answer_with(&code, &[]), settings());
+    assert!(c.blocked(), "{:?}", c.problems());
+    let p = c.problems().join("\n");
+    assert!(p.contains("HELMSMAN-L1 at "), "{p}");
+    assert!(p.contains("blocks the code"), "{p}");
+    assert!(matches!(next(&c, 0, false), Next::Retry(m) if m.contains("HELMSMAN-L1")));
+    // A reason on that line: the answer stands.
+    let code = TIMER_IN_IF.replace("PRAGMA", " {lint: off HELMSMAN-L1 \"the branch is the enable\"}");
+    let c = check(&file(), &project(), &answer_with(&code, &[]), settings());
+    assert!(!c.blocked(), "{:?}", c.problems());
+    assert!(
+        !c.problems().join("\n").contains("HELMSMAN-L1"),
+        "{:?}",
+        c.problems()
+    );
+    // No reason: still held, and the pragma is reported.
+    let code = TIMER_IN_IF.replace("PRAGMA", " {lint: off HELMSMAN-L1}");
+    let c = check(&file(), &project(), &answer_with(&code, &[]), settings());
+    assert!(c.blocked(), "{:?}", c.problems());
+    // The project already had it: an unrelated edit is not held for it.
+    let had = Files::from([("main.st".to_string(), TIMER_IN_IF.replace("PRAGMA", ""))]);
+    let edited = TIMER_IN_IF
+        .replace("PRAGMA", "")
+        .replace("lamp := t.Q;", "lamp := t.Q; (* on *)");
+    let c = check(&file(), &had, &answer_with(&edited, &[]), settings());
+    assert!(!c.blocked(), "{:?}", c.problems());
+    assert!(
+        !c.problems().join("\n").contains("HELMSMAN-L1"),
+        "{:?}",
+        c.problems()
+    );
+}
+
+/// An advisory lint goes back to the Agent like a red test and is a
+/// warning once the retries are used; it never blocks.
+#[test]
+fn an_advisory_lint_goes_back_but_never_blocks() {
+    let code = LAMP.replace("VAR_OUTPUT", "VAR\n  spare : BOOL;\nEND_VAR\nVAR_OUTPUT");
+    let c = check(&file(), &project(), &answer_with(&code, &[]), settings());
+    assert!(!c.blocked(), "{:?}", c.problems());
+    assert!(
+        c.problems().join("\n").contains("PLCOPEN-CP24"),
+        "{:?}",
+        c.problems()
+    );
+    assert!(matches!(next(&c, 0, true), Next::Retry(m) if m.contains("PLCOPEN-CP24")));
+    assert!(c.warnings().iter().any(|w| w.contains("PLCOPEN-CP24")));
+    assert!(matches!(next(&c, RETRIES, true), Next::Show));
 }

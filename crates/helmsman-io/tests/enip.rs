@@ -280,8 +280,9 @@ fn a_second_owner_is_refused_until_the_first_lets_go() {
     ));
 
     drop(a); // Forward_Close
-    read(&mut b, "di:0").unwrap();
-    wait_value(&mut b, "di:2", Value::Bool(false), Duration::from_secs(2));
+    // b's refused connect is tried again after a wait, not on the very
+    // next read (`a_device_that_keeps_refusing_is_not_asked_every_read`).
+    wait_value(&mut b, "di:2", Value::Bool(false), Duration::from_secs(4));
 }
 
 #[test]
@@ -852,4 +853,405 @@ fn a_scan_lists_the_simulated_e1213_once_with_its_identity() {
     .unwrap();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].mac, None);
+}
+
+/// The E1213's layout with a 3-byte configuration assembly: a block that
+/// takes its channel setup from the controller, as the Murrelektronik
+/// IMPACT67 E DIO8 does with its instance 109 out of the box.
+fn configurable() -> E1213Sim {
+    let mut c = DeviceConfig::moxa_e1213();
+    c.assemblies[0] = (100, 3);
+    E1213Sim::start_with(c, Application::bench()).unwrap()
+}
+
+fn explicit(s: &E1213Sim, extra: &[(&str, &str)]) -> BTreeMap<String, String> {
+    let mut p = with(s, &[("config", "100"), ("o2t", "102:1"), ("t2o", "101:51")]);
+    p.remove("profile");
+    for (k, v) in extra {
+        p.insert((*k).into(), (*v).into());
+    }
+    p
+}
+
+#[test]
+fn configuration_data_reaches_the_device_and_again_after_a_reconnect() {
+    let s = configurable();
+    let p = explicit(&s, &[("config_data", "00Ff01")]);
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[0x00, 0xFF, 0x01][..]));
+
+    // A power cycle: the connection gone, the channel setup back at the
+    // device's own.
+    s.inject(Fault::Reboot);
+    lock_ref(&s.device()).write_assembly(100, &[0; 3]).unwrap();
+    let e = wait_error(&mut d, "di:0", Duration::from_secs(3));
+    assert!(e.is_link(), "{e}");
+    s.clear_faults();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(d.opens, 2);
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[0x00, 0xFF, 0x01][..]));
+}
+
+#[test]
+fn no_configuration_data_leaves_the_devices_own() {
+    let s = configurable();
+    lock_ref(&s.device()).write_assembly(100, &[7, 8, 9]).unwrap();
+    let mut d = EnipDriver::from_params(&s.endpoint(), &explicit(&s, &[])).unwrap();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[7, 8, 9][..]));
+}
+
+#[test]
+fn configuration_data_of_another_size_is_refused_with_the_devices_code() {
+    let s = configurable();
+    for hex in ["00", "0001", "0001020304", &"00".repeat(480)] {
+        let p = explicit(&s, &[("config_data", hex)]);
+        let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+        let e = read(&mut d, "di:0").unwrap_err();
+        assert!(
+            e.is_link() && e.to_string().contains("0x0126 (invalid configuration size)"),
+            "{hex}: {e}"
+        );
+        assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[0; 3][..]), "{hex}");
+    }
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+}
+
+#[test]
+fn bad_configuration_data_is_refused_before_any_traffic() {
+    let s = configurable();
+    for (hex, what) in [
+        ("", "hex digits"),
+        ("0", "hex digits"),
+        ("000", "hex digits"),
+        ("0g", "hex digits"),
+        ("0x00", "hex digits"),
+        ("00 ff", "hex digits"),
+        ("+1", "hex digits"),
+        ("\u{ff10}\u{ff10}", "hex digits"),
+        (&"00".repeat(481), "hex digits"),
+    ] {
+        let e = EnipDriver::from_params(&s.endpoint(), &explicit(&s, &[("config_data", hex)])).unwrap_err();
+        assert!(!e.is_link() && e.to_string().contains(what), "{hex:?}: {e}");
+    }
+    // The built-in profile has no configuration assembly to fill.
+    let e = EnipDriver::from_params(&s.endpoint(), &with(&s, &[("config_data", "00")])).unwrap_err();
+    assert!(e.to_string().contains("only with eds= or explicit"), "{e}");
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+}
+
+/// The facts EDS with an exclusive owner that sends `Assem100` as
+/// configuration; `members` is that assembly's member list.
+fn eds_with_config(params: &str, members: &str) -> String {
+    let eds = FACTS
+        .replace(
+            "    Assem101 = \"Input Data\"",
+            &format!(
+                "    Assem100 = \"Configuration\", , 3, 0x0001, ,, {members};\n    Assem101 = \"Input Data\""
+            ),
+        )
+        .replace(
+            "        ,,                              $ target config\n        \"Exclusive Owner\"",
+            "        , Assem100,\n        \"Exclusive Owner\"",
+        )
+        .replace("[Assembly]", &format!("{params}\n[Assembly]"));
+    assert!(
+        eds.contains("Assem100") && eds.contains(", Assem100,"),
+        "the fixture moved"
+    );
+    eds
+}
+
+const MODE_PARAMS: &str = "    Param10 = 0, ,, 0x0000, 0xC6, 1, \"Mode\", \"\", \"\", 0, 1, 1, ,,,, ,,,, ;
+    Param11 = 0, ,, 0x0000, 0xC6, 1, \"Pin 4\", \"\", \"\", 0, 255, 240, ,,,, ,,,, ;
+    Param12 = 0, ,, 0x0000, 0xC6, 1, \"Pin 2\", \"\", \"\", 0, 255, 0, ,,,, ,,,, ;";
+
+#[test]
+fn an_eds_with_parameter_defaults_sends_them_as_configuration() {
+    let s = configurable();
+    let path = temp_eds(&eds_with_config(
+        MODE_PARAMS,
+        "8, Param10, 8, Param11, 8, Param12",
+    ));
+    let mut p = with(&s, &[("eds", path.to_str().unwrap())]);
+    p.remove("profile");
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[1, 240, 0][..]));
+    drop(d);
+
+    // config_data= replaces the defaults, and must be the EDS's size.
+    p.insert("config_data".into(), "000f0f".into());
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    read(&mut d, "di:0").unwrap();
+    assert_eq!(lock_ref(&s.device()).assembly(100), Some(&[0, 15, 15][..]));
+    drop(d);
+    p.insert("config_data".into(), "000f".into());
+    let e = EnipDriver::from_params(&s.endpoint(), &p).unwrap_err();
+    assert!(
+        e.to_string().contains("2 bytes, the EDS's connection wants 3"),
+        "{e}"
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn an_eds_that_wants_configuration_and_gives_no_defaults_asks_for_it() {
+    let s = configurable();
+    // Members the EDS does not spell out, a param without a default, a
+    // default too wide for its bits, and members short of the size.
+    for (params, members) in [
+        ("", "24, "),
+        (
+            "    Param10 = 0, ,, 0x0000, 0xC6, 1, \"Mode\", \"\", \"\", 0, 1, , ,,,, ,,,, ;",
+            "8, Param10, 16, ",
+        ),
+        (MODE_PARAMS, "4, Param11, 20, Param12"),
+        (MODE_PARAMS, "8, Param10, 8, Param11, 8, Param99"),
+    ] {
+        let path = temp_eds(&eds_with_config(params, members));
+        let mut p = with(&s, &[("eds", path.to_str().unwrap())]);
+        p.remove("profile");
+        let e = EnipDriver::from_params(&s.endpoint(), &p).unwrap_err();
+        assert!(
+            !e.is_link() && e.to_string().contains("wants 3 bytes of configuration data"),
+            "{members:?}: {e}"
+        );
+        p.insert("config_data".into(), "010203".into());
+        let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+        read(&mut d, "di:0").unwrap();
+        assert_eq!(
+            lock_ref(&s.device()).assembly(100),
+            Some(&[1, 2, 3][..]),
+            "{members:?}"
+        );
+        drop(d);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+/// What a box does when it stops: writes the safe values and lets the
+/// driver go. The write changes the O->T image, which the producer sends
+/// at its next RPI; closing before that left the device holding the old
+/// outputs (a Murrelektronik IMPACT67 keeps its output assembly as it was
+/// after a `Forward_Close`, 2026-11-16). The last image goes out before
+/// the close.
+#[test]
+fn an_output_written_just_before_the_driver_goes_reaches_the_device() {
+    let s = E1213Sim::start().unwrap();
+    for round in 0..5 {
+        let mut d = driver(&s);
+        d.write("do:2", Value::Bool(true)).unwrap();
+        wait_value(&mut d, "di:2", Value::Bool(true), Duration::from_secs(2));
+        d.write("do:2", Value::Bool(false)).unwrap();
+        drop(d);
+        // The close is answered after the last packet was sent; the
+        // simulator takes that packet off its socket within a tick.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while lock_ref(&s.device()).assembly(102) != Some(&[0][..]) {
+            assert!(
+                Instant::now() < deadline,
+                "round {round}: DO-02 still on after the driver went"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+    }
+}
+
+/// A Novanta `MDrive` resets the TCP session about 2.5 s after the
+/// `Forward_Open` and goes on exchanging I/O (2026-11-16). The link must
+/// not notice, and when the driver goes the connection is still closed,
+/// over a session of its own, instead of being left to time out with the
+/// device's outputs held.
+#[test]
+fn a_device_that_drops_the_idle_session_keeps_its_link_and_is_still_closed() {
+    let s = E1213Sim::start_idle(
+        DeviceConfig::moxa_e1213(),
+        Application::bench(),
+        Duration::from_millis(150),
+    )
+    .unwrap();
+    // Multiplier 3: the simulator would only time the connection out
+    // after 3.2 s, far past the deadline below.
+    let mut d = EnipDriver::from_params(&s.endpoint(), &with(&s, &[("multiplier", "3")])).unwrap();
+    d.write("do:1", Value::Bool(true)).unwrap();
+    wait_value(&mut d, "di:1", Value::Bool(true), Duration::from_secs(2));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while s.sessions() > 0 {
+        assert!(Instant::now() < deadline, "the simulator kept the idle session");
+        read(&mut d, "di:1").unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Still exchanging: an output written now reaches the device.
+    d.write("do:0", Value::Bool(true)).unwrap();
+    wait_value(&mut d, "di:0", Value::Bool(true), Duration::from_secs(2));
+    assert_eq!(d.opens, 1);
+    assert_eq!(lock_ref(&s.device()).connections().len(), 1);
+
+    drop(d);
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    while !lock_ref(&s.device()).connections().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the connection was left open for the device to time out"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The facts EDS with its exclusive owner's O->T real-time format
+/// declared modeless, as the Novanta `MDrive`'s EDS declares its own while
+/// the drive takes a run/idle header (its `Forward_Open` at the EDS's size
+/// is refused 0x0127 with the size it wants, four bytes more; 2026-11-16).
+fn modeless_eds() -> std::path::PathBuf {
+    let eds = FACTS.replace("0x44640405,", "0x44640005,");
+    assert_ne!(eds, FACTS, "the fixture moved");
+    temp_eds(&eds)
+}
+
+#[test]
+fn an_eds_that_leaves_out_the_run_idle_header_is_corrected_from_the_refusal() {
+    let s = E1213Sim::start().unwrap();
+    let path = modeless_eds();
+    let mut p = with(&s, &[("eds", path.to_str().unwrap())]);
+    p.remove("profile");
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    assert!(!d.connection().o_to_t_run_idle, "the EDS says modeless");
+    // The outputs arrive where they belong, not four bytes late.
+    d.write("do:3", Value::Bool(true)).unwrap();
+    wait_value(&mut d, "di:3", Value::Bool(true), Duration::from_secs(2));
+    assert_eq!(lock_ref(&s.device()).assembly(102), Some(&[0b1000][..]));
+    assert!(d.connection().o_to_t_run_idle);
+    assert_eq!(d.opens, 2, "one refusal, one corrected open");
+    assert_eq!(lock_ref(&s.device()).connections().len(), 1);
+    drop(d);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn a_header_the_device_does_not_take_is_dropped_from_the_refusal() {
+    // The other way round, both directions: a target without a run/idle
+    // header O->T, and with one T->O, against explicit sizes that assume
+    // the usual (header out, none in).
+    let mut c = DeviceConfig::moxa_e1213();
+    c.consumed_run_idle = false;
+    c.produced_run_idle = true;
+    let s = E1213Sim::start_with(c, Application::bench()).unwrap();
+    let mut d = EnipDriver::from_params(&s.endpoint(), &explicit(&s, &[])).unwrap();
+    // Inputs read where they are (the simulated wiring only follows an
+    // owner whose header says run, so an input is held on instead), and
+    // the output byte lands in the output assembly.
+    s.force_di(2, true);
+    wait_value(&mut d, "di:2", Value::Bool(true), Duration::from_secs(2));
+    assert_eq!(read(&mut d, "di:1").unwrap(), Value::Bool(false));
+    d.write("do:0", Value::Bool(true)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while lock_ref(&s.device()).assembly(102) != Some(&[1][..]) {
+        assert!(Instant::now() < deadline, "DO-00 never arrived");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let spec = d.connection();
+    assert!(!spec.o_to_t_run_idle && spec.t_to_o_run_idle);
+    assert_eq!(d.opens, 3, "one refusal a direction, then the open");
+}
+
+#[test]
+fn a_size_refusal_that_is_not_the_header_stays_a_refusal() {
+    // Four bytes more wanted, but because the assembly is four bytes
+    // longer than the map says: a run/idle header sent there would put
+    // its run bit into the first output byte.
+    let mut config = DeviceConfig::moxa_e1213();
+    config.consumed_run_idle = false;
+    config.assemblies[2] = (102, 5);
+    let s = E1213Sim::start_with(config, Application::bench()).unwrap();
+    let p = explicit(&s, &[("run_idle", "off")]);
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    let e = read(&mut d, "in:0.0").unwrap_err();
+    assert!(e.is_link() && e.to_string().contains("0x0127"), "{e}");
+    assert_eq!(d.opens, 1, "nothing was retried");
+    assert!(!d.connection().o_to_t_run_idle);
+    assert_eq!(lock_ref(&s.device()).assembly(102), Some(&[0; 5][..]));
+
+    // Sizes off by something else are refused as before, once.
+    let s = E1213Sim::start().unwrap();
+    for (o2t, t2o, code) in [("102:3", "101:51", "0x0127"), ("102:1", "101:47", "0x0128")] {
+        let p = explicit(&s, &[("o2t", o2t), ("t2o", t2o)]);
+        let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+        let e = read(&mut d, "in:0.0").unwrap_err();
+        assert!(e.is_link() && e.to_string().contains(code), "{o2t} {t2o}: {e}");
+        assert_eq!(d.opens, 1);
+    }
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+}
+
+/// A link on a port of its own asks the device, in the `Forward_Open`, to
+/// send its inputs there. A Murrelektronik IMPACT67 E and a Novanta
+/// `MDrive` ignore that and send to UDP 2222 (2026-11-16); the link then
+/// sees an open connection with no data, and its error says what to look
+/// at.
+#[test]
+fn no_data_on_a_port_of_the_links_own_names_the_port() {
+    let s = E1213Sim::start().unwrap();
+    s.inject(Fault::Silent);
+    let mut d = driver(&s);
+    let e = read(&mut d, "di:0").unwrap_err();
+    let text = e.to_string();
+    assert!(
+        e.is_link() && text.contains("no T->O data within") && text.contains("to UDP 2222 whatever port"),
+        "{text}"
+    );
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0, "closed again");
+}
+
+/// A box's link asks its driver every scan, which is every few
+/// milliseconds. Against a device that answers and refuses (another owner,
+/// the wrong configuration instance) each ask used to be a TCP session
+/// and a `Forward_Open`: 41 in 5 s against a Murrelektronik IMPACT67 on
+/// 2026-11-16. A refused or failed connect is not tried again at once;
+/// the reads in between say what the last attempt said.
+#[test]
+fn a_device_that_keeps_refusing_is_not_asked_every_read() {
+    let s = E1213Sim::start().unwrap();
+    // A size the device does not have: refused 0x0127 every time.
+    let p = explicit(&s, &[("o2t", "102:3")]);
+    let mut d = EnipDriver::from_params(&s.endpoint(), &p).unwrap();
+    let until = Instant::now() + Duration::from_millis(700);
+    let mut reads = 0u32;
+    while Instant::now() < until {
+        let e = read(&mut d, "in:0.0").unwrap_err();
+        assert!(e.is_link() && e.to_string().contains("0x0127"), "{e}");
+        reads += 1;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(reads > 50, "the loop itself ran: {reads} reads");
+    assert!(
+        (2..=5).contains(&d.opens),
+        "{} Forward_Opens for {reads} reads in 700 ms",
+        d.opens
+    );
+    assert_eq!(lock_ref(&s.device()).connections().len(), 0);
+}
+
+/// The wait after a failed connect is short at first and has a ceiling,
+/// so a device that comes back is found again within seconds, and a
+/// connection that was up and is lost is reopened at the next read.
+#[test]
+fn a_device_that_comes_back_is_connected_again_without_being_asked_to() {
+    let s = E1213Sim::start().unwrap();
+    let mut first = driver(&s);
+    read(&mut first, "di:0").unwrap();
+    // A second owner is refused for as long as the first holds on.
+    let mut second = driver(&s);
+    for _ in 0..40 {
+        let e = read(&mut second, "di:0").unwrap_err();
+        assert!(e.is_link() && e.to_string().contains("0x0106"), "{e}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(first);
+    // Nothing tells the second driver: its next attempt, a wait away,
+    // gets in.
+    wait_value(&mut second, "di:0", Value::Bool(false), Duration::from_secs(5));
+    assert!(second.opens <= 6, "{} opens", second.opens);
 }

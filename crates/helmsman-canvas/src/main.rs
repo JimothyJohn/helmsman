@@ -30,28 +30,53 @@ mod app;
 mod arrange;
 #[cfg(test)]
 mod arrange_tests;
+mod ask;
+#[cfg(test)]
+mod ask_tests;
+mod assign;
+mod assign_ui;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod box_design_tests;
 mod box_popup;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_projects_tests;
+mod box_spec;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_tests;
 mod box_trend;
 mod box_view;
+mod chat_about;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod chat_about_tests;
 mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
+mod design;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod design_page_tests;
+mod design_step;
+mod design_ui;
 mod desk;
 mod device_config;
 mod device_form;
 mod device_form_ui;
+mod device_io;
+mod device_proposal;
+mod device_vendor;
 mod devices;
+mod diagram_menu;
 mod diff_ui;
 mod editor;
+mod edits;
+#[cfg(test)]
+mod edits_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod features_tests;
 mod find;
 mod front;
 #[cfg(test)]
@@ -62,13 +87,21 @@ mod help;
 mod history_ui;
 mod hotkeys;
 mod icons;
+mod install_review;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod install_review_tests;
 mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;
+mod io_cards;
 mod io_names;
+mod jump;
 mod lamps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod link_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lint_shipped_tests;
+mod md_view;
 mod messages;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -76,6 +109,9 @@ mod monitor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod node_api_tests;
 mod node_token;
+mod pane_layout;
+#[cfg(test)]
+mod pane_layout_tests;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -101,11 +137,15 @@ mod sim_projects;
 mod sim_projects_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod slow_link_tests;
+mod spec_mode;
 mod st_fold;
 mod st_hints;
 mod st_syntax;
 mod st_view;
 mod stamp;
+mod start_state;
+#[cfg(test)]
+mod start_state_tests;
 mod steps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod steps_tests;
@@ -126,6 +166,7 @@ mod verify_tests;
 mod watch;
 #[cfg(target_arch = "wasm32")]
 mod web;
+mod wired;
 
 /// `helmsman-canvas --help-tables keyboard|starters`: the help site's
 /// generated pages, as Markdown on stdout (scripts/build-help.sh).

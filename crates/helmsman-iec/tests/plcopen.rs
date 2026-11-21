@@ -490,7 +490,7 @@ fn structural_errors() {
         (project(&[], "<SFC/>"), "SFC bodies"),
         (project(&[], "<IL><xhtml:p>LD a</xhtml:p></IL>"), "IL bodies"),
         (project(&[], "<LD/><FBD/>"), "exactly one language"),
-        (project(&[("s", "string")], &st("")), "STRING"),
+        (project(&[("s", "wstring")], &st("")), "WSTRING"),
         ("<plc/>".to_string(), "expected a PLCopen <project>"),
         (
             "<project><types><pous><pou name=\"p\" pouType=\"task\"/></pous></types></project>".into(),
@@ -872,4 +872,131 @@ fn a_long_rung_lowers() {
     set(&mut img, 0, true);
     p.scan(&mut img).unwrap();
     assert_eq!(img.q[0] & 1, 1);
+}
+
+// ---- global variable lists (a hand-written project: tests/plcopen/globals.xml) ----
+
+/// The configuration's and the resource's `<globalVars>` become the
+/// module's globals; the task and the program instance beside them are
+/// not read.
+#[test]
+fn global_variable_lists_import_into_one_module() {
+    let xml = fixture("globals.xml");
+    let st = plcopen::lower(&xml).unwrap().st().to_string();
+    assert!(st.contains("VAR_GLOBAL CONSTANT"), "{st}");
+    assert!(st.contains("VAR_GLOBAL RETAIN"), "{st}");
+    assert!(st.contains("VAR_EXTERNAL CONSTANT"), "{st}");
+    // The task and the instance are written as a CONFIGURATION the ST
+    // parser reads past with a warning.
+    assert!(st.contains("TASK task0(INTERVAL := T#20ms);"), "{st}");
+    assert!(st.contains("PROGRAM instance0 WITH task0 : plc_prg;"), "{st}");
+
+    let mut p = build(&xml);
+    let w: Vec<String> = p
+        .warnings()
+        .iter()
+        .map(|d| format!("{}: {}", d.pos, d.msg))
+        .collect();
+    assert_eq!(
+        w,
+        [
+            "63:11: TASK TASK0 (interval T#20ms) was not taken from this file: \
+             a module's scan rate is set where the module is deployed",
+            "64:13: program instance INSTANCE0 of PLC_PRG was not taken from this file: \
+             a module runs its one PROGRAM",
+        ],
+        "at the <task> and <pouInstance> elements of the XML"
+    );
+    let mut img = Image::new(SIZES);
+    p.scan(&mut img).unwrap();
+    // The resource's list starts ResourceGlobal at 2; the block adds 3.
+    assert_eq!(int(&p, "seen"), 5);
+    assert_eq!(int(&p, "ResourceGlobal"), 5);
+    assert_eq!(int(&p, "limit_seen"), 17, "the configuration's constant list");
+    assert_eq!(int(&p, "Hits"), 1, "used without an externalVars entry");
+    p.scan(&mut img).unwrap();
+    assert_eq!(int(&p, "seen"), 8);
+    assert_eq!(int(&p, "Hits"), 2);
+}
+
+/// What the box stores is the lowered ST, so the same warnings come from
+/// compiling that text; and a hostile name or interval cannot write ST of
+/// its own into it.
+#[test]
+fn the_lowered_configuration_warns_the_same_and_hostile_attributes_stay_text() {
+    let xml = fixture("globals.xml");
+    let st = plcopen::lower(&xml).unwrap().st().to_string();
+    let (compiled, warnings) = helmsman_iec::compile_warned(&st, SIZES);
+    assert!(compiled.is_ok());
+    assert_eq!(warnings.len(), 2, "{warnings:#?}");
+    assert!(
+        warnings[0]
+            .msg
+            .starts_with("TASK TASK0 (interval T#20ms) was not taken from this file")
+    );
+
+    let hostile = xml
+        .replace(
+            "name=\"task0\" priority=\"0\" interval=\"T#20ms\"",
+            "name=\"t); END_RESOURCE\" priority=\"0\" interval=\"T#20ms); PROGRAM x : y;\"",
+        )
+        .replace("typeName=\"plc_prg\"", "typeName=\"a b;\"");
+    assert_ne!(hostile, xml);
+    let p = build(&hostile);
+    let t: Vec<&str> = p.warnings().iter().map(|d| d.msg.as_str()).collect();
+    assert_eq!(t.len(), 2, "{t:#?}");
+    assert!(t[0].starts_with("TASK TASKT_END_RESOURCE "), "{t:#?}");
+    assert!(!t[0].contains("interval"), "{t:#?}");
+    assert!(
+        t[1].starts_with("program instance INSTANCE0 of PROGRAMA_B_ "),
+        "{t:#?}"
+    );
+}
+
+/// An `externalVars` entry with no global list behind it is a variable of
+/// some other project: refused, with the way modules do talk.
+#[test]
+fn an_external_variable_without_its_global_list_is_refused() {
+    let xml = fixture("globals.xml").replace(
+        "<variable name=\"ResourceGlobal\">\n              <type><DINT/></type>",
+        "<variable name=\"SomethingElse\">\n              <type><DINT/></type>",
+    );
+    assert!(xml.contains("SomethingElse"), "the fixture changed shape");
+    let e = errors(&xml);
+    assert!(e.contains("VAR_EXTERNAL RESOURCEGLOBAL"), "{e}");
+    assert!(e.contains("signals are how modules talk"), "{e}");
+    // Said where it is declared, and not again at each use in the block.
+    assert_eq!(e.matches("RESOURCEGLOBAL").count(), 3, "{e}");
+}
+
+/// A global list is declared by the rules of any other: a bad entry is an
+/// error at its line of the XML, and the import never panics on one.
+#[test]
+fn a_bad_global_list_is_an_error_at_its_line() {
+    let good = fixture("globals.xml");
+    for (from, to, want) in [
+        // An initial value that is not an expression.
+        (
+            "<simpleValue value=\"17\"/>",
+            "<simpleValue value=\"1 +\"/>",
+            "expected an expression",
+        ),
+        // Two lists declare the same name.
+        (
+            "<variable name=\"Hits\">",
+            "<variable name=\"ResourceGlobal\">",
+            "RESOURCEGLOBAL is declared twice",
+        ),
+        // A type nothing declares.
+        (
+            "<variable name=\"Hits\"><type><DINT/></type>",
+            "<variable name=\"Hits\"><type><derived name=\"Nowhere\"/></type>",
+            "unknown type NOWHERE",
+        ),
+    ] {
+        let xml = good.replace(from, to);
+        assert_ne!(xml, good, "{from} is not in the fixture");
+        let e = errors(&xml);
+        assert!(e.contains(want), "{to}: {e}");
+    }
 }

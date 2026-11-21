@@ -1,0 +1,272 @@
+/* The site's own palette and faces (docs/index.html), as in ../helmsman-ad-v2. */
+@font-face {
+  font-family: "Saira Stencil One";
+  src: url("assets/fonts/SairaStencilOne-400.woff2") format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("assets/fonts/BarlowCondensed-700.woff2") format("woff2");
+  font-weight: 700;
+}
+:root {
+  --yellow: #ffc20e;
+  --black: #141414;
+  --graphite: #3a3a3a;
+  --ink: #f2f2f2;
+  --stencil: "Saira Stencil One", sans-serif;
+  --cond: "Barlow Condensed", sans-serif;
+  --mono: "IBM Plex Mono", monospace;
+}
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  width: 2560px;
+  height: 1440px;
+  overflow: hidden;
+  background: var(--black);
+}
+/* Everything is laid out on a 1920 x 1080 stage, scaled to the 2560 x 1440 frame. */
+#stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  transform: scale(1.3333333333);
+  transform-origin: 0 0;
+}
+#root {
+  position: relative;
+}
+#shake,
+.full,
+.wrap {
+  position: absolute;
+  inset: 0;
+}
+.stencil {
+  font-family: var(--stencil);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  line-height: 0.95;
+}
+.cond {
+  font-family: var(--cond);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.w {
+  display: inline-block;
+}
+
+/* Footage. The way things were is drained of colour; the rest is as shot. */
+.shot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  object-fit: cover;
+}
+.shot.app {
+  object-fit: contain;
+}
+.wrap.old {
+  filter: saturate(0.25) brightness(0.8) contrast(1.12);
+}
+
+/* Copy on label tape: flat blocks, so it reads over any picture. */
+.kicker {
+  position: absolute;
+  left: 120px;
+  top: 96px;
+  background: var(--yellow);
+  color: var(--black);
+  font-size: 40px;
+  line-height: 1;
+  letter-spacing: 0.3em;
+  padding: 14px 22px 14px 28px;
+}
+.step {
+  position: absolute;
+  left: 120px;
+  top: 96px;
+  background: var(--yellow);
+  color: var(--black);
+  font-size: 110px;
+  padding: 18px 34px 10px;
+}
+.step.big {
+  font-size: 260px;
+  padding: 22px 48px 6px;
+}
+.lines {
+  position: absolute;
+  left: 120px;
+  bottom: 104px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+}
+.line {
+  background: var(--black);
+  color: var(--ink);
+  font-size: 104px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  padding: 10px 30px 16px;
+}
+.line.y {
+  background: var(--yellow);
+  color: var(--black);
+}
+
+/* The slash that turns the film from the old way to the new. */
+.slash-wrap {
+  position: absolute;
+  left: -240px;
+  top: 504px;
+  width: 2400px;
+  height: 72px;
+}
+.slash {
+  width: 2400px;
+  height: 72px;
+  background: var(--yellow);
+}
+.flood {
+  position: absolute;
+  inset: 0;
+  background: var(--yellow);
+}
+
+/* The claim, on yellow. */
+.claim {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-left: 160px;
+  background: var(--yellow);
+  color: var(--black);
+}
+.claim h1 {
+  font-size: 230px;
+}
+.claim h1 .hot {
+  background: var(--black);
+  color: var(--yellow);
+  padding: 0 28px;
+}
+.claim .sub {
+  margin-top: 52px;
+  font-size: 50px;
+  letter-spacing: 0.12em;
+}
+
+/* What is built, over the footage dimmed. */
+.stack {
+  background: rgba(20, 20, 20, 0.86);
+}
+.built {
+  position: absolute;
+  left: 160px;
+  top: 110px;
+  color: var(--yellow);
+  font-size: 44px;
+  letter-spacing: 0.32em;
+}
+.fact {
+  position: absolute;
+  left: 160px;
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  color: var(--ink);
+  font-size: 92px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.fact i {
+  display: block;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  background: var(--yellow);
+}
+
+/* End card */
+#end {
+  background: var(--yellow);
+  color: var(--black);
+}
+#lockup {
+  position: absolute;
+  left: 0;
+  top: 250px;
+  width: 1920px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 56px;
+}
+#mark,
+#mark img {
+  display: block;
+  width: 260px;
+  height: 260px;
+  flex: none;
+}
+#wordmark {
+  font-size: 190px;
+  line-height: 0.85;
+}
+#descriptor {
+  font-size: 44px;
+  letter-spacing: 0.46em;
+  margin-top: 22px;
+}
+#cta {
+  position: absolute;
+  left: 0;
+  top: 640px;
+  width: 1920px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 48px;
+}
+#cta-btn {
+  background: var(--black);
+  color: var(--yellow);
+  font: 600 44px/1 var(--mono);
+  padding: 34px 44px;
+}
+#cta-url {
+  font: 600 48px/1 var(--mono);
+}
+#early {
+  position: absolute;
+  left: 0;
+  top: 830px;
+  width: 1920px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  font: 400 36px/1 var(--mono);
+}
+#early b {
+  background: var(--graphite);
+  color: #fff;
+  font-weight: 600;
+  padding: 14px 20px;
+}

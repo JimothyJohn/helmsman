@@ -34,8 +34,20 @@
 //! MOVE) and function blocks (TON, TOF, TP, CTU, CTD, CTUD, `R_TRIG`,
 //! `F_TRIG`, SR, RS, and `BLINK_PATTERN`, a stack light's patterns that
 //! IEC 61131-3 does not have; see library.st: a blinking MODE with a
-//! PERIOD of 0 or below faults the module, [`BadParam::BlinkPeriod`]). Pragmas (`{...}`) are skipped. Not yet: STRING, DATE,
-//! DT and TOD, `VAR_IN_OUT`, `VAR_GLOBAL`, function outputs, pointers and
+//! PERIOD of 0 or below faults the module, [`BadParam::BlinkPeriod`]). Pragmas (`{...}`) are skipped. `VAR_IN_OUT`
+//! (function blocks only: the caller's own variable, passed by reference
+//! inside one module) and `VAR_OUTPUT` on a function (every call binds
+//! every output with `=>`). `VAR_GLOBAL`, written
+//! before the POUs or in a `CONFIGURATION` and its one `RESOURCE`: the
+//! globals belong to the module, every POU of it sees them (`VAR_EXTERNAL`
+//! may name one, and `VAR_EXTERNAL CONSTANT` reads it only), and nothing
+//! outside the module can, since signals are how modules talk. A
+//! `CONFIGURATION`'s `TASK` lines and program instances are read past and
+//! run nothing, each one a warning (a module's scan rate is set where it
+//! is deployed, and it runs its one PROGRAM); `VAR_ACCESS` and
+//! `VAR_CONFIG` are refused.
+//! `STRING[n]` and DATE, TOD and DT are covered (see [`dt`]; the wall
+//! clock is [`Program::set_wall_clock`]). Not yet: WSTRING, pointers and
 //! references, multi-level addresses (`%QW0.1.2`). Nesting is capped at
 //! `MAX_NESTING` levels so hostile input cannot overflow the stack.
 //!
@@ -111,12 +123,14 @@ pub mod ast {
 }
 
 mod check;
+pub mod dt;
 mod fmath;
 pub mod hints;
 mod interp;
 pub mod l5x;
 pub mod ladder;
 mod lexer;
+pub mod lint;
 mod once;
 mod parser;
 pub mod plcopen;
@@ -124,6 +138,7 @@ mod rename;
 pub mod scan;
 pub mod spec;
 mod state;
+mod strs;
 mod suggest;
 pub mod tidy;
 pub mod trace;
@@ -192,6 +207,9 @@ pub struct Program {
     /// without std the clock comes in through [`Program::scan_at`]).
     #[cfg(feature = "std")]
     started: Option<Instant>,
+    /// The wall clock at `now = 0`, in nanoseconds since 1970-01-01 (see
+    /// [`Program::set_wall_clock`]).
+    wall: i64,
     /// Located initial values are still to be written (a cold start).
     cold: bool,
     /// Trace counters per scan (see [`trace`]).
@@ -216,6 +234,7 @@ fn run_on(
     mem: &mut [Value],
     image: &mut Image,
     now: Duration,
+    wall: i64,
     tap: Option<&mut Recorder>,
 ) -> Result<(), Halt> {
     let mut m = Machine {
@@ -223,11 +242,13 @@ fn run_on(
         image,
         pous: &code.pous,
         library: code.library,
+        scratch: code.scratch,
         base: 0,
         budget,
         now: i128::try_from(now.as_nanos())
             .unwrap_or(i128::MAX)
             .min(i128::from(i64::MAX)),
+        wall: i128::from(wall),
         tap,
     };
     m.run(&code.pous[code.program])
@@ -272,6 +293,7 @@ fn program_of(mut code: check::Checked, sizes: ImageSizes) -> Program {
         budget: DEFAULT_BUDGET,
         #[cfg(feature = "std")]
         started: None,
+        wall: 0,
         cold: true,
         counters,
         map: Once::new(),
@@ -285,15 +307,20 @@ fn program_of(mut code: check::Checked, sizes: ImageSizes) -> Program {
 /// Every problem found, positioned in the XML.
 pub fn compile_plcopen(xml: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>> {
     let lowered = plcopen::lower(xml)?;
-    compile(lowered.st(), sizes).map_err(|diags| {
-        diags
-            .into_iter()
-            .map(|d| Diagnostic {
-                pos: lowered.origin(d.pos),
-                msg: d.msg,
-            })
-            .collect()
-    })
+    let at_xml = |d: Diagnostic| Diagnostic {
+        pos: lowered.origin(d.pos),
+        msg: d.msg,
+    };
+    match compile(lowered.st(), sizes) {
+        Ok(mut program) => {
+            // The warnings (a `<task>` read past, say) are said at the XML
+            // element too.
+            let warnings = core::mem::take(&mut program.code.warnings);
+            program.code.warnings = warnings.into_iter().map(at_xml).collect();
+            Ok(program)
+        }
+        Err(diags) => Err(diags.into_iter().map(at_xml).collect()),
+    }
 }
 
 impl Program {
@@ -313,6 +340,16 @@ impl Program {
     #[must_use]
     pub const fn sizes(&self) -> ImageSizes {
         self.sizes
+    }
+
+    /// Sets the wall clock `DT_NOW()` reads: `at_start` is the date and
+    /// time, in nanoseconds since 1970-01-01T00:00:00 (as a DT holds it),
+    /// at the moment `scan_at`'s clock reads zero. The clock is whatever
+    /// the host calls local time: the program has no time zone. Until it
+    /// is set, `DT_NOW()` counts from 1970-01-01. Not part of the program's
+    /// state: a reset or a hot swap keeps what the host last set.
+    pub const fn set_wall_clock(&mut self, at_start: i64) {
+        self.wall = at_start;
     }
 
     /// Changes the per-scan instruction budget.
@@ -382,7 +419,15 @@ impl Program {
         if self.cold {
             interp::init_located(&mut image, &self.code.loc_init);
         }
-        let r = run_on(&self.code, self.budget, &mut mem, &mut image, now, Some(&mut rec));
+        let r = run_on(
+            &self.code,
+            self.budget,
+            &mut mem,
+            &mut image,
+            now,
+            self.wall,
+            Some(&mut rec),
+        );
         let prog = &self.code.pous[self.code.program];
         let frame = mem[prog.base..prog.base + prog.size].to_vec();
         let fault = match r {
@@ -413,7 +458,7 @@ impl Program {
             interp::init_located(image, &self.code.loc_init);
             self.cold = false;
         }
-        run_on(&self.code, self.budget, &mut self.mem, image, now, tap).map_err(|h| match h {
+        run_on(&self.code, self.budget, &mut self.mem, image, now, self.wall, tap).map_err(|h| match h {
             Halt::Fault(f) => f,
             Halt::Break(_) => unreachable!("only scan_to sets breakpoints"),
         })
@@ -453,6 +498,7 @@ impl Program {
                 }
                 let esize = match elem {
                     Type::Agg(e) => self.code.aggs[*e].size,
+                    Type::Str(n) => strs::slots(usize::from(*n)),
                     _ => 1,
                 };
                 let mut stride = esize;
@@ -479,7 +525,10 @@ impl Program {
                     ty = f.ty;
                 }
                 AggKind::Fb(fb) => {
-                    let f = self.code.pous[*fb].vars.iter().find(|v| v.name == m)?;
+                    let f = self.code.pous[*fb]
+                        .vars
+                        .iter()
+                        .find(|v| v.name == m && v.section != parser::Section::InOut)?;
                     slot += f.off;
                     ty = f.ty;
                 }
@@ -497,8 +546,45 @@ impl Program {
         matches!(ty, Type::Elem(_) | Type::Enum(_)).then(|| self.mem[slot])
     }
 
+    /// A string variable's text, by path as for [`Self::get`] (`name`,
+    /// `job.label`, `names[2]`), one byte per character (bytes above 127
+    /// read as Latin-1). `None` if the path is not a string.
+    #[must_use]
+    pub fn get_str(&self, path: &str) -> Option<String> {
+        let (slot, Type::Str(_)) = self.resolve(path)? else {
+            return None;
+        };
+        Some(strs::read(&self.mem, slot).into_iter().map(char::from).collect())
+    }
+
+    /// Writes a string variable by path, between scans, cut at nothing:
+    /// the text must fit and be ASCII.
+    ///
+    /// # Errors
+    /// No such string variable; text longer than it holds or with a
+    /// character that is not ASCII (a STRING holds single bytes). The
+    /// variable keeps its previous text.
+    pub fn set_str(&mut self, path: &str, text: &str) -> Result<(), SetError> {
+        let Some((slot, Type::Str(cap))) = self.resolve(path) else {
+            return Err(SetError::NoSuchVariable);
+        };
+        if !text.is_ascii() {
+            return Err(SetError::NotAscii);
+        }
+        if text.len() > usize::from(cap) {
+            return Err(SetError::TooLong(cap));
+        }
+        strs::put(&mut self.mem, slot, usize::from(cap), text.as_bytes());
+        Ok(())
+    }
+
     /// The program's ports: its `VAR_INPUT`s and `VAR_OUTPUT`s, in
     /// declaration order, names upper-cased. A host binds them to signals.
+    ///
+    /// Only elementary ports are listed. A STRING, DATE, TOD or DT port
+    /// compiles and works inside the program but is no signal yet: it is
+    /// skipped here, on purpose (card `st-string-signals`; the date types
+    /// have no card yet).
     #[must_use]
     pub fn ports(&self) -> Vec<Port> {
         let prog = &self.code.pous[self.code.program];
@@ -511,6 +597,9 @@ impl Program {
                     _ => return None,
                 };
                 let Type::Elem(ty) = v.ty else { return None };
+                if ty.is_calendar() {
+                    return None;
+                }
                 Some(Port {
                     name: v.name.clone(),
                     dir,
@@ -602,6 +691,10 @@ pub enum SetError {
     Kind(Ty),
     /// Out of this type's range, or a non-finite real.
     Range(Ty),
+    /// [`Program::set_str`]: more characters than the STRING holds.
+    TooLong(u16),
+    /// [`Program::set_str`]: a character that is not ASCII.
+    NotAscii,
 }
 
 impl core::fmt::Display for SetError {
@@ -611,6 +704,8 @@ impl core::fmt::Display for SetError {
             Self::NoSuchVariable => f.write_str("no such variable"),
             Self::Kind(t) => write!(f, "wrong kind of value for {t}"),
             Self::Range(t) => write!(f, "value out of range for {t}"),
+            Self::TooLong(n) => write!(f, "more than the {n} characters this STRING holds"),
+            Self::NotAscii => f.write_str("a STRING holds ASCII characters only"),
         }
     }
 }

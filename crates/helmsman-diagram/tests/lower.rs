@@ -557,3 +557,160 @@ fn bitwise_not_on_a_word_stays_a_block() {
 "
     );
 }
+
+// ---- module globals ----
+
+const GLOBALS: &str = "VAR_GLOBAL total : INT; armed : BOOL; END_VAR
+FUNCTION_BLOCK add
+VAR_INPUT n : INT; END_VAR
+VAR_EXTERNAL total : INT; END_VAR
+total := total + n;
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK arm
+VAR_OUTPUT q : BOOL; END_VAR
+q := NOT armed;
+armed := TRUE;
+END_FUNCTION_BLOCK
+PROGRAM t
+VAR seen : INT; END_VAR
+seen := total;
+total := seen + 1;
+END_PROGRAM
+";
+
+/// A global is drawn as any variable is: a read where it is read and a
+/// write where it is written, in the program and in a block, whether the
+/// block names it `VAR_EXTERNAL` or not.
+#[test]
+fn a_read_and_a_write_of_a_global_are_in_the_diagram() {
+    let (_, m) = build(GLOBALS);
+    assert_eq!(
+        program_shape(&m),
+        "\
+#0 read TOTAL
+#1 write SEEN := <- #0
+#2 const 1
+#3 op + <- #1 #2
+#4 write TOTAL := <- #3
+"
+    );
+    assert_eq!(
+        shape(&m.pou("ADD").unwrap().diagram),
+        "\
+#0 read TOTAL
+#1 read N
+#2 op + <- #0 #1
+#3 write TOTAL := <- #2
+"
+    );
+    // Not declared in this block: still a read (it was drawn as a constant),
+    // and a BOOL one, so its NOT is a bubble on the write.
+    assert_eq!(
+        shape(&m.pou("ARM").unwrap().diagram),
+        "\
+#0 read ARMED
+#1 write Q := <- !#0
+#2 const TRUE
+#3 write ARMED := <- #2
+"
+    );
+}
+
+#[test]
+fn a_run_of_one_operator_is_one_block_with_an_input_each() {
+    assert_eq!(
+        lowered("a, b, c, d, y : BOOL;", "y := a AND NOT b AND c AND d;"),
+        "\
+#0 read A
+#1 read B
+#2 read C
+#3 read D
+#4 op AND <- #0 !#1 #2 #3
+#5 write Y := <- #4
+"
+    );
+    // AND binds tighter: each run is its own block under the OR.
+    assert_eq!(
+        lowered("a, b, c, d, y : BOOL;", "y := a AND b AND c OR d OR a AND d;"),
+        "\
+#0 read A
+#1 read B
+#2 read C
+#3 op AND <- #0 #1 #2
+#4 read D
+#5 op AND <- #0 #4
+#6 op OR <- #3 #4 #5
+#7 write Y := <- #6
+"
+    );
+    assert_eq!(
+        lowered("a, b, c : INT;", "c := a + b + c + 1;\nc := a * b * c;"),
+        "\
+#0 read A
+#1 read B
+#2 read C
+#3 const 1
+#4 op + <- #0 #1 #2 #3
+#5 write C := <- #4
+#6 read A
+#7 read B
+#8 op * <- #6 #7 #5
+#9 write C := <- #8
+"
+    );
+}
+
+#[test]
+fn only_a_run_as_written_is_joined() {
+    // The author's brackets keep their own block, on either side.
+    assert_eq!(
+        lowered(
+            "a, b, c, y : BOOL;",
+            "y := (a AND b) AND c;\ny := a AND (b AND c);"
+        ),
+        "\
+#0 read A
+#1 read B
+#2 op AND <- #0 #1
+#3 read C
+#4 op AND <- #2 #3
+#5 write Y := <- #4
+#6 read A
+#7 read B
+#8 read C
+#9 op AND <- #7 #8
+#10 op AND <- #6 #9
+#11 write Y := <- #10
+"
+    );
+    // `-` and `/` do not regroup, and a comparison takes two inputs.
+    assert_eq!(
+        lowered("a, b, c : INT;", "c := a - b - c;\nc := a + b - c + a;"),
+        "\
+#0 read A
+#1 read B
+#2 op - <- #0 #1
+#3 read C
+#4 op - <- #2 #3
+#5 write C := <- #4
+#6 read A
+#7 read B
+#8 op + <- #6 #7
+#9 op - <- #8 #5
+#10 op + <- #9 #6
+#11 write C := <- #10
+"
+    );
+}
+
+#[test]
+fn string_variables_literals_and_calls_lower_like_any_other() {
+    let out = lowered(
+        "s, t : STRING[8]; n : INT; same : BOOL;",
+        "s := CONCAT('ab', t);\nn := LEN(s);\nsame := s = 'x$'y';",
+    );
+    assert!(out.contains("func CONCAT"), "{out}");
+    assert!(out.contains("func LEN"), "{out}");
+    assert!(out.contains("write S :="), "{out}");
+    assert!(out.contains("op = <-"), "{out}");
+}

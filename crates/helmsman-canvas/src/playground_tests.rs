@@ -792,6 +792,27 @@ fn the_system_prompt_is_long_enough_to_cache_and_names_the_dialect() {
 }
 
 #[test]
+fn the_prompt_says_strings_and_dates_work_and_what_it_shows_compiles() {
+    let (supported, unsupported) = claude::SYSTEM.split_once("Not supported (do not use):").unwrap();
+    let unsupported = unsupported.lines().next().unwrap();
+    for t in ["STRING", "DATE", "DT", "TOD", "TIME_OF_DAY", "DT_NOW()"] {
+        assert!(supported.contains(t), "{t} is not listed as supported");
+    }
+    // WSTRING stays refused; the plain types are no longer on the list.
+    assert!(unsupported.contains("WSTRING"));
+    for t in ["STRING and", " DATE,", " DT,", " TOD,"] {
+        assert!(!unsupported.contains(t), "{t:?} is still listed as unsupported");
+    }
+    // What the prompt teaches compiles in this playground.
+    let src = "PROGRAM p\nVAR late : BOOL; wd : INT; s : STRING[20]; d : DATE; t : TOD := TOD#22:00:00; x : DT; END_VAR\n\
+        x := DT_NOW();\n late := DT_TO_TOD(DT_NOW()) >= TOD#22:00:00;\n d := DT_TO_DATE(x); wd := SINT_TO_INT(DAY_OF_WEEK(d));\n\
+        t := t + T#1h; s := CONCAT('at ', TOD_TO_STRING(t)); d := CONCAT_DATE(2024, 2, 29); x := CONCAT_DATE_TOD(d, t);\n\
+        wd := LEN(s);\nEND_PROGRAM";
+    let s = crate::playground::Session::new(src);
+    assert!(s.diags.is_empty(), "{:?}", s.diags);
+}
+
+#[test]
 fn haiku_has_no_fallback_and_the_proxy_route_has_no_key() {
     let r = ask_for(&Route::Proxy, Model::Haiku, &ctx("x", &[]));
     assert_eq!(r.url, PROXY_URL);
@@ -1755,15 +1776,50 @@ fn dragging_a_block_by_its_header_moves_it_and_not_the_view() {
     assert_eq!(s.input("enable"), b(false));
 }
 
+/// Was `dragging_empty_space_pans_and_moves_no_block`: since 2026-11-16 a
+/// plain drag on empty space draws a selection box, and the view moves
+/// with the middle button (Space and a drag is in `ui_tests/multi_select.rs`).
 #[test]
-fn dragging_empty_space_pans_and_moves_no_block() {
+fn dragging_empty_space_selects_and_the_middle_button_pans_and_neither_moves_a_block() {
     let mut s = Screen::new();
     s.view.session.set_running(false);
     let before = s.node("enable");
     let size = s.view.viewer.as_ref().unwrap().diagram().size;
-    // Below and right of everything drawn.
-    let empty = s.screen(size.0 + 40.0, size.1 + 40.0);
+    let offset = |s: &Screen| {
+        let v = s.view.viewer.as_ref().unwrap();
+        v.cams[v.scope].offset
+    };
+    // Below everything drawn, in the view.
+    let empty = s.screen(size.0 / 2.0, size.1 + 40.0);
+    assert!(
+        s.chrome.diagram.contains(empty),
+        "{empty:?} in {:?}",
+        s.chrome.diagram
+    );
+    let start = offset(&s);
     s.drag(empty, empty + Vec2::new(-60.0, -30.0));
+    assert_eq!(s.node("enable"), before);
+    assert_eq!(offset(&s), start, "a plain drag no longer pans");
+    assert!(!s.view.viewer.as_ref().unwrap().rearranged());
+    // The middle button moves the view and nothing else.
+    s.frame(vec![Event::PointerMoved(empty)]);
+    let middle = |s: &mut Screen, at: Pos2, pressed: bool| {
+        s.frame(vec![Event::PointerButton {
+            pos: at,
+            button: PointerButton::Middle,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+    };
+    middle(&mut s, empty, true);
+    for k in 1..=10 {
+        #[allow(clippy::cast_precision_loss)]
+        let at = empty + Vec2::new(-60.0, -30.0) * (k as f32 / 10.0);
+        s.frame(vec![Event::PointerMoved(at)]);
+    }
+    middle(&mut s, empty + Vec2::new(-60.0, -30.0), false);
+    let moved = offset(&s) - start;
+    assert!(moved.x < -20.0 && moved.y < -10.0, "the view moved by {moved:?}");
     assert_eq!(s.node("enable"), before);
     assert!(!s.view.viewer.as_ref().unwrap().rearranged());
 }
@@ -2748,6 +2804,7 @@ VAR RETAIN
   kept : INT;
 END_VAR
 q := q OR set;
+kept := kept + 1;
 END_FUNCTION_BLOCK
 PROGRAM main
 VAR_INPUT
@@ -2763,6 +2820,45 @@ l(set := go);
 lamp := l.q;
 END_PROGRAM
 ";
+
+const TIMER_IN_IF: &str = "PROGRAM p\nVAR_INPUT go : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nVAR t : TON; END_VAR\nIF go THEN\n  t(IN := TRUE, PT := T#1s);PRAGMA\nEND_IF;\nlamp := t.Q;\nEND_PROGRAM\n";
+
+/// A lint that blocks (`st-lints`): its row names the id and says it holds
+/// Deploy (at the rows' default width), Deploy refuses with why and what
+/// runs is untouched; a pragma with a reason on its line deploys it and
+/// the row says it was overridden.
+#[test]
+fn a_blocking_lint_row_names_its_id_and_holds_the_deploy_until_overridden() {
+    let bare = TIMER_IN_IF.replace("PRAGMA", "");
+    let mut s = Screen::new();
+    s.view.load(&bare, "held");
+    s.wait(0.3);
+    assert!(s.view.session.diags.is_empty(), "it compiles");
+    let diags = s.view.diags();
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].line, 6, "{diags:?}");
+    assert!(diags[0].message.starts_with("HELMSMAN-L1: "), "{diags:?}");
+    assert!(diags[0].message.ends_with("(holds Deploy)"), "{diags:?}");
+    assert!(s.chrome.rect("diag 0").is_some(), "the row under the editor");
+    assert!(s.view.session.deploy(&bare).is_none(), "Deploy is held");
+    assert!(
+        s.view.session.diags[0]
+            .msg
+            .contains("not deployed, held by HELMSMAN-L1"),
+        "{:?}",
+        s.view.session.diags
+    );
+    let ok = TIMER_IN_IF.replace("PRAGMA", " {lint: off HELMSMAN-L1 \"the branch is the enable\"}");
+    assert!(s.view.session.deploy(&ok).is_some(), "overridden, it deploys");
+    let diags = s.view.diags();
+    assert_eq!(diags.len(), 1, "still listed: {diags:?}");
+    assert!(
+        diags[0]
+            .message
+            .contains("(overridden: the branch is the enable)"),
+        "{diags:?}"
+    );
+}
 
 #[test]
 fn a_warning_is_marked_and_listed_beside_the_code_and_never_blocks_the_deploy() {

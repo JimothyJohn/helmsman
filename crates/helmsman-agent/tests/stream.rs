@@ -38,6 +38,7 @@ fn assemble(text: &str) -> (Result<Step, String>, Vec<String>) {
     let mut seen = Vec::new();
     let mut on = |d: Delta<'_>| match d {
         Delta::Text(t) => seen.push(format!("text:{t}")),
+        Delta::Thinking(t) => seen.push(format!("thinking:{t}")),
         Delta::ToolStart { id, name } => seen.push(format!("tool:{id}:{name}")),
     };
     for e in events(text) {
@@ -84,6 +85,15 @@ fn thinking_and_its_signature_go_back_exactly_as_streamed() {
         "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds..."
     );
     assert_eq!(t.content[1]["type"], "text");
+}
+
+#[test]
+fn thinking_streams_as_its_own_delta_and_matches_the_kept_block() {
+    let (r, seen) = assemble(&fixture("thinking.sse"));
+    let Ok(Step::Done(t)) = r else { panic!("{r:?}") };
+    let streamed: String = seen.iter().filter_map(|s| s.strip_prefix("thinking:")).collect();
+    assert_eq!(streamed, t.content[0]["thinking"].as_str().unwrap());
+    assert_ne!(streamed, "");
 }
 
 #[test]

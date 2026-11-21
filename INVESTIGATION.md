@@ -62,11 +62,13 @@ Read this first, so we don't propose things that are already built.
   FUNCTION_BLOCK, VAR / VAR_TEMP / VAR_INPUT / VAR_OUTPUT / VAR CONSTANT,
   STRUCT / enum / alias, ARRAY, the elementary types up to LREAL and TIME,
   located variables, the full statement set, the standard functions.
-- **Language not covered**: STRING / WSTRING, DATE / DT / TOD, VAR_IN_OUT
-  (it parses as `Section::InOut`, but nothing downstream supports it),
-  VAR_GLOBAL / VAR_EXTERNAL (the parser refuses them), function outputs
-  other than the return value, pointers and references, and OOP (METHOD,
-  INTERFACE, EXTENDS).
+- **Language not covered**: WSTRING, pointers and
+  references, and OOP (METHOD, INTERFACE, EXTENDS). VAR_IN_OUT (on a
+  function block) and function outputs are covered since the
+  `st-var-in-out` card, and VAR_GLOBAL / VAR_EXTERNAL inside one module
+  since `st-var-global`; TASK lines and program instances in a
+  CONFIGURATION are read past with a warning since `st-configuration-tasks`
+  (2026-11-15), and VAR_ACCESS and VAR_CONFIG are refused.
 - **Feedback loop**: the checker's errors, the requirement tests
   (`test_NAME.st` with `ASSERT`, run in lockstep by `helmsman_iec::spec`),
   and the ruSTy differential oracle (tests/oracle.rs, run through docker,
@@ -177,6 +179,158 @@ stand on it.
   ranking is the roadmap for §4. It is measured instead of guessed.
 - **Stand**: **do it second.** It costs little and makes the ordering in
   §4 a data question.
+- **Result** (`scripts/st-corpus.sh`, 2026-11-15, 1009 files from the six
+  sources in docs/SOURCES.md; OSCAT BASIC skipped, license and download
+  terms not looked up). The stages are "parses" (lex and parse together:
+  the public API does not separate them) and "compiles" (check and compile
+  together). A file counts under the first diagnostic only, and the lexer
+  stops at the first string literal, so STRING hides whatever else is in
+  those 726 files: the next run after STRING lands will move the order.
+  UniTest's 351 files are B&R function bodies without their declarations,
+  so its 116 "expected :, found X" are the fragment format, not a dialect
+  gap. matiec's `bad_*` and iec-checker's `bad/` files are listed apart.
+  After `st-var-in-out` one more file compiles (iec-checker's
+  `good/function-blocks.st`, which declares a VAR_IN_OUT); the ranking below
+  is the run after it. Only the totals and the "no PROGRAM found" line
+  changed: no file had VAR_IN_OUT as its first refusal, because a parse
+  error or the missing PROGRAM is reported before it.
+  After `st-var-global` (2026-11-15) the same 16 files compile and one
+  more parses; the ranking below is the run after it. The 25 files that
+  stopped at CONFIGURATION now stop inside it at TASK, which a module
+  refuses (its scan rate is set where it is deployed), so no
+  configuration file of the corpus compiles yet. The 3 files that
+  stopped at VAR_EXTERNAL and the ruSTy one at a top-level VAR_GLOBAL
+  moved on to their next refusal (a missing `;`, a call form, no
+  PROGRAM), and iec-checker's one VAR_GLOBAL inside a PROGRAM is told
+  where a global goes.
+  After `st-configuration-tasks` (2026-11-15) the 25 configuration files
+  no longer stop at TASK: the TASK lines and program instances are read
+  past with a warning, so 33 more files parse (39 to 72) and 22 more
+  compile (16 to 38 of 1009); the ranking above is the run after it. The
+  three configuration files of iec-checker stop on other causes (a TOD
+  type, a second PROGRAM, a local that hides a global); the `bad_*` ones
+  stay in their own list.
+  The lint pass of `st-lints` (2026-11-17, `helmsman_iec::lint`) runs over
+  every file that parses (185 of the 1009 after STRING landed, 72 before): HELMSMAN-L1
+  0 findings, PLCOPEN-CP12 1 (in 1 file; `good/control-statements.st`
+  writes `vo1` in six places), PLCOPEN-CP3 19 (8 files), PLCOPEN-CP8 0,
+  PLCOPEN-L12 3 (1 file; iec-checker's own `plcopen-l22.st`), PLCOPEN-CP24
+  77 (56 files), PLCOPEN-CP2 3 (1 file; `dead-code.st`), HELMSMAN-L2 0. The
+  test fails on a panic in the pass and prints the table after the
+  refusals. The other counts did not change with the 113 files STRING
+  made parse.
+  PLCOPEN-CP24 is the noisy one (a corpus file declares what it never
+  uses); the blocking two are quiet.
+
+  After `st-string` (2026-11-17) the lexer no longer stops at a string
+  literal, so the first diagnostic of most of those 726 files moves on to
+  what came after it: files that parse go from 72 to 185 and files that
+  compile from 38 to 44 of 1009. The block below is the run after it. The
+  ranking was ordered by STRING and is not any more: what now leads is
+  `expected :, found X` (136, of which UniTest's 116 are the fragment
+  format) and the 96 files with no PROGRAM, both mostly rusty's tests of
+  other dialect (methods, pointers, `^`, INTERFACE: 40). 12 files stop at a
+  WSTRING literal, refused on purpose. matiec goes from 28 to 39 parsing
+  files and from 20 to 25 compiling ones.
+
+  After `st-tod-date` (2026-11-18) the DT, TOD and DATE literals and the
+  TOD type parse: files that parse go from 185 to 189 (ruSTy's 108 to
+  112), compile stays at 44, since those files stop on the next thing
+  (a second PROGRAM, methods, `^`). The `L` forms (LDT, LTOD, LDATE) still
+  refuse, 5 files. The block below is the run after it.
+
+```
+per source (files, parse, compile, refused, refused as expected):
+  blark: 18 files, 2 parse, 0 compile, 18 refused, 0 refused as expected
+  iec-checker: 53 files, 35 parse, 15 compile, 36 refused, 2 refused as expected
+  matiec: 40 files, 39 parse, 25 compile, 1 refused, 14 refused as expected
+  rusty: 541 files, 112 parse, 4 compile, 537 refused, 0 refused as expected
+  unitest: 351 files, 1 parse, 0 compile, 351 refused, 0 refused as expected
+  wenger: 6 files, 0 parse, 0 compile, 6 refused, 0 refused as expected
+total: 1009 files, 189 parse, 44 compile, 949 refused, 16 refused as expected (named bad_* or bad/, left out of the ranking)
+
+refusals by cause (first diagnostic of each file):
+   136 files  parse: expected :, found X  (blark 1, rusty 19, unitest 116)
+   116 files  parse: expected := or a call, found ;  (unitest 116)
+   116 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found ACTION  (unitest 116)
+   100 files  compile: no PROGRAM found  (iec-checker 6, rusty 94)
+    61 files  parse: expected :, found VAR  (rusty 61)
+    59 files  parse: unexpected character ^  (blark 1, rusty 58)
+    53 files  parse: expected := or a call, found X  (matiec 1, rusty 52)
+    41 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found INTERFACE  (rusty 41)
+    34 files  parse: expected ;, found END_TYPE  (iec-checker 2, rusty 32)
+    21 files  parse: expected ;, found TO  (blark 1, rusty 20)
+    19 files  parse: X:  is not allowed in names  (rusty 19)
+    17 files  parse: expected ;, found (  (blark 1, rusty 16)
+    14 files  parse: expected an expression, found TO  (rusty 14)
+    14 files  parse: missing ; after END_IF  (blark 1, iec-checker 3, rusty 8, unitest 2)
+    12 files  parse: WSTRING literals () are not supported: write a STRING literal in single quotes  (iec-checker 2, rusty 10)
+    12 files  parse: missing ; after END_CASE  (rusty 12)
+     7 files  compile: unknown function X  (rusty 6, unitest 1)
+     6 files  parse: expected :, found VAR_INPUT  (rusty 6)
+     6 files  parse: expected :, found VAR_IN_OUT  (rusty 6)
+     6 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found UNIT  (wenger 6)
+     6 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found X  (iec-checker 1, rusty 5)
+     6 files  parse: expected an integer, found X  (blark 3, rusty 3)
+     4 files  compile: only one PROGRAM is supported  (iec-checker 4)
+     4 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found METHOD  (blark 4)
+     4 files  parse: expected an address after AT, found X  (rusty 4)
+     3 files  compile: %X: multi-level addresses (as X extensions assign) are not supported; this runtime takes %X<byte>N<bit> or %X<n>  (iec-checker 1, rusty 2)
+     3 files  parse: LDT literals are not supported yet  (rusty 3)
+     3 files  parse: expected ,, found X  (rusty 3)
+     3 files  parse: expected :, found *  (iec-checker 1, rusty 2)
+     3 files  parse: expected an expression, found [  (rusty 3)
+     2 files  compile: VAR_IN_OUT is not supported in a PROGRAM: a program  (rusty 2)
+     2 files  compile: X is a function block type; declare an instance and call that  (rusty 2)
+     2 files  compile: unknown type X  (blark 1, iec-checker 1)
+     2 files  parse: VAR_ACCESS is not supported: modules do not share variables, signals are how modules talk  (iec-checker 2)
+     2 files  parse: a STRING literal holds at most N characters  (rusty 2)
+     2 files  parse: expected :, found VAR_OUTPUT  (rusty 2)
+     2 files  parse: expected ;, found INT  (rusty 2)
+     2 files  parse: expected ;, found STRING  (rusty 2)
+     2 files  parse: expected ;, found [  (iec-checker 2)
+     2 files  parse: expected a number after WSTRING#  (rusty 2)
+     1 files  compile: %X: address must start with X, X or X  (iec-checker 1)
+     1 files  compile: CONSTANT X needs an initial value  (blark 1)
+     1 files  compile: X cannot be written: inputs (%X) are read-only  (rusty 1)
+     1 files  compile: X is a global variable of this module; a variable of the same name here would hide it, so give this one another name  (iec-checker 1)
+     1 files  compile: X: an input (%X) cannot take an initial value  (iec-checker 1)
+     1 files  compile: expected BOOL, found INT; convert explicitly with X  (iec-checker 1)
+     1 files  compile: expected INT, found LREAL; convert explicitly with X  (iec-checker 1)
+     1 files  compile: expected INT, found REAL; convert explicitly with X  (iec-checker 1)
+     1 files  compile: integer literal N cannot be a TIME  (iec-checker 1)
+     1 files  compile: unary - needs a signed integer, real or TIME, found USINT  (rusty 1)
+     1 files  compile: undeclared variable X (declare it in a VAR block)  (iec-checker 1)
+     1 files  parse: LDATE literals are not supported yet  (rusty 1)
+     1 files  parse: LTOD literals are not supported yet  (rusty 1)
+     1 files  parse: VAR_GLOBAL goes before the first PROGRAM, or in a CONFIGURATION, not inside a X: move it out so every X of the module can see it  (iec-checker 1)
+     1 files  parse: a STRING holds single-byte characters, X as written: write other bytes as $X  (rusty 1)
+     1 files  parse: bad $ escape: $X takes two hex digits  (rusty 1)
+     1 files  parse: bad $ escape: use $$, $  (rusty 1)
+     1 files  parse: bad TIME literal: expected a number  (rusty 1)
+     1 files  parse: bad TIME literal: only the last part may have a fraction  (iec-checker 1)
+     1 files  parse: expected ), found :=  (rusty 1)
+     1 files  parse: expected :, found ,  (blark 1)
+     1 files  parse: expected :, found END_FUNCTION  (rusty 1)
+     1 files  parse: expected :, found VAR_EXTERNAL  (rusty 1)
+     1 files  parse: expected := or a call, found VAR_OUTPUT  (blark 1)
+     1 files  parse: expected ;, found :=  (rusty 1)
+     1 files  parse: expected ;, found X  (rusty 1)
+     1 files  parse: expected PROGRAM, FUNCTION, FUNCTION_BLOCK, TYPE, VAR_GLOBAL or CONFIGURATION, found ;  (blark 1)
+     1 files  parse: expected a CASE label, found N  (blark 1)
+     1 files  parse: expected a number after CHAR#  (rusty 1)
+     1 files  parse: expected a number after WCHAR#  (rusty 1)
+     1 files  parse: expected a statement, found +  (rusty 1)
+     1 files  parse: expected a type, found (  (rusty 1)
+     1 files  parse: expected an expression, found )  (rusty 1)
+     1 files  parse: expected an expression, found N  (rusty 1)
+     1 files  parse: expected an expression, found X  (rusty 1)
+     1 files  parse: expected an integer, found *  (rusty 1)
+     1 files  parse: expected an integer, found N  (rusty 1)
+     1 files  parse: missing ; after END_FOR  (rusty 1)
+     1 files  parse: unexpected character ?  (iec-checker 1)
+     1 files  parse: unterminated STRING literal: a literal ends on its line (write $X for a line break)  (rusty 1)
+```
 
 ### 4. Lifting the dialect
 
@@ -189,8 +343,8 @@ staying analysable. So each feature gets a position, not a blanket "yes":
 | VAR_IN_OUT | yes | the standard way to pass a struct or array into an FB; every library uses it. Inside one module it breaks nothing. |
 | function outputs (VAR_OUTPUT on FUNCTION) | yes | cheap, common in libraries |
 | STRING (fixed-length, `STRING[n]`) | yes | messages, recipe names, OPC UA and webhook payloads, device IDs. Fixed length keeps the scan bounded and fits no_std. WSTRING later. |
-| TOD / DATE / DT | yes | the shift calendar already exists; logic like "after 22:00" is natural to write and today can't be. Needs a clock source in `scan_at` (it has one). |
-| VAR_GLOBAL inside one module (CONFIGURATION / RESOURCE scope) | maybe | common in imported code. Across modules it must stay refused; signals and `Binding::Module` are the way modules talk. |
+| TOD / DATE / DT | yes (built 2026-11-18) | the shift calendar already exists; logic like "after 22:00" is natural to write and today can't be. Needs a clock source in `scan_at` (it has one). |
+| VAR_GLOBAL inside one module (CONFIGURATION / RESOURCE scope) | yes (built 2026-11-15) | common in imported code. Across modules it must stay refused; signals and `Binding::Module` are the way modules talk. |
 | METHOD / PROPERTY on FUNCTION_BLOCK | later | TwinCAT and CODESYS code (TcOpen, Henneken's blog, Pratt's OOIP talk) is written this way, and models have read a lot of it. The diagram needs a story for methods first. |
 | INTERFACE / EXTENDS / polymorphism | no, for now | dynamic dispatch defeats "on because ..." explanations and per-statement tracing. Revisit only if the corpus says imports fail mostly on this. |
 | POINTER / REFERENCE | no | it breaks the memory-safety and isolation claims the voice rules lean on |

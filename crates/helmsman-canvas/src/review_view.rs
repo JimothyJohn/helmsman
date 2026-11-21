@@ -13,6 +13,7 @@ use eframe::egui::{
 use helmsman_diagram::diff::{self, Change, Line};
 
 use crate::diff_ui::Kind;
+use crate::install_review::{BundleReview, State, plain};
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, in_port_at, out_port, out_port_at};
 use helmsman_diagram::{Diagram, NodeId};
 
@@ -20,7 +21,7 @@ use crate::review::{
     Answer, Call, Chart, Delta, Drawn, Open, Phase, ROLES, Refusal, Replay, Request, Review, SHOWN,
     SignalChart, Step, Target, Track, Values, Why,
 };
-use crate::st_view::brand::{BLACK, YELLOW};
+use crate::st_view::brand::{BLACK, SELECT, YELLOW};
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
 
@@ -213,6 +214,8 @@ impl ReviewView {
         self.login_ui(ui);
         ui.separator();
         self.drafts_ui(ui);
+        ui.separator();
+        self.install_ui(ui);
     }
 
     /// Who is approving: signed in, or the way in this box takes (a user
@@ -446,14 +449,61 @@ impl ReviewView {
         }
     }
 
+    /// The install form: a marketplace's index address and a bundle's name.
+    /// The box fetches it, has the Agent read it, and makes a proposal.
+    fn install_ui(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
+        ui.label(RichText::new("Install from a marketplace").strong())
+            .tip("The box fetches the bundle from the marketplace's signed index and checks it. The Agent then reads it and can refuse. What passes becomes a draft here, approved like any other.");
+        // Capped to the panel: a long address must not widen it.
+        let width = (ui.available_width() - 12.0).max(80.0);
+        ui.label(RichText::new("Index address").small().color(t.muted));
+        let index = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.state.install.index)
+                    .desired_width(width)
+                    .hint_text("https://…/index.json"),
+            )
+            .tip("The address of the marketplace's index.json. Its signature must be one of a publisher this box trusts.");
+        self.rects.push(("install index".into(), index.rect));
+        ui.label(RichText::new("Bundle").small().color(t.muted));
+        let name = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.state.install.name)
+                    .desired_width(width)
+                    .hint_text("name in the index"),
+            )
+            .tip("The bundle's name as the index lists it. The newest version is taken.");
+        self.rects.push(("install name".into(), name.rect));
+        let busy = self.state.install.busy;
+        let go = ui
+            .add_enabled(!busy, egui::Button::new(if busy { "Reading the bundle…" } else { "Install" }))
+            .tip(if busy {
+                "The box is fetching and reviewing the bundle."
+            } else {
+                "Fetches the bundle, has the Agent read it, and makes a draft if the Agent does not refuse. Nothing runs until it is approved."
+            });
+        self.rects.push(("install go".into(), go.rect));
+        if go.clicked() {
+            self.state.install_bundle();
+        }
+    }
+
     fn center(&mut self, ui: &mut egui::Ui, now: f64) {
         let t = theme(ui);
         let signed_in = self.state.signed_in();
+        let mut out = Out {
+            signed_in: signed_in.clone(),
+            ..Out::default()
+        };
+        install_result_ui(ui, &mut self.state, &mut out);
         let Some(o) = self.state.open.as_mut() else {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("Pick a proposal to review it.").color(t.muted));
             });
+            self.rects.extend(out.rects);
+            self.act(out.act, now);
             return;
         };
         header(ui, o);
@@ -478,6 +528,15 @@ impl ReviewView {
             };
             ui.label(RichText::new(range).color(t.muted));
         }
+        if o.json["kind"] == "bundle" {
+            section(ui, "Bundle");
+            bundle_ui(ui, o);
+            if let Some(r) = o.bundle_review() {
+                section(ui, "The Agent's review")
+                    .tip("The Agent read the bundle's modules before the box made this draft. It can only describe and refuse; the approval below is the box's own.");
+                review_ui(ui, &r);
+            }
+        }
         if !o.manifest.is_empty() {
             section(ui, "Manifest");
             manifest(ui, o);
@@ -497,10 +556,6 @@ impl ReviewView {
                 diagram(ui, d, &mut self.pou, &mut self.cam);
             }
         }
-        let mut out = Out {
-            signed_in,
-            ..Out::default()
-        };
         section(ui, "Sim replay");
         replay_ui(ui, &o.step, &mut out);
         if let Some(v) = o.values() {
@@ -529,10 +584,17 @@ impl ReviewView {
             );
         }
         self.rects.extend(out.rects);
-        for a in out.act {
+        self.act(out.act, now);
+    }
+
+    /// Carries out what the frame's clicks asked for.
+    fn act(&mut self, acts: Vec<Act>, now: f64) {
+        for a in acts {
             match a {
                 Act::Replay(t) => self.state.replay(&t),
                 Act::Approve(t) => self.state.approve(&t, now),
+                Act::GoOn => self.state.install_without_review(),
+                Act::Dismiss => self.state.install.dismiss(),
             }
         }
     }
@@ -542,6 +604,10 @@ impl ReviewView {
 enum Act {
     Replay(Target),
     Approve(Target),
+    /// "Install without a review" on a stopped install.
+    GoOn,
+    /// Close the install's result.
+    Dismiss,
 }
 
 /// What drawing collected: clicks to act on, and where the controls are.
@@ -590,6 +656,12 @@ fn header(ui: &mut egui::Ui, o: &Open) {
             None => badge(ui, "no tier", (t.rule, t.fg)),
         }
         let title = match o.json["kind"].as_str() {
+            Some("bundle") => format!(
+                "#{} bundle {} {}",
+                o.id,
+                o.json["bundle"]["name"].as_str().unwrap_or("?"),
+                o.json["bundle"]["version"].as_str().unwrap_or("")
+            ),
             Some("module") => format!(
                 "#{} {} module {}",
                 o.id,
@@ -642,6 +714,124 @@ fn header(ui: &mut egui::Ui, o: &Open) {
     if let Some(a) = o.json["manifest"]["author"].as_str() {
         ui.label(RichText::new(format!("by {a}")).small().color(t.muted));
     }
+}
+
+/// What the box says about a bundle draft: who made it, who vouches for
+/// it, what it can touch.
+fn bundle_ui(ui: &mut egui::Ui, o: &Open) {
+    let t = theme(ui);
+    let b = &o.json["bundle"];
+    if let Some(d) = b["description"].as_str() {
+        ui.label(plain(d));
+    }
+    ui.label(
+        RichText::new(format!("by {}", plain(b["author"].as_str().unwrap_or("?"))))
+            .small()
+            .color(t.muted),
+    );
+    if let Some(l) = b["trust_line"].as_str() {
+        ui.label(RichText::new(plain(l)).color(t.muted));
+    }
+    if let Some(s) = b["capabilities"]["summary"].as_str() {
+        ui.label(RichText::new(format!("The box computed from the code: {}.", plain(s))).color(t.muted));
+    }
+}
+
+/// The Agent's review: what it came to, then what the bundle touches.
+fn review_ui(ui: &mut egui::Ui, r: &BundleReview) {
+    let t = theme(ui);
+    ui.horizontal_wrapped(|ui| {
+        match (r.state, r.risk.as_deref()) {
+            (State::Refused, _) => badge(ui, "advises against", (RED, BLACK)),
+            (State::Reviewed, Some(risk)) => badge(ui, &format!("{risk} risk"), risk_colors(&t, risk)),
+            (State::NotReviewed, _) => badge(ui, "not reviewed", (YELLOW, BLACK)),
+            _ => badge(ui, "no review", (t.rule, t.fg)),
+        }
+        ui.label(RichText::new(r.headline()).strong());
+    });
+    if r.read() {
+        if !r.summary.is_empty() {
+            ui.add_space(4.0);
+            ui.label(&r.summary);
+        }
+        for (title, entries) in &r.lists {
+            ui.add_space(2.0);
+            ui.label(RichText::new(*title).small().color(t.muted));
+            if entries.is_empty() {
+                ui.label(RichText::new("· none").color(t.muted));
+            }
+            for e in entries {
+                ui.label(format!("· {e}"));
+            }
+        }
+        if !r.reason.is_empty() {
+            ui.add_space(4.0);
+            let what = if r.state == State::Refused {
+                "Why: "
+            } else {
+                "Before you approve: "
+            };
+            ui.label(RichText::new(format!("{what}{}", r.reason)).strong());
+        }
+    }
+}
+
+/// The risk badge: yellow for medium, red for high, plain for low.
+fn risk_colors(t: &Theme, risk: &str) -> (Color32, Color32) {
+    match risk {
+        "high" => (RED, BLACK),
+        "medium" => (YELLOW, BLACK),
+        _ => (t.rule, t.fg),
+    }
+}
+
+/// The last install's result, above whatever is open: a stop with the
+/// Agent's reading and the way on, the proposal it made, or a plain
+/// refusal.
+fn install_result_ui(ui: &mut egui::Ui, state: &mut Review, out: &mut Out) {
+    let t = theme(ui);
+    if !state.install.has_result() {
+        return;
+    }
+    let engineer = state.engineer();
+    section(ui, "Install");
+    if let Some(s) = &state.install.stopped {
+        ui.label(RichText::new(format!("{} did not install", s.bundle)).heading());
+        ui.label(&s.error);
+        review_ui(ui, &s.review);
+        if s.can_go_on() {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "The box checked the bundle's signature and content as it always does. You can go on without a review: the install is recorded as made without one, and the approval still applies in full.",
+                )
+                .color(t.muted),
+            );
+            let go = ui
+                .add_enabled(engineer, egui::Button::new("Install without a review"))
+                .tip(if engineer {
+                    "Makes the draft without the Agent's reading. It is recorded as installed without a review, with who went on."
+                } else {
+                    "Needs an engineer signed in (left panel)."
+                });
+            out.rects.push(("install go on".into(), go.rect));
+            if go.clicked() {
+                out.act.push(Act::GoOn);
+            }
+        }
+    } else if let Some(e) = &state.install.error {
+        ui.colored_label(crate::theme::theme(ui).ink(RED), e);
+    } else if let Some(id) = state.install.installed {
+        ui.label(format!(
+            "Made draft #{id}. Its review is below; nothing runs until it is approved."
+        ));
+    }
+    let close = ui.small_button("Dismiss").tip("Closes this result.");
+    out.rects.push(("install dismiss".into(), close.rect));
+    if close.clicked() {
+        out.act.push(Act::Dismiss);
+    }
+    ui.separator();
 }
 
 fn manifest(ui: &mut egui::Ui, o: &Open) {
@@ -734,7 +924,9 @@ fn diagram(ui: &mut egui::Ui, d: &Drawn, pou: &mut usize, cam: &mut Cam) {
     ))
     .tip(
         "Yellow: added. Yellow outline: changed. Dashed grey, below the diagram: removed. \
-         Drag to pan, pinch to zoom, double-click to fit.",
+         Click a block to select it, drag from empty space to select several, Shift or Ctrl adds. \
+         Esc or a click off the blocks lets them go. Hold Space or the middle button and drag to \
+         move the view, pinch to zoom, double-click to fit.",
     );
     if d.diff.is_empty() {
         ui.label(RichText::new("The diagram is unchanged.").color(t.muted));
@@ -787,9 +979,7 @@ fn diagram(ui: &mut egui::Ui, d: &Drawn, pou: &mut usize, cam: &mut Cam) {
         cam.fitted = true;
     }
     cam.origin = area.min;
-    if response.dragged() {
-        cam.offset += response.drag_delta();
-    }
+    let selected = select(ui, &response, area, cam, &p.diagram, *pou);
     let zoom = ui.ctx().input(egui::InputState::zoom_delta);
     if response.hovered() && (zoom - 1.0).abs() > f32::EPSILON {
         cam.zoom = (cam.zoom * zoom).clamp(0.15, 3.0);
@@ -803,11 +993,164 @@ fn diagram(ui: &mut egui::Ui, d: &Drawn, pou: &mut usize, cam: &mut Cam) {
         added: d.diff.new_nodes(&p.name, Change::Added),
         changed: d.diff.new_nodes(&p.name, Change::Changed),
         regions: d.diff.new_regions(&p.name),
+        selected: selected.shown,
     };
     draw_diff(&painter, &t, area, *cam, &p.diagram, &marks);
+    if let Some((a, b)) = selected.band {
+        let band = Rect::from_two_pos(a, b);
+        painter.rect_filled(band, CornerRadius::ZERO, SELECT.gamma_multiply(0.12));
+        painter.rect_stroke(
+            band,
+            CornerRadius::ZERO,
+            Stroke::new(1.5, SELECT),
+            StrokeKind::Inside,
+        );
+    }
     if let Some(o) = old {
         draw_ghosts(&painter, *cam, o, &ghosts, &ghost_wires, p.diagram.size.1);
     }
+}
+
+/// The blocks selected in the proposed diagram, and the drag in hand:
+/// the Editor's diagram's gestures (`crate::st_view`), so a hand that
+/// knows one knows the other. Kept with the page's widget state.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Selection {
+    /// The POU the blocks are of: another POU starts empty.
+    pou: usize,
+    blocks: Vec<NodeId>,
+    /// The rubber band: where the press was and where the pointer is.
+    band: Option<(Pos2, Pos2)>,
+    /// The drag moves the view (the middle button, or Space held).
+    pan: bool,
+}
+
+/// What [`select`] hands the painter.
+struct Selected {
+    /// The blocks to draw as selected: while a band is being drawn, what
+    /// it touches so far.
+    shown: Vec<NodeId>,
+    band: Option<(Pos2, Pos2)>,
+}
+
+/// The diagram's selection and view gestures for this frame. A click on
+/// a block selects it alone; a drag from anywhere draws a rubber band
+/// that selects what it touches when the button is released; Shift or
+/// Ctrl adds (a click toggles). A click off the blocks or off the
+/// diagram, or Esc with nothing else using it, lets the selection go.
+/// The middle button, or Space held, and a drag move the view.
+fn select(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    area: Rect,
+    cam: &mut Cam,
+    d: &Diagram,
+    pou: usize,
+) -> Selected {
+    let id = response.id.with("selection");
+    let mut s: Selection = ui.data(|m| m.get_temp(id)).unwrap_or_default();
+    if s.pou != pou {
+        s = Selection {
+            pou,
+            ..Selection::default()
+        };
+    }
+    s.blocks.retain(|n| (n.0 as usize) < d.nodes.len());
+    let (add, origin, pointer, primary, middle, space, clicked_at) = ui.ctx().input(|i| {
+        (
+            i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl,
+            i.pointer.press_origin(),
+            i.pointer.interact_pos(),
+            i.pointer.button_down(egui::PointerButton::Primary),
+            i.pointer.button_down(egui::PointerButton::Middle),
+            i.key_down(egui::Key::Space),
+            i.pointer
+                .primary_clicked()
+                .then(|| i.pointer.interact_pos())
+                .flatten(),
+        )
+    });
+    let touched = |cam: &Cam, band: Rect| -> Vec<NodeId> {
+        let band = band.intersect(area);
+        d.nodes
+            .iter()
+            .filter(|n| cam.rect(&n.rect).intersects(band))
+            .map(|n| n.id)
+            .collect()
+    };
+    let small = |band: Rect| band.width() < 2.0 && band.height() < 2.0;
+    if response.drag_started() {
+        s.pan = middle || space;
+        s.band = origin.filter(|_| !s.pan && primary).map(|p| (p, p));
+    }
+    if response.dragged() {
+        if s.pan {
+            cam.offset += response.drag_delta();
+        } else if let (Some((from, _)), Some(to)) = (s.band, pointer) {
+            s.band = Some((from, to));
+        }
+    }
+    if response.drag_stopped() {
+        if let Some((a, b)) = s.band.take() {
+            let band = Rect::from_two_pos(a, b);
+            if !small(band) {
+                if !add {
+                    s.blocks.clear();
+                }
+                s.blocks.extend(touched(cam, band));
+            }
+        }
+        s.pan = false;
+    }
+    if response.clicked()
+        && let Some(p) = response.interact_pointer_pos()
+    {
+        let hit = d
+            .nodes
+            .iter()
+            .rev()
+            .find(|n| cam.rect(&n.rect).contains(p))
+            .map(|n| n.id);
+        match (hit, add) {
+            (Some(n), true) if s.blocks.contains(&n) => s.blocks.retain(|b| *b != n),
+            (Some(n), true) => s.blocks.push(n),
+            (Some(n), false) => s.blocks = vec![n],
+            (None, true) => {}
+            (None, false) => s.blocks.clear(),
+        }
+    }
+    if clicked_at.is_some_and(|p| !area.contains(p)) {
+        s.blocks.clear();
+    }
+    // Escape, when no popup, modal or field with the cursor has its use.
+    let busy = ui.ctx().any_popup_open()
+        || ui
+            .ctx()
+            .memory(|m| m.focused().is_some() || m.top_modal_layer().is_some());
+    if (s.band.is_some() || !s.blocks.is_empty())
+        && !busy
+        && ui
+            .ctx()
+            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        && s.band.take().is_none()
+    {
+        s.blocks.clear();
+    }
+    s.blocks.sort_unstable();
+    s.blocks.dedup();
+    let mut shown = s.blocks.clone();
+    if let Some((a, b)) = s.band {
+        let band = Rect::from_two_pos(a, b);
+        if !small(band) {
+            if !add {
+                shown.clear();
+            }
+            shown.extend(touched(cam, band));
+        }
+    }
+    let band = s.band;
+    ui.data_mut(|m| m.insert_temp(id, s));
+    Selected { shown, band }
 }
 
 /// What to highlight in the proposed diagram.
@@ -815,6 +1158,8 @@ pub struct Marks {
     pub added: Vec<NodeId>,
     pub changed: Vec<NodeId>,
     pub regions: Vec<(helmsman_diagram::RegionId, Change)>,
+    /// The blocks selected: outlined blue, as the Editor's diagram does.
+    pub selected: Vec<NodeId>,
 }
 
 fn font(z: f32, size: f32) -> FontId {
@@ -886,6 +1231,15 @@ fn draw_diff(painter: &egui::Painter, t: &Theme, area: Rect, cam: Cam, d: &Diagr
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, CornerRadius::same(4), outline, StrokeKind::Outside);
+        if m.selected.contains(&n.id) {
+            painter.rect_filled(r, CornerRadius::same(4), SELECT.gamma_multiply(0.14));
+            painter.rect_stroke(
+                r.expand(3.0 * z),
+                CornerRadius::same(6),
+                Stroke::new(2.5 * z.max(0.6), SELECT),
+                StrokeKind::Outside,
+            );
+        }
         if text {
             painter.text(h.center(), Align2::CENTER_CENTER, &n.label, font(z, 11.5), ink);
             if changed {
@@ -1373,4 +1727,246 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
         on(s.on_ms.0),
         on(s.on_ms.1)
     ));
+}
+
+#[cfg(test)]
+mod select_tests {
+    //! The review diagram's selection gestures ([`select`]), driven
+    //! through egui on a bare diagram.
+
+    use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Sense, Vec2};
+    use helmsman_diagram::{Diagram, NodeId};
+
+    use super::{Cam, Selected, select};
+
+    const SRC: &str = "PROGRAM p\nVAR_INPUT a : BOOL; b : BOOL; END_VAR\nVAR_OUTPUT x : BOOL; y : BOOL; END_VAR\nx := a AND b;\ny := a OR b;\nEND_PROGRAM\n";
+
+    struct Bench {
+        ctx: egui::Context,
+        d: Diagram,
+        cam: Cam,
+        time: f64,
+        area: Rect,
+        last: Vec<NodeId>,
+        band: bool,
+        pou: usize,
+    }
+
+    impl Bench {
+        fn new() -> Self {
+            let build = crate::playground::Build::new(SRC).0.expect("compiles");
+            let d = build
+                .module
+                .expect("lowers")
+                .program()
+                .expect("a program")
+                .diagram
+                .clone();
+            let mut b = Self {
+                ctx: egui::Context::default(),
+                d,
+                cam: Cam::default(),
+                time: 1.0,
+                area: Rect::NOTHING,
+                last: Vec::new(),
+                band: false,
+                pou: 0,
+            };
+            b.frame(vec![]);
+            b
+        }
+
+        fn frame(&mut self, events: Vec<Event>) {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 900.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            self.time += 1.0 / 60.0;
+            let Self {
+                ctx,
+                d,
+                cam,
+                area,
+                last,
+                band,
+                pou,
+                ..
+            } = self;
+            let mut out = ctx.run_ui(input, |ui| {
+                ui.add_space(40.0);
+                let (a, response) = ui.allocate_exact_size(Vec2::new(1000.0, 700.0), Sense::click_and_drag());
+                cam.origin = a.min;
+                let Selected { shown, band: drawn } = select(ui, &response, a, cam, d, *pou);
+                *area = a;
+                *last = shown;
+                *band = drawn.is_some();
+            });
+            // No renderer here to upload textures to.
+            out.textures_delta.clear();
+        }
+
+        fn wait(&mut self, secs: f64) {
+            let end = self.time + secs;
+            while self.time < end {
+                self.frame(vec![]);
+            }
+        }
+
+        fn on_screen(&self, n: NodeId) -> Rect {
+            self.cam.rect(&self.d.node(n).rect)
+        }
+
+        fn button(at: Pos2, button: PointerButton, pressed: bool, modifiers: Modifiers) -> Event {
+            Event::PointerButton {
+                pos: at,
+                button,
+                pressed,
+                modifiers,
+            }
+        }
+
+        fn click(&mut self, at: Pos2, held: Modifiers) {
+            self.wait(1.0);
+            self.frame(vec![Event::ModifiersChanged(held), Event::PointerMoved(at)]);
+            self.frame(vec![Self::button(at, PointerButton::Primary, true, held)]);
+            self.frame(vec![Self::button(at, PointerButton::Primary, false, held)]);
+            self.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+            self.frame(vec![]);
+        }
+
+        fn press_and_move(&mut self, from: Pos2, to: Pos2, button: PointerButton) {
+            self.wait(1.0);
+            self.frame(vec![Event::PointerMoved(from)]);
+            self.frame(vec![Self::button(from, button, true, Modifiers::NONE)]);
+            for k in 1..=8 {
+                #[allow(clippy::cast_precision_loss)]
+                self.frame(vec![Event::PointerMoved(from.lerp(to, k as f32 / 8.0))]);
+            }
+            self.frame(vec![]);
+        }
+
+        fn release(&mut self, at: Pos2, button: PointerButton) {
+            self.frame(vec![Self::button(at, button, false, Modifiers::NONE)]);
+            self.frame(vec![]);
+        }
+
+        /// A point of the diagram's area no block is near.
+        fn empty(&self) -> Pos2 {
+            let p = Pos2::new(self.area.right() - 6.0, self.area.bottom() - 6.0);
+            assert!(
+                self.d
+                    .nodes
+                    .iter()
+                    .all(|n| !self.on_screen(n.id).expand(10.0).contains(p))
+            );
+            p
+        }
+
+        fn all(&self) -> Vec<NodeId> {
+            self.d.nodes.iter().map(|n| n.id).collect()
+        }
+    }
+
+    #[test]
+    fn a_click_selects_one_block_a_modifier_toggles_and_a_click_off_lets_go() {
+        let mut b = Bench::new();
+        let (n0, n1) = (b.d.nodes[0].id, b.d.nodes[1].id);
+        b.click(b.on_screen(n0).center(), Modifiers::NONE);
+        assert_eq!(b.last, vec![n0]);
+        b.click(b.on_screen(n1).center(), Modifiers::NONE);
+        assert_eq!(b.last, vec![n1], "only the one clicked");
+        b.click(b.on_screen(n0).center(), Modifiers::SHIFT);
+        assert_eq!(b.last, vec![n0, n1], "Shift adds");
+        b.click(b.on_screen(n0).center(), Modifiers::COMMAND);
+        assert_eq!(b.last, vec![n1], "and takes away");
+        let empty = b.empty();
+        b.click(empty, Modifiers::SHIFT);
+        assert_eq!(b.last, vec![n1], "a modified click on nothing changes nothing");
+        b.click(empty, Modifiers::NONE);
+        assert!(b.last.is_empty(), "a click off the blocks lets go");
+        b.click(b.on_screen(n0).center(), Modifiers::NONE);
+        b.click(Pos2::new(1100.0, 20.0), Modifiers::NONE);
+        assert!(b.last.is_empty(), "so does a click off the diagram");
+    }
+
+    #[test]
+    fn a_drag_draws_a_band_that_previews_then_selects_and_escape_clears() {
+        let mut b = Bench::new();
+        let n0 = b.d.nodes[0].id;
+        b.click(b.on_screen(n0).center(), Modifiers::NONE);
+        let offset = b.cam.offset;
+        let (from, to) = (b.empty(), b.area.min + Vec2::splat(2.0));
+        b.press_and_move(from, to, PointerButton::Primary);
+        assert!(b.band, "the band is drawn while the button is down");
+        assert_eq!(b.last, b.all(), "and what it touches is shown selected");
+        assert_eq!(b.cam.offset, offset, "a plain drag does not move the view");
+        b.release(to, PointerButton::Primary);
+        assert!(!b.band);
+        assert_eq!(b.last, b.all(), "released: selected");
+        b.frame(vec![Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        b.frame(vec![]);
+        assert!(b.last.is_empty(), "Escape lets the selection go");
+        // A band abandoned with Escape selects nothing.
+        b.press_and_move(from, to, PointerButton::Primary);
+        b.frame(vec![Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        b.release(to, PointerButton::Primary);
+        assert!(b.last.is_empty() && !b.band);
+    }
+
+    #[test]
+    fn the_middle_button_and_space_move_the_view_and_select_nothing() {
+        let mut b = Bench::new();
+        let offset = b.cam.offset;
+        let (from, to) = (b.empty(), b.area.center());
+        b.press_and_move(from, to, PointerButton::Middle);
+        b.release(to, PointerButton::Middle);
+        let moved = b.cam.offset - offset;
+        assert!(
+            (moved - (to - from)).length() < 2.0,
+            "the view moved with the pointer: {moved:?}"
+        );
+        assert!(b.last.is_empty() && !b.band);
+        let offset = b.cam.offset;
+        let space = |pressed| Event::Key {
+            key: Key::Space,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        b.frame(vec![space(true)]);
+        b.press_and_move(to, from, PointerButton::Primary);
+        b.release(from, PointerButton::Primary);
+        b.frame(vec![space(false)]);
+        assert!(
+            (b.cam.offset - offset - (from - to)).length() < 2.0,
+            "Space and a drag move it back"
+        );
+        assert!(b.last.is_empty(), "nothing is selected");
+    }
+
+    #[test]
+    fn another_pou_starts_with_nothing_selected() {
+        let mut b = Bench::new();
+        let n0 = b.d.nodes[0].id;
+        b.click(b.on_screen(n0).center(), Modifiers::NONE);
+        assert_eq!(b.last, vec![n0]);
+        b.pou = 1;
+        b.frame(vec![]);
+        assert!(b.last.is_empty(), "nothing is selected");
+    }
 }

@@ -27,6 +27,20 @@ pub const OPENER: (&str, &str) = (
     "0e0da5ddd62f571ea319dc29254be08cac5134236b389174983d80f0e370760f",
 );
 
+pub const MDRIVE: (&str, &str) = (
+    "SEM_MDrivever1_2.eds",
+    "b14f0fe268df5b37e9dcee6bd0288a88e59d428dbe6044b49dba8beaaeb86041",
+);
+
+pub const IMPACT67: (&str, &str) = (
+    "55089_Impact67_E_DIO16.eds",
+    "6eb94568f8b5fc73420611ac1633073da2c6e8cda75d81593bd73631807bef3d",
+);
+pub const IMPACT67_OMRON: (&str, &str) = (
+    "55089_Impact67_E_DIO16_Omron.eds",
+    "2320dbc1dded11586c969412e8e0e11182c010325a598af4bd823fc4c1c1f225",
+);
+
 fn corpus() -> Option<PathBuf> {
     std::env::var_os("HELMSMAN_EDS_CORPUS").map(PathBuf::from)
 }
@@ -126,9 +140,110 @@ fn the_opener_eds_resolves_to_the_sample_layout() {
         .map(|p| (p.configuration, p.consumed, p.produced))
         .collect();
     assert_eq!(points, want);
-    // Its exclusive owner sends 10 bytes of configuration, which neither
-    // the driver nor a target built from an EDS does yet.
-    let e = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap_err();
-    assert!(e.contains("configuration data"), "{e}");
+    // Its exclusive owner sends 10 bytes of configuration: the EDS's
+    // defaults when its configuration assembly spells them out, else
+    // `config_data=` has to bring them.
+    let spec = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap();
+    match spec.config_wanted {
+        Some(n) => {
+            assert_eq!(n, 10);
+            let e = spec.clone().with_config_data(None).unwrap_err();
+            assert!(e.contains("10 bytes of configuration data"), "{e}");
+            assert_eq!(
+                spec.with_config_data(Some(&[0; 10])).unwrap().config_data,
+                [0; 10]
+            );
+        }
+        None => assert_eq!(spec.config_data.len(), 10),
+    }
     Spec::from_eds(&eds, Connection::InputOnly).unwrap();
+}
+
+/// Novanta's own file resolves to the connection the drive on the bench
+/// took on 2026-11-16 (docs/devices/novanta-mdrive.md), and to the same
+/// one as the fixture that restates it for the other tests.
+#[test]
+fn the_mdrive_eds_resolves_as_its_facts_fixture_does() {
+    let Some(dir) = corpus() else {
+        eprintln!("HELMSMAN_EDS_CORPUS not set: nothing to check");
+        return;
+    };
+    let Some(text) = load(&dir, MDRIVE) else {
+        eprintln!("{} not in the corpus", MDRIVE.0);
+        return;
+    };
+    let eds = Eds::parse(&text).unwrap();
+    let facts = Eds::parse(include_str!(
+        "../../helmsman-proto/tests/fixtures/mdrive-facts.eds"
+    ))
+    .unwrap();
+    let spec = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap();
+    assert_eq!(spec, Spec::from_eds(&facts, Connection::ExclusiveOwner).unwrap());
+    assert_eq!(
+        (
+            spec.configuration,
+            spec.o_to_t,
+            spec.t_to_o,
+            spec.o_to_t_len,
+            spec.t_to_o_len
+        ),
+        (1, 112, 100, 36, 16)
+    );
+    // What the file says; the drive takes a run/idle header O->T, which
+    // the driver learns from the refusal.
+    assert!(!spec.o_to_t_run_idle && !spec.t_to_o_run_idle);
+    assert_eq!((spec.rpi_min, spec.rpi_max, spec.rpi_default), (None, None, None));
+    assert!(spec.config_data.is_empty() && spec.config_wanted.is_none());
+    let id = spec.identity.unwrap();
+    assert_eq!((id.vendor_id, id.device_type, id.product_code), (243, 43, 15362));
+    assert_eq!(Spec::from_eds(&eds, Connection::InputOnly).unwrap().o_to_t, 128);
+}
+
+/// Murrelektronik's two files for the IMPACT67 E DIO8 resolve to the
+/// connection the unit on the bench took from each on 2026-11-17
+/// (docs/devices/murrelektronik-impact67-e.md): the first exclusive
+/// owner, configuration instance 109, with the file's parameter defaults
+/// as configuration data, three bytes in one file and four in the other.
+#[test]
+fn the_impact67_eds_files_resolve_with_their_configuration_defaults() {
+    let Some(dir) = corpus() else {
+        eprintln!("HELMSMAN_EDS_CORPUS not set: nothing to check");
+        return;
+    };
+    for (file, config_bytes) in [(IMPACT67, 3usize), (IMPACT67_OMRON, 4)] {
+        let Some(text) = load(&dir, file) else {
+            eprintln!("{} not in the corpus", file.0);
+            continue;
+        };
+        let eds = Eds::parse(&text).unwrap();
+        let id = eds.identity().unwrap();
+        assert_eq!((id.vendor_id, id.device_type, id.product_code), (640, 7, 55089));
+        assert_eq!((id.major_revision, id.minor_revision), (1, 2));
+        let connections = eds.connections().unwrap();
+        assert_eq!(connections.len(), 6, "{}", file.0);
+        let spec = Spec::from_eds(&eds, Connection::ExclusiveOwner).unwrap();
+        assert_eq!(
+            (
+                spec.configuration,
+                spec.o_to_t,
+                spec.t_to_o,
+                spec.o_to_t_len,
+                spec.t_to_o_len
+            ),
+            (109, 35, 5, 2, 2),
+            "{}",
+            file.0
+        );
+        assert!(spec.o_to_t_run_idle && !spec.t_to_o_run_idle, "{}", file.0);
+        assert_eq!(spec.config_data, vec![0; config_bytes], "{}", file.0);
+        assert_eq!(spec.config_wanted, None);
+        // The map's own setup must be the file's size.
+        let own = vec![0xFF; config_bytes];
+        assert_eq!(
+            spec.clone().with_config_data(Some(&own)).unwrap().config_data,
+            own
+        );
+        let e = spec.with_config_data(Some(&[0; 7])).unwrap_err();
+        assert!(e.contains("7 bytes"), "{e}");
+    }
 }

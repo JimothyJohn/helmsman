@@ -346,11 +346,29 @@ impl ClaudeLink {
         let url = format!("{base}/demo/v1/status");
         let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
-            let state = match plain("GET", &url, None).await {
-                Ok(body) => crate::claude::Free::from_status(&body),
-                Err(_) => crate::claude::Free::Unreachable,
+            let (state, takes) = match plain("GET", &url, None).await {
+                Ok(body) => (
+                    crate::claude::Free::from_status(&body),
+                    crate::claude::Takes::from_status(&body),
+                ),
+                Err(_) => (crate::claude::Free::Unreachable, crate::claude::Takes::default()),
             };
-            inbox.borrow_mut().push(Incoming::Free(state));
+            let mut inbox = inbox.borrow_mut();
+            inbox.push(Incoming::Takes(takes));
+            inbox.push(Incoming::Free(state));
+            drop(inbox);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Asks the design entry at `base` for its status; the body goes to
+    /// the page as it is (empty when it could not be asked).
+    pub fn check_design(&mut self, base: &str, ctx: &egui::Context) {
+        let url = format!("{base}/demo/v1/status");
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let body = plain("GET", &url, None).await.unwrap_or_default();
+            inbox.borrow_mut().push(Incoming::DesignStatus(body));
             ctx.request_repaint();
         });
     }
@@ -845,11 +863,120 @@ thread_local! {
     static PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// Why a picked file was not read, told in Messages.
     static PICK_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The vendor's file picked for the agent (`device_vendor.rs`).
+    static VENDOR_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why that file was not read, said beside its button.
+    static VENDOR_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// A file picked for a specification (`spec_mode.rs`).
+    static SPEC_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why that file was not read, said in the specification's window.
+    static SPEC_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The pane layout file picked for View › Pane layouts… › Import.
+    static LAYOUTS_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why that file was not read, said in the popup.
+    static LAYOUTS_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
+
+type Sink = &'static std::thread::LocalKey<RefCell<Vec<(String, Vec<u8>)>>>;
+type Errors = &'static std::thread::LocalKey<RefCell<Vec<String>>>;
 
 /// Opens the browser's file picker (`accept`: `.zip,.st,.xml,.l5x`); the
 /// file chosen arrives through [`take_picked`].
 pub fn pick_file(accept: &str, ctx: &egui::Context) {
+    pick_into(accept, ctx, crate::app::pick_refusal, &PICKED, &PICK_ERRORS);
+}
+
+/// Opens the picker for the vendor's file the agent reads (EDS, IODD,
+/// manual); the file arrives through [`take_vendor_picked`], its refusal
+/// through [`take_vendor_errors`].
+pub fn pick_vendor_file(ctx: &egui::Context) {
+    pick_into(
+        crate::device_vendor::ACCEPT,
+        ctx,
+        crate::device_vendor::pick_refusal,
+        &VENDOR_PICKED,
+        &VENDOR_ERRORS,
+    );
+}
+
+/// Opens the picker for a specification's `.md` or `.txt` file; a file
+/// too large is refused before it is read ([`crate::spec_mode::pick_refusal`]).
+pub fn pick_spec_file(ctx: &egui::Context, pdf: bool) {
+    if pdf {
+        pick_into(
+            crate::spec_mode::ACCEPT_BOX,
+            ctx,
+            crate::spec_mode::pick_refusal_box,
+            &SPEC_PICKED,
+            &SPEC_ERRORS,
+        );
+    } else {
+        pick_into(
+            crate::spec_mode::ACCEPT,
+            ctx,
+            crate::spec_mode::pick_refusal,
+            &SPEC_PICKED,
+            &SPEC_ERRORS,
+        );
+    }
+}
+
+/// The specification's files picked since the last call: name and bytes.
+#[must_use]
+pub fn take_spec_picked() -> Vec<(String, Vec<u8>)> {
+    SPEC_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Why the specification's files picked since the last call were not read.
+#[must_use]
+pub fn take_spec_errors() -> Vec<String> {
+    SPEC_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Opens the picker for a pane layout file (`crate::pane_layout`); the
+/// file arrives through [`take_layouts_picked`], its refusal through
+/// [`take_layouts_errors`].
+pub fn pick_layouts_file(ctx: &egui::Context) {
+    pick_into(
+        crate::pane_layout::ACCEPT,
+        ctx,
+        crate::pane_layout::pick_refusal,
+        &LAYOUTS_PICKED,
+        &LAYOUTS_ERRORS,
+    );
+}
+
+/// The pane layout files picked since the last call: name and bytes.
+#[must_use]
+pub fn take_layouts_picked() -> Vec<(String, Vec<u8>)> {
+    LAYOUTS_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Why the pane layout files picked since the last call were not read.
+#[must_use]
+pub fn take_layouts_errors() -> Vec<String> {
+    LAYOUTS_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// The vendor's files picked since the last call: name and bytes.
+#[must_use]
+pub fn take_vendor_picked() -> Vec<(String, Vec<u8>)> {
+    VENDOR_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Why the vendor's files picked since the last call were not read.
+#[must_use]
+pub fn take_vendor_errors() -> Vec<String> {
+    VENDOR_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+fn pick_into(
+    accept: &str,
+    ctx: &egui::Context,
+    refusal: fn(&str, f64) -> Option<String>,
+    picked: Sink,
+    errors: Errors,
+) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
@@ -870,8 +997,8 @@ pub fn pick_file(accept: &str, ctx: &egui::Context) {
         };
         let name = file.name();
         // Before the whole file is read into the page.
-        if let Some(why) = crate::app::pick_refusal(&name, file.size()) {
-            PICK_ERRORS.with(|p| p.borrow_mut().push(why));
+        if let Some(why) = refusal(&name, file.size()) {
+            errors.with(|p| p.borrow_mut().push(why));
             ctx.request_repaint();
             return;
         }
@@ -879,9 +1006,9 @@ pub fn pick_file(accept: &str, ctx: &egui::Context) {
             match JsFuture::from(file.array_buffer()).await {
                 Ok(buf) => {
                     let bytes = web_sys::js_sys::Uint8Array::new(&buf).to_vec();
-                    PICKED.with(|p| p.borrow_mut().push((name, bytes)));
+                    picked.with(|p| p.borrow_mut().push((name, bytes)));
                 }
-                Err(e) => PICK_ERRORS.with(|p| {
+                Err(e) => errors.with(|p| {
                     p.borrow_mut()
                         .push(format!("{name} could not be read: {}", text(&e)));
                 }),

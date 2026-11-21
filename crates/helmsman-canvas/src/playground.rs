@@ -388,12 +388,47 @@ impl std::fmt::Debug for Build {
     }
 }
 
+/// The checker's `warnings` and the lint findings of `src`
+/// (`helmsman_iec::lint`), as the rows show them: the id first, and for a
+/// blocking one that no pragma overrides, that it holds Deploy.
+fn with_lints(src: &str, mut warnings: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    for l in helmsman_iec::lint::lints(src) {
+        let msg = if l.blocking {
+            format!("{}: {} (holds Deploy)", l.id, l.msg)
+        } else {
+            l.text()
+        };
+        warnings.push(Diagnostic { pos: l.pos, msg });
+    }
+    warnings.sort_by_key(|d| d.pos);
+    warnings
+}
+
+/// The blocking, un-overridden lint findings of `src`, as errors that
+/// say Deploy was refused.
+fn held_lints(src: &str) -> Vec<Diagnostic> {
+    helmsman_iec::lint::lints(src)
+        .into_iter()
+        .filter(|l| l.blocking)
+        .map(|l| Diagnostic {
+            pos: l.pos,
+            msg: format!(
+                "not deployed, held by {}: {} Fix it, or override it on this line with {{lint: off {} \"reason\"}}.",
+                l.id, l.msg, l.id
+            ),
+        })
+        .collect()
+}
+
 impl Build {
     /// Compiles `src`: the build, or the compiler's diagnostics; and in
     /// both cases the checker's warnings.
     pub fn new(src: &str) -> (Result<Self, Vec<Diagnostic>>, Vec<Diagnostic>) {
         let (compiled, warnings) = compile_warned(src, SIZES);
-        (compiled.map(|program| Self::from_program(src, program)), warnings)
+        (
+            compiled.map(|program| Self::from_program(src, program)),
+            with_lints(src, warnings),
+        )
     }
 
     fn from_program(src: &str, program: Program) -> Self {
@@ -862,6 +897,36 @@ pub struct Session {
     /// Page time the clock last caught up to, s.
     last: Option<f64>,
     acc_ms: f64,
+    /// What `DT_NOW()` reads at program time zero: the date and time on the
+    /// host's wall (the browser's local time), in nanoseconds since
+    /// 1970-01-01T00:00, taken when the clock starts over (a new program, a
+    /// restart) and kept across a deploy, which keeps the clock running.
+    /// The program's own clock runs at the simulation's pace from there.
+    pub wall_ns: i64,
+}
+
+/// The date and time on the host's wall now, as a `DT` holds it. In the
+/// browser it is the page's local time; natively (the test suite) it is
+/// the epoch, so a run does not depend on when it is made.
+#[must_use]
+pub fn host_local_ns() -> i64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let now = web_sys::js_sys::Date::new_0();
+        // getTimezoneOffset is minutes west of UTC at that instant.
+        let local_ms = now.get_time() - now.get_timezone_offset() * 60_000.0;
+        // Truncation to whole milliseconds is the point; the range is a DT's.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "a clamped f64 of whole milliseconds"
+        )]
+        let ms = local_ms.clamp(-9.0e15, 9.0e15) as i64;
+        ms.saturating_mul(1_000_000)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        0
+    }
 }
 
 impl Session {
@@ -891,6 +956,7 @@ impl Session {
             paused: None,
             last: None,
             acc_ms: 0.0,
+            wall_ns: host_local_ns(),
         };
         s.set_source(src);
         s
@@ -933,7 +999,7 @@ impl Session {
             return false;
         }
         let (compiled, warnings) = compile_warned(&self.src, SIZES);
-        self.warnings = warnings;
+        self.warnings = with_lints(&self.src, warnings);
         match compiled {
             Ok(_) => {
                 self.diags.clear();
@@ -972,9 +1038,22 @@ impl Session {
             return None;
         }
         let (built, warnings) = Build::new(&self.src);
+        // Deploy holds for a lint that blocks, as a box's does: the rows
+        // say which and how to override it, and what runs is untouched.
+        let held = hot && built.is_ok() && !held_lints(&self.src).is_empty();
         self.warnings = warnings;
+        let built = if held {
+            self.diags = held_lints(&self.src);
+            return None;
+        } else {
+            built
+        };
         match built {
             Ok(mut b) => {
+                if !(hot && self.build.is_some()) {
+                    self.wall_ns = host_local_ns();
+                }
+                b.program.set_wall_clock(self.wall_ns);
                 self.breaks = self
                     .build
                     .as_ref()
@@ -1263,8 +1342,10 @@ impl Session {
 
     /// Cold restart: initial values, clock to zero, trend cleared.
     pub fn restart(&mut self) {
+        self.wall_ns = host_local_ns();
         if let Some(b) = &mut self.build {
             b.program.reset();
+            b.program.set_wall_clock(self.wall_ns);
             b.image = Image::new(SIZES);
             read_outputs(b);
         }
@@ -1528,5 +1609,47 @@ impl Session {
 
     fn points(&self) -> impl Iterator<Item = &Point> {
         self.build.iter().flat_map(|b| b.points.iter())
+    }
+}
+
+#[cfg(test)]
+mod wall_clock_tests {
+    use super::*;
+
+    const NOW: &str = "PROGRAM t\nVAR x : DT; END_VAR\nx := DT_NOW();\nEND_PROGRAM";
+    const SEC: i64 = 1_000_000_000;
+
+    fn x(s: &Session) -> i64 {
+        match s.build.as_ref().and_then(|b| b.program.get("X")) {
+            Some(Value::Int(n)) => i64::try_from(n).unwrap(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_deploy_keeps_the_simulated_wall_clock_and_a_restart_takes_the_hosts_again() {
+        let mut s = Session::new(NOW);
+        let day = 1_717_200_000 * SEC;
+        s.wall_ns = day;
+        s.build.as_mut().unwrap().program.set_wall_clock(day);
+        s.step();
+        assert_eq!(x(&s), day);
+        // A deploy keeps the clock running: the new program reads the same
+        // wall, ten milliseconds on.
+        assert!(
+            s.deploy(&NOW.replace("x := DT_NOW();", "x := DT_NOW() + T#1s;"))
+                .is_some()
+        );
+        s.step();
+        assert_eq!(x(&s), day + 10_000_000 + SEC);
+        // Starting over is a new start on the host's wall.
+        s.restart();
+        s.step();
+        assert_eq!(x(&s), host_local_ns() + SEC);
+        // And so is loading another program.
+        s.wall_ns = day;
+        assert!(s.load(NOW));
+        s.step();
+        assert_eq!(x(&s), host_local_ns());
     }
 }
