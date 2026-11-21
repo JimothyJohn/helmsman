@@ -205,7 +205,9 @@ scan; the scheduler bounds how often.
   `rtu::serial` (termios through rustix, the `serial` feature) on the box,
   `rtu::pipe` (in memory) in tests.
 - **`sim`**: a Modbus device with cross-wires (a coil driving a discrete
-  input, like a wire on the bench) and injectable faults, over TCP; and
+  input, like a wire on the bench), holes in its map (addresses it does
+  not have, a request touching one refused whole, as a Universal Robot
+  does) and injectable faults, over TCP; and
   `rtu::sim`, the same tables as an RTU unit on a pipe, with the serial
   faults (bad CRC, truncated frame, another unit answering, noise, a reply
   in pieces, late replies).
