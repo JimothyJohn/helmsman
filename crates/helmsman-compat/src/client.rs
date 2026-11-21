@@ -106,3 +106,31 @@ pub fn post_stream(
     }
     Ok((status, out))
 }
+
+/// A POST of `body` as it is (a document, not JSON) with `content_type`:
+/// the status and the answer as JSON (`Null` when it is not JSON).
+///
+/// # Errors
+/// The request could not be made or read.
+pub fn post_raw(
+    url: &Url,
+    path: &str,
+    token: Option<&str>,
+    content_type: &str,
+    body: &[u8],
+) -> Result<(u16, Json), String> {
+    let auth = token.map(|t| format!("Bearer {t}"));
+    let headers: Vec<(&str, &str)> = auth.iter().map(|a| ("Authorization", a.as_str())).collect();
+    let full = format!("{}{path}", url.prefix);
+    let req = http::Request {
+        method: "POST",
+        path: &full,
+        headers: &headers,
+        json: None,
+        raw: Some((content_type, body)),
+    };
+    let r = http::send(url, &req, timeouts(60)).map_err(|e| format!("POST {path}: {e:?}"))?;
+    let status = r.status;
+    let b = r.read_body(16 << 20).map_err(|e| format!("POST {path}: {e:?}"))?;
+    Ok((status, serde_json::from_slice(&b).unwrap_or(Json::Null)))
+}

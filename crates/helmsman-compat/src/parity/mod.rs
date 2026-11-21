@@ -59,6 +59,8 @@ pub struct Ctx {
     pub session: String,
     pub bin: PathBuf,
     pub work: PathBuf,
+    /// What stands behind the box's agent routes.
+    pub agent: Agent,
 }
 
 /// What a journey came to.
@@ -67,6 +69,9 @@ pub enum Outcome {
     Pass(String),
     Fail(String),
     Pending,
+    /// Written, and not run on this side: the reason. Reported like
+    /// [`Self::Pending`] (no finding, counted), never a pass.
+    NotRun(String),
 }
 
 /// A journey: what it saw when it passed, or why it failed.
@@ -75,6 +80,8 @@ pub type Journey = fn(&Ctx) -> Result<String, String>;
 mod agent;
 mod devices;
 mod more;
+
+pub use agent::{Agent, AgentSide};
 
 /// The box's own journeys (this file). Each area keeps its journeys in
 /// its own file, so the areas are written apart: [`agent`] (the relay
@@ -111,6 +118,9 @@ pub fn run(manifest: &Manifest, ctx: &Ctx) -> Vec<(String, Outcome)> {
                     f.journey
                 )),
                 Some((_, None)) => Outcome::Pending,
+                Some((id, Some(_))) if agent::needs_relay(id) && matches!(ctx.agent, Agent::None) => {
+                    Outcome::NotRun("needs a relay (--relay-bin or --url and --token)".into())
+                }
                 Some((_, Some(j))) => match j(ctx) {
                     Ok(d) => Outcome::Pass(d),
                     Err(e) => Outcome::Fail(boxp::redact(&e)),
@@ -121,8 +131,8 @@ pub fn run(manifest: &Manifest, ctx: &Ctx) -> Vec<(String, Outcome)> {
         .collect()
 }
 
-/// The outcomes as findings (a pending journey is left out) and the
-/// count of pending ones.
+/// The outcomes as findings (a pending or not-run journey is left out)
+/// and the count of those.
 #[must_use]
 pub fn findings(outcomes: &[(String, Outcome)]) -> (Vec<Finding>, usize) {
     let mut pending = 0;
@@ -132,7 +142,7 @@ pub fn findings(outcomes: &[(String, Outcome)]) -> (Vec<Finding>, usize) {
         match o {
             Outcome::Pass(d) => out.push(Finding::pass(check, d.clone())),
             Outcome::Fail(d) => out.push(Finding::fail(check, d.clone())),
-            Outcome::Pending => pending += 1,
+            Outcome::Pending | Outcome::NotRun(_) => pending += 1,
         }
     }
     (out, pending)
@@ -150,11 +160,29 @@ pub fn check(
     work: &Path,
     extra: &[OsString],
 ) -> Result<Vec<(String, Outcome)>, String> {
+    check_with(bin, manifest, work, extra, &AgentSide::None)
+}
+
+/// [`check`] with an agent side: the stub model behind a candidate
+/// relay, or the deployed relay. With [`AgentSide::None`] the agent
+/// journeys are not run.
+///
+/// # Errors
+/// As [`check`], or the relay did not start.
+pub fn check_with(
+    bin: &Path,
+    manifest: &Path,
+    work: &Path,
+    extra: &[OsString],
+    side: &AgentSide,
+) -> Result<Vec<(String, Outcome)>, String> {
     let text = std::fs::read_to_string(manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let manifest =
         Manifest::parse(&text).map_err(|e| format!("{}:\n{}", manifest.display(), e.join("\n")))?;
     let mut args: Vec<OsString> = vec!["--projects".into()];
     args.extend(extra.iter().cloned());
+    let behind = agent::start(side, work)?;
+    args.extend(behind.args());
     let b = BoxProc::start_with(bin, None, work, &args, |state| {
         boxp::add_account(bin, state, USER, "engineer", PASSWORD)
     })?;
@@ -165,6 +193,7 @@ pub fn check(
         session,
         bin: bin.to_path_buf(),
         work: work.to_path_buf(),
+        agent: behind.agent(),
     };
     let mut out = run(&manifest, &ctx);
     // The box's log once, under the first failure: it is the same box.

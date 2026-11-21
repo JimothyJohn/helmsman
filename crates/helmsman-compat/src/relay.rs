@@ -113,8 +113,51 @@ fn answers_tools(body: &Json) -> bool {
         .is_some_and(|c| c.iter().any(|b| b["type"] == "tool_result"))
 }
 
+/// The requirement test the stub submits when the tests profile offers
+/// `submit_test`: it drives `start` of the parity project's counter and
+/// asserts its `lamp` after a few scans.
+#[must_use]
+pub fn stub_test_source(name: &str) -> String {
+    format!(
+        "PROGRAM test_{name}
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR n : INT; lamp_on : ASSERT; END_VAR
+n := n + 1;
+start := TRUE;
+IF n > 3 THEN lamp_on(COND := lamp); done := TRUE; END_IF;
+END_PROGRAM
+"
+    )
+}
+
+/// The test name the box put in a requirement turn's data envelope.
+fn requirement_name(body: &Json) -> Option<String> {
+    let text = body["messages"].as_array()?.iter().find_map(|m| {
+        m["content"]
+            .as_array()?
+            .iter()
+            .filter_map(|b| b["text"].as_str())
+            .find(|t| t.contains("<box-data tool=\"requirement\">"))
+    })?;
+    let rest = text.split("\"name\":\"").nth(1)?;
+    Some(rest.split('"').next()?.to_string())
+}
+
+/// The input the stub calls tool `name` with: a real test for
+/// `submit_test` when the box named one, else the probe no tool takes.
+fn call_input(name: &str, body: &Json) -> String {
+    if name == "submit_test"
+        && let Some(test) = requirement_name(body)
+    {
+        return json!({ "name": test, "source": stub_test_source(&test) }).to_string();
+    }
+    format!("{{\"{PROBE_FIELD}\":1}}")
+}
+
 /// The stub model's streamed answer to one request: every offered tool
-/// called once with only [`PROBE_FIELD`] on a turn's first request, then
+/// called once with only [`PROBE_FIELD`] on a turn's first request (but
+/// `submit_test`, with a test of the name the box asked for), then
 /// text.
 #[must_use]
 pub fn stub_reply(body: &Json) -> String {
@@ -150,7 +193,7 @@ pub fn stub_reply(body: &Json) -> String {
             );
             ev(
                 &mut s,
-                &json!({ "type": "content_block_delta", "index": i, "delta": { "type": "input_json_delta", "partial_json": format!("{{\"{PROBE_FIELD}\":1}}") } }),
+                &json!({ "type": "content_block_delta", "index": i, "delta": { "type": "input_json_delta", "partial_json": call_input(name, body) } }),
             );
             ev(&mut s, &json!({ "type": "content_block_stop", "index": i }));
         }
@@ -436,7 +479,7 @@ fn run_turns(b: &BoxProc, help: &str, log: Option<&Arc<Mutex<StubLog>>>, prefix:
     out
 }
 
-fn write_token(work: &Path, token: &str) -> Result<std::path::PathBuf, String> {
+pub(crate) fn write_token(work: &Path, token: &str) -> Result<std::path::PathBuf, String> {
     let p = boxp::fresh_dir(work, "token")?.join("relay-token");
     std::fs::write(&p, token).map_err(|e| e.to_string())?;
     #[cfg(unix)]
