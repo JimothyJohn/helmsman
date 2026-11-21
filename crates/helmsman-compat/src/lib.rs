@@ -28,6 +28,7 @@ pub mod client;
 pub mod devices;
 pub mod features;
 pub mod hardware;
+pub mod parity;
 pub mod relay;
 pub mod report;
 pub mod web;
