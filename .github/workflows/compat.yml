@@ -5,9 +5,10 @@
 # (automerge.yml). Not --live: no deployed relay, no model spend, no LAN.
 #
 # Needs the repository secret COMPAT_RELAY_TOKEN (a fine-grained token that
-# reads JimothyJohn/agent-relay; scratch/33-compat-token.sh sets it). Without
+# reads the two private repositories, JimothyJohn/agent-relay and
+# JimothyJohn/helmsman-hardware; scratch/33-compat-token.sh sets it). Without
 # it the job says so and stops green. The token is passed to scripts/compat.sh
-# alone, which uses it for agent-relay's git and gh calls and nothing else,
+# alone, which uses it for those two repositories' git and gh calls only,
 # and scripts/compat-scrub.sh fails the job if it reached a file.
 #
 # A schedule fires only from the default branch, so this runs nightly once

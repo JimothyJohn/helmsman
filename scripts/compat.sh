@@ -29,8 +29,8 @@
 # In CI (.github/workflows/compat.yml) there are no siblings:
 # COMPAT_CLONE=1 clones the missing ones from github.com into COMPAT_REPOS,
 # and COMPAT_RELAY_TOKEN (a fine-grained token that reads the private
-# agent-relay) is used for that repository only, as an http.extraheader in
-# the environment of its git and gh commands. It is never put in a URL, a
+# agent-relay and helmsman-hardware) is used for those two only, as an
+# http.extraheader in the environment of their git and gh commands. It is never put in a URL, a
 # git config file or an argument list, and is unset before any build runs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -83,11 +83,14 @@ slug() { # GitHub owner/name of a checkout
   git -C "$1" remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'
 }
 
-# gitr REPO ARGS...: git, with the token for agent-relay (the one private
-# repository) as an extra header for this command only.
+# The private repositories: the token is used for these and no other.
+is_private() { case "$1" in agent-relay|helmsman-hardware) return 0 ;; *) return 1 ;; esac; }
+
+# gitr REPO ARGS...: git, with the token for a private repository as an
+# extra header for this command only.
 gitr() {
   local repo=$1; shift
-  if [ "$repo" = agent-relay ] && [ -n "$RELAY_TOKEN" ]; then
+  if is_private "$repo" && [ -n "$RELAY_TOKEN" ]; then
     local h; h=$(printf 'x-access-token:%s' "$RELAY_TOKEN" | base64 | tr -d '\n')
     GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
       GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $h" git "$@"
@@ -96,10 +99,10 @@ gitr() {
   fi
 }
 
-# ghr REPO ARGS...: gh, signed in with the token for agent-relay.
+# ghr REPO ARGS...: gh, signed in with the token for a private repository.
 ghr() {
   local repo=$1; shift
-  if [ "$repo" = agent-relay ] && [ -n "$RELAY_TOKEN" ]; then
+  if is_private "$repo" && [ -n "$RELAY_TOKEN" ]; then
     GH_TOKEN=$RELAY_TOKEN gh "$@"
   else
     gh "$@"
