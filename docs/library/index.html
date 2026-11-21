@@ -111,7 +111,7 @@ footer{color:var(--muted);padding:0 0 48px;font:13px var(--mono)}
 
 <main><div class="wrap">
   <h1>Check a device</h1>
-  <p class="lede">The agent drafted each entry from the vendor's documents. Pick a device you know and open only the parts you can speak to. A reading from a real unit is what turns an entry from drafted to proven.</p>
+  <p class="lede">Helmsman drafted each entry from the vendor's documents. Pick a device you know and open only the parts you can speak to. A reading from a real unit is what turns an entry from drafted to proven.</p>
   <p class="said" id="load" aria-live="polite">Loading the library…</p>
 
   <div id="app" hidden>
@@ -150,7 +150,7 @@ footer{color:var(--muted);padding:0 0 48px;font:13px var(--mono)}
     </div>
   </div>
 </div></main>
-<footer><div class="wrap">Helmsman Factory Automation · early release · the library is open at <a href="https://github.com/JimothyJohn/helmsman-devices">github.com/JimothyJohn/helmsman-devices</a></div></footer>
+<footer><div class="wrap">Helmsman Factory Automation · the library is open at <a href="https://github.com/JimothyJohn/helmsman-devices">github.com/JimothyJohn/helmsman-devices</a></div></footer>
 
 <script>
 (function(){var h=document.documentElement,b=document.querySelector('header.top .theme');function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();
@@ -161,7 +161,6 @@ footer{color:var(--muted);padding:0 0 48px;font:13px var(--mono)}
 const RAW='https://raw.githubusercontent.com/JimothyJohn/helmsman-devices/';
 const GH='https://github.com/JimothyJohn/helmsman-devices/';
 const FOLDER=/^devices\/[a-z0-9][a-z0-9_.-]{0,63}\/[a-z0-9][a-z0-9_.-]{0,63}$/;
-const BOUNTY=50;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -283,7 +282,7 @@ function drawTest(){const d=LIB[cur],r=rv();let h='<p class="hint">The scripts b
     if(co)h+='<p class="hint">To prove an output, run this in your own terminal. It switches one coil for two seconds and puts it back, after you type back the word it shows. Whatever is wired to that output will act, so make the machine safe first.</p><div class="cmd"><code>python3 -I scripts/modbus-pulse.py ITS-ADDRESS coil:'+co.first+'</code><button type="button" data-copy>Copy</button></div>'}
   h+='<label>Paste everything the script printed<textarea id="paste" spellcheck="false">'+esc(r.paste)+'</textarea></label>'
     +'<div class="grid" style="margin-top:10px"><label>Its firmware<input id="fw" value="'+esc(r.fw)+'"></label><label>Date of the reading<input id="date" type="date" value="'+esc(r.date)+'"></label></div>';
-  if(!d.checked)h+='<p class="hint" style="margin-top:12px">No unit of this device has been tested. If you would rather send yours to the bench, <a href="'+esc(UNIT+encodeURIComponent(d.vendor+' '+d.model))+'" target="_blank" rel="noopener">offer it</a>: a verified device earns $'+BOUNTY+'.</p>';
+  if(!d.checked)h+='<p class="hint" style="margin-top:12px">No unit of this device has been tested. If you would rather send yours to the bench, <a href="'+esc(UNIT+encodeURIComponent(d.vendor+' '+d.model))+'" target="_blank" rel="noopener">offer it</a>: a verified device gets you paid.</p>';
   $('#test-body').innerHTML=h;drawResult()}
 function drawResult(){const d=LIB[cur],r=rv(),el=$('#result');if(!r.paste.trim()){el.innerHTML='';return}
   const rd=parseReading(r.paste);if(!rd.any){el.innerHTML='<p class="hint" style="margin-top:10px">No identity, assembly or Modbus range found in that text. Paste everything the script printed, from the first line.</p>';return}

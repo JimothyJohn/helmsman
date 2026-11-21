@@ -92,15 +92,23 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
 
 ## Voice (anything a user reads: the site, README intro, UI text, release notes)
 
-The reader is a controls or plant engineer, not a developer. Benefits, not
-features: **robust** (few dependencies, CI), **simple** (one controller, no
-microservices), **safe** (memory-safe, approval and audit, friction hidden
-to keep the user in flow), **reliable** (native performance, fixed scan,
-watchdog). The headline is agentic programming: you write specs and
-validate results, you don't write code. Proven IEC 61131-3 Structured Text,
-no ladder and proud of it. EtherNet/IP (CIP) and Modbus TCP, Ethernet only;
-a pure soft PLC with I/O in remote modules (e.g. Moxa ioLogik). Say "early
-release". IO-Link is named only as "based on the IO-Link specification"
+The reader is a controls or plant engineer, not a developer. Lead with
+benefits and leave the mechanics out: **simple** (no cloud to run the
+machine, no licences, nothing to install), **secure** (a line and a link
+to /security/, where the memory-safe language and few dependencies live),
+**reliable** (a word or a short line, no internals). The headline is "Say
+what it should do. See it work." (Nick, 2026-11-21): describe, visualize,
+approve. **Never "agent" or "agentic" on the marketing pages** (home,
+programming/, skipper/, security/, find/, library/, the datasheet): say
+Helmsman, the machine, or what happens. /help/ follows the UI, whose panel
+is still labelled Agent. **No status, roadmap, forecasts or "early
+release"** anywhere a visitor reads, and no dollar amount on the device
+bounty ("get connected, get paid"). Don't feature the relay. The edge
+node is the **Skipper**. The site is a hub (docs/index.html) with spokes,
+sharing docs/site.css and site.js; no in-page anchor nav. Proven IEC
+61131-3 Structured Text, no ladder and proud of it. EtherNet/IP (CIP) and
+Modbus TCP, Ethernet only; a pure soft PLC with I/O in remote modules
+(e.g. Moxa ioLogik). IO-Link is named only as "based on the IO-Link specification"
 (Nick, 2026-11-15; docs/SOURCES.md has the notice): no compliance or
 conformance claim and no logo. Never mention Rust, crates, the Raspberry Pi or the model vendor
 by name. Claims must be true of what is built. Write like an engineer, with

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman · Programming</title>
+<meta name="description" content="Describe the machine in plain language, watch the program behave on a live diagram, and approve it before it goes live.">
+<link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href=".././"><img src="../brand/helmsman-mark-20-yellow.svg" alt="" width="28" height="28">HELMSMAN</a>
+    <button class="ic theme" type="button" aria-pressed="false" aria-label="Switch to light" title="Switch to light"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg></button>
+    <a class="ic" href="../help/" aria-label="Help and documentation" title="Help and documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.3"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg></a>
+    <details class="menu">
+      <summary class="ic" aria-label="Menu" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square" aria-hidden="true"><path d="M3 6.5h18M3 12h18M3 17.5h18"/></svg></summary>
+      <nav aria-label="Site"><div class="wrap">
+        <a href="../programming/" aria-current="page">Programming<span>Describe it, watch it run, approve it.</span></a>
+        <a href="../skipper/">Skipper<span>The edge node that runs your machine.</span></a>
+        <a href="../find/">Device library<span>Every device Helmsman already knows how to talk to.</span></a>
+        <a href="../security/">Security<span>Who can see and change what, and how it is checked.</span></a>
+        <a href="../help/">Docs<span>How to use Helmsman, screen by screen.</span></a>
+      </div></nav>
+    </details>
+  </div>
+</header>
+<main>
+<div class="page-head">
+  <div class="wrap">
+    <p class="kicker">Programming</p>
+    <h1>Specs, not code</h1>
+    <p>Tell Helmsman what the machine should do in plain language. Helmsman drafts the program, and you check how it behaves.</p>
+    <a class="btn primary" href="../playground/">Try it in your browser</a>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>How it works</h2>
+    <h3>Describe, visualize, approve</h3>
+    <ol class="steps">
+      <li><h4>Describe</h4><p>State the sequence step by step, with its interlocks and alarms, the way you would explain it to a colleague. Drop in what you already have: a written spec, a drawing as a PDF, a photo of the panel, or a program exported from another PLC.</p></li>
+      <li><h4>Visualize</h4><p>Watch the draft behave on a live diagram, with the values on the wires, running against a simulation of your I/O. Tap any output to see exactly what drives it.</p></li>
+      <li><h4>Approve</h4><p>Nothing goes live until it is approved. Each requirement you state becomes a test, and a failing test holds the change back.</p></li>
+    </ol>
+  </div>
+</section>
+
+<section class="on-black">
+  <div class="wrap">
+    <div class="two">
+      <div>
+        <h2>Under the diagram</h2>
+        <h3>The code is there when you want it</h3>
+        <p>Underneath, every program is standard IEC 61131-3 Structured Text. You can open it, compare it between versions and take it to another controller. Most of the time you won't need to: the live diagram is what tells you whether the machine does the right thing.</p>
+        <p>There is no ladder. Ladder was made so electricians could read relay circuits; a diagram with live values shows the same thing to anyone on the floor.</p>
+      </div>
+      <div>
+        <h2>Already have a program?</h2>
+        <h3>Bring it along</h3>
+        <p>Hand Helmsman an export from your current tools, such as a Rockwell L5X file or a PLCopen XML project, and it reads the tags and the logic before it writes anything. Helmsman only ever reads your existing PLCs. It never writes to them.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>After it is live</h2>
+    <h3>Every change, kept</h3>
+    <ul class="rules">
+      <li><h4>History</h4>Every change says what it changed, who made it and when. Step back through the whole history and bring back any earlier version.</li>
+      <li><h4>Simulation first</h4>Try a change against the simulated machine before anyone approves it, so the real one only sees what already worked.</li>
+      <li><h4>Your devices</h4>Helmsman finds the devices on your network and looks each one up in the <a href="../find/">device library</a>, so the I/O is mapped for you.</li>
+    </ul>
+    <p class="more"><a href="../help/">Read the docs &rarr;</a></p>
+  </div>
+</section>
+
+<div class="brandband">
+  <div class="wrap">
+    <p>Write a program in your browser.</p>
+    <a class="btn primary" href="../playground/">Try it in your browser</a>
+  </div>
+</div>
+</main>
+<footer>
+  <div class="wrap">
+    <span>Helmsman Factory Automation · open source (Apache 2.0)</span>
+    <nav aria-label="Footer">
+      <a href="../programming/">Programming</a>
+      <a href="../skipper/">Skipper</a>
+      <a href="../find/">Device library</a>
+      <a href="../security/">Security</a>
+      <a href="../help/">Docs</a>
+      <a href="https://github.com/JimothyJohn/helmsman">Source code</a>
+    </nav>
+  </div>
+</footer>
+<script src="../site.js"></script>
+</body>
+</html>

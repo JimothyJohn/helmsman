@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman · Security</title>
+<meta name="description" content="How Helmsman keeps your controller safe: sign-in, roles, encryption, audit, and source you can read.">
+<link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href=".././"><img src="../brand/helmsman-mark-20-yellow.svg" alt="" width="28" height="28">HELMSMAN</a>
+    <button class="ic theme" type="button" aria-pressed="false" aria-label="Switch to light" title="Switch to light"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg></button>
+    <a class="ic" href="../help/" aria-label="Help and documentation" title="Help and documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.3"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg></a>
+    <details class="menu">
+      <summary class="ic" aria-label="Menu" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square" aria-hidden="true"><path d="M3 6.5h18M3 12h18M3 17.5h18"/></svg></summary>
+      <nav aria-label="Site"><div class="wrap">
+        <a href="../programming/">Programming<span>Describe it, watch it run, approve it.</span></a>
+        <a href="../skipper/">Skipper<span>The edge node that runs your machine.</span></a>
+        <a href="../find/">Device library<span>Every device Helmsman already knows how to talk to.</span></a>
+        <a href="../security/" aria-current="page">Security<span>Who can see and change what, and how it is checked.</span></a>
+        <a href="../help/">Docs<span>How to use Helmsman, screen by screen.</span></a>
+      </div></nav>
+    </details>
+  </div>
+</header>
+<main>
+<div class="page-head">
+  <div class="wrap">
+    <p class="kicker">For IT and security</p>
+    <h1>Security</h1>
+    <p>A controller on your network decides what your machine does. This page explains who can see it, who can change it, and how you can check every claim here for yourself.</p>
+    <a class="btn primary" href="https://github.com/JimothyJohn/helmsman">Read the source</a>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>Access and control</h2>
+    <h3>Nobody walks in</h3>
+    <ul class="rules">
+      <li><h4>Sign-in for everything</h4>Reading programs, live values or the I/O map needs a sign-in, and so does every change. A request without one is refused before it reaches anything.</li>
+      <li><h4>Roles and approval</h4>Operators, engineers and integrators each get what their role allows. A change that can affect an output needs an engineer, and a site policy can only make these rules stricter.</li>
+      <li><h4>Guessing gets locked out</h4>Wrong passwords lock the account for a time that doubles with each miss, up to an hour, and the whole controller slows down a flood of attempts across accounts.</li>
+      <li><h4>Sessions end</h4>A sign-in lasts an hour at most and ends after 15 minutes unused. Disabling an account or changing its password ends its sessions too.</li>
+      <li><h4>A complete record</h4>Every change, approval and sign-in goes into an append-only audit log with the person and the time.</li>
+      <li><h4>Existing PLCs stay untouched</h4>Helmsman can read tags from the PLCs you already run. It has no way to write to them.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="on-black">
+  <div class="wrap">
+    <h2>On the wire</h2>
+    <h3>Interception and injection</h3>
+    <ul class="rules">
+      <li><h4>Encrypted by default</h4>The controller serves its editor and API over HTTPS (TLS 1.2 and 1.3) with a certificate it makes on first start. You compare its fingerprint once, and from then on a stand-in cannot pass as your controller. Plain HTTP from another machine is sent to HTTPS or refused.</li>
+      <li><h4>Sessions stay out of reach</h4>The sign-in is held in a cookie that scripts on the page cannot read, and the editor's pages only run scripts the controller itself lists.</li>
+      <li><h4>Documents are only read</h4>Specs, drawings and exported programs you hand to Helmsman are treated as untrusted. They are read as text and never run, and nothing written in them can widen what Helmsman is allowed to reach.</li>
+      <li><h4>Strict input checks</h4>Every request and every device reply is size-limited and checked field by field. Anything malformed is dropped before it is used.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="two">
+      <div>
+        <h2>How it is built</h2>
+        <h3>Small and checkable</h3>
+        <p>Helmsman is written in a memory-safe language, which rules out whole classes of attack such as buffer overflows. The few places that must talk to the operating system directly are kept in one small module and reviewed line by line.</p>
+        <p>It depends on few outside libraries, and each new one is reviewed before it comes in. Every change runs the full test suite, including interoperability tests against real protocol stacks, before it ships.</p>
+        <p>There is no cloud in the control path. Programs keep running if the internet goes away; only the programming help waits for it to come back.</p>
+      </div>
+      <div>
+        <h2>Credentials</h2>
+        <h3>No default passwords</h3>
+        <p>A controller ships with no account and no password. You create the accounts, and passwords are stored only as salted, slow hashes. Passwords and PINs never appear in a log.</p>
+        <h2 style="margin-top:32px">The Skipper</h2>
+        <p>Any change to a <a href="../skipper/">Skipper</a> node, such as a new program, a stop or new settings, needs the node's key. Its live values can be read by anyone on the same network, so keep it on the machine network.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="on-black">
+  <div class="wrap">
+    <h2>Open source</h2>
+    <h3>Look for yourself</h3>
+    <p>Every line of Helmsman is public under Apache 2.0, including the tests that hold it to the claims on this page. Read the code, run the tests, or have your own team review it.</p>
+    <div class="cta"><a class="btn primary" href="https://github.com/JimothyJohn/helmsman">Source code on GitHub</a><a class="btn" href="../help/">Docs</a></div>
+  </div>
+</section>
+</main>
+<footer>
+  <div class="wrap">
+    <span>Helmsman Factory Automation · open source (Apache 2.0)</span>
+    <nav aria-label="Footer">
+      <a href="../programming/">Programming</a>
+      <a href="../skipper/">Skipper</a>
+      <a href="../find/">Device library</a>
+      <a href="../security/">Security</a>
+      <a href="../help/">Docs</a>
+      <a href="https://github.com/JimothyJohn/helmsman">Source code</a>
+    </nav>
+  </div>
+</footer>
+<script src="../site.js"></script>
+</body>
+</html>

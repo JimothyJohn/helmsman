@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman · Skipper</title>
+<meta name="description" content="The Skipper edge node: a $30 off-the-shelf controller on one Ethernet cable that runs your Helmsman program on the machine.">
+<link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href=".././"><img src="../brand/helmsman-mark-20-yellow.svg" alt="" width="28" height="28">HELMSMAN</a>
+    <button class="ic theme" type="button" aria-pressed="false" aria-label="Switch to light" title="Switch to light"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg></button>
+    <a class="ic" href="../help/" aria-label="Help and documentation" title="Help and documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.3"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg></a>
+    <details class="menu">
+      <summary class="ic" aria-label="Menu" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square" aria-hidden="true"><path d="M3 6.5h18M3 12h18M3 17.5h18"/></svg></summary>
+      <nav aria-label="Site"><div class="wrap">
+        <a href="../programming/">Programming<span>Describe it, watch it run, approve it.</span></a>
+        <a href="../skipper/" aria-current="page">Skipper<span>The edge node that runs your machine.</span></a>
+        <a href="../find/">Device library<span>Every device Helmsman already knows how to talk to.</span></a>
+        <a href="../security/">Security<span>Who can see and change what, and how it is checked.</span></a>
+        <a href="../help/">Docs<span>How to use Helmsman, screen by screen.</span></a>
+      </div></nav>
+    </details>
+  </div>
+</header>
+<main>
+<div class="page-head">
+  <div class="wrap">
+    <p class="kicker">Edge node</p>
+    <h1>Skipper</h1>
+    <p>You steer, the Skipper runs the machine on the floor. It is a small off-the-shelf board, about $30, that takes power and network from a single Ethernet cable. Plug it into a PoE switch, send it a program from the editor, and it runs.</p>
+    <a class="btn primary" href="../helmsman-datasheet.pdf" download="helmsman-datasheet.pdf">Download the datasheet (PDF)</a>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>Why a small controller</h2>
+    <h3>Control where the machine is</h3>
+    <ul class="rules">
+      <li><h4>One cable</h4>Power and network arrive on the same Ethernet cable. There is no power supply to wire and no cabinet to find room in.</li>
+      <li><h4>Spread it out</h4>At about $30 a node, each cell or station can have its own controller, so one fault stays in one place.</li>
+      <li><h4>Programmed from anywhere</h4>Write and check the program in the Helmsman editor in a browser, then send it to the Skipper over the network. Firmware updates travel the same way.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="on-black">
+  <div class="wrap">
+    <h2>At a glance</h2>
+    <h3>What it does</h3>
+    <div class="table-scroll">
+    <table>
+      <tbody>
+        <tr><th>Runs</th><td>IEC 61131-3 Structured Text programs from the Helmsman editor, on a fixed scan</td></tr>
+        <tr><th>Talks to</th><td>Remote I/O over Modbus TCP and EtherNet/IP. See which devices in the <a href="../find/">device library</a></td></tr>
+        <tr><th>Power and network</th><td>One Ethernet port with Power over Ethernet</td></tr>
+        <tr><th>Updates</th><td>Programs and firmware over the network</td></tr>
+        <tr><th>Changes</th><td>Need the node's key; see <a href="../security/">Security</a></td></tr>
+        <tr><th>Hardware</th><td>An off-the-shelf ESP32-P4 Ethernet board, about $30</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="muted">I/O stays out on the machine, in remote I/O blocks. The Skipper runs the logic and talks to them over the network.</p>
+  </div>
+</section>
+
+<div class="brandband">
+  <div class="wrap">
+    <p>Write the program before the board arrives.</p>
+    <a class="btn primary" href="../playground/">Try it in your browser</a>
+  </div>
+</div>
+</main>
+<footer>
+  <div class="wrap">
+    <span>Helmsman Factory Automation · open source (Apache 2.0)</span>
+    <nav aria-label="Footer">
+      <a href="../programming/">Programming</a>
+      <a href="../skipper/">Skipper</a>
+      <a href="../find/">Device library</a>
+      <a href="../security/">Security</a>
+      <a href="../help/">Docs</a>
+      <a href="https://github.com/JimothyJohn/helmsman">Source code</a>
+    </nav>
+  </div>
+</footer>
+<script src="../site.js"></script>
+</body>
+</html>
