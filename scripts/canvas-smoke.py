@@ -53,13 +53,15 @@ import urllib.request
 
 from playwright.sync_api import sync_playwright
 
+PLC = None  # set in main: target/debug/helmsman-plc
+
 KEY = "helmsman-canvas/editor"
 W, H = 1400, 860
 S = 2
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 USER, PASSWORD = "alice", "alice-engineer-pw"
 # Console lines the smoke itself causes.
-EXPECTED = ("/__seed", "status of 404", "status of 401")
+EXPECTED = ("/__seed", "status of 404", "status of 401", "status of 409", "status of 422")
 
 
 # Every tab in the left pane, in its first order (2026-11-13: one pane, the
@@ -357,6 +359,208 @@ def box(ctx, base, out):
     return problems
 
 
+# ---- the marketplace install and the Agent's review --------------------------
+
+BENIGN = {
+    "summary": "A horn that sounds while the start button is held. It reads start and drives horn, as its description says.",
+    "reads": ["start: the push button"],
+    "writes": ["horn: on while start is held, off at once when it is released"],
+    "devices": [], "access": [], "at_start": [], "undeclared": [],
+    "risk": "medium", "refuse": False,
+    "reason": "Check that the horn is wired to the output called horn before you approve.",
+}
+RISKY = dict(
+    BENIGN,
+    summary="A siren that, once started, stays on. Nothing in the program turns it off.",
+    writes=["horn: set when start is pressed and never cleared"],
+    undeclared=["the output is latched with no way to clear it"],
+    risk="high", refuse=True,
+    reason="It latches the horn on and nothing turns it off, which could hurt someone standing near it. <b>Do not install.</b>",
+)
+
+
+def relay_events(text):
+    def ev(d):
+        return f"event: {d['type']}\ndata: {json.dumps(d)}\n\n"
+    return (
+        ev({"type": "message_start", "message": {"id": "m", "type": "message", "role": "assistant", "content": [], "model": "m", "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 1}}})
+        + ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+        + ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
+        + ev({"type": "content_block_stop", "index": 0})
+        + ev({"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 9}})
+        + ev({"type": "message_stop"})
+        + ev({"type": "relay_usage", "request_id": "r", "agent_version": "helmsman/review-v1", "model": "m", "input_tokens": 1, "output_tokens": 9, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0})
+    )
+
+
+class Relay(http.server.BaseHTTPRequestHandler):
+    """The Agent, scripted: refuses the bundle whose source says RISKY."""
+
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):
+        body = b"{}"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", "0"))
+        asked = self.rfile.read(n).decode()
+        verdict = RISKY if "RISKY" in asked else BENIGN
+        body = relay_events(json.dumps(verdict)).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def plc(*args, env=None, **kw):
+    return subprocess.run([PLC, *args], env=env, text=True, capture_output=True, check=True, **kw)
+
+
+def make_market(work):
+    """A signed index of two bundles in work/site, the publisher's key, and
+    the module and map of the box that installs from it."""
+    os.makedirs(os.path.join(work, "site"))
+    key = os.path.join(work, "acme.key")
+    out = plc("bundle", "keygen", key, "--name", "acme").stdout
+    trust_key = out.split("trust add acme ")[1].split()[0]
+    for name, desc, src in (
+        ("horn-kit", "Sounds the horn while start is held.", "  (* Horn follows the start button *)\n  horn := start;\n"),
+        ("siren-kit", "A siren for the start button.", "  (* RISKY: latched, never cleared *)\n  IF start THEN horn := TRUE; END_IF;\n"),
+    ):
+        d = os.path.join(work, name)
+        os.makedirs(d)
+        with open(os.path.join(d, "module.manifest"), "w") as f:
+            f.write(f"name     {name.replace('-kit', '')}\nauthor   Acme Automation\nscan_ms  10\nreads    start\ndrives   horn\n")
+        with open(os.path.join(d, "module.st"), "w") as f:
+            f.write(f"PROGRAM {name.replace('-kit', '')}\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT horn : BOOL; END_VAR\n{src}END_PROGRAM\n")
+        bundle = os.path.join(work, "site", f"{name}-1.0.0.hbundle")
+        plc("bundle", "pack", "--module-dir", d, "--name", name, "--version", "1.0.0", "--author", "Acme Automation", "--description", desc, bundle)
+        plc("bundle", "sign", "--key", key, bundle, bundle)
+    site = os.path.join(work, "site")
+    plc("bundle", "index", "--key", key, "--publisher", "acme", site, os.path.join(site, "index.json"))
+    conv = os.path.join(work, "conveyor")
+    os.makedirs(conv)
+    with open(os.path.join(conv, "module.manifest"), "w") as f:
+        f.write("name     conveyor\nauthor   Test\nscan_ms  10\nreads    start\ndrives   lamp\n")
+    with open(os.path.join(conv, "module.st"), "w") as f:
+        f.write("PROGRAM conveyor\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\n  lamp := start;\nEND_PROGRAM\n")
+    with open(os.path.join(work, "map.txt"), "w") as f:
+        f.write("in  start bool box di:0\nout lamp  bool box do:0 safe=false\nout horn  bool box do:1 safe=false\n")
+    return trust_key
+
+
+def start_market_box(dist, work, trust_key, port, relay_port):
+    """A box that installs from the loopback marketplace; the relay (or
+    none, with relay_port None)."""
+    state = os.path.join(work, f"state-{port}")
+    os.makedirs(state)
+    env = dict(os.environ, STATE_DIRECTORY=state)
+    plc("account", "add", USER, "engineer", env=env, input=PASSWORD + "\n")
+    plc("bundle", "trust", "--state-dir", state, "add", "acme", trust_key)
+    args = [PLC, "--module-dir", os.path.join(work, "conveyor"), "--io-map", os.path.join(work, "map.txt"),
+            "--api", f"127.0.0.1:{port}", "--https", "off", "--opcua", "off", "--ui", dist, "--bind", "127.0.0.1",
+            "--encap-port", "0", "--io-port", "0", "--market-allow-local", "on"]
+    if relay_port:
+        token = os.path.join(state, "relay-token")
+        with open(token, "w") as f:
+            f.write("hmr1_" + "0123456789abcdef" * 4 + "\n")
+        os.chmod(token, 0o600)
+        args += ["--relay", f"http://127.0.0.1:{relay_port}", "--relay-token", token]
+    proc = subprocess.Popen(args, env=env, cwd=state, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if not wait_for(f"http://127.0.0.1:{port}/api"):
+        proc.kill()
+        sys.exit("the market box did not answer: " + (proc.stderr.read() or "")[:500])
+    return proc
+
+
+# On the Proposals screen at 1400x860: the install form is under the drafts
+# in the left panel (crates/helmsman-canvas/src/review_view.rs).
+
+
+def market(browser, dist, out):
+    """The Proposals screen's install form, against a box with a relay
+    that reviews, and against one without a relay."""
+    problems = []
+    work = tempfile.mkdtemp(prefix="helmsman-market-")
+    srv = relay = rproc = bproc = None
+    try:
+        trust_key = make_market(work)
+        site = serve(os.path.join(work, "site"))
+        index = f"http://127.0.0.1:{site.server_address[1]}/index.json"
+        relay = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Relay)
+        relay.daemon_threads = True
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        for label, relay_port in (("review", relay.server_address[1]), ("noreview", None)):
+            port = free_port()
+            proc = start_market_box(dist, work, trust_key, port, relay_port)
+            try:
+                ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+                base = f"http://127.0.0.1:{port}"
+                r = Run(open_app(ctx, base, "", layout()), out, f"market-{label}")
+                r.wait(4000)
+                def sign_in():
+                    r.click(1230, 100); r.wait(200)
+                    r.page.keyboard.type(USER)
+                    r.click(1230, 136); r.wait(200)
+                    r.page.keyboard.type(PASSWORD)
+                    r.key("Enter")
+                sign_in(); r.wait(6000)
+                r.click(*VIEW_MENU); r.wait(1500)
+                r.click(259, 135); r.wait(1500)
+                r.shot("proposals-screen")
+                problems += install_steps(r, index, label)
+                problems += r.problems()
+                ctx.close()
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+    finally:
+        for s in (relay,):
+            if s:
+                s.shutdown()
+        shutil.rmtree(work, ignore_errors=True)
+    return problems
+
+
+def fill(r, field, text):
+    r.click(*field); r.key(f"{MOD}+a"); r.page.keyboard.type(text); r.wait(200)
+
+
+INSTALL_INDEX_FIELD = (133, 312)
+INSTALL_NAME_FIELD = (133, 374)
+INSTALL_BUTTON = (42, 410)
+
+
+def install_steps(r, index, label):
+    """Install horn-kit and siren-kit through the form, a screenshot each."""
+    fill(r, INSTALL_INDEX_FIELD, index)
+    fill(r, INSTALL_NAME_FIELD, "horn-kit")
+    r.click(*INSTALL_BUTTON); r.wait(4000)
+    r.shot("horn-kit")
+    if label == "review":
+        # The first install left a draft in the list: the form is lower.
+        r.click(330, 138); r.wait(300)
+        fill(r, (133, 374), index)
+        fill(r, (133, 435), "siren-kit")
+        r.click(42, 462); r.wait(4000)
+        r.shot("siren-kit-refused")
+    else:
+        r.page.mouse.move(395, 262); r.wait(400)
+        r.click(395, 262); r.wait(3000)
+        r.shot("went-on-without-a-review")
+    return []
+
+
 def phone(browser, base, query, out, prefix):
     ctx = browser.new_context(viewport={"width": 390 * S, "height": 844 * S}, device_scale_factor=S, color_scheme="dark")
     r = Run(open_app(ctx, base, query, layout()), out, prefix)
@@ -422,7 +626,10 @@ def main():
     ap.add_argument("--dist", default=os.path.join(ROOT, "target", "canvas-dist"))
     ap.add_argument("--out", default=os.path.join(ROOT, "target", "canvas-smoke"))
     ap.add_argument("--box", action="store_true", help="also start a loopback box and drive its page")
+    ap.add_argument("--market-only", action="store_true", help="only the marketplace install scenario (starts its own boxes)")
     a = ap.parse_args()
+    global PLC
+    PLC = os.path.join(ROOT, "target", "debug", "helmsman-plc")
     if not os.path.exists(os.path.join(a.dist, "index.html")):
         sys.exit(f"no canvas build in {a.dist}: make canvas-web")
     os.makedirs(a.out, exist_ok=True)
@@ -432,21 +639,25 @@ def main():
     proc = None
     state = tempfile.mkdtemp(prefix="helmsman-smoke-")
     try:
-        if a.box:
+        if a.box and not a.market_only:
             box_port = free_port()
             proc = start_box(a.dist, state, box_port)
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
-            problems += playground(ctx, base, a.out)
-            ctx.close()
-            problems += phone(browser, base, "?playground&editor", a.out, "pg")
-            if proc:
-                bbase = f"http://127.0.0.1:{box_port}"
+            if a.market_only:
+                problems += market(browser, a.dist, a.out)
+            else:
                 ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
-                problems += box(ctx, bbase, a.out)
+                problems += playground(ctx, base, a.out)
                 ctx.close()
-                problems += phone(browser, bbase, "", a.out, "box")
+                problems += phone(browser, base, "?playground&editor", a.out, "pg")
+                if proc:
+                    bbase = f"http://127.0.0.1:{box_port}"
+                    ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+                    problems += box(ctx, bbase, a.out)
+                    ctx.close()
+                    problems += phone(browser, bbase, "", a.out, "box")
+                    problems += market(browser, a.dist, a.out)
             browser.close()
     finally:
         srv.shutdown()

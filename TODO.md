@@ -859,10 +859,10 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 - [ ] **Community marketplace** — publish/browse/install bundles; floor per market-floor, then an AI review on install that explains risk in plain words and can only refuse.
   est: 3w
   difficulty: high
-  notes: walking skeleton done 2026-11-02 night, PR #196: bundle::index (signed canonical JSON), bundle::market fetch (public hosts only), CLI bundle index/fetch, POST /api/market/list and /api/market/install through the bundle import and approval policy, --market-allow-local. Card stays open for accounts, payments, the AI review.
+  notes: built: the walking skeleton (2026-11-02, PR #196: signed index, bundle fetch, CLI bundle index/fetch, POST /api/market/list and /install through the bundle import and the approval policy, --market-allow-local) and the AI review on install (2026-11-18, feat/marketplace-install-review here and feat/install-review-profile in agent-relay, both drafts): the relay profile helmsman/review-v1 (no tools, strict JSON verdict, three evals), the box's review stage between the bundle's checks and the proposal (a refusal stops it, a clean review goes on the proposal and the audit lines, no review stops at 409 until an engineer's session sends without_review), and the canvas's Install form and review panel on the Proposals screen. Left: nothing is live until the relay is promoted to main and deployed, then one make eval-live run of the three review scenarios on the deployed model; accounts, publisher uploads and payments (Nick, 2026-11-17: none of them yet); mirrors.
   id: marketplace
-  needs: the walking skeleton only, for now
-  notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a static, signed index of bundles (a JSON file and the bundles in a public repo, signed by trusted publishers), a box lists it and installs from it through the existing bundle path and approval policy; no accounts, no payments, no AI review yet. Est for the skeleton: 2d.
+  needs: the relay deploy (Nick: agent-relay dev to main, then the deploy) before the review is live; accounts and payments stay out until asked
+  notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a static, signed index of bundles (a JSON file and the bundles in a public repo, signed by trusted publishers), a box lists it and installs from it through the existing bundle path and approval policy. Nick 2026-11-17 (interview): the next slice is the AI review on install, no money or account infrastructure.
   status: ready
 
 - [ ] **Box SKU** — reproducible Pi image, first-boot pairing with the relay, provisioning script, enclosure/BOM for the preloaded kit.

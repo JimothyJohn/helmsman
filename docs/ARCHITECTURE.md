@@ -2885,8 +2885,44 @@ review, payments) is private and does not exist yet (LICENSING.md).
   the policy classifies; the audit line and the proposal's note say which
   index and file it came from. `helmsman-plc bundle fetch` does the same
   on a laptop and writes the bundle file.
-- **Not in the skeleton**: publisher accounts, uploads, the AI review on
-  install, payments, mirrors. A third party can run its own index today.
+- **Lints hold a bundle** (`st-lints`): the blocking findings of
+  `helmsman_iec::lint` (a function block called inside a condition, an
+  output written in two places) hold a bundle's ST modules as they hold a
+  project's deploy. `POST /api/bundles` and the install answer `422` with
+  `held` (`module:line:col ID: message`) before any review turn is spent;
+  approving or replaying a stored bundle proposal answers the same, whenever
+  it was drafted. A `{lint: off ID "reason"}` pragma overrides a finding and
+  the reason goes into the audit line.
+- **The install review** (`api/review.rs`, `api/bundle.rs`; contract in
+  `tests/bundle.rs`, the relay's profile in `docs/install-review.md` of the
+  relay repository): after the bundle has verified and bound to this box's
+  signals, and before the proposal is made, the box sends the bundle's
+  contents (what it computed the bundle can touch, each module's manifest
+  and source, the map template) to the relay's `helmsman/review-v1`, which
+  has no tools and answers with one JSON verdict: a plain-words summary,
+  what it reads, drives and names, what runs at start, what the code does
+  that its manifest does not say, a risk level, `refuse` and a reason. The
+  bundle goes as data in `<bundle-data>` tags with `<`, `>` and `&` escaped;
+  the answer is parsed strictly (exactly the fields, bounded sizes, no
+  control or invisible characters, a refusal says `high`), and anything
+  else is no review. The review can only stop an install and never approves
+  one:
+  - a refusal: `422`, the reason in the answer and the audit log, no
+    proposal;
+  - no refusal: the verdict is on the proposal (`review.state` `reviewed`)
+    and in the audit line of the install and of the approval; the policy
+    classifies the proposal as it always did;
+  - no review (no relay, unreachable, busy, an answer that does not parse):
+    `409`, `review.state` `not_reviewed`. The same call with
+    `"without_review": true` goes on, and takes an engineer's login session
+    (the box token cannot): the proposal says who went on, and the audit
+    line says installed without a review. A bundle imported as a file
+    (`POST /api/bundles`) is not reviewed (`review.state` `not_asked`).
+  `--relay-review-agent` names another profile. The canvas shows the
+  review above the approval, and the install form is on the Proposals
+  screen (`install_review.rs`).
+- **Not in the skeleton**: publisher accounts, uploads, payments, mirrors.
+  A third party can run its own index today.
 
 ## Webhook sinks (`sink-webhook`, built)
 
