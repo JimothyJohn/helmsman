@@ -2,7 +2,10 @@
 docs/FEATURES.md names is opened on the playground and must be drawn,
 look unlike the other tabs of its panel, and log no error.
 
-usage: python3 -I scripts/parity-tabs.py --dist DIR     (the candidate: a canvas build, make canvas-web)
+usage: python3 -I scripts/parity-tabs.py --dist DIR [--path P]
+                                                        (the candidate: DIR served on loopback, the page
+                                                        at P: target/canvas-dist, or a checkout's docs/
+                                                        with --path /playground, as Pages serves it)
        python3 -I scripts/parity-tabs.py --site URL     (live: URL/playground/)
        [--out DIR] (default target/parity-tabs/<dist|site>)
 
@@ -42,7 +45,12 @@ BOTTOM = ("trend", "messages")
 PANE_BODY = (0, 66, 300, 480)
 BOTTOM_BODY = (330, 620, 700, 200)
 # Console lines the seeding itself causes (the seed URL is not the app).
-EXPECTED = ("/__seed", "status of 404", "favicon")
+EXPECTED = ["/__seed", "status of 404", "favicon"]
+# Served from loopback (--dist) only: the page asks the deployed demo relay
+# for its status, and the relay's CORS allows the public site, not
+# 127.0.0.1, so the browser refuses it (and logs the failed load). Live, on
+# the site, the same request must succeed, so these stay errors there.
+LOOPBACK_ONLY = ["/demo/v1/", "Failed to load resource: net::ERR_FAILED"]
 
 
 def manifest_tabs(path=FEATURES):
@@ -98,6 +106,11 @@ def open_tab(browser, base, key, out):
         return [f"[{key}] the page answered {resp.status if resp else 'nothing'}"], None
     page.wait_for_timeout(4000)
     page.screenshot(path=os.path.join(out, f"{key}-page.png"))
+    # The loader's own error screen is HTML, so it can be read.
+    body = page.inner_text("body")
+    if "could not start" in body:
+        ctx.close()
+        return [f"[{key}] the page did not start: {' '.join(body.split())[:300]}"], None
     digest, size = shot(page, region, os.path.join(out, f"{key}.png"))
     # A flat region compresses to almost nothing: the tab drew no content.
     if size < 4000:
@@ -116,6 +129,7 @@ def main():
     where = ap.add_mutually_exclusive_group(required=True)
     where.add_argument("--dist", help="a canvas build to serve on loopback (the candidate)")
     where.add_argument("--site", help="the site whose /playground/ is live")
+    ap.add_argument("--path", default="", help="where the page is under --dist (/playground for a checkout's docs/)")
     ap.add_argument("--out")
     a = ap.parse_args()
     out = a.out or os.path.join(ROOT, "target", "parity-tabs", "dist" if a.dist else "site")
@@ -125,7 +139,8 @@ def main():
         if not os.path.exists(os.path.join(a.dist, "index.html")):
             sys.exit(f"no canvas build in {a.dist}: make canvas-web")
         srv = serve(a.dist)
-        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        EXPECTED.extend(LOOPBACK_ONLY)
+        base = f"http://127.0.0.1:{srv.server_address[1]}" + a.path.rstrip("/")
     else:
         base = a.site.rstrip("/") + "/playground"
     tabs = manifest_tabs()

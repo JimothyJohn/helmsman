@@ -9,6 +9,8 @@
 #   scripts/ship.sh --yes       no question before promoting
 #   scripts/ship.sh --live-only the live half only (after a ship whose
 #                               live check you want again)
+#   scripts/ship.sh --report    the report again from target/ship/ (runs
+#                               nothing, opens no pull request)
 #
 # Steps:
 #   1. candidate: scripts/compat.sh --candidate (the four dev tips against
@@ -44,12 +46,13 @@ MAIN=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)
 REPOS=${COMPAT_REPOS:-$(dirname "$MAIN")}
 OUT=$ROOT/target/ship
 SITE=${HELMSMAN_SITE:-https://helmsman.advin.io}
-DRY=0 YES=0 LIVE_ONLY=0
+DRY=0 YES=0 LIVE_ONLY=0 REPORT_ONLY=0
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY=1 ;;
     --yes) YES=1 ;;
     --live-only) LIVE_ONLY=1 ;;
+    --report) REPORT_ONLY=1 ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "ship.sh: unknown argument $a (--help)" >&2; exit 2 ;;
   esac
@@ -68,6 +71,12 @@ src_of() { [ "$1" = helmsman ] && echo "$MAIN" || echo "$REPOS/$1"; }
 slug() { git -C "$(src_of "$1")" remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'; }
 REPOS_ALL="helmsman agent-relay helmsman-devices helmsman-hardware"
 
+if [ "$REPORT_ONLY" = 1 ]; then
+  H_DEV=$(git -C "$MAIN" rev-parse origin/dev); H_LIVE=$(git -C "$MAIN" rev-parse origin/master)
+  DEV_DIR=$ROOT/target/compat/src/helmsman@${H_DEV:0:12}
+  FEATURES=$DEV_DIR/docs/FEATURES.md
+  [ -f "$FEATURES" ] || die "--report needs a run's checkout of dev at $DEV_DIR"
+else
 # ---- 1. candidate ----------------------------------------------------------
 
 python3 -I -c 'import playwright' 2>/dev/null || die "needs Playwright for python3 (pip install playwright; python3 -m playwright install chromium)"
@@ -130,7 +139,7 @@ if [ "$LIVE_ONLY" = 0 ]; then
   [ -x "$RELAY_DEV" ] || die "no relay built at agent-relay's dev tip ($RELAY_DEV): compat.sh builds it"
   parity candidate "$BOX_DEV" --relay-bin "$RELAY_DEV"; c1=$?
   say "candidate: every tab on dev's playground page"
-  tabs candidate --dist "$DEV_DIR/docs/playground"; c2=$?
+  tabs candidate --dist "$DEV_DIR/docs" --path /playground; c2=$?
   if [ "$c1" != 0 ] || [ "$c2" != 0 ]; then
     echo "ship.sh: a feature fails on the candidate itself; fix it on dev first. Nothing promoted." >&2
     exit 1
@@ -211,6 +220,8 @@ parity live "$BOX_LIVE" --url "$LIVE_URL" --token "$LIVE_TOKEN"
 say "live: every tab on $SITE/playground/"
 tabs live --site "$SITE"
 
+fi
+
 # ---- 4. report -------------------------------------------------------------
 
 # outcome FILE CHECK -> ok | FAIL | pending
@@ -259,6 +270,7 @@ fi
 
 echo
 echo "ship.sh: REGRESSED on live:$regress"
+[ "$REPORT_ONLY" = 1 ] && exit 1
 merge=$(awk '$1 == "helmsman" { print $2 }' "$OUT/promoted.txt" 2>/dev/null | tail -1)
 if [ -n "$merge" ]; then
   br=revert/ship-$(date -u +%Y%m%d%H%M)
