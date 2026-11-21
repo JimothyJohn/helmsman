@@ -26,7 +26,7 @@ IF pulse.Q THEN
   lamp := NOT lamp;
 END_IF;
 IF NOT enable THEN
-  lamp := FALSE;
+  lamp := FALSE; {lint: off PLCOPEN-CP12 \"disabling overrides the flip\"}
 END_IF;
 END_PROGRAM
 ",

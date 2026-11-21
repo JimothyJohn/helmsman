@@ -27,6 +27,7 @@
 //! `not_asked`.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use serde_json::{Value as Json, json};
 
@@ -212,6 +213,45 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
     import_bytes(req, ctx, &req.body, "", Gate::Direct)
 }
 
+/// The lint findings (`helmsman_iec::lint`, card `st-lints`) of a bundle's
+/// ST modules: the blocking ones that no pragma overrides as
+/// `module:line:col ID: message`, and the overrides the bundle carries as
+/// an audit line's tail. A compiled module has no source to lint. A
+/// bundle that holds a blocking finding is refused at install and again at
+/// approval, as a project's deploy is.
+pub(super) fn lint_findings(cs: &ChangeSet) -> (Vec<String>, String) {
+    let mut held = Vec::new();
+    let mut overrides = String::new();
+    for (name, f) in &cs.modules {
+        let crate::store::Code::St(src) = &f.code else {
+            continue;
+        };
+        for l in helmsman_iec::lint::lints(src) {
+            if l.blocking {
+                held.push(format!("{name}:{}:{} {}: {}", l.pos.line, l.pos.col, l.id, l.msg));
+            } else if let Some(r) = &l.overridden {
+                let _ = write!(
+                    overrides,
+                    "; {} in {name} at {} overridden: \"{}\"",
+                    l.id,
+                    l.pos.line,
+                    super::clean(r)
+                );
+            }
+        }
+    }
+    (held, overrides)
+}
+
+/// The 422 a lint-held bundle gets: what holds it, and the way out.
+pub(super) fn lint_refusal(held: &[String]) -> Json {
+    json!({
+        "error": "the bundle holds a lint finding that blocks it; the publisher must fix it, or override it on its line with a pragma and a reason: {lint: off ID \"reason\"}",
+        "held": held,
+        "changed": false,
+    })
+}
+
 /// Whether the bundle is reviewed before it becomes a proposal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Gate {
@@ -315,6 +355,25 @@ pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str, ga
             &format!("{what}: nothing to change"),
         );
     }
+    // A blocking lint finding holds a bundle as it holds a project's
+    // deploy, before any model turn is spent on it.
+    let (held, overrides) = lint_findings(&target);
+    if !held.is_empty() {
+        let ids: Vec<&str> = held
+            .iter()
+            .filter_map(|h| h.split_whitespace().nth(1))
+            .map(|i| i.trim_end_matches(':'))
+            .collect();
+        return refused(
+            422,
+            &lint_refusal(&held),
+            &format!(
+                "{what}: held by lint {}: {}",
+                ids.join(", "),
+                super::clean(&held.join("; "))
+            ),
+        );
+    }
     let (review, review_detail) = match gate {
         Gate::Direct => (review::not_asked(), String::new()),
         Gate::Review { without_review } => match review::run(ctx.chat.as_ref(), &v) {
@@ -400,7 +459,7 @@ pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str, ga
         "diff": render::diff(&diff(&running, &target)),
         "approval": approve::tier_json(ctx, &running, &target, None),
     });
-    let mut detail = format!("proposal {id}: {what}: snapshot {base} -> {snap}{review_detail}");
+    let mut detail = format!("proposal {id}: {what}: snapshot {base} -> {snap}{overrides}{review_detail}");
     if !via.is_empty() {
         detail.push_str(" (via ");
         detail.push_str(via);

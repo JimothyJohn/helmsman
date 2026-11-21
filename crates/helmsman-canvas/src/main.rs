@@ -51,6 +51,8 @@ mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lint_shipped_tests;
 // The design step's contract, ahead of the Agent tab entry that will call
 // it (TODO.md `design-step-canvas`): nothing outside its tests uses it yet.
 mod chat_about;

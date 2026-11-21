@@ -816,6 +816,17 @@ fn bench_local(trust: Option<TrustStore>, market_local: bool) -> Bench {
 /// As [`bench_local`], with the chat route (and so the install review)
 /// pointed at a relay.
 fn bench_full(trust: Option<TrustStore>, market_local: bool, chat: Option<chat::Setup>) -> Bench {
+    bench_seeded(trust, market_local, chat, None)
+}
+
+/// As [`bench_full`], with a bundle proposal already stored (drafted before
+/// a rule existed, say): its change set.
+fn bench_seeded(
+    trust: Option<TrustStore>,
+    market_local: bool,
+    chat: Option<chat::Setup>,
+    seed: Option<ChangeSet>,
+) -> Bench {
     let dd = d();
     let md = ModuleDir::from_text(
         Path::new("conveyor"),
@@ -890,12 +901,24 @@ fn bench_full(trust: Option<TrustStore>, market_local: bool, chat: Option<chat::
         memory: 64,
         log: Arc::new(|_: &str| {}),
     };
+    let proposals = MemProposals::new(100);
+    if let Some(change) = seed {
+        use helmsman_plc::api::Proposals as _;
+        let id = proposals.reserve().unwrap();
+        let mut target = running();
+        target.modules.extend(change.modules);
+        proposals.insert(helmsman_plc::api::store::Stored {
+            id,
+            json: json!({ "id": id, "kind": "bundle", "status": "draft", "base": running().id().to_string() }),
+            change: Some(target),
+        });
+    }
     let shared = Shared {
         catalog,
         live: Arc::new(Live::default()),
         devices: Arc::new(Devices::new(["box".to_string()])),
         audit: Box::new(MemAudit::new(10_000)),
-        proposals: Box::new(MemProposals::new(100)),
+        proposals: Box::new(proposals),
         running: Some(running()),
         snapshots: Some(Mutex::new(Store::open(&store).unwrap())),
         approval: Some(approval),
@@ -2732,4 +2755,126 @@ fn a_big_bundle_sends_the_modules_that_fit_and_names_the_rest() {
     // What the box computed is always there, and the message wraps it.
     assert_eq!(data["computed"]["reads"], json!(["start"]));
     assert!(review::message(&data).contains("\"cut\""));
+}
+
+// ---- blocking lints hold a bundle -------------------------------------------------
+
+/// A module with a function block called inside an IF (HELMSMAN-L1).
+const FB_IN_IF: &str = "
+PROGRAM horner
+VAR_INPUT start : BOOL; END_VAR
+VAR_OUTPUT horn : BOOL; END_VAR
+VAR t : TON; END_VAR
+  IF start THEN
+    t(IN := TRUE, PT := T#1s);
+  END_IF;
+  horn := t.Q;
+END_PROGRAM";
+
+/// A module that writes its output in two places (PLCOPEN-CP12).
+const TWICE: &str = "
+PROGRAM horner
+VAR_INPUT start : BOOL; END_VAR
+VAR_OUTPUT horn : BOOL; END_VAR
+  horn := start;
+  horn := NOT start;
+END_PROGRAM";
+
+fn lint_bundle(source: &str) -> Vec<u8> {
+    let mut cs = horner_content();
+    cs.modules.insert("horner".into(), files(HORNER_MANIFEST, source));
+    signed(cs).encode()
+}
+
+#[test]
+fn our_own_fixtures_have_no_lint_finding() {
+    for src in [HORNER_SOURCE, CONVEYOR_SOURCE] {
+        assert!(helmsman_iec::lint::lints(src).is_empty(), "{src}");
+    }
+}
+
+#[test]
+fn a_bundle_with_a_blocking_lint_finding_is_refused_with_the_id_and_line_at_import_and_install() {
+    for (src, id) in [(FB_IN_IF, "HELMSMAN-L1"), (TWICE, "PLCOPEN-CP12")] {
+        let bytes = lint_bundle(src);
+        // A file import.
+        let b = bench(Some(trust()));
+        let r = import(&b, &bytes);
+        assert_eq!(r.status, 422, "{id}: {r:?}");
+        let j = r.json();
+        let held = j["held"].as_array().unwrap();
+        assert!(!held.is_empty(), "{j}");
+        let line = held[0].as_str().unwrap();
+        assert!(line.starts_with("horner:") && line.contains(id), "{line}");
+        assert_eq!(j["changed"], false);
+        assert_eq!(proposals(&b).len(), 0);
+        let log = last_audit(&b, "/api/bundles");
+        assert!(
+            log["detail"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("held by lint {id}")),
+            "{log}"
+        );
+        // A marketplace install: held before the Agent is asked.
+        let url = site_url(&[("horn-kit-1.0.0.hbundle", bytes)]);
+        let relay = Relay::start(vec![Say::Text(ok_verdict().to_string())]);
+        let b = bench_full(Some(trust()), true, Some(review_setup(relay.url())));
+        let r = install(&b, TOKEN, &json!({ "index": url, "name": "horn-kit" }));
+        assert_eq!(r.status, 422, "{id}: {r:?}");
+        assert!(r.json()["held"][0].as_str().unwrap().contains(id));
+        assert!(relay.asked().is_empty(), "no model turn is spent on it");
+        assert_eq!(proposals(&b).len(), 0);
+    }
+}
+
+#[test]
+fn a_pragma_with_a_reason_overrides_the_finding_and_the_audit_line_keeps_it() {
+    let src = TWICE.replace(
+        "  horn := NOT start;",
+        "  horn := NOT start; {lint: off PLCOPEN-CP12 \"the second write is the fail-safe\"}",
+    );
+    let b = bench(Some(trust()));
+    let r = import(&b, &lint_bundle(&src));
+    assert_eq!(r.status, 201, "{r:?}");
+    let detail = last_audit(&b, "/api/bundles")["detail"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        detail.contains("PLCOPEN-CP12") && detail.contains("the second write is the fail-safe"),
+        "{detail}"
+    );
+}
+
+#[test]
+fn a_bundle_drafted_before_the_rule_is_held_at_approval_not_applied() {
+    // A stored bundle proposal whose module holds a blocking finding.
+    let mut cs = horner_content();
+    cs.modules.insert("horner".into(), files(HORNER_MANIFEST, TWICE));
+    let b = bench_seeded(Some(trust()), true, None, Some(cs));
+    let id = proposals(&b)[0]["id"].as_u64().unwrap();
+    let before = head(&b);
+    let r = request(
+        b.addr,
+        "POST",
+        &format!("/api/proposals/{id}/apply"),
+        true,
+        "application/json",
+        json!({ "role": "engineer", "pin": ENGINEER })
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    let j = r.json();
+    assert!(j["held"][0].as_str().unwrap().contains("PLCOPEN-CP12"), "{j}");
+    assert_eq!(head(&b), before, "nothing was applied");
+    let log = last_audit(&b, &format!("/api/proposals/{id}/apply"));
+    assert!(
+        log["detail"]
+            .as_str()
+            .unwrap()
+            .contains("held by lint PLCOPEN-CP12"),
+        "{log}"
+    );
 }

@@ -744,8 +744,33 @@ into the code.
     Fernhill's dialect: check a claim against ruSTy before leaning on it.
   - The PLCopen Coding Guidelines v1.0 (2016), for the lints (card
     `st-lints`): a free PDF from https://www.plcopen.org/downloads
-    (no login; checked 2026-11-08). The entry with its rule numbers
-    arrives with that card.
+    (no login; checked 2026-11-08, downloaded and read 2026-11-17,
+    127 pages, Coding Guidelines V.1.0, April 20 2016). The rule numbers
+    and pages below are the PDF's own contents list and rule headings. A
+    lint's message never quotes the document.
+    - `PLCOPEN-CP12`: rule CP12, "Physical outputs shall be written once
+      per PLC cycle", §5.13, page 68. Its exception ("clear and explicit
+      requirements ... more than one location, with caution") is what the
+      override pragma is for.
+    - `PLCOPEN-CP3`: CP3, "All variables shall be initialized before being
+      used", §5.3, page 47.
+    - `PLCOPEN-CP8`: CP8, "Floating point comparison shall not be equality
+      or non-equality", §5.8, page 58.
+    - `PLCOPEN-L12`: rule L12, "Loop variables should not be modified
+      inside a FOR loop", §6.5.4, page 113 (the contents list prints it as
+      L22; the rule heading says L12).
+    - `PLCOPEN-CP24`: CP24, "Do not declare variables that are not used",
+      §5.25, page 94.
+    - `PLCOPEN-CP2`: CP2, "All code shall be used in the application",
+      §5.2, page 45. The lint covers the unreachable half only.
+    - Recursion is CP13 (§5.14, page 69): the checker already refuses it
+      as an error, so there is no lint.
+    - `HELMSMAN-L1` (a function block instance called inside a condition)
+      and `HELMSMAN-L2` (a pragma that overrides nothing) are Helmsman's
+      own. L1 is stricter than the guidelines: CP20 (§5.21, page 84, "each
+      instance should be called only once per cycle") says "the call may
+      be conditional". L1 follows INVESTIGATION.md §1 (the timer-in-IF bug)
+      and is overridable on its line for that reason.
 - **STRING (card `st-string`):** the behaviours below are pinned by the
   oracle, not by a clause. Assignment cuts at the declared length, `LEN`
   sees the cut text, `LEFT`/`RIGHT`/`MID`/`FIND`/`INSERT`/`DELETE`/`REPLACE`

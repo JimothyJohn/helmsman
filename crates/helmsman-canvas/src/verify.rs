@@ -568,6 +568,9 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
         c.failures.push(format!("The code does not compile: {first}"));
         return c;
     }
+    let (held, advice) = lint_findings(files, &plan.main);
+    c.failures.extend(held);
+    c.tests.extend(advice);
     for v in helmsman_sim::iec::run_all(&plan, settings, plant_of(&all)) {
         if let Some(s) = scen.iter().find(|s| s.file == v.file) {
             c.scenarios.push(Ran {
@@ -605,6 +608,57 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
         .map(|s| (s.file, s.text))
         .collect();
     c
+}
+
+/// The lint findings (`helmsman_iec::lint`) the answer adds: those of the
+/// project with it that the project as it was did not have, as `(held,
+/// advice)`. A blocking one that no pragma overrides holds the answer like
+/// a compile error (it could not be deployed); the others go back to the
+/// Agent and are a warning after the retries. A finding the project
+/// already had is not the answer's to fix.
+fn lint_findings(old: &Files, main: &str) -> (Vec<String>, Vec<String>) {
+    let before = spec::plan(
+        old.iter()
+            .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
+            .map(|(n, t)| (n.as_str(), t.as_str())),
+    );
+    let mut had: Vec<(&'static str, String)> = helmsman_iec::lint::lints(&before.main)
+        .into_iter()
+        .map(|l| (l.id, l.msg))
+        .collect();
+    let (mut held, mut advice) = (Vec::new(), Vec::new());
+    for l in helmsman_iec::lint::lints(main) {
+        if l.overridden.is_some() {
+            continue;
+        }
+        if let Some(i) = had.iter().position(|(id, m)| *id == l.id && *m == l.msg) {
+            had.swap_remove(i);
+            continue;
+        }
+        let (file, line) = lint_place(main, l.pos.line);
+        let said = format!("{} at {file}:{line}: {}", l.id, l.msg);
+        if l.blocking {
+            held.push(format!(
+                "Lint {said} This blocks the code from being used or deployed until it is fixed."
+            ));
+        } else {
+            advice.push(format!("Lint {said}"));
+        }
+    }
+    (held, advice)
+}
+
+/// The file and line of `line` in a build's source, which holds each file
+/// under a `(* file NAME *)` line when there are several.
+fn lint_place(main: &str, line: u32) -> (String, u32) {
+    let (mut file, mut start) = ("the code".to_string(), 0u32);
+    for (i, l) in main.lines().enumerate().take(line as usize) {
+        if let Some(n) = l.strip_prefix("(* file ").and_then(|r| r.strip_suffix(" *)")) {
+            file = n.to_string();
+            start = u32::try_from(i + 1).unwrap_or(0);
+        }
+    }
+    (file, line - start)
 }
 
 /// The code of `text` with comments and white space gone: what it does.

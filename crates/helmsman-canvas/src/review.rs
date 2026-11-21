@@ -481,6 +481,7 @@ pub fn refusal(a: &Answer, now: f64) -> Refusal {
     let error = j["error"]
         .as_str()
         .map_or_else(|| a.body.trim().chars().take(300).collect(), str::to_string);
+    let error = with_held(error, &j);
     let tier = j["tier"].as_str().map(str::to_string);
     let (why, hint) = match a.status {
         0 => (
@@ -1004,7 +1005,10 @@ impl Review {
                 self.session_ended();
                 self.install.error = Some(not_signed_in().hint);
             }
-            _ => self.install.error = Some(short(a)),
+            _ => {
+                let shown = with_held(short(a), &j.cloned().unwrap_or(Json::Null));
+                self.install.error = Some(shown);
+            }
         }
     }
 
@@ -1268,6 +1272,25 @@ fn short(a: &Answer) -> String {
     match j.as_ref().and_then(|j| j["error"].as_str()) {
         Some(e) => format!("HTTP {}: {e}", a.status),
         None => format!("HTTP {}", a.status),
+    }
+}
+
+/// `error` with the lint findings that hold the change (`held`: `module:line:col
+/// ID: message`, from the box) after it, so the engineer sees which rule and
+/// where.
+fn with_held(error: String, j: &Json) -> String {
+    let held: Vec<String> = j["held"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Json::as_str)
+        .take(12)
+        .map(crate::install_review::plain)
+        .collect();
+    if held.is_empty() {
+        error
+    } else {
+        format!("{error} Held by: {}", held.join("; "))
     }
 }
 
@@ -1829,5 +1852,27 @@ mod tests {
         assert_eq!(speed.old.as_deref(), Some("1.5  [0.0 .. 10.0]"));
         assert_eq!(speed.new.as_deref(), Some("2.0  [0.0 .. 10.0]"));
         assert_eq!(rows[0].field, "drives", "outputs first");
+    }
+
+    #[test]
+    fn a_lint_held_bundle_shows_which_rule_and_where() {
+        let body = json!({ "error": "the bundle holds a lint finding that blocks it", "held": ["horner:5:3 PLCOPEN-CP12: output written in more than one place"], "changed": false });
+        let a = Answer {
+            status: 422,
+            retry_after: None,
+            body: body.to_string(),
+        };
+        let mut r = Review::default();
+        r.install.busy = true;
+        r.installed(&a, Some(&body));
+        let e = r.install.error.clone().unwrap();
+        assert!(e.contains("PLCOPEN-CP12") && e.contains("horner:5:3"), "{e}");
+        assert!(r.install.stopped.is_none());
+        let refused = refusal(&a, 0.0);
+        assert!(
+            refused.error.contains("Held by: horner:5:3 PLCOPEN-CP12"),
+            "{}",
+            refused.error
+        );
     }
 }

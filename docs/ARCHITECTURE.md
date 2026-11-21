@@ -1902,15 +1902,42 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   `warnings` (an older box has no such field and the canvas reads none),
   `severity` `"warning"` here and `"error"` on `diagnostics`. The ST
   lints (`st-lints`) add an optional `id` and a `blocking` flag to a
-  warning; the canvas already reads both (`projects::Diag`) and a reader
-  that does not know them ignores them. The canvas lists errors first
+  warning, and an `overridden` reason when a pragma lifts it; the canvas
+  already reads the first two (`projects::Diag`) and a reader that does
+  not know them ignores them. The canvas lists errors first
   then warnings under the editor (a warning with the word `warning`
   before it and the warning colour), marks a warning line with a thick
   underline and no red ground, and logs them as one Messages warning;
   the browser simulation does the same from `Session::warnings`. A
-  deploy takes no warnings into account, and the deploy route's answer
-  does not list them (the check before it does). `POST
-  /api/proposals/check` (a draft) does not list them yet.
+  deploy takes no warnings into account, except a blocking lint (below),
+  and the deploy route's answer does not list them (the check before it
+  does). `POST /api/proposals/check` (a draft) does not list them yet.
+- **The lint pass** (`st-lints`, `helmsman_iec::lint`, docs/help/lints.md):
+  a pass over the parsed syntax tree, apart from the checker (so a source
+  that does not compile still lists what it can), that gives each finding
+  a stable id (`PLCOPEN-CP<n>` / `PLCOPEN-L<n>` where the PLCopen Coding
+  Guidelines number the rule, `HELMSMAN-L<n>` otherwise; docs/SOURCES.md
+  has rule and page), a position and a `blocking` flag. Two block:
+  `HELMSMAN-L1` (a function block instance called inside a condition) and
+  `PLCOPEN-CP12` (an output written in more than one place). A pragma
+  `{lint: off ID "reason"}` on the finding's line overrides one: it stays
+  listed, advisory, with the reason. The pass reads pragmas from the
+  source text, so the lexer is untouched. Three consumers: `build_noted`
+  adds the findings to a module's problems (`Diag.id`, `blocking`,
+  `overridden`), and `POST /api/projects/{p}/deploy` refuses with 422
+  (`held`, the findings, how to override) while one blocks, before the
+  approval path and with nothing changed; the audit line of a deploy that
+  went out with an override names the id, file, line and reason (user
+  text, escaped and bounded by `clean`). `verify::check` adds the
+  findings an Agent answer introduces (those the project did not already
+  have): a blocking one is a failure that holds the answer like a compile
+  error, the rest go to the retry message like a red test and are a
+  warning after the retries. The browser simulation lists them in its
+  rows and refuses its Deploy for a blocking one. A box's agent path has
+  no twin of `verify::check` (card `warnings-box-gaps`): a box shows the
+  findings in its check answer and refuses a deploy, and nothing more.
+  Requirement tests (`test_*.st`) are not linted, and an `ASSERT` call
+  is never flagged by L1.
 - **ZIP** (`project::zip`, in the `helmsman-project` crate since the
   simulation uses it too; hand-written on APPNOTE 6.3.10; DEFLATE through
   `miniz_oxide`, already in the lockfile): a download is the files
@@ -2754,6 +2781,14 @@ review, payments) is private and does not exist yet (LICENSING.md).
   the policy classifies; the audit line and the proposal's note say which
   index and file it came from. `helmsman-plc bundle fetch` does the same
   on a laptop and writes the bundle file.
+- **Lints hold a bundle** (`st-lints`): the blocking findings of
+  `helmsman_iec::lint` (a function block called inside a condition, an
+  output written in two places) hold a bundle's ST modules as they hold a
+  project's deploy. `POST /api/bundles` and the install answer `422` with
+  `held` (`module:line:col ID: message`) before any review turn is spent;
+  approving or replaying a stored bundle proposal answers the same, whenever
+  it was drafted. A `{lint: off ID "reason"}` pragma overrides a finding and
+  the reason goes into the audit line.
 - **The install review** (`api/review.rs`, `api/bundle.rs`; contract in
   `tests/bundle.rs`, the relay's profile in `docs/install-review.md` of the
   relay repository): after the bundle has verified and bound to this box's
