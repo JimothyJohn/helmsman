@@ -265,6 +265,32 @@ fn held_by_lint(ctx: &Ctx, req: &Request, label: &str, b: &crate::project::build
     ))
 }
 
+/// A bundle proposal whose modules hold a blocking lint finding: the 422
+/// refusal and its audit line, or `None` when nothing blocks it.
+fn bundle_held_by_lint(ctx: &Ctx, req: &Request, label: &str, cs: &ChangeSet) -> Option<Response> {
+    let (held, _) = super::bundle::lint_findings(cs);
+    if held.is_empty() {
+        return None;
+    }
+    let ids: Vec<&str> = held
+        .iter()
+        .filter_map(|h| h.split_whitespace().nth(1))
+        .map(|i| i.trim_end_matches(':'))
+        .collect();
+    Some(refuse(
+        ctx,
+        req,
+        422,
+        &super::bundle::lint_refusal(&held),
+        &format!(
+            "{label}: held by lint {}: {}",
+            ids.join(", "),
+            super::clean(&held.join("; "))
+        ),
+        Note::default(),
+    ))
+}
+
 /// What every apply, rollback and replay starts with: the target exists
 /// (404), the box has an approval path (501), and the target has a change
 /// set (409). The approval path, the target change set, the proposal it
@@ -295,27 +321,9 @@ fn prelude<'c>(
             // project's deploy, whenever it was drafted.
             if p.json["kind"] == "bundle"
                 && let Some(cs) = &p.change
+                && let Some(r) = bundle_held_by_lint(ctx, req, label, cs)
             {
-                let (held, _) = super::bundle::lint_findings(cs);
-                if !held.is_empty() {
-                    let ids: Vec<&str> = held
-                        .iter()
-                        .filter_map(|h| h.split_whitespace().nth(1))
-                        .map(|i| i.trim_end_matches(':'))
-                        .collect();
-                    return Err(refuse(
-                        ctx,
-                        req,
-                        422,
-                        &super::bundle::lint_refusal(&held),
-                        &format!(
-                            "{label}: held by lint {}: {}",
-                            ids.join(", "),
-                            super::clean(&held.join("; "))
-                        ),
-                        Note::default(),
-                    ));
-                }
+                return Err(r);
             }
             (p.change.clone(), Some(p))
         }
