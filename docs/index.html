@@ -4,369 +4,169 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Helmsman Factory Automation</title>
-<meta name="description" content="Helmsman Factory Automation: the soft PLC you program by describing the machine. Write the spec, validate the result; standard IEC 61131-3 Structured Text, EtherNet/IP and Modbus TCP.">
+<meta name="description" content="Say what your machine should do and see it work. Helmsman writes the program, shows it running on a live diagram, and talks to your devices for you.">
 <link rel="icon" type="image/svg+xml" href="brand/helmsman-mark-16-yellow.svg">
 <script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
-<style>
-:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;--dim:#A8A8A8;--ink:#F2F2F2;--header-fg:#C8C8C8;
---stencil:'Saira Stencil One',Impact,sans-serif;--cond:'Barlow Condensed','Arial Narrow',sans-serif;
---mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif;
-color-scheme:dark;
---bg:#141414;--fg:#F0F0F0;--muted:#8C8C8C;--rule:#3A3A3A;--rule-strong:#F0F0F0;
---band:#242424;--band-fg:#F2F2F2;--band-pre:#0A0A0A;--band-code:#3A3A3A;
---pre:#242424;--pre-fg:#F2F2F2;--code:#2C2C2C;--code-fg:#F0F0F0;--diagram:#242424;--footer:#0A0A0A}
-:root[data-theme="light"]{color-scheme:light;
---bg:#FFFFFF;--fg:#141414;--muted:#3A3A3A;--rule:#8C8C8C;--rule-strong:#141414;
---band:#141414;--band-fg:#F2F2F2;--band-pre:#0A0A0A;--band-code:#3A3A3A;
---pre:#141414;--pre-fg:#F2F2F2;--code:#EDEDED;--code-fg:#141414;--diagram:#141414;--footer:#141414}
-*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans)}
-.sprite{position:absolute;width:0;height:0;overflow:hidden}
-.mk{display:block;flex:none;max-width:100%;height:auto}
-.wrap{max-width:1040px;margin:0 auto;padding:0 16px}
-a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
-.on-black a,.on-graphite a{color:var(--yellow)}
-header.top{background:var(--black);color:var(--white);border-bottom:4px solid var(--yellow)}
-header.top .wrap{display:flex;align-items:center;gap:16px;min-height:56px}
-header.top .brand{display:flex;align-items:center;gap:10px;color:var(--white);text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
-header.top nav{display:flex;gap:18px;overflow-x:auto;margin-left:auto;font:13px var(--mono);padding:8px 0}
-header.top nav a{color:var(--header-fg);text-decoration:none;white-space:nowrap}
-header.top nav a:hover{color:var(--yellow)}
-header.top .theme{flex:none;margin:0;padding:6px 0;background:none;border:0;color:var(--header-fg);font:13px var(--mono);cursor:pointer;white-space:nowrap}
-header.top .theme:hover{color:var(--yellow)}
-header.top .theme:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
-.hero{background:var(--yellow);color:var(--black)}
-.hero .wrap{padding-top:56px;padding-bottom:56px}
-.lockup{display:flex;flex-wrap:wrap;align-items:center;gap:20px 36px}
-.lockup .mk{width:clamp(88px,18vw,160px)}
-.wm{display:block;font:clamp(52px,11vw,120px)/.85 var(--stencil);letter-spacing:.03em;margin:0}
-.desc{display:block;font:700 clamp(14px,2.4vw,28px)/1 var(--cond);letter-spacing:.46em;margin-top:14px}
-.lede{font-size:19px;max-width:680px;margin:32px 0 28px}
-.cta{display:flex;flex-wrap:wrap;gap:12px}
-.btn{font:600 14px/1 var(--mono);padding:13px 18px;text-decoration:none;border:2px solid var(--black);color:var(--black)}
-.btn.primary{background:var(--black);color:var(--yellow)}
-.facts{background:var(--graphite);color:var(--white)}
-.facts .wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
-.facts div div{padding:18px 16px 18px 0}
-.facts b{display:block;font:700 20px/1.2 var(--cond);letter-spacing:.06em;text-transform:uppercase;color:var(--yellow)}
-.facts span{font-size:14px}
-section{padding:64px 0}
-.on-black{background:var(--band);color:var(--band-fg)}
-.on-graphite{background:var(--graphite);color:var(--white)}
-h2{font:700 14px/1 var(--cond);letter-spacing:.32em;text-transform:uppercase;margin:0 0 12px}
-.on-black h2{color:var(--yellow)}
-h3{font:clamp(30px,5vw,44px)/1 var(--stencil);letter-spacing:.03em;margin:0 0 20px;text-transform:uppercase}
-p{max-width:700px}
-.muted{color:var(--muted)}
-.on-black .muted{color:var(--dim)}
-pre{background:var(--pre);color:var(--pre-fg);font:13.5px/1.6 var(--mono);padding:18px 20px;overflow-x:auto;margin:20px 0;border-left:4px solid var(--yellow)}
-.on-black pre{background:var(--band-pre)}
-pre .c{color:var(--dim)}
-pre .k{color:var(--yellow)}
-code{font-family:var(--mono);font-size:.92em}
-p code,li code,td code{background:var(--code);color:var(--code-fg);padding:1px 5px}
-.on-black p code,.on-black li code,.on-black td code{background:var(--band-code);color:var(--white)}
-.rules{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));margin:28px 0 0;padding:0;list-style:none;counter-reset:r}
-.rules li{border-top:4px solid var(--rule-strong);padding-top:12px}
-.rules li b{display:block;font:700 22px/1.15 var(--cond);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px}
-.diagram{margin:28px 0 0;overflow-x:auto;background:var(--diagram);padding:20px}
-.diagram svg{width:100%;min-width:600px;height:auto;display:block}
-.diagram text{font-family:var(--mono);fill:var(--ink)}
-.diagram .dim{fill:var(--dim)}
-.diagram .box{fill:var(--graphite);stroke:var(--steel);stroke-width:1.5}
-.diagram .us{fill:var(--yellow)}
-.diagram .us-t{fill:var(--black)}
-.diagram .wire{stroke:var(--steel);stroke-width:1.5;fill:none}
-.diagram .wire.io{stroke:var(--yellow);stroke-dasharray:5 4}
-.diagram .arrow{fill:var(--steel)}
-.diagram .arrow.io{fill:var(--yellow)}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start}
-.two>*{min-width:0}
-@media (max-width:760px){.two{grid-template-columns:1fr}}
-.table-scroll{overflow-x:auto}
-table{border-collapse:collapse;width:100%;font-size:14.5px;margin:20px 0}
-th,td{text-align:left;padding:10px 12px 10px 0;border-bottom:1px solid var(--rule);vertical-align:top}
-th{font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em}
-.chip{display:inline-block;font:600 12px/1 var(--mono);padding:5px 8px;white-space:nowrap}
-.chip.ok{background:var(--yellow);color:var(--black)}
-.chip.pending{background:var(--graphite);color:var(--white)}
-.brandband{background:var(--yellow);color:var(--black);padding:40px 0}
-.brandband .wrap{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:20px}
-.brandband p{margin:0;font-size:17px}
-footer{background:var(--footer);color:var(--dim);padding:28px 0 48px;font:13px var(--mono)}
-footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
-footer a{color:var(--yellow)}
-header.top .gh{display:flex;color:var(--header-fg);flex:none;padding:6px}
-header.top .gh:hover{color:var(--yellow)}
-.early{margin:22px 0 0;font-size:15px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.btn.find{display:inline-block;margin-top:20px;background:var(--yellow);color:var(--black);border-color:var(--yellow)}
-.lib-tools{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;margin:24px 0 0}
-.lib-tools input{font:14px var(--mono);padding:10px 12px;min-width:min(100%,280px);background:var(--bg);color:var(--fg);border:2px solid var(--rule-strong)}
-.lib-tools input:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
-.lib-tools .muted{font:13px var(--mono)}
-#lib-rows .chip{margin-top:6px}
-.lib-vendor{font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
-#lib-rows td:first-child{min-width:150px}
-.doors{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));margin:32px 0 12px}
-.door{display:block;padding:16px;border:2px solid var(--rule-strong);text-decoration:none;font-size:14.5px}
-.door span{display:block;font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
-.door b{display:block;font:28px/1.1 var(--stencil);letter-spacing:.03em;text-transform:uppercase;margin:8px 0 6px}
-.door.pay{background:var(--yellow);border-color:var(--yellow);color:var(--black)}
-.door.pay span{color:var(--black)}
-.door:hover,.door:focus-visible{outline:2px solid var(--yellow);outline-offset:3px}
-.door.pay:hover,.door.pay:focus-visible{outline-color:var(--rule-strong)}
-#lib-rows td:last-child{white-space:nowrap}
-.steps.four{grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))}
-.steps{counter-reset:s}
-.steps li{counter-increment:s}
-.steps li b::before{content:counter(s) ". "}
-</style>
+<link rel="stylesheet" href="site.css">
 </head>
 <body>
-<svg class="sprite" xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true" focusable="false"><defs><mask id="m-se" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96"><rect width="96" height="96" fill="#fff"/><g transform="translate(48 48)" fill="#000"><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(22.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(67.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(112.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(157.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(202.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(247.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(292.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(337.5)"/><rect x="-1.25" y="-27" width="2.5" height="6"/><rect x="-1.25" y="-27" width="2.5" height="6" transform="rotate(45)"/><rect x="-1.25" y="-27" width="2.5" height="6" transform="rotate(90)"/><rect x="-1.25" y="-27" width="2.5" height="6" transform="rotate(135)"/><rect x="-1.25" y="-27" width="2.5" height="6" transform="rotate(180)"/><rect x="-1.25" y="-27" width="2.5" height="6" transform="rotate(225)"/><rect x="-1.25" y="-27" width="2.5" height="6" transform="rotate(270)"/><rect x="-1.25" y="-27" width="2.5" height="6" transform="rotate(315)"/><rect x="-1.25" y="-14" width="2.5" height="6" transform="rotate(45)"/><rect x="-1.25" y="-14" width="2.5" height="6" transform="rotate(135)"/><rect x="-1.25" y="-14" width="2.5" height="6" transform="rotate(225)"/><rect x="-1.25" y="-14" width="2.5" height="6" transform="rotate(315)"/></g></mask><mask id="m-se32" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96"><rect width="96" height="96" fill="#fff"/><g transform="translate(48 48)" fill="#000"><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(22.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(67.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(112.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(157.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(202.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(247.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(292.5)"/><rect x="-1.75" y="-33" width="3.5" height="14" transform="rotate(337.5)"/><rect x="-1.25" y="-14" width="2.5" height="6" transform="rotate(45)"/><rect x="-1.25" y="-14" width="2.5" height="6" transform="rotate(135)"/><rect x="-1.25" y="-14" width="2.5" height="6" transform="rotate(225)"/><rect x="-1.25" y="-14" width="2.5" height="6" transform="rotate(315)"/></g></mask><mask id="m-enc" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96"><rect width="96" height="96" fill="#fff"/><g transform="translate(48 48)" fill="#000"><circle r="9"/><rect x="-2.5" y="-26" width="5" height="12" transform="rotate(22.5)"/><rect x="-2.5" y="-26" width="5" height="12" transform="rotate(67.5)"/><rect x="-2.5" y="-26" width="5" height="12" transform="rotate(112.5)"/><rect x="-2.5" y="-26" width="5" height="12" transform="rotate(157.5)"/><rect x="-2.5" y="-26" width="5" height="12" transform="rotate(202.5)"/><rect x="-2.5" y="-26" width="5" height="12" transform="rotate(247.5)"/><rect x="-2.5" y="-26" width="5" height="12" transform="rotate(292.5)"/><rect x="-2.5" y="-26" width="5" height="12" transform="rotate(337.5)"/></g></mask><mask id="m-hubh" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96"><rect width="96" height="96" fill="#fff"/><g transform="translate(48 48)" fill="#000"><rect x="-8" y="-8" width="4" height="16"/><rect x="4" y="-8" width="4" height="16"/><rect x="-4" y="-2" width="8" height="4"/></g></mask><filter id="spray-a" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="1.2" numOctaves="2" seed="3" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.6" xChannelSelector="R" yChannelSelector="G" result="d"/><feGaussianBlur in="d" stdDeviation="1.4" result="b"/><feComponentTransfer in="b" result="o"><feFuncA type="linear" slope="0.45"/></feComponentTransfer><feMerge><feMergeNode in="o"/><feMergeNode in="d"/></feMerge></filter><filter id="spray-b" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="8" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.8" xChannelSelector="R" yChannelSelector="G" result="d"/><feGaussianBlur in="d" stdDeviation="1.6" result="b"/><feComponentTransfer in="b" result="o"><feFuncA type="linear" slope="0.5"/></feComponentTransfer><feMerge><feMergeNode in="o"/><feMergeNode in="d"/></feMerge></filter><filter id="spray-c" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="1.3" numOctaves="2" seed="21" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="1.4" xChannelSelector="R" yChannelSelector="G" result="d"/><feGaussianBlur in="d" stdDeviation="1.2" result="b"/><feComponentTransfer in="b" result="o"><feFuncA type="linear" slope="0.4"/></feComponentTransfer><feMerge><feMergeNode in="o"/><feMergeNode in="d"/></feMerge></filter><symbol id="se" viewBox="0 0 96 96"><g mask="url(#m-se)" fill="currentColor"><g transform="translate(48 48)"><circle r="26.5" fill="none" stroke="currentColor" stroke-width="9"/><circle r="11" fill="none" stroke="currentColor" stroke-width="4"/><circle r="4"/><rect x="-5" y="-43" width="10" height="10"/><rect x="-5" y="-43" width="10" height="10" transform="rotate(45)"/><rect x="-5" y="-43" width="10" height="10" transform="rotate(90)"/><rect x="-5" y="-43" width="10" height="10" transform="rotate(135)"/><rect x="-5" y="-43" width="10" height="10" transform="rotate(180)"/><rect x="-5" y="-43" width="10" height="10" transform="rotate(225)"/><rect x="-5" y="-43" width="10" height="10" transform="rotate(270)"/><rect x="-5" y="-43" width="10" height="10" transform="rotate(315)"/></g></g></symbol><symbol id="se20" viewBox="0 0 96 96"><g transform="translate(48 48)" fill="currentColor"><circle r="26.5" fill="none" stroke="currentColor" stroke-width="11"/><circle r="7"/><rect x="-6" y="-44" width="12" height="11"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(45)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(90)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(135)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(180)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(225)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(270)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(315)"/></g></symbol></defs></svg>
 <header class="top">
   <div class="wrap">
-    <a class="brand" href="#"><svg class="mk" viewBox="0 0 96 96" width="28" height="28" aria-hidden="true" style="color:#FFC20E"><use href="#se20"/></svg>HELMSMAN</a>
-    <nav aria-label="Sections">
-      <a href="#agentic">How it works</a>
-      <a href="#connect">Connects to</a>
-      <a href="#library">Devices</a>
-      <a href="#status">Status</a>
-      <a href="#why">Why?</a>
-      <a href="#field">From the field</a>
-      <a href="help/">Help</a>
-      <a href="helmsman-datasheet.pdf" download="helmsman-datasheet.pdf">Datasheet</a>
-      <a href="playground/">Try it</a>
-    </nav>
-    <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
-    <a class="gh" href="https://github.com/JimothyJohn/helmsman" aria-label="Source on GitHub" title="Source on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="brand" href="./"><img src="brand/helmsman-mark-20-yellow.svg" alt="" width="28" height="28">HELMSMAN</a>
+    <button class="ic theme" type="button" aria-pressed="false" aria-label="Switch to light" title="Switch to light"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg><svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg></button>
+    <a class="ic" href="help/" aria-label="Help and documentation" title="Help and documentation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.3"/><circle cx="12" cy="17.6" r=".6" fill="currentColor"/></svg></a>
+    <details class="menu">
+      <summary class="ic" aria-label="Menu" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square" aria-hidden="true"><path d="M3 6.5h18M3 12h18M3 17.5h18"/></svg></summary>
+      <nav aria-label="Site"><div class="wrap">
+        <a href="programming/">Programming<span>Describe it, watch it run, approve it.</span></a>
+        <a href="skipper/">Skipper<span>The edge node that runs your machine.</span></a>
+        <a href="find/">Device library<span>Every device Helmsman already knows how to talk to.</span></a>
+        <a href="security/">Security<span>Who can see and change what, and how it is checked.</span></a>
+        <a href="help/">Docs<span>How to use Helmsman, screen by screen.</span></a>
+      </div></nav>
+    </details>
   </div>
 </header>
-
 <main>
 <div class="hero">
   <div class="wrap">
     <div class="lockup">
-      <svg class="mk" viewBox="0 0 96 96" width="160" height="160" role="img" aria-label="Helmsman stencil encoder mark" style="color:#141414"><use href="#se"/></svg>
+      <img src="brand/helmsman-mark-black.svg" alt="" width="132" height="132">
       <h1><span class="wm">HELMSMAN</span><span class="desc">FACTORY AUTOMATION</span></h1>
     </div>
-    <p class="lede">The soft PLC you program by describing the machine. The agent writes standard IEC 61131-3 Structured Text from your spec, and you check it on a live diagram before it runs.</p>
+    <p class="headline">Say what it should do. See it work.</p>
+    <p class="lede">Tell Helmsman how your machine should behave, in your own words. It writes the program, shows it running on a live diagram you can check at a glance, and talks to your devices for you, so you never have to deal with protocols or low-level logic.</p>
     <div class="cta">
       <a class="btn primary" href="playground/">Try it in your browser</a>
-      <a class="btn" href="#agentic">How it works</a>
-      <a class="btn" href="#library">Send a device, get $50</a>
+      <a class="btn" href="#library">Get connected, get paid</a>
     </div>
-    <p class="early"><span class="chip pending">Early release</span> Running on the bench today. The source is open.</p>
-  </div>
-</div>
-
-<div class="facts" id="pillars">
-  <div class="wrap">
-    <div><b>Robust</b><span>Built on a minimal set of dependencies. Every change passes more than 1,300 automated tests and interoperability tests before it ships.</span></div>
-    <div><b>Simple</b><span>One controller, one service, its own web screen. No cloud needed to run the machine, no database server, no stack of microservices.</span></div>
-    <div><b>Safe</b><span>Written in a memory-safe language. Changes need an engineer's approval, every change is audited, and the safeguards stay out of your way.</span></div>
-    <div><b>Reliable</b><span>Compiled, native performance on a fixed scan. A watchdog bounds every scan, and a faulted program stops alone with its outputs safe.</span></div>
-  </div>
-</div>
-
-<section id="agentic">
-  <div class="wrap">
-    <h2>Agentic programming</h2>
-    <h3>Write specs, not code</h3>
-    <p>Tell Helmsman what the machine should do, in plain language. Drop in a P&amp;ID, an electrical drawing or a photo of the panel and it reads them. The agent drafts the program and you check how it behaves.</p>
-    <ol class="rules steps">
-      <li><b>Describe</b>State the sequence, the interlocks and the alarms the way you would to a colleague. Attach the drawings.</li>
-      <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it. The agent writes a test for each change it makes, and a failing test stops the deploy.</li>
-      <li><b>Approve</b>An engineer signs off with a PIN. The change goes live between scans; every version is kept and can be rolled back.</li>
-    </ol>
-    <div class="two" style="margin-top:40px">
-      <div>
-        <h2>Why there is no ladder</h2>
-        <p>Ladder was built so electricians could read relay circuits. Here the agent writes the program, so Helmsman shows it as a live function-block diagram with values on the wires. Underneath is standard IEC 61131-3 Structured Text that you can read, compare between versions and move to another controller.</p>
-      </div>
-<pre><span class="k">PROGRAM</span> line
-<span class="k">VAR</span>
-  s1, s2 : station;
-  jam_1 <span class="k">AT</span> %IX0.0 : BOOL;
-  alarm <span class="k">AT</span> %QX0.2 : BOOL;
-<span class="k">END_VAR</span>
-s1(enable := TRUE, jam := jam_1);
-s2(enable := TRUE, jam := FALSE);
-alarm := s1.alarm <span class="k">OR</span> s2.alarm;
-<span class="k">END_PROGRAM</span></pre>
-    </div>
-  </div>
-</section>
-
-<section id="connect" class="on-black">
-  <div class="wrap">
-    <h2>Standards and interoperability</h2>
-    <h3>A pure soft PLC on your network.</h3>
-    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols. It scans the network for devices and looks each one up in a <a href="#library">public device library</a> of devices proven on a bench, or reads the vendor's EDS file.</p>
-    <ul class="rules">
-      <li><b>IEC 61131-3</b>Structured Text, the proven standard, plus PLCopen XML import from other tools.</li>
-      <li><b>EtherNet/IP (CIP)</b>Drives remote I/O over cyclic Class 1 connections. Your existing PLCs see it as a standard adapter, and it reads their tags without ever writing to them.</li>
-      <li><b>Modbus TCP</b>Drives remote I/O blocks and devices directly, through a named I/O map.</li>
+    <ul class="benefits">
+      <li><b>Simple</b>No cloud needed to run the machine, no licences and no software to install.</li>
+      <li><b>Secure</b>Nobody changes the machine without signing in, and every change is recorded. <a href="security/">How it is secured</a></li>
+      <li><b>Reliable</b>Your program runs on a fixed scan, the same way every time.</li>
     </ul>
-    <p class="muted" style="margin-top:24px">Ethernet protocols today; others as customers need them.</p>
   </div>
-</section>
-
-<section id="library">
-  <div class="wrap">
-    <h2>Device library</h2>
-    <h3>Every device, proven once</h3>
-    <p>Working out how a device talks is the slow part of a controls project. Helmsman does it once for each device and publishes the result. The agent reads the vendor's EDS file and manual and drafts an entry: the identity the device reports, its protocols and what each byte of its I/O means, with the manual's page beside every claim. The device is then run on a bench until the entry is right. From then on the controller recognises that device on any network and adds it to a project with one click.</p>
-    <p>The library grows with the devices people send in. Testing costs you nothing, and a device that is verified earns you $50.</p>
-    <ol class="rules steps four">
-      <li><b>You send it</b>Free. Offer the unit first, so that two people do not post the same one.</li>
-      <li><b>We test it</b>Free. It is wired up on the bench and run until the entry is right.</li>
-      <li><b>We verify it</b>You get $50 when the entry matches what the unit does.</li>
-      <li><b>We add it</b>The entry goes into the public library with the date and firmware it was proven on, and the unit comes back to you.</li>
-    </ol>
-    <div class="doors">
-      <a class="door pay" id="door-unit" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=Unit%20offer%3A%20&amp;body=Device%20%28vendor%20and%20model%29%3A%0AFirmware%2C%20if%20known%3A%0AShips%20from%20%28country%29%3A%0APowers%20up%20and%20worked%20when%20last%20used%3A%20yes%20/%20no%0AWant%20it%20back%20after%20testing%3A%20yes%20/%20no%0A%0ANotes%3A%0A%0A%28No%20address%20or%20payment%20details%20here.%20Those%20are%20arranged%20in%20private%20after%20a%20yes.%29%0A"><span>Paid, $50</span><b>Send a unit</b>Offer a device for the bench.</a>
-      <a class="door" href="library/#test"><span>You have one</span><b>Test it</b>Run a read-only script on your own unit and see it compared with the entry.</a>
-      <a class="door" href="library/"><span>You know one</span><b>Check it</b>Read what an entry claims, with the source of each claim, and say what is wrong.</a>
-      <a class="door" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=New%20device%3A%20&amp;body=Vendor%3A%0AModel%3A%0AProduct%20page%3A%0AProtocols%20%28EtherNet/IP%2C%20Modbus%20TCP%2C%20other%29%3A%0AI%20have%20a%20unit%20and%20can%20run%20a%20read-only%20test%3A%20yes%20/%20no%0AI%20could%20send%20a%20unit%20to%20the%20bench%3A%20yes%20/%20no%0A"><span>You want one</span><b>Name it</b>Say which device to map next.</a>
-    </div>
-    <p class="muted">An offer or a request opens a filled-in issue on GitHub. It is public, so the shipping address and the payment are arranged in private afterwards.</p>
-    <p class="muted">Working with an agent? Point it at <a href="https://github.com/JimothyJohn/helmsman-devices/blob/dev/AGENTS.md"><code>AGENTS.md</code></a> in the library and give it the device's address. It identifies the unit, drafts or looks up the entry, tests it against the unit and sends the pull request.</p>
-    <p class="muted">An entry marked <i>from documents</i> was read from the vendor's EDS file and manual, page by page, and has not yet been run on a unit. A checked entry names the date it was.</p>
-    <p><a class="btn primary find" href="find/">Is yours here? See every device &rarr;</a></p>
-    <div class="lib-tools">
-      <input id="lib-q" type="search" placeholder="Filter: vendor, model, protocol" aria-label="Filter the device library" hidden>
-      <span id="lib-count" class="muted" aria-live="polite">Loading the library…</span>
-    </div>
-    <div class="table-scroll">
-    <table id="lib-table" hidden>
-      <thead><tr><th>Device</th><th>Protocols</th><th>I/O</th><th>Bounty</th></tr></thead>
-      <tbody id="lib-rows"></tbody>
-    </table>
-    </div>
-    <p class="muted">The library is open: <a href="https://github.com/JimothyJohn/helmsman-devices">github.com/JimothyJohn/helmsman-devices</a>. A pull request with one folder adds a device.</p>
-  </div>
-</section>
-
-<section id="status">
-  <div class="wrap">
-    <h2>Status</h2>
-    <h3>What has been tested</h3>
-    <p>Each result below comes from a passing test or a capture. The suite runs on every change against an open-source EtherNet/IP device in a container.</p>
-    <div class="table-scroll">
-    <table>
-      <thead><tr><th>Device</th><th>Role</th><th>Status</th></tr></thead>
-      <tbody>
-        <tr><td>OpENer reference adapter</td><td>EtherNet/IP device under continuous test</td><td><span class="chip ok">verified</span></td></tr>
-        <tr><td>Helmsman's own adapter</td><td>Same interoperability suite</td><td><span class="chip ok">verified</span></td></tr>
-        <tr><td>Moxa ioLogik E1213</td><td>Remote I/O over EtherNet/IP and Modbus TCP</td><td><span class="chip ok">verified</span></td></tr>
-        <tr><td>Rockwell CompactLogix</td><td>Existing PLC, read without writing</td><td><span class="chip pending">bench pending</span></td></tr>
-      </tbody>
-    </table>
-    </div>
-  </div>
-</section>
+</div>
 
 <section id="why" class="on-black">
   <div class="wrap">
-    <h2>Why?</h2>
-    <h3>The tools are older than the plants</h3>
+    <h2>Why Helmsman</h2>
+    <h3>Programming machines shouldn't be this hard.</h3>
     <div class="two">
-      <div>
-        <p>Most industrial programming suites are stacked on the suites before them and keep their habits. You draw on a canvas and the tool saves a file only it can read, so a program is hard to review, hard to compare with last week's and hard to hand to the next person.</p>
-        <p>Language models read and write text well. People on the floor want to see what the machine is doing. Helmsman gives each side what it works best with: underneath, the program is plain Structured Text; on screen, it is a live diagram with values on the wires.</p>
-        <p>The same models are good at the part of controls work nobody enjoys: finding how a device talks, bringing the link up, mapping the I/O and keeping it mapped. That used to take most of a project's hours before the first line of the sequence was written. With the agent doing it, the engineer's hours go to the spec and to checking the result. Each device it works out is tested on a real unit and published in the <a href="#library">device library</a>, so the next plant starts with that device already done.</p>
+      <div class="reel" role="img" aria-label="A screen recording is coming: describe a machine, watch it run, connect a device and upload the program.">
+        <ol><li>Describe it</li><li>Watch it run</li><li>Connect a device</li><li>Upload</li></ol>
+        <span>Screen recording coming soon</span>
       </div>
       <div>
-        <p>Earlier suites were proprietary, tied to one operating system and heavy on the workstation. Helmsman runs as one service on the controller and serves its own editor to a browser, so there is nothing to install and nothing to license per seat.</p>
-        <p>The idea in one line: focus on what matters and leave the boilerplate to the agent. You are the robot overlord, not the meat puppet.</p>
+        <p>Getting a machine running used to mean hours of setup before the first useful line: installing the software, starting a project, chasing syntax errors, then working out how each device talks and wiring up the comms by hand.</p>
+        <p>Helmsman is a new way to program a machine: you talk to it. It is good at the part of controls work nobody enjoys, like finding how a device talks, bringing the link up and mapping the I/O. Your time goes to what the machine should do, and to checking that it does it.</p>
       </div>
     </div>
+    <ul class="rules">
+      <li><h4>No licence fees</h4>Helmsman is open source under Apache 2.0. Use it on as many machines as you like.</li>
+      <li><h4>A $30 controller</h4>The <a href="skipper/">Skipper</a> is an off-the-shelf board powered over its Ethernet cable. It needs little to hook up and makes it easy to spread control across a line.</li>
+      <li><h4>Plug in and go</h4>The editor runs in a browser on any computer and the program runs on the device. Plug it into an Ethernet switch and start.</li>
+    </ul>
+    <p style="margin-top:36px;font:800 clamp(24px,3.6vw,34px)/1.15 var(--cond);letter-spacing:.02em;text-transform:uppercase;max-width:none">You're the robot overlord now. <span style="color:var(--yellow)">Focus on what matters and leave the code to the machines.</span></p>
   </div>
 </section>
 
-<section id="field">
+<section id="how">
+  <div class="wrap">
+    <h2>Programming</h2>
+    <h3>Specs, not code</h3>
+    <p>Tell Helmsman what the machine should do in plain language. Helmsman drafts the program, and you check how it behaves.</p>
+    <ol class="steps">
+      <li><h4>Describe</h4><p>State the sequence step by step, the way you would to a colleague.</p></li>
+      <li><h4>Visualize</h4><p>Watch it behave on a live diagram, running against a simulation of your I/O.</p></li>
+      <li><h4>Approve</h4><p>It has to be approved before it goes live.</p></li>
+    </ol>
+    <p class="more"><a href="programming/">More on programming &rarr;</a></p>
+  </div>
+</section>
+
+<section id="library" class="on-black">
+  <div class="wrap">
+    <h2>Device library</h2>
+    <h3>Get connected, get paid.</h3>
+    <p>Your device talks to ours. Helmsman learns how each device talks once, proves it on a real unit and publishes it in a <a href="find/">public device library</a>. From then on it recognises that device on any network and adds it to a project in one click.</p>
+    <ol class="steps">
+      <li><h4>Send us your device</h4><p><a href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=Unit%20offer%3A%20&amp;body=Device%20%28vendor%20and%20model%29%3A%0AFirmware%2C%20if%20known%3A%0AShips%20from%20%28country%29%3A%0APowers%20up%20and%20worked%20when%20last%20used%3A%20yes%20/%20no%0AWant%20it%20back%20after%20testing%3A%20yes%20/%20no%0A%0ANotes%3A%0A%0A%28No%20address%20or%20payment%20details%20here.%20Those%20are%20arranged%20in%20private%20after%20a%20yes.%29%0A">Offer a unit</a> and we tell you where to send it.</p></li>
+      <li><h4>We plug it in</h4><p>Helmsman builds the integration on our bench.</p></li>
+      <li><h4>You get paid</h4><p>Once it is verified, it goes into the library for everyone, and we pay you.</p></li>
+    </ol>
+    <div class="cta" style="margin-top:28px">
+      <a class="btn primary" href="find/">Is yours here? See every device</a>
+      <a class="btn" href="https://github.com/JimothyJohn/helmsman-devices/issues/new?title=New%20device%3A%20&amp;body=Vendor%3A%0AModel%3A%0AProduct%20page%3A%0AProtocols%20%28EtherNet/IP%2C%20Modbus%20TCP%2C%20other%29%3A%0AI%20have%20a%20unit%20and%20can%20run%20a%20read-only%20test%3A%20yes%20/%20no%0AI%20could%20send%20a%20unit%20to%20the%20bench%3A%20yes%20/%20no%0A">Name a device you want</a>
+    </div>
+    <p class="muted" style="margin-top:18px">Devices still waiting for a unit to test are marked in the <a href="find/">library</a>. Those are the ones we most want to see.</p>
+  </div>
+</section>
+
+<section id="connect">
+  <div class="wrap">
+    <h2>Standards and interoperability</h2>
+    <h3>Built on open standards</h3>
+    <p>Helmsman speaks the protocols your equipment already uses and keeps the program in a standard language, so nothing is locked into a proprietary format. It also hides the hard parts: you say what a device does, and Helmsman handles how it talks.</p>
+    <ul class="rules">
+      <li><h4>IEC 61131-3</h4>Programs are standard Structured Text that other tools can read. Projects from other tools come in as PLCopen XML.</li>
+      <li><h4>EtherNet/IP</h4>Runs remote I/O and drives. The PLCs you already have see Helmsman as a standard device, and it reads their tags without ever writing to them.</li>
+      <li><h4>Modbus TCP</h4>Runs remote I/O blocks and devices directly, with every point given a name you can read.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="field" class="on-black">
   <div class="wrap">
     <h2>From the field</h2>
     <h3>What engineers are tired of</h3>
-    <p>We read years of forum threads, reviews and issue trackers about the major PLC suites and the open-source runtimes. The same complaints come up on every platform. These are the ones Helmsman answers today, each checked against what is built.</p>
-    <ul class="rules">
-      <li><b>A virtual machine per version</b>The controller serves its own editor to a browser. There is no workstation software to install or to keep in step with the firmware.</li>
-      <li><b>Project files you can't compare</b>A project is a folder of plain text: the Structured Text, the I/O map and the settings. Every deploy is kept as a version you can roll back to, with its approver and the time.</li>
-      <li><b>Stopping the machine for a change</b>An approved change is taken between two scans while the other programs keep running, and timers and counters keep their values. You can also stop, run or restart one program on its own.</li>
-      <li><b>Testing that needs the machine</b>Requirement tests run against the program with no hardware connected and give the same result every run. A failing test is named when you deploy, with the reason it failed.</li>
-      <li><b>Licence keys, dongles and trial timers</b>The controller has none of them. Its software is open source under Apache 2.0.</li>
-      <li><b>Default passwords</b>There is no default account or password. Only an engineer's sign-in or PIN can approve a change, and every change goes into an append-only audit log.</li>
-      <li><b>One typo, twenty errors</b>A syntax error is reported once, at its line and column, and the editor marks it where you typed it.</li>
-      <li><b>A cloud in the control path</b>Programs keep scanning when the controller loses its internet connection. Only the agent waits until the connection is back.</li>
+    <p>We read years of forum threads, reviews and issue trackers about the major PLC suites. The same complaints come up on every platform.</p>
+    <ul class="ba">
+      <li><div class="was"><span class="tag">Before</span><b>A virtual machine for every version</b></div><div class="now"><span class="tag">Now</span>Nothing to install. The editor opens in a browser on any computer and always matches the controller it came from.</div></li>
+      <li><div class="was"><span class="tag">Before</span><b>Testing needs the machine</b></div><div class="now"><span class="tag">Now</span>Helmsman simulates your I/O and the equipment on it, so you can test the program before the hardware arrives.</div></li>
+      <li><div class="was"><span class="tag">Before</span><b>One typo, twenty errors</b></div><div class="now"><span class="tag">Now</span>A proper editor with highlighting, indentation and folding, and the program Helmsman hands you has already compiled.</div></li>
+      <li><div class="was"><span class="tag">Before</span><b>Project files you can't compare</b></div><div class="now"><span class="tag">Now</span>Every change says what it changed and who made it. Look back through the whole history, see what moved between versions, and bring back an old one when you need it.</div></li>
+      <li><div class="was"><span class="tag">Before</span><b>Licence keys, dongles and trial timers</b></div><div class="now"><span class="tag">Now</span>Gone. Helmsman is open source under Apache 2.0: use it freely and credit the project.</div></li>
     </ul>
+  </div>
+</section>
+
+<section id="explore">
+  <div class="wrap">
+    <h2>Explore</h2>
+    <h3>Find your way around</h3>
+    <div class="tiles">
+      <a class="tile" href="programming/"><span class="k">Programming</span><b>Describe, watch, approve</b><span class="t">How you go from a description to a running machine.</span><span class="go">Read more &rarr;</span></a>
+      <a class="tile" href="skipper/"><span class="k">Edge node</span><b>Skipper</b><span class="t">The small controller that runs the program on the machine.</span><span class="go">See the Skipper &rarr;</span></a>
+      <a class="tile" href="find/"><span class="k">Device library</span><b>Is yours here?</b><span class="t">Every device Helmsman already knows how to talk to.</span><span class="go">Search the library &rarr;</span></a>
+      <a class="tile" href="security/"><span class="k">For IT and security</span><b>Security</b><span class="t">Who can see and change what, and how you can check it.</span><span class="go">Read the details &rarr;</span></a>
+    </div>
   </div>
 </section>
 
 <div class="brandband">
   <div class="wrap">
-    <p>Run a program in your browser, with nothing to install.</p>
+    <p>Try it now, with nothing to install.</p>
     <a class="btn primary" href="playground/">Try it in your browser</a>
   </div>
 </div>
 </main>
-
 <footer>
   <div class="wrap">
-    <span>Helmsman Factory Automation · early release · open source (Apache 2.0)</span>
+    <span>Helmsman Factory Automation · open source (Apache 2.0)</span>
+    <nav aria-label="Footer">
+      <a href="programming/">Programming</a>
+      <a href="skipper/">Skipper</a>
+      <a href="find/">Device library</a>
+      <a href="security/">Security</a>
+      <a href="help/">Docs</a>
+      <a href="https://github.com/JimothyJohn/helmsman">Source code</a>
+    </nav>
   </div>
 </footer>
-<script>
-(function(){var h=document.documentElement,b=document.querySelector('header.top .theme');if(!b){return}function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();
-</script>
-<script>
-(function(){
-  var URL_INDEX='https://raw.githubusercontent.com/JimothyJohn/helmsman-devices/main/index.json';
-  var CHECK='library/#';
-  var FOLDER=/^devices\/[a-z0-9][a-z0-9_.-]{0,63}\/[a-z0-9][a-z0-9_.-]{0,63}$/;
-  var PROTO={enip:'EtherNet/IP',modbus:'Modbus TCP'};
-  var q=document.getElementById('lib-q'),count=document.getElementById('lib-count'),
-      table=document.getElementById('lib-table'),body=document.getElementById('lib-rows');
-  if(!q||!body){return}
-  function str(v,max){return typeof v==='string'&&v.length<=max?v:''}
-  function cell(tr,text){var td=document.createElement('td');td.textContent=text;tr.appendChild(td);return td}
-  function failed(){count.textContent='The library could not be loaded here; it is on GitHub.'}
-  var rows=[],proven=0;
-  function show(){
-    var words=q.value.toLowerCase().split(/\s+/).filter(Boolean),n=0;
-    rows.forEach(function(r){var on=words.every(function(w){return r.key.indexOf(w)>=0});r.tr.hidden=!on;if(on){n++}});
-    count.textContent=n===rows.length?rows.length+' devices, '+proven+' proven on a unit':n+' of '+rows.length+' devices';
-  }
-  fetch(URL_INDEX,{credentials:'omit',referrerPolicy:'no-referrer'}).then(function(r){
-    if(!r.ok){throw new Error('HTTP '+r.status)}return r.json()
-  }).then(function(ix){
-    if(!ix||ix.format!=='helmsman-devices-index 1'||!Array.isArray(ix.devices)){throw new Error('format')}
-    var list=ix.devices.slice(0,2000).filter(function(d){return d&&str(d.vendor,120)&&str(d.model,120)});
-    list.sort(function(a,b){return (a.vendor+' '+a.model).localeCompare(b.vendor+' '+b.model,undefined,{numeric:true})});
-    proven=list.length;
-    list.forEach(function(d){
-      var tr=document.createElement('tr');
-      var m=cell(tr,''),folder=str(d.folder,160),v=document.createElement('span');
-      v.className='lib-vendor';v.textContent=d.vendor;m.appendChild(v);m.appendChild(document.createElement('br'));
-      if(FOLDER.test(folder)){var a=document.createElement('a');a.href=CHECK+folder;a.textContent=d.model;m.appendChild(a)}else{m.appendChild(document.createTextNode(d.model))}
-      var ps=d.protocols&&typeof d.protocols==='object'?Object.keys(d.protocols).map(function(k){return PROTO[k]}).filter(Boolean):[];
-      cell(tr,ps.join(', ')||'–');
-      cell(tr,str(d.channels,120)||'–');
-      var chip=document.createElement('span'),checked=str(d.checked_on,10);
-      if(/^\d{4}-\d{2}-\d{2}$/.test(checked)){chip.className='chip ok';chip.textContent='checked '+checked}else{chip.className='chip pending';chip.textContent='from documents'}
-      m.appendChild(document.createElement('br'));m.appendChild(chip);
-      var b=cell(tr,''),du=document.getElementById('door-unit');
-      if(chip.className==='chip ok'){b.textContent='–'}else{proven--;if(du){var s=document.createElement('a');s.href=du.href.replace(/title=[^&]*/,'title='+encodeURIComponent('Unit offer: '+d.vendor+' '+d.model));s.textContent='Send one, $50';b.appendChild(s)}else{b.textContent='$50'}}
-      body.appendChild(tr);
-      rows.push({tr:tr,key:[d.vendor,d.model,ps.join(' '),str(d.channels,120),str(d.kind,40)].join(' ').toLowerCase()});
-    });
-    table.hidden=false;q.hidden=false;q.addEventListener('input',show);show();
-  }).catch(failed);
-})();
-</script>
+<script src="site.js"></script>
 </body>
 </html>

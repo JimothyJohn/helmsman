@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Helmsman Factory Automation datasheet</title>
-<meta name="description" content="One-page datasheet: Helmsman Factory Automation, the soft PLC you program by describing the machine. Early release.">
+<meta name="description" content="One-page datasheet: Helmsman Factory Automation, the soft PLC you program by describing the machine.">
 <meta name="author" content="Helmsman Factory Automation">
 <link rel="icon" type="image/svg+xml" href="brand/helmsman-mark-16-yellow.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -81,15 +81,15 @@ pre .k{color:var(--yellow)}
     <svg class="mk" viewBox="0 0 96 96" width="68" height="68" role="img" aria-label="Helmsman stencil encoder mark" style="color:#FFC20E"><g transform="translate(48 48)" fill="currentColor"><circle r="26.5" fill="none" stroke="currentColor" stroke-width="11"/><circle r="7"/><rect x="-6" y="-44" width="12" height="11"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(45)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(90)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(135)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(180)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(225)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(270)"/><rect x="-6" y="-44" width="12" height="11" transform="rotate(315)"/></g></svg>
     <h1 style="margin:0"><span class="wm">HELMSMAN</span><span class="desc">FACTORY AUTOMATION</span></h1>
   </div>
-  <div class="doc"><b>Datasheet</b><span class="chip">Early release</span><br>November 2026 · helmsman.advin.io</div>
+  <div class="doc"><b>Datasheet</b><br>November 2026 · helmsman.advin.io</div>
 </div>
 
 <div class="lede">
-  <p>The soft PLC you program by describing the machine. The agent writes standard IEC 61131-3 Structured Text from your spec, you check it on a live diagram, and an engineer approves it before it runs.</p>
+  <p>The soft PLC you program by describing the machine. Helmsman writes standard IEC 61131-3 Structured Text from your spec, you check it on a live diagram, and an engineer approves it before it runs.</p>
   <ol class="steps">
     <li><b>Describe</b>State the sequence, the interlocks and the alarms the way you would to a colleague. Attach the drawings.</li>
-    <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see what drives it.</li>
-    <li><b>Approve</b>An engineer signs off with a PIN. The change goes live between scans; every version is kept and can be rolled back.</li>
+    <li><b>Visualize</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see what drives it.</li>
+    <li><b>Approve</b>It must be approved before it goes live. Every version is kept and can be restored.</li>
   </ol>
 </div>
 
@@ -110,9 +110,9 @@ pre .k{color:var(--yellow)}
       <tr><th>Controller I/O</th><td>Digital inputs and outputs on the header · WebAssembly drivers, sandboxed to their own device's socket</td></tr>
       <tr><th>OPC UA</th><td>Server · opc.tcp, port 4840 · SecurityPolicy None, anonymous · loopback by default, LAN by choice</td></tr>
       <tr><th>Webhooks, trends</th><td>HTTP and HTTPS POST, JSON, on events · trends on the controller: 10 min window, 2 400 points per signal · snapshots with rollback</td></tr>
-      <tr><th>API and UI</th><td>HTTP + JSON API, port 8080 · HTTPS, TLS 1.2 and 1.3, certificate made at first boot · browser editor served by the controller (WebAssembly) · MCP for agents</td></tr>
+      <tr><th>API and UI</th><td>HTTP + JSON API, port 8080 · HTTPS, TLS 1.2 and 1.3, certificate made at first boot · browser editor served by the controller (WebAssembly) · MCP</td></tr>
       <tr><th>Access</th><td>Roles operator, engineer, integrator · PIN · approval policy per controller · audit log of every deploy, force and release · forces end at sign-out</td></tr>
-      <tr><th>Agent</th><td>Programs from a description · proposals reviewed before deploy · drop-ins: P&amp;ID, electrical drawing, panel photo (PNG, JPEG, WebP), PDF · explain mode · reaches the controller only through its API and policy</td></tr>
+      <tr><th>Programming</th><td>Programs from a description · proposals reviewed before deploy · drop-ins: P&amp;ID, electrical drawing, panel photo (PNG, JPEG, WebP), PDF · explain mode · reaches the controller only through its API and policy</td></tr>
       <tr><th>Platform</th><td>64-bit Linux, arm64 and x86-64 · one compiled service, headless · no database server, no cloud, nothing on the workstation</td></tr>
       <tr><th>Assurance</th><td>1 300+ automated tests · interoperability suite against OpENer in CI · memory-safe implementation · Apache 2.0</td></tr>
     </table>
@@ -136,7 +136,7 @@ pre .k{color:var(--yellow)}
     </table>
     <p class="note">Each verified row is a passing test or a capture; the suite runs on every change against an open-source EtherNet/IP device in a container. Ethernet protocols today; others as customers need them.</p>
 
-    <h2 style="margin-top:4mm">What the agent writes</h2>
+    <h2 style="margin-top:4mm">What Helmsman writes</h2>
 <pre><span class="k">PROGRAM</span> line
 <span class="k">VAR</span>
   s1, s2 : station;
@@ -152,7 +152,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
 </div>
 
 <div class="foot">
-  <span>Helmsman Factory Automation · early release · open source (Apache 2.0)</span>
+  <span>Helmsman Factory Automation · open source (Apache 2.0)</span>
   <span><a href="https://helmsman.advin.io/">helmsman.advin.io</a> · <a href="https://helmsman.advin.io/help/">help</a> · <a href="https://github.com/JimothyJohn/helmsman">source</a></span>
 </div>
 
