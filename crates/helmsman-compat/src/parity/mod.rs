@@ -69,37 +69,34 @@ pub enum Outcome {
     Pending,
 }
 
-type Journey = fn(&Ctx) -> Result<String, String>;
+/// A journey: what it saw when it passed, or why it failed.
+pub type Journey = fn(&Ctx) -> Result<String, String>;
 
-/// Every journey, by the id docs/FEATURES.md gives it; `None` is
-/// pending. `every_manifest_journey_is_in_the_table` holds the two to
-/// each other.
-pub const JOURNEYS: &[(&str, Option<Journey>)] = &[
+mod agent;
+mod devices;
+mod more;
+
+/// The box's own journeys (this file). Each area keeps its journeys in
+/// its own file, so the areas are written apart: [`agent`] (the relay
+/// routes), [`devices`] (on simulators) and [`more`] (the rest).
+const BOX: &[(&str, Option<Journey>)] = &[
     ("health", Some(health)),
     ("sign-in", Some(sign_in)),
     ("live-values", Some(live_values)),
     ("module-control", Some(module_control)),
-    ("explain", None),
     ("projects", Some(projects)),
     ("deploy", Some(deploy)),
-    ("requirements", None),
-    ("proposals", None),
-    ("history", None),
-    ("bundles", None),
-    ("audit", None),
-    ("chat", None),
-    ("design", None),
-    ("help", None),
-    ("devices", None),
-    ("device-config", None),
-    ("device-profile", None),
-    ("forces", None),
-    ("trends", None),
-    ("layout", None),
-    ("drivers", None),
-    ("site", None),
-    ("mcp", None),
 ];
+
+/// Every journey, by the id docs/FEATURES.md gives it; `None` is
+/// pending. `every_manifest_journey_is_in_the_table_and_no_other` holds
+/// the table and the manifest to each other.
+pub fn journeys() -> impl Iterator<Item = &'static (&'static str, Option<Journey>)> {
+    BOX.iter()
+        .chain(agent::JOURNEYS)
+        .chain(devices::JOURNEYS)
+        .chain(more::JOURNEYS)
+}
 
 /// Walk every journey of the manifest, in its order.
 #[must_use]
@@ -108,9 +105,9 @@ pub fn run(manifest: &Manifest, ctx: &Ctx) -> Vec<(String, Outcome)> {
         .features
         .iter()
         .map(|f| {
-            let outcome = match JOURNEYS.iter().find(|(id, _)| *id == f.journey) {
+            let outcome = match journeys().find(|(id, _)| *id == f.journey) {
                 None => Outcome::Fail(format!(
-                    "no journey `{}` in helmsman-compat parity::JOURNEYS",
+                    "no journey `{}` in helmsman-compat parity::journeys()",
                     f.journey
                 )),
                 Some((_, None)) => Outcome::Pending,
@@ -179,7 +176,7 @@ pub fn check(
 }
 
 /// Sign in as the journeys' engineer: the session token.
-fn login(url: &Url) -> Result<String, String> {
+pub(crate) fn login(url: &Url) -> Result<String, String> {
     let (st, j) = client::call(
         url,
         "POST",
@@ -199,7 +196,13 @@ fn login(url: &Url) -> Result<String, String> {
 // ---- helpers ---------------------------------------------------------------
 
 /// One request with the engineer's session; the status must be `want`.
-fn expect(c: &Ctx, method: &str, path: &str, body: Option<&Json>, want: u16) -> Result<Json, String> {
+pub(crate) fn expect(
+    c: &Ctx,
+    method: &str,
+    path: &str,
+    body: Option<&Json>,
+    want: u16,
+) -> Result<Json, String> {
     let (st, j) = client::call(&c.url, method, path, Some(&c.session), body)?;
     if st == want {
         Ok(j)
@@ -210,7 +213,7 @@ fn expect(c: &Ctx, method: &str, path: &str, body: Option<&Json>, want: u16) -> 
 
 /// Wait up to 20 s for `ok` (the box's reads lag a control by a scan
 /// tick, CLAUDE.md "Timing in tests").
-fn wait_for(what: &str, mut ok: impl FnMut() -> Result<bool, String>) -> Result<(), String> {
+pub(crate) fn wait_for(what: &str, mut ok: impl FnMut() -> Result<bool, String>) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut last = String::new();
     while Instant::now() < deadline {
@@ -224,12 +227,12 @@ fn wait_for(what: &str, mut ok: impl FnMut() -> Result<bool, String>) -> Result<
     Err(format!("{what}: not within 20 s {last}"))
 }
 
-fn module_status(c: &Ctx, name: &str) -> Result<String, String> {
+pub(crate) fn module_status(c: &Ctx, name: &str) -> Result<String, String> {
     let j = expect(c, "GET", &format!("/api/modules/{name}"), None, 200)?;
     Ok(j["status"]["state"].as_str().unwrap_or_default().to_string())
 }
 
-fn module_names(c: &Ctx) -> Result<BTreeSet<String>, String> {
+pub(crate) fn module_names(c: &Ctx) -> Result<BTreeSet<String>, String> {
     let j = expect(c, "GET", "/api/modules", None, 200)?;
     let list = j
         .as_array()
@@ -371,7 +374,7 @@ fn projects(c: &Ctx) -> Result<String, String> {
 
 /// Make project `name` with the counter, check, replay and deploy it,
 /// and wait for it to run: the replay number.
-fn deploy_project(c: &Ctx, name: &str) -> Result<u64, String> {
+pub(crate) fn deploy_project(c: &Ctx, name: &str) -> Result<u64, String> {
     expect(c, "POST", "/api/projects", Some(&json!({ "name": name })), 201)?;
     expect(
         c,
@@ -426,7 +429,7 @@ fn deploy_project(c: &Ctx, name: &str) -> Result<u64, String> {
 }
 
 /// A module running, deployed from project `parity-run` when none is.
-fn ensure_running(c: &Ctx) -> Result<String, String> {
+pub(crate) fn ensure_running(c: &Ctx) -> Result<String, String> {
     if let Some(m) = module_names(c)?.into_iter().next() {
         return Ok(m);
     }
@@ -453,8 +456,8 @@ mod tests {
     #[test]
     fn every_manifest_journey_is_in_the_table_and_no_other() {
         let named: BTreeSet<String> = manifest().features.iter().map(|f| f.journey.clone()).collect();
-        let table: BTreeSet<String> = JOURNEYS.iter().map(|(id, _)| (*id).to_string()).collect();
-        assert_eq!(JOURNEYS.len(), table.len(), "a journey is in the table twice");
+        let table: BTreeSet<String> = journeys().map(|(id, _)| (*id).to_string()).collect();
+        assert_eq!(journeys().count(), table.len(), "a journey is in the table twice");
         let missing: Vec<_> = named.difference(&table).collect();
         let extra: Vec<_> = table.difference(&named).collect();
         assert!(
