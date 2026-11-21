@@ -31,7 +31,7 @@ writes it (query included); `tab:KEY`, the key the tab saves in a layout;
 | Requirements and tests | `requirements` | `POST /api/projects/{p}/tests`, `POST /api/projects/{p}/requirements`, `profile:tests` |
 | Proposals and approval | `proposals` | `GET /api/proposals`, `GET /api/proposals/{id}`, `POST /api/proposals`, `POST /api/proposals/check`, `POST /api/proposals/replay`, `POST /api/proposals/{id}/replay`, `POST /api/proposals/{id}/apply` |
 | History and rollback | `history` | `GET /api/snapshots`, `GET /api/snapshots/head`, `GET /api/snapshots/{id}`, `GET /api/snapshots/{a}/diff/{b}`, `POST /api/snapshots/{id}/replay`, `POST /api/snapshots/{id}/rollback`, `GET /api/replays/{n}`, `tab:history` |
-| Bundles and the marketplace | `bundles` | `GET /api/snapshots/{id}/bundle`, `POST /api/bundles`, `POST /api/market/list`, `POST /api/market/install` |
+| Bundles and the marketplace | `bundles` | `GET /api/snapshots/{id}/bundle`, `POST /api/bundles`, `POST /api/market/list`, `POST /api/market/install`, `profile:review` |
 | Audit trail | `audit` | `GET /api/audit?after=N&limit=M`, `tab:messages` |
 | Agent chat | `chat` | `POST /api/chat`, `GET /api/chat/status`, `POST /api/dropins?name=N&kind=K`, `GET /api/dropins`, `GET /api/dropins/{id}?chunk=K`, `GET /api/dropins/{id}/plc?view=V&name=N&offset=O`, `profile:chat`, `tab:claude` |
 | Design step | `design` | `POST /api/design`, `profile:design` |
