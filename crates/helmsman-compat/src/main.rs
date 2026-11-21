@@ -7,7 +7,7 @@
 //! helmsman-compat relay    --box BIN --helmsman DIR --relay-bin BIN [--latest] [--work DIR] [--json FILE]
 //! helmsman-compat live     --box BIN --helmsman DIR --url URL --token FILE [--work DIR] [--json FILE]
 //! helmsman-compat hardware --helmsman DIR --hardware DIR [--json FILE]
-//! helmsman-compat parity   --box BIN --helmsman DIR [--manifest FILE] [--work DIR] [--json FILE]
+//! helmsman-compat parity   --box BIN --helmsman DIR [--manifest FILE] [--relay-bin BIN | --url URL --token FILE] [--work DIR] [--json FILE]
 //! ```
 //!
 //! Exit 0 when every check passed, 1 when one failed, 2 when the cell
@@ -114,11 +114,24 @@ fn run(cmd: &str, o: &BTreeMap<String, String>, latest: bool) -> Result<Vec<Find
             let manifest = o
                 .get("manifest")
                 .map_or_else(|| Ok(helmsman.join("docs/FEATURES.md")), |_| path(o, "manifest"))?;
-            let outcomes = parity::check(&path(o, "box")?, &manifest, &work()?, &[])?;
+            // The agent journeys' side: the stub behind a candidate
+            // relay, the deployed relay, or none (they are then not run).
+            let side = match (o.get("relay-bin"), o.get("url")) {
+                (Some(_), Some(_)) => return Err("--relay-bin and --url are two sides; give one".into()),
+                (Some(_), None) => parity::AgentSide::Stub {
+                    relay_bin: path(o, "relay-bin")?,
+                },
+                (None, Some(url)) => parity::AgentSide::Live {
+                    url: url.clone(),
+                    token: path(o, "token")?,
+                },
+                (None, None) => parity::AgentSide::None,
+            };
+            let outcomes = parity::check_with(&path(o, "box")?, &manifest, &work()?, &[], &side)?;
             let (findings, pending) = parity::findings(&outcomes);
             if pending > 0 {
                 eprintln!(
-                    "helmsman-compat parity: {pending} journeys are pending (not written yet; docs/PARITY.md)"
+                    "helmsman-compat parity: {pending} journeys did not run (not written yet, or no relay for the agent ones; docs/PARITY.md)"
                 );
             }
             Ok(findings)
