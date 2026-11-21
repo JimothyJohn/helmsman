@@ -186,19 +186,27 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
 
 ## Bench network (2026-11-20)
 
-One unmanaged PoE switch carries the bench, supervictor's PoE rack and the
-uplink to the house router since 2026-11-19, so 192.168.3.0/24 and the
-house DHCP LAN (10.0.0.0/24) share one wire. The Studio is 192.168.3.10
-static on en0 (Wi-Fi en1 is on 10.0.0.x). Ports are not recorded: an
-unmanaged switch has no table to read.
+One unmanaged 16-port PoE switch (120 W budget; Amazon ASIN B0C4X7VZV9)
+carries the bench, supervictor's PoE rack and the uplink to the house
+router since 2026-11-19, so 192.168.3.0/24 and the house DHCP LAN
+(10.0.0.0/24) share one wire. The Studio is 192.168.3.10 static on en0
+(Wi-Fi en1 is on 10.0.0.x). Ports as Nick cabled them (2026-11-20); an
+unmanaged switch has no table to read, so a move is recorded by hand.
 
-| Device | Address | MAC |
-|---|---|---|
-| P4 node | 192.168.3.56 (:8080) | e8:f6:0a:e8:16:e1 |
-| Moxa E1213 | 192.168.3.60 | 00:90:e8:7e:af:be |
-| Novanta MDrive | 192.168.33.1, its default (reach it with the en0 alias above) | 8c:1f:64:ad:89:20 |
-| Bench Pi (parked) | 192.168.3.20, and 10.0.0.56 on the same port | 98:fe:54:51:5c:7d |
-| Murrelektronik 55089, Balluff | not seen on 2026-11-20 (no frame in 25 s) | |
+| Port | Device | Address | MAC |
+|---|---|---|---|
+| 1 | Novanta MDrive | 192.168.33.1, its default (reach it with the en0 alias above) | 8c:1f:64:ad:89:20 |
+| 2 | work laptop dock (disconnected) | | |
+| 3 | Bench Pi 5 (parked) | 192.168.3.20, and 10.0.0.56 on the same port | 98:fe:54:51:5c:7d |
+| 4 | house router (internet, DHCP 10.0.0.0/24) | 10.0.0.1 | |
+| 5 | Moxa E1213 | 192.168.3.60 | 00:90:e8:7e:af:be |
+| 6 | Mac Studio en0 | 192.168.3.10 | 9c:76:0e:3a:bc:22 |
+| 7, 8 | supervictor ESP32-POE2 x2 | 10.0.0.x (supervictor's HARDWARE.md) | |
+| 9, 11 | supervictor ESP32-POE-ISO x2 | 10.0.0.x (supervictor's HARDWARE.md) | |
+| 10 | P4 node | 192.168.3.56 (:8080) | e8:f6:0a:e8:16:e1 |
+| 12 | Murrelektronik 55089 | DHCP (10.0.0.73 on 2026-11-16); silent on 2026-11-20, no DHCP request in 25 s: its 24 V, not PoE, powers it | |
+
+The Balluff is not on the switch.
 
 - **Don't run a box with `--dhcp en0` on the bench.** Its server would
   answer the house's clients beside the router's.
