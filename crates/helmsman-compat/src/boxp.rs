@@ -28,7 +28,23 @@ impl BoxProc {
     /// # Errors
     /// The box did not start, or did not say where its API is in 60 s.
     pub fn start(bin: &Path, helmsman: &Path, work: &Path, extra: &[OsString]) -> Result<Self, String> {
+        Self::start_with(bin, helmsman, work, extra, |_| Ok(()))
+    }
+
+    /// [`Self::start`], with `setup` run on the fresh state directory
+    /// before the box starts (an account added with [`add_account`]).
+    ///
+    /// # Errors
+    /// `setup` failed, or as [`Self::start`].
+    pub fn start_with(
+        bin: &Path,
+        helmsman: &Path,
+        work: &Path,
+        extra: &[OsString],
+        setup: impl FnOnce(&Path) -> Result<(), String>,
+    ) -> Result<Self, String> {
         let state = fresh_dir(work, "state")?;
+        setup(&state)?;
         let cwd = fresh_dir(work, "cwd")?;
         let echo = helmsman.join("crates/helmsman-plc/programs/echo.st");
         let mut child = Command::new(bin)
@@ -171,5 +187,37 @@ mod tests {
             r,
             "API token (new): [redacted]; relay hmr1_[redacted]; port 8080, sha 4a6d37aa"
         );
+    }
+}
+
+/// `bin account add USER ROLE` on the state directory `state`, the
+/// password given on stdin as the box reads it.
+///
+/// # Errors
+/// It did not run, or refused.
+pub fn add_account(bin: &Path, state: &Path, user: &str, role: &str, password: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut child = Command::new(bin)
+        .args(["account", "add", user, role])
+        .env("STATE_DIRECTORY", state)
+        .current_dir(state)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("account add: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        writeln!(stdin, "{password}").map_err(|e| format!("account add: {e}"))?;
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("account add: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "account add {user} {role}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
     }
 }

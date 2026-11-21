@@ -101,3 +101,24 @@ fn a_route_the_manifest_lacks_is_named_with_what_to_do() {
     );
     assert!(m.contains("no longer has them"), "{m}");
 }
+
+/// The parity run (helmsman-compat `parity`, docs/PARITY.md) on this
+/// checkout's own box: every journey written so far passes, so a dev
+/// change that breaks a feature's main path fails here before it can
+/// show up as a gap between dev and live.
+#[test]
+fn every_written_journey_passes_on_this_box() {
+    use helmsman_compat::parity::{self, Outcome};
+    let bin = Path::new(env!("CARGO_BIN_EXE_helmsman-plc"));
+    let outcomes = parity::check(bin, &root(), &root().join(FILE), &work("journeys"), &[]).unwrap();
+    let failed: Vec<String> = outcomes
+        .iter()
+        .filter_map(|(id, o)| match o {
+            Outcome::Fail(d) => Some(format!("{id}: {d}")),
+            _ => None,
+        })
+        .collect();
+    assert!(failed.is_empty(), "journeys that failed:\n{}", failed.join("\n\n"));
+    let passed = outcomes.iter().filter(|(_, o)| matches!(o, Outcome::Pass(_))).count();
+    assert!(passed >= 6, "only {passed} journeys passed: {outcomes:?}");
+}

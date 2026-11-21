@@ -7,6 +7,7 @@
 //! helmsman-compat relay    --box BIN --helmsman DIR --relay-bin BIN [--latest] [--work DIR] [--json FILE]
 //! helmsman-compat live     --box BIN --helmsman DIR --url URL --token FILE [--work DIR] [--json FILE]
 //! helmsman-compat hardware --helmsman DIR --hardware DIR [--json FILE]
+//! helmsman-compat parity   --box BIN --helmsman DIR [--manifest FILE] [--work DIR] [--json FILE]
 //! ```
 //!
 //! Exit 0 when every check passed, 1 when one failed, 2 when the cell
@@ -17,9 +18,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use helmsman_compat::report::{self, Finding};
-use helmsman_compat::{devices, hardware, relay};
+use helmsman_compat::{devices, hardware, parity, relay};
 
-const USAGE: &str = "usage: helmsman-compat devices|relay|live|hardware [options] (see the crate docs)";
+const USAGE: &str =
+    "usage: helmsman-compat devices|relay|live|hardware|parity [options] (see the crate docs)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -105,6 +107,22 @@ fn run(cmd: &str, o: &BTreeMap<String, String>, latest: bool) -> Result<Vec<Find
             )
         }
         "hardware" => hardware::check(&path(o, "helmsman")?, Path::new(&path(o, "hardware")?)),
+        "parity" => {
+            let helmsman = path(o, "helmsman")?;
+            // The candidate's features, also when the box is live's: live
+            // is held to what dev has (docs/PARITY.md).
+            let manifest = o
+                .get("manifest")
+                .map_or_else(|| Ok(helmsman.join("docs/FEATURES.md")), |_| path(o, "manifest"))?;
+            let outcomes = parity::check(&path(o, "box")?, &helmsman, &manifest, &work()?, &[])?;
+            let (findings, pending) = parity::findings(&outcomes);
+            if pending > 0 {
+                eprintln!(
+                    "helmsman-compat parity: {pending} journeys are pending (not written yet; docs/PARITY.md)"
+                );
+            }
+            Ok(findings)
+        }
         _ => Err(USAGE.into()),
     }
 }
