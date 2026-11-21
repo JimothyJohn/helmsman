@@ -835,6 +835,7 @@ fn seed_bundle(proposals: &MemProposals, change: ChangeSet) {
 
 /// As [`bench_full`], with a bundle proposal already stored (drafted before
 /// a rule existed, say): its change set.
+#[allow(clippy::too_many_lines)]
 fn bench_seeded(
     trust: Option<TrustStore>,
     market_local: bool,
