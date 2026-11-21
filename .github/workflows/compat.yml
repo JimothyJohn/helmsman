@@ -30,7 +30,9 @@ env:
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_INCREMENTAL: '0'
   COMPAT_CLONE: '1'
-  COMPAT_REPOS: ${{ runner.temp }}/repos
+  # COMPAT_REPOS ($RUNNER_TEMP/repos) is set by the first step: the runner
+  # context is not available in a workflow-level env, and GitHub refuses the
+  # whole file over it (2026-11-21).
 
 concurrency:
   group: compat
@@ -46,6 +48,7 @@ jobs:
         env:
           COMPAT_RELAY_TOKEN: ${{ secrets.COMPAT_RELAY_TOKEN }}
         run: |
+          echo "COMPAT_REPOS=$RUNNER_TEMP/repos" >> "$GITHUB_ENV"
           if [ -n "$COMPAT_RELAY_TOKEN" ]; then
             echo "have=true" >> "$GITHUB_OUTPUT"
             # The header form scripts/compat.sh derives is not a secret to
