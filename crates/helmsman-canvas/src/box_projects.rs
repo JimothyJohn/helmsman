@@ -147,6 +147,9 @@ pub enum PCall {
     ProposalAccept,
     /// `DELETE /api/device-profile/proposal`: throw it away.
     ProposalDiscard,
+    /// `POST /api/device-profile/publish`: send the saved profile to the
+    /// device library for review (answered by the Devices tab).
+    ProposalPublish,
     /// `POST /api/dropins`: the vendor's file for the agent
     /// (answered by the Devices tab, `device_vendor.rs`).
     VendorFile,
@@ -1960,6 +1963,7 @@ impl BoxProjects {
             | PCall::Proposal
             | PCall::ProposalAccept
             | PCall::ProposalDiscard
+            | PCall::ProposalPublish
             | PCall::VendorFile
             | PCall::SpecPdf(_)
             | PCall::SpecProject(_)

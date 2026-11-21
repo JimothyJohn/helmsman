@@ -2755,6 +2755,32 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   drop-in and the model read it by id. Real box: `box_projects_tests.rs`
   (`a_vendor_file_becomes_a_dropin_on_a_real_box_...`); the scripted
   refusals and roles: `ui_tests/vendor.rs`.
+- **Publishing the saved profile to the library** (`device-profile-publish`;
+  contract in `tests/device_publish.rs` here and the relay's
+  `docs/relay-protocol.md`, "`POST .../tools/publish_device_profile`"). A
+  profile an engineer saved and the tab read back from the project has
+  "Publish to the library…": it asks, names the file and says only that file
+  goes, and on "Send for review" the page sends `POST
+  /api/device-profile/publish {project, file}`. The box (`api/device_profile.rs`,
+  engineer sessions only, audited) reads `NAME.device` from the project itself,
+  never text from the request, holds it to the same `Profile::parse` and
+  bounds as a proposal, and asks the relay (`helmsman_agent::publish`, the
+  box's relay token, the agent version `--relay-publish-agent`, default
+  `helmsman/v13`, the first profile that lists the relay's
+  `publish_device_profile`). The relay holds the only GitHub credential (a
+  fine-grained token on the library repository, in its Secrets Manager) and
+  opens a **draft** pull request into `helmsman-devices` `dev`: `NAME.device`
+  beside the device's `device.toml`, which gains `profile = "NAME.device"`, and
+  `index.json` gaining `profile`, for a device the library's index already
+  lists (a device it lacks is refused with the pointer to a "New device:"
+  issue). The same publish again returns its open pull request. The box
+  answers 201 with `{number, url, created, draft, folder}` (200 when one was
+  already open) or the relay's refusal in its words (422 the library has no
+  such device, 409 it has a profile or this one was closed, 429, 503 the relay
+  has no token, 502 the relay or GitHub failed or could not be reached); the
+  page shows the request's number and a link only if it is a library pull
+  request's page, and never a GitHub credential, which no box has. No tool of
+  the agent reaches the route (`mcp::reachable`, `tools::NAMES`).
 - **Questions, not guesses.** What the document leaves out (a signal the
   box does not have, a shift that is not defined) comes back as questions
   in the chat; the relay's v3 prompt says so, and the module only names

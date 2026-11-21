@@ -36,6 +36,9 @@ const AMBER: egui::Color32 = egui::Color32::from_rgb(255, 196, 60);
 
 pub const URL: &str = "/api/device-profile/proposal";
 pub const ACCEPT_URL: &str = "/api/device-profile/proposal/accept";
+/// Sends the saved profile to the device library (card
+/// `device-profile-publish`).
+pub const PUBLISH_URL: &str = "/api/device-profile/publish";
 /// Seconds between reads of the box's proposal while the tab is open.
 pub const POLL_S: f64 = 3.0;
 /// Most channels kept of one proposal (the box's own limit).
@@ -186,6 +189,44 @@ pub struct Saved {
     pub file: String,
 }
 
+/// Where sending the saved profile to the library stands.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Publishing {
+    #[default]
+    Idle,
+    /// Asked once; waiting for the person to confirm.
+    Confirming,
+    /// The request is on its way.
+    Sending,
+    /// The library has a review request for it.
+    Sent {
+        number: u64,
+        /// The page of the request, when the box named a library page.
+        link: Option<String>,
+        /// `false`: it was already there.
+        created: bool,
+    },
+    /// Nothing was sent; why, in words.
+    Refused(String),
+}
+
+/// The page of a library review request: `https://github.com/OWNER/REPO/pull/N`
+/// with plain names, or nothing. What the box says is data: a link is
+/// only drawn when it has this shape.
+fn pull_link(url: &str, number: u64) -> Option<String> {
+    let plain = |p: &str| {
+        (1..=100).contains(&p.len())
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            && !p.bytes().all(|b| b == b'.')
+    };
+    let (owner, repo) = url
+        .strip_prefix("https://github.com/")?
+        .strip_suffix(&format!("/pull/{number}"))?
+        .split_once('/')?;
+    (plain(owner) && plain(repo)).then(|| url.to_string())
+}
+
 /// What the page knows that this section needs each frame.
 #[derive(Debug, Clone)]
 pub struct Context {
@@ -225,6 +266,8 @@ pub struct ProposalUi {
     /// A save is on its way.
     pub saving: bool,
     pub saved: Option<Saved>,
+    /// Sending the saved profile to the library.
+    pub publishing: Publishing,
     /// To tell the view: the project to read again.
     reread: Option<String>,
     ctx: Context,
@@ -311,6 +354,53 @@ impl ProposalUi {
         ));
     }
 
+    /// Sends the saved profile to the library: the box reads the file
+    /// from the project again, so only its project and name go.
+    fn publish(&mut self) {
+        let Some(s) = self.saved.clone() else {
+            return;
+        };
+        if self.publishing != Publishing::Confirming {
+            return;
+        }
+        self.publishing = Publishing::Sending;
+        self.queue.push(PReq::json(
+            PCall::ProposalPublish,
+            "POST",
+            PUBLISH_URL.into(),
+            &json!({ "project": s.project, "file": s.file }),
+        ));
+    }
+
+    fn publish_answer(&mut self, status: u16, j: &Json, body: &str) {
+        if self.publishing != Publishing::Sending {
+            return;
+        }
+        self.publishing = match status {
+            200 | 201 => match j["number"].as_u64() {
+                Some(number) => Publishing::Sent {
+                    number,
+                    link: j["url"].as_str().and_then(|u| pull_link(u, number)),
+                    created: status == 201 && j["created"] == true,
+                },
+                None => Publishing::Refused("the box's answer was not understood".into()),
+            },
+            0 => Publishing::Refused(format!("the box did not answer ({})", clean(body, 120, false))),
+            401 => Publishing::Refused("the box no longer knows this page's session. Sign in again".into()),
+            403 => {
+                Publishing::Refused("only an engineer can publish a device profile. Sign in as one".into())
+            }
+            _ => {
+                let why = clean(j["error"].as_str().unwrap_or_default(), 300, false);
+                Publishing::Refused(if why.is_empty() {
+                    format!("the box refused it ({status})")
+                } else {
+                    why
+                })
+            }
+        };
+    }
+
     fn discard(&mut self) {
         self.refusals = Refusals::default();
         self.queue.push(PReq::delete(PCall::ProposalDiscard, URL.into()));
@@ -341,6 +431,7 @@ impl ProposalUi {
         match call {
             PCall::Proposal => self.read_answer(status, &j),
             PCall::ProposalAccept => self.accept_answer(status, &j, body),
+            PCall::ProposalPublish => self.publish_answer(status, &j, body),
             PCall::ProposalDiscard => {
                 if matches!(status, 200..=299 | 404) {
                     self.forget();
@@ -413,6 +504,7 @@ impl ProposalUi {
                 if let (Some(file), Some(project)) = (file, project) {
                     self.reread = Some(project.clone());
                     self.saved = Some(Saved { project, file });
+                    self.publishing = Publishing::Idle;
                 }
                 self.forget();
             }
@@ -728,12 +820,109 @@ impl ProposalUi {
                 ui.label(RichText::new("Reading it back from the project…").color(t.muted));
             }
         }
+        // Only a profile that was saved and reads back can be sent on.
+        if matches!(
+            self.ctx
+                .saved_text
+                .as_deref()
+                .map(helmsman_project::profile_skim::skim),
+            Some(Ok(_))
+        ) {
+            self.publish_ui(ui, chrome, s);
+        }
         let b = ui
             .add(egui::Button::new("Done").min_size(Vec2::new(0.0, TAP * 0.7)))
             .tip("Closes this note. The profile stays in the project.");
         chrome.hit("proposal done", b.rect);
         if b.clicked() {
             self.saved = None;
+            self.publishing = Publishing::Idle;
+        }
+    }
+
+    /// Sending the saved profile to the device library: one button, a
+    /// confirmation that says what goes, and the result.
+    fn publish_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome, s: &Saved) {
+        let t = theme(ui);
+        ui.add_space(4.0);
+        match self.publishing.clone() {
+            Publishing::Idle | Publishing::Refused(_) => {
+                if let Publishing::Refused(why) = &self.publishing {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("Not sent: {}.", why.trim_end_matches('.')))
+                                .color(theme(ui).ink(RED)),
+                        )
+                        .wrap(),
+                    );
+                }
+                let can = self.ctx.engineer.is_ok();
+                let b = ui
+                    .add_enabled(
+                        can,
+                        egui::Button::new("Publish to the library…").min_size(Vec2::new(0.0, TAP * 0.7)),
+                    )
+                    .tip(match &self.ctx.engineer {
+                        Ok(()) => "Offers this profile to the public device library, where its maintainers review it before it is added. You confirm first; nothing is sent yet.".to_string(),
+                        Err(why) if !why.is_empty() => why.clone(),
+                        Err(_) => "Only an engineer can publish a device profile.".to_string(),
+                    });
+                chrome.hit("proposal publish", b.rect);
+                if b.clicked() {
+                    self.publishing = Publishing::Confirming;
+                }
+            }
+            Publishing::Confirming => {
+                ui.add(
+                    egui::Label::new(format!(
+                        "Send {} to the public device library? Its maintainers review it before it is added. Only this profile file is sent.",
+                        clean(&s.file, 64, false)
+                    ))
+                    .wrap(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    let send = ui
+                        .add(egui::Button::new("Send for review").min_size(Vec2::new(0.0, TAP * 0.7)))
+                        .tip("Sends the profile file as saved in the project. The library's page for it opens when the box answers.");
+                    chrome.hit("proposal publish send", send.rect);
+                    let cancel = ui
+                        .add(egui::Button::new("Cancel").min_size(Vec2::new(0.0, TAP * 0.7)))
+                        .tip("Sends nothing.");
+                    chrome.hit("proposal publish cancel", cancel.rect);
+                    if send.clicked() {
+                        self.publish();
+                    } else if cancel.clicked() {
+                        self.publishing = Publishing::Idle;
+                    }
+                });
+            }
+            Publishing::Sending => {
+                ui.label(RichText::new("Sending…").color(t.muted));
+            }
+            Publishing::Sent {
+                number,
+                link,
+                created,
+            } => {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(if created {
+                            format!("Sent. The library's maintainers have review request #{number}.")
+                        } else {
+                            format!("Already sent. Review request #{number} is still open.")
+                        })
+                        .color(t.accent)
+                        .strong(),
+                    )
+                    .wrap(),
+                );
+                if let Some(url) = link {
+                    let r = ui
+                        .hyperlink_to(RichText::new(format!("Open request #{number}")), &url)
+                        .tip("Opens the review request on the library's page in a new tab.");
+                    chrome.hit("proposal publish link", r.rect);
+                }
+            }
         }
     }
 }

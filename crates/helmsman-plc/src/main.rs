@@ -143,6 +143,12 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        profile; default helmsman/help-v1). The box runs only
                        its submit_issue for it either way; a relay that does
                        not serve it leaves Help with the box's own issue.
+  --relay-publish-agent V
+                       the agent version POST /api/device-profile/publish
+                       asks for (a profile that lists the relay's
+                       publish_device_profile; default helmsman/v13). A relay
+                       without it, or without a GitHub token, answers that
+                       publishing is not available; nothing else changes.
   --devices-index URL  the device library's index the Devices tab and the
                        agent look a found device up in (default the public
                        library's, see docs/devices/; `off` for none)
@@ -237,6 +243,7 @@ struct Opts {
     relay_design_agent: Option<String>,
     relay_tests_agent: Option<String>,
     relay_help_agent: Option<String>,
+    relay_publish_agent: Option<String>,
     ui: Option<PathBuf>,
     site: Option<String>,
     /// `--devices-index`: `None` is the default library, `Some("off")` none.
@@ -263,7 +270,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
 
 /// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`,
 /// `--relay-design-agent`,
-/// `--relay-tests-agent`, `--relay-help-agent`.
+/// `--relay-tests-agent`, `--relay-help-agent`, `--relay-publish-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
         "--relay" => {
@@ -276,6 +283,7 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
         "--relay-design-agent" => o.relay_design_agent = Some(v.to_string()),
         "--relay-tests-agent" => o.relay_tests_agent = Some(v.to_string()),
         "--relay-help-agent" => o.relay_help_agent = Some(v.to_string()),
+        "--relay-publish-agent" => o.relay_publish_agent = Some(v.to_string()),
         _ => v.clone_into(&mut o.relay_agent),
     }
     Ok(())
@@ -308,6 +316,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_design_agent: None,
         relay_tests_agent: None,
         relay_help_agent: None,
+        relay_publish_agent: None,
         ui: None,
         site: None,
         devices_index: None,
@@ -399,7 +408,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             | "--relay-explain-agent"
             | "--relay-design-agent"
             | "--relay-tests-agent"
-            | "--relay-help-agent" => {
+            | "--relay-help-agent"
+            | "--relay-publish-agent" => {
                 relay_flag(&mut o, flag, v)?;
             }
             "--policy" => once(&mut o.policy, flag, v)?,
@@ -1456,6 +1466,9 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
     setup.tests_agent = Some(o.relay_tests_agent.clone().unwrap_or_else(|| "tests-v1".into()));
     if let Some(v) = &o.relay_help_agent {
         setup.help_agent.clone_from(v);
+    }
+    if let Some(v) = &o.relay_publish_agent {
+        setup.publish_agent.clone_from(v);
     }
     Ok(Some(setup))
 }
