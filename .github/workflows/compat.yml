@@ -1,0 +1,152 @@
+# The release train, nightly (docs/COMPAT.md, "In CI"): helmsman,
+# agent-relay, helmsman-devices and helmsman-hardware held to each other's
+# contracts at their dev tips and at live, on three corners each. It also
+# re-tests dev after a merge auto-merge made, which fires no push run
+# (automerge.yml). Not --live: no deployed relay, no model spend, no LAN.
+#
+# Needs the repository secret COMPAT_RELAY_TOKEN (a fine-grained token that
+# reads JimothyJohn/agent-relay; scratch/33-compat-token.sh sets it). Without
+# it the job says so and stops green. The token is passed to scripts/compat.sh
+# alone, which uses it for agent-relay's git and gh calls and nothing else,
+# and scripts/compat-scrub.sh fails the job if it reached a file.
+#
+# A schedule fires only from the default branch, so this runs nightly once
+# dev is promoted; "Run workflow" works from any branch that has the file.
+name: Compat
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug builds of four workspaces: no debug info keeps them small and fast
+  # to restore, and the checks do not read it.
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_INCREMENTAL: '0'
+  COMPAT_CLONE: '1'
+  COMPAT_REPOS: ${{ runner.temp }}/repos
+
+concurrency:
+  group: compat
+  cancel-in-progress: false
+
+jobs:
+  compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: The relay token is set
+        id: tok
+        env:
+          COMPAT_RELAY_TOKEN: ${{ secrets.COMPAT_RELAY_TOKEN }}
+        run: |
+          if [ -n "$COMPAT_RELAY_TOKEN" ]; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+            # The header form scripts/compat.sh derives is not a secret to
+            # GitHub, so mask it too.
+            echo "::add-mask::$(printf 'x-access-token:%s' "$COMPAT_RELAY_TOKEN" | base64 | tr -d '\n')"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=compat skipped::the repository secret COMPAT_RELAY_TOKEN is not set, so agent-relay cannot be cloned; run scratch/33-compat-token.sh"
+            echo "compat skipped: the repository secret COMPAT_RELAY_TOKEN is not set (scratch/33-compat-token.sh sets it)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # The harness and the box at dev (a manual run from a branch tests that
+      # branch's harness). The other refs are read from the full history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.tok.outputs.have == 'true'
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        if: steps.tok.outputs.have == 'true'
+        with:
+          toolchain: stable
+      - name: Clone the other repositories
+        if: steps.tok.outputs.have == 'true'
+        env:
+          COMPAT_RELAY_TOKEN: ${{ secrets.COMPAT_RELAY_TOKEN }}
+        run: ./scripts/compat.sh --sync
+      # Keyed on the lock files of every ref a build comes from, so a
+      # dependency change anywhere rebuilds and nothing else does; a miss
+      # starts from the newest cache of an older set.
+      - name: Cache key
+        id: key
+        if: steps.tok.outputs.have == 'true'
+        run: |
+          lock() { git -C "$1" show "$2:Cargo.lock"; }
+          h=$( {
+            lock . origin/dev; lock . origin/master
+            lock "$COMPAT_REPOS/agent-relay" origin/dev; lock "$COMPAT_REPOS/agent-relay" origin/main
+          } | sha256sum | cut -c1-16)
+          echo "key=compat-${RUNNER_OS}-${h}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
+        if: steps.tok.outputs.have == 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/compat/build
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: compat-${{ runner.os }}-
+      - name: make compat
+        id: run
+        if: steps.tok.outputs.have == 'true'
+        env:
+          COMPAT_RELAY_TOKEN: ${{ secrets.COMPAT_RELAY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p target/compat
+          set +e
+          make compat 2>&1 | tee target/compat/run.log
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+      # Before anything leaves the runner.
+      - name: The token is in no file
+        id: scrub
+        if: ${{ !cancelled() && steps.tok.outputs.have == 'true' }}
+        env:
+          COMPAT_RELAY_TOKEN: ${{ secrets.COMPAT_RELAY_TOKEN }}
+        run: ./scripts/compat-scrub.sh
+      - name: Summary
+        if: ${{ !cancelled() && steps.tok.outputs.have == 'true' && steps.scrub.outcome == 'success' }}
+        run: |
+          {
+            echo "## $(tail -n 1 target/compat/run.log)"
+            echo
+            cat target/compat/report.md 2>/dev/null || echo "no report was written"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && steps.tok.outputs.have == 'true' && steps.scrub.outcome == 'success' }}
+        with:
+          name: compat
+          path: |
+            target/compat/report.md
+            target/compat/cells/
+          if-no-files-found: warn
+          retention-days: 30
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ !cancelled() && steps.tok.outputs.have == 'true' && steps.cache.outputs.cache-hit != 'true' && (github.event_name == 'schedule' || github.ref == 'refs/heads/dev') }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/compat/build
+          key: ${{ steps.key.outputs.key }}
+      # Exit 0 is ready, 1 is a failed check or a red candidate commit, 2 is
+      # a cell that could not run: all but 0 fail the job.
+      - name: Verdict
+        if: steps.tok.outputs.have == 'true'
+        env:
+          RC: ${{ steps.run.outputs.rc }}
+        run: |
+          [ "$RC" = 0 ] || { echo "make compat exited $RC"; tail -n 1 target/compat/run.log; exit 1; }

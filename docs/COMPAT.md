@@ -111,3 +111,38 @@ checkouts) and builds go to `target/compat/`, and the sibling repositories
 are found beside the main checkout (`COMPAT_REPOS` overrides). A cold run
 builds two boxes and two relays. Boxes and relays listen on loopback only
 and are stopped when their cell ends.
+
+## In CI
+
+`.github/workflows/compat.yml` runs `make compat` (the full matrix, not
+`--live`) every night at 03:17 UTC and on "Run workflow". It covers what no
+single repository's CI does: each repository's checks see only that
+repository, and a merge that auto-merge made fires no push run on dev, so
+nothing else re-tests dev after one. The job summary shows the verdict line
+and the report; `target/compat/report.md` and `cells/` are uploaded as the
+`compat` artifact for 30 days. Exit 1 or 2 fails the job.
+
+- **A schedule fires only from the default branch**, so the nightly starts
+  once dev is promoted; before that, run it by hand (`gh workflow run
+  compat.yml --ref <branch>`).
+- **The relay token.** agent-relay is private, so the job needs the
+  repository secret `COMPAT_RELAY_TOKEN`: a fine-grained token for that one
+  repository with Contents, Metadata and Actions read-only, 90-day expiry
+  (`scratch/33-compat-token.sh` prints the settings, checks the token and
+  stores it). Without the secret the job writes one line to its summary
+  and passes without running. An expired token fails the clone.
+- **The token stays out of files and logs.** `scripts/compat.sh` takes it
+  from `COMPAT_RELAY_TOKEN` and unsets it at once. It is sent only as an
+  `http.extraheader` in the environment of agent-relay's own `git` and `gh`
+  commands, never in a URL, an argument list or a clone's `.git/config`, and
+  no build sees it. `scripts/compat-scrub.sh` then fails the job if the token
+  or its header form is in the report, the cells, the run log, the build
+  logs or a clone's git config; the upload runs only after it passes.
+- **Cloning.** With `COMPAT_CLONE=1` (the workflow sets it), compat.sh
+  clones the missing siblings from github.com into `COMPAT_REPOS`;
+  `compat.sh --sync` does just that. Locally nothing changes.
+- **Cache.** Cargo's registry and the four builds (`target/compat/build`)
+  are cached under a key hashed from the Cargo.lock of every ref a build
+  comes from, so a build is redone only when a dependency changed
+  somewhere; a miss starts from the newest older cache. Only scheduled and
+  dev runs save it.

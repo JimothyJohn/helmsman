@@ -8,6 +8,8 @@
 #   scripts/compat.sh --candidate     only the four dev tips together
 #   scripts/compat.sh --live          also the deployed relay (one short
 #                                     model turn per box ref is spent)
+#   scripts/compat.sh --sync          only clone (COMPAT_CLONE=1) and fetch
+#                                     the sibling repositories, then stop
 #   REF overrides: --helmsman R --relay R --devices R --hardware R (the
 #   candidate side; default origin/dev each)
 #
@@ -23,22 +25,34 @@
 # The sibling repositories are found beside the main checkout
 # (COMPAT_REPOS overrides). Needs: cargo, git, gh (CI status; skipped
 # with a note when gh is not signed in).
+#
+# In CI (.github/workflows/compat.yml) there are no siblings:
+# COMPAT_CLONE=1 clones the missing ones from github.com into COMPAT_REPOS,
+# and COMPAT_RELAY_TOKEN (a fine-grained token that reads the private
+# agent-relay) is used for that repository only, as an http.extraheader in
+# the environment of its git and gh commands. It is never put in a URL, a
+# git config file or an argument list, and is unset before any build runs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 
+RELAY_TOKEN=${COMPAT_RELAY_TOKEN:-}
+unset COMPAT_RELAY_TOKEN
+
 CANDIDATE_ONLY=0
 LIVE=0
+SYNC_ONLY=0
 H_REF=origin/dev R_REF=origin/dev D_REF=origin/dev W_REF=origin/dev
 while [ $# -gt 0 ]; do
   case "$1" in
     --candidate) CANDIDATE_ONLY=1 ;;
     --live) LIVE=1 ;;
+    --sync) SYNC_ONLY=1 ;;
     --helmsman) H_REF=$2; shift ;;
     --relay) R_REF=$2; shift ;;
     --devices) D_REF=$2; shift ;;
     --hardware) W_REF=$2; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "compat.sh: unknown argument $1 (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -69,10 +83,39 @@ slug() { # GitHub owner/name of a checkout
   git -C "$1" remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'
 }
 
+# gitr REPO ARGS...: git, with the token for agent-relay (the one private
+# repository) as an extra header for this command only.
+gitr() {
+  local repo=$1; shift
+  if [ "$repo" = agent-relay ] && [ -n "$RELAY_TOKEN" ]; then
+    local h; h=$(printf 'x-access-token:%s' "$RELAY_TOKEN" | base64 | tr -d '\n')
+    GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+      GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $h" git "$@"
+  else
+    GIT_TERMINAL_PROMPT=0 git "$@"
+  fi
+}
+
+# ghr REPO ARGS...: gh, signed in with the token for agent-relay.
+ghr() {
+  local repo=$1; shift
+  if [ "$repo" = agent-relay ] && [ -n "$RELAY_TOKEN" ]; then
+    GH_TOKEN=$RELAY_TOKEN gh "$@"
+  else
+    gh "$@"
+  fi
+}
+
 for r in helmsman agent-relay helmsman-devices helmsman-hardware; do
-  [ -d "$(src_of $r)/.git" ] || [ -f "$(src_of $r)/.git" ] || { echo "compat.sh: no checkout of $r at $(src_of $r)" >&2; exit 2; }
-  git -C "$(src_of $r)" fetch -q origin
+  if [ ! -e "$(src_of $r)/.git" ] && [ "${COMPAT_CLONE:-0}" = 1 ] && [ "$r" != helmsman ]; then
+    echo "  clone $r into $REPOS"
+    mkdir -p "$REPOS"
+    gitr "$r" clone -q "https://github.com/JimothyJohn/$r.git" "$(src_of $r)" || { echo "compat.sh: cloning $r failed" >&2; exit 2; }
+  fi
+  [ -e "$(src_of $r)/.git" ] || { echo "compat.sh: no checkout of $r at $(src_of $r)" >&2; exit 2; }
+  gitr "$r" -C "$(src_of $r)" fetch -q origin || { echo "compat.sh: fetching $r failed" >&2; exit 2; }
 done
+[ "$SYNC_ONLY" = 0 ] || exit 0
 
 sha() { git -C "$(src_of "$1")" rev-parse --verify -q "$2^{commit}"; }
 
@@ -181,7 +224,7 @@ for pair in "helmsman $H_DEV" "agent-relay $R_DEV" "helmsman-devices $D_DEV" "he
   # parent, and says so: the merged tree itself was not re-run there (the
   # contracts above were run on it here).
   runs() {
-    gh run list -R "$(slug "$(src_of "$1")")" --commit "$2" --limit 20 \
+    ghr "$1" run list -R "$(slug "$(src_of "$1")")" --commit "$2" --limit 20 \
       --json workflowName,conclusion,status,createdAt \
       --jq 'group_by(.workflowName) | map(max_by(.createdAt)) | map(.workflowName + "=" + (if .status == "completed" then .conclusion else .status end)) | join(" ")' \
       2>/dev/null
