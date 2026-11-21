@@ -8,7 +8,7 @@ use eframe::egui;
 use serde_json::json;
 
 use crate::claude::Incoming;
-use crate::instruct::{Kind, Mode, PlanState};
+use crate::instruct::{Kind, Mode, PlanState, Way};
 use crate::instruct_tests::{LAMP, horn_follows, latches, mine, reply};
 use crate::playground_view::PlaygroundView;
 use crate::steps::{MAX_STEPS, big_ask, parse, plan_request, step_request};
@@ -58,10 +58,24 @@ fn last_user(v: &PlaygroundView) -> String {
         .to_string()
 }
 
+/// Sent as the page sends it, a big ask the way the notice's first
+/// button does: in steps.
 fn send(v: &mut PlaygroundView, instruction: &str) {
+    v.instruct.draft = instruction.into();
+    let way = if big_ask(instruction, Some(9)) {
+        Way::Steps
+    } else {
+        Way::Ask
+    };
+    v.send_instruction_as(&egui::Context::default(), way);
+}
+
+fn press_send(v: &mut PlaygroundView, instruction: &str) {
     v.instruct.draft = instruction.into();
     v.send_instruction(&egui::Context::default());
 }
+
+const BIG: &str = "Latch the lamp.\n- Start sets it\n- Stop resets it\n- A power cut resets it\n";
 
 fn plan_state(v: &PlaygroundView) -> Option<PlanState> {
     match &v.instruct.run.as_ref()?.mode {
@@ -337,6 +351,70 @@ fn a_big_ask_is_planned_first_and_one_step_needs_no_approval() {
         ),
     );
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
+}
+
+/// A big ask sent as typed goes nowhere: the draft stays, the notice has
+/// the time in one go, and nothing is sent until the engineer picks.
+#[test]
+fn a_big_ask_is_held_with_its_estimate_until_the_engineer_picks() {
+    let mut v = mine();
+    let before = v.link.sent.len();
+    press_send(&mut v, BIG);
+    assert_eq!(v.link.sent.len(), before, "nothing is sent");
+    assert!(v.instruct.run.is_none(), "no run");
+    assert_eq!(v.instruct.draft, BIG, "what was typed is kept");
+    let (least, most) = v.big.as_ref().expect("the notice").1;
+    assert_eq!((least, most), crate::instruct::estimate_secs(Some(9)));
+    assert_eq!(
+        crate::instruct::big_notice(least, most),
+        format!(
+            "This is a big change (about {least} to {most} s in one go). Splitting it into checked steps is faster to get right."
+        )
+    );
+    // Editing the draft takes the notice off; sending again re-offers.
+    v.instruct.draft.push_str("Also a horn.");
+    assert!(v.big.as_ref().is_some_and(|b| b.0 != v.instruct.draft));
+}
+
+#[test]
+fn splitting_a_held_big_ask_sends_the_plan_request() {
+    let mut v = mine();
+    press_send(&mut v, BIG);
+    v.send_instruction_as(&egui::Context::default(), Way::Steps);
+    assert!(v.big.is_none());
+    assert!(last_user(&v).contains("This instruction is big, so it is planned first"));
+    assert!(v.instruct.run.is_some());
+}
+
+/// Send pressed again on the unchanged draft takes the way on offer.
+#[test]
+fn sending_the_held_ask_again_takes_the_steps() {
+    let mut v = mine();
+    press_send(&mut v, BIG);
+    v.send_instruction(&egui::Context::default());
+    assert!(last_user(&v).contains("This instruction is big, so it is planned first"));
+}
+
+#[test]
+fn one_go_sends_the_instruction_as_typed() {
+    let mut v = mine();
+    press_send(&mut v, BIG);
+    v.send_instruction_as(&egui::Context::default(), Way::OneGo);
+    assert!(v.big.is_none());
+    let asked = last_user(&v);
+    assert!(!asked.contains("planned first"), "{asked}");
+    assert!(asked.starts_with(BIG.trim()), "{asked}");
+    assert!(matches!(v.instruct.run.as_ref().unwrap().mode, Mode::Direct));
+}
+
+#[test]
+fn a_small_ask_goes_at_once_with_no_notice() {
+    let mut v = mine();
+    let before = v.link.sent.len();
+    press_send(&mut v, "Latch the lamp until stop.");
+    assert!(v.big.is_none());
+    assert_eq!(v.link.sent.len(), before + 1, "sent at once");
+    assert!(!last_user(&v).contains("planned first"));
 }
 
 /// A plan request answered with code after all is checked as the answer.
