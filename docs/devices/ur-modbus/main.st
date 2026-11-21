@@ -31,10 +31,7 @@ base_mrad := INT_TO_DINT(base_turns) * 6283 + INT_TO_DINT(base_angle);
 robot_ready := robot_mode >= 5 AND NOT protective AND NOT estop;
 tick(IN := NOT tick.Q, PT := T#1s);
 IF tick.Q THEN
-  heartbeat := heartbeat + 1;
-  IF heartbeat > 1000 THEN
-    heartbeat := 1;
-  END_IF;
+  heartbeat := (heartbeat MOD 1000) + 1;  (* 1..1000, then 1 again *)
 END_IF;
 IF robot_ready THEN
   handshake := heartbeat;
