@@ -245,9 +245,15 @@ if [ "$LIVE_ONLY" = 0 ]; then
     exit 0
   else
     if [ "$YES" = 0 ]; then
+      # Read from the terminal itself, after dropping anything typed ahead
+      # during the long checks, with carriage returns and spaces taken off:
+      # on 2026-11-21 a typed "ship" was refused after `gh run watch` had
+      # run in the same command line. Whole seconds: macOS's bash is 3.2.
+      while IFS= read -r -t 1 -n 4096 _ </dev/tty 2>/dev/null; do :; done
       printf '\nPromote%s to their default branches and deploy the relay? Type ship: ' "$TODO"
-      read -r answer
-      [ "$answer" = ship ] || { echo "ship.sh: not promoted"; exit 3; }
+      IFS= read -r answer </dev/tty || answer=""
+      answer=${answer//[$'\r\t ']/}
+      [ "$answer" = ship ] || { printf 'ship.sh: not promoted (read %q)\n' "$answer"; exit 3; }
     fi
     stamp=$(date -u +%Y-%m-%dT%H%MZ)
     for r in $TODO; do
