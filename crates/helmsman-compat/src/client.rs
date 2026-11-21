@@ -68,6 +68,79 @@ pub fn call(
     Ok((status, serde_json::from_slice(&b).unwrap_or(Json::Null)))
 }
 
+/// A GET whose answer is not JSON: the status and the body's bytes (a
+/// bundle file).
+///
+/// # Errors
+/// The request could not be made or read.
+pub fn get_bytes(url: &Url, path: &str, token: Option<&str>) -> Result<(u16, Vec<u8>), String> {
+    let r = send(url, "GET", path, token, None, 30)?;
+    let status = r.status;
+    let b = r.read_body(16 << 20).map_err(|e| format!("GET {path}: {e:?}"))?;
+    Ok((status, b))
+}
+
+/// A request with a body of another type (`application/octet-stream`, a
+/// driver's `application/wasm`): the status and the answer as JSON.
+///
+/// # Errors
+/// The request could not be made or read.
+pub fn call_raw(
+    url: &Url,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    content_type: &str,
+    body: &[u8],
+) -> Result<(u16, Json), String> {
+    let auth = token.map(|t| format!("Bearer {t}"));
+    let headers: Vec<(&str, &str)> = auth.iter().map(|a| ("Authorization", a.as_str())).collect();
+    let full = format!("{}{path}", url.prefix);
+    let req = http::Request {
+        method,
+        path: &full,
+        headers: &headers,
+        json: None,
+        raw: Some((content_type, body)),
+    };
+    let r = http::send(url, &req, timeouts(60)).map_err(|e| format!("{method} {path}: {e:?}"))?;
+    let status = r.status;
+    let b = r
+        .read_body(16 << 20)
+        .map_err(|e| format!("{method} {path}: {e:?}"))?;
+    Ok((status, serde_json::from_slice(&b).unwrap_or(Json::Null)))
+}
+
+/// A JSON POST with extra headers (MCP's protocol version): the status
+/// and the answer as JSON.
+///
+/// # Errors
+/// The request could not be made or read.
+pub fn post_with_headers(
+    url: &Url,
+    path: &str,
+    token: Option<&str>,
+    extra: &[(&str, &str)],
+    body: &Json,
+) -> Result<(u16, Json), String> {
+    let auth = token.map(|t| format!("Bearer {t}"));
+    let mut headers: Vec<(&str, &str)> = auth.iter().map(|a| ("Authorization", a.as_str())).collect();
+    headers.extend_from_slice(extra);
+    let bytes = body.to_string().into_bytes();
+    let full = format!("{}{path}", url.prefix);
+    let req = http::Request {
+        method: "POST",
+        path: &full,
+        headers: &headers,
+        json: Some(&bytes),
+        raw: None,
+    };
+    let r = http::send(url, &req, timeouts(60)).map_err(|e| format!("POST {path}: {e:?}"))?;
+    let status = r.status;
+    let b = r.read_body(16 << 20).map_err(|e| format!("POST {path}: {e:?}"))?;
+    Ok((status, serde_json::from_slice(&b).unwrap_or(Json::Null)))
+}
+
 /// A POST whose 200 answer is an event stream: the status and every
 /// event (name, data) until it ends; a non-200 answer is one `body` event.
 ///
