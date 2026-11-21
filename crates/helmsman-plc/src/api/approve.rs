@@ -265,6 +265,32 @@ fn held_by_lint(ctx: &Ctx, req: &Request, label: &str, b: &crate::project::build
     ))
 }
 
+/// A bundle proposal whose modules hold a blocking lint finding: the 422
+/// refusal and its audit line, or `None` when nothing blocks it.
+fn bundle_held_by_lint(ctx: &Ctx, req: &Request, label: &str, cs: &ChangeSet) -> Option<Response> {
+    let (held, _) = super::bundle::lint_findings(cs);
+    if held.is_empty() {
+        return None;
+    }
+    let ids: Vec<&str> = held
+        .iter()
+        .filter_map(|h| h.split_whitespace().nth(1))
+        .map(|i| i.trim_end_matches(':'))
+        .collect();
+    Some(refuse(
+        ctx,
+        req,
+        422,
+        &super::bundle::lint_refusal(&held),
+        &format!(
+            "{label}: held by lint {}: {}",
+            ids.join(", "),
+            super::clean(&held.join("; "))
+        ),
+        Note::default(),
+    ))
+}
+
 /// What every apply, rollback and replay starts with: the target exists
 /// (404), the box has an approval path (501), and the target has a change
 /// set (409). The approval path, the target change set, the proposal it
@@ -291,6 +317,14 @@ fn prelude<'c>(
                     Note::default(),
                 ));
             };
+            // A bundle's modules are held by the same blocking lints as a
+            // project's deploy, whenever it was drafted.
+            if p.json["kind"] == "bundle"
+                && let Some(cs) = &p.change
+                && let Some(r) = bundle_held_by_lint(ctx, req, label, cs)
+            {
+                return Err(r);
+            }
             (p.change.clone(), Some(p))
         }
         Target::Snapshot(id) => match super::snapshot(ctx, id) {
@@ -672,6 +706,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     };
     let role = by.role();
     let who = by.who();
+    // What the install review said, for the approval's audit lines.
+    let review_note = proposal
+        .as_ref()
+        .map_or_else(String::new, |p| super::review::audit_note(&p.json));
     if ctx.box_.snapshots.is_none() {
         return refuse(
             ctx,
@@ -845,7 +883,11 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         ctx,
         req,
         202,
-        &format!("{label}: approved ({tier}) by {who}{}; applying", red_note(&red)),
+        &format!(
+            "{label}: approved ({tier}) by {who}{}{}; applying",
+            red_note(&red),
+            review_note
+        ),
         note,
     )
     .is_none()
@@ -967,6 +1009,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     }
     detail.push_str(&red_note(&red));
     detail.push_str(&overrides);
+    detail.push_str(&review_note);
     let _ = record(ctx, req, 200, &detail, note);
     Response::json(
         200,

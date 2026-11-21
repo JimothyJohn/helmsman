@@ -99,6 +99,10 @@ pub struct Setup {
     /// The agent version `POST /api/design` asks the relay for (a design
     /// profile: no tools). See [`super::design`].
     pub design_agent: String,
+    /// The agent version a marketplace install asks to review a bundle
+    /// (a profile with no tools that can only describe and refuse). See
+    /// [`super::review`].
+    pub review_agent: String,
     /// The agent version `POST /api/device-profile/publish` asks the relay
     /// for: a profile that lists the relay's `publish_device_profile` tool
     /// ([`super::device_profile::PUBLISH_AGENT`]).
@@ -128,6 +132,7 @@ impl Setup {
             help_agent: super::help::PROFILE.into(),
             help_budget: super::help::budget(),
             design_agent: super::design::PROFILE.into(),
+            review_agent: super::review::PROFILE.into(),
             publish_agent: super::device_profile::PUBLISH_AGENT.into(),
             publish_wait: (
                 super::device_profile::PUBLISH_IDLE,
@@ -690,6 +695,12 @@ impl Chat {
             retry: self.setup.retry,
             limits: self.setup.limits,
         }
+    }
+
+    /// The relay as the install review uses it: the review profile, short
+    /// timeouts ([`super::review::relay_config`]).
+    pub(super) fn review_relay(&self) -> relay::Config {
+        super::review::relay_config(&self.setup.relay, &self.setup.review_agent)
     }
 
     /// The design step's conversations.
