@@ -14,7 +14,8 @@ const FILE: &str = "docs/FEATURES.md";
 
 #[test]
 fn every_tab_is_under_a_feature() {
-    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(FILE)).unwrap();
+    let text =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(FILE)).unwrap();
     let m = Manifest::parse(&text).unwrap_or_else(|e| panic!("{FILE} does not read:\n{}", e.join("\n")));
     let have: BTreeSet<Surface> = Pane::ALL
         .iter()
@@ -22,7 +23,15 @@ fn every_tab_is_under_a_feature() {
         .chain(Bottom::ALL.iter().map(|b| b.key()))
         .map(|k| Surface::Tab(k.into()))
         .collect();
-    assert_eq!(have.len(), Pane::ALL.len() + Bottom::ALL.len(), "two tabs share a key");
+    assert_eq!(
+        have.len(),
+        Pane::ALL.len() + Bottom::ALL.len(),
+        "two tabs share a key"
+    );
     let (missing, stale) = m.coverage(&have, |s| matches!(s, Surface::Tab(_)));
-    assert!(missing.is_empty() && stale.is_empty(), "{}", features::explain(FILE, &missing, &stale));
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "{}",
+        features::explain(FILE, &missing, &stale)
+    );
 }

@@ -264,21 +264,25 @@ impl Manifest {
 /// remove.
 #[must_use]
 pub fn explain(file: &str, missing: &[Surface], stale: &[Surface]) -> String {
+    use std::fmt::Write as _;
+    // Writing to a String cannot fail.
     let mut m = String::new();
     if !missing.is_empty() {
-        m.push_str(&format!(
-            "{file} has no feature for these (add each to a row, with its journey; docs/PARITY.md):\n"
-        ));
+        let _ = writeln!(
+            m,
+            "{file} has no feature for these (add each to a row, with its journey; docs/PARITY.md):"
+        );
         for s in missing {
-            m.push_str(&format!("  `{s}`\n"));
+            let _ = writeln!(m, "  `{s}`");
         }
     }
     if !stale.is_empty() {
-        m.push_str(&format!(
-            "{file} names these and the code no longer has them (remove them):\n"
-        ));
+        let _ = writeln!(
+            m,
+            "{file} names these and the code no longer has them (remove them):"
+        );
         for s in stale {
-            m.push_str(&format!("  `{s}`\n"));
+            let _ = writeln!(m, "  `{s}`");
         }
     }
     m
