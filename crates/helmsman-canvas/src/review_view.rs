@@ -13,6 +13,7 @@ use eframe::egui::{
 use helmsman_diagram::diff::{self, Change, Line};
 
 use crate::diff_ui::Kind;
+use crate::install_review::{BundleReview, State, plain};
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, in_port_at, out_port, out_port_at};
 use helmsman_diagram::{Diagram, NodeId};
 
@@ -213,6 +214,8 @@ impl ReviewView {
         self.login_ui(ui);
         ui.separator();
         self.drafts_ui(ui);
+        ui.separator();
+        self.install_ui(ui);
     }
 
     /// Who is approving: signed in, or the way in this box takes (a user
@@ -446,14 +449,61 @@ impl ReviewView {
         }
     }
 
+    /// The install form: a marketplace's index address and a bundle's name.
+    /// The box fetches it, has the Agent read it, and makes a proposal.
+    fn install_ui(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
+        ui.label(RichText::new("Install from a marketplace").strong())
+            .tip("The box fetches the bundle from the marketplace's signed index and checks it. The Agent then reads it and can refuse. What passes becomes a draft here, approved like any other.");
+        // Capped to the panel: a long address must not widen it.
+        let width = (ui.available_width() - 12.0).max(80.0);
+        ui.label(RichText::new("Index address").small().color(t.muted));
+        let index = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.state.install.index)
+                    .desired_width(width)
+                    .hint_text("https://…/index.json"),
+            )
+            .tip("The address of the marketplace's index.json. Its signature must be one of a publisher this box trusts.");
+        self.rects.push(("install index".into(), index.rect));
+        ui.label(RichText::new("Bundle").small().color(t.muted));
+        let name = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.state.install.name)
+                    .desired_width(width)
+                    .hint_text("name in the index"),
+            )
+            .tip("The bundle's name as the index lists it. The newest version is taken.");
+        self.rects.push(("install name".into(), name.rect));
+        let busy = self.state.install.busy;
+        let go = ui
+            .add_enabled(!busy, egui::Button::new(if busy { "Reading the bundle…" } else { "Install" }))
+            .tip(if busy {
+                "The box is fetching and reviewing the bundle."
+            } else {
+                "Fetches the bundle, has the Agent read it, and makes a draft if the Agent does not refuse. Nothing runs until it is approved."
+            });
+        self.rects.push(("install go".into(), go.rect));
+        if go.clicked() {
+            self.state.install_bundle();
+        }
+    }
+
     fn center(&mut self, ui: &mut egui::Ui, now: f64) {
         let t = theme(ui);
         let signed_in = self.state.signed_in();
+        let mut out = Out {
+            signed_in: signed_in.clone(),
+            ..Out::default()
+        };
+        install_result_ui(ui, &mut self.state, &mut out);
         let Some(o) = self.state.open.as_mut() else {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("Pick a proposal to review it.").color(t.muted));
             });
+            self.rects.extend(out.rects);
+            self.act(out.act, now);
             return;
         };
         header(ui, o);
@@ -478,6 +528,15 @@ impl ReviewView {
             };
             ui.label(RichText::new(range).color(t.muted));
         }
+        if o.json["kind"] == "bundle" {
+            section(ui, "Bundle");
+            bundle_ui(ui, o);
+            if let Some(r) = o.bundle_review() {
+                section(ui, "The Agent's review")
+                    .tip("The Agent read the bundle's modules before the box made this draft. It can only describe and refuse; the approval below is the box's own.");
+                review_ui(ui, &r);
+            }
+        }
         if !o.manifest.is_empty() {
             section(ui, "Manifest");
             manifest(ui, o);
@@ -497,10 +556,6 @@ impl ReviewView {
                 diagram(ui, d, &mut self.pou, &mut self.cam);
             }
         }
-        let mut out = Out {
-            signed_in,
-            ..Out::default()
-        };
         section(ui, "Sim replay");
         replay_ui(ui, &o.step, &mut out);
         if let Some(v) = o.values() {
@@ -529,10 +584,17 @@ impl ReviewView {
             );
         }
         self.rects.extend(out.rects);
-        for a in out.act {
+        self.act(out.act, now);
+    }
+
+    /// Carries out what the frame's clicks asked for.
+    fn act(&mut self, acts: Vec<Act>, now: f64) {
+        for a in acts {
             match a {
                 Act::Replay(t) => self.state.replay(&t),
                 Act::Approve(t) => self.state.approve(&t, now),
+                Act::GoOn => self.state.install_without_review(),
+                Act::Dismiss => self.state.install.dismiss(),
             }
         }
     }
@@ -542,6 +604,10 @@ impl ReviewView {
 enum Act {
     Replay(Target),
     Approve(Target),
+    /// "Install without a review" on a stopped install.
+    GoOn,
+    /// Close the install's result.
+    Dismiss,
 }
 
 /// What drawing collected: clicks to act on, and where the controls are.
@@ -590,6 +656,12 @@ fn header(ui: &mut egui::Ui, o: &Open) {
             None => badge(ui, "no tier", (t.rule, t.fg)),
         }
         let title = match o.json["kind"].as_str() {
+            Some("bundle") => format!(
+                "#{} bundle {} {}",
+                o.id,
+                o.json["bundle"]["name"].as_str().unwrap_or("?"),
+                o.json["bundle"]["version"].as_str().unwrap_or("")
+            ),
             Some("module") => format!(
                 "#{} {} module {}",
                 o.id,
@@ -642,6 +714,124 @@ fn header(ui: &mut egui::Ui, o: &Open) {
     if let Some(a) = o.json["manifest"]["author"].as_str() {
         ui.label(RichText::new(format!("by {a}")).small().color(t.muted));
     }
+}
+
+/// What the box says about a bundle draft: who made it, who vouches for
+/// it, what it can touch.
+fn bundle_ui(ui: &mut egui::Ui, o: &Open) {
+    let t = theme(ui);
+    let b = &o.json["bundle"];
+    if let Some(d) = b["description"].as_str() {
+        ui.label(plain(d));
+    }
+    ui.label(
+        RichText::new(format!("by {}", plain(b["author"].as_str().unwrap_or("?"))))
+            .small()
+            .color(t.muted),
+    );
+    if let Some(l) = b["trust_line"].as_str() {
+        ui.label(RichText::new(plain(l)).color(t.muted));
+    }
+    if let Some(s) = b["capabilities"]["summary"].as_str() {
+        ui.label(RichText::new(format!("The box computed from the code: {}.", plain(s))).color(t.muted));
+    }
+}
+
+/// The Agent's review: what it came to, then what the bundle touches.
+fn review_ui(ui: &mut egui::Ui, r: &BundleReview) {
+    let t = theme(ui);
+    ui.horizontal_wrapped(|ui| {
+        match (r.state, r.risk.as_deref()) {
+            (State::Refused, _) => badge(ui, "advises against", (RED, BLACK)),
+            (State::Reviewed, Some(risk)) => badge(ui, &format!("{risk} risk"), risk_colors(&t, risk)),
+            (State::NotReviewed, _) => badge(ui, "not reviewed", (YELLOW, BLACK)),
+            _ => badge(ui, "no review", (t.rule, t.fg)),
+        }
+        ui.label(RichText::new(r.headline()).strong());
+    });
+    if r.read() {
+        if !r.summary.is_empty() {
+            ui.add_space(4.0);
+            ui.label(&r.summary);
+        }
+        for (title, entries) in &r.lists {
+            ui.add_space(2.0);
+            ui.label(RichText::new(*title).small().color(t.muted));
+            if entries.is_empty() {
+                ui.label(RichText::new("· none").color(t.muted));
+            }
+            for e in entries {
+                ui.label(format!("· {e}"));
+            }
+        }
+        if !r.reason.is_empty() {
+            ui.add_space(4.0);
+            let what = if r.state == State::Refused {
+                "Why: "
+            } else {
+                "Before you approve: "
+            };
+            ui.label(RichText::new(format!("{what}{}", r.reason)).strong());
+        }
+    }
+}
+
+/// The risk badge: yellow for medium, red for high, plain for low.
+fn risk_colors(t: &Theme, risk: &str) -> (Color32, Color32) {
+    match risk {
+        "high" => (RED, BLACK),
+        "medium" => (YELLOW, BLACK),
+        _ => (t.rule, t.fg),
+    }
+}
+
+/// The last install's result, above whatever is open: a stop with the
+/// Agent's reading and the way on, the proposal it made, or a plain
+/// refusal.
+fn install_result_ui(ui: &mut egui::Ui, state: &mut Review, out: &mut Out) {
+    let t = theme(ui);
+    if !state.install.has_result() {
+        return;
+    }
+    let engineer = state.engineer();
+    section(ui, "Install");
+    if let Some(s) = &state.install.stopped {
+        ui.label(RichText::new(format!("{} did not install", s.bundle)).heading());
+        ui.label(&s.error);
+        review_ui(ui, &s.review);
+        if s.can_go_on() {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "The box checked the bundle's signature and content as it always does. You can go on without a review: the install is recorded as made without one, and the approval still applies in full.",
+                )
+                .color(t.muted),
+            );
+            let go = ui
+                .add_enabled(engineer, egui::Button::new("Install without a review"))
+                .tip(if engineer {
+                    "Makes the draft without the Agent's reading. It is recorded as installed without a review, with who went on."
+                } else {
+                    "Needs an engineer signed in (left panel)."
+                });
+            out.rects.push(("install go on".into(), go.rect));
+            if go.clicked() {
+                out.act.push(Act::GoOn);
+            }
+        }
+    } else if let Some(e) = &state.install.error {
+        ui.colored_label(crate::theme::theme(ui).ink(RED), e);
+    } else if let Some(id) = state.install.installed {
+        ui.label(format!(
+            "Made draft #{id}. Its review is below; nothing runs until it is approved."
+        ));
+    }
+    let close = ui.small_button("Dismiss").tip("Closes this result.");
+    out.rects.push(("install dismiss".into(), close.rect));
+    if close.clicked() {
+        out.act.push(Act::Dismiss);
+    }
+    ui.separator();
 }
 
 fn manifest(ui: &mut egui::Ui, o: &Open) {

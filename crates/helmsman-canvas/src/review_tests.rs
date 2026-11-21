@@ -63,7 +63,7 @@ fn explain_rides_the_same_cookie_and_is_refused_without_it() {
 }
 
 pub const OPERATOR: &str = "op-246810";
-const ENGINEER: &str = "eng-135797";
+pub const ENGINEER: &str = "eng-135797";
 
 const MANIFEST: &str = "\
 name     conveyor
@@ -192,9 +192,25 @@ fn wait(what: &str, mut ok: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
+/// A marketplace on the bench: the publishers the box trusts, and the
+/// relay the Agent's review goes to (none: no review is possible).
+pub struct Market {
+    pub trust: helmsman_plc::bundle::TrustStore,
+    pub chat: Option<helmsman_plc::api::chat::Setup>,
+}
+
 impl Bench {
-    #[allow(clippy::too_many_lines)]
     pub fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// A box that installs from a marketplace served on loopback.
+    pub fn with_market(m: Market) -> Self {
+        Self::build(Some(m))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn build(mut market: Option<Market>) -> Self {
         let d = Defaults {
             period: Duration::from_millis(2),
             i: Window::new(0, 0),
@@ -295,9 +311,21 @@ impl Bench {
             running: Some(running()),
             snapshots: Some(Mutex::new(Store::open(&store).unwrap())),
             approval: Some(approval),
-            chat: None,
+            chat: market.as_mut().and_then(|m| m.chat.take()),
         };
-        let api = Api::start(cfg, shared).unwrap();
+        let api = match market {
+            None => Api::start(cfg, shared).unwrap(),
+            Some(m) => Api::start_with(
+                cfg,
+                shared,
+                helmsman_plc::api::Extras {
+                    trust: Some(m.trust),
+                    market_local: true,
+                    ..helmsman_plc::api::Extras::default()
+                },
+            )
+            .unwrap(),
+        };
         let addr = api.addr();
         let stop = Arc::new(AtomicBool::new(false));
         let ticks = Arc::new(AtomicU64::new(0));
