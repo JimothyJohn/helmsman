@@ -1,5 +1,5 @@
 //! A Universal Robot by its profile over Modbus TCP, against a simulator
-//! loaded with what URSim (PolyScope X 10.13) answered on 2026-11-20: its
+//! loaded with what UR's simulator (software 10.13) answered on 2026-11-20: its
 //! register values and the holes in its map, where a request that touches
 //! an address the robot does not have is refused whole (Illegal Data
 //! Address). docs/devices/universal-robots.md has the capture.

@@ -179,6 +179,21 @@ impl Identification {
     }
 }
 
+/// The table slice `start` and `qty` address, when it lies inside a table
+/// of `len` and touches none of `holes`.
+fn range(
+    holes: &[std::ops::RangeInclusive<u16>],
+    len: usize,
+    start: u16,
+    qty: u16,
+) -> Option<std::ops::Range<usize>> {
+    let end = usize::from(start) + usize::from(qty);
+    let hole = holes
+        .iter()
+        .any(|h| usize::from(*h.start()) < end && usize::from(*h.end()) >= usize::from(start));
+    (end <= len && !hole).then_some(usize::from(start)..end)
+}
+
 impl State {
     #[must_use]
     pub fn new(size: u16) -> Self {
@@ -231,13 +246,6 @@ impl State {
         let ex = |code: u8| vec![fc | 0x80, code];
         let word = |i: usize| pdu.get(i..i + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
         let (bit_holes, register_holes) = (&self.absent_bits, &self.absent_registers);
-        let range = |holes: &[std::ops::RangeInclusive<u16>], len: usize, start: u16, qty: u16| {
-            let end = usize::from(start) + usize::from(qty);
-            let hole = holes
-                .iter()
-                .any(|h| usize::from(*h.start()) < end && usize::from(*h.end()) >= usize::from(start));
-            (end <= len && !hole).then_some(usize::from(start)..end)
-        };
         match fc {
             READ_COILS | READ_DISCRETE_INPUTS => {
                 let (Some(start), Some(qty), 5) = (word(1), word(3), pdu.len()) else {
