@@ -175,16 +175,21 @@ fi
 
 STATUS=0
 ROWS=""
-# cell NAME ARGS... : runs one helmsman-compat cell, keeps its output
+# cell NAME ARGS... : runs one helmsman-compat cell, keeps its output in
+# cells/<file>.{json,txt}, the file named from NAME with only letters,
+# digits, dots, dashes and underscores ("devices: box@dev + devices@dev" is
+# devices_box-dev_devices-dev): upload-artifact refuses a colon, and no
+# file name here has a space.
 cell() {
   local name=$1; shift
+  local file; file=$(printf '%s' "$name" | tr '@' '-' | tr -cs 'A-Za-z0-9.-' '_')
   echo "== $name"
   local rc=0
-  "$CHECK" "$@" --json "$OUT/cells/$name.json" >"$OUT/cells/$name.txt" 2>&1 || rc=$?
-  grep -E '^(FAIL|[0-9]+ checks)' "$OUT/cells/$name.txt" || tail -5 "$OUT/cells/$name.txt"
+  "$CHECK" "$@" --json "$OUT/cells/$file.json" >"$OUT/cells/$file.txt" 2>&1 || rc=$?
+  grep -E '^(FAIL|[0-9]+ checks)' "$OUT/cells/$file.txt" || tail -5 "$OUT/cells/$file.txt"
   local verdict=pass
   case $rc in 0) ;; 1) verdict=FAIL; [ $STATUS -lt 1 ] && STATUS=1 ;; *) verdict="could not run"; STATUS=2 ;; esac
-  ROWS="$ROWS| $name | $verdict | $(tail -1 "$OUT/cells/$name.txt") |
+  ROWS="$ROWS| $name | $verdict | $(tail -1 "$OUT/cells/$file.txt") |
 "
 }
 
