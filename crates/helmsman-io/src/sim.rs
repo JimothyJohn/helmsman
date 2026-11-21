@@ -86,6 +86,13 @@ pub struct State {
     pub input: Vec<u16>,
     /// `(coil, discrete input)`: writing the coil sets the input.
     pub wires: Vec<(u16, u16)>,
+    /// Bit addresses (coils and discrete inputs) the device does not
+    /// have: a request that touches one, alone or inside a longer range,
+    /// is Illegal Data Address for the whole request. A Universal Robot's
+    /// map has such holes (docs/devices/universal-robots.md).
+    pub absent_bits: Vec<std::ops::RangeInclusive<u16>>,
+    /// The same for registers (holding and input).
+    pub absent_registers: Vec<std::ops::RangeInclusive<u16>>,
     /// Applied to the next requests, one per request, front first.
     pub faults: Vec<Fault>,
     /// Requests answered, faults included.
@@ -223,9 +230,13 @@ impl State {
         };
         let ex = |code: u8| vec![fc | 0x80, code];
         let word = |i: usize| pdu.get(i..i + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
-        let range = |len: usize, start: u16, qty: u16| {
+        let (bit_holes, register_holes) = (&self.absent_bits, &self.absent_registers);
+        let range = |holes: &[std::ops::RangeInclusive<u16>], len: usize, start: u16, qty: u16| {
             let end = usize::from(start) + usize::from(qty);
-            (end <= len).then_some(usize::from(start)..end)
+            let hole = holes
+                .iter()
+                .any(|h| usize::from(*h.start()) < end && usize::from(*h.end()) >= usize::from(start));
+            (end <= len && !hole).then_some(usize::from(start)..end)
         };
         match fc {
             READ_COILS | READ_DISCRETE_INPUTS => {
@@ -240,7 +251,7 @@ impl State {
                 } else {
                     &self.discrete
                 };
-                let Some(r) = range(table.len(), start, qty) else {
+                let Some(r) = range(bit_holes, table.len(), start, qty) else {
                     return ex(ILLEGAL_DATA_ADDRESS);
                 };
                 let mut bytes = vec![0u8; usize::from(qty).div_ceil(8)];
@@ -263,7 +274,7 @@ impl State {
                 } else {
                     &self.input
                 };
-                let Some(r) = range(table.len(), start, qty) else {
+                let Some(r) = range(register_holes, table.len(), start, qty) else {
                     return ex(ILLEGAL_DATA_ADDRESS);
                 };
                 let mut out = vec![fc, u8::try_from(qty * 2).expect("at most 250")];
@@ -279,10 +290,10 @@ impl State {
                 if v != COIL_ON && v != COIL_OFF {
                     return ex(ILLEGAL_DATA_VALUE);
                 }
-                let Some(slot) = self.coils.get_mut(usize::from(addr)) else {
+                if range(bit_holes, self.coils.len(), addr, 1).is_none() {
                     return ex(ILLEGAL_DATA_ADDRESS);
-                };
-                *slot = v == COIL_ON;
+                }
+                self.coils[usize::from(addr)] = v == COIL_ON;
                 self.apply_wires();
                 pdu.to_vec()
             }
@@ -290,10 +301,10 @@ impl State {
                 let (Some(addr), Some(v), 5) = (word(1), word(3), pdu.len()) else {
                     return ex(ILLEGAL_DATA_VALUE);
                 };
-                let Some(slot) = self.holding.get_mut(usize::from(addr)) else {
+                if range(register_holes, self.holding.len(), addr, 1).is_none() {
                     return ex(ILLEGAL_DATA_ADDRESS);
-                };
-                *slot = v;
+                }
+                self.holding[usize::from(addr)] = v;
                 pdu.to_vec()
             }
             WRITE_MULTIPLE_REGISTERS => {
@@ -307,7 +318,7 @@ impl State {
                 {
                     return ex(ILLEGAL_DATA_VALUE);
                 }
-                let Some(r) = range(self.holding.len(), start, qty) else {
+                let Some(r) = range(register_holes, self.holding.len(), start, qty) else {
                     return ex(ILLEGAL_DATA_ADDRESS);
                 };
                 for (slot, c) in self.holding[r].iter_mut().zip(pdu[6..].as_chunks::<2>().0) {
