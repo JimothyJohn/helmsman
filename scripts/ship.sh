@@ -366,12 +366,14 @@ if [ -n "$merge" ]; then
   wt=$MAIN/.claude/worktrees/$(echo "$br" | tr '/' '-')
   git -C "$MAIN" worktree add -q -b "$br" "$wt" origin/master &&
     git -C "$wt" revert --no-edit -m 1 "$merge" >/dev/null &&
-    git -C "$wt" push -q -u origin "$br" &&
+    git -C "$wt" -c http.postBuffer=524288000 push -q -u origin "$br" &&
     gh pr create --repo "$(slug helmsman)" --draft --base master --head "$br" \
       --title "Revert the promotion of $(git -C "$MAIN" log -1 --format=%cs "$merge"): live regressed" \
       --body "make ship found features that pass on the candidate and fail live:$regress. Report: target/ship/report.md in the checkout that ran it. Merge to take master back to before the promotion, or close and fix forward. Opened as a draft by scripts/ship.sh; nothing was reset or force-pushed." ||
     echo "ship.sh: opening the revert pull request failed; revert by hand: git revert -m 1 $merge on master" >&2
   git -C "$MAIN" worktree remove --force "$wt" 2>/dev/null
+  # Pushed or not, the local branch is done with (one was left on 2026-11-21).
+  git -C "$MAIN" branch -q -D "$br" 2>/dev/null
 else
   echo "ship.sh: helmsman was not promoted by this run, so there is nothing of its to revert; the regression is in the relay, the device library or the site." >&2
 fi
