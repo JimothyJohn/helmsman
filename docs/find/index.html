@@ -298,7 +298,7 @@ function answer(asking,best,raw,id,top){
     say.appendChild(el('small',null,'Name it and it goes on the list; send one and the bench maps it.'));
   }
   btn('Name it',issue('New device: '+raw.slice(0,80),'Vendor:\nModel: '+raw.slice(0,80)+'\nProduct page:\nProtocols (EtherNet/IP, Modbus TCP, other):\nI have a unit and can run a read-only test: yes / no\nI could send a unit to the bench: yes / no\n'),best===0);
-  btn('Send one, $50',issue('Unit offer: '+raw.slice(0,80),'Device (vendor and model): '+raw.slice(0,80)+'\nFirmware, if known:\nShips from (country):\nPowers up and worked when last used: yes / no\nWant it back after testing: yes / no\n\nNotes:\n\n(No address or payment details here. Those are arranged in private after a yes.)\n'));
+  btn('Send one, get paid',issue('Unit offer: '+raw.slice(0,80),'Device (vendor and model): '+raw.slice(0,80)+'\nFirmware, if known:\nShips from (country):\nPowers up and worked when last used: yes / no\nWant it back after testing: yes / no\n\nNotes:\n\n(No address or payment details here. Those are arranged in private after a yes.)\n'));
 }
 function vendors(){
   const box=$('#vendors'),counts=new Map();all.forEach(o=>counts.set(o.vendor,(counts.get(o.vendor)||0)+1));
