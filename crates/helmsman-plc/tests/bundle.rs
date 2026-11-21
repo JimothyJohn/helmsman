@@ -819,6 +819,20 @@ fn bench_full(trust: Option<TrustStore>, market_local: bool, chat: Option<chat::
     bench_seeded(trust, market_local, chat, None)
 }
 
+/// Stores a draft bundle proposal over the running set with `change`'s
+/// modules, as if drafted before the box's current rules.
+fn seed_bundle(proposals: &MemProposals, change: ChangeSet) {
+    use helmsman_plc::api::Proposals as _;
+    let id = proposals.reserve().unwrap();
+    let mut target = running();
+    target.modules.extend(change.modules);
+    proposals.insert(helmsman_plc::api::store::Stored {
+        id,
+        json: json!({ "id": id, "kind": "bundle", "status": "draft", "base": running().id().to_string() }),
+        change: Some(target),
+    });
+}
+
 /// As [`bench_full`], with a bundle proposal already stored (drafted before
 /// a rule existed, say): its change set.
 fn bench_seeded(
@@ -903,15 +917,7 @@ fn bench_seeded(
     };
     let proposals = MemProposals::new(100);
     if let Some(change) = seed {
-        use helmsman_plc::api::Proposals as _;
-        let id = proposals.reserve().unwrap();
-        let mut target = running();
-        target.modules.extend(change.modules);
-        proposals.insert(helmsman_plc::api::store::Stored {
-            id,
-            json: json!({ "id": id, "kind": "bundle", "status": "draft", "base": running().id().to_string() }),
-            change: Some(target),
-        });
+        seed_bundle(&proposals, change);
     }
     let shared = Shared {
         catalog,
