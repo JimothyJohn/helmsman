@@ -13,7 +13,9 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   `cfg(target_os = "linux")` is never compiled here and three casts in it
   failed CI after a green local gate (2026-11-11). New `cfg(target_os)`
   code gets its other half linted the same way in `lint.sh`.
-- `cargo test --workspace --locked`
+- `cargo test --workspace --locked`. A new API route, canvas tab or relay
+  profile fails it until docs/FEATURES.md has it under a feature with a
+  journey (docs/PARITY.md, "Adding a feature").
 - After a change the native suite cannot see (anything behind
   `cfg(target_arch = "wasm32")`, panel layout): `make canvas-web` then
   `make canvas-smoke` (`BOX=1` for the box-served page too) drives the

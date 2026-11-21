@@ -34,6 +34,13 @@ live-smoke:  ## Drive the live public page headless as a first visit: drawn, mov
 compat:  ## The release train: helmsman, agent-relay, helmsman-devices and helmsman-hardware held to each other's contracts at dev and live (docs/COMPAT.md; ARGS=--live, --candidate).
 	./scripts/compat.sh $(ARGS)
 
+parity:  ## Every feature in docs/FEATURES.md walked on this checkout's box (docs/PARITY.md; ARGS=--relay-bin BIN for the agent journeys).
+	cargo build -q --locked -p helmsman-plc -p helmsman-compat
+	./target/debug/helmsman-compat parity --box target/debug/helmsman-plc --helmsman . --work target/parity $(ARGS)
+
+ship:  ## Promote the release train and show live does what dev does, feature by feature (docs/PARITY.md; ARGS=--dry-run, --yes, --live-only).
+	./scripts/ship.sh $(ARGS)
+
 # ---- Interop targets --------------------------------------------------------
 
 opener-up:  ## Build and start the OpENer adapter container (ports 44818 tcp/udp, 2222 udp).

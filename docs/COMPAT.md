@@ -103,6 +103,9 @@ from an old `master` is checked by the same code as one built at the tip.
 - Real devices and the node board itself. Those are the benches
   (`scripts/bench-e1213.sh`, helmsman-hardware `docs/bringup-test.md`).
 - What the site and the try box serve. That is `make live-state`.
+- Whether each feature works end to end on live as it does on dev. That
+  is the vertical check, `make parity` and `make ship` (docs/PARITY.md),
+  which runs this one first.
 
 ## Running it
 
