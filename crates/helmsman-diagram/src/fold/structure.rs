@@ -61,7 +61,6 @@ use std::collections::HashMap;
 use helmsman_iec::ast::{self, Stmt, StmtKind};
 
 use super::{Fold, FoldKind};
-use crate::edit::{offset_in, skip_trivia};
 use crate::model::Diagram;
 
 /// The longest section title, in characters.
@@ -319,4 +318,50 @@ pub fn statements(d: &Diagram, src: &str) -> Vec<Fold> {
         }
     }
     out
+}
+
+/// The byte offset of a 1-based line and column (the lexer counts bytes).
+fn offset_in(s: &str, p: ast::Pos) -> usize {
+    let mut at = 0;
+    for _ in 1..p.line {
+        match s.as_bytes()[at..].iter().position(|&b| b == b'\n') {
+            Some(i) => at += i + 1,
+            None => return s.len(),
+        }
+    }
+    (at + (p.col as usize).saturating_sub(1)).min(s.len())
+}
+
+/// Steps over whitespace, `(* *)` and `/* */` comments, `//` comments and
+/// `{ }` pragmas, as the lexer does.
+fn skip_trivia(b: &[u8], mut i: usize) -> usize {
+    fn close(b: &[u8], from: usize, c: u8) -> usize {
+        let mut i = from;
+        while i + 1 < b.len() {
+            if b[i] == b'*' && b[i + 1] == c {
+                return i + 2;
+            }
+            i += 1;
+        }
+        b.len()
+    }
+    loop {
+        match (b.get(i), b.get(i + 1)) {
+            (Some(c), _) if c.is_ascii_whitespace() => i += 1,
+            (Some(b'('), Some(b'*')) => i = close(b, i + 2, b')'),
+            (Some(b'/'), Some(b'*')) => i = close(b, i + 2, b'/'),
+            (Some(b'/'), Some(b'/')) => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            (Some(b'{'), _) => {
+                while i < b.len() && b[i] != b'}' {
+                    i += 1;
+                }
+                i = (i + 1).min(b.len());
+            }
+            _ => return i,
+        }
+    }
 }

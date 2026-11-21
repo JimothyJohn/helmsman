@@ -10,6 +10,9 @@
 #     demo function, its DemoUrl output, no trailing slash): the Agent tab
 #     then sends there and has no key field. Unset: visitors paste their
 #     own model API key, as before. The script says which it built.
+#   HELMSMAN_DESIGN_URL=https://...  the design entry's address (the relay's
+#     DemoDesignUrl, no trailing slash): the Agent tab then offers "Design a
+#     machine" while that entry says it is open. Unset: no design entry.
 # Needs: trunk (`cargo install trunk --locked`); adds the wasm32 target.
 # The built files are committed: Pages builds nothing, it serves docs/ as is,
 # and nothing goes live until dev is merged to master.
@@ -28,6 +31,17 @@ if [ -n "$free" ]; then
         exit 1
     fi
     export HELMSMAN_FREE_CHAT_URL="$free"
+fi
+# The design entry is a second relay function with its own address: the
+# same rules, and it opens the page's connect-src a second time.
+design="${HELMSMAN_DESIGN_URL:-}"
+design="${design%/}"
+if [ -n "$design" ]; then
+    if ! printf '%s' "$design" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
+        echo "HELMSMAN_DESIGN_URL must be https://host (no path): got '$design'" >&2
+        exit 1
+    fi
+    export HELMSMAN_DESIGN_URL="$design"
 fi
 rustup target add wasm32-unknown-unknown >/dev/null
 # Smaller wasm for a public page (6.2 MB -> 4.7 MB on 2026-10-31), for this
@@ -51,18 +65,30 @@ ls "$dist"/*.wasm >/dev/null 2>&1 || { echo "trunk produced no .wasm in $dist" >
 key_csp="connect-src 'self' https://api.anthropic.com;"
 grep -qF "$key_csp" "$dist/index.html" \
     || { echo "the page's connect-src is not the one this script knows; update both" >&2; exit 1; }
-if [ -n "$free" ]; then
-    sed -i.bak "s|$key_csp|connect-src 'self' $free;|" "$dist/index.html"
+connect="'self' https://api.anthropic.com"
+[ -z "$free" ] || connect="'self' $free"
+[ -z "$design" ] || connect="$connect $design"
+if [ "connect-src $connect;" != "$key_csp" ]; then
+    sed -i.bak "s|$key_csp|connect-src $connect;|" "$dist/index.html"
     rm -f "$dist/index.html.bak"
-    grep -qF "connect-src 'self' $free;" "$dist/index.html" \
-        || { echo "could not set the page's connect-src to $free" >&2; exit 1; }
-    case "$free" in
-        https://*) ;;
-        *) echo "warning: $free is not https; a page served over https cannot call it" >&2 ;;
+    grep -qF "connect-src $connect;" "$dist/index.html" \
+        || { echo "could not set the page's connect-src to $connect" >&2; exit 1; }
+fi
+for url in "$free" "$design"; do
+    case "$url" in
+        "" | https://*) ;;
+        *) echo "warning: $url is not https; a page served over https cannot call it" >&2 ;;
     esac
+done
+if [ -n "$free" ]; then
     echo "Agent tab: the free chat at $free (no key field; the page may connect only there and to itself)"
 else
     echo "Agent tab: the visitor's own key (HELMSMAN_FREE_CHAT_URL is not set)"
+fi
+if [ -n "$design" ]; then
+    echo "Design entry: at $design (the page may also connect there)"
+else
+    echo "Design entry: none (HELMSMAN_DESIGN_URL is not set)"
 fi
 rm -rf "$out"
 mkdir -p "$out"

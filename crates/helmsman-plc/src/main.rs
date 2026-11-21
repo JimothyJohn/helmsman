@@ -44,7 +44,10 @@ use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::site::{self, Site};
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::store::{ChangeSet, Code, Kind, Store};
+use helmsman_plc::zone::{self, Zone};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
+
+mod pair;
 
 const USAGE: &str = "\
 usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-dir DIR ...] [options]
@@ -52,6 +55,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
        helmsman-plc account add USER ROLE | passwd USER | disable USER | enable USER | list
                     [--state-dir DIR]   (per-person logins; passwords on stdin. Once
                     any account exists, approvers log in and role PINs are refused)
+       helmsman-plc pair --relay URL --box-id ID --code-file FILE --out FILE [--wait SECS]
+                    (first boot: trades the relay's one-time pairing code, read
+                    from FILE, for this box's relay token, written to --out with
+                    mode 0600; neither is printed. Exit 3: the relay refused the code)
        helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE.st ...]
                     (first install only: with no project and nothing deployed,
                     makes NAME from the files for --projects; nothing runs
@@ -75,6 +82,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        helmsman_plc::calendar::text): adds the signals in_shift,
                        on_break, planned_down, working, shift_id, shift_minute,
                        shift_left, and drives the outputs its `drive` lines name
+  --time-zone NAME     the zone DT_NOW() reads in: an IANA name (America/Chicago)
+                       or UTC. Default: the system's (/etc/localtime), read once
+                       at start; UTC, and a line saying so, if it cannot be read
   --sinks FILE         webhook sinks and the signals they publish (see
                        helmsman_plc::sink); needs --sink-dir
   --sink-dir DIR       where each sink keeps its on-disk queue (state, not config)
@@ -140,6 +150,12 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        profile; default helmsman/help-v1). The box runs only
                        its submit_issue for it either way; a relay that does
                        not serve it leaves Help with the box's own issue.
+  --relay-publish-agent V
+                       the agent version POST /api/device-profile/publish
+                       asks for (a profile that lists the relay's
+                       publish_device_profile; default helmsman/v13). A relay
+                       without it, or without a GitHub token, answers that
+                       publishing is not available; nothing else changes.
   --devices-index URL  the device library's index the Devices tab and the
                        agent look a found device up in (default the public
                        library's, see docs/devices/; `off` for none)
@@ -212,6 +228,8 @@ struct Opts {
     io_map: Option<PathBuf>,
     gpio_chip: Option<PathBuf>,
     calendar: Option<PathBuf>,
+    /// `--time-zone`: where `DT_NOW()` reads the plant's local time.
+    time_zone: Option<String>,
     sinks: Option<PathBuf>,
     sink_dir: Option<PathBuf>,
     store: Option<PathBuf>,
@@ -233,6 +251,7 @@ struct Opts {
     relay_review_agent: Option<String>,
     relay_tests_agent: Option<String>,
     relay_help_agent: Option<String>,
+    relay_publish_agent: Option<String>,
     ui: Option<PathBuf>,
     site: Option<String>,
     /// `--devices-index`: `None` is the default library, `Some("off")` none.
@@ -259,7 +278,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
 
 /// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`,
 /// `--relay-design-agent`, `--relay-review-agent`,
-/// `--relay-tests-agent`, `--relay-help-agent`.
+/// `--relay-tests-agent`, `--relay-help-agent`, `--relay-publish-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
         "--relay" => {
@@ -273,6 +292,7 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
         "--relay-review-agent" => o.relay_review_agent = Some(v.to_string()),
         "--relay-tests-agent" => o.relay_tests_agent = Some(v.to_string()),
         "--relay-help-agent" => o.relay_help_agent = Some(v.to_string()),
+        "--relay-publish-agent" => o.relay_publish_agent = Some(v.to_string()),
         _ => v.clone_into(&mut o.relay_agent),
     }
     Ok(())
@@ -292,6 +312,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         store: None,
         projects: false,
         emit_st: false,
+        time_zone: None,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         https: cfg!(feature = "https"),
         market: MarketHosts::Public,
@@ -305,6 +326,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_review_agent: None,
         relay_tests_agent: None,
         relay_help_agent: None,
+        relay_publish_agent: None,
         ui: None,
         site: None,
         devices_index: None,
@@ -397,7 +419,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             | "--relay-design-agent"
             | "--relay-review-agent"
             | "--relay-tests-agent"
-            | "--relay-help-agent" => {
+            | "--relay-help-agent"
+            | "--relay-publish-agent" => {
                 relay_flag(&mut o, flag, v)?;
             }
             "--policy" => once(&mut o.policy, flag, v)?,
@@ -411,6 +434,13 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--io-map" => once(&mut o.io_map, flag, v)?,
             "--gpio-chip" => once(&mut o.gpio_chip, flag, v)?,
             "--calendar" => once(&mut o.calendar, flag, v)?,
+            "--time-zone" if o.time_zone.is_some() => return Err("--time-zone given twice".into()),
+            "--time-zone" => {
+                if v != "UTC" {
+                    zone::valid_name(v).map_err(|e| format!("--time-zone: {e}"))?;
+                }
+                o.time_zone = Some(v.clone());
+            }
             "--sinks" => once(&mut o.sinks, flag, v)?,
             "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
             "--store" => once(&mut o.store, flag, v)?,
@@ -1451,6 +1481,9 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
     if let Some(v) = &o.relay_help_agent {
         setup.help_agent.clone_from(v);
     }
+    if let Some(v) = &o.relay_publish_agent {
+        setup.publish_agent.clone_from(v);
+    }
     Ok(Some(setup))
 }
 
@@ -1611,6 +1644,8 @@ fn run(o: &Opts) -> Result<(), String> {
     let access = o.api.map(|_| load_access(o)).transpose()?;
     let cfg = device_config(o.serial);
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    // First, so a zone that cannot be had stops the box before it binds.
+    let (zone, zone_notes) = plant_zone(o)?;
     let d = defaults(o, i_len, q_len);
     let mut content = content(o, &d)?;
     let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
@@ -1639,6 +1674,7 @@ fn run(o: &Opts) -> Result<(), String> {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
         format!("modules do not fit together:{}", lines.concat())
     })?;
+    rt.set_wall_clock(zone.wall_clock());
     let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
@@ -1754,6 +1790,9 @@ fn run(o: &Opts) -> Result<(), String> {
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
     let mut names: Vec<String> = rt.names().map(str::to_string).collect();
+    for note in &zone_notes {
+        eprintln!("helmsman-plc: {note}");
+    }
     let start = Instant::now();
     // A planned stop (service manager, Ctrl-C) sets one of these; the scan
     // loop sees it within a scan and writes the RETAIN values before exiting.
@@ -1833,6 +1872,37 @@ fn run(o: &Opts) -> Result<(), String> {
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
         sleep_to(start, rt.next_deadline(), cap(scene.calendar.as_ref()), &mut said);
     }
+}
+
+/// The zone `DT_NOW()` reads in: `--time-zone`, which stops the box when it
+/// cannot be had, else the system's, which falls back to UTC with a line
+/// that says so (a box with no zone database still runs). Read once.
+/// The lines for the journal come back with it, to be printed after the
+/// start banner.
+fn plant_zone(o: &Opts) -> Result<(Zone, Vec<String>), String> {
+    let mut notes = Vec::new();
+    let (zone, why) = match &o.time_zone {
+        Some(name) => (
+            Zone::named(name).map_err(|e| format!("--time-zone: {e}"))?,
+            "--time-zone",
+        ),
+        None => match Zone::system() {
+            Ok(z) => (z, "the system's"),
+            Err(e) => {
+                notes.push(format!(
+                    "time zone: {e}; DT_NOW() reads UTC (give --time-zone to say otherwise)"
+                ));
+                (Zone::utc(), "fallback")
+            }
+        },
+    };
+    let now = i64::try_from(zone::system_utc_ns().div_euclid(1_000_000_000)).unwrap_or(0);
+    notes.push(format!(
+        "DT_NOW() reads {} time ({why}), UTC{} now",
+        zone.name(),
+        zone.offset_text(now)
+    ));
+    Ok((zone, notes))
 }
 
 /// `helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE...]`:
@@ -1938,6 +2008,18 @@ fn main() -> ExitCode {
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
+            }
+        };
+    }
+    if args.first().is_some_and(|a| a == "pair") {
+        return match pair::run(&args[1..]) {
+            Ok(out) => {
+                print!("{out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {}", e.message);
+                ExitCode::from(e.code)
             }
         };
     }

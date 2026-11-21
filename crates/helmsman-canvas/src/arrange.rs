@@ -187,19 +187,6 @@ impl Layers {
         }
     }
 
-    /// A diagram edit renamed blocks (their text changed): the moves of
-    /// `old`'s blocks go to the new names, as tweaks, so the next layout
-    /// of the edited diagram puts them where they were.
-    pub fn carry(&mut self, old: &Viewer, renamed: &[(crate::st_view::BlockKey, crate::st_view::BlockKey)]) {
-        let Some(key) = self.key.clone() else { return };
-        let moved = old.arrangement().carried(renamed, &self.shared);
-        if moved.is_empty() {
-            return;
-        }
-        let mine = self.personal(&key).merged(&moved);
-        self.put(&key, &mine);
-    }
-
     /// Keeps what the operator moved since last time as the view's tweaks
     /// (once a drag is over).
     pub fn track(&mut self, v: &Viewer) {

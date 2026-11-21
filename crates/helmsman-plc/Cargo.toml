@@ -126,6 +126,10 @@ name = "device_profile"
 required-features = ["box"]
 
 [[test]]
+name = "device_publish"
+required-features = ["box"]
+
+[[test]]
 name = "dhcp"
 required-features = ["box"]
 
@@ -250,9 +254,17 @@ name = "firstboot"
 required-features = ["box"]
 
 [[test]]
+name = "pair"
+required-features = ["box"]
+
+[[test]]
 name = "retain"
 required-features = ["box"]
 
 [[test]]
 name = "test_cli"
+required-features = ["box"]
+
+[[test]]
+name = "zone"
 required-features = ["box"]

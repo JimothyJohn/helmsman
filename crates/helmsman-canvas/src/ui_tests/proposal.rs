@@ -575,3 +575,338 @@ fn the_panel_keeps_its_default_width_with_a_proposal_and_a_refusal_showing() {
         assert!((0.0..=8.0).contains(&r), "after {k} the right panel grew {r} pt");
     }
 }
+
+// ---- publishing the saved profile to the library (card `device-profile-publish`) ----
+
+/// An engineer's page with `acme-rio.device` saved into `demo` and read
+/// back from the project, the proposal gone.
+fn saved(role: &str, file_text: &str) -> Harness {
+    let mut h = with(role, &proposal(7, "acme-rio", "s"));
+    h.press("proposal save");
+    let _ = sent(&mut h);
+    answer(
+        &mut h,
+        PCall::ProposalAccept,
+        201,
+        r#"{"project":"demo","file":"acme-rio.device","version":"v1","revision":3}"#,
+    );
+    let _ = sent(&mut h);
+    h.app
+        .boxv
+        .as_mut()
+        .unwrap()
+        .projects
+        .open
+        .as_mut()
+        .unwrap()
+        .bufs
+        .insert("acme-rio.device".into(), buf(file_text));
+    h.wait(0.2);
+    h
+}
+
+/// Asks to publish and confirms: the confirmation is drawn a frame after
+/// the click.
+fn send(h: &mut Harness) {
+    h.press("proposal publish");
+    h.wait(0.1);
+    h.press("proposal publish send");
+}
+
+const LINK: &str = "https://github.com/JimothyJohn/helmsman-devices/pull/12";
+
+fn sent_ok(number: u64, url: &str, created: bool) -> String {
+    json!({ "number": number, "url": url, "created": created, "draft": true, "folder": "devices/acme/rio-8" })
+        .to_string()
+}
+
+#[test]
+fn publishing_is_offered_only_for_a_profile_saved_and_read_back() {
+    // Not before the project hands the saved file back.
+    let mut h = with("engineer", &proposal(7, "acme-rio", "s"));
+    assert!(!h.has("proposal publish"), "no saved profile yet");
+    h.press("proposal save");
+    let _ = sent(&mut h);
+    answer(
+        &mut h,
+        PCall::ProposalAccept,
+        201,
+        r#"{"project":"demo","file":"acme-rio.device","version":"v1","revision":3}"#,
+    );
+    assert!(
+        !h.has("proposal publish"),
+        "saved, but not read back from the project"
+    );
+    h.app
+        .boxv
+        .as_mut()
+        .unwrap()
+        .projects
+        .open
+        .as_mut()
+        .unwrap()
+        .bufs
+        .insert("acme-rio.device".into(), buf(PROFILE));
+    h.wait(0.2);
+    assert!(h.has("proposal publish"), "saved and read back");
+    // A saved file that does not read as a profile is not offered.
+    let h = saved("engineer", "this is not a device profile\n");
+    assert!(!h.has("proposal publish"));
+    // Closing the note takes the button with it.
+    let mut h = saved("engineer", PROFILE);
+    h.press("proposal done");
+    h.wait(0.1);
+    assert!(!h.has("proposal publish"));
+    // Its words: the button names the library, with the ellipsis of a step that asks first.
+    let mut h = saved("engineer", PROFILE);
+    assert!(all_text(&mut h).contains("Publish to the library…"));
+}
+
+#[test]
+fn nothing_is_sent_until_the_person_confirms_and_cancel_sends_nothing() {
+    let mut h = saved("engineer", PROFILE);
+    h.press("proposal publish");
+    let reqs = sent(&mut h);
+    assert!(
+        calls(&reqs, &PCall::ProposalPublish).is_empty(),
+        "asking is not sending"
+    );
+    let t = all_text(&mut h);
+    assert!(
+        t.contains("Send acme-rio.device to the public device library?"),
+        "the confirmation names the file: {t}"
+    );
+    assert!(t.contains("Only this profile file is sent."), "{t}");
+    h.press("proposal publish cancel");
+    let reqs = sent(&mut h);
+    assert!(
+        calls(&reqs, &PCall::ProposalPublish).is_empty(),
+        "cancelling sends nothing"
+    );
+    assert!(h.has("proposal publish"), "back to the button");
+    // Confirm: exactly one request, the project and the file name only.
+    send(&mut h);
+    let reqs = sent(&mut h);
+    assert_eq!(
+        calls(&reqs, &PCall::ProposalPublish),
+        [(
+            "POST",
+            "/api/device-profile/publish".to_string(),
+            json!({ "project": "demo", "file": "acme-rio.device" })
+        )],
+        "the box reads the file itself: no text goes from the page"
+    );
+    assert!(
+        !h.has("proposal publish send"),
+        "no second send while one is on its way"
+    );
+    assert!(all_text(&mut h).contains("Sending…"));
+    assert!(
+        calls(&sent(&mut h), &PCall::ProposalPublish).is_empty(),
+        "nothing is sent"
+    );
+}
+
+#[test]
+fn the_review_request_comes_back_as_a_number_and_a_library_link() {
+    let mut h = saved("engineer", PROFILE);
+    send(&mut h);
+    let _ = sent(&mut h);
+    answer(&mut h, PCall::ProposalPublish, 201, &sent_ok(12, LINK, true));
+    let t = all_text(&mut h);
+    assert!(
+        t.contains("Sent. The library's maintainers have review request #12."),
+        "{t}"
+    );
+    assert!(t.contains("Open request #12"), "{t}");
+    assert!(h.has("proposal publish link"));
+    assert!(!h.has("proposal publish"), "nothing to send again");
+    // The same profile again: said as it is.
+    let mut h = saved("engineer", PROFILE);
+    send(&mut h);
+    let _ = sent(&mut h);
+    answer(&mut h, PCall::ProposalPublish, 200, &sent_ok(12, LINK, false));
+    assert!(all_text(&mut h).contains("Already sent. Review request #12 is still open."));
+    // A link is only ever a library review page: anything else is not drawn.
+    for url in [
+        "https://evil.example/o/r/pull/12",
+        "http://github.com/o/r/pull/12",
+        "https://github.com/o/r/pull/13",
+        "https://github.com/../r/pull/12",
+        "https://github.com/o/../pull/12",
+        "https://github.com.evil.example/o/r/pull/12",
+        "javascript:alert(1)",
+        "https://github.com/o/r/pull/12 and more",
+        "",
+    ] {
+        let mut h = saved("engineer", PROFILE);
+        send(&mut h);
+        let _ = sent(&mut h);
+        answer(&mut h, PCall::ProposalPublish, 201, &sent_ok(12, url, true));
+        assert!(!h.has("proposal publish link"), "{url}");
+        assert!(all_text(&mut h).contains("review request #12"), "{url}");
+    }
+}
+
+#[test]
+fn every_refusal_says_why_nothing_was_sent_and_the_button_comes_back() {
+    for (status, body, want) in [
+        (
+            422,
+            r#"{"error":"the device library has no entry for Acme Rio 8: a profile is added to an entry that exists","kind":"invalid_request"}"#,
+            "Not sent: the device library has no entry for Acme Rio 8",
+        ),
+        (
+            409,
+            r#"{"error":"the library already has a profile for this device"}"#,
+            "Not sent: the library already has a profile",
+        ),
+        (
+            429,
+            r#"{"error":"at most 6 publishes an hour from one box"}"#,
+            "Not sent: at most 6 publishes an hour",
+        ),
+        (
+            503,
+            r#"{"error":"publishing is not set up on this relay: it has no GitHub token"}"#,
+            "Not sent: publishing is not set up",
+        ),
+        (
+            502,
+            r#"{"error":"the agent service could not be reached. Nothing was sent"}"#,
+            "Not sent: the agent service could not be reached",
+        ),
+        (403, r#"{"error":"x"}"#, "Not sent: only an engineer can publish"),
+        (
+            401,
+            r#"{"error":"x"}"#,
+            "Not sent: the box no longer knows this page's session",
+        ),
+        (
+            404,
+            r#"{"error":"no projects on this box (--projects)"}"#,
+            "Not sent: no projects on this box",
+        ),
+        (500, "not json", "Not sent: the box refused it (500)"),
+        (
+            0,
+            "connection reset",
+            "Not sent: the box did not answer (connection reset)",
+        ),
+        (
+            201,
+            r#"{"url":"x"}"#,
+            "Not sent: the box's answer was not understood",
+        ),
+    ] {
+        let mut h = saved("engineer", PROFILE);
+        send(&mut h);
+        let _ = sent(&mut h);
+        answer(&mut h, PCall::ProposalPublish, status, body);
+        let t = all_text(&mut h);
+        assert!(t.contains(want), "{status}: {want:?} not in:\n{t}");
+        assert!(h.has("proposal publish"), "{status}: the button is back");
+        assert!(!h.has("proposal publish link"), "{status}");
+    }
+}
+
+#[test]
+fn words_from_the_box_are_printable_and_bounded() {
+    let mut h = saved("engineer", PROFILE);
+    send(&mut h);
+    let _ = sent(&mut h);
+    let evil = format!("a\u{202E}b\u{0007}c {}", "wide ".repeat(400));
+    answer(
+        &mut h,
+        PCall::ProposalPublish,
+        409,
+        &json!({ "error": evil }).to_string(),
+    );
+    let t = all_text(&mut h);
+    assert!(!t.contains('\u{202E}') && !t.contains('\u{0007}'));
+    assert!(t.contains("Not sent: abc wide"), "{t}");
+    assert!(t.len() < 6000);
+    // An answer that arrives when nothing was sent changes nothing.
+    let mut h = saved("engineer", PROFILE);
+    answer(&mut h, PCall::ProposalPublish, 201, &sent_ok(12, LINK, true));
+    assert!(h.has("proposal publish"), "an unasked answer is ignored");
+    assert!(!all_text(&mut h).contains("review request"));
+}
+
+#[test]
+fn a_session_that_changes_takes_the_offer_away_until_the_project_is_read_again() {
+    let mut h = saved("engineer", PROFILE);
+    assert!(h.has("proposal publish"));
+    h.app.review.as_mut().unwrap().state.session = Some(Session {
+        user: Some("bob".into()),
+        role: "operator".into(),
+    });
+    h.wait(0.2);
+    assert!(
+        !h.has("proposal publish"),
+        "the project closed with the session: nothing is read back to publish"
+    );
+    assert!(
+        calls(&sent(&mut h), &PCall::ProposalPublish).is_empty(),
+        "nothing is sent"
+    );
+}
+
+#[test]
+fn the_panel_keeps_its_default_width_while_publishing_every_state() {
+    let mut h = saved("engineer", PROFILE);
+    h.app.chrome.dock(crate::editor::Pane::Io, true);
+    h.wait(0.3);
+    let left = h.rect("left");
+    let right = h.rect("right");
+    let check = |h: &mut Harness, what: &str| {
+        for k in ["pane files", "pane devices", "tab claude", "pane devices"] {
+            h.press(k);
+            h.wait(0.3);
+            let l = h.rect("left").right() - left.right();
+            let r = right.left() - h.rect("right").left();
+            assert!(
+                (0.0..=8.0).contains(&l),
+                "{what}: after {k} the left pane grew {l} pt"
+            );
+            assert!(
+                (0.0..=8.0).contains(&r),
+                "{what}: after {k} the right panel grew {r} pt"
+            );
+        }
+        let small = h.small_text();
+        assert!(
+            small.is_empty(),
+            "{what}: text under the smallest size: {small:?}"
+        );
+    };
+    check(&mut h, "the button");
+    h.press("proposal publish");
+    check(&mut h, "the confirmation");
+    h.press("proposal publish send");
+    check(&mut h, "sending");
+    let long = format!("{} {}", "a refusal in words".repeat(30), "w".repeat(250));
+    answer(
+        &mut h,
+        PCall::ProposalPublish,
+        409,
+        &json!({ "error": long }).to_string(),
+    );
+    check(&mut h, "a long refusal");
+    h.press("proposal publish");
+    h.wait(0.2);
+    h.press("proposal publish send");
+    answer(
+        &mut h,
+        PCall::ProposalPublish,
+        201,
+        &sent_ok(
+            12_345_678,
+            "https://github.com/JimothyJohn/helmsman-devices/pull/12345678",
+            true,
+        ),
+    );
+    check(&mut h, "the review request");
+    let edge = h.rect("left").right();
+    assert!(h.rect("proposal publish link").right() <= edge + 0.5);
+}

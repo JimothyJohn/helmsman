@@ -30,6 +30,14 @@ if [ -n "$HELMSMAN_FREE_CHAT_URL" ]; then
 else
     echo "Agent tab: the visitor's own key (HELMSMAN_FREE_CHAT_URL is empty)"
 fi
+# The design entry (the relay's DemoDesignUrl) has no default: the entry
+# is there only when the address is set (HELMSMAN_DESIGN_URL=https://...).
+export HELMSMAN_DESIGN_URL="${HELMSMAN_DESIGN_URL-}"
+if [ -n "$HELMSMAN_DESIGN_URL" ]; then
+    echo "Design entry: at $HELMSMAN_DESIGN_URL"
+else
+    echo "Design entry: none (HELMSMAN_DESIGN_URL is empty)"
+fi
 dist="$PWD/target/canvas-dist"
 mkdir -p "$dist"
 # The page waits for the first build below; a stale index.html from the

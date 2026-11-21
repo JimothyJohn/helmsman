@@ -78,6 +78,7 @@ Three directions of traffic, three different rules:
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, and v2 relay-held sessions for harness profiles; HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
+| `helmsman-compat` | The release train's checker (docs/COMPAT.md): the contracts between helmsman, agent-relay, helmsman-devices and helmsman-hardware, checked black-box against a box and a relay built at any ref (a devices checkout served as the library, `agent-relay-local` in front of a stub model, the node firmware's pins against the board's netlist). Run by `scripts/compat.sh` (`make compat`); never on a box. | built: against its own tests and the four repositories at dev and live |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
@@ -441,9 +442,9 @@ scan; the scheduler bounds how often.
   it: the menu items, `row_menu` for a row of the I/O tab, and the
   question (`DevicesUi::assigning`, `assign_ui`) both views call each
   frame. The Devices tab's point row opens it, or returns
-  `DeviceAct::Assign`; the diagram's menu (`diagram_edit.rs`, `Entries::
-  assign`, `Viewer::assign`) offers it on a port's Read or Write block
-  whatever `edit_gate` says, and `Viewer::secondary_on_controls` carries
+  `DeviceAct::Assign`; the diagram's menu (`diagram_menu.rs`, `Entries::
+  assign`, `Viewer::assign`) offers it on a port's Read or Write block,
+  and `Viewer::secondary_on_controls` carries
   a right-click made on the switch or force button over a Read block.
   The simulation writes `proj.files["io.map"]` (`assign_act`); a box
   writes the open project's `io.map` buffer, as `wire_in` does;
@@ -961,8 +962,7 @@ box, Send or Stop, Undo, and a status line with the reason.
 
 "Chat about this" (`chat-about-this`, Nick 2026-11-16, `chat_about.rs`)
 makes the diagram something to point at. A right click on a block has the
-item, on the page and on a box (a box's menu holds it with the code's
-edits shown off); an input's or output's row will call
+item, on the page and on a box; an input's or output's row will call
 `chat_about_signal(name, chrome)` on either view. Choosing it sends
 nothing: it opens the Agent tab and adds a chip to `Instruct::chips`,
 drawn above the instruction box (`instruct::chips_ui`: wrapped by hand
@@ -1452,6 +1452,84 @@ numeric types and BOOL. `WSTRING` is refused with a diagnostic. Code in
   50 (...)`; a plain `ASSERT`'s text is unchanged. A test can compare text
   it builds itself, but cannot read a program's STRING output until the
   signals card shares STRING ports.
+
+## Dates and times of day (`st-tod-date`, built)
+
+`DATE`, `TOD` (`TIME_OF_DAY`) and `DT` (`DATE_AND_TIME`) are elementary
+types of the language, in `helmsman-iec`'s `dt.rs` (calendar arithmetic,
+text), `lexer.rs` (literals), `check.rs` (types, arithmetic, the functions)
+and `interp.rs`. The `L` forms (`LDATE`, `LTOD`, `LDT`) are refused with a
+diagnostic, as is `LTIME`.
+
+- **Representation.** Three more `Ty` variants, held as `Value::Int` like
+  `TIME`: signed 64-bit nanoseconds, so `Value` is unchanged and stays
+  `Copy`. `DATE` and `DT` count from 1970-01-01T00:00:00 (proleptic
+  Gregorian, no time zone, no leap seconds), `DATE` at midnight; `TOD`
+  counts from midnight and stays in `0..86_400_000_000_000`. That is
+  ruSTy's representation, which the oracle can then compare as plain
+  numbers. The cost is the range: 1677-09-21 to 2262-04-11 for a `DT`
+  (a literal outside it is a compile error), and a resolution of
+  nanoseconds nobody asked for. Zero is 1970-01-01 and midnight. They
+  are not numbers: no implicit or explicit conversion to or from an
+  integer, real or `TIME`, no `-x`, `*`, `/`, `MOD`.
+- **Literals.** `D#2024-02-29`, `TOD#22:00:00[.fraction]` (up to 9
+  digits), `DT#2024-02-29-22:00:00[.fraction]`, and the long prefixes
+  `DATE#`, `TIME_OF_DAY#`, `DATE_AND_TIME#`. Refused with the reason: a
+  day that does not exist (29 Feb of 1900 or 2023), hour 24, second 60,
+  a missing part, a fraction past nanoseconds, a value beyond the range,
+  more than 40 characters of body.
+- **Comparison** (`= <> < > <= >=`) between two values of one type;
+  `MIN`, `MAX`, `LIMIT`, `SEL`, `MUX` work too.
+- **Arithmetic** is ruSTy's table and nothing else: `TOD +/- TIME` (wraps
+  at midnight), `DT +/- TIME`, `DATE - DATE`, `TOD - TOD` and `DT - DT`
+  (each a `TIME`, not wrapped). Overflow of a `DT` wraps like `TIME`
+  does. Everything else (`DATE + TIME`, `TIME + TOD`, `TOD + TOD`) is a
+  diagnostic that lists what is defined; a `TOD` from a `TIME` is
+  `TOD#00:00:00 + t`.
+- **Functions.** `DT_TO_DATE`, `DT_TO_TOD` (and the long
+  `DATE_AND_TIME_TO_DATE`, `DATE_AND_TIME_TO_TIME_OF_DAY`, `TO_DATE`,
+  `TO_TOD` on a DT), `DATE_TO_DT` (midnight), `CONCAT_DATE_TOD`,
+  `CONCAT_DATE(y, m, d)`, `CONCAT_TOD(h, m, s, ms)` (0, the epoch or
+  midnight, when there is no such date or time, as ruSTy), `DAY_OF_WEEK`
+  (0 Sunday), and `DT_NOW()`. Not built: the `SPLIT_*` functions (outputs
+  by reference), the `L` forms.
+- **Text.** `TO_STRING`, `DATE_TO_STRING`, `TOD_TO_STRING`, `DT_TO_STRING`
+  print the literal (`D#2024-02-29`, `TOD#08:30:00.5`, with the fraction
+  only when there is one), and `STRING_TO_DATE` / `_TOD` / `_DT` read it
+  back (prefix optional, spaces around ignored; anything else is the zero
+  value, like text that is no number). The print form is Helmsman's, not
+  a clause: it is the literal itself, so it round-trips.
+- **The clock.** `scan_at`'s clock is time since the program started, not a
+  date. `Program::set_wall_clock(ns)` gives the DT at that clock's zero;
+  `DT_NOW()` is that plus the clock, so the host owns the time zone (the
+  program has none) and a reset or hot swap keeps it. Unset it counts from
+  1970-01-01. An initial value cannot call it.
+- **The box's clock** (`helmsman-plc`'s `zone.rs`, `Runtime::set_wall_clock`;
+  contract in `tests/zone.rs`). `DT_NOW()` reads the box's own time zone:
+  the system's, from the TZif file `/etc/localtime` points at, read once at
+  start, or `--time-zone NAME` (an IANA name from the OS database, or
+  `UTC`). No dependency reads it: `zone.rs` parses TZif (RFC 8536: the
+  transitions, then the POSIX rule of the footer for later years) and
+  checks the name before it is a path (no `..`, no absolute path, 64
+  characters, no empty or dotted part). The system zone falling back to
+  UTC says so in the journal; an explicit `--time-zone` that cannot be had
+  stops the box. The runtime re-reads the system clock on every tick, adds
+  the zone's offset for that instant and hands the result to every module
+  it is about to scan, so a long-running box never drifts, a step of the
+  system clock or a daylight-saving change shows at the next scan, and any
+  way a program gets installed (load, swap, reconfigure, rebind, restart)
+  has the clock without its own code. Local time is not monotonic: at the
+  end of daylight saving `DT_NOW()` repeats an hour and at its start skips
+  one. Replay and requirement tests run on their own scan clock and keep
+  counting from 1970. The canvas's simulation (`playground.rs`,
+  `host_local_ns`) takes the browser's local time when the clock starts
+  over (a new program, a restart), keeps it across a deploy, and runs at
+  the simulation's pace from there.
+- **Not signals.** A DATE, TOD or DT port works inside its program but
+  `Program::ports()` skips it, like a STRING one: not in `/api/signals`,
+  the values stream, trends or OPC UA. `RETAIN` works (the state encoding
+  has the types). The diagram's live value of a whole DATE, TOD or DT
+  variable reads as its literal (`TOD#23:00:00`), not as nanoseconds.
 
 ## Box API (`box-api`, built)
 
@@ -2677,6 +2755,32 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   drop-in and the model read it by id. Real box: `box_projects_tests.rs`
   (`a_vendor_file_becomes_a_dropin_on_a_real_box_...`); the scripted
   refusals and roles: `ui_tests/vendor.rs`.
+- **Publishing the saved profile to the library** (`device-profile-publish`;
+  contract in `tests/device_publish.rs` here and the relay's
+  `docs/relay-protocol.md`, "`POST .../tools/publish_device_profile`"). A
+  profile an engineer saved and the tab read back from the project has
+  "Publish to the library…": it asks, names the file and says only that file
+  goes, and on "Send for review" the page sends `POST
+  /api/device-profile/publish {project, file}`. The box (`api/device_profile.rs`,
+  engineer sessions only, audited) reads `NAME.device` from the project itself,
+  never text from the request, holds it to the same `Profile::parse` and
+  bounds as a proposal, and asks the relay (`helmsman_agent::publish`, the
+  box's relay token, the agent version `--relay-publish-agent`, default
+  `helmsman/v13`, the first profile that lists the relay's
+  `publish_device_profile`). The relay holds the only GitHub credential (a
+  fine-grained token on the library repository, in its Secrets Manager) and
+  opens a **draft** pull request into `helmsman-devices` `dev`: `NAME.device`
+  beside the device's `device.toml`, which gains `profile = "NAME.device"`, and
+  `index.json` gaining `profile`, for a device the library's index already
+  lists (a device it lacks is refused with the pointer to a "New device:"
+  issue). The same publish again returns its open pull request. The box
+  answers 201 with `{number, url, created, draft, folder}` (200 when one was
+  already open) or the relay's refusal in its words (422 the library has no
+  such device, 409 it has a profile or this one was closed, 429, 503 the relay
+  has no token, 502 the relay or GitHub failed or could not be reached); the
+  page shows the request's number and a link only if it is a library pull
+  request's page, and never a GitHub credential, which no box has. No tool of
+  the agent reaches the route (`mcp::reachable`, `tools::NAMES`).
 - **Questions, not guesses.** What the document leaves out (a signal the
   box does not have, a shift that is not defined) comes back as questions
   in the chat; the relay's v3 prompt says so, and the module only names
@@ -2973,10 +3077,10 @@ tokio ever reach the box build.
 
 The operator's view of what a module's code is doing
 (`canvas-edit-scope`: ST is the source of truth). The view itself only
-reads. The diagram also writes ST back through checked splices
-(`helmsman_diagram::edit`, below the lowering): in the simulation as a
-deploy, on a box as an edit of the open buffer. See "Editing on the
-canvas" at the end of this section.
+reads: on the diagram the user edits the layout and toggles inputs, and
+code changes are typed in the editor or asked of the Agent (Nick,
+2026-11-18, docs/UI.md). The diagram's right-click menu is described at
+the end of this section.
 
 - **Lowering** (`helmsman_diagram::lower`, from `helmsman_iec::ast`, the
   parser's tree exposed read-only). Per statement: reads and literals on the
@@ -3002,10 +3106,7 @@ canvas" at the end of this section.
   c AND d` is one AND with four inputs, the FBD convention, for AND, OR,
   XOR, `+` and `*`. Only a run as written is joined, so the inputs are
   evaluated in the source's order and an operand in the author's
-  parentheses keeps its own block. `edit::SwapOp` on such a block changes
-  every operator of the run, refuses an operator drawn with two inputs
-  (`ManyInputs`), and brackets whatever would otherwise join a
-  neighbouring run, so an edit never changes the number of blocks.
+  parentheses keeps its own block.
 - **Folds: several blocks drawn as one** (`helmsman_diagram::fold`). A
   `Fold` names blocks the reader would rather see as one thing; `view`
   gives the diagram with each fold as one block (`NodeKind::Fold`) whose
@@ -3015,8 +3116,8 @@ canvas" at the end of this section.
   read and written become named pins). A fold that is neither, or shares
   a block with an earlier one, is left out and the view says why. The
   view maps its blocks, ports, wires and regions back (`View::live`,
-  `View::drivers`, `View::original`), so lowering, the trace mapping and
-  the edit spans are those of the diagram underneath. A whole-statement
+  `View::drivers`, `View::original`), so lowering and the trace mapping
+  are those of the diagram underneath. A whole-statement
   fold made `with_blocks` keeps one block per variable it reads, wired
   into it (on the canvas that block is where an input is set), and a
   region inside a fold that is gated from outside it is one more input.
@@ -3073,9 +3174,9 @@ canvas" at the end of this section.
   viewer keeps everything in the diagram's own numbers and draws the
   view: a click on a fold picks a block under it, a double click opens
   it into its blocks (outlined, with a tab that folds them back), a
-  folded comparison is edited in place (double click its value, right
-  click for the operator), a right click on a fold's pin is a gesture
-  on the pin behind it, a dragged fold keeps its place. Sections and
+  right click on a fold's pin is about the block behind it
+  (`Viewer::base_block`: the block itself, or the comparison of a folded
+  comparison), a dragged fold keeps its place. Sections and
   arms start as their blocks (`on_request`): a section is outlined
   under its name and folds from that tab, an arm folds from a double
   click on its label. A state block is on as the diagram opens: a chip
@@ -3086,7 +3187,7 @@ canvas" at the end of this section.
   `draw_table_row`), the row whose cells all hold lit, and with the
   output FALSE the cells that are not satisfied in the fault colour; a
   cell's hover (`Viewer::cell_tip`) says what its row needs and what the
-  signal is. A gesture on a table's pin is refused (`base_pin`): its pin
+  signal is. A right click on a table's pin is about no block: its pin
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
@@ -3278,55 +3379,19 @@ canvas" at the end of this section.
   through an in-process proxy with a site VPN's 300 ms round trip,
   1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
 
-- **Editing on the canvas** (`diagram-edit-canvas`, `diagram-edit-box`;
-  `diagram_edit.rs`, tests in `ui_tests/diagram_edit.rs`). `Viewer::canvas`
-  only notices a right click (`hit_at`: a pin within reach of an input
-  port, else the nearest block) or a double click on a constant, and
-  hands it up as a `Gesture`; with `Viewer::edit_gate` off it leaves a
-  note of why instead (a viewer starts off with `BOX_REASON`; both hosts
-  set the gate each frame, so it shows only for a viewer no host drives).
-  The menu offers Change operator (`SwapOp`), Negate input
-  (`ToggleNegation`), Connect to… (`Rewire`), Edit value… (`SetConst`),
-  Rename… and Delete statement; `SetFbArg` is in the engine and is not
-  offered by the menu. A long press is egui's secondary click on touch.
-  `PlaygroundView` sets the gate
-  each frame (`edit_gate`: the viewer's source equals the build source,
-  and the project builds from exactly one `.st` file, so the engine's byte
-  offsets are the buffer's) and draws `EditUi`, whose menu lists only
-  what `edit::apply` accepts (each entry is dry-run when the menu opens).
-  A choice is an `Edit`; `PlaygroundView::diagram_edit` runs it through
-  `edit::apply` against the viewer's own source and module, pushes the old
-  text into the file's `TextEditState` undoer (`editor::push_undo`, its
-  own entry), writes the patched text to the file, and runs the Deploy
-  path without the formatter (`deploy_as(false)`, so the file holds the
-  splice and nothing else; the same requirement-test and compile checks
-  refuse it as for a typed edit, leaving the edit in the code). The
-  rebuilt `Viewer` keeps the old one's cameras, scope and pick, and
-  `Layers::carry` re-keys the dragged positions of the blocks whose text
-  changed (`Viewer::edited_blocks`: same shape pairs blocks by place,
-  otherwise by `diff::modules`). `Chrome::flash` highlights the patch and
-  sends the editor to its line for 1.5 s. Undo and Redo of a gesture
-  redeploy while the diagram was in sync before them (`Follow::deployed`,
-  cleared by any typing or Deploy).
-
-  On a box (`BoxView::edit_gate`, `BoxView::diagram_edit`, #505) a gesture
-  only edits the open buffer, as typing would: the same `edit::apply`
-  against the diagram's source (the box's header lines are stripped by
-  `file_start`), the old text pushed as one undo entry
-  (`editor::push_undo`), the patched text in the buffer, the highlight
-  flashed. Nothing is saved or deployed; Save and Deploy are the
-  engineer's, through the box's approval policy, which tiers the change
-  from its diff as for typed text. The gate is on only when the session is
-  an engineer's (`is_engineer`), the open project is the one the box
-  runs, the project has exactly one program file (`sole_program`, test
-  files aside), that file is loaded, and the diagram's source is the file
-  under the box's header lines. The diagram draws what runs, so after one
-  gesture the buffer differs from it and the gate is off ("Save and
-  Deploy, then edit from the diagram") until the change is deployed and
-  running or Undo restores the text. Tests:
-  `box_projects_tests.rs` (`a_diagram_edit_on_a_box_is_an_unsaved_typed_edit_with_one_undo_step`,
-  `an_operator_or_nobody_cannot_edit_from_the_diagram`,
-  `the_diagram_is_off_when_it_is_not_the_open_file`).
+- **The diagram's menu** (`diagram_menu.rs`, tests in
+  `ui_tests/diagram_menu.rs`). `Viewer::canvas` notices a right click
+  (`hit_at`: the block of a pin within reach of an input port, else the
+  nearest block; a long press is egui's secondary click on touch) and
+  hands it up as a `Gesture` when the block has an item: any block has
+  Chat about this while `Viewer::chat_ok` (the diagram is of the text the
+  host's files hold; a box always), and a program port's block has the
+  io.map items. Both hosts draw `Menu`; none of its items changes the
+  code. On the diagram the user moves blocks (`diagram.layout`), folds,
+  zooms, selects and switches inputs (the simulation's virtual inputs, a
+  box's forces); code changes are typed or asked of the Agent.
+  The removed code edits, with what they taught, are recorded in
+  `docs/decisions/diagram-edits.md`.
 
 ## Explain mode (`explain-mode`, built)
 
@@ -3501,44 +3566,6 @@ file and token in a temporary state directory).
   removed and changed plus the added and the changed ones' new versions
   are exactly the new blocks. Removed blocks are drawn as dashed ghosts in
   their old layout below the proposed diagram.
-- **Edits from the diagram** (`helmsman_diagram::edit`, `diagram-edit-core`;
-  pure, wasm-safe, depends only on `helmsman-iec`). ST stays the source of
-  truth and the parse tree drops comments, so an edit splices text.
-  Lowering records a byte range for every input pin (`Diagram::pins`,
-  `(node, input)` to the operand's text with its `NOT`s and parentheses),
-  every IF/ELSIF/WHILE/REPEAT gate (`gates`) and every binary operator
-  block (`ops`); the ranges are the parser's `Expr::start` and `end`,
-  converted from line and column (bytes, 1-based). A read wired from an
-  earlier write keeps its own text in this statement.
-  `apply(src, &Module, Edit) -> Result<Patch, Refusal>`: `SetConst` (a
-  literal, a TIME preset), `ToggleNegation` (a pin or a gate), `SwapOp`
-  (AND/OR, a comparison, `+ - * /`). A `Patch` is a byte range and the new
-  text, trimmed to what differs; `Patch::inverse(src)` undoes it exactly.
-  Brackets only where the precedence of `text::expr` needs them. The
-  module must be the lowering of `src` (geometry aside), else
-  `StaleDiagram`. Every edit is checked before it is returned: the result
-  is compiled and lowered again and compared block by block with the old
-  diagram (and with `diff::modules`): only the addressed block and the
-  blocks of its statement that hold its text may differ, and only the asked
-  bubble may flip, else the edit is refused in plain words (`Refusal`).
-  `diagram-edit-rewire` adds four more, through the same entry point:
-  `Rewire { pin, to: Source }` (a pin takes a variable, a literal or an
-  earlier write; a bubble stays except on a literal), `SetFbArg { pou,
-  node, arg, to }` (replace the argument or add `NAME := value` after the
-  last input argument), `DeleteStmt { pou, span }` (the range must be
-  exactly one statement; a statement alone on its line goes with its
-  indentation, trailing comment and line break, otherwise it goes with the
-  blanks that kept it from its neighbour and comments stay) and `Rename {
-  pou, from, to }` (`helmsman_iec::rename_ident` over the POU's text only).
-  Block numbers shift under these, so `edit/graph.rs` checks them as
-  trees: each statement unfolded from its roots, equal to the old one but
-  for the addressed pin and the blocks above it; a deleted statement's
-  readers may now read the variable or an older write. A rename is checked
-  as the same module with both names blanked out everywhere. Types come
-  from the declarations (`Types::type_of`): a pin takes what it takes now,
-  a function block port what it declares. Library POUs are refused
-  (`LibraryPou`), as are names that are reserved words, taken, or not
-  names; a rename that breaks a call by port name fails the compile check.
 - **Sim replay chart.** "Run the sim replay" posts `.../replay`; the
   answer now carries, per driven signal, both step tracks
   (`current_track`, `proposed_track`: type and `[at_ms, value]` steps, at
@@ -3742,6 +3769,61 @@ both). No box, no server: everything runs in the page (`playground.rs`,
     for it (`port X: no signal of that name`) is followed by
     `box_projects::deploy_words`. Contracts in `box_spec_tests.rs` (the real
     box API) and `ui_tests/spec_mode.rs`.
+- **The design step** (`design.rs`, `design_step.rs`, `design_ui.rs`; Nick,
+  2026-11-15, card `design-step-canvas`): "Design a machine…" in the Agent
+  tab, beside "From a spec…", on both pages. `design.rs` is the contract
+  with the relay's `helmsman/design-v1` (the request, `Continue`, the
+  reader, `Design::problems`, `Design::step_brief`); `design_step.rs` is
+  the state and the streams, free of I/O like `box_agent.rs`; `design_ui.rs`
+  is the screens (the entry and its cards in the tab, the description
+  window, the window the design is read in), plain data in and an `Act` out.
+  - **Two routes, one `Designer`.** On a box the page posts `{description}`
+    to `POST /api/design` and `{session}` again while `done.more` is true
+    (`BoxView`, its own `ChatHttp`; the box adds the dialect and the
+    project). In the simulation it asks the relay's design entry at a second
+    address, `HELMSMAN_DESIGN_URL` when the page is built (unset: no entry;
+    `scripts/build-playground.sh` checks it is an origin and opens the
+    page's `connect-src` to it): `GET {url}/demo/v1/status` decides whether
+    the entry is shown (`Avail::from_status`: the entry is there only while
+    the relay lists the agent and says it is open; closed, it says so; the
+    chat's own status is never read for it), and `POST {url}/demo/v1/messages`
+    carries `{"agent": "design", "messages"}` and nothing else. A continued
+    design sends the first message again, each answer as the blocks the
+    stream gave (`Block`: thinking with its signature, redacted thinking,
+    text, exactly) and the word `Continue`; the relay takes 9 messages and
+    1 MiB, so a design that needs more says it is too large for the
+    playground (`design_step::TOO_LARGE`) rather than fail. Refusals are
+    put in words (`refusal`): `design_closed`, `design_allowance_used`
+    (with the wait from `retry_after_s`, counted down in the tab), 413,
+    403, `upstream_rejected`, `upstream_unavailable`; neither touches the
+    chat's state. A stream without `relay_usage` (the box's `done`) was cut
+    off: the tab says so and offers Carry on (the turn is asked again) or
+    Discard; Stop leaves no draft. The page transport is `web::ClaudeLink`
+    with `claude::json_post` (no key, no other header).
+  - **Kept as `design.md`**, a kept file (`helmsman_project::kept_name`) like
+    `spec.md`: Keep is one revision in the simulation (a built-in example
+    first becomes a project named for the machine). The box's file route
+    writes only the files a project uses, so on a box Keep makes a copy of
+    the open project, as the box holds it, with `design.md` in it, through
+    the atomic zip route (`PCall::DesignProject`; a taken name goes to a free
+    one, nothing is written over, unsaved edits stop it). The cleaner box
+    route, `design.md` through `PUT .../files`, is a change to
+    `helmsman-project`'s file names and is not made here.
+  - **Build** reads the kept `design.md` again (`KeptCache`), shows
+    `Design::problems` before it offers Build (a design with a problem is
+    never built), and hands the build order to the steps run in batches of
+    at most `steps::MAX_STEPS`: `Instruct::start_design_steps` makes a
+    `Plan` whose `briefs` are `Design::step_brief` for each step (instead of
+    `steps::step_request`) and whose `of` is where the batch stands in the
+    design ("steps 1 to 6 of 19" in the tab). The run is the steps run's:
+    a working copy, each step checked and retried, the file written once
+    when the batch has passed. A design step that runs out of room pauses
+    and is not split (a smaller step would lose the parts and requirements
+    it names). The steps built are counted per project in the page, after
+    the batch is written (not across a reload); one PROGRAM per project and
+    the six-step plan stay. Contracts in `design_step_tests.rs` (the
+    recorded bottling line), `design_page_tests.rs`, `box_design_tests.rs`
+    (the real box API) and `ui_tests/design.rs` (the panel's default width).
 - **The Agent watches** (`watch.rs`; Nick, 2026-11-14): what the page
   already sees go wrong is said unasked in a card over the top of the
   diagram (on screen whichever tab is open, not modal), one thing at a time, most urgent first (`watch::noticed`): an

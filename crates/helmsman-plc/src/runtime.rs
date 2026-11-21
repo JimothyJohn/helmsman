@@ -174,6 +174,29 @@ impl Clock {
     }
 }
 
+/// Where the runtime reads the plant's local date and time for `DT_NOW()`:
+/// nanoseconds since 1970-01-01T00:00:00 on the plant's wall clock, as a
+/// `DT` holds them. The box's reads the system clock through a time zone
+/// (`crate::zone`); a test scripts it. See [`Runtime::set_wall_clock`].
+pub struct WallClock(Box<dyn Fn() -> i64 + Send + Sync>);
+
+impl WallClock {
+    /// A wall clock that reads `f`, once per tick.
+    pub fn new(f: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        Self(Box::new(f))
+    }
+
+    fn now(&self) -> i64 {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for WallClock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WallClock")
+    }
+}
+
 impl fmt::Debug for Clock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Clock")
@@ -371,6 +394,8 @@ pub struct Runtime {
     carried: Vec<(String, Carry)>,
     /// What each scan's execution time is read from.
     clock: Clock,
+    /// Where `DT_NOW()` reads the date, if the host gave one.
+    wall: Option<WallClock>,
 }
 
 impl Runtime {
@@ -420,7 +445,19 @@ impl Runtime {
             last: None,
             carried: Vec::new(),
             clock: Clock::monotonic(),
+            wall: None,
         })
+    }
+
+    /// Gives every ST module the plant's date and time for `DT_NOW()`.
+    /// The clock is read at the start of each tick and handed to each
+    /// module about to scan, so it holds for whatever installed that
+    /// module (a load, a swap, a reconfigure, a rebind, a cold restart) and
+    /// follows the source: a long-running box does not drift from it, and
+    /// a step of the system clock or of the time zone's offset shows in the
+    /// next scan. Without one, `DT_NOW()` counts from 1970-01-01.
+    pub fn set_wall_clock(&mut self, wall: WallClock) {
+        self.wall = Some(wall);
     }
 
     /// Reads each scan's execution time from `clock` from now on (a
@@ -699,6 +736,11 @@ impl Runtime {
     ) -> Vec<(String, Fault)> {
         let mut faults = Vec::new();
         self.last = Some(now);
+        // The DT at this tick's clock zero: `DT_NOW()` is that plus `now`.
+        let wall = self.wall.as_ref().map(|w| {
+            w.now()
+                .saturating_sub(i64::try_from(now.as_nanos()).unwrap_or(i64::MAX))
+        });
         for s in &mut self.slots {
             if matches!(s.status, Status::Faulted(_) | Status::Stopped) || s.next > now {
                 continue;
@@ -706,6 +748,9 @@ impl Runtime {
             let q = &mut self.outputs[s.module.q.start..][..s.module.q.len];
             if set_inputs(s, table) {
                 let started = self.clock.now();
+                if let (Some(at), Some(p)) = (wall, s.module.program.st_mut()) {
+                    p.set_wall_clock(at);
+                }
                 let late = now.saturating_sub(s.next);
                 s.status = Status::Running;
                 let w = s.module.i;

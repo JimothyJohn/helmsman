@@ -57,6 +57,9 @@ pub struct Link {
     /// The free chats asked whether they are open, by address.
     #[cfg(not(target_arch = "wasm32"))]
     pub free_checks: Vec<String>,
+    /// The design entries asked for their status, by address.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub design_checks: Vec<String>,
 }
 
 impl Link {
@@ -112,6 +115,18 @@ impl Link {
         self.posted.push(req);
     }
 
+    /// Asks the design entry at `base` for its status. Natively a test
+    /// hands the answer in through `inbox`.
+    fn check_design(&mut self, base: &str, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        self.web.check_design(base, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = ctx;
+            self.design_checks.push(base.to_string());
+        }
+    }
+
     fn drain(&mut self) -> Vec<crate::claude::Incoming> {
         #[cfg(target_arch = "wasm32")]
         return self.web.drain();
@@ -149,14 +164,12 @@ pub struct PlaygroundView {
     pub layers: Layers,
     /// The viewer was just built: lay it out from the layers.
     fresh: bool,
-    /// The popup a right click or double click on the diagram opened
-    /// (`crate::diagram_edit`).
-    pub dedit: crate::diagram_edit::EditUi,
+    /// The menu a right click on the diagram opened
+    /// (`crate::diagram_menu`).
+    pub dmenu: crate::diagram_menu::Menu,
     /// The program's ports as last read, by the source they came from:
     /// the I/O tab and the diagram ask every frame.
     ports_memo: std::cell::RefCell<Option<(String, Vec<crate::device_form::Port>)>>,
-    /// What a diagram edit asks of the rebuild and of Undo.
-    dstate: crate::diagram_edit::Follow,
     viewer_of: String,
     /// When the editor last changed and is not checked yet.
     pending: Option<f64>,
@@ -254,6 +267,18 @@ pub struct PlaygroundView {
     /// The draft a spec run made, on review: nothing is written until
     /// Accept.
     pub spec_review: Option<crate::spec_mode::Review>,
+    /// The design step's entry (`crate::design_step`).
+    pub design: crate::design_step::Designer,
+    /// Its way to the relay's design entry.
+    pub design_link: Link,
+    /// The batch of the kept design the Agent is building: the project
+    /// and how many steps it holds.
+    design_building: Option<(String, usize)>,
+    /// Steps of each project's design built in this page.
+    design_built: std::collections::BTreeMap<String, usize>,
+    /// The open project's `design.md` as last read: its hash, the design
+    /// and what stops it being built from.
+    design_cache: crate::design_step::KeptCache,
     /// When to say what went wrong (`crate::watch`).
     watching: crate::watch::Watching,
     /// What the Agent noticed, said under the top bar this frame.
@@ -303,9 +328,8 @@ impl PlaygroundView {
             history_at: None,
             layers: Layers::load(tweaks),
             fresh: false,
-            dedit: crate::diagram_edit::EditUi::default(),
+            dmenu: crate::diagram_menu::Menu::default(),
             ports_memo: std::cell::RefCell::new(None),
-            dstate: crate::diagram_edit::Follow::default(),
             viewer_of: String::new(),
             pending: None,
             last_pick: None,
@@ -353,6 +377,11 @@ impl PlaygroundView {
             spec: crate::spec_mode::Spec::default(),
             spec_docs: None,
             spec_review: None,
+            design: crate::design_step::Designer::page(),
+            design_link: Link::default(),
+            design_building: None,
+            design_built: std::collections::BTreeMap::new(),
+            design_cache: crate::design_step::KeptCache::default(),
             watching: crate::watch::Watching::default(),
             noticed: None,
             selection: None,
@@ -481,7 +510,6 @@ impl PlaygroundView {
     /// Loads the open project's build into the session, compiled and
     /// stopped.
     fn reload(&mut self) {
-        self.dstate.deployed = false;
         let src = self.proj.build_src();
         self.session.load(&src);
         self.pending = None;
@@ -503,10 +531,8 @@ impl PlaygroundView {
     }
 
     /// The editor's text changed: the session's source follows at once
-    /// and is checked after the pause. What runs waits for Deploy (typing
-    /// waits; a diagram gesture deploys, [`Self::diagram_edit`]).
+    /// and is checked after the pause. What runs waits for Deploy.
     fn edited(&mut self, t: f64) {
-        self.dstate.deployed = false;
         self.session.src = self.proj.build_src();
         self.pending = Some(t);
         self.notice = None;
@@ -696,156 +722,6 @@ impl PlaygroundView {
         }
     }
 
-    /// [`Self::deploy`], and `format`: the open project's edited files are
-    /// first put in the one layout. A diagram edit deploys unformatted,
-    /// so the file holds the splice and nothing else.
-    fn deploy_as(&mut self, format: bool) {
-        // A red requirement test is said with the deploy, which goes on.
-        let red = self.tests_warn(None);
-        // What runs is what the files say, in the one layout.
-        if format && self.proj.format() > 0 {
-            self.edited(f64::NEG_INFINITY);
-        }
-        let src = self.proj.build_src();
-        let carried = self.session.deploy(&src);
-        self.pending = None;
-        self.sync_viewer();
-        if let Some(carried) = carried {
-            self.session.set_running(true);
-            self.seen.running = Some(true);
-            self.seen.scans = self.session.scans;
-            self.proj.running = Some(self.proj.open.clone());
-            let program = self
-                .viewer
-                .as_ref()
-                .and_then(|v| v.module.program())
-                .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
-            let note = format!(
-                "{} is running in this page{program}.{}",
-                self.proj.open,
-                carried.describe()
-            );
-            self.running_notice = Some(note.clone());
-            self.notice = Some(
-                red.as_ref()
-                    .map_or_else(|| note.clone(), |why| format!("{note} {why}")),
-            );
-            self.log.info(
-                self.session.now_ms as f64 / 1000.0,
-                format!("Deployed {}: running in this page{program}.", self.proj.open),
-            );
-            if let Some(why) = red {
-                self.log.warning(
-                    self.session.now_ms as f64 / 1000.0,
-                    format!("Deployed {} with a test red. {why}", self.proj.open),
-                );
-            }
-        } else {
-            self.notice = Some(format!(
-                "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
-                self.proj.open,
-                self.session.diags.len()
-            ));
-            self.log.error(
-                self.session.now_ms as f64 / 1000.0,
-                format!(
-                    "Deploy of {} refused: {} problem(s).",
-                    self.proj.open,
-                    self.session.diags.len()
-                ),
-            );
-        }
-    }
-
-    /// The diagram shows the code in the editor: the program deployed is
-    /// the text of the files as they stand.
-    fn diagram_in_sync(&self) -> bool {
-        self.viewer
-            .as_ref()
-            .is_some_and(|v| v.src == self.proj.build_src())
-    }
-
-    /// Whether the diagram's gestures change the code now, and when not,
-    /// what to do about it.
-    #[must_use]
-    pub fn edit_gate(&self) -> crate::diagram_edit::Gate {
-        use crate::diagram_edit::Gate;
-        if self.viewer.is_none() {
-            return Gate::Off("There is no diagram to edit: the program does not compile.".into());
-        }
-        if self.proj.sole_built_file().is_none() {
-            return Gate::Off(
-                "Editing from the diagram works on projects with one program file for now. \
-                 This project has more: change the code in the editor."
-                    .into(),
-            );
-        }
-        if !self.diagram_in_sync() {
-            return Gate::Off(match self.session.diags.first() {
-                Some(d) => format!(
-                    "The code in the editor does not compile ({d}), so the diagram cannot follow it. \
-                     Fix it, then Deploy."
-                ),
-                None => "The diagram shows the program as last deployed, not the code in the editor. \
-                         Deploy first, then edit from the diagram."
-                    .into(),
-            });
-        }
-        Gate::On
-    }
-
-    /// Makes `edit` on the code and deploys it, as the Deploy button would
-    /// (same checks: a red requirement test or a compile error leaves the
-    /// edit in the code and the program running as it was, and the note
-    /// under the top bar says why). The old text is one entry of the
-    /// editor's undo history, the edited text is highlighted in the
-    /// editor, and the diagram keeps its camera, its pick and where its
-    /// blocks were dragged to.
-    ///
-    /// # Errors
-    /// Why nothing was changed, in words: the engine's refusal of the
-    /// edit, or why the diagram's gestures are off.
-    pub fn diagram_edit(
-        &mut self,
-        edit: helmsman_diagram::edit::Edit,
-        ctx: &egui::Context,
-        chrome: &mut Chrome,
-    ) -> Result<(), String> {
-        if let crate::diagram_edit::Gate::Off(why) = self.edit_gate() {
-            return Err(why);
-        }
-        let (Some(v), Some(file)) = (&self.viewer, self.proj.sole_built_file()) else {
-            return Err("There is no diagram to edit.".into());
-        };
-        let patch = helmsman_diagram::edit::apply(&v.src, &v.module, edit)
-            .map_err(|refusal| format!("Not changed: {refusal}."))?;
-        let old = self.proj.files.get(&file).cloned().unwrap_or_default();
-        if old != v.src {
-            return Err("The diagram shows other code than the editor. Deploy first.".into());
-        }
-        let new = patch.apply_to(&old);
-        if new.len() > MAX_SOURCE {
-            return Err(format!(
-                "Not changed: the code would be over {MAX_SOURCE} characters, the most a file takes."
-            ));
-        }
-        let now = ctx.input(|i| i.time);
-        editor::push_undo(ctx, editor::source_id("pg-source", &self.proj.open, &file), &old);
-        self.proj.files.insert(file.clone(), new.clone());
-        self.proj.open_file(&file);
-        self.edited(now);
-        self.dstate.keep_view = true;
-        self.deploy_as(false);
-        self.dstate.keep_view = false;
-        self.dstate.deployed = self.diagram_in_sync();
-        chrome.flash(
-            &new,
-            patch.start..patch.start + patch.text.len(),
-            now + Chrome::FLASH,
-        );
-        Ok(())
-    }
-
     /// Rebuilds the diagram when the program running changed.
     fn sync_viewer(&mut self) {
         let Some(b) = &self.session.build else {
@@ -862,8 +738,6 @@ impl PlaygroundView {
         if let Some(v) = &self.viewer {
             self.layers.track(v);
         }
-        let keep = std::mem::take(&mut self.dstate.keep_view);
-        let previous = if keep { self.viewer.take() } else { None };
         self.fresh = true;
         self.viewer = b.module.clone().map(|m| {
             let mut v = Viewer::new(&b.src, m);
@@ -872,16 +746,6 @@ impl PlaygroundView {
             v.because = old.filter(|o| v.knows(o));
             v
         });
-        // A diagram edit changed the text of the blocks it touched, which
-        // is what names them: the camera, the pick and the places they
-        // were dragged to go with them.
-        if let (Some(before), Some(now)) = (&previous, &mut self.viewer) {
-            let renamed = before.edited_blocks(now);
-            let pairs: Vec<_> = renamed.iter().map(|r| (r.0.clone(), r.1.clone())).collect();
-            self.layers.carry(before, &pairs);
-            now.carry_view(before, &renamed);
-            self.last_pick = now.pick;
-        }
     }
 
     /// Checks the editor if it has been quiet long enough (or `now`):
@@ -1698,6 +1562,293 @@ impl PlaygroundView {
         self.instruct
             .discarded("Discarded the draft from the spec. Nothing was made.");
         self.log_outcome();
+    }
+
+    // ---- the design step (`crate::design_step`) ----
+
+    /// Why a design cannot be asked for now, if it cannot: what is not the
+    /// design entry's own words (those are said beside the entry).
+    fn design_blocked(&self) -> Option<String> {
+        if self.instruct.busy() {
+            return Some("The Agent is still working on the last instruction.".into());
+        }
+        self.design
+            .busy()
+            .then(|| "A design is being written.".to_string())
+    }
+
+    /// Asks the relay's design entry for the design of the machine in the
+    /// description window: the project's program, I/O and requirement
+    /// tests go with it as data.
+    pub fn send_design(&mut self, ctx: &egui::Context) {
+        if let Some(why) = self.design_blocked() {
+            self.design.error = Some(why);
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let description = self.design.description.clone();
+        let is_agent = |n: &str| helmsman_project::agent::is_agent_file(n);
+        let files: Vec<(String, String)> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| {
+                helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St)
+                    && !helmsman_iec::spec::is_test(n)
+                    && !is_agent(n)
+            })
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let tests: Vec<(String, String)> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| helmsman_iec::spec::is_test(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let devices = self.devices_text();
+        let first = crate::design::request(&crate::design::Ask {
+            description: &description,
+            dialect: crate::design_step::PAGE_DIALECT,
+            files: &files,
+            devices: &devices,
+            tests: &tests,
+        });
+        match self.design.start_page(first, &description, now) {
+            Ok(req) => {
+                self.design.open = false;
+                self.design_link.send(req.seq, req.for_page(), ctx);
+            }
+            Err(why) => self.design.error = Some(why),
+        }
+    }
+
+    /// Stop, or Discard of a cut design: nothing is kept.
+    pub fn stop_design(&mut self) {
+        self.design.stop();
+        self.design_link.abort();
+    }
+
+    /// Carry on after a stream that stopped early.
+    pub fn carry_on_design(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if let Some(req) = self.design.carry_on(now) {
+            self.design_link.send(req.seq, req.for_page(), ctx);
+        }
+    }
+
+    /// Why the design on show cannot be kept now, if it cannot.
+    fn design_keep_blocked(&self) -> Option<String> {
+        self.instruct
+            .busy()
+            .then(|| "The Agent is still working on the last instruction.".to_string())
+    }
+
+    /// Keep: the design goes into the open project as `design.md`, one
+    /// revision. A built-in example is read-only: a project of its own is
+    /// made first, named for the machine.
+    pub fn keep_design(&mut self) {
+        let Some(read) = self.design.read.clone() else {
+            return;
+        };
+        if let Some(why) = self.design_keep_blocked().or_else(|| read.keep_refusal()) {
+            self.design.notice = Some(why);
+            return;
+        }
+        if self.proj.is_example() {
+            let name = self
+                .proj
+                .free(&crate::design_step::project_slug(&read.description));
+            self.proj.create(&name, None);
+        }
+        if self.proj.dirty() {
+            self.proj.save();
+        }
+        self.proj
+            .files
+            .insert(crate::design_step::DESIGN_FILE.to_string(), read.text.clone());
+        let what = if read.design.summary.is_empty() {
+            "Kept the design".to_string()
+        } else {
+            format!(
+                "Kept the design: {}",
+                read.design.summary.chars().take(100).collect::<String>()
+            )
+        };
+        self.proj.save_as(&what, None);
+        self.reload();
+        self.design.discard();
+        self.design_built.remove(&self.proj.open);
+        self.notice = Some(format!(
+            "Kept the design as {} in {}.",
+            crate::design_step::DESIGN_FILE,
+            self.proj.open
+        ));
+    }
+
+    /// The open project's kept design: what the tab shows of it. Read
+    /// again only when the file changed.
+    fn kept_design(&mut self) -> Option<crate::design_ui::Kept> {
+        let text = self.proj.files.get(crate::design_step::DESIGN_FILE)?;
+        let (d, problems) = self.design_cache.get(text);
+        let built = self.design_built.get(&self.proj.open).copied().unwrap_or(0);
+        let blocked = if self.instruct.busy() {
+            Some("The Agent is still working on the last instruction.".to_string())
+        } else {
+            self.chat.route().err().map(str::to_string)
+        };
+        Some(crate::design_step::kept_view(d, problems, built, blocked))
+    }
+
+    /// [`Self::kept_design`], for the tests.
+    #[cfg(test)]
+    pub fn kept_design_for_test(&mut self) -> Option<crate::design_ui::Kept> {
+        self.kept_design()
+    }
+
+    /// Sets how many steps of the open project's design are built, for
+    /// the tests.
+    #[cfg(test)]
+    pub fn design_built_for_test(&mut self, n: usize) {
+        self.design_built.insert(self.proj.open.clone(), n);
+    }
+
+    /// Build: the next batch of the kept design's build order goes to the
+    /// steps run, `Design::step_brief` as each step's instruction.
+    pub fn build_design(&mut self, ctx: &egui::Context) {
+        if self.instruct.busy() {
+            return;
+        }
+        if let Err(why) = self.chat.route() {
+            self.instruct.failed(why);
+            return;
+        }
+        let Some(text) = self.proj.files.get(crate::design_step::DESIGN_FILE) else {
+            return;
+        };
+        let (design, problems) = self.design_cache.get(text);
+        if !problems.is_empty() {
+            return;
+        }
+        let built = self.design_built.get(&self.proj.open).copied().unwrap_or(0);
+        let Some(batch) = crate::design_step::batch(design, built) else {
+            return;
+        };
+        let label = batch.label(design);
+        let file = if self.proj.files.contains_key(helmsman_project::MAIN) {
+            helmsman_project::MAIN.to_string()
+        } else {
+            self.proj.current.clone()
+        };
+        let (diags, devices, settings) = self.agent_env();
+        let env = crate::instruct::Env {
+            project: &self.proj.open,
+            scope: crate::scope::Scope::File(file),
+            files: &self.proj.files,
+            source: &self.session.src,
+            diagnostics: &diags,
+            devices: &devices,
+            settings,
+        };
+        self.instruct.edits = self.chat.serves(crate::instruct::AGENT);
+        let n = batch.to - batch.from;
+        let (from, total) = (batch.from, batch.total);
+        match self
+            .instruct
+            .start_design_steps(&env, &label, (batch.steps, batch.briefs), (from, total))
+        {
+            Ok(ask) => {
+                self.design_building = Some((self.proj.open.clone(), n));
+                self.asked_at = ctx.input(|i| i.time);
+                self.drop_question();
+                self.send_ask(&ask, ctx);
+            }
+            Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// Each frame: the design entry's status when it is not known, what
+    /// the transport brought, and a batch that ended.
+    fn design_tick(&mut self, ctx: &egui::Context) {
+        if let Some(base) = self.design.ask_status() {
+            self.design_link.check_design(&base, ctx);
+        }
+        let now = ctx.input(|i| i.time);
+        for m in self.design_link.drain() {
+            if let crate::claude::Incoming::DesignStatus(body) = &m {
+                self.design.status_body(body);
+            } else if let Some(feed) = crate::design_step::Feed::from_claude(m)
+                && let Some(req) = self.design.receive(feed, now)
+            {
+                self.design_link.send(req.seq, req.for_page(), ctx);
+            }
+        }
+        if self.design.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
+    /// A batch of the design that was written counts its steps; one that
+    /// was stopped or refused counts none.
+    fn design_count(&mut self) {
+        if self.design_building.is_none() || self.instruct.busy() {
+            return;
+        }
+        let applied = self
+            .instruct
+            .outcome
+            .as_ref()
+            .is_some_and(|o| o.kind == crate::instruct::Kind::Applied);
+        if let Some((project, n)) = self.design_building.take()
+            && applied
+        {
+            *self.design_built.entry(project).or_default() += n;
+        }
+    }
+
+    /// What an act of the design screens asks for.
+    fn design_act(&mut self, act: crate::design_ui::Act, ctx: &egui::Context) {
+        use crate::design_ui::Act;
+        match act {
+            Act::Send => self.send_design(ctx),
+            Act::Stop | Act::Discard => {
+                if self.design.busy() {
+                    self.stop_design();
+                } else {
+                    self.design.discard();
+                }
+            }
+            Act::CarryOn => self.carry_on_design(ctx),
+            Act::Keep => self.keep_design(),
+            Act::Build => self.build_design(ctx),
+        }
+    }
+
+    /// The description window and the window the design is read in.
+    fn design_windows(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        if !self.design.visible() {
+            return;
+        }
+        let blocked = self
+            .design_blocked()
+            .or_else(|| self.design.closed_line(ctx.input(|i| i.time)));
+        let mut acts = Vec::new();
+        acts.extend(crate::design_ui::ask_window(
+            ctx,
+            chrome,
+            &mut self.design,
+            blocked.as_deref(),
+        ));
+        let keep = self.design_keep_blocked();
+        acts.extend(crate::design_ui::read_window(
+            ctx,
+            chrome,
+            &mut self.design,
+            keep.as_deref(),
+        ));
+        for a in acts {
+            self.design_act(a, ctx);
+        }
     }
 
     /// The specification's window, the files the browser's picker gave it
@@ -2644,6 +2795,7 @@ impl PlaygroundView {
         }
         self.program_name_ui(&ui.ctx().clone(), chrome);
         self.spec_ui(&ui.ctx().clone(), chrome);
+        self.design_windows(&ui.ctx().clone(), chrome);
         self.revision_ui(&ui.ctx().clone(), chrome);
         for (name, r) in std::mem::take(&mut self.input_rects) {
             chrome.hit(format!("input {name}"), r);
@@ -2919,10 +3071,12 @@ impl PlaygroundView {
         for m in self.link.drain() {
             self.chat.receive(m);
         }
+        self.design_tick(ctx);
         self.drop_run_of_another_project();
         self.side_settle(ctx);
         self.start_settle(ctx);
         self.settle(ctx);
+        self.design_count();
         self.tidy_question();
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
@@ -3467,9 +3621,7 @@ impl Body for PlaygroundView {
         self.idle_ui(ui, chrome);
         let menus = self.assign_menus();
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
-        let gate = self.edit_gate();
         if let Some(v) = &mut self.viewer {
-            v.edit_gate = gate;
             // A block's lines are the files' only while the diagram is of the text.
             v.chat_ok = v.src == self.proj.build_src();
             v.assign = menus;
@@ -3483,13 +3635,13 @@ impl Body for PlaygroundView {
             for t in self.session.earlier() {
                 v.saw(t, now);
             }
-            v.menu_open = self.dedit.is_open() || self.sim_popup.is_some();
+            v.menu_open = self.dmenu.is_open() || self.sim_popup.is_some();
             v.canvas(ui, scan);
             let reads = v.reads_on_screen();
             // The switches over the Read blocks take the right-click first.
             v.secondary_on_controls(ui, &reads);
             if let Some(g) = v.gesture.take() {
-                self.dedit.open(v, g);
+                self.dmenu.open(v, g);
             }
             // The blocks selected are the Agent's focus.
             crate::chat_about::apply_off(&mut self.instruct, v);
@@ -3510,8 +3662,8 @@ impl Body for PlaygroundView {
                 );
                 self.instruct.focus.set(key, made);
             }
-            self.dedit.chat_full = self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS;
-            let asked = self.dedit.show(ui.ctx(), chrome, area, v);
+            self.dmenu.chat_full = self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS;
+            self.dmenu.show(ui.ctx(), chrome, area);
 
             let mut jump = None;
             if v.pick != self.last_pick {
@@ -3522,10 +3674,10 @@ impl Body for PlaygroundView {
                     self.selection = None;
                 }
             }
-            if let Some((port, ask)) = self.dedit.take_assign() {
+            if let Some((port, ask)) = self.dmenu.take_assign() {
                 self.assign_ask(port, ask);
             }
-            if let Some(n) = self.dedit.take_chat() {
+            if let Some(n) = self.dmenu.take_chat() {
                 self.chat_about_node(n, chrome);
             }
             self.map_inputs(ui, area, &reads);
@@ -3533,12 +3685,6 @@ impl Body for PlaygroundView {
                 match self.proj.locate(line) {
                     Some((file, l)) => self.goto(&file, l, chrome),
                     None => chrome.goto(line),
-                }
-            }
-            if let Some(edit) = asked {
-                match self.diagram_edit(edit, ui.ctx(), chrome) {
-                    Ok(()) => self.dedit.close(),
-                    Err(why) => self.dedit.fail(why),
                 }
             }
             return;
@@ -3932,6 +4078,15 @@ impl PlaygroundView {
                         self.spec.open = true;
                     }
                 });
+            }
+            let view = crate::design_ui::EntryView {
+                now: ctx.input(|i| i.time),
+                blocked: self.design_blocked(),
+                keep_blocked: self.design_keep_blocked(),
+                kept: self.kept_design(),
+            };
+            if let Some(act) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
+                self.design_act(act, &ctx);
             }
             let r = ui
                 .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
@@ -5122,9 +5277,6 @@ impl Workspace for PlaygroundView {
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
         let id = self.source_id();
-        // A diagram edit is deployed, so Undo of it is too, while the
-        // diagram still shows the code as it stands.
-        let follows = self.dstate.deployed && self.diagram_in_sync();
         let Some(text) = self.proj.current_text_mut() else {
             return false;
         };
@@ -5132,12 +5284,6 @@ impl Workspace for PlaygroundView {
         if done {
             let t = ctx.input(|i| i.time);
             self.edited(t);
-            if follows {
-                self.dstate.keep_view = true;
-                self.deploy_as(false);
-                self.dstate.keep_view = false;
-                self.dstate.deployed = self.diagram_in_sync();
-            }
         }
         done
     }
@@ -5154,8 +5300,61 @@ impl Workspace for PlaygroundView {
     /// typed text reaches the program running. One that does not compile is
     /// refused, its errors listed, and the program running is unchanged.
     fn deploy(&mut self) {
-        self.dstate.deployed = false;
-        self.deploy_as(true);
+        // A red requirement test is said with the deploy, which goes on.
+        let red = self.tests_warn(None);
+        // What runs is what the files say, in the one layout.
+        if self.proj.format() > 0 {
+            self.edited(f64::NEG_INFINITY);
+        }
+        let src = self.proj.build_src();
+        let carried = self.session.deploy(&src);
+        self.pending = None;
+        self.sync_viewer();
+        if let Some(carried) = carried {
+            self.session.set_running(true);
+            self.seen.running = Some(true);
+            self.seen.scans = self.session.scans;
+            self.proj.running = Some(self.proj.open.clone());
+            let program = self
+                .viewer
+                .as_ref()
+                .and_then(|v| v.module.program())
+                .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
+            let note = format!(
+                "{} is running in this page{program}.{}",
+                self.proj.open,
+                carried.describe()
+            );
+            self.running_notice = Some(note.clone());
+            self.notice = Some(
+                red.as_ref()
+                    .map_or_else(|| note.clone(), |why| format!("{note} {why}")),
+            );
+            self.log.info(
+                self.session.now_ms as f64 / 1000.0,
+                format!("Deployed {}: running in this page{program}.", self.proj.open),
+            );
+            if let Some(why) = red {
+                self.log.warning(
+                    self.session.now_ms as f64 / 1000.0,
+                    format!("Deployed {} with a test red. {why}", self.proj.open),
+                );
+            }
+        } else {
+            self.notice = Some(format!(
+                "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
+                self.proj.open,
+                self.session.diags.len()
+            ));
+            self.log.error(
+                self.session.now_ms as f64 / 1000.0,
+                format!(
+                    "Deploy of {} refused: {} problem(s).",
+                    self.proj.open,
+                    self.session.diags.len()
+                ),
+            );
+        }
     }
 
     fn busy(&self) -> bool {

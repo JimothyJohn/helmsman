@@ -38,6 +38,8 @@ mod assign_ui;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod box_design_tests;
 mod box_popup;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -47,22 +49,18 @@ mod box_spec;
 mod box_tests;
 mod box_trend;
 mod box_view;
+mod chat_about;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod chat_about_tests;
 mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod lint_shipped_tests;
-// The design step's contract, ahead of the Agent tab entry that will call
-// it (TODO.md `design-step-canvas`): nothing outside its tests uses it yet.
-mod chat_about;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod chat_about_tests;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into the Agent tab by design-step-canvas")
-)]
 mod design;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod design_page_tests;
+mod design_step;
+mod design_ui;
 mod desk;
 mod device_config;
 mod device_form;
@@ -71,7 +69,7 @@ mod device_io;
 mod device_proposal;
 mod device_vendor;
 mod devices;
-mod diagram_edit;
+mod diagram_menu;
 mod diff_ui;
 mod editor;
 mod edits;
@@ -99,6 +97,9 @@ mod jump;
 mod lamps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod link_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lint_shipped_tests;
+mod md_view;
 mod messages;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]

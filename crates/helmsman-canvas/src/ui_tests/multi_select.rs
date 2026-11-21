@@ -472,11 +472,10 @@ fn escape_belongs_to_a_menu_or_the_find_box_first() {
     let motor = h.write_of("motor");
     h.wait(1.0);
     h.right_click(h.on_screen(motor).center());
-    assert_ne!(h.app.sim.as_ref().unwrap().dedit.stage_name(), "closed");
+    assert!(h.app.sim.as_ref().unwrap().dmenu.is_open());
     h.key(Modifiers::NONE, Key::Escape);
-    assert_eq!(
-        h.app.sim.as_ref().unwrap().dedit.stage_name(),
-        "closed",
+    assert!(
+        !h.app.sim.as_ref().unwrap().dmenu.is_open(),
         "Escape shuts the menu"
     );
     assert_eq!(h.selected(), sel, "and leaves the selection");

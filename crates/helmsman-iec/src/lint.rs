@@ -362,6 +362,7 @@ impl<'a> Scope<'a> {
             ExprKind::Int { .. } => Ty::Elem("INT".into()),
             ExprKind::Bool(_) | ExprKind::Unary(UnOp::Not, _) => Ty::Elem("BOOL".into()),
             ExprKind::Time(_) => Ty::Elem("TIME".into()),
+            ExprKind::Calendar(ty, _) => Ty::Elem(ty.name().into()),
             ExprKind::Str(_) => Ty::Elem("STRING".into()),
             ExprKind::EnumLit(..) => Ty::Enum,
             ExprKind::Var(n) => self.ty_of_var(n),

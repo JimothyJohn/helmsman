@@ -274,16 +274,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-13
   by: claude-session
 
-- [ ] **Publish a checked device profile to the library** — the second tool, on the relay (it holds the only token that can push): a pull request into helmsman-devices' `dev` with `NAME.device` beside `device.toml` and `index.json` gaining `profile`, opened from what the user checked on the Devices tab.
-  needs: a fine-grained GitHub token held by the relay alone (Nick, 2026-11-13: only the relay can push), limited to pull requests on helmsman-devices and kept in Secrets Manager; you create it from a hand-off script that names the scopes. No box ever holds a GitHub credential
-  result: the library grows by a pull request each time a user maps a new device
-  depends: device-profile-propose-box
-  est: 1d
-  difficulty: med
+- [ ] **Publish a checked device profile to the library: the token, the deploy, the first real one** — built 2026-11-18 (helmsman PR for the box route and the Devices tab's "Publish to the library…", agent-relay PR #51 for the tool `publish_device_profile` and profile `helmsman/v13`), both drafts; nothing has met the real GitHub, only a scripted one. What it does: an engineer saves a profile, the tab offers the button, the box sends the saved file to the relay, the relay opens a DRAFT pull request into helmsman-devices `dev` (`NAME.device` beside the device's `device.toml`, which gains `profile = "NAME.device"`, and `index.json` gaining `profile`, byte for byte what `build-index.py` writes; drafts because the library's auto-merge merges non-draft PRs from you). Only for a device the library's index already lists (44 of 45 entries have no profile yet); one it lacks is refused with the pointer to a "New device:" issue. Left: (1) your steps, in order: review and merge the relay PR (a new template parameter `GithubSecretName` and one IAM statement reading that one secret), `./scripts/deploy.sh` there, run `scratch/31-github-publish-token.sh` (prints the token settings to make, takes it at a hidden prompt, stores it with `scripts/put-github-key.sh`, checks it sees helmsman-devices and not another repository), merge this PR and start a box with `--relay-publish-agent` left at its default `helmsman/v13` (or `--relay-agent v13`); until the token is stored every publish answers "publishing is not set up" and nothing else changes; (2) the first real publish, from the E1213 or an E1210 profile, to see the PR, its CI (`build-index.py --check`) and the draft; fix what the real GitHub shows and keep it as a test in the relay; (3) a device the library lacks: a minimal folder (`device.toml` with vendor, model, kind and profile only) is a small step on the relay, a decision on what the library accepts without an EDS or citations (its AGENTS.md says every field is read or seen); (4) the tool is listed to the model too (the route needs the profile to list it, and a model's call does nothing); a tool flag that keeps it out of the model's list is a relay-core change.
+  needs: you: the steps in (1); a unit-checked profile is not required (the PR says no unit has proven it)
+  result: the library grows by a pull request each time a user maps a device it has no profile for
+  est: 2h of yours, then 2h for what the first real publish shows
+  difficulty: low
   id: device-profile-publish
   asked: 2026-11-13
   by: claude-session
-  status: ready
+  status: blocked
 
 - [ ] **PROFINET from the node: a real device, then the node image** — Why it matters: only once a device has to be reached over PROFINET. Parked with `profinet-raw-access` (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first; PROFINET when a customer or a device needs it). the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block.
   needs: a device that has to be reached over PROFINET
@@ -404,7 +403,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   notes: box side merged in #219 (FC 43/14 codec and probe, modbus= endpoints, discover ?modbus=1, spec §6.21). Left: the Devices tab asking ?modbus=1 and showing the list; identity.modbus in helmsman-devices build-index.py; a Modbus-identity query on GET /api/devices/library; whether the E1213 answers FC 43/14 (unchecked: it was off the LAN 2026-11-04).
 
-- [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (separate repo and session; SAM deploy, deploy-chain edits as a draft PR): a new profile id (e.g. helmsman/help-v1; a served profile never changes) whose model gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
+- [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (SAM deploy, deploy-chain edits as a draft PR): helmsman/help-v1 (agent-relay #55, 2026-11-18) answers from the box data and help pages alone; this is the next id (helmsman/help-v2, and the box's `--relay-help-agent` default moved to it), whose model also gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
   needs: a session in ../agent-relay (this repo's sessions cannot write there); Nick's go for the deploy
   result: the relay serves the Help profile the box's Help mode asks for
   est: 2d
@@ -427,16 +426,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: kept-files-in-canvas
   asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — Why it matters: today a node's firmware changes only over a USB cable from a laptop, so a node in a cabinet has to be opened to update it. This lets it take a new image over the network and fall back to the old one by itself if the new one does not come up, so a bad build cannot leave a machine without its controller. #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. On the P4 (helmsman-node-p4); the ESP32 boards are closed (Nick, 2026-11-13). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
-  needs: the P4 on the bench (192.168.3.56, /dev/cu.usbmodem5C930154551): the node board since 2026-11-13, the ESP32 boards closed
-  result: a node on the plant network takes a new firmware from a laptop without a USB cable, and a bad image cannot brick it
-  notes: sized 2026-11-09 (not started, needs the bench): (1) a new partition table, nvs / otadata / phy_init / ota_0 / ota_1 on supervictor/edge/partitions.csv's model, one USB flash per board (espflash --partition-table, --erase-parts otadata; it moves the nvs region the settings and program live in, so the node is commissioned again); (2) port supervictor/edge/src/ota/{install,policy,http,manifest}.rs into nodecore (Slot trait installer with sector buffering, digest and read-back; the checksummed RTC record with MAX_PENDING_BOOTS; the strict response-head parser; 2.4k lines with their proptests, tied to supervictor_common::firmware types to replace); (3) the fetch task on embassy-net (Range + If-Match) writing through esp-bootloader-esp-idf 0.5's OtaUpdater (next_partition, activate_next_partition, set_current_ota_state), the boot policy at start, GET /api/firmware, POST /api/firmware {url, sha256}, POST /api/firmware/confirm; (4) on the P4: a push, a confirm, a forced rollback.
-  est: 2d
-  difficulty: high
-  id: node-ota
-  asked: 2026-11-09
   by: claude-session
 
 - [ ] **A Studio box with the device links off, beside the P4** — your answer to `try-box-keep-or-retire` (2026-11-13): the Studio is for app and interface work, the P4 for runtime and embedded work, and the two should not both be on the devices; but the Studio box should still be programmable with everything except device comms, so it can run while the P4 has them. Today a box opens every link its project's map names, and the only way off the E1213 is to stop the box. Build a box setting (`--links off`, and the same as a switch an engineer can flip): the program, the canvas, the agent, proposals, history and the Monitor all work; no link opens; each input reads as the simulation would give it (the same plant model the page's simulation runs) and outputs go nowhere; the Devices tab and the Monitor say "device links off on this box" so nobody reads simulated values as the plant's. Then the try box runs that way during P4 work, and CLAUDE.md's try box entry says so.
@@ -471,7 +460,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   result: the P4 node runs on PoE alone, shares the E1213, and has its G4 and G5 numbers in docs/EDGE.md
   est: 1d
   difficulty: med
-  notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash 4.7.0). A program over the flash slot runs but is not kept (12 KB did not fit): the larger slot comes with node-ota's partition table.
+  notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash 4.7.0). A program over the flash slot runs but is not kept (12 KB did not fit): node-ota's partition table kept the settings area at its 24 KiB, so a larger program slot is still open (it moves the settings, so the node is commissioned again).
   depends: p4-poe-isolation, e1213-firmware-update
   id: node-p4-followups
   asked: 2026-11-10
@@ -492,16 +481,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 4d
   difficulty: high
   id: design-step
-  asked: 2026-11-15
-  by: design-step session
-
-- [ ] **Design step on the canvas: ask for a design, read it, build from it** — done in #465: `crates/helmsman-canvas/src/design.rs` (`request`, `CONTINUE`, `join`, `parse`, `Design::problems`, `Design::step_brief`), registered with an expect on dead_code because nothing calls it yet. Left, once the agent-speed work on instruct.rs and claude.rs has landed: the Agent tab entry (on a box it posts to `POST /api/design` and posts `{"session"}` again while `done.more` is true; on the page it needs the playground's design entry, card `design-step-playground`), the thinking summary shown while a turn runs (a turn can take 8 minutes), the design kept with the project as `design.md` and shown readable at the panel's default width, `Design::problems` shown before Build is offered, and its Build order handed to the steps run (`steps.rs`) with `step_brief` as each step's instruction. Today a plan is at most 6 steps on one file (`MAX_STEPS`) and the bottling line's design has 19 steps over 11 parts: that limit, and one PROGRAM per project, are what the abstraction work has to lift; until then the step run takes the design in batches and says so. The page hides the design entry when the relay does not serve it.
-  needs: the relay serving design-v1 (`design-step-deploy`) to try it live; fixtures of the bottling-line turns for tests (the session's scratchpad has them; hold them as test data)
-  result: the Agent tab has a design entry; a design is a project file; Build runs its steps
-  depends: design-step
-  est: 2d
-  difficulty: high
-  id: design-step-canvas
   asked: 2026-11-15
   by: design-step session
 
@@ -619,8 +598,8 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **The diagram draws a VAR_IN_OUT argument as a read** — found while building `st-var-in-out` (#446, 2026-11-15): a function block can write through its in-out argument, but helmsman-diagram's lowering draws that argument as an input wire only, so the write the block makes is missing from the picture and the diagram edits (`edit.rs`, built before in-outs existed) have never been tried on such a call. Draw the in-out as both ways, extend the generators in crates/helmsman-diagram/tests/props.rs to call blocks with in-outs and functions with outputs, and make each edit either work on those calls or refuse in plain words.
-  result: a block that takes a buffer by reference shows that it changes it, and editing around it from the diagram is safe
+- [ ] **The diagram draws a VAR_IN_OUT argument as a read** — found while building `st-var-in-out` (#446, 2026-11-15): a function block can write through its in-out argument, but helmsman-diagram's lowering draws that argument as an input wire only, so the write the block makes is missing from the picture. Draw the in-out as both ways, and extend the generators in crates/helmsman-diagram/tests/props.rs to call blocks with in-outs and functions with outputs.
+  result: a block that takes a buffer by reference shows that it changes it
   est: 1d
   difficulty: med
   id: diagram-in-out
@@ -695,11 +674,11 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **TOD, DATE and DT** — the last "yes" row of INVESTIGATION.md §4: time-of-day and date types and their arithmetic, from the clock `scan_at` already has (the shift calendar uses it), so "after 22:00" can be written in ST. Oracle cases (ruSTy accepts them), property tests across midnight and the year end, no_std, a relay profile id. After `st-string`, which the formatting functions need.
-  result: schedule logic is written in ST instead of worked around with the calendar
-  est: 2d
-  difficulty: med
-  depends: st-string
+- [ ] **TOD, DATE and DT: the rest** — built: the language, the box's wall clock in its system time zone (`--time-zone`), the canvas simulation's browser time, and the prompts (relay PR agent-relay#54: `helmsman/v14`, `playground-v7`, `tests-v2`). Left: point the box (`--relay-agent`), the demo (`RELAY_DEMO_AGENTS`) and the test writer at those ids once the relay is deployed; DATE/TOD/DT ports are no signals (with STRING: `st-string-signals`); `SPLIT_DATE`/`SPLIT_TOD`/`SPLIT_DT` and the `L` forms are not built.
+  result: a controls engineer can read a DATE, TOD or DT port beside the other signals, and the agents write with the new ids
+  est: 4h
+  difficulty: low
+  depends: st-string-signals
   id: st-tod-date
   asked: 2026-11-08
   by: claude-session
@@ -722,7 +701,7 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: st-lsp-formatter
   asked: 2026-11-08
   by: claude-session
-  status: ready
+  notes: 2026-11-17 Nick's pick: the lints are built (#509); the language server and the formatter stay parked.
 
 - [ ] **Siemens SCL import** — decided (Nick, 2026-11-08: `st-scl-import`): not for the early release. SCL (TIA Portal) is an ST dialect (`#local`, `"DB".member`, REGION, IEC_TIMER instances, its own instructions); a source-level converter would follow the L5X pattern. Carded here so it is not lost: pick it up when a customer brings TIA code, and estimate then (likely 1-2 weeks).
   needs: a customer with TIA Portal code to import
@@ -733,17 +712,6 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   id: scl-import
   asked: 2026-11-08
   by: claude-session
-
-- [ ] **Diagram edits V2 and V3: add blocks, then regions** — V2: a palette to add a block, a new assignment or a new FB instance (that edits the VAR section too). V3: regions: wrap statements in an IF, edit a condition, add ELSIF or ELSE, add CASE arms.
-  result: building new logic from the diagram, not only changing it
-  notes: V2 about 3-4 days, V3 about 3 days; split into cards when V1 lands.
-  est: 1w
-  difficulty: high
-  depends: diagram-edit-docs
-  id: diagram-edit-v2-v3
-  asked: 2026-11-07
-  by: claude-session
-  status: ready
 
 ### Fewer, more descriptive blocks on the diagram (Nick, 2026-11-15: "do everything")
 
@@ -851,7 +819,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: machine-template
   asked: 2026-11-01
   by: claude-session
-  status: ready
+  notes: 2026-11-17 Nick's pick: skipped until real documents exist.
 
 - [ ] **Fleet console + OTA** — the relay grows into the fleet backbone: box registry, snapshot sync, signed updates of the core.
   est: 3w
@@ -859,7 +827,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: 2026-11-02 night: the node half moved: helmsman-node runs the scan bench and Modbus (PRs #193, #199); its own API + site beacon and the Site view across nodes are what this card is now.
   id: fleet-console
   needs: a decision taken (interview 2026-11-02): no console host at all; see notes
-  notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
+  notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (A/B slots and the rollback are built, card node-ota, 2026-11-18: the node pulls an image from a URL; signed images are what is left); depends on the edge spike (`node-modbus`) for the node half.
   status: ready
 
 - [ ] **TLS on a node's data port** — your answer to `node-tls-first-peer` (2026-11-13): needed eventually to push production data out over a second network port, with strict isolation between the control runtime and the data publication; not until there is a board with more than one Ethernet port. The recipe (mbedtls-rs at the fork's main with Homebrew clang) compiles for the P4 (docs/EDGE.md Phase 3) and is all that exists.
@@ -891,11 +859,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 - [ ] **Box SKU** — reproducible Pi image, first-boot pairing with the relay, provisioning script, enclosure/BOM for the preloaded kit.
   est: 2w
   difficulty: high
-  notes: walking skeleton done 2026-11-02 night, PR #198: scripts/pi-image.sh (pi-gen in Docker, pinned ref), helmsman-firstboot pairing files → LoadCredential, docs/BOX.md; not booted. Pairing by code needs a relay endpoint (relay card). Card stays open for enclosure/BOM and a booted image.
+  notes: walking skeleton done 2026-11-02 night, PR #198: scripts/pi-image.sh (pi-gen in Docker, pinned ref), helmsman-firstboot pairing files → LoadCredential, docs/BOX.md; not booted. 2026-11-18 slice (branch feat/box-image-ci, draft; relay half agent-relay feat/pair-by-code, draft): BUILT: .github/workflows/box-image.yml builds the image on an arm64 runner and scripts/box-boot-test.sh boots it under QEMU raspi3b (the image's own kernel; watchdog driver kept out), a scripted relay answers the redeem, the job waits for /api/health and the canvas page and keeps the serial log; `helmsman-plc pair` + helmsman-firstboot take a pairing-code, relay-box-id and relay-url (relay-allow-http for an http relay) off the boot partition; relay: POST /v1/pairings (admin token named in PairAdmins) and POST /v1/pair, tests on memory and SQLite. DONE 2026-11-19: the CI boot is green (run 44445977754: build, boot, API up after 205 s, canvas served, one pairing redeem; 23 min); pi-gen.ref is pinned. CHANGED 2026-11-18: QEMU's raspi3b froze the guest in sysinit (cause not found), so CI boots the image's rootfs on the generic `virt` machine with a pinned Debian cloud kernel (deploy/pi-image/qemu-kernel.env; its modules copied into the CI copy), which proves the userland and first boot, not the Pi's kernel/firmware/device tree. LEFT: enclosure and BOM; deploying the relay half (PairAdmins parameter, an admin token, `make test-integration` for the DynamoDB test nobody has run, maybe a WAF on /v1/pair); the first boot of the image on a real Pi (OWED: CI no longer runs a Pi machine); a console prompt for the code was left out.
   id: box-sku
   needs: the walking skeleton only, for now
   notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a reproducible Pi image build script (pi-gen or rpi-image-gen, the box binary and the canvas preinstalled, the systemd unit, first boot pairs with the relay from a one-time code) checked by booting it in QEMU in CI; no enclosure or BOM yet. Est for the skeleton: 2d.
-  status: ready
+  notes: the ready mark is dropped on 2026-11-18: what is left (enclosure, BOM, the relay deploy) is Nick's, not a worker's.
 
 - [ ] **EtherCAT master via ethercrab** — ethercrab (MIT/Apache-2.0, pure Rust) as the driver; EtherCAT slaves' PDOs mapped into the runtime's %I/%Q. Master only: a Pi cannot be an EtherCAT slave (needs an ESC chip).
   needs: a USB 3 gigabit NIC for the Pi (its one port is the Studio link) and one EtherCAT I/O slave to test against (e.g. a bus coupler + digital I/O terminal)

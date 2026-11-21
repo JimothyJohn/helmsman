@@ -58,6 +58,7 @@
 //! POST /api/device-profile/proposal       token or session: {name, text, summary}, read by the profile checker; held for a person, or 422 with the problems and their lines
 //! POST /api/device-profile/proposal/accept engineer session: {id, project, name?, channels?}: the channels renamed, checked again, `NAME.device` saved into the project
 //! DELETE /api/device-profile/proposal     engineer session: drop the proposal
+//! POST /api/device-profile/publish        engineer session: {project, file}: the saved NAME.device, checked again, sent to the relay, which opens a draft pull request into the public device library (needs --relay; see [`device_profile`])
 //! GET  /api/projects ...                  the editor's projects; PUT, DELETE, deploy and uploads need an engineer session (see [`projects`])
 //! POST /api/projects/{p}/requirements    engineer session: one requirement in words; the agent writes its test (see [`requirements`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
@@ -2062,6 +2063,7 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/device-profile/proposal", true, "token or session: {name, text, summary}: the text is read by the profile checker; 201 holds it and lists its channels, 422 lists problems with lines"),
             e("POST", "/api/device-profile/proposal/accept", true, "engineer session: {id, project, name?, channels?: {FROM: TO}}: rename, check again and save NAME.device into the project as a new file"),
             e("DELETE", "/api/device-profile/proposal", true, "engineer session: drop the proposal"),
+            e("POST", "/api/device-profile/publish", true, "engineer session: {project, file}: the saved NAME.device, read again by the profile checker and sent to the agent service, which opens a draft pull request into the device library; 201 with {number, url, created, draft, folder}, 200 when it already has one open, 422 with the reason or the profile's problems"),
             e("GET", "/api/proposals", true, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", true, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),

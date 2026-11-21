@@ -101,6 +101,26 @@ pub struct DeviceLive {
     pub reconnects: u32,
 }
 
+/// The firmware half of the live state (`GET /api/firmware`).
+pub struct FwLive {
+    /// The partition table has two app slots and the trial record.
+    pub available: bool,
+    pub slot: Option<u8>,
+    pub trial: helmsman_nodecore::ota::status::Trial,
+    pub fetch: helmsman_nodecore::ota::status::Fetch,
+}
+
+impl Default for FwLive {
+    fn default() -> Self {
+        Self {
+            available: false,
+            slot: None,
+            trial: helmsman_nodecore::ota::status::Trial::Confirmed,
+            fetch: helmsman_nodecore::ota::status::Fetch::Idle,
+        }
+    }
+}
+
 /// What a request asked the scan loop to do; cleared once done.
 pub enum Pending {
     /// Compile and run `source` as `name`. The scan loop compiles, not the
@@ -139,6 +159,7 @@ pub struct Live {
     pub deployed: Option<DeployResult>,
     pub link_up: bool,
     pub ip: Option<[u8; 4]>,
+    pub fw: FwLive,
 }
 
 pub type Shared = Mutex<CriticalSectionRawMutex, RefCell<Live>>;
@@ -236,6 +257,17 @@ pub fn view(
             version: helmsman_nodecore::VERSION,
             board,
             io_map,
+            firmware: live
+                .fw
+                .available
+                .then(|| helmsman_nodecore::ota::status::Firmware {
+                    version: helmsman_nodecore::VERSION,
+                    build: crate::ota::BUILD,
+                    chip: helmsman_nodecore::ota::image::Chip::Esp32P4.label(),
+                    slot: live.fw.slot,
+                    trial: live.fw.trial,
+                    fetch: live.fw.fetch.clone(),
+                }),
         }
     })
 }

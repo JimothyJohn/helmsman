@@ -108,6 +108,8 @@ pub enum ExprKind {
     },
     Bool(bool),
     Time(i128),
+    /// A DATE, TOD or DT literal: its type and nanoseconds.
+    Calendar(crate::types::Ty, i128),
     /// A STRING literal: its bytes, escapes resolved (at most 255).
     Str(Vec<u8>),
     EnumLit(String, String),
@@ -1746,6 +1748,7 @@ impl Parser {
             Tok::Real { value, prefix } => ExprKind::Real { value, prefix },
             Tok::Bool(b) => ExprKind::Bool(b),
             Tok::Time(ns) => ExprKind::Time(ns),
+            Tok::Calendar(ty, ns) => ExprKind::Calendar(ty, ns),
             Tok::Str(bytes) => ExprKind::Str(bytes),
             Tok::EnumLit(t, v) => ExprKind::EnumLit(t, v),
             Tok::Direct(d) => ExprKind::Direct(d),
@@ -1814,6 +1817,7 @@ mod tests {
             ExprKind::Real { value, .. } => format!("{value:?}"),
             ExprKind::Bool(b) => b.to_string(),
             ExprKind::Time(ns) => format!("T#{ns}ns"),
+            ExprKind::Calendar(ty, ns) => format!("{ty}#{ns}ns"),
             ExprKind::Str(b) => format!("{:?}", String::from_utf8_lossy(b)),
             ExprKind::EnumLit(t, v) => format!("{t}#{v}"),
             ExprKind::Var(v) => v.clone(),

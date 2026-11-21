@@ -11,8 +11,7 @@ use crate::lexer::{Tok, lex};
 
 /// Whether `s` is a word of the language (`IF`, `END_VAR`, `TRUE`, ...) in
 /// any letter case: no variable can be called that.
-#[must_use]
-pub fn is_reserved_word(s: &str) -> bool {
+fn is_reserved_word(s: &str) -> bool {
     let up = s.to_ascii_uppercase();
     crate::parser::is_reserved(&up) || up == "TRUE" || up == "FALSE"
 }

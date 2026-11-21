@@ -15,6 +15,11 @@
 //!                                             read again, and `NAME.device` saved into the project
 //!                                             as a new file (201, a revision in its history)
 //! DELETE /api/device-profile/proposal         engineer session: the proposal dropped (200)
+//! POST   /api/device-profile/publish          engineer session: {project, file}: the saved `NAME.device`,
+//!                                             read again by `Profile::parse`, sent to the relay's
+//!                                             `publish_device_profile` (a draft pull request into the
+//!                                             public device library); 201 with the pull request, 200
+//!                                             when this profile already has one open
 //! ```
 //!
 //! **Held, never written.** The one pending proposal lives in memory (a
@@ -38,6 +43,7 @@
 //! counts.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use helmsman_io::model::{Dir, Ty};
 use helmsman_io::profile::Profile;
@@ -58,6 +64,13 @@ pub const MAX_CHANNELS: usize = 256;
 pub const MAX_SUMMARY: usize = 8000;
 /// Most problems one refusal lists.
 const MAX_PROBLEMS: usize = 50;
+/// The relay agent a publish asks for unless `--relay-publish-agent` names
+/// another: the profile that lists the relay's `publish_device_profile`.
+pub const PUBLISH_AGENT: &str = "helmsman/v13";
+/// Longest silence from the relay while it makes its calls to GitHub.
+pub const PUBLISH_IDLE: Duration = Duration::from_secs(60);
+/// Longest a publish may take.
+pub const PUBLISH_TOTAL: Duration = Duration::from_secs(90);
 
 /// The one pending proposal.
 #[derive(Debug)]
@@ -84,6 +97,14 @@ struct Proposed {
     name: String,
     text: String,
     summary: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Publish {
+    project: String,
+    /// `NAME.device`, a file of the project.
+    file: String,
 }
 
 #[derive(Deserialize)]
@@ -245,11 +266,12 @@ pub(super) fn mutate(req: &Request, ctx: &Ctx, rest: &[&str]) -> Response {
     match (req.method.as_str(), rest) {
         ("POST", ["proposal"]) => propose(req, ctx),
         ("POST", ["proposal", "accept"]) => accept(req, ctx),
+        ("POST", ["publish"]) => publish(req, ctx),
         ("DELETE", ["proposal"]) => discard(req, ctx),
         _ => {
             let allow = match rest {
                 ["proposal"] => Some("GET, POST, DELETE"),
-                ["proposal", "accept"] => Some("POST"),
+                ["proposal", "accept"] | ["publish"] => Some("POST"),
                 _ => None,
             };
             let (r, detail) = match allow {
@@ -517,5 +539,161 @@ fn discard(req: &Request, ctx: &Ctx) -> Response {
             &json!({ "error": "no device profile is waiting for you" }),
             "device profile discard: nothing pending",
         ),
+    }
+}
+
+/// The box's status and words for what the relay said.
+fn relay_refusal(e: &helmsman_agent::publish::Error) -> (u16, String, String, bool) {
+    use helmsman_agent::publish::Error;
+    match e {
+        Error::Refused {
+            status,
+            kind,
+            message,
+            retryable,
+        } => {
+            let (code, words) = match *status {
+                400 => (422, message.clone()),
+                409 | 429 | 502 | 503 => (*status, message.clone()),
+                401 | 403 | 404 => (
+                    502,
+                    "the agent service does not offer publishing to this box: the agent version it asks for is not served to it. Nothing was sent"
+                        .to_string(),
+                ),
+                _ => (502, "the agent service could not publish it".to_string()),
+            };
+            (code, words, kind.clone(), *retryable)
+        }
+        Error::Unreachable(_) => (
+            502,
+            "the agent service could not be reached. Nothing was sent".into(),
+            "relay_unreachable".into(),
+            true,
+        ),
+        Error::Malformed => (
+            502,
+            "the agent service's answer was not understood".into(),
+            "relay_malformed".into(),
+            false,
+        ),
+    }
+}
+
+/// `POST /api/device-profile/publish`.
+#[allow(clippy::too_many_lines)] // one flow: every refusal is its own audited answer
+fn publish(req: &Request, ctx: &Ctx) -> Response {
+    const WHAT: &str = "device profile publish";
+    if let Err(r) = engineer(ctx, req, WHAT) {
+        return r;
+    }
+    let no = |status: u16, why: &str, list: &[(usize, String)], detail: &str| {
+        refused(ctx, req, status, why, list, detail)
+    };
+    let (Some(projects), Some(chat)) = (&ctx.projects, &ctx.chat) else {
+        return no(
+            404,
+            if ctx.projects.is_none() {
+                "no projects on this box (--projects)"
+            } else {
+                "publishing goes through the agent service, which this box has none of (--relay)"
+            },
+            &[],
+            "device profile publish: not available",
+        );
+    };
+    if !is_json(req) {
+        return no(
+            415,
+            "Content-Type must be application/json",
+            &[],
+            "device profile publish: not JSON",
+        );
+    }
+    let p: Publish = match serde_json::from_slice(&req.body) {
+        Ok(p) => p,
+        Err(e) => {
+            return no(
+                400,
+                &format!("expected {{project, file}}: {e}"),
+                &[],
+                "device profile publish: malformed",
+            );
+        }
+    };
+    let Some(name) = p
+        .file
+        .strip_suffix(helmsman_project::DEVICE_EXT)
+        .filter(|n| name_ok(n))
+    else {
+        return no(
+            422,
+            "the file is a device profile of the project: NAME.device",
+            &[],
+            "device profile publish: not a profile file",
+        );
+    };
+    let what = format!("device profile {}", clean(name));
+    // The saved file, never text from the request.
+    let text = match projects.file(&p.project, &p.file) {
+        Ok(t) => t,
+        Err(r) => {
+            return no(
+                r.status,
+                &r.why,
+                &[],
+                &format!("{what}: not published: {}", clean(&r.why)),
+            );
+        }
+    };
+    if let Err(e) = shape(&text) {
+        return no(422, &e, &[], &format!("{what}: not published, text refused"));
+    }
+    let profile = match Profile::parse(&text) {
+        Ok(p) => p,
+        Err(list) => {
+            return no(
+                422,
+                "the profile does not check",
+                &list,
+                &format!("{what}: not published, {} problem(s)", list.len()),
+            );
+        }
+    };
+    if profile.channels.len() > MAX_CHANNELS {
+        return no(
+            422,
+            &format!("a profile has at most {MAX_CHANNELS} channels"),
+            &[],
+            &format!("{what}: not published, too many channels"),
+        );
+    }
+    match helmsman_agent::publish::publish(&chat.publish_relay(), name, &text) {
+        Ok(done) => {
+            let status = if done.created { 201 } else { 200 };
+            audited(
+                ctx,
+                req,
+                status,
+                &json!({
+                    "project": p.project, "file": p.file, "number": done.number, "url": done.url,
+                    "created": done.created, "draft": done.draft, "folder": done.folder,
+                }),
+                &format!(
+                    "{what}: published as pull request #{}{}",
+                    done.number,
+                    if done.created { "" } else { " (already open)" }
+                ),
+            )
+        }
+        Err(e) => {
+            let (status, words, kind, retryable) = relay_refusal(&e);
+            audited(
+                ctx,
+                req,
+                status,
+                &json!({ "error": words, "kind": kind, "retryable": retryable }),
+                &format!("{what}: not published: {}", clean(&kind)),
+            )
+        }
     }
 }

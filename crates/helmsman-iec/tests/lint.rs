@@ -957,3 +957,58 @@ fn the_repos_st_files_hold_no_blocking_finding() {
     }
     assert!(bad.is_empty(), "{bad:#?}");
 }
+
+// ------------------------------------------------- DATE, TOD and DT
+
+#[test]
+fn a_date_or_time_of_day_compared_with_equals_is_no_real_equality() {
+    for ty in ["DATE", "TOD", "DT", "TIME_OF_DAY", "DATE_AND_TIME"] {
+        let src = prog(
+            &format!("a : {ty}; b : {ty}; same : BOOL; lamp : BOOL;"),
+            "a := b;\nsame := a = b;\nlamp := same AND a <> b;",
+        );
+        none_of(&src, lint::REAL_EQUALITY);
+    }
+    let src = prog(
+        "t : TOD := TOD#08:00:00; ok : BOOL;",
+        "ok := t = TOD#08:00:00 OR t <> DT_TO_TOD(DT#2024-02-29-08:00:00);",
+    );
+    none_of(&src, lint::REAL_EQUALITY);
+    // A real still is.
+    let src = prog("x : REAL; ok : BOOL;", "ok := x = 1.5;");
+    assert_eq!(only(&src, lint::REAL_EQUALITY).len(), 1);
+}
+
+#[test]
+fn an_unset_calendar_local_is_read_before_write_like_any_other() {
+    for ty in ["DATE", "TOD", "DT"] {
+        let src = prog(&format!("d : {ty}; ok : BOOL;"), "ok := d = d;");
+        assert_eq!(
+            only(&src, lint::READ_BEFORE_WRITE).len(),
+            1,
+            "{ty}: {:#?}",
+            lints(&src)
+        );
+    }
+    let src = prog("d : DATE := D#2024-01-01; ok : BOOL;", "ok := d < D#2025-01-01;");
+    none_of(&src, lint::READ_BEFORE_WRITE);
+    let src = prog(
+        "x : DT; ok : BOOL;",
+        "x := DT_NOW();\nok := DT_TO_TOD(x) >= TOD#22:00:00;",
+    );
+    none_of(&src, lint::READ_BEFORE_WRITE);
+}
+
+#[test]
+fn calendar_values_in_structs_arrays_and_calls_never_panic_the_pass() {
+    let src = "TYPE Shift : STRUCT start : TOD; day : DATE; END_STRUCT; END_TYPE
+PROGRAM p
+VAR s : Shift; a : ARRAY[0..1] OF DT; w : SINT; ok : BOOL; END_VAR
+  s.start := TOD#06:00:00; s.day := D#2024-02-29; a[0] := DT_NOW(); a[1] := a[0] + T#1h;
+  w := DAY_OF_WEEK(s.day);
+  ok := s.start = TOD#06:00:00 AND a[1] > a[0];
+END_PROGRAM
+";
+    let _ = lints(src);
+    none_of(src, lint::REAL_EQUALITY);
+}

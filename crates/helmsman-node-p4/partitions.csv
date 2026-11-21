@@ -1,0 +1,20 @@
+# The P4 node's flash layout (docs/EDGE.md, "Updating a node without a cable").
+# Two app slots and the bootloader's record of which one boots, so a node
+# takes a new image into the idle slot and falls back to the old one if the
+# new one never confirms.
+#
+# nvs keeps the offset and size of the default table (0x9000, 24 KiB): the
+# settings and the program live there (flash.rs) and a USB flash that
+# leaves it alone leaves them alone.
+# bootrec is the trial record, two 4 KiB sectors written alternately
+# (helmsman-nodecore ota::record). Its subtype is "undefined", found by
+# its label.
+# No factory slot: a USB flash writes ota_0, and an erased otadata boots it.
+# Pass this file to espflash (--partition-table); scripts/node-flash.sh does.
+# Name,     Type, SubType,   Offset,   Size
+nvs,        data, nvs,       0x9000,   0x6000
+otadata,    data, ota,       0xf000,   0x2000
+phy_init,   data, phy,       0x11000,  0x1000
+bootrec,    data, undefined, 0x12000,  0x2000
+ota_0,      app,  ota_0,     0x20000,  0x200000
+ota_1,      app,  ota_1,     0x220000, 0x200000

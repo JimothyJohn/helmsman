@@ -37,7 +37,7 @@ use esp_storage::FlashStorage;
 use helmsman_iec::{Image, ImageSizes, Program, compile};
 use helmsman_node_p4::report::parse_endpoint;
 use helmsman_node_p4::state::{self, IO_BYTES, Pending, PointNames, Shared};
-use helmsman_node_p4::{beacon, board, ethernet, flash, io, server};
+use helmsman_node_p4::{beacon, board, ethernet, flash, io, ota, server};
 use helmsman_nodecore::api::State;
 use helmsman_nodecore::iomap::{self, IoMap};
 use helmsman_nodecore::router::Control;
@@ -214,6 +214,13 @@ async fn main(spawner: Spawner) -> ! {
     let store: &'static server::StoreCell = STORE.init(embassy_sync::mutex::Mutex::new(RefCell::new(store)));
 
     let shared: &'static Shared = SHARED.init(Mutex::new(RefCell::new(state::Live::default())));
+    // Firmware: this boot counts against a trial, or ends one and resets
+    // into the old image (card node-ota). Nothing else has the store yet.
+    let (on_trial, ota_line) = match store.try_lock() {
+        Ok(guard) => ota::on_boot(&guard, shared),
+        Err(_) => (false, String::from("ota: the flash store was busy at boot")),
+    };
+    println!("{ota_line}");
     state::with(shared, |live| {
         live.device.name.clone_from(&map.device);
         live.device.address = alloc::format!("{block}");
@@ -298,6 +305,16 @@ async fn main(spawner: Spawner) -> ! {
         scan_ms: 10.0,
         sizes: SIZES,
     });
+    match ota::fetch_task(stack, ctx) {
+        Ok(t) => spawner.spawn(t),
+        Err(_) => halt("the firmware task would not spawn").await,
+    }
+    if on_trial {
+        match ota::confirm_task(ctx) {
+            Ok(t) => spawner.spawn(t),
+            Err(_) => halt("the confirm task would not spawn").await,
+        }
+    }
     for _ in 0..2 {
         match server::http_task(stack, ctx) {
             Ok(t) => spawner.spawn(t),
@@ -326,6 +343,9 @@ async fn main(spawner: Spawner) -> ! {
         LOG_TX.init([0; 512]),
     );
     let _ = log.bind(0);
+    if let Some(to) = sink {
+        let _ = log.send_to(ota_line.as_bytes(), to).await;
+    }
 
     // The scan loop.
     let mut image = Image::new(SIZES);
@@ -339,6 +359,10 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         ticker.next().await;
         let t0 = Instant::now();
+        assert!(
+            !(ota::BREAK && start.elapsed() > Duration::from_secs(12)),
+            "NODE_OTA_BREAK: this image is broken on purpose and never confirms"
+        );
         let late_us = u32::try_from(t0.saturating_duration_since(deadline).as_micros()).unwrap_or(u32::MAX);
         let was_late = t0 > deadline + SCAN;
         deadline += SCAN;
@@ -485,7 +509,7 @@ async fn main(spawner: Spawner) -> ! {
                 live.link_up = link_up;
                 live.ip = ip;
                 alloc::format!(
-                    "up {}s {} scans {} late {} over {} exec max {} us device {} heap used {} B peak {} B external {} B",
+                    "up {}s {} scans {} late {} over {} exec max {} us device {} heap used {} B peak {} B external {} B {}",
                     start.elapsed().as_secs(),
                     if live.module.state.is_some() {
                         live.module.name.as_str()
@@ -504,6 +528,7 @@ async fn main(spawner: Spawner) -> ! {
                     state::heap().0,
                     esp_alloc::HEAP.stats().max_usage,
                     state::heap().1.map_or(0, |(_, used)| used),
+                    ota::report_text(live),
                 )
             });
             println!("{line}");

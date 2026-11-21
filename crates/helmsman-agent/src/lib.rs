@@ -17,6 +17,7 @@
 
 pub mod agent;
 pub mod http;
+pub mod publish;
 pub mod relay;
 pub mod session;
 pub mod sse;
