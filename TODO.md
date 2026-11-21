@@ -586,6 +586,23 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-20
   by: claude-session 44a269b3
 
+- [ ] **The DHCP server moves a client off a lease it ACKed** — `helmsman-dhcp` tests/hostile.rs `no_request_sequence_breaks_the_invariants` found it on 2026-11-20 and fails on every run once the case is in its regressions file. Minimal case: client 00-07-46-00-00-03 sends a REQUEST (option 53 = 3) with ciaddr 192.168.3.103 and no lease on record; the server ACKs .103. Its next DISCOVER (53 = 1) is offered .102, moving it off a lease that is still running. RFC 2131 has a server answer a REQUEST from a client it holds no binding for with a NAK or silence (§ 4.3.2 from memory, not yet checked; cite it in docs/SOURCES.md once read), and offer an existing binding on DISCOVER. The full shrunk input and its `cc` seed line are in scratch/dhcp-lease-moved-2026-11-20.txt (main checkout). Not committed anywhere: committing the seed alone turns every PR red. The fix starts by committing that line to tests/hostile.proptest-regressions and watching it fail.
+  result: a client keeps the lease it was given; the property holds with the seed checked in
+  est: 2h
+  difficulty: med
+  id: dhcp-lease-moved
+  asked: 2026-11-20
+  by: claude-session 44a269b3
+
+- [ ] **Let a box reach a device console on another port, so device settings can be checked on a simulator** — the parity run's `device-config` journey is pending because the box reaches a unit's web console on port 80 only (`api::devconf::Setup::in_state_dir` hardcodes `http_port: 80`), and the console simulator (`helmsman-devconf` `sim`) cannot bind 80 unprivileged. Shape: the io.map device line takes an optional `console=PORT` (default 80) that `Setup` reads, which is also true of a unit behind a NAT or a port forward. Then crates/helmsman-compat/src/parity/devices.rs starts the sim and turns `device-config` on (read, set a harmless setting, snapshot).
+  result: device settings is walked end to end on every ship, on the simulator
+  depends: parity-ship
+  est: 3h
+  difficulty: low
+  id: parity-device-config
+  asked: 2026-11-20
+  by: claude-session 44a269b3
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
