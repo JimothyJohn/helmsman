@@ -8,7 +8,7 @@ feature, whether live does what dev does.
 
 ```sh
 make parity                                   # every journey on this checkout's box (no relay: agent journeys not run)
-make parity ARGS="--relay-bin ../agent-relay/target/debug/agent-relay-local"   # with the agent journeys, on the stub model
+make parity ARGS="--relay-bin target/compat/build/agent-relay-dev/debug/agent-relay-local"   # agent journeys on the stub (the relay make compat builds at agent-relay dev)
 make ship ARGS=--dry-run                      # the candidate half: contracts, CI, journeys, tabs; nothing promoted
 make ship                                     # check, ask, promote, deploy the relay, wait for live, check live, report
 make ship ARGS=--live-only                    # the live half again
@@ -42,7 +42,9 @@ make ship ARGS=--live-only                    # the live half again
     a unit's console on port 80 only).
   - `tests/features.rs` runs every written journey on this checkout's box in
     the normal gate, so a broken main path fails on dev before it can become
-    a gap between dev and live.
+    a gap between dev and live. Its agent journeys run only on the relay
+    `COMPAT_RELAY_BIN` names (else NOT RUN), never a build found on disk:
+    an old one serves no design or help profile.
 - **scripts/parity-tabs.py** opens every manifest tab on the playground:
   `--dist` serves a build (the candidate), `--site` the public page (live).
   Each tab must draw, look unlike the other tabs of its panel, and log no
