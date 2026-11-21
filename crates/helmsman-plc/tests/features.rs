@@ -141,20 +141,13 @@ fn every_written_journey_passes_on_this_box() {
 
 const AGENT: [&str; 5] = ["explain", "requirements", "chat", "design", "help"];
 
-/// `agent-relay-local`, the way scripts/compat.sh looks for the relay: the
-/// `COMPAT_RELAY_BIN` it is given, else a build in the `agent-relay`
-/// checkout beside the main helmsman checkout.
+/// `agent-relay-local`, only as `COMPAT_RELAY_BIN` names it. Never a
+/// build found on disk: one left beside the checkout from an older
+/// agent-relay (the Studio's was from 2026-11-15) serves no design or help
+/// profile, and the test's verdict would depend on whatever build was
+/// lying there. `make ship` and `make compat` pass the relay they build.
 fn relay_bin() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("COMPAT_RELAY_BIN") {
-        return Some(PathBuf::from(p));
-    }
-    let root = root().canonicalize().ok()?;
-    root.ancestors().find_map(|dir| {
-        ["debug", "release"].iter().find_map(|profile| {
-            let p = dir.join(format!("agent-relay/target/{profile}/agent-relay-local"));
-            p.is_file().then_some(p)
-        })
-    })
+    std::env::var_os("COMPAT_RELAY_BIN").map(PathBuf::from)
 }
 
 /// The agent journeys (explain, requirements, chat, design, help) on this
@@ -172,7 +165,7 @@ fn every_agent_journey_passes_on_this_box_behind_the_stub() {
             "no agent-relay-local to run the agent journeys against (COMPAT_RELAY_BIN)"
         );
         eprintln!(
-            "NOT RUN: the agent journeys need agent-relay-local (set COMPAT_RELAY_BIN, or build agent-relay beside this checkout)"
+            "NOT RUN: the agent journeys need agent-relay-local built at agent-relay's dev; name it with COMPAT_RELAY_BIN"
         );
         return;
     };
