@@ -242,6 +242,9 @@ pub struct PlaygroundView {
     /// A change that passed its checks and waits to be compared with the
     /// engineer's answer, and when that was asked (page time, s).
     held: Option<(crate::instruct::Apply, f64)>,
+    /// A big ask held back for the engineer's pick: the draft it is for
+    /// and the time it takes in one go ([`crate::instruct::estimate_secs`]).
+    pub big: Option<(String, (u64, u64))>,
     /// That change, kept while the Agent corrects it to do what was
     /// answered: written after all if the correction does not pass.
     fallback: Option<crate::instruct::Apply>,
@@ -367,6 +370,7 @@ impl PlaygroundView {
             start_link: Link::default(),
             start_answer: crate::claude::Side::default(),
             held: None,
+            big: None,
             fallback: None,
             asked_at: 0.0,
             after_change: AfterChange::default(),
@@ -916,6 +920,15 @@ impl PlaygroundView {
     /// Sends the typed instruction about the file in scope, with the last
     /// instructions carried out on that file (read from History).
     pub fn send_instruction(&mut self, ctx: &egui::Context) {
+        self.send_instruction_as(ctx, crate::instruct::Way::Ask);
+    }
+
+    /// [`Self::send_instruction`], by `way`. A big ask ([`crate::steps::big_ask`])
+    /// sent as [`Way::Ask`] goes nowhere: the draft stays and the tab
+    /// offers the two ways ([`crate::instruct::big_ui`]). Sent again
+    /// unchanged it goes in steps, the way on offer first.
+    pub fn send_instruction_as(&mut self, ctx: &egui::Context, way: crate::instruct::Way) {
+        use crate::instruct::Way;
         if let Err(why) = self.chat.route() {
             self.instruct.failed(why);
             return;
@@ -924,13 +937,47 @@ impl PlaygroundView {
         let scope = self.scope();
         // A new program: the points the engineer named go ahead of what
         // was typed, and a bad name stops it here.
-        if scope == crate::scope::Scope::NewProject {
-            if let Some(problem) = self.new_io.problems().first() {
-                self.instruct.failed(&format!("the I/O list: {problem}"));
-                return;
-            }
-            self.instruct.draft = self.new_io.instruction(&self.instruct.draft);
+        if scope == crate::scope::Scope::NewProject
+            && let Some(problem) = self.new_io.problems().first()
+        {
+            self.instruct.failed(&format!("the I/O list: {problem}"));
+            return;
         }
+        let asked = if scope == crate::scope::Scope::NewProject {
+            self.new_io.instruction(&self.instruct.draft)
+        } else {
+            self.instruct.draft.clone()
+        };
+        let lines = scope
+            .file()
+            .and_then(|f| self.proj.files.get(f))
+            .map(|t| t.lines().count());
+        // An Agent that answers with the lines that change is asked for
+        // those, and a long file is then no reason to plan in steps: the
+        // answer is as short as the change.
+        let edits = self.chat.serves(crate::instruct::AGENT);
+        self.instruct.edits = edits;
+        let big = crate::steps::big_ask(&asked, lines.filter(|_| !edits));
+        let plan = match way {
+            Way::Steps => true,
+            Way::Ask if big => {
+                if let Some(why) = self.instruct.refusal() {
+                    self.instruct.failed(&why);
+                    return;
+                }
+                let seen = self.big.as_ref().is_some_and(|b| b.0 == self.instruct.draft);
+                if !seen {
+                    // Nothing goes to the model until the engineer picks.
+                    let estimate = crate::instruct::estimate_secs(lines);
+                    self.big = Some((self.instruct.draft.clone(), estimate));
+                    return;
+                }
+                true
+            }
+            Way::OneGo | Way::Ask => false,
+        };
+        self.big = None;
+        self.instruct.draft = asked;
         let file = crate::instruct::target(&scope);
         let earlier = crate::instruct::recent(
             self.proj.revisions().iter().filter_map(|r| r.page.as_deref()),
@@ -946,17 +993,6 @@ impl PlaygroundView {
             devices: &devices,
             settings,
         };
-        let lines = env
-            .scope
-            .file()
-            .and_then(|f| env.files.get(f))
-            .map(|t| t.lines().count());
-        // An Agent that answers with the lines that change is asked for
-        // those, and a long file is then no reason to plan in steps: the
-        // answer is as short as the change.
-        let edits = self.chat.serves(crate::instruct::AGENT);
-        self.instruct.edits = edits;
-        let plan = crate::steps::big_ask(&self.instruct.draft, lines.filter(|_| !edits));
         match self.instruct.start_with(&env, &earlier, plan) {
             Ok(ask) => {
                 self.asked_at = ctx.input(|i| i.time);
@@ -4106,9 +4142,16 @@ impl PlaygroundView {
                 room_below: Some(0.0),
                 progress: self.progress(ctx.input(|i| i.time)),
                 card: self.card.clone(),
+                big: self
+                    .big
+                    .as_ref()
+                    .filter(|b| b.0 == self.instruct.draft)
+                    .map(|b| b.1),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
+                Some(crate::instruct::Act::Split) => self.send_instruction_as(&ctx, crate::instruct::Way::Steps),
+                Some(crate::instruct::Act::OneGo) => self.send_instruction_as(&ctx, crate::instruct::Way::OneGo),
                 Some(crate::instruct::Act::Stop) => self.stop_answer(),
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
                 Some(crate::instruct::Act::RunSteps) => self.run_steps(&ctx),
