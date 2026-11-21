@@ -577,6 +577,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-15
   by: claude-session (board run)
 
+- [ ] **Feature parity, dev against live, and `make ship`** — Nick, 2026-11-20: a vertical test layer beside `make compat` (which is horizontal: the four repositories against each other's contracts), so a promotion is one step and every feature that works on dev is shown to work live. Decided by interview that day: `make ship` is one command Nick runs (the dev→master merge stays his); "live" is the site's playground, the deployed relay and a fresh loopback box built from master (never the try box); journeys go through the box API and the relay, with a thin browser pass that reaches every tab; a features manifest lists every API route, canvas tab and default relay profile with its journey, and a test fails when a surface has none; device journeys run on simulators only (Moxa sim, OpENer), never the E1213; candidate runs use the stub model, live runs spend one short real turn per agent route (chat, design, help, explain, tests); a journey green on candidate and red live after a ship gets a report and a draft revert PR on master, never a reset. Milestones: (1) manifest + coverage test, (2) `helmsman-compat parity --target candidate|live` with target/parity/report.md, (3) browser pass over every manifest tab, (4) `make ship` (candidate parity + compat, promote, relay deploy, live-state, live parity, revert draft), (5) docs/PARITY.md. All PRs drafts (they reach prod).
+  result: one command promotes all four repositories and reports, per feature, whether live matches dev
+  est: 3d
+  difficulty: high
+  id: parity-ship
+  status: doing
+  asked: 2026-11-20
+  by: claude-session 44a269b3
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).

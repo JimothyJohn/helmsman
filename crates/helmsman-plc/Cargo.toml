@@ -49,6 +49,8 @@ signal-hook = { version = "0.4.6", default-features = false, optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
 
 [dev-dependencies]
+# docs/FEATURES.md and the box it is held to (tests/features.rs).
+helmsman-compat = { path = "../helmsman-compat" }
 # The simulated Moxa console the device-configuration routes are tested against (tests/devconf.rs).
 helmsman-devconf = { path = "../helmsman-devconf", features = ["sim"] }
 # Deflated entries for hostile upload archives (tests/projects.rs).
@@ -111,6 +113,10 @@ required-features = ["box"]
 
 [[test]]
 name = "api"
+required-features = ["box"]
+
+[[test]]
+name = "features"
 required-features = ["box"]
 
 [[test]]
