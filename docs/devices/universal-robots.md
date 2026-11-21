@@ -2,8 +2,9 @@
 
 A UR is available for the bench (Nick, 2026-11-10; TODO.md `ur-bringup`).
 It is the one device that speaks every protocol the box has a driver for.
-Nothing here has been tried against a robot; sources are in
-docs/SOURCES.md ("Universal Robots fieldbus files").
+Nothing here has been tried against a robot; Modbus TCP has been against
+UR's simulators (below). Sources are in docs/SOURCES.md ("Universal
+Robots fieldbus files", "Universal Robots Modbus register table").
 
 ## PROFINET IO device
 
@@ -64,17 +65,75 @@ EDS import will say what it resolves to.
 
 ## Modbus TCP server
 
-Port 502, always on. As UR's "Modbus Server" article and register table
-describe it (read by a research pass on 2026-11-10, not re-read): function
-codes 1..6, 15 and 16; registers 0..33 the robot's I/O, 128..255 general
-purpose (read and write), robot state from 256, tool state from 768; the
-same I/O as coils; every value an unsigned 16-bit word, so a signed
-quantity (a joint angle in mrad, a TCP position in tenths of a
-millimetre) is converted by the reader; the unit id is ignored.
+Port 502, always on, the unit id ignored. Addresses below are from UR's
+register table (`ModBus Server Data.pdf`, docs/SOURCES.md "Universal
+Robots Modbus register table"); what the simulators answered is in the
+next section. The profile is `universal-robots-e-series.device` (this
+folder) and `ur-modbus/` is a program that runs on it.
 
-## URSim is not a stand-in
+- Registers (FC 3 and 4 alike): 0..33 the control box and tool I/O,
+  128..255 general purpose (read and write; a robot program reads them
+  with `read_port_register`), robot state from 256, TCP from 400, tool
+  state from 768. Bits (FC 1 and 2 alike): 0..9 the box's eight digital
+  inputs and the tool's two, 16..25 the outputs, 128..143 the
+  configurable I/O, 260..265 the state flags, 300..427 and 500..627 the
+  general purpose booleans shared with RTDE.
+- The table says "all values are unsigned" and gives `val - 65535` for a
+  signed one. That is one off: two's complement is `val - 65536` for
+  `val >= 32768`, so `65535` is -1 (the simulators' TCP rx of -1 mrad
+  read `65535`). The profile reads the signed ones as `i16`.
+- Every address `x` also answers at 10000 + x, 20000 + x, 30000 + x and
+  40000 + x, and 9999 is 0 (UR's page, for Siemens clients; the
+  simulators agreed).
 
-Forum reports (no UR statement found): the simulator's PROFINET part is
-not installed, its EtherNet/IP adapter works in some versions and not in
-others, and its Modbus registers read 65535 and take no writes. The
-bring-up needs the robot.
+## The simulators (2026-11-20)
+
+URSim e-Series 5.26.0 (`universalrobots/ursim_e-series`, amd64 under
+Docker's Rosetta emulation; its Xvfb crashes there, so no PolyScope, but
+URControl ran) and PolyScope X 10.13.0 (`universalrobots/ursim_polyscopex`,
+arm64 outer image, most inner images amd64 under QEMU). Both answered the
+same, register for register, and contradict the forum reports this page
+used to repeat: no register read 65535 by default and writes took.
+Reproduced in `crates/helmsman-io/tests/universal_robots.rs`, which holds
+the PolyScope X capture.
+
+- **Writes:** FC 6 and FC 16 to 130..132 read back as written (1234,
+  0xBEEF, 65535); the box's own write through the profile took too.
+- **Holes:** only these registers answer: 0..11, 16..22, 24..33,
+  128..258, 260..266, 270..275, 280..285, 290..295, 300..305, 310..315,
+  320..325, 400..405, 410..415, 420..428, 450..451, 768..770; bits 0..9,
+  16..25, 64..143, 260..265, 300..427, 500..627. A request that touches
+  any other address is refused whole with exception 2 (Illegal Data
+  Address), so 256..260 fails over 259 and a 16-bit read of the input
+  word (bits 0..15) fails over 10..15. The box reads one point a request
+  today; a driver that batches must keep to these runs.
+- **A joint's angle is two registers.** The table says 270..275 are the
+  joint angles "in mrad". They are the angle inside one turn, 0..6283,
+  and 320..325 hold the turns, signed: the base at -1.6007 rad (the
+  realtime interface's `q_actual`, port 30003) read 4682 and -1
+  (`65535`), and -1 * 6283 + 4682 = -1601. A client that reads 270 alone
+  gets +4.682 rad. All six joints agreed.
+- **TCP pose** (400..405) is two's complement: x -0.1440 m read `64096`
+  (-1440 tenths of a mm), y -4356, z 2020, rx -1, ry 3116, rz 39 mrad,
+  as on 30003.
+- **State:** 256..257 the controller version (5.26, 10.13), 258 robot
+  mode 3 (power off), 266 safety mode 1, 310..315 joint mode 239 (power
+  off), 768 tool mode 253, joint temperatures 23..26.
+- **Not tried:** powering the arm on, motion, joint speeds and currents
+  with the arm moving (the profile reads them as `i16`: inferred, not
+  seen), the configurable outputs and the general purpose booleans from a
+  robot program.
+
+EtherNet/IP did not answer on either: URSim 5.26 needs it switched on in
+PolyScope, which could not start, and the PolyScope X image does not ship
+the `ur-ethernetip` URCap (its bootstrapper: "Failed finding URCapX
+ur-ethernetip in urcaps folder"). PROFINET is missing from it the same
+way. So the robot, or the URCap file, is still what the EtherNet/IP half
+of `ur-bringup` needs.
+
+Running it here: `docker run -d --name ursimx --privileged --network
+bridge -e HOST_ARCH=arm64 -e ROBOT_TYPE=UR5 -p 127.0.0.1:8000:80 -p
+127.0.0.1:502:502 universalrobots/ursim_polyscopex:10.13.0`; its inner
+nginx died under QEMU at boot and came up after `docker exec ursimx
+docker restart root-nginx-1` (UI on http://localhost:8000). Stop with
+`docker rm -f ursimx`.

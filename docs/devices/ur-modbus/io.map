@@ -1,0 +1,20 @@
+# A Universal Robot over Modbus TCP by its profile
+# (docs/devices/universal-robots-e-series.device; the box finds it in the
+# project, else in its state dir's drivers/). Put the robot's address on
+# the device line; the unit id is ignored by the robot.
+device ur device:universal-robots-e-series 127.0.0.1 poll_ms=50
+
+in  robot_mode     int  ur ch:robot-mode
+in  protective     bool ur ch:protective-stop
+in  estop          bool ur ch:emergency-stop
+in  base_angle     int  ur ch:base-angle
+in  base_turns     int  ur ch:base-turns
+in  tcp_z          int  ur ch:tcp-z
+
+# The robot's program reads this with read_port_register(130)
+out handshake      int  ur ch:reg-130 safe=0
+
+# Shown on the screen only
+out base_mrad      int  screen base_mrad
+out robot_ready    bool screen robot_ready
+out heartbeat      int  screen heartbeat

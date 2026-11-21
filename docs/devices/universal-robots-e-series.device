@@ -1,0 +1,157 @@
+helmsman-device 1
+# Universal Robots e-Series (and PolyScope X): the robot's Modbus TCP server.
+# Addresses from UR's register table (ModBus Server Data.pdf, docs/SOURCES.md);
+# what URSim 5.26 and PolyScope X 10.13 answered is in
+# docs/devices/universal-robots.md. Not yet seen on a robot.
+vendor Universal Robots
+model  e-Series
+kind   other
+
+# The unit id is ignored by the robot. EtherNet/IP joins once it is tried.
+transport modbus-tcp unit=1
+
+# robot state (read only)
+in  controller-major int modbus-tcp=ir:256
+in  controller-minor int modbus-tcp=ir:257
+in  robot-mode       int modbus-tcp=ir:258   # 3 power off, 4 power on, 5 idle, 7 running
+in  powered          bool modbus-tcp=di:260
+in  protective-stop  bool modbus-tcp=di:261
+in  emergency-stop   bool modbus-tcp=di:262
+in  teach-button     bool modbus-tcp=di:263
+in  power-button     bool modbus-tcp=di:264
+in  safety-stop      bool modbus-tcp=di:265
+in  safety-mode      int modbus-tcp=ir:266
+
+# joints: the angle is 0..6283 mrad (one turn) and the turns count is
+# signed; the joint's angle is turns * 2 pi + angle (URSim, both versions)
+in  base-angle   int unit=mrad modbus-tcp=ir:270
+in  shoulder-angle   int unit=mrad modbus-tcp=ir:271
+in  elbow-angle   int unit=mrad modbus-tcp=ir:272
+in  wrist1-angle   int unit=mrad modbus-tcp=ir:273
+in  wrist2-angle   int unit=mrad modbus-tcp=ir:274
+in  wrist3-angle   int unit=mrad modbus-tcp=ir:275
+in  base-turns   int modbus-tcp=ir:320:i16
+in  shoulder-turns   int modbus-tcp=ir:321:i16
+in  elbow-turns   int modbus-tcp=ir:322:i16
+in  wrist1-turns   int modbus-tcp=ir:323:i16
+in  wrist2-turns   int modbus-tcp=ir:324:i16
+in  wrist3-turns   int modbus-tcp=ir:325:i16
+in  base-speed   int unit=mrad/s modbus-tcp=ir:280:i16
+in  shoulder-speed   int unit=mrad/s modbus-tcp=ir:281:i16
+in  elbow-speed   int unit=mrad/s modbus-tcp=ir:282:i16
+in  wrist1-speed   int unit=mrad/s modbus-tcp=ir:283:i16
+in  wrist2-speed   int unit=mrad/s modbus-tcp=ir:284:i16
+in  wrist3-speed   int unit=mrad/s modbus-tcp=ir:285:i16
+in  base-current int unit=mA modbus-tcp=ir:290:i16
+in  shoulder-current int unit=mA modbus-tcp=ir:291:i16
+in  elbow-current int unit=mA modbus-tcp=ir:292:i16
+in  wrist1-current int unit=mA modbus-tcp=ir:293:i16
+in  wrist2-current int unit=mA modbus-tcp=ir:294:i16
+in  wrist3-current int unit=mA modbus-tcp=ir:295:i16
+in  base-temp    int unit=degC modbus-tcp=ir:300
+in  shoulder-temp    int unit=degC modbus-tcp=ir:301
+in  elbow-temp    int unit=degC modbus-tcp=ir:302
+in  wrist1-temp    int unit=degC modbus-tcp=ir:303
+in  wrist2-temp    int unit=degC modbus-tcp=ir:304
+in  wrist3-temp    int unit=degC modbus-tcp=ir:305
+in  base-mode    int modbus-tcp=ir:310   # 253 running, 255 idle, 239 power off
+in  shoulder-mode    int modbus-tcp=ir:311   # 253 running, 255 idle, 239 power off
+in  elbow-mode    int modbus-tcp=ir:312   # 253 running, 255 idle, 239 power off
+in  wrist1-mode    int modbus-tcp=ir:313   # 253 running, 255 idle, 239 power off
+in  wrist2-mode    int modbus-tcp=ir:314   # 253 running, 255 idle, 239 power off
+in  wrist3-mode    int modbus-tcp=ir:315   # 253 running, 255 idle, 239 power off
+
+# tool centre point in the base frame, signed
+in  tcp-x  int unit=0.1mm modbus-tcp=ir:400:i16
+in  tcp-y  int unit=0.1mm modbus-tcp=ir:401:i16
+in  tcp-z  int unit=0.1mm modbus-tcp=ir:402:i16
+in  tcp-rx  int unit=mrad modbus-tcp=ir:403:i16
+in  tcp-ry  int unit=mrad modbus-tcp=ir:404:i16
+in  tcp-rz  int unit=mrad modbus-tcp=ir:405:i16
+in  tcp-x-speed int unit=mm/s modbus-tcp=ir:410:i16
+in  tcp-y-speed int unit=mm/s modbus-tcp=ir:411:i16
+in  tcp-z-speed int unit=mm/s modbus-tcp=ir:412:i16
+in  tcp-rx-speed int unit=mrad/s modbus-tcp=ir:413:i16
+in  tcp-ry-speed int unit=mrad/s modbus-tcp=ir:414:i16
+in  tcp-rz-speed int unit=mrad/s modbus-tcp=ir:415:i16
+in  robot-current int unit=mA modbus-tcp=ir:450
+in  io-current    int unit=mA modbus-tcp=ir:451
+in  tool-mode     int modbus-tcp=ir:768
+in  tool-temp     int unit=degC modbus-tcp=ir:769
+in  tool-current  int unit=mA modbus-tcp=ir:770
+
+# the control box's digital I/O and the tool's (bits 10..15 do not exist:
+# a read that reaches them is refused)
+in  DI-0  bool modbus-tcp=di:0
+in  DI-1  bool modbus-tcp=di:1
+in  DI-2  bool modbus-tcp=di:2
+in  DI-3  bool modbus-tcp=di:3
+in  DI-4  bool modbus-tcp=di:4
+in  DI-5  bool modbus-tcp=di:5
+in  DI-6  bool modbus-tcp=di:6
+in  DI-7  bool modbus-tcp=di:7
+in  tool-DI-0 bool modbus-tcp=di:8
+in  tool-DI-1 bool modbus-tcp=di:9
+out DO-0  bool safe=false modbus-tcp=coil:16
+out DO-1  bool safe=false modbus-tcp=coil:17
+out DO-2  bool safe=false modbus-tcp=coil:18
+out DO-3  bool safe=false modbus-tcp=coil:19
+out DO-4  bool safe=false modbus-tcp=coil:20
+out DO-5  bool safe=false modbus-tcp=coil:21
+out DO-6  bool safe=false modbus-tcp=coil:22
+out DO-7  bool safe=false modbus-tcp=coil:23
+out tool-DO-0 bool safe=false modbus-tcp=coil:24
+out tool-DO-1 bool safe=false modbus-tcp=coil:25
+in  CI-0  bool modbus-tcp=di:128
+in  CI-1  bool modbus-tcp=di:129
+in  CI-2  bool modbus-tcp=di:130
+in  CI-3  bool modbus-tcp=di:131
+in  CI-4  bool modbus-tcp=di:132
+in  CI-5  bool modbus-tcp=di:133
+in  CI-6  bool modbus-tcp=di:134
+in  CI-7  bool modbus-tcp=di:135
+out CO-0  bool safe=false modbus-tcp=coil:136
+out CO-1  bool safe=false modbus-tcp=coil:137
+out CO-2  bool safe=false modbus-tcp=coil:138
+out CO-3  bool safe=false modbus-tcp=coil:139
+out CO-4  bool safe=false modbus-tcp=coil:140
+out CO-5  bool safe=false modbus-tcp=coil:141
+out CO-6  bool safe=false modbus-tcp=coil:142
+out CO-7  bool safe=false modbus-tcp=coil:143
+
+# general purpose registers the robot's program reads (read_port_register
+# 128..) and boolean registers shared with RTDE: 300.. the robot reads,
+# 500.. the robot writes. 128..255 and 300..427 are all there; the first
+# 16 and 8 are named here.
+out reg-128 int safe=0 modbus-tcp=hr:128
+out reg-129 int safe=0 modbus-tcp=hr:129
+out reg-130 int safe=0 modbus-tcp=hr:130
+out reg-131 int safe=0 modbus-tcp=hr:131
+out reg-132 int safe=0 modbus-tcp=hr:132
+out reg-133 int safe=0 modbus-tcp=hr:133
+out reg-134 int safe=0 modbus-tcp=hr:134
+out reg-135 int safe=0 modbus-tcp=hr:135
+out reg-136 int safe=0 modbus-tcp=hr:136
+out reg-137 int safe=0 modbus-tcp=hr:137
+out reg-138 int safe=0 modbus-tcp=hr:138
+out reg-139 int safe=0 modbus-tcp=hr:139
+out reg-140 int safe=0 modbus-tcp=hr:140
+out reg-141 int safe=0 modbus-tcp=hr:141
+out reg-142 int safe=0 modbus-tcp=hr:142
+out reg-143 int safe=0 modbus-tcp=hr:143
+out bool-in-0  bool safe=false modbus-tcp=coil:300
+out bool-in-1  bool safe=false modbus-tcp=coil:301
+out bool-in-2  bool safe=false modbus-tcp=coil:302
+out bool-in-3  bool safe=false modbus-tcp=coil:303
+out bool-in-4  bool safe=false modbus-tcp=coil:304
+out bool-in-5  bool safe=false modbus-tcp=coil:305
+out bool-in-6  bool safe=false modbus-tcp=coil:306
+out bool-in-7  bool safe=false modbus-tcp=coil:307
+in  bool-out-0 bool modbus-tcp=di:500
+in  bool-out-1 bool modbus-tcp=di:501
+in  bool-out-2 bool modbus-tcp=di:502
+in  bool-out-3 bool modbus-tcp=di:503
+in  bool-out-4 bool modbus-tcp=di:504
+in  bool-out-5 bool modbus-tcp=di:505
+in  bool-out-6 bool modbus-tcp=di:506
+in  bool-out-7 bool modbus-tcp=di:507

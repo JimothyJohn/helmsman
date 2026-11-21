@@ -109,9 +109,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   notes: 2026-11-17: Nick on the comms-loss stop: accept it on the bench for now. A silent controller does not stop a slew on this unit (it stops on a Forward_Close and on run/idle going to idle); what its Halt Motion setting really holds was not read. Open again before the drive runs anywhere but the bench: an MCode program on the drive or a hardware stop.
 
-- [ ] **Bring up a Universal Robot over EtherNet/IP and Modbus TCP** — Why it matters: the first device with a large mixed image (floats, 32-bit registers, bit fields), so it tests what a profile can say about a value beyond on and off, and a robot is something customers already own. PROFINET first is out (Nick, 2026-11-13). Read 2026-11-10 (docs/devices/universal-robots.md): EtherNet/IP input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); Modbus TCP server on 502, function codes 1..6, 15, 16, general purpose registers 128..255, robot state from 256, every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values converted by hand), the unit id ignored. EtherNet/IP and PROFINET cannot be on together. URSim is no stand-in: users report its Modbus registers stuck, so this needs the robot. PROFINET (its GSDML is read, slots 1..10) only if a customer asks.
+- [ ] **Bring up a Universal Robot over EtherNet/IP and Modbus TCP** — Why it matters: the first device with a large mixed image (floats, 32-bit registers, bit fields), so it tests what a profile can say about a value beyond on and off, and a robot is something customers already own. PROFINET first is out (Nick, 2026-11-13). Read 2026-11-10 (docs/devices/universal-robots.md): EtherNet/IP input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); Modbus TCP server on 502, function codes 1..6, 15, 16, general purpose registers 128..255, robot state from 256, every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values converted by hand), the unit id ignored. EtherNet/IP and PROFINET cannot be on together. URSim covers Modbus (2026-11-20: registers live and writable, contrary to the forum reports) but not EtherNet/IP. PROFINET (its GSDML is read, slots 1..10) only if a customer asks.
   needs: the robot on 192.168.3.x, its model and PolyScope version, EtherNet/IP enabled under Installation > Fieldbus; a cleared cell before anything moves
   result: docs/devices/universal-robots.md "On the bench" with what each interface accepted; a profile with both transports; an ST program that reads the robot's state and sets a general purpose register; the register quirks held as tests
+  notes: 2026-11-20, Modbus TCP against URSim 5.26.0 and PolyScope X 10.13.0 (no robot): done, docs/devices/universal-robots-e-series.device (Modbus only), docs/devices/ur-modbus/ (ST: state, a joint angle put together, a heartbeat in register 130, run on a box against the sim), crates/helmsman-io/tests/universal_robots.rs (holes refused whole with exception 2, a joint angle split into 0..6283 mrad plus signed turns at 320.., signed TCP). Left: EtherNet/IP (the PolyScope X sim lacks the ur-ethernetip URCap; Nick is getting it, 2026-11-20), then the robot itself for both. Library entry: helmsman-devices#49 (devices/universal-robots/e-series/, flagged simulator-only, three questions for the robot).
   est: 2d
   difficulty: med
   status: blocked
@@ -583,6 +584,23 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: high
   id: parity-ship
   status: doing
+  asked: 2026-11-20
+  by: claude-session 44a269b3
+
+- [ ] **The DHCP server moves a client off a lease it ACKed** — `helmsman-dhcp` tests/hostile.rs `no_request_sequence_breaks_the_invariants` found it on 2026-11-20 and fails on every run once the case is in its regressions file. Minimal case: client 00-07-46-00-00-03 sends a REQUEST (option 53 = 3) with ciaddr 192.168.3.103 and no lease on record; the server ACKs .103. Its next DISCOVER (53 = 1) is offered .102, moving it off a lease that is still running. RFC 2131 has a server answer a REQUEST from a client it holds no binding for with a NAK or silence (§ 4.3.2 from memory, not yet checked; cite it in docs/SOURCES.md once read), and offer an existing binding on DISCOVER. The full shrunk input and its `cc` seed line are in scratch/dhcp-lease-moved-2026-11-20.txt (main checkout). Not committed anywhere: committing the seed alone turns every PR red. The fix starts by committing that line to tests/hostile.proptest-regressions and watching it fail.
+  result: a client keeps the lease it was given; the property holds with the seed checked in
+  est: 2h
+  difficulty: med
+  id: dhcp-lease-moved
+  asked: 2026-11-20
+  by: claude-session 44a269b3
+
+- [ ] **Let a box reach a device console on another port, so device settings can be checked on a simulator** — the parity run's `device-config` journey is pending because the box reaches a unit's web console on port 80 only (`api::devconf::Setup::in_state_dir` hardcodes `http_port: 80`), and the console simulator (`helmsman-devconf` `sim`) cannot bind 80 unprivileged. Shape: the io.map device line takes an optional `console=PORT` (default 80) that `Setup` reads, which is also true of a unit behind a NAT or a port forward. Then crates/helmsman-compat/src/parity/devices.rs starts the sim and turns `device-config` on (read, set a harmless setting, snapshot).
+  result: device settings is walked end to end on every ship, on the simulator
+  depends: parity-ship
+  est: 3h
+  difficulty: low
+  id: parity-device-config
   asked: 2026-11-20
   by: claude-session 44a269b3
 

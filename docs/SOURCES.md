@@ -1239,6 +1239,25 @@ into the code.
   https://www.universal-robots.com/developer/communication-protocol/,
   and the forum threads on URSim (28222, 17631, 6042).
 
+### Universal Robots Modbus register table (read 2026-11-20)
+
+- **Register table:** `ModBus Server Data.pdf` (8 pages), SHA-256
+  `6a2fbe54d36fb03811e6a371f033006e5b888a06119486f153c461eb8de0555e`,
+  https://s3-eu-west-1.amazonaws.com/ur-support-site/16377/ModBus%20Server%20Data.pdf,
+  linked from the Modbus server article
+  https://www.universal-robots.com/articles/ur/interface-communication/modbus-server/
+  (re-read 2026-11-20: "all values are unsigned", the `val - 65535`
+  conversion, the 10000 + x .. 40000 + x and 9999 aliases). The
+  register and bit addresses of docs/devices/universal-robots.md and
+  `universal-robots-e-series.device` are from its "REGISTER ADDRESS" and
+  "COIL ADDRESS" tables, pp. 1-5. Not committed.
+- **Simulators:** Docker Hub `universalrobots/ursim_e-series:5.26.0` and
+  `universalrobots/ursim_polyscopex:10.13.0`
+  (https://hub.docker.com/r/universalrobots/ursim_polyscopex for the run
+  flags). What they answered, and where it differs from the table, is
+  in the device doc; the capture is held by
+  `crates/helmsman-io/tests/universal_robots.rs`.
+
 ### The host's ARP table: `proc(5)` and `arp(8)`
 
 - **What:** where `helmsman_io::resolve` looks a `mac=` endpoint up.
