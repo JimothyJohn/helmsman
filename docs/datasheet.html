@@ -108,45 +108,36 @@ pre .k{color:var(--yellow)}
       <tr><th>Logix tags</th><td>Read Tag (0x4C), Read Tag Fragmented (0x52), symbol browse, backplane routing · CompactLogix, ControlLogix · read only: no write service in the controller build</td></tr>
       <tr><th>Modbus</th><td>TCP master, port 502 · RTU over a serial port · FC 01, 02, 03, 04, 05, 06, 16, 43/14 · named I/O map, bit and register points, scaling</td></tr>
       <tr><th>Controller I/O</th><td>Digital inputs and outputs on the header · WebAssembly drivers, sandboxed to their own device's socket</td></tr>
-      <tr><th>OPC UA</th><td>Server · opc.tcp, port 4840 · SecurityPolicy None, anonymous · loopback by default, LAN by choice</td></tr>
-      <tr><th>Webhooks, trends</th><td>HTTP and HTTPS POST, JSON, on events · trends on the controller: 10 min window, 2 400 points per signal · snapshots with rollback</td></tr>
       <tr><th>API and UI</th><td>HTTP + JSON API, port 8080 · HTTPS, TLS 1.2 and 1.3, certificate made at first boot · browser editor served by the controller (WebAssembly) · MCP</td></tr>
       <tr><th>Access</th><td>Roles operator, engineer, integrator · PIN · approval policy per controller · audit log of every deploy, force and release · forces end at sign-out</td></tr>
       <tr><th>Programming</th><td>Programs from a description · proposals reviewed before deploy · drop-ins: P&amp;ID, electrical drawing, panel photo (PNG, JPEG, WebP), PDF · explain mode · reaches the controller only through its API and policy</td></tr>
-      <tr><th>Platform</th><td>64-bit Linux, arm64 and x86-64 · one compiled service, headless · no database server, no cloud, nothing on the workstation</td></tr>
-      <tr><th>Assurance</th><td>1 300+ automated tests · interoperability suite against OpENer in CI · memory-safe implementation · Apache 2.0</td></tr>
     </table>
   </div>
 
   <div class="col">
     <h2>Why it holds up</h2>
     <div class="pillars">
-      <div><b>Robust</b>A minimal set of dependencies. Every change passes more than 1,300 automated tests and interoperability tests before it ships.</div>
-      <div><b>Simple</b>One controller, one service, its own web screen. No cloud, no database server, no stack of microservices.</div>
-      <div><b>Safe</b>Written in a memory-safe language. Changes need an engineer's approval, every change is audited, and the safeguards stay out of your way.</div>
-      <div><b>Reliable</b>Compiled, native performance on a fixed scan. A watchdog bounds every scan, and a faulted program stops alone with its outputs safe.</div>
+      <div><b>Simple</b>No cloud needed to run the machine, no licences, nothing to install. The editor opens in a browser.</div>
+      <div><b>Secure</b>Sign-in for every read and change, HTTPS by default, no default passwords, and an audit log of every change.</div>
+      <div><b>Reliable</b>A fixed scan, the same every time. A program that faults stops alone with its outputs safe.</div>
+      <div><b>Open</b>Open source under Apache 2.0, built on IEC 61131-3, EtherNet/IP and Modbus TCP.</div>
     </div>
 
-    <h2>What has been tested</h2>
-    <table class="tested">
-      <tr><td>OpENer reference adapter</td><td><span class="ok">verified</span></td></tr>
-      <tr><td>Helmsman's own adapter, same suite</td><td><span class="ok">verified</span></td></tr>
-      <tr><td>Moxa ioLogik E1213, Modbus TCP and EtherNet/IP</td><td><span class="ok">verified</span></td></tr>
-      <tr><td>Rockwell CompactLogix, read without writing</td><td><span class="pending">bench pending</span></td></tr>
+    <h2>Skipper edge node</h2>
+    <table class="spec">
+      <tr><th>Hardware</th><td>Off-the-shelf ESP32-P4 Ethernet board · power over Ethernet · about $30</td></tr>
+      <tr><th>Runs</th><td>Structured Text programs from the Helmsman editor, on a fixed scan</td></tr>
+      <tr><th>I/O</th><td>Remote I/O over Modbus TCP and EtherNet/IP</td></tr>
+      <tr><th>Updates</th><td>Programs and firmware over the network · changes need the node's key</td></tr>
     </table>
-    <p class="note">Each verified row is a passing test or a capture; the suite runs on every change against an open-source EtherNet/IP device in a container. Ethernet protocols today; others as customers need them.</p>
 
-    <h2 style="margin-top:4mm">What Helmsman writes</h2>
-<pre><span class="k">PROGRAM</span> line
-<span class="k">VAR</span>
-  s1, s2 : station;
-  jam_1 <span class="k">AT</span> %IX0.0 : BOOL;
-  alarm <span class="k">AT</span> %QX0.2 : BOOL;
-<span class="k">END_VAR</span>
-s1(enable := TRUE, jam := jam_1);
-s2(enable := TRUE, jam := FALSE);
-alarm := s1.alarm <span class="k">OR</span> s2.alarm;
-<span class="k">END_PROGRAM</span></pre>
+    <h2 style="margin-top:4mm">Controller</h2>
+    <table class="spec">
+      <tr><th>OPC UA</th><td>Server · opc.tcp, port 4840 · SecurityPolicy None, anonymous · loopback by default, LAN by choice</td></tr>
+      <tr><th>Webhooks, trends</th><td>HTTP and HTTPS POST, JSON, on events · trends on the controller: 10 min window, 2 400 points per signal · snapshots with rollback</td></tr>
+      <tr><th>Platform</th><td>64-bit Linux, arm64 and x86-64 · one compiled service, headless · no database server, no cloud, nothing on the workstation</td></tr>
+      <tr><th>Assurance</th><td>1 300+ automated tests · interoperability suite against OpENer in CI · memory-safe implementation · Apache 2.0</td></tr>
+    </table>
     <p class="note">Try it with nothing to install: <a href="https://helmsman.advin.io/playground/" style="color:var(--black);text-decoration:underline">helmsman.advin.io/playground</a> runs a controller in the browser against simulated I/O, with the same editor and diagram.</p>
   </div>
 </div>
