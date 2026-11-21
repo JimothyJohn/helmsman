@@ -144,7 +144,8 @@ if [ "$LIVE_ONLY" = 0 ]; then
       echo "  the build came out the same as dev's page"
     else
       git -C "$wt" commit -q -m "site: rebuild the playground at the dev tip (make ship)" &&
-        git -C "$wt" push -q -u origin "$br" || die "pushing $br failed; worktree left at $wt"
+        # The page carries a 7 MB wasm; the default HTTP buffer drops it ("unexpected disconnect").
+        git -C "$wt" -c http.postBuffer=524288000 push -q -u origin "$br" || die "pushing $br failed; worktree left at $wt"
       url=$(gh pr create --repo "$(slug helmsman)" --base dev --head "$br" \
         --title "site: rebuild the playground at the dev tip" \
         --body "make ship: the canvas changed after dev's committed page was built, so master would serve an old page. Built by scripts/build-playground.sh; auto-merge takes it in once CI is green." 2>&1 | tail -1)
