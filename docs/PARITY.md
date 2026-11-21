@@ -53,6 +53,11 @@ make ship ARGS=--live-only                    # the live half again
 
 ## What `make ship` does
 
+Run it from the main checkout on `dev`, pulled. Ship runs its own scripts and
+the checker from that checkout, so it first compares them with `origin/dev`
+and stops, with the command that updates the checkout, if they differ
+(`SHIP_LOCAL_SCRIPTS=1` runs local copies, for changing ship itself).
+
 0. **Playground.** When the canvas code has changed since the commit that
    last wrote dev's `docs/playground`, the page is rebuilt at the dev tip
    (`scripts/build-playground.sh`, with the relay stack's `DemoUrl` and
