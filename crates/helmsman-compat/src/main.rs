@@ -114,7 +114,7 @@ fn run(cmd: &str, o: &BTreeMap<String, String>, latest: bool) -> Result<Vec<Find
             let manifest = o
                 .get("manifest")
                 .map_or_else(|| Ok(helmsman.join("docs/FEATURES.md")), |_| path(o, "manifest"))?;
-            let outcomes = parity::check(&path(o, "box")?, &helmsman, &manifest, &work()?, &[])?;
+            let outcomes = parity::check(&path(o, "box")?, &manifest, &work()?, &[])?;
             let (findings, pending) = parity::findings(&outcomes);
             if pending > 0 {
                 eprintln!(

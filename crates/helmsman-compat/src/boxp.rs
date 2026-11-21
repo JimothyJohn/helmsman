@@ -28,17 +28,20 @@ impl BoxProc {
     /// # Errors
     /// The box did not start, or did not say where its API is in 60 s.
     pub fn start(bin: &Path, helmsman: &Path, work: &Path, extra: &[OsString]) -> Result<Self, String> {
-        Self::start_with(bin, helmsman, work, extra, |_| Ok(()))
+        let echo = helmsman.join("crates/helmsman-plc/programs/echo.st");
+        Self::start_with(bin, Some(&echo), work, extra, |_| Ok(()))
     }
 
-    /// [`Self::start`], with `setup` run on the fresh state directory
-    /// before the box starts (an account added with [`add_account`]).
+    /// [`Self::start`] with `program` (or none: a `--projects` box boots
+    /// its store's head and takes no program on its command line), and
+    /// `setup` run on the fresh state directory before the box starts (an
+    /// account added with [`add_account`]).
     ///
     /// # Errors
     /// `setup` failed, or as [`Self::start`].
     pub fn start_with(
         bin: &Path,
-        helmsman: &Path,
+        program: Option<&Path>,
         work: &Path,
         extra: &[OsString],
         setup: impl FnOnce(&Path) -> Result<(), String>,
@@ -46,9 +49,8 @@ impl BoxProc {
         let state = fresh_dir(work, "state")?;
         setup(&state)?;
         let cwd = fresh_dir(work, "cwd")?;
-        let echo = helmsman.join("crates/helmsman-plc/programs/echo.st");
         let mut child = Command::new(bin)
-            .arg(&echo)
+            .args(program)
             .args(["--opcua", "off", "--https", "off", "--api", "127.0.0.1:0"])
             .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
             .arg("--state-dir")
@@ -198,8 +200,9 @@ mod tests {
 pub fn add_account(bin: &Path, state: &Path, user: &str, role: &str, password: &str) -> Result<(), String> {
     use std::io::Write as _;
     let mut child = Command::new(bin)
-        .args(["account", "add", user, role])
-        .env("STATE_DIRECTORY", state)
+        .args(["account", "add", user, role, "--state-dir"])
+        .arg(state)
+        .env_remove("STATE_DIRECTORY")
         .current_dir(state)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

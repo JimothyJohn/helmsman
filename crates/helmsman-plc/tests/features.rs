@@ -110,7 +110,7 @@ fn a_route_the_manifest_lacks_is_named_with_what_to_do() {
 fn every_written_journey_passes_on_this_box() {
     use helmsman_compat::parity::{self, Outcome};
     let bin = Path::new(env!("CARGO_BIN_EXE_helmsman-plc"));
-    let outcomes = parity::check(bin, &root(), &root().join(FILE), &work("journeys"), &[]).unwrap();
+    let outcomes = parity::check(bin, &root().join(FILE), &work("journeys"), &[]).unwrap();
     let failed: Vec<String> = outcomes
         .iter()
         .filter_map(|(id, o)| match o {
@@ -118,7 +118,14 @@ fn every_written_journey_passes_on_this_box() {
             _ => None,
         })
         .collect();
-    assert!(failed.is_empty(), "journeys that failed:\n{}", failed.join("\n\n"));
-    let passed = outcomes.iter().filter(|(_, o)| matches!(o, Outcome::Pass(_))).count();
+    assert!(
+        failed.is_empty(),
+        "journeys that failed:\n{}",
+        failed.join("\n\n")
+    );
+    let passed = outcomes
+        .iter()
+        .filter(|(_, o)| matches!(o, Outcome::Pass(_)))
+        .count();
     assert!(passed >= 6, "only {passed} journeys passed: {outcomes:?}");
 }

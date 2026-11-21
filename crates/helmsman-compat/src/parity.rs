@@ -32,12 +32,22 @@ pub const PASSWORD: &str = "parity-engineer-password";
 /// The project the journeys make.
 pub const PROJECT: &str = "parity";
 
-/// A program with no I/O, so it deploys on any box: it counts scans.
+/// A program on the box's own process image, so it deploys on any box:
+/// it counts scans and echoes an input to an output.
 const COUNTER: &str = "\
 PROGRAM counter
+VAR_INPUT start : BOOL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
 VAR n : UDINT; END_VAR
   n := n + 1;
+  lamp := start;
 END_PROGRAM
+";
+
+/// Its I/O map: the two ports on the box's own image.
+const MAP: &str = "\
+in  start bool box di:0
+out lamp  bool box do:0 safe=false
 ";
 
 /// What a journey runs against.
@@ -139,7 +149,6 @@ pub fn findings(outcomes: &[(String, Outcome)]) -> (Vec<Finding>, usize) {
 /// walked.
 pub fn check(
     bin: &Path,
-    helmsman: &Path,
     manifest: &Path,
     work: &Path,
     extra: &[OsString],
@@ -149,7 +158,7 @@ pub fn check(
         Manifest::parse(&text).map_err(|e| format!("{}:\n{}", manifest.display(), e.join("\n")))?;
     let mut args: Vec<OsString> = vec!["--projects".into()];
     args.extend(extra.iter().cloned());
-    let b = BoxProc::start_with(bin, helmsman, work, &args, |state| {
+    let b = BoxProc::start_with(bin, None, work, &args, |state| {
         boxp::add_account(bin, state, USER, "engineer", PASSWORD)
     })?;
     let session = login(&b.url).map_err(|e| format!("{e}\n  box log:\n{}", b.log_tail()))?;
@@ -161,10 +170,10 @@ pub fn check(
         work: work.to_path_buf(),
     };
     let mut out = run(&manifest, &ctx);
-    for (_, o) in &mut out {
-        if let Outcome::Fail(d) = o {
-            d.push_str(&format!("\n  box log:\n{}", b.log_tail()));
-        }
+    // The box's log once, under the first failure: it is the same box.
+    if let Some((_, Outcome::Fail(d))) = out.iter_mut().find(|(_, o)| matches!(o, Outcome::Fail(_))) {
+        d.push_str("\n  box log:\n");
+        d.push_str(&b.log_tail());
     }
     Ok(out)
 }
@@ -217,7 +226,7 @@ fn wait_for(what: &str, mut ok: impl FnMut() -> Result<bool, String>) -> Result<
 
 fn module_status(c: &Ctx, name: &str) -> Result<String, String> {
     let j = expect(c, "GET", &format!("/api/modules/{name}"), None, 200)?;
-    Ok(j["status"].as_str().unwrap_or_default().to_string())
+    Ok(j["status"]["state"].as_str().unwrap_or_default().to_string())
 }
 
 fn module_names(c: &Ctx) -> Result<BTreeSet<String>, String> {
@@ -280,6 +289,7 @@ fn sign_in(c: &Ctx) -> Result<String, String> {
 }
 
 fn live_values(c: &Ctx) -> Result<String, String> {
+    ensure_running(c)?;
     let j = expect(c, "GET", "/api/signals", None, 200)?;
     let list = j
         .as_array()
@@ -295,12 +305,7 @@ fn live_values(c: &Ctx) -> Result<String, String> {
 }
 
 fn module_control(c: &Ctx) -> Result<String, String> {
-    let names = module_names(c)?;
-    let name = names
-        .iter()
-        .next()
-        .ok_or("GET /api/modules: no module running")?
-        .clone();
+    let name = ensure_running(c)?;
     let ops = [("stop", "stopped"), ("run", "running"), ("restart", "running")];
     for (op, want) in ops {
         expect(
@@ -346,7 +351,7 @@ fn projects(c: &Ctx) -> Result<String, String> {
         c,
         "POST",
         &format!("/api/projects/{p}/rename"),
-        Some(&json!({ "name": q })),
+        Some(&json!({ "to": q })),
         200,
     )?;
     expect(c, "GET", &format!("/api/projects/{q}"), None, 200)?;
@@ -364,19 +369,28 @@ fn projects(c: &Ctx) -> Result<String, String> {
     Ok("made, wrote and read a file, listed, renamed, deleted".into())
 }
 
-fn deploy(c: &Ctx) -> Result<String, String> {
-    expect(c, "POST", "/api/projects", Some(&json!({ "name": PROJECT })), 201)?;
+/// Make project `name` with the counter, check, replay and deploy it,
+/// and wait for it to run: the replay number.
+fn deploy_project(c: &Ctx, name: &str) -> Result<u64, String> {
+    expect(c, "POST", "/api/projects", Some(&json!({ "name": name })), 201)?;
     expect(
         c,
         "PUT",
-        &format!("/api/projects/{PROJECT}/files/main.st"),
+        &format!("/api/projects/{name}/files/main.st"),
         Some(&json!({ "text": COUNTER })),
+        200,
+    )?;
+    expect(
+        c,
+        "PUT",
+        &format!("/api/projects/{name}/files/io.map"),
+        Some(&json!({ "text": MAP })),
         200,
     )?;
     let check = expect(
         c,
         "POST",
-        &format!("/api/projects/{PROJECT}/check"),
+        &format!("/api/projects/{name}/check"),
         Some(&json!({})),
         200,
     )?;
@@ -386,7 +400,7 @@ fn deploy(c: &Ctx) -> Result<String, String> {
     let r = expect(
         c,
         "POST",
-        &format!("/api/projects/{PROJECT}/replay"),
+        &format!("/api/projects/{name}/replay"),
         Some(&json!({})),
         201,
     )?;
@@ -396,18 +410,32 @@ fn deploy(c: &Ctx) -> Result<String, String> {
     let d = expect(
         c,
         "POST",
-        &format!("/api/projects/{PROJECT}/deploy"),
+        &format!("/api/projects/{name}/deploy"),
         Some(&json!({ "replay": n })),
         200,
     )?;
-    if d["project"]["name"] != PROJECT {
+    if d["project"]["name"] != name {
         return Err(format!("deploy: {d}"));
     }
     wait_for("counter running", || Ok(module_names(c)?.contains("counter")))?;
     let running = expect(c, "GET", "/api/running", None, 200)?;
-    if running["project"] != PROJECT {
+    if running["project"] != name {
         return Err(format!("GET /api/running after deploy: {running}"));
     }
+    Ok(n)
+}
+
+/// A module running, deployed from project `parity-run` when none is.
+fn ensure_running(c: &Ctx) -> Result<String, String> {
+    if let Some(m) = module_names(c)?.into_iter().next() {
+        return Ok(m);
+    }
+    deploy_project(c, "parity-run")?;
+    Ok("counter".into())
+}
+
+fn deploy(c: &Ctx) -> Result<String, String> {
+    let n = deploy_project(c, PROJECT)?;
     Ok(format!(
         "checked, replayed ({n}), deployed; counter runs from {PROJECT}"
     ))
@@ -424,12 +452,7 @@ mod tests {
 
     #[test]
     fn every_manifest_journey_is_in_the_table_and_no_other() {
-        let named: BTreeSet<&str> = manifest()
-            .features
-            .iter()
-            .map(|f| f.journey.as_str())
-            .collect::<BTreeSet<_>>();
-        let named: BTreeSet<String> = named.into_iter().map(str::to_string).collect();
+        let named: BTreeSet<String> = manifest().features.iter().map(|f| f.journey.clone()).collect();
         let table: BTreeSet<String> = JOURNEYS.iter().map(|(id, _)| (*id).to_string()).collect();
         assert_eq!(JOURNEYS.len(), table.len(), "a journey is in the table twice");
         let missing: Vec<_> = named.difference(&table).collect();
