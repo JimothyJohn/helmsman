@@ -158,6 +158,11 @@ printf '  %-18s candidate %s (%s)  live %s\n' \
   agent-relay "${R_DEV:0:12}" "$R_REF" "${R_LIVE:0:12}" \
   helmsman-devices "${D_DEV:0:12}" "$D_REF" "${D_LIVE:0:12}" \
   helmsman-hardware "${W_DEV:0:12}" "$W_REF" "${W_LIVE:0:12}"
+# The candidate as full commits, for scripts/ship.sh: it promotes these, not
+# whatever dev holds by the time it gets there.
+mkdir -p "$OUT"
+printf '%s %s\n' helmsman "$H_DEV" agent-relay "$R_DEV" \
+  helmsman-devices "$D_DEV" helmsman-hardware "$W_DEV" >"$OUT/train.txt"
 
 echo "== build"
 (cargo build -q --locked -p helmsman-compat) || exit 2

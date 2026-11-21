@@ -13,17 +13,26 @@
 #                               nothing, opens no pull request)
 #
 # Steps:
+#   0. playground: when the canvas has changed since dev's committed page
+#      was built, the page is rebuilt at the dev tip
+#      (scripts/build-playground.sh, with the relay stack's DemoUrl and
+#      DemoDesignUrl, or HELMSMAN_FREE_CHAT_URL / HELMSMAN_DESIGN_URL when
+#      set) and merged into dev by a pull request before anything is
+#      checked. Without this the site kept a page six days old through a
+#      ship (2026-11-21). --dry-run only says the page is stale.
 #   1. candidate: scripts/compat.sh --candidate (the four dev tips against
 #      each other's contracts, and their CI), then `helmsman-compat parity`
 #      on the box compat built at dev, and scripts/parity-tabs.py on dev's
 #      committed playground (what master will serve).
-#   2. promote: each repository whose dev is ahead of its default branch
-#      gets a dev -> default pull request, merged (a merge commit, so the
-#      two branches stay in step). agent-relay is then deployed from a
+#   2. promote: each repository whose candidate commit (compat.sh's
+#      target/compat/train.txt) is ahead of its default branch gets a
+#      ship/<stamp> branch at that commit and a pull request from it into
+#      the default branch, merged (a merge commit). What lands on dev after
+#      the candidate was checked is neither shipped nor in the way. agent-relay is then deployed from a
 #      throwaway worktree at main (`make deploy`, which keeps the stack's
 #      settings), so the relay that is live is the one that was checked.
-#   3. live: scripts/live-state.sh until every row but the try box says
-#      live (the site's Pages build takes minutes), then parity on a box
+#   3. live: scripts/live-state.sh --at each candidate commit until every
+#      row but the try box says live (the site's Pages build takes minutes), then parity on a box
 #      built at the new master held to dev's docs/FEATURES.md, and the
 #      tabs on the public site.
 #   4. report: target/ship/report.md, every feature with its candidate and
@@ -33,7 +42,8 @@
 #      merge or close. Nothing is ever force-pushed or reset.
 #
 # Needs: what scripts/compat.sh needs (cargo, git, gh signed in, the
-# sibling checkouts), Playwright's Chromium for python3, and for the relay
+# sibling checkouts), Playwright's Chromium for python3, trunk and the aws
+# CLI for a playground rebuild, and for the relay
 # deploy what ../agent-relay/scripts/deploy.sh needs (AWS credentials,
 # SAM, cargo-lambda). Run it from a real terminal: a box that reads the
 # LAN is not involved, but the relay deploy and gh may ask for things.
@@ -70,6 +80,34 @@ default_of() {
 src_of() { [ "$1" = helmsman ] && echo "$MAIN" || echo "$REPOS/$1"; }
 slug() { git -C "$(src_of "$1")" remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'; }
 REPOS_ALL="helmsman agent-relay helmsman-devices helmsman-hardware"
+TRAIN=$ROOT/target/compat/train.txt
+# candidate REPO -> the commit compat.sh checked for it (empty without a run)
+candidate() { awk -v r="$1" '$1 == r { print $2 }' "$TRAIN" 2>/dev/null; }
+
+# page_stale REF -> 0 when the canvas changed after the commit that last
+# wrote REF's docs/playground (the question scripts/live-state.sh asks).
+page_stale() {
+  local page; page=$(git -C "$MAIN" log -1 --format=%H "$1" -- docs/playground)
+  [ -n "$page" ] && ! git -C "$MAIN" diff --quiet "$page" "$1" -- \
+    crates/helmsman-canvas crates/helmsman-iec crates/helmsman-diagram crates/helmsman-sim
+}
+# stack_out KEY -> the relay stack's output KEY, or nothing
+stack_out() {
+  local v; v=$(aws cloudformation describe-stacks --stack-name agent-relay \
+    --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text 2>/dev/null)
+  [ "$v" = None ] || printf '%s' "$v"
+}
+# wait_merged URL MINUTES -> 0 once the pull request merged; 1 closed or timed out
+wait_merged() {
+  local st
+  for _ in $(seq 1 $(($2 * 4))); do
+    st=$(gh pr view "$1" --json state --jq .state 2>/dev/null)
+    [ "$st" = MERGED ] && return 0
+    [ "$st" = CLOSED ] && return 1
+    sleep 15
+  done
+  return 1
+}
 
 if [ "$REPORT_ONLY" = 1 ]; then
   H_DEV=$(git -C "$MAIN" rev-parse origin/dev); H_LIVE=$(git -C "$MAIN" rev-parse origin/master)
@@ -82,6 +120,43 @@ else
 python3 -I -c 'import playwright' 2>/dev/null || die "needs Playwright for python3 (pip install playwright; python3 -m playwright install chromium)"
 gh auth status >/dev/null 2>&1 || die "gh is not signed in"
 
+# ---- 0. the playground -----------------------------------------------------
+
+if [ "$LIVE_ONLY" = 0 ]; then
+  git -C "$MAIN" fetch -q origin dev || die "fetching helmsman failed"
+  if ! page_stale origin/dev; then
+    :
+  elif [ "$DRY" = 1 ]; then
+    say "playground: dev's page is older than its canvas; a real ship rebuilds it first"
+  else
+    say "playground: dev's page is older than its canvas; rebuilding it at the dev tip"
+    command -v trunk >/dev/null || die "the playground rebuild needs trunk (cargo install trunk --locked)"
+    free=${HELMSMAN_FREE_CHAT_URL-$(stack_out DemoUrl)}
+    design=${HELMSMAN_DESIGN_URL-$(stack_out DemoDesignUrl)}
+    [ -n "$free" ] || die "no free chat address (the relay stack's DemoUrl, or HELMSMAN_FREE_CHAT_URL): the page would ask visitors for a key"
+    br=site/playground-$(date -u +%Y%m%d%H%M); wt=$MAIN/.claude/worktrees/$(echo "$br" | tr '/' '-')
+    git -C "$MAIN" worktree add -q -b "$br" "$wt" origin/dev || die "a worktree for $br failed"
+    echo "  build at $(git -C "$wt" rev-parse --short=12 HEAD) (free chat ${free%/}${design:+, design ${design%/}}; $OUT/playground.log)"
+    (cd "$wt" && HELMSMAN_FREE_CHAT_URL=$free HELMSMAN_DESIGN_URL=$design scripts/build-playground.sh) >"$OUT/playground.log" 2>&1 ||
+      { tail -20 "$OUT/playground.log" >&2; die "the playground build failed ($OUT/playground.log); worktree left at $wt"; }
+    git -C "$wt" add docs/playground
+    if git -C "$wt" diff --cached --quiet; then
+      echo "  the build came out the same as dev's page"
+    else
+      git -C "$wt" commit -q -m "site: rebuild the playground at the dev tip (make ship)" &&
+        git -C "$wt" push -q -u origin "$br" || die "pushing $br failed; worktree left at $wt"
+      url=$(gh pr create --repo "$(slug helmsman)" --base dev --head "$br" \
+        --title "site: rebuild the playground at the dev tip" \
+        --body "make ship: the canvas changed after dev's committed page was built, so master would serve an old page. Built by scripts/build-playground.sh; auto-merge takes it in once CI is green." 2>&1 | tail -1)
+      case "$url" in https://*) echo "  $url" ;; *) die "opening the playground pull request failed: $url" ;; esac
+      wait_merged "$url" 40 || die "$url did not merge in 40 min; nothing promoted"
+    fi
+    git -C "$MAIN" worktree remove "$wt" && git -C "$MAIN" branch -q -D "$br"
+    git -C "$MAIN" fetch -q origin dev
+    page_stale origin/dev && die "dev's page is stale again: the canvas changed while the rebuild merged; run make ship again"
+  fi
+fi
+
 if [ "$LIVE_ONLY" = 0 ]; then
   say "candidate: contracts and CI (scripts/compat.sh --candidate)"
   scripts/compat.sh --candidate
@@ -89,8 +164,11 @@ if [ "$LIVE_ONLY" = 0 ]; then
   [ "$st" = 0 ] || { echo "ship.sh: the candidate's contracts or CI are not green (target/compat/report.md); nothing promoted" >&2; exit "$st"; }
 fi
 
-# The checkouts and the box compat made at the dev tip.
-H_DEV=$(git -C "$MAIN" rev-parse origin/dev)
+# The checkouts and the box compat made at the dev tip: the commits it
+# checked, which a --live-only run takes from the last ship's train.
+H_DEV=$(candidate helmsman)
+[ -n "$H_DEV" ] || { [ "$LIVE_ONLY" = 1 ] && H_DEV=$(git -C "$MAIN" rev-parse origin/dev); }
+[ -n "$H_DEV" ] || die "compat.sh left no train ($TRAIN)"
 DEV_DIR=$ROOT/target/compat/src/helmsman@${H_DEV:0:12}
 [ -d "$DEV_DIR" ] || { mkdir -p "$ROOT/target/compat/src"; git clone -q --shared --no-checkout "$MAIN" "$DEV_DIR" && git -C "$DEV_DIR" checkout -q --detach "$H_DEV"; } || die "no checkout of dev at $DEV_DIR"
 FEATURES=$DEV_DIR/docs/FEATURES.md
@@ -148,7 +226,7 @@ fi
 
 # ---- 2. promote ------------------------------------------------------------
 
-ahead() { gh api "repos/$(slug "$1")/compare/$(default_of "$1")...dev" --jq .ahead_by 2>/dev/null; }
+ahead() { gh api "repos/$(slug "$1")/compare/$(default_of "$1")...$(candidate "$1")" --jq .ahead_by 2>/dev/null; }
 
 if [ "$LIVE_ONLY" = 0 ]; then
   say "the promotion"
@@ -156,7 +234,7 @@ if [ "$LIVE_ONLY" = 0 ]; then
   for r in $REPOS_ALL; do
     n=$(ahead "$r")
     [ -n "$n" ] || die "GitHub did not say how far $r's dev is ahead"
-    printf '  %-18s dev is %s commits ahead of %s\n' "$r" "$n" "$(default_of "$r")"
+    printf '  %-18s %s is %s commits ahead of %s\n' "$r" "$(candidate "$r" | cut -c1-12)" "$n" "$(default_of "$r")"
     [ "$n" = 0 ] || TODO="$TODO $r"
   done
   if [ -z "$TODO" ]; then
@@ -172,17 +250,16 @@ if [ "$LIVE_ONLY" = 0 ]; then
     fi
     stamp=$(date -u +%Y-%m-%dT%H%MZ)
     for r in $TODO; do
-      s=$(slug "$r"); base=$(default_of "$r")
-      url=$(gh pr create --repo "$s" --base "$base" --head dev --title "Promote dev to $base ($stamp)" \
-        --body "make ship: candidate parity green (helmsman target/ship/report.md)." 2>&1 | tail -1)
+      s=$(slug "$r"); base=$(default_of "$r"); sha=$(candidate "$r"); br=ship/$(echo "$stamp" | tr -d ':-')
+      # A branch at the checked commit, so a merge into dev since is not shipped with it.
+      gh api "repos/$s/git/refs" -f ref="refs/heads/$br" -f sha="$sha" >/dev/null || die "creating $br at ${sha:0:12} in $s failed"
+      url=$(gh pr create --repo "$s" --base "$base" --head "$br" --title "Promote dev to $base ($stamp)" \
+        --body "make ship: the candidate ${sha:0:12} from dev, parity green (helmsman target/ship/report.md)." 2>&1 | tail -1)
       case "$url" in https://*) ;; *) die "opening the $r promotion failed: $url" ;; esac
-      echo "  $r: $url"
+      echo "  $r: $url (${sha:0:12})"
       gh pr merge "$url" --merge >/dev/null 2>&1 || gh pr merge "$url" --merge --auto >/dev/null 2>&1 || die "merging $url failed"
-      for _ in $(seq 1 120); do
-        [ "$(gh pr view "$url" --json state --jq .state)" = MERGED ] && break
-        sleep 15
-      done
-      [ "$(gh pr view "$url" --json state --jq .state)" = MERGED ] || die "$url did not merge in 30 min"
+      wait_merged "$url" 30 || die "$url did not merge in 30 min"
+      gh api -X DELETE "repos/$s/git/refs/heads/$br" >/dev/null 2>&1 || true
       echo "$r $(gh pr view "$url" --json mergeCommit --jq .mergeCommit.oid)" >>"$OUT/promoted.txt"
     done
     case " $TODO " in
@@ -201,10 +278,15 @@ fi
 
 # ---- 3. live ---------------------------------------------------------------
 
-say "waiting for live (scripts/live-state.sh; the try box is not part of it)"
+say "waiting for live (scripts/live-state.sh at the candidate; the try box is not part of it)"
+AT=""
+for r in helmsman agent-relay helmsman-devices; do
+  c=$(candidate "$r"); [ -n "$c" ] && AT="$AT --at $r=$c"
+done
 live=0
 for _ in $(seq 1 40); do
-  scripts/live-state.sh >"$OUT/live-state.txt" 2>&1
+  # shellcheck disable=SC2086 # AT is a list of words
+  scripts/live-state.sh $AT >"$OUT/live-state.txt" 2>&1
   if ! grep -v 'try box' "$OUT/live-state.txt" | grep -q -E '^(NOT LIVE|unknown) '; then live=1; break; fi
   sleep 30
 done

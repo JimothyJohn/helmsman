@@ -5,6 +5,10 @@
 # file. "Done" in a session's report means the line here says live.
 #
 # Usage: scripts/live-state.sh        (make live-state)
+#        scripts/live-state.sh --at helmsman=SHA --at agent-relay=SHA ...
+#          holds a repository to that commit instead of its dev tip
+#          (scripts/ship.sh: live is what it shipped, not what landed on
+#          dev since). Repositories: helmsman, agent-relay, helmsman-devices.
 # Needs: git, gh (signed in), curl; aws for the relay's lines (skipped
 #        without credentials). Reads only; changes nothing.
 # Exit: 0 when everything is live, 1 when something on dev is not.
@@ -19,6 +23,25 @@ devices=JimothyJohn/helmsman-devices
 main="$(cd "$(git rev-parse --git-common-dir)/.." && pwd)"
 try="${HELMSMAN_TRY:-$(dirname "$main")/helmsman-try}"
 behind=0
+at_helmsman=dev at_relay=dev at_devices=dev
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --at)
+      [ $# -ge 2 ] || { echo "live-state.sh: --at needs REPO=SHA" >&2; exit 2; }
+      v=${2#*=}
+      printf '%s' "$v" | grep -Eq '^[0-9a-f]{7,40}$' || { echo "live-state.sh: --at $2: not a commit" >&2; exit 2; }
+      case "${2%%=*}" in
+        helmsman) at_helmsman=$v ;;
+        agent-relay) at_relay=$v ;;
+        helmsman-devices) at_devices=$v ;;
+        *) echo "live-state.sh: --at $2: unknown repository" >&2; exit 2 ;;
+      esac
+      shift 2 ;;
+    *) echo "live-state.sh: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+# A commit is named short in the rows; dev is named as dev.
+name() { [ "$1" = dev ] && echo dev || echo "${1:0:12}"; }
 
 row() { printf '%-10s %-22s %s\n' "$1" "$2" "$3"; }
 live() { row live "$1" "$2"; }
@@ -33,33 +56,37 @@ promotion() { # LABEL REPO BASE HEAD
   n="$(ahead "$2" "$3" "$4")"
   case "$n" in
     "") unknown "$1" "GitHub did not answer for $2 ($3...$4)" ;;
-    0) live "$1" "$3 has all of $4" ;;
-    *) stale "$1" "$3 is $n commits behind $4" ;;
+    0) live "$1" "$3 has all of $(name "$4")" ;;
+    *) stale "$1" "$3 is $n commits behind $(name "$4")" ;;
   esac
 }
 
-promotion "helmsman" "$repo" master dev
+promotion "helmsman" "$repo" master "$at_helmsman"
 
 # The page the site serves, against the one built on dev: each build has
 # its own file name.
 built() { grep -o 'helmsman-canvas-[0-9a-f]\{16\}' | head -1; }
-on_dev="$(git fetch -q origin dev 2>/dev/null; git show origin/dev:docs/playground/index.html 2>/dev/null | built)"
+git fetch -q origin dev 2>/dev/null
+page_ref=origin/dev; [ "$at_helmsman" = dev ] || page_ref=$at_helmsman
+on_dev="$(git show "$page_ref:docs/playground/index.html" 2>/dev/null | built)"
 on_site="$(curl -fsS --max-time 20 "$site/playground/" 2>/dev/null | built)"
 if [ -z "$on_site" ]; then
   unknown "playground" "$site/playground/ did not answer"
 elif [ "$on_site" = "$on_dev" ]; then
-  live "playground" "the site serves dev's build (${on_site#helmsman-canvas-})"
+  live "playground" "the site serves $(name "$at_helmsman")'s build (${on_site#helmsman-canvas-})"
 else
-  stale "playground" "the site serves ${on_site#helmsman-canvas-}, dev holds ${on_dev#helmsman-canvas-}"
+  stale "playground" "the site serves ${on_site#helmsman-canvas-}, $(name "$at_helmsman") holds ${on_dev#helmsman-canvas-}"
 fi
-# The page on dev is itself a build: older than the canvas it was built from?
-page_at="$(git log -1 --format=%ct origin/dev -- docs/playground 2>/dev/null)"
-code_at="$(git log -1 --format=%ct origin/dev -- crates/helmsman-canvas crates/helmsman-iec crates/helmsman-diagram crates/helmsman-sim 2>/dev/null)"
-if [ -n "$page_at" ] && [ -n "$code_at" ] && [ "$code_at" -gt "$page_at" ]; then
-  stale "playground" "dev's page was built before the canvas last changed: scripts/build-playground.sh"
+# The page on dev is itself a build: has the canvas changed since the commit
+# that last wrote it? (A diff, not commit dates: a branch merged late keeps
+# its old dates.) scripts/ship.sh asks the same question before it ships.
+page_commit="$(git log -1 --format=%H "$page_ref" -- docs/playground 2>/dev/null)"
+if [ -n "$page_commit" ] && ! git diff --quiet "$page_commit" "$page_ref" -- \
+    crates/helmsman-canvas crates/helmsman-iec crates/helmsman-diagram crates/helmsman-sim 2>/dev/null; then
+  stale "playground" "$(name "$at_helmsman")'s page was built before the canvas last changed: scripts/build-playground.sh"
 fi
 
-promotion "relay" "$relay" main dev
+promotion "relay" "$relay" main "$at_relay"
 if command -v aws >/dev/null && aws sts get-caller-identity >/dev/null 2>&1; then
   deployed="$(aws cloudformation describe-stacks --stack-name agent-relay \
     --query 'Stacks[0].LastUpdatedTime' --output text 2>/dev/null)"
@@ -78,7 +105,7 @@ else
   unknown "relay deploy" "no AWS credentials here"
 fi
 
-promotion "device library" "$devices" main dev
+promotion "device library" "$devices" main "$at_devices"
 
 # The try box, when it is up, says which build it is (X-Helmsman-Build: the commit it
 # was built from, `git describe --always --abbrev=9`).
