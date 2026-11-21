@@ -6,9 +6,12 @@
 # Nothing here checks out or runs PR-authored code (just `gh` calls), so the
 # pull_request trigger is safe to grant write to. The same-repo head guard
 # keeps fork PRs out regardless.
-# Known trade-off, acceptable: merges enabled by GITHUB_TOKEN don't fire
-# push-event workflows on dev; the identical required checks just passed on
-# the PR, and deploys hang off master only.
+# Token: a merge that auto-merge enabled with GITHUB_TOKEN fires no
+# push-event workflows, so dev's push CI never ran and a red dev went
+# unseen (agent-relay, 2026-11-21: #53 left clippy failing). UPDATE_BRANCH_TOKEN is a
+# fine-grained PAT with Contents and Pull requests read/write; with it the
+# merge is the owner's and dev's push CI runs. Until it is set this falls
+# back to GITHUB_TOKEN and behaves as before.
 name: Auto-merge
 
 on:
@@ -33,4 +36,4 @@ jobs:
         run: gh pr merge --auto --merge "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.UPDATE_BRANCH_TOKEN || secrets.GITHUB_TOKEN }}
