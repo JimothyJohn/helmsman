@@ -46,11 +46,23 @@ fn devices(c: &Ctx) -> Result<String, String> {
             200,
         )?;
     }
-    let check = expect(c, "POST", &format!("/api/projects/{p}/check"), Some(&json!({})), 200)?;
+    let check = expect(
+        c,
+        "POST",
+        &format!("/api/projects/{p}/check"),
+        Some(&json!({})),
+        200,
+    )?;
     if check["ok"] != true {
         return Err(format!("check of a map naming a device: {check}"));
     }
-    let r = expect(c, "POST", &format!("/api/projects/{p}/replay"), Some(&json!({})), 201)?;
+    let r = expect(
+        c,
+        "POST",
+        &format!("/api/projects/{p}/replay"),
+        Some(&json!({})),
+        201,
+    )?;
     let n = r["replay"]
         .as_u64()
         .ok_or_else(|| format!("replay: no number in {r}"))?;
@@ -86,7 +98,9 @@ fn devices(c: &Ctx) -> Result<String, String> {
 
     // The running map names the device and the signal wired to it.
     let map_back = expect(c, "GET", "/api/io_map", None, 200)?;
-    let text = map_back["text"].as_str().map_or_else(|| map_back.to_string(), str::to_string);
+    let text = map_back["text"]
+        .as_str()
+        .map_or_else(|| map_back.to_string(), str::to_string);
     if !text.contains("device rio") || !text.contains("sensor") {
         return Err(format!("GET /api/io_map is not the deployed map: {map_back}"));
     }
@@ -101,7 +115,9 @@ fn devices(c: &Ctx) -> Result<String, String> {
     if st != 200 && st != 404 {
         return Err(format!("GET /api/dhcp: {st} {dhcp}"));
     }
-    Ok(format!("rio listed ({seen}); running map names it; adapter {adapter}; dhcp {st}"))
+    Ok(format!(
+        "rio listed ({seen}); running map names it; adapter {adapter}; dhcp {st}"
+    ))
 }
 
 fn device_profile(c: &Ctx) -> Result<String, String> {
@@ -131,7 +147,13 @@ fn device_profile(c: &Ctx) -> Result<String, String> {
     if saved["file"] != "parity-probe.device" {
         return Err(format!("accept: wrong file in {saved}"));
     }
-    let file = expect(c, "GET", &format!("/api/projects/{p}/files/parity-probe.device"), None, 200)?;
+    let file = expect(
+        c,
+        "GET",
+        &format!("/api/projects/{p}/files/parity-probe.device"),
+        None,
+        200,
+    )?;
     if !file.to_string().contains("model Probe") {
         return Err(format!("the saved profile is not the proposed text: {file}"));
     }
@@ -148,5 +170,7 @@ fn device_profile(c: &Ctx) -> Result<String, String> {
     if !(400..500).contains(&st) {
         return Err(format!("publish of a file the project lacks: {st} {why}"));
     }
-    Ok(format!("proposed, held, saved as parity-probe.device; publish refused ({st})"))
+    Ok(format!(
+        "proposed, held, saved as parity-probe.device; publish refused ({st})"
+    ))
 }
