@@ -116,6 +116,7 @@ mod lamps;
 mod link_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod lint_shipped_tests;
+mod look3d;
 mod md_view;
 mod messages;
 mod monitor;

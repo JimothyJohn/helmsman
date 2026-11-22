@@ -1,63 +1,147 @@
-//! The scene as vertex data for the GL pass, and the theme's colours on
-//! it. Plain `Vec<f32>`: no GL here, so the native tests read what the
-//! pass is given.
+//! The scene as vertex data for the GL pass: no GL here, so the native
+//! tests read what the pass is given.
 //!
-//! Colours are linear: the theme's sRGB bytes are decoded here, lit in
-//! the shaders, tone mapped and encoded once at the end (`gl3d.rs`).
+//! One path for every renderer: flat shapes drawn far to near (no depth
+//! buffer, no offscreen target). A tile is a few rounded-rectangle layers
+//! stacked up its side; the fragment shader rounds and antialiases them
+//! with a signed distance, so edges are smooth without MSAA. Shadows are
+//! analytic blurred rounded rectangles under each tile; lamps and live
+//! wires add a soft glow on top. [`crate::look3d::Look`] holds every taste
+//! decision.
 //!
-//! Solid vertices (a box is 36): position (3), normal (3), colour (4),
-//! emit (1), the box's centre (3) and half size (3), material (1).
+//! Shape vertices (six a quad): position (3), local coordinates (2: world
+//! units from the shape's centre, or -1 to 1 on a sprite), half size (2),
+//! corner radius (1), colour (4, straight alpha), parameters (4: mode,
+//! top layer, live, extra).
 //! Line vertices (six a segment, widened to quads in the vertex shader):
-//! end A (3), end B (3), corner (2: 0 or 1 along, -1 or 1 across), colour
-//! (4), width in points (1), emit (1), distance along the wire at A (1),
-//! whether pulses run on it (1).
-//! Pool vertices (the light a lit thing throws on the floor beneath, six
-//! a quad): position (3), the quad's coordinates (2, -1 to 1), colour (3).
+//! end A (3), end B (3), corner (2), colour (4), width in points (1),
+//! emit (1), distance along the wire at A (1), whether pulses run (1).
 
 use crate::anim3d::Glows;
-use crate::cam3d::{Aabb, V3};
-use crate::scene3d::{Flow, Level, Role, Scene, Seg, Solid};
-use crate::st_view::brand::{GREEN, SELECT, STEEL, YELLOW};
-use crate::theme::Theme;
+use crate::cam3d::{Aabb, V3, add, dot, scale, sub};
+use crate::look3d::Look;
+use crate::scene3d::{Flow, Role, Scene, Seg, Solid};
 
-pub const SOLID_STRIDE: usize = 18;
+pub const SHAPE_STRIDE: usize = 16;
 pub const LINE_STRIDE: usize = 16;
-pub const POOL_STRIDE: usize = 8;
-/// Points: a wire, a link between levels, a strut.
-pub const WIRE_PX: f32 = 3.2;
-pub const LINK_PX: f32 = 5.0;
-pub const STRUT_PX: f32 = 1.6;
 
-/// Material numbers the shader reads.
-pub const MAT_BLOCK: f32 = 0.0;
-pub const MAT_BOARD: f32 = 1.0;
-pub const MAT_SLAB: f32 = 2.0;
-pub const MAT_POU: f32 = 3.0;
+/// What a shape is, in the first parameter.
+pub const M_TILE: f32 = 0.0;
+pub const M_SHADOW: f32 = 1.0;
+pub const M_HALO: f32 = 2.0;
+pub const M_SPHERE: f32 = 3.0;
+pub const M_FLOOR: f32 = 4.0;
+pub const M_POOL: f32 = 5.0;
 
 /// Where the camera is: what the view dims.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
-    /// The whole stack.
+    /// Every board.
     Overview,
-    /// Down in one scope's blocks: the middle level and the other boards
-    /// are left as faint ghosts.
+    /// Down in one scope's board: the others are left as faint ghosts.
     Dive(usize),
+}
+
+/// The camera's frame, for ordering and for sprites that face it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rig {
+    pub eye: V3,
+    pub right: V3,
+    pub up: V3,
+    pub fwd: V3,
+}
+
+impl Rig {
+    #[must_use]
+    pub fn of(pose: &crate::cam3d::Pose) -> Self {
+        let (right, up, fwd) = pose.basis();
+        Self {
+            eye: pose.eye,
+            right,
+            up,
+            fwd,
+        }
+    }
+
+    fn depth(&self, p: V3) -> f32 {
+        dot(sub(p, self.eye), self.fwd)
+    }
+}
+
+/// One board's shapes, in the order they are drawn: what lies on the
+/// floor, the wires, then the tiles far to near.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BoardBatch {
+    pub under: Vec<f32>,
+    pub lines: Vec<f32>,
+    pub over: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Batch {
-    pub solids: Vec<f32>,
-    pub solids_ghost: Vec<f32>,
-    pub lines: Vec<f32>,
-    pub lines_ghost: Vec<f32>,
-    pub pools: Vec<f32>,
-    /// Anything glows: bloom has something to do.
+    /// Far to near.
+    pub boards: Vec<BoardBatch>,
+    /// Added on top of everything: halos and the glow of live wires.
+    pub glow: Vec<f32>,
+    pub glow_lines: Vec<f32>,
+    /// The links between boards, over all.
+    pub links: Vec<f32>,
+    /// Anything glows: the frame wants to keep moving.
     pub any_lit: bool,
 }
 
-fn lin(c: eframe::egui::Color32) -> [f32; 3] {
-    let [r, g, b, _] = c.to_array();
-    [r, g, b].map(|v| (f32::from(v) / 255.0).powf(2.2))
+#[allow(clippy::too_many_arguments)]
+fn vert(out: &mut Vec<f32>, p: V3, uv: [f32; 2], half: [f32; 2], rad: f32, col: [f32; 4], par: [f32; 4]) {
+    out.extend_from_slice(&p);
+    out.extend_from_slice(&uv);
+    out.extend_from_slice(&half);
+    out.push(rad);
+    out.extend_from_slice(&col);
+    out.extend_from_slice(&par);
+}
+
+/// A rounded rectangle lying flat at `c`, `half` the size of its body and
+/// `pad` more all round for what blurs past it.
+fn flat(out: &mut Vec<f32>, c: V3, half: [f32; 2], pad: f32, rad: f32, col: [f32; 4], par: [f32; 4]) {
+    let (hx, hz) = (half[0] + pad, half[1] + pad);
+    let corner = |sx: f32, sz: f32| ([c[0] + sx * hx, c[1], c[2] + sz * hz], [sx * hx, sz * hz]);
+    for (sx, sz) in [
+        (-1.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 1.0),
+        (-1.0, -1.0),
+        (1.0, 1.0),
+        (-1.0, 1.0),
+    ] {
+        let (p, uv) = corner(sx, sz);
+        vert(out, p, uv, half, rad, col, par);
+    }
+}
+
+/// A square sprite of half size `r` at `c`, facing the camera.
+fn sprite(out: &mut Vec<f32>, c: V3, r: f32, rig: &Rig, col: [f32; 4], par: [f32; 4]) {
+    for (sx, sy) in [
+        (-1.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 1.0),
+        (-1.0, -1.0),
+        (1.0, 1.0),
+        (-1.0, 1.0),
+    ] {
+        let p = add(c, add(scale(rig.right, sx * r), scale(rig.up, sy * r)));
+        vert(out, p, [sx, sy], [1.0, 1.0], 0.0, col, par);
+    }
+}
+
+fn with_alpha(c: [f32; 3], a: f32) -> [f32; 4] {
+    [c[0], c[1], c[2], a]
+}
+
+fn alpha(scope: usize, focus: Focus) -> f32 {
+    match focus {
+        Focus::Dive(d) if scope != d => 0.14,
+        _ => 1.0,
+    }
 }
 
 fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -68,82 +152,404 @@ fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
-/// A solid's colour from the theme (before it glows), linear.
-#[must_use]
-pub fn solid_color(role: Role, t: &Theme) -> [f32; 3] {
-    match role {
-        Role::Pou => mix(lin(t.panel), lin(YELLOW), 0.38),
-        Role::Board => mix(lin(t.bg), lin(t.rule), 0.55),
-        Role::Read => mix(lin(t.panel), lin(SELECT), 0.4),
-        Role::Write => mix(lin(t.panel), lin(YELLOW), 0.5),
-        Role::Op => mix(lin(t.panel), lin(t.muted), 0.55),
-        Role::Func => mix(lin(t.panel), lin(STEEL), 0.6),
-        Role::Fb => mix(lin(t.panel), lin(YELLOW), 0.3),
-        Role::Const => mix(lin(t.panel), lin(t.rule), 0.7),
-        Role::Other => lin(t.shade),
-        Role::Region => mix(lin(t.panel), lin(t.accent), 0.5),
+/// How bright a lit thing is: its eased level and the flare of a change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Glow {
+    pub level: f32,
+    pub flare: f32,
+}
+
+impl Glow {
+    fn live(self) -> f32 {
+        (self.level + 0.5 * self.flare).clamp(0.0, 1.0)
     }
 }
 
-/// The glow of a lit solid: the lamps' green, yellow for a POU.
-#[must_use]
-pub fn glow_color(role: Role) -> [f32; 3] {
-    if role == Role::Pou {
-        lin(YELLOW)
-    } else {
-        lin(GREEN)
-    }
-}
-
-fn flow_color(f: Flow, t: &Theme) -> [f32; 3] {
-    match f {
-        Flow::On => lin(GREEN),
-        Flow::Off => lin(t.muted),
-        Flow::Idle => lin(t.idle),
-        Flow::Link => lin(t.accent),
-        Flow::Strut => lin(t.rule),
-    }
-}
-
-/// The alpha a thing at `level` of `scope` is drawn with, 1 for solid.
-fn alpha(level: Level, scope: usize, focus: Focus) -> f32 {
-    match focus {
-        Focus::Overview => 1.0,
-        Focus::Dive(d) if level == Level::Bottom && scope == d => 1.0,
-        Focus::Dive(_) if level == Level::Middle => 0.18,
-        Focus::Dive(_) => 0.12,
-    }
-}
-
-const FACES: [([f32; 3], [[usize; 3]; 4]); 6] = [
-    // normal, the four corners as (x, y, z) picks of min (0) or max (1)
-    ([0.0, 1.0, 0.0], [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]]),
-    ([0.0, -1.0, 0.0], [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]]),
-    ([0.0, 0.0, 1.0], [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]]),
-    ([0.0, 0.0, -1.0], [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]]),
-    ([1.0, 0.0, 0.0], [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]]),
-    ([-1.0, 0.0, 0.0], [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]]),
-];
-
-fn push_box(out: &mut Vec<f32>, b: &Aabb, color: [f32; 4], emit: f32, mat: f32) {
+/// The footprint of a box: its centre on the floor and half sizes, drawn
+/// inside the box by the look's inset.
+fn footprint(b: &Aabb, inset: f32) -> (V3, [f32; 2]) {
     let c = b.center();
-    let h = crate::cam3d::scale(crate::cam3d::sub(b.max, b.min), 0.5);
-    for (n, quad) in &FACES {
-        let p = |q: &[usize; 3]| -> V3 {
+    let hx = ((b.max[0] - b.min[0]) / 2.0 - inset).max(0.06);
+    let hz = ((b.max[2] - b.min[2]) / 2.0 - inset).max(0.06);
+    ([c[0], b.min[1], c[2]], [hx, hz])
+}
+
+/// A tile: `look.layers` rounded layers up its side from `y0`, and its
+/// shadow into `under`.
+#[allow(clippy::too_many_arguments)]
+fn tile(
+    under: &mut Vec<f32>,
+    over: &mut Vec<f32>,
+    look: &Look,
+    base: V3,
+    half: [f32; 2],
+    height: f32,
+    rad: f32,
+    color: [f32; 3],
+    a: f32,
+    live: f32,
+    gloss: f32,
+) {
+    let sigma = look.shadow_sigma * (0.6 + height);
+    flat(
+        under,
+        [base[0] + 0.05, base[1] + 0.004, base[2] + 0.12],
+        half,
+        sigma * 3.0,
+        rad,
+        [0.0, 0.0, 0.0, a],
+        [M_SHADOW, sigma, look.shadow_opacity * a, 0.0],
+    );
+    let n = look.layers.max(1);
+    for k in 1..=n {
+        let top = k == n;
+        let y = base[1] + height * k as f32 / n as f32;
+        let shade = if top { 1.0 } else { look.side_shade(k) };
+        let c = [color[0] * shade, color[1] * shade, color[2] * shade];
+        flat(
+            over,
+            [base[0], y, base[2]],
+            half,
+            0.0,
+            rad,
+            with_alpha(c, a),
             [
-                if q[0] == 0 { b.min[0] } else { b.max[0] },
-                if q[1] == 0 { b.min[1] } else { b.max[1] },
-                if q[2] == 0 { b.min[2] } else { b.max[2] },
-            ]
-        };
-        for k in [0, 1, 2, 0, 2, 3] {
-            out.extend_from_slice(&p(&quad[k]));
-            out.extend_from_slice(n);
-            out.extend_from_slice(&color);
-            out.push(emit);
-            out.extend_from_slice(&c);
-            out.extend_from_slice(&h);
-            out.push(mat);
+                M_TILE,
+                f32::from(u8::from(top)),
+                if top { live } else { 0.0 },
+                if top { gloss } else { 0.0 },
+            ],
+        );
+    }
+}
+
+/// The scene's shapes for `focus`, with each thing as bright as `glows`
+/// has it at `now` (a scene without them is lit as the scan has it).
+#[must_use]
+pub fn build(scene: &Scene, focus: Focus, look: &Look, rig: &Rig, glows: Option<&Glows>, now: f64) -> Batch {
+    let mut batch = Batch::default();
+    let glow_of = |k: usize, lit: bool| {
+        glows.and_then(|g| g.solids.get(k)).map_or(
+            Glow {
+                level: f32::from(u8::from(lit)),
+                flare: 0.0,
+            },
+            |f| Glow {
+                level: f.level(now),
+                flare: f.flare(now),
+            },
+        )
+    };
+    let mut order: Vec<(f32, BoardBatch)> = Vec::new();
+    for (i, board) in scene.boards.iter().enumerate() {
+        let a = alpha(i, focus);
+        let mut bb = BoardBatch::default();
+        // The floor: a clean matte surface with a faint dot grid.
+        let c = board.center();
+        let (hx, hz) = (
+            (board.max[0] - board.min[0]) / 2.0 + 0.5,
+            (board.max[2] - board.min[2]) / 2.0 + 0.5,
+        );
+        let floor_y = scene.floor(i);
+        flat(
+            &mut bb.under,
+            [c[0], floor_y, c[2]],
+            [hx, hz],
+            0.0,
+            0.8,
+            with_alpha(look.floor, a),
+            [M_FLOOR, 0.0, 0.0, if look.dark { 0.55 } else { 0.7 }],
+        );
+        // Regions: slightly raised, faintly tinted areas.
+        for (k, s) in scene
+            .solids
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.scope == i && s.role == Role::Region)
+        {
+            let g = glow_of(k, s.lit);
+            let (base, half) = footprint(&s.bounds, 0.0);
+            let (mut shadow, mut layers) = (Vec::new(), Vec::new());
+            tile(
+                &mut shadow,
+                &mut layers,
+                look,
+                base,
+                half,
+                s.bounds.max[1] - s.bounds.min[1],
+                0.5,
+                look.tile_color(Role::Region),
+                a * 0.9,
+                g.live() * 0.5,
+                0.0,
+            );
+            bb.under.extend(shadow);
+            bb.under.extend(layers);
+        }
+        // The tiles, each with its own order key.
+        let mut items: Vec<(f32, Vec<f32>)> = Vec::new();
+        let mut shadows: Vec<f32> = Vec::new();
+        for (k, s) in scene.solids.iter().enumerate().filter(|(_, s)| s.scope == i) {
+            if matches!(s.role, Role::Board | Role::Region) {
+                continue;
+            }
+            let g = glow_of(k, s.lit);
+            let mut v = Vec::new();
+            block(&mut v, &mut shadows, &mut batch.glow, look, rig, s, a, g);
+            if g.live() > 0.01 {
+                batch.any_lit = true;
+            }
+            items.push((rig.depth(s.bounds.center()), v));
+        }
+        bb.under.extend(shadows);
+        items.sort_by(|x, y| y.0.total_cmp(&x.0));
+        for (_, v) in items {
+            bb.over.extend(v);
+        }
+        order.push((rig.depth(board.center()), bb));
+    }
+    // The wires.
+    let mut by_scope: Vec<Vec<usize>> = vec![Vec::new(); scene.boards.len()];
+    for (k, s) in scene.segs.iter().enumerate() {
+        if s.flow != Flow::Link
+            && let Some(v) = by_scope.get_mut(s.scope)
+        {
+            v.push(k);
+        }
+    }
+    for (i, ks) in by_scope.iter().enumerate() {
+        let a = alpha(i, focus);
+        for &k in ks {
+            let s = &scene.segs[k];
+            let g = glows.and_then(|g| g.segs.get(k)).map_or(
+                Glow {
+                    level: f32::from(u8::from(s.lit())),
+                    flare: 0.0,
+                },
+                |f| Glow {
+                    level: f.level(now),
+                    flare: 0.0,
+                },
+            );
+            wire(&mut order[i].1.lines, &mut batch.glow_lines, look, s, a, g);
+            if s.lit() {
+                batch.any_lit = true;
+            }
+        }
+    }
+    for s in scene.segs.iter().filter(|s| s.flow == Flow::Link) {
+        let a = alpha(s.scope, focus) * 0.8;
+        push_line(
+            &mut batch.links,
+            &Line {
+                a: s.a,
+                b: s.b,
+                color: with_alpha(look.accent, a),
+                width: look.link_px,
+                emit: 0.0,
+                phase0: 0.0,
+                flow: 0.0,
+            },
+        );
+    }
+    order.sort_by(|x, y| y.0.total_cmp(&x.0));
+    batch.boards = order.into_iter().map(|(_, b)| b).collect();
+    batch
+}
+
+/// One block as a tile, a button, a lamp or a readout.
+#[allow(clippy::too_many_arguments)]
+fn block(
+    over: &mut Vec<f32>,
+    under: &mut Vec<f32>,
+    glow: &mut Vec<f32>,
+    look: &Look,
+    rig: &Rig,
+    s: &Solid,
+    a: f32,
+    g: Glow,
+) {
+    let (base, half) = footprint(&s.bounds, look.inset);
+    let h = look.tile_h.min(s.bounds.max[1] - s.bounds.min[1]);
+    let color = look.tile_color(s.role);
+    let (w, d) = (half[0] * 2.0, half[1] * 2.0);
+    match s.role {
+        Role::Button => {
+            tile(
+                under,
+                over,
+                look,
+                base,
+                half,
+                h * 0.6,
+                look.radius,
+                color,
+                a,
+                0.0,
+                0.0,
+            );
+            let r = (0.36 * w.min(d)).clamp(0.2, 0.8);
+            let (cx, cz) = (base[0], base[2]);
+            let y = base[1] + h * 0.6;
+            let neutral = if look.dark {
+                [0.5, 0.52, 0.56]
+            } else {
+                [0.93, 0.93, 0.95]
+            };
+            let pressed = mix(neutral, look.accent, 0.6 * g.level);
+            // The cap sinks while it is pressed.
+            let rise = 0.2 - 0.09 * g.level;
+            tile(
+                under,
+                over,
+                look,
+                [cx, y, cz],
+                [r * 1.18, r * 1.18],
+                0.04,
+                r * 1.18,
+                mix(color, [0.0; 3], 0.2),
+                a,
+                0.0,
+                0.0,
+            );
+            let mut cap = Vec::new();
+            tile(
+                over,
+                &mut cap,
+                look,
+                [cx, y + 0.04, cz],
+                [r, r],
+                rise,
+                r,
+                pressed,
+                a,
+                g.live(),
+                0.9,
+            );
+            over.extend(cap);
+            if g.live() > 0.01 && a >= 1.0 {
+                flat(
+                    glow,
+                    [cx, y + 0.01, cz],
+                    [r * 1.4, r * 1.4],
+                    r,
+                    r * 1.4,
+                    with_alpha(look.accent, 1.0),
+                    [M_POOL, 0.0, 0.25 * look.glow * g.live(), 0.0],
+                );
+            }
+        }
+        Role::Lamp => {
+            let plate = h * 0.7;
+            tile(
+                under,
+                over,
+                look,
+                base,
+                half,
+                plate,
+                look.radius,
+                color,
+                a,
+                0.0,
+                0.0,
+            );
+            let r = (0.42 * w.min(d)).clamp(0.3, 0.72);
+            let c = [base[0], base[1] + plate + r * 0.5, base[2]];
+            let hue = Look::hue(s.hue);
+            sprite(
+                over,
+                c,
+                r * 1.12,
+                rig,
+                with_alpha(hue, a),
+                [M_SPHERE, 0.0, g.live(), 0.0],
+            );
+            if g.live() > 0.01 && a >= 1.0 {
+                sprite(
+                    glow,
+                    c,
+                    r * 3.6,
+                    rig,
+                    with_alpha(hue, 1.0),
+                    [M_HALO, 0.0, 0.55 * look.glow * g.live(), 0.0],
+                );
+                flat(
+                    glow,
+                    [base[0], base[1] + plate + 0.01, base[2]],
+                    [r * 2.0, r * 2.0],
+                    r * 2.0,
+                    r * 2.0,
+                    with_alpha(hue, 1.0),
+                    [M_POOL, 0.0, 0.3 * look.glow * g.live(), 0.0],
+                );
+            }
+        }
+        Role::Numeric | Role::Readout => {
+            tile(under, over, look, base, half, h, look.radius, color, a, 0.0, 0.0);
+            // A track along the tile with how far the value is along it.
+            let tw = (half[0] * 1.5).max(0.1);
+            let ty = base[1] + h;
+            let track = if look.dark {
+                [0.08, 0.08, 0.09]
+            } else {
+                [0.82, 0.83, 0.86]
+            };
+            let z = base[2] + half[1] * 0.35;
+            flat(
+                over,
+                [base[0], ty + 0.004, z],
+                [tw, 0.06],
+                0.0,
+                0.06,
+                with_alpha(track, a),
+                [M_TILE, 1.0, 0.0, 0.0],
+            );
+            let f = s.fill.clamp(0.0, 1.0);
+            if f > 0.01 {
+                flat(
+                    over,
+                    [base[0] - tw + tw * f, ty + 0.008, z],
+                    [tw * f, 0.06],
+                    0.0,
+                    0.06,
+                    with_alpha(look.accent, a),
+                    [M_TILE, 1.0, 0.0, 0.0],
+                );
+            }
+            if s.role == Role::Numeric {
+                let knob = look.accent;
+                let mut k = Vec::new();
+                tile(
+                    over,
+                    &mut k,
+                    look,
+                    [base[0] - tw + 2.0 * tw * f, ty + 0.01, z],
+                    [0.14, 0.14],
+                    0.06,
+                    0.14,
+                    mix(knob, [1.0; 3], 0.4),
+                    a,
+                    0.0,
+                    0.6,
+                );
+                over.extend(k);
+            }
+        }
+        _ => {
+            tile(
+                under,
+                over,
+                look,
+                base,
+                half,
+                h,
+                look.radius,
+                color,
+                a,
+                g.live(),
+                0.0,
+            );
         }
     }
 }
@@ -175,167 +581,39 @@ fn push_line(out: &mut Vec<f32>, l: &Line) {
     }
 }
 
-/// A flat quad of light on the floor at height `y` over the x and z
-/// ranges.
-fn push_pool(out: &mut Vec<f32>, x: (f32, f32), z: (f32, f32), y: f32, color: [f32; 3]) {
-    for (u, v) in [
-        (-1.0, -1.0),
-        (1.0, -1.0),
-        (1.0, 1.0),
-        (-1.0, -1.0),
-        (1.0, 1.0),
-        (-1.0, 1.0),
-    ] {
-        let px = if u < 0.0 { x.0 } else { x.1 };
-        let pz = if v < 0.0 { z.0 } else { z.1 };
-        out.extend_from_slice(&[px, y, pz, u, v]);
-        out.extend_from_slice(&color);
-    }
-}
-
-/// How bright a lit thing is: its eased level and the flare of a change.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Glow {
-    pub level: f32,
-    pub flare: f32,
-}
-
-impl Glow {
-    const fn emit(self, base: f32) -> f32 {
-        self.level * base + self.flare * 3.0
-    }
-}
-
-/// The scene's vertices for `focus`, in the colours of `t`, with each
-/// thing as bright as `glows` has it at `now` (a scene without them is
-/// lit as the scan has it).
-#[must_use]
-pub fn build(scene: &Scene, focus: Focus, t: &Theme, glows: Option<&Glows>, now: f64) -> Batch {
-    let mut b = Batch::default();
-    for (k, s) in scene.solids.iter().enumerate() {
-        let g = glows.and_then(|g| g.solids.get(k)).map_or(
-            Glow {
-                level: f32::from(u8::from(s.lit)),
-                flare: 0.0,
-            },
-            |f| Glow {
-                level: f.level(now),
-                flare: f.flare(now),
+/// A wire: dim while idle, the accent while live, with a soft pulse.
+fn wire(lines: &mut Vec<f32>, glow_lines: &mut Vec<f32>, look: &Look, s: &Seg, a: f32, g: Glow) {
+    let (base, alpha) = match s.flow {
+        Flow::Idle => (look.idle, 0.85),
+        Flow::Off => (look.idle, 0.6),
+        Flow::On | Flow::Link => (look.accent, 1.0),
+    };
+    let col = mix(mix(look.idle, base, 1.0), look.accent, g.level);
+    let live = g.level.clamp(0.0, 1.0);
+    push_line(
+        lines,
+        &Line {
+            a: s.a,
+            b: s.b,
+            color: with_alpha(col, a * (alpha * (1.0 - live) + live)),
+            width: look.wire_px + 0.4 * live,
+            emit: live,
+            phase0: s.phase0,
+            flow: live,
+        },
+    );
+    if live > 0.01 && a >= 1.0 {
+        push_line(
+            glow_lines,
+            &Line {
+                a: s.a,
+                b: s.b,
+                color: with_alpha(look.accent, 0.16 * look.glow * live),
+                width: look.wire_px * 4.0,
+                emit: 0.0,
+                phase0: 0.0,
+                flow: 0.0,
             },
         );
-        solid(&mut b, s, focus, t, g);
-    }
-    for (k, s) in scene.segs.iter().enumerate() {
-        let lit = s.lit();
-        let g = glows.and_then(|g| g.segs.get(k)).map_or(
-            Glow {
-                level: f32::from(u8::from(lit)),
-                flare: 0.0,
-            },
-            |f| Glow {
-                level: f.level(now),
-                flare: 0.0 * f.flare(now),
-            },
-        );
-        seg(&mut b, s, focus, t, g);
-    }
-    b
-}
-
-fn solid(b: &mut Batch, s: &Solid, focus: Focus, t: &Theme, g: Glow) {
-    let a = alpha(s.level, s.scope, focus);
-    let base = solid_color(s.role, t);
-    let live = a >= 1.0 && (g.level > 0.01 || g.flare > 0.01);
-    let col = if live {
-        mix(base, glow_color(s.role), 0.8 * g.level.max(g.flare))
-    } else {
-        base
-    };
-    let strength = match s.role {
-        Role::Pou => 0.75,
-        Role::Region => 0.12,
-        _ => 1.6,
-    };
-    let emit = if live { g.emit(strength) } else { 0.0 };
-    let mat = match s.role {
-        Role::Board => MAT_BOARD,
-        Role::Region => MAT_SLAB,
-        Role::Pou => MAT_POU,
-        _ => MAT_BLOCK,
-    };
-    // A slab is a veil over the floor: it blends with what is under it,
-    // and so does anything dimmed for the dive.
-    let alpha = if s.role == Role::Region { a * 0.3 } else { a };
-    let list = if alpha < 1.0 {
-        &mut b.solids_ghost
-    } else {
-        &mut b.solids
-    };
-    push_box(list, &s.bounds, [col[0], col[1], col[2], alpha], emit, mat);
-    if emit > 0.01 {
-        b.any_lit = true;
-    }
-    // The light a lit block throws on what it stands on.
-    if live && s.role != Role::Pou && s.role != Role::Region && s.role != Role::Board {
-        let k = 0.5 * g.level + 0.9 * g.flare;
-        let c = glow_color(s.role).map(|v| v * k);
-        let r = 2.0;
-        push_pool(
-            &mut b.pools,
-            (s.bounds.min[0] - r, s.bounds.max[0] + r),
-            (s.bounds.min[2] - r, s.bounds.max[2] + r),
-            s.bounds.min[1] + 0.02,
-            c,
-        );
-    }
-}
-
-fn seg(b: &mut Batch, s: &Seg, focus: Focus, t: &Theme, g: Glow) {
-    let a = alpha(s.level, s.scope, focus);
-    let c = flow_color(s.flow, t);
-    let (width, emit_base) = match s.flow {
-        Flow::On | Flow::Off | Flow::Idle => (WIRE_PX, 2.0),
-        Flow::Link => (LINK_PX, 0.9),
-        Flow::Strut => (STRUT_PX, 0.0),
-    };
-    let level = if s.flow == Flow::Link { 1.0 } else { g.level };
-    let live = a >= 1.0 && matches!(s.flow, Flow::On | Flow::Link);
-    let emit = if live { level * emit_base + g.flare } else { 0.0 };
-    // A wire that has just gone dark still shows its own colour: the
-    // eased level mixes toward the lit one.
-    let col = if s.flow == Flow::On || g.level > 0.01 {
-        mix(c, lin(GREEN), g.level)
-    } else {
-        c
-    };
-    let strut_alpha = if s.flow == Flow::Strut { 0.55 } else { 1.0 };
-    let l = Line {
-        a: s.a,
-        b: s.b,
-        color: [col[0], col[1], col[2], a * strut_alpha],
-        width,
-        emit,
-        phase0: s.phase0,
-        flow: if s.flow == Flow::On { g.level } else { 0.0 },
-    };
-    let list = if a < 1.0 { &mut b.lines_ghost } else { &mut b.lines };
-    push_line(list, &l);
-    if emit > 0.01 && s.flow == Flow::On {
-        b.any_lit = true;
-    }
-    // Its light on the floor, along the horizontal runs.
-    if s.flow == Flow::On && g.level > 0.01 && a >= 1.0 {
-        let flat = (s.a[0] - s.b[0]).abs() > 1e-4 || (s.a[2] - s.b[2]).abs() > 1e-4;
-        if flat {
-            let r = 1.0;
-            let k = 0.32 * g.level;
-            push_pool(
-                &mut b.pools,
-                (s.a[0].min(s.b[0]) - r, s.a[0].max(s.b[0]) + r),
-                (s.a[2].min(s.b[2]) - r, s.a[2].max(s.b[2]) + r),
-                s.a[1] - crate::scene3d::WIRE_Y + 0.02,
-                lin(GREEN).map(|v| v * k),
-            );
-        }
     }
 }

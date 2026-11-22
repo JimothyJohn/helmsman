@@ -17,14 +17,17 @@ use eframe::egui_glow::CallbackFn;
 use helmsman_diagram::{Diagram, Live, Scan, annotate};
 
 use crate::anim3d::{Glows, pulse_phase};
-use crate::batch3d::{self, Focus};
+use crate::batch3d::{self, Focus, Rig};
 use crate::cam3d::{Aabb, Camera, Limits, Orbit, OrbitFlight, PITCH0, Pose, YAW0, add, sub};
 use crate::gl3d::{Frame, Shared};
 use crate::labels3d::{self, Kind, Label, Opts, Tone};
+use crate::look3d::Look;
+use crate::playground::{Point, Widget};
 use crate::scene3d::{self, Item, Scene, ScopeIn};
-use crate::st_view::brand::{GREEN, RED, SELECT, YELLOW};
+use crate::st_view::brand::{GREEN, RED};
 use crate::st_view::{Pick, SCROLL_ZOOM, Viewer};
 use crate::theme::{Theme, theme};
+use helmsman_iec::Value;
 
 /// Seconds of pulse travel a second: the wires' pulses run this many
 /// wavelengths in one.
@@ -81,7 +84,11 @@ impl Nav {
                 self.framed = self.framed_after;
             }
         } else if self.framed {
-            self.orbit = self.orbit.framing_points(&self.points(scene), aspect);
+            let pts = self.points(scene);
+            self.orbit = match self.focus {
+                Focus::Overview => self.orbit.framing_best(&pts, aspect),
+                Focus::Dive(_) => self.orbit.framing_points(&pts, aspect),
+            };
         }
         self.orbit
     }
@@ -160,7 +167,7 @@ impl Nav {
             pitch: PITCH0,
             ..self.orbit
         };
-        let to = from.framing_points(&scene.frame_points(None), aspect);
+        let to = from.framing_best(&scene.frame_points(None), aspect);
         self.fly(to, true, now);
     }
 
@@ -196,6 +203,53 @@ impl Nav {
             .cast_unsigned();
         self.dive(scene, to, aspect, now).then_some(to)
     }
+}
+
+/// What a press on the board asks of the simulation: the same calls the
+/// diagram's own input buttons make (`PlaygroundView::hold`, `Session::set_input`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Act3d {
+    /// A push button is held (or let go), every frame it is drawn.
+    Hold(String, bool),
+    /// A switch is flipped.
+    Flip(String),
+    /// A numeric input was dragged by this many points.
+    Nudge(String, f32),
+}
+
+/// The value a drag of `dx` points gives a numeric input at `v`, by its
+/// widget: a bounded integer moves along its range (a slider the width of
+/// the control), a REAL by a hundredth of itself (at least a hundredth),
+/// a TIME by ten milliseconds a point. `None` when it would not change.
+#[must_use]
+pub fn nudged(w: Widget, v: Value, dx: f32) -> Option<Value> {
+    if !dx.is_finite() || dx == 0.0 {
+        return None;
+    }
+    let dx = f64::from(dx.clamp(-2000.0, 2000.0));
+    let out = match (w, v) {
+        (Widget::Int { min, max }, Value::Int(n)) => {
+            let lo = min.max(-1_000_000);
+            let hi = max.min(1_000_000);
+            let step = ((hi - lo) as f64 / 300.0).max(1.0);
+            let moved = n + (dx * step).round() as i128;
+            Value::Int(moved.clamp(lo, hi))
+        }
+        (Widget::Real, Value::Real(r)) => {
+            let step = (r.abs() * 0.01).max(0.01);
+            let x = r + dx * step;
+            if !x.is_finite() {
+                return None;
+            }
+            Value::Real(x)
+        }
+        (Widget::Time, Value::Int(ns)) => {
+            let ms = ns / 1_000_000 + (dx * 10.0).round() as i128;
+            Value::Int(ms.clamp(0, 86_400_000) * 1_000_000)
+        }
+        _ => return None,
+    };
+    (out != v).then_some(out)
 }
 
 /// The 3D view's state, kept with the playground's.
@@ -236,7 +290,7 @@ pub fn parents(prefixes: &[&str]) -> Vec<Option<usize>> {
 
 /// The scene and the labels of a viewer's scopes with `scan` on them.
 #[must_use]
-pub fn built_of(v: &Viewer, scan: Option<&dyn Scan>) -> Built {
+pub fn built_of(v: &Viewer, scan: Option<&dyn Scan>, io: &[Point]) -> Built {
     let prefixes: Vec<&str> = v.scopes.iter().map(|s| s.prefix.as_str()).collect();
     let parents = parents(&prefixes);
     let diagrams: Vec<Option<&Diagram>> = v
@@ -254,11 +308,26 @@ pub fn built_of(v: &Viewer, scan: Option<&dyn Scan>) -> Built {
     let mut vars = Vec::new();
     for (i, s) in v.scopes.iter().enumerate() {
         let Some(d) = diagrams[i] else { continue };
+        // The block of the caller that calls this scope: the function block
+        // call of its instance's name.
+        let via = parents[i].and_then(|p| {
+            let inst = s.prefix.trim_end_matches('.').rsplit('.').next()?;
+            diagrams[p]?.nodes.iter().find_map(|n| match &n.kind {
+                helmsman_diagram::NodeKind::Fb { instance, .. } if instance.eq_ignore_ascii_case(inst) => {
+                    Some(n.id)
+                }
+                _ => None,
+            })
+        });
         ins.push(ScopeIn {
             label: s.label.clone(),
             diagram: d,
             live: lives[i].as_ref(),
             parent: parents[i],
+            via,
+            // The simulation's inputs and outputs are the program's: no
+            // other scope's variables.
+            io: if s.prefix.is_empty() { io } else { &[] },
         });
         vars.push(v.module.pous.get(s.pou).map(|p| &p.vars));
     }
@@ -271,17 +340,7 @@ pub fn built_of(v: &Viewer, scan: Option<&dyn Scan>) -> Built {
 #[cfg(test)]
 #[must_use]
 pub fn scene_of(v: &Viewer, scan: Option<&dyn Scan>) -> Scene {
-    built_of(v, scan).scene
-}
-
-fn lin3(c: Color32) -> [f32; 3] {
-    let [r, g, b, _] = c.to_array();
-    [r, g, b].map(|v| (f32::from(v) / 255.0).powf(2.2))
-}
-
-fn srgb3(c: Color32) -> [f32; 3] {
-    let [r, g, b, _] = c.to_array();
-    [r, g, b].map(|v| f32::from(v) / 255.0)
+    built_of(v, scan, &[]).scene
 }
 
 impl View3d {
@@ -309,13 +368,10 @@ impl View3d {
         let shared = Arc::clone(&self.shared);
         let frame = Frame {
             vp: [0.0; 16],
-            eye: [0.0; 3],
             batch: batch3d::Batch::default(),
-            bg: [0.0; 3],
-            fog: [0.0; 4],
+            accent: [0.0; 3],
+            dark: true,
             time: 0.0,
-            bloom: 0.0,
-            exposure: 1.0,
             ppp: 1.0,
         };
         ui.painter().add(egui::PaintCallback {
@@ -368,17 +424,81 @@ impl View3d {
     }
 
     /// The diagram in 3D, in the rest of `ui`.
-    pub fn ui(&mut self, ui: &mut egui::Ui, v: &mut Viewer, scan: Option<&dyn Scan>) {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        v: &mut Viewer,
+        scan: Option<&dyn Scan>,
+        io: &[Point],
+    ) -> Vec<Act3d> {
         let t = theme(ui);
+        let look = Look::of(&t);
+        let mut acts: Vec<Act3d> = Vec::new();
         let area = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(area, Sense::click_and_drag());
         let now = ui.input(|i| i.time);
-        let built = built_of(v, scan);
+        let built = built_of(v, scan, io);
         let scene = &built.scene;
         let size = (area.width(), area.height());
         let aspect = Camera::new(Pose::default(), size).aspect();
         let limits = Nav::limits(scene);
         let mut orbit = self.nav.orbit(scene, aspect, now);
+        let cam0 = Camera::new(orbit.pose(), size);
+        // The buttons and controls of the board are widgets of their own,
+        // made after the board's: a press on one is a press on it, and a
+        // drag that starts on one is not the camera's.
+        let mut over_control = None;
+        let space = ui.input(|i| i.key_down(Key::Space));
+        let space_hit = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Space, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none())));
+        let typing = ui.ctx().memory(|m| m.focused().is_some());
+        for c in &scene.controls {
+            let top = c.top.corners();
+            let pts: Vec<Pos2> = [2, 3, 6, 7]
+                .iter()
+                .filter_map(|&k| cam0.project(top[k]).map(|(x, y, _)| area.min + Vec2::new(x, y)))
+                .collect();
+            if pts.len() < 4 {
+                continue;
+            }
+            let rect = Rect::from_points(&pts).intersect(area);
+            if rect.width() < 2.0 || rect.height() < 2.0 {
+                continue;
+            }
+            let id = egui::Id::unique(("3d-control", c.scope, c.node.0));
+            let r = ui.interact(rect, id, Sense::click_and_drag());
+            let item = Item::Block(c.scope, c.node);
+            let picked_here = self.picked == Some(item) && !typing;
+            match c.widget {
+                Widget::Push => acts.push(Act3d::Hold(
+                    c.name.clone(),
+                    r.is_pointer_button_down_on() || (picked_here && space),
+                )),
+                Widget::Toggle => {
+                    if r.clicked() || (picked_here && space_hit) {
+                        acts.push(Act3d::Flip(c.name.clone()));
+                    }
+                }
+                _ => {
+                    if r.dragged() {
+                        acts.push(Act3d::Nudge(c.name.clone(), r.drag_delta().x));
+                    }
+                }
+            }
+            if r.clicked() || r.drag_started() {
+                self.picked = Some(item);
+                v.scope = c.scope.min(v.scopes.len().saturating_sub(1));
+                v.pick = Some(Pick::Node(c.node));
+            }
+            if r.hovered() {
+                over_control = Some(item);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            r.on_hover_text(match c.widget {
+                Widget::Push => "push button: on while held",
+                Widget::Toggle => "switch: click to flip (Space when picked)",
+                _ => "drag to change the value",
+            });
+        }
 
         // The pointer and the keys move the camera; a flight stops where
         // it is.
@@ -405,7 +525,8 @@ impl View3d {
                 ),
             )
         });
-        let keyboard = response.hovered() && ui.ctx().memory(|m| m.focused().is_none());
+        let keyboard =
+            (response.hovered() || over_control.is_some()) && ui.ctx().memory(|m| m.focused().is_none());
         let local = |p: Pos2| p - area.min;
         let mut moved = false;
         if response.dragged() {
@@ -461,6 +582,9 @@ impl View3d {
             .filter(|_| response.hovered())
             .and_then(|p| cam.ray(local(p).x, local(p).y))
             .and_then(|r| scene.pick(&r, dive));
+        if over_control.is_some() {
+            self.hover = over_control;
+        }
         if response.clicked()
             && let Some(item) = self.hover
         {
@@ -542,21 +666,15 @@ impl View3d {
                 }));
         }
 
-        // The GL pass.
-        let batch = batch3d::build(scene, self.nav.focus, &t, Some(&self.glows), now);
-        let bounds = scene.bounds();
-        let r = sub(bounds.max, bounds.min);
-        let radius = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt() / 2.0;
-        let bg = lin3(t.bg);
+        // The GL pass: one path, shapes far to near.
+        let rig = Rig::of(&orbit.pose());
+        let batch = batch3d::build(scene, self.nav.focus, &look, &rig, Some(&self.glows), now);
         let frame = Frame {
             vp: cam.view_proj(),
-            eye: orbit.pose().eye,
             batch,
-            bg: srgb3(t.bg),
-            fog: [bg[0], bg[1], bg[2], 1.0 / (radius * 3.0).max(1.0)],
+            accent: look.accent,
+            dark: t.dark,
             time: pulse_phase(now, PULSE_SPEED),
-            bloom: if t.dark { 0.95 } else { 0.5 },
-            exposure: 1.0,
             ppp: ui.ctx().pixels_per_point(),
         };
         if let Some(why) = self.shared.error() {
@@ -568,7 +686,7 @@ impl View3d {
                 FontId::proportional(crate::theme::BODY),
                 t.muted,
             );
-            return;
+            return acts;
         }
         let shared = Arc::clone(&self.shared);
         let frame = Arc::new(frame);
@@ -579,7 +697,8 @@ impl View3d {
             })),
         });
 
-        self.overlay(ui, &built, &cam, area, &t, dive, orbit.dist);
+        self.overlay(ui, &built, &cam, area, &t, dive, orbit.dist, orbit.pitch);
+        acts
     }
 
     /// Labels, and the outlines of what is hovered and picked, projected
@@ -594,6 +713,7 @@ impl View3d {
         t: &Theme,
         dive: Option<usize>,
         dist: f32,
+        cam_pitch: f32,
     ) {
         let painter = ui.painter_at(area);
         let scene = &built.scene;
@@ -601,6 +721,7 @@ impl View3d {
         let opts = Opts {
             focus: dive,
             reach: dist * 1.6,
+            hide_detail: cam_pitch < 0.42,
             ..Opts::default()
         };
         for p in labels3d::place(&built.labels, cam, &opts) {
@@ -617,24 +738,24 @@ impl View3d {
                 area.min + Vec2::new(p.rect[0], p.rect[1]),
                 area.min + Vec2::new(p.rect[2], p.rect[3]),
             );
-            if matches!(
-                l.kind,
-                Kind::Node | Kind::Value | Kind::Region | Kind::Pou | Kind::WireValue
-            ) {
-                painter.rect_filled(rect, 3.0, t.veil.gamma_multiply(0.55 * p.alpha));
-            }
+            // Names in the app's own type, values in the mono the 2D view
+            // writes them in; no plates: the tiles are quiet enough.
+            let font = if matches!(l.kind, Kind::Value | Kind::WireValue | Kind::RegionState) {
+                FontId::monospace(p.font)
+            } else {
+                FontId::proportional(p.font * labels3d::PROPORTIONAL)
+            };
             painter.text(
                 Pos2::new(rect.left() + 2.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 &p.text,
-                FontId::monospace(p.font),
+                font,
                 ink,
             );
         }
-        for (item, color) in [(self.hover, SELECT), (self.picked, YELLOW)] {
-            if let Some(b) = item.and_then(|i| scene.solid(i)).map(|s| s.bounds) {
-                outline(&painter, &b.corners().map(at), color);
-            }
+        // Only what is picked is outlined.
+        if let Some(b) = self.picked.and_then(|i| scene.solid(i)).map(|s| s.bounds) {
+            outline(&painter, &b.corners().map(at), t.accent.gamma_multiply(0.75), 1.2);
         }
         let hint = if dive.is_some() {
             "drag: orbit   right-drag or Shift-drag: pan   wheel: zoom   F: frame all   Q E: other POU   Esc: up"
@@ -651,7 +772,7 @@ impl View3d {
     }
 }
 
-fn outline(painter: &egui::Painter, c: &[Option<Pos2>; 8], color: Color32) {
+fn outline(painter: &egui::Painter, c: &[Option<Pos2>; 8], color: Color32, w: f32) {
     for (i, j) in [
         (0, 1),
         (2, 3),
@@ -667,7 +788,7 @@ fn outline(painter: &egui::Painter, c: &[Option<Pos2>; 8], color: Color32) {
         (3, 7),
     ] {
         if let (Some(a), Some(b)) = (c[i], c[j]) {
-            painter.line_segment([a, b], Stroke::new(2.0, color));
+            painter.line_segment([a, b], Stroke::new(w, color));
         }
     }
 }

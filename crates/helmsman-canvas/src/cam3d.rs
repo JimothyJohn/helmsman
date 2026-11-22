@@ -427,7 +427,7 @@ pub fn ease(t: f32) -> f32 {
 }
 
 /// How far down and up the camera may look, radians over the floor.
-pub const PITCH_MIN: f32 = 0.06;
+pub const PITCH_MIN: f32 = 0.24;
 pub const PITCH_MAX: f32 = 1.5;
 /// The angles the view opens at: a little from the left, well above, so
 /// the stack's height shows.
@@ -610,6 +610,23 @@ impl Orbit {
     #[must_use]
     pub fn framing(&self, b: &Aabb, aspect: f32) -> Self {
         self.framing_points(&b.corners(), aspect)
+    }
+
+    /// Frames the points `pts` from the angle, within a half turn of
+    /// this camera's, that fills the view best: a long board is seen from
+    /// along its length. The pitch is kept.
+    #[must_use]
+    pub fn framing_best(&self, pts: &[V3], aspect: f32) -> Self {
+        (-3..=3)
+            .map(|k| {
+                Self {
+                    yaw: self.yaw + k as f32 * 0.25,
+                    ..*self
+                }
+                .framing_points(pts, aspect)
+            })
+            .min_by(|a, b| a.dist.total_cmp(&b.dist))
+            .unwrap_or(*self)
     }
 
     /// Frames the points `pts`.

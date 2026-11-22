@@ -2839,14 +2839,7 @@ impl PlaygroundView {
         for (name, r) in std::mem::take(&mut self.input_rects) {
             chrome.hit(format!("input {name}"), r);
         }
-        // Every push button of this frame has spoken (the diagram's and
-        // the I/O tab's): an input is on while any of its buttons is held.
-        for (name, on) in std::mem::take(&mut self.pushed) {
-            let was = self.session.value(&name);
-            if self.session.set_input(&name, Value::Bool(on)) && on && was != Some(Value::Bool(true)) {
-                self.idle_note(&name, true);
-            }
-        }
+        self.apply_pushed();
         self.sim_popup_ui(&ui.ctx().clone(), chrome);
     }
 
@@ -3660,6 +3653,17 @@ impl Body for PlaygroundView {
         self.idle_ui(ui, chrome);
         let menus = self.assign_menus();
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
+        // The simulation's inputs and outputs, for the 3D view's buttons
+        // and lamps.
+        let io: Vec<Point> = if self.view3d.on {
+            self.session
+                .inputs()
+                .chain(self.session.outputs())
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         if let Some(v) = &mut self.viewer {
             // A block's lines are the files' only while the diagram is of the text.
             v.chat_ok = v.src == self.proj.build_src();
@@ -3671,8 +3675,11 @@ impl Body for PlaygroundView {
             self.view3d.key_ui(ui, area);
             if self.view3d.on {
                 let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
-                self.view3d.ui(ui, v, scan);
+                let acts = self.view3d.ui(ui, v, scan, &io);
                 self.view3d.toggle_ui(ui, area);
+                for a in acts {
+                    self.act_3d(a);
+                }
                 return;
             }
             if self.view3d.wants_release() {
@@ -3993,6 +4000,45 @@ impl PlaygroundView {
         match self.pushed.iter_mut().find(|(n, _)| n == name) {
             Some((_, h)) => *h |= on,
             None => self.pushed.push((name.to_string(), on)),
+        }
+    }
+
+    /// Every push button of this frame has spoken (the diagram's, the I/O
+    /// tab's and the 3D board's): an input is on while any of its buttons
+    /// is held.
+    pub(crate) fn apply_pushed(&mut self) {
+        for (name, on) in std::mem::take(&mut self.pushed) {
+            let was = self.session.value(&name);
+            if self.session.set_input(&name, Value::Bool(on)) && on && was != Some(Value::Bool(true)) {
+                self.idle_note(&name, true);
+            }
+        }
+    }
+
+    /// What a press on the 3D board asks: the same calls as the diagram's
+    /// own input buttons (`hold`, `set_by_hand`).
+    pub(crate) fn act_3d(&mut self, a: crate::view3d::Act3d) {
+        use crate::view3d::{Act3d, nudged};
+        match a {
+            Act3d::Hold(name, on) => self.hold(&name, on),
+            Act3d::Flip(name) => {
+                if let Some(Value::Bool(cur)) = self.session.value(&name) {
+                    self.set_by_hand(&name, Value::Bool(!cur));
+                }
+            }
+            Act3d::Nudge(name, dx) => {
+                let p = self
+                    .session
+                    .inputs()
+                    .find(|p| p.name.eq_ignore_ascii_case(&name))
+                    .cloned();
+                if let Some(p) = p
+                    && let Some(w) = p.widget
+                    && let Some(v) = nudged(w, p.value, dx)
+                {
+                    self.set_by_hand(&p.name, v);
+                }
+            }
         }
     }
 

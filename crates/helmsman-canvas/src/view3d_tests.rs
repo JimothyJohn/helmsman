@@ -6,10 +6,12 @@ use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, Rect, Vec2};
 
 use crate::batch3d::Focus;
 use crate::cam3d::{Camera, FLIGHT, Orbit};
+use crate::playground::Point;
 use crate::playground::{Session, example};
 use crate::scene3d::Item;
 use crate::st_view::Viewer;
-use crate::view3d::{Nav, View3d, built_of, parents, scene_of};
+use crate::view3d::{Act3d, Nav, View3d, built_of, nudged, parents, scene_of};
+use helmsman_iec::Value;
 
 fn viewer(src: &str) -> (Viewer, Session) {
     let mut s = Session::new(src);
@@ -94,25 +96,25 @@ fn the_first_frame_fills_the_pane_with_every_node_on_screen() {
 
 #[test]
 fn a_dive_ends_framed_on_the_pous_blocks_and_the_way_back_on_the_whole() {
-    let (v, s) = viewer(example("Traffic light").src);
+    let (v, s) = viewer(TWO);
     let scene = scene_of(&v, scan(&s));
     let aspect = 1.6;
     let mut nav = Nav::default();
     let over = nav.orbit(&scene, aspect, 0.0);
-    assert!(nav.dive(&scene, 0, aspect, 5.0));
+    assert!(nav.dive(&scene, 1, aspect, 5.0));
     assert!(nav.flying());
-    assert_eq!(nav.focus, Focus::Dive(0));
+    assert_eq!(nav.focus, Focus::Dive(1));
     let mid = nav.orbit(&scene, aspect, 5.0 + FLIGHT / 2.0);
     assert!(nav.flying());
     assert_ne!(mid, over);
     let end = nav.orbit(&scene, aspect, 5.0 + FLIGHT + 0.01);
     assert!(!nav.flying());
-    assert_eq!(end, over.framing_points(&scene.frame_points(Some(0)), aspect));
+    assert_eq!(end, over.framing_points(&scene.frame_points(Some(1)), aspect));
     let cam = Camera::new(end.pose(), (1000.0, 1000.0 / aspect));
     for sol in scene
         .solids
         .iter()
-        .filter(|s| matches!(s.item, Some(Item::Block(..))))
+        .filter(|s| s.scope == 1 && matches!(s.item, Some(Item::Block(..))))
     {
         assert!(on_screen(&cam, &sol.bounds), "{}", sol.label);
     }
@@ -195,7 +197,7 @@ fn q_and_e_step_through_the_pous_and_wrap() {
 #[test]
 fn a_click_flies_to_the_block_and_frames_it() {
     let (v, s) = viewer(example("Traffic light").src);
-    let b = built_of(&v, scan(&s));
+    let b = built_of(&v, scan(&s), &[]);
     let mut nav = Nav::default();
     let size = (1000.0, 600.0);
     let aspect = size.0 / size.1;
@@ -220,21 +222,24 @@ fn frame(
     size: Vec2,
     t: f64,
     events: Vec<Event>,
-) {
+) -> Vec<Act3d> {
     let input = egui::RawInput {
         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
         time: Some(t),
         events,
         ..Default::default()
     };
+    let io: Vec<Point> = s.inputs().chain(s.outputs()).cloned().collect();
+    let mut acts = Vec::new();
     let mut out = ctx.run_ui(input, |ui| {
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let area = ui.available_rect_before_wrap();
-            view.ui(ui, v, scan(s));
+            acts = view.ui(ui, v, scan(s), &io);
             view.toggle_ui(ui, area);
         });
     });
     out.textures_delta.clear();
+    acts
 }
 
 #[test]
@@ -433,4 +438,310 @@ fn keys_frame_all_snap_the_levels_and_climb() {
     assert_eq!(view.nav.focus, Focus::Overview, "1 goes up to the whole");
     frame(&ctx, &mut view, &mut v, &s, size, 0.7, vec![key(egui::Key::F)]);
     assert_eq!(view.nav.focus, Focus::Overview);
+}
+
+// ---- pressing the board's controls ----
+
+const SWITCH: &str = "PROGRAM p
+VAR_INPUT go : BOOL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
+lamp := go;
+END_PROGRAM
+";
+const PUSH: &str = "PROGRAM p
+VAR_INPUT start : BOOL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
+lamp := start;
+END_PROGRAM
+";
+
+fn ptr(x: f32, y: f32) -> Event {
+    Event::PointerMoved(Pos2::new(x, y))
+}
+
+fn button(pos: Pos2, b: PointerButton, down: bool) -> Event {
+    Event::PointerButton {
+        pos,
+        button: b,
+        pressed: down,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+/// The view with a frame drawn, and the screen point in the middle of the
+/// first control's top.
+fn ready(src: &str) -> (egui::Context, View3d, Viewer, Session, Vec2, Pos2) {
+    let (mut v, s) = viewer(src);
+    let ctx = egui::Context::default();
+    let mut view = View3d::default();
+    view.set_on(true);
+    let size = Vec2::new(1200.0, 800.0);
+    frame(&ctx, &mut view, &mut v, &s, size, 0.0, vec![ptr(5.0, 5.0)]);
+    frame(&ctx, &mut view, &mut v, &s, size, 0.1, vec![]);
+    let io: Vec<Point> = s.inputs().chain(s.outputs()).cloned().collect();
+    let b = built_of(&v, None, &io);
+    let c = &b.scene.controls[0];
+    let cam = Camera::new(view.nav.orbit_now_for_test().pose(), (size.x, size.y));
+    let t = c.top.center();
+    let (x, y, _) = cam.project(t).unwrap();
+    (ctx, view, v, s, size, Pos2::new(x, y))
+}
+
+#[test]
+fn a_click_on_a_switch_flips_the_input_through_the_real_path() {
+    let (ctx, mut view, mut v, s, size, at) = ready(SWITCH);
+    let mut got = Vec::new();
+    got.extend(frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.2,
+        vec![ptr(at.x, at.y)],
+    ));
+    got.extend(frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.3,
+        vec![button(at, PointerButton::Primary, true)],
+    ));
+    got.extend(frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.4,
+        vec![button(at, PointerButton::Primary, false)],
+    ));
+    assert!(got.contains(&Act3d::Flip("GO".into())), "{got:?}");
+    // And the same acts, given to the playground, change what the program reads.
+    let mut pv = crate::playground_view::PlaygroundView::new();
+    assert!(pv.session.load(SWITCH));
+    pv.session.step();
+    assert_eq!(pv.session.value("go"), Some(Value::Bool(false)));
+    pv.act_3d(Act3d::Flip("GO".into()));
+    assert_eq!(
+        pv.session.value("go"),
+        Some(Value::Bool(true)),
+        "the switch is on"
+    );
+    pv.session.step();
+    assert_eq!(
+        pv.session.value("lamp"),
+        Some(Value::Bool(true)),
+        "and the program saw it"
+    );
+    pv.act_3d(Act3d::Flip("GO".into()));
+    assert_eq!(pv.session.value("go"), Some(Value::Bool(false)));
+}
+
+#[test]
+fn a_push_button_is_on_while_held_and_off_after() {
+    let (ctx, mut view, mut v, s, size, at) = ready(PUSH);
+    let held = |acts: &[Act3d]| {
+        acts.iter()
+            .any(|a| matches!(a, Act3d::Hold(n, true) if n == "START"))
+    };
+    let released = |acts: &[Act3d]| {
+        acts.iter()
+            .any(|a| matches!(a, Act3d::Hold(n, false) if n == "START"))
+    };
+    assert!(
+        released(&frame(
+            &ctx,
+            &mut view,
+            &mut v,
+            &s,
+            size,
+            0.2,
+            vec![ptr(at.x, at.y)]
+        )),
+        "not held to begin with"
+    );
+    let down = frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.3,
+        vec![button(at, PointerButton::Primary, true)],
+    );
+    let down2 = frame(&ctx, &mut view, &mut v, &s, size, 0.35, vec![]);
+    assert!(held(&down) || held(&down2), "{down:?} {down2:?}");
+    let up = frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.4,
+        vec![button(at, PointerButton::Primary, false)],
+    );
+    let up2 = frame(&ctx, &mut view, &mut v, &s, size, 0.45, vec![]);
+    assert!(released(&up) || released(&up2));
+    // Through the playground's own hold path.
+    let mut pv = crate::playground_view::PlaygroundView::new();
+    assert!(pv.session.load(PUSH));
+    pv.session.step();
+    pv.act_3d(Act3d::Hold("START".into(), true));
+    pv.apply_pushed();
+    assert_eq!(pv.session.value("start"), Some(Value::Bool(true)));
+    pv.act_3d(Act3d::Hold("START".into(), false));
+    pv.apply_pushed();
+    assert_eq!(pv.session.value("start"), Some(Value::Bool(false)));
+}
+
+#[test]
+fn a_drag_that_starts_on_a_control_never_moves_the_camera_and_one_on_the_board_does() {
+    for src in [SWITCH, PUSH] {
+        let (ctx, mut view, mut v, s, size, at) = ready(src);
+        let before = view.nav.orbit_now_for_test();
+        frame(&ctx, &mut view, &mut v, &s, size, 0.2, vec![ptr(at.x, at.y)]);
+        frame(
+            &ctx,
+            &mut view,
+            &mut v,
+            &s,
+            size,
+            0.3,
+            vec![button(at, PointerButton::Primary, true)],
+        );
+        for (k, d) in [(0.4, 40.0), (0.5, 90.0), (0.6, 160.0), (0.7, 230.0)] {
+            frame(
+                &ctx,
+                &mut view,
+                &mut v,
+                &s,
+                size,
+                k,
+                vec![ptr(at.x + d, at.y + d * 0.4)],
+            );
+        }
+        frame(
+            &ctx,
+            &mut view,
+            &mut v,
+            &s,
+            size,
+            0.8,
+            vec![button(at, PointerButton::Primary, false)],
+        );
+        let after = view.nav.orbit_now_for_test();
+        assert_eq!(before, after, "{src}: the camera moved on a drag from a control");
+    }
+    // The same drag from empty space orbits.
+    let (ctx, mut view, mut v, s, size, _) = ready(SWITCH);
+    let before = view.nav.orbit_now_for_test();
+    let empty = Pos2::new(20.0, size.y - 20.0);
+    frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.2,
+        vec![ptr(empty.x, empty.y)],
+    );
+    frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.3,
+        vec![button(empty, PointerButton::Primary, true)],
+    );
+    for (k, d) in [(0.4, 40.0), (0.5, 90.0), (0.6, 160.0)] {
+        frame(
+            &ctx,
+            &mut view,
+            &mut v,
+            &s,
+            size,
+            k,
+            vec![ptr(empty.x + d, empty.y - d * 0.3)],
+        );
+    }
+    frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.8,
+        vec![button(empty, PointerButton::Primary, false)],
+    );
+    assert_ne!(
+        before,
+        view.nav.orbit_now_for_test(),
+        "a drag on the board orbits"
+    );
+}
+
+#[test]
+fn space_flips_a_picked_switch_and_holds_a_picked_push_button() {
+    let (ctx, mut view, mut v, s, size, at) = ready(SWITCH);
+    // Pick it with a click, then Space.
+    frame(&ctx, &mut view, &mut v, &s, size, 0.2, vec![ptr(at.x, at.y)]);
+    frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.3,
+        vec![button(at, PointerButton::Primary, true)],
+    );
+    frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.4,
+        vec![button(at, PointerButton::Primary, false)],
+    );
+    assert!(view.picked.is_some());
+    let space = Event::Key {
+        key: egui::Key::Space,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    };
+    let acts = frame(&ctx, &mut view, &mut v, &s, size, 0.5, vec![space]);
+    assert!(acts.contains(&Act3d::Flip("GO".into())), "{acts:?}");
+}
+
+#[test]
+fn a_numeric_drag_moves_the_value_inside_its_range_whatever_the_delta() {
+    use crate::playground::Widget;
+    let int = Widget::Int { min: 0, max: 1000 };
+    assert_eq!(nudged(int, Value::Int(10), 3.0), Some(Value::Int(10 + 10)));
+    assert_eq!(nudged(int, Value::Int(10), -1e9), Some(Value::Int(0)));
+    assert_eq!(nudged(int, Value::Int(999), 1e9), Some(Value::Int(1000)));
+    assert_eq!(nudged(int, Value::Int(0), -5.0), None, "already at the bottom");
+    assert_eq!(nudged(int, Value::Int(10), 0.0), None);
+    assert_eq!(nudged(int, Value::Int(10), f32::NAN), None);
+    assert_eq!(nudged(int, Value::Bool(true), 3.0), None, "not an integer");
+    let huge = Widget::Int {
+        min: i128::MIN,
+        max: i128::MAX,
+    };
+    assert!(matches!(nudged(huge, Value::Int(0), 50.0), Some(Value::Int(n)) if n.abs() <= 1_000_000));
+    assert!(matches!(nudged(Widget::Real, Value::Real(2.0), 10.0), Some(Value::Real(x)) if x > 2.0));
+    assert!(matches!(
+        nudged(Widget::Real, Value::Real(f64::MAX), 1e9),
+        Some(Value::Real(_)) | None
+    ));
+    assert_eq!(nudged(Widget::Time, Value::Int(0), -9.0), None);
+    assert!(
+        matches!(nudged(Widget::Time, Value::Int(1_000_000_000), 5.0), Some(Value::Int(ns)) if ns == 1_050_000_000)
+    );
 }

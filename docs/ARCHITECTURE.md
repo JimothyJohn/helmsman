@@ -3627,40 +3627,57 @@ in `tests/site.rs`, `site_tests.rs`).
 ## The diagram in 3D (`canvas-3d-mvp`, `canvas-3d-nav`)
 
 The `3` key (or the "3D" button at the top of the diagram's middle) shows
-the playground's program as a stack: the program's POUs as nodes high up
-(the middle level), each over its board of blocks and wires (the bottom
-level, from the deterministic layout), joined by thick links and four
-struts, with regions lifted as slabs. 2D is the default and is untouched
-while 3D is off. The camera orbits (drag), pans (right-drag, Shift-drag,
-W A S D, a trackpad's two-finger scroll on a desktop build) and zooms
-toward the pointer (wheel, pinch); `F` frames everything, `1` is the
-opening view, `2`, Enter or a double click dives into a POU's blocks, `Q`
-and `E` step between POUs, `Esc` climbs, a click on a block picks it
-(the code's line follows, as in 2D) and flies to it. Every move is eased
-over 0.3 s and a hand on the pointer stops it. The top level (plant and
-devices) is `canvas-3d-devices`.
+the playground's program as boards: one low, matte board per POU (the
+program, then each user function block instance), its blocks as rounded
+tiles and its wires as traces on the surface, regions as faintly raised
+areas. A board that a block calls stands one drop below its caller's, off
+to the side, joined to the calling block by a thin lit link and titled at
+its edge (one POU alone is named by the pane's header). 2D is the default
+and is untouched while 3D is off.
 
-- Pure, with tests (`*3d_tests.rs`), no GL and no egui: `scene3d.rs`
-  (scene from `helmsman-diagram`), `cam3d.rs` (matrices, rays, framing,
-  the `Orbit` camera with its limits and flights), `labels3d.rs` (every
-  label 2D draws, anchored in the scene, and the placement that fades,
-  shrinks to a readable minimum, nudges and culls with the nearest first),
-  `anim3d.rs` (glows that ease and flare, pulses: functions of a clock the
-  caller passes in) and `batch3d.rs` (vertex data in linear colours from
-  the theme).
-- `view3d.rs` is the egui side: input, `Nav`, the labels drawn over the
-  pass. It asks for a repaint only while something moves (a flight, a
-  glow, a wire carrying pulses).
-- `gl3d.rs` is the GL pass, in an `egui_glow::CallbackFn`: the scene into
-  a half-float target (bytes where the context cannot render to floats,
-  tried at startup) with shaded, bevelled blocks, a gridded glossy board,
-  distance fog, antialiased wires with travelling pulses and the soft pool
-  of light a lit thing throws on the floor; a bright pass, a five-level
-  down and up blur chain, and a composite with ACES tone mapping and one
-  gamma encode. No new dependency (`eframe::glow`). Shaders take their
+The program's own inputs and outputs, as the simulation declares them
+(`playground::Point`: `VAR_INPUT`/`VAR_OUTPUT` and `%I`/`%Q`, never a
+guess from a name), are not plain blocks: a read of a BOOL input is a push
+button, a write to a BOOL output a pilot lamp (glass in the colour its
+name says, else the live green), a numeric input a control to drag, a
+numeric output a readout. A function block instance's variables are not
+the simulation's, an internal variable, a member or an array element stays
+a tile. A press goes through the same calls as the diagram's own buttons
+(`PlaygroundView::hold`, `set_by_hand`): a button whose widget is a
+`Push` is on while held, a `Toggle` flips on a click, Space does the same
+on the picked one. The buttons are egui widgets over the board, so a press
+on one is not a drag of the camera.
+
+The camera orbits (drag), pans (right-drag, Shift-drag, W A S D, a
+trackpad's two-finger scroll on a desktop build) and zooms toward the
+pointer (wheel, pinch); `F` frames everything, `1` is the opening view,
+`2`, Enter or a double click dives into a board, `Q` and `E` step between
+boards, `Esc` climbs, a click on a block picks it (the code's line
+follows, as in 2D) and flies to it. Every move is eased over 0.3 s and a
+hand on the pointer stops it.
+
+- Pure, with tests (`*3d_tests.rs`), no GL and no egui: `scene3d.rs` (scene
+  and the I/O classification), `cam3d.rs` (matrices, rays, framing, the
+  `Orbit` camera with its limits and flights), `labels3d.rs` (every label
+  2D draws, anchored in the scene, and the placement that fades, shrinks
+  to a readable minimum and culls with the nearest first), `anim3d.rs`
+  (glows that ease and flare, pulses: functions of a clock the caller
+  passes in), `look3d.rs` (the palette, proportions and glow strength of
+  each theme in one place) and `batch3d.rs` (the shapes as vertex data).
+- `view3d.rs` is the egui side: input, `Nav`, the controls, the labels
+  drawn over the pass (names in the app's proportional face, values in
+  mono). It asks for a repaint only while something moves.
+- `gl3d.rs` is the GL pass, one path for every renderer, in an
+  `egui_glow::CallbackFn`: two programs (shapes, wires) drawn far to near
+  straight into egui's framebuffer, with no depth buffer, offscreen target
+  or extension. A tile is a few rounded-rectangle layers up its side; the
+  fragment shader rounds and antialiases them with a signed distance and
+  draws a blurred rounded rectangle as its shadow; a lamp is a glass sphere
+  sprite with an added halo; a live wire has a soft added width and a slow
+  pulse. No new dependency (`eframe::glow`). The shaders take their
   version line from `ShaderVersion` (GLSL 1.40 native, ES 3.00 in the
-  browser); a context without them leaves the view on a message and the
-  2D button.
+  browser); a context without them leaves the view on a message and the 2D
+  button.
 - **`unsafe`**: `gl3d.rs` is the one module of the canvas with it (glow's
   calls are `unsafe fn`; Nick's ruling, 2026-11-21); main.rs denies
   `unsafe_code` for the rest, and every block carries its safety comment.

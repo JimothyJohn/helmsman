@@ -17,13 +17,13 @@ use helmsman_diagram::lower::Var;
 use helmsman_iec::Value;
 
 use crate::cam3d::{Camera, FAR, FOV_Y, NEAR, V3};
-use crate::scene3d::{Item, Scene, ScopeIn, UNIT, WIRE_Y};
+use crate::scene3d::{Item, Role, Scene, ScopeIn, UNIT, WIRE_Y};
 use crate::st_view::{gate_state, value_text};
 
 /// What a label is, which is also how much it matters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
-    Pou,
+    Title,
     Region,
     Node,
     Value,
@@ -89,25 +89,40 @@ impl Label {
 #[must_use]
 pub fn labels(scopes: &[ScopeIn], vars: &[Option<&HashMap<String, Var>>], scene: &Scene) -> Vec<Label> {
     let mut out = Vec::new();
+    // What each block is to the simulation, so a button's or a lamp's name
+    // goes on the board in front of it and not over its cap.
+    let special: std::collections::HashSet<(usize, u32)> = scene
+        .solids
+        .iter()
+        .filter(|s| matches!(s.role, Role::Button | Role::Lamp | Role::Numeric | Role::Readout))
+        .filter_map(|s| match s.item {
+            Some(Item::Block(sc, n)) => Some((sc, n.0)),
+            _ => None,
+        })
+        .collect();
     for (i, s) in scopes.iter().enumerate() {
-        let (Some(pou), Some(&(ox, oz))) = (scene.pous.get(i), scene.origins.get(i)) else {
+        let (Some(board), Some(&(ox, oz))) = (scene.boards.get(i), scene.origins.get(i)) else {
             continue;
         };
         let d = s.diagram;
         let at = |x: f32, y: f32| (ox + x * UNIT, oz + y * UNIT);
         let v = vars.get(i).copied().flatten();
-        let c = pou.center();
-        let mut l = Label::new(
-            [c[0], pou.max[1], c[2]],
-            s.label.clone(),
-            Kind::Pou,
-            i,
-            pou.max[0] - pou.min[0],
-            22.0,
-        );
-        l.tone = Tone::Accent;
-        l.item = Some(Item::Pou(i));
-        out.push(l);
+        // Each board of several is titled at its front edge; one alone is
+        // named by the pane's header.
+        if scopes.len() > 1 {
+            let mut t = Label::new(
+                [board.min[0], board.max[1].min(scene.floor(i)), board.max[2] + 0.9],
+                s.label.clone(),
+                Kind::Title,
+                i,
+                board.max[0] - board.min[0],
+                16.0,
+            );
+            t.align = Align::Left;
+            t.tone = Tone::Accent;
+            t.item = Some(Item::Board(i));
+            out.push(t);
+        }
         for r in &d.regions {
             let Some(b) = scene.regions[i].get(r.id.0 as usize) else {
                 continue;
@@ -152,9 +167,39 @@ pub fn labels(scopes: &[ScopeIn], vars: &[Option<&HashMap<String, Var>>], scene:
             } else {
                 at(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
             };
-            let mut l = Label::new([cx, top, cz], n.label.clone(), Kind::Node, i, wide, 11.5);
+            let front = special.contains(&(i, n.id.0));
+            let (cz, name_w) = if front {
+                (b.max[2] + 0.5, wide * 1.4)
+            } else {
+                (cz, wide)
+            };
+            // Names in normal case, as the 2D tunnel tags write them;
+            // operators and functions keep their capitals.
+            let text = if matches!(n.kind, NodeKind::Read { .. } | NodeKind::Write { .. }) {
+                n.label.to_ascii_lowercase()
+            } else {
+                n.label.clone()
+            };
+            let mut l = Label::new([cx, top, cz], text, Kind::Node, i, name_w, 11.5);
             l.item = Some(Item::Block(i, n.id));
             out.push(l);
+            if front {
+                // The state under the name; no port names on these.
+                if let Some(val) = s
+                    .live
+                    .and_then(|l| l.values.get(n.id.0 as usize)?.first().copied().flatten())
+                    && let Some(text) = value_text(d, n.id, val, v)
+                {
+                    let mut vl = Label::new([cx, top, b.max[2] + 0.86], text, Kind::Value, i, wide, 10.0);
+                    vl.tone = match val {
+                        Value::Bool(true) => Tone::True,
+                        Value::Bool(false) => Tone::False,
+                        _ => Tone::Normal,
+                    };
+                    out.push(vl);
+                }
+                continue;
+            }
             for (k, name) in n.ins.iter().enumerate().filter(|(_, n)| !n.is_empty()) {
                 let (px, py) = in_port(n, k);
                 let (x, z) = at(px + 6.0, py);
@@ -231,14 +276,18 @@ pub struct Opts {
     pub focus: Option<usize>,
     /// About how far the scene is seen from, to fade the far ones.
     pub reach: f32,
+    /// Port names, wire values and arm states are left out (a low angle
+    /// stacks them).
+    pub hide_detail: bool,
 }
 
 impl Default for Opts {
     fn default() -> Self {
         Self {
-            font: (8.0, 17.0),
+            font: (9.0, 17.0),
             focus: None,
             reach: 30.0,
+            hide_detail: false,
         }
     }
 }
@@ -266,6 +315,10 @@ struct Cand {
     alpha: f32,
 }
 
+/// The proportional face's size against the mono's for the same room (it
+/// is narrower).
+pub const PROPORTIONAL: f32 = 1.0;
+
 /// A monospace advance, as a fraction of the type size.
 pub const ADVANCE: f32 = 0.6;
 
@@ -282,7 +335,10 @@ pub fn place(labels: &[Label], cam: &Camera, o: &Opts) -> Vec<Placed> {
     let th = (FOV_Y / 2.0).tan();
     let mut cands: Vec<Cand> = Vec::new();
     for (i, l) in labels.iter().enumerate() {
-        if o.focus.is_some_and(|f| l.scope != f && l.kind != Kind::Pou) {
+        if o.focus.is_some_and(|f| l.scope != f && l.kind != Kind::Title) {
+            continue;
+        }
+        if o.hide_detail && matches!(l.kind, Kind::Port | Kind::WireValue | Kind::RegionState) {
             continue;
         }
         let Some((x, y, d)) = cam.project(l.at) else {
@@ -294,15 +350,15 @@ pub fn place(labels: &[Label], cam: &Camera, o: &Opts) -> Vec<Placed> {
         let raw = l.size * UNIT * per_unit;
         // What is too small to read collapses; a block's name and a
         // title never do: they are held at the smallest type.
-        let holds = matches!(l.kind, Kind::Pou | Kind::Region | Kind::Node);
-        if !holds && raw < o.font.0 * 0.9 {
+        let holds = matches!(l.kind, Kind::Title | Kind::Region | Kind::Node);
+        if !holds && raw < o.font.0 + 0.5 {
             continue;
         }
         let font = raw.clamp(o.font.0, o.font.1);
         let room = l.width * per_unit;
         let fit = (room / (font * ADVANCE)).floor();
         let chars = l.text.chars().count();
-        let text = if (chars as f32) <= fit || l.kind == Kind::Pou || l.kind == Kind::Region {
+        let text = if (chars as f32) <= fit || l.kind == Kind::Title || l.kind == Kind::Region {
             l.text.clone()
         } else if fit >= 3.0 || l.kind == Kind::Node {
             // A block's name is cut to its block but never dropped: at
@@ -356,7 +412,7 @@ pub fn place(labels: &[Label], cam: &Camera, o: &Opts) -> Vec<Placed> {
         // before it is given up; the rest are left out.
         let nudge = matches!(l.kind, Kind::Node | Kind::Value | Kind::Region);
         let tries: &[f32] = if nudge {
-            &[0.0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4, 3.0, -3.0]
+            &[0.0, 0.6, -0.6, 1.2, -1.2]
         } else {
             &[0.0]
         };

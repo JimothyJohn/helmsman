@@ -38,7 +38,8 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | F, Home | In 3D: frame the whole stack, keeping the angle | |
 | 1, R | In 3D: the whole stack at the opening angle | |
 | 2, Enter, double-click | In 3D: dive into the picked POU's blocks (else the one under the pointer) | |
-| E, Q | In 3D: the next or the previous POU's blocks | |
+| E, Q | In 3D: the next or the previous POU's board | |
+| Space | In 3D: flip the picked switch, or hold the picked push button | |
 | Esc | In 3D: up from the blocks to the whole stack | |
 
 Reserved, not built yet: F2 / Shift F2 for the Agent.
