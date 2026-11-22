@@ -34,10 +34,14 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   is only its native dev-dependency (the real box API in its tests).
   crates/helmsman-canvas/tests/wasm_deps.rs fails if a native-only crate
   reaches the canvas.
-- **`unsafe` lives in helmsman-l2 and nowhere else.** Every other crate
-  forbids it; a system call the safe crates in the tree cannot make
-  (raw Ethernet today) goes there, one libc call per block with its
-  safety comment. It reaches a binary only through helmsman-plc's
+- **`unsafe` lives in helmsman-l2 and in the canvas's `gl3d.rs`, and
+  nowhere else.** Every other crate forbids it; a system call the safe
+  crates in the tree cannot make (raw Ethernet today) goes to
+  helmsman-l2, one libc call per block with its safety comment. The
+  canvas denies it crate-wide and allows it in `gl3d.rs` alone (Nick,
+  2026-11-21): glow's GL calls are `unsafe fn`s and the 3D view is a GL
+  pass of our own, so every GL call lives in that module, each block
+  with its safety comment. helmsman-l2 reaches a binary only through helmsman-plc's
   `profinet-io` feature, which stays out of `default` until a real
   PROFINET device has passed the bench (TODO.md `mdrive-bringup`), as
   `enip-io` did (2026-11-11).
