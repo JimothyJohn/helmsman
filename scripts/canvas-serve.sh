@@ -55,10 +55,11 @@ fi
 rm -f "$dist/index.html"
 (cd crates/helmsman-canvas && exec trunk watch --release --dist "$dist") &
 watch=$!
-# Ctrl-C reaches only the foreground: a background job of a script ignores
-# SIGINT, so the watch goes when this shell runs the trap, which is why the
-# server below runs as a child and is not exec'd (an exec'd shell runs no
-# trap, and every Ctrl-C left the watch running).
+# The watch goes when this shell runs the trap, so the server below runs as
+# a child and is not exec'd: an exec'd shell runs no trap, and stopping the
+# server alone (the kill by port above, dev-processes.sh --stop) left the
+# watch running. The exec above makes $watch trunk itself, not a subshell
+# that may fork it.
 trap 'kill "$watch" 2>/dev/null; wait "$watch" 2>/dev/null || true' EXIT
 trap 'exit 130' INT TERM
 # The first build must land before the page is worth serving.
