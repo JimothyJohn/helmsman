@@ -91,10 +91,6 @@ BOTTOM_TABS = (330, 575, 300, 50)
 MESSAGES = (330, 640, 700, 200)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
-# The 3D toggle over the diagram's left edge, and the POU node in the 3D
-# overview, in points.
-TOGGLE_3D = (352, 489)
-POU_3D = (860, 275)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt), and the bottom panel's Trend and
 # Messages.
@@ -240,14 +236,6 @@ def playground(ctx, base, out):
         m.move(800, 200, steps=12); m.up()
     r.step("diagram-selected", band, DIAGRAM, 800)
     r.step("diagram-deselected", lambda: r.key("Escape"), DIAGRAM, 500)
-    # The diagram in 3D (canvas-3d-mvp): the toggle on the diagram's left
-    # edge, a double click on the POU node dives to its blocks, Escape
-    # climbs, the toggle again goes back to the flat diagram. Headless
-    # Chromium needs a software WebGL2 (the launch flags in main).
-    r.step("3d-on", lambda: r.click(*TOGGLE_3D), DIAGRAM, 2500)
-    r.step("3d-dive", lambda: r.page.mouse.dblclick(*POU_3D), DIAGRAM, 1500)
-    r.step("3d-up", lambda: r.key("Escape"), DIAGRAM, 1500)
-    r.step("3d-off", lambda: r.click(*TOGGLE_3D), DIAGRAM, 1000)
     r.step("trend-hidden", lambda: r.key("Alt+Shift+Digit2"), BOTTOM_TABS)
     r.key("Alt+Shift+Digit2"); r.wait(400)
     # Alt+Shift+5 docks the Code tab on the right, the I/O shown on the
@@ -655,7 +643,7 @@ def main():
             box_port = free_port()
             proc = start_box(a.dist, state, box_port)
         with sync_playwright() as p:
-            browser = p.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"])
+            browser = p.chromium.launch()
             if a.market_only:
                 problems += market(browser, a.dist, a.out)
             else:
