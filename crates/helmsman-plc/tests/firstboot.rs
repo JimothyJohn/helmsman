@@ -53,6 +53,11 @@ fn boot(root: &Path) -> Boot {
     let out = Command::new("bash")
         .arg(script())
         .env("HELMSMAN_FIRSTBOOT_ROOT", root)
+        // Whatever locale the caller has, the script's ranges are bytes:
+        // under a UTF-8 locale a bash without `globasciiranges` (3.2,
+        // macOS) takes A to E as part of `a-f`, and `hmr1_ABC` was
+        // installed as a token. A system without this locale runs as C.
+        .env("LC_ALL", "en_US.UTF-8")
         .output()
         .unwrap();
     assert!(

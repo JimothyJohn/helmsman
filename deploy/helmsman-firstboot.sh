@@ -32,6 +32,10 @@
 #
 # HELMSMAN_PLC_BIN names the box binary (tests point it at the one they built).
 set -euo pipefail
+# Every pattern below is over bytes. Under a UTF-8 locale a bash without
+# `globasciiranges` (3.2) reads `a-f` by collation, A to E included, and
+# an uppercase token passed the check.
+export LC_ALL=C
 root="${HELMSMAN_FIRSTBOOT_ROOT:-}"
 plc="${HELMSMAN_PLC_BIN:-/usr/local/bin/helmsman-plc}"
 boot="$root/boot/firmware/helmsman"
