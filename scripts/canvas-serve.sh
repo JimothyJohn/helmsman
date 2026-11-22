@@ -53,7 +53,7 @@ if leftover=$(pgrep -f "trunk watch .*--dist $dist\$"); then
     while pgrep -f "trunk watch .*--dist $dist\$" >/dev/null; do sleep 1; done
 fi
 rm -f "$dist/index.html"
-(cd crates/helmsman-canvas && trunk watch --release --dist "$dist") &
+(cd crates/helmsman-canvas && exec trunk watch --release --dist "$dist") &
 watch=$!
 # Ctrl-C reaches only the foreground: a background job of a script ignores
 # SIGINT, so the watch goes when this shell runs the trap, which is why the
