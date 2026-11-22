@@ -3624,6 +3624,31 @@ in `tests/site.rs`, `site_tests.rs`).
   docs/UI.md's clean-up; the site returns with a fleet view. The box side
   above is unchanged.
 
+## The diagram in 3D (`canvas-3d-mvp`)
+
+A toggle ("3D" on the diagram's left edge, "2D" back) in the playground
+shows the program's POUs as nodes (the middle level, y = 9) over one board
+per POU of blocks and wires (the bottom level, from the deterministic
+layout); regions lift what they hold. 2D is the default and is untouched
+while the toggle is off. A double click or Enter on a POU flies the camera
+down to its blocks in 0.3 s, eased, the middle level left as a faint ghost
+above; Escape flies back. The top level (plant and devices) is
+`canvas-3d-devices`; free orbit and snap keys are `canvas-3d-nav`.
+
+- `scene3d.rs` (scene from `helmsman-diagram`), `cam3d.rs` (matrices, ray,
+  framing, easing), `batch3d.rs` (vertex data and theme colours) and
+  `view3d.rs` (`Nav`, the egui view and its labels) hold no GL; their
+  tests are `*3d_tests.rs`.
+- `gl3d.rs` is the GL pass: an `egui_glow::CallbackFn` into an offscreen
+  target, a bright pass of what a traced scan lights (`live::annotate`), a
+  two-pass blur at half size, and a composite onto egui's framebuffer. No
+  new dependency (`eframe::glow`). Shaders take their version line from
+  `ShaderVersion` (GLSL 1.40 native, ES 3.00 in the browser); a context
+  without them leaves the view on a message and the 2D button.
+- **`unsafe`**: `gl3d.rs` is the one module of the canvas with it (glow's
+  calls are `unsafe fn`); main.rs denies `unsafe_code` for the rest, and
+  every block carries its safety comment.
+
 ## The canvas's loading screen
 
 Both pages (`index.html` on the box, `playground.html`) include
