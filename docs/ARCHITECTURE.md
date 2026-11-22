@@ -76,6 +76,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-devconf` | Configuration of third-party devices over their own configuration protocols, std only with no dependencies: `moxa_e1200` is the Moxa ioLogik E1200 web console (HTTP client, form and export readers, export / form / set / restart / import / change-password) and `moxa_e1200::sim` (feature `sim`) is a simulated console for tests. A library for now: nothing in the box calls it yet. | built: against its simulator only; the real console was mapped by hand (2026-11-12) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
+| `helmsman-drawing` | Parts out of a technical drawing, no I/O and no dependencies (wasm-safe): a reader for ASCII DXF (`dxf`: group-code pairs, BLOCKS, INSERT with ATTRIB / ATTDEF, TEXT, MTEXT, LINE, LWPOLYLINE; binary DXF, other entity types and other sections are named in the result, never skipped silently; truncated or malformed input is an error value), the parts a drawing inserts with tag, part number, position, rotation and, for a block with no attributes, the text beside it (`parts`; self-inserting blocks terminate, depth and count are capped), and each part's match to a device-library record as `Matched`, `Ambiguous` or `Unknown` by exact order number or model text (`matching`; takes the library as a slice of `LibraryRecord`, built by the caller from `helmsman_project::devlib`; text beside a part never decides alone). Not wired into the canvas or the box yet (TODO.md `drawing-review`). | built: against a hand-made panel layout and hostile inputs; no vendor DXF yet (`tests/fixtures/README.md`) |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, and v2 relay-held sessions for harness profiles; HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 | `helmsman-compat` | The release train's checker (docs/COMPAT.md): the contracts between helmsman, agent-relay, helmsman-devices and helmsman-hardware, checked black-box against a box and a relay built at any ref (a devices checkout served as the library, `agent-relay-local` in front of a stub model, the node firmware's pins against the board's netlist). Run by `scripts/compat.sh` (`make compat`); never on a box. | built: against its own tests and the four repositories at dev and live |
@@ -3623,6 +3624,31 @@ in `tests/site.rs`, `site_tests.rs`).
 - **No view for now.** The canvas's Site view (`?site`) was removed with
   docs/UI.md's clean-up; the site returns with a fleet view. The box side
   above is unchanged.
+
+## The diagram in 3D (`canvas-3d-mvp`)
+
+A toggle ("3D" on the diagram's left edge, "2D" back) in the playground
+shows the program's POUs as nodes (the middle level, y = 9) over one board
+per POU of blocks and wires (the bottom level, from the deterministic
+layout); regions lift what they hold. 2D is the default and is untouched
+while the toggle is off. A double click or Enter on a POU flies the camera
+down to its blocks in 0.3 s, eased, the middle level left as a faint ghost
+above; Escape flies back. The top level (plant and devices) is
+`canvas-3d-devices`; free orbit and snap keys are `canvas-3d-nav`.
+
+- `scene3d.rs` (scene from `helmsman-diagram`), `cam3d.rs` (matrices, ray,
+  framing, easing), `batch3d.rs` (vertex data and theme colours) and
+  `view3d.rs` (`Nav`, the egui view and its labels) hold no GL; their
+  tests are `*3d_tests.rs`.
+- `gl3d.rs` is the GL pass: an `egui_glow::CallbackFn` into an offscreen
+  target, a bright pass of what a traced scan lights (`live::annotate`), a
+  two-pass blur at half size, and a composite onto egui's framebuffer. No
+  new dependency (`eframe::glow`). Shaders take their version line from
+  `ShaderVersion` (GLSL 1.40 native, ES 3.00 in the browser); a context
+  without them leaves the view on a message and the 2D button.
+- **`unsafe`**: `gl3d.rs` is the one module of the canvas with it (glow's
+  calls are `unsafe fn`); main.rs denies `unsafe_code` for the rest, and
+  every block carries its safety comment.
 
 ## The canvas's loading screen
 

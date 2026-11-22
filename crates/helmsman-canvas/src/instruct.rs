@@ -1392,10 +1392,25 @@ pub fn recent<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<S
 
 // ------------------------------------------------------------------ view
 
+/// How an instruction goes out. A big ask sent as `Ask` is held for the
+/// engineer's pick ([`big_ui`]); small ones go at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Way {
+    Ask,
+    /// Planned in steps first, each checked.
+    Steps,
+    /// As typed, in one request, however big.
+    OneGo,
+}
+
 /// What the tab asks its owner to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Act {
     Send,
+    /// The big ask on show, in steps ([`Way::Steps`]).
+    Split,
+    /// The big ask on show, in one go ([`Way::OneGo`]).
+    OneGo,
     Stop,
     Undo,
     /// Run the plan waiting for approval, or try its paused step again.
@@ -1432,6 +1447,9 @@ pub struct View {
     /// The question that goes with the instruction under way or just
     /// done (`crate::ask`), when there is one.
     pub card: Option<crate::ask::Card>,
+    /// A big ask waiting for the engineer's pick, with the time it takes
+    /// in one go ([`estimate_secs`]).
+    pub big: Option<(u64, u64)>,
 }
 
 /// Where the arrows go: the revision before and after the one shown,
@@ -1832,6 +1850,54 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
 /// A plan in steps: why, the steps (done, this one, later), and while it
 /// waits for the engineer, the button that runs it (or tries a paused
 /// step again) beside what went wrong. `true` when that was clicked.
+/// The notice for a big ask, before anything is sent: steps are the way
+/// on offer (the first button), one go the engineer's own risk.
+fn big_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, (least, most): (u64, u64)) -> Option<Act> {
+    use egui::RichText;
+
+    let t = crate::theme::theme(ui);
+    let mut act = None;
+    let r = ui
+        .add(
+            egui::Label::new(
+                RichText::new(big_notice(least, most))
+                    .color(t.ink(crate::st_view::brand::WARN)),
+            )
+            .wrap(),
+        )
+        .tip("Nothing has been sent yet. In steps the Agent plans the change first, then does and checks one step at a time, and the file is written once, at the end.");
+    chrome.hit("agent big ask", r.rect);
+    ui.horizontal_wrapped(|ui| {
+        let r = ui
+            .add(egui::Button::new(RichText::new(SPLIT).strong()))
+            .tip("Plans the change as short steps, each checked on a copy before the next. The file is written once, at the end.");
+        chrome.hit("agent split", r.rect);
+        if r.clicked() {
+            act = Some(Act::Split);
+        }
+        let r = ui
+            .button(ONE_GO)
+            .tip("Sends the whole instruction as one request. It can take the longer time above and is less likely to pass its checks.");
+        chrome.hit("agent one go", r.rect);
+        if r.clicked() {
+            act = Some(Act::OneGo);
+        }
+    });
+    act
+}
+
+/// The big-ask notice's words.
+#[must_use]
+pub fn big_notice(least: u64, most: u64) -> String {
+    format!(
+        "This is a big change (about {least} to {most} s in one go). Splitting it into checked steps is faster to get right."
+    )
+}
+
+/// The big-ask notice's buttons: the way on offer, then the other.
+pub const SPLIT: &str = "Split into steps";
+pub const ONE_GO: &str = "Send in one go";
+
 fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> bool {
     use egui::RichText;
 
@@ -2136,6 +2202,11 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             }
         }
     });
+    if let Some(estimate) = v.big
+        && !s.busy()
+    {
+        act = big_ui(ui, chrome, estimate).or(act);
+    }
     // The question goes right under the box, above the progress and the
     // draft: it is the one thing here that waits for the engineer, so it
     // is never what a long draft pushes off the screen.

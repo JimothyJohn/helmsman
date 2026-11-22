@@ -12,6 +12,9 @@
 #   scripts/ship.sh --report    the report again from target/ship/ (runs
 #                               nothing, opens no pull request)
 #
+# Ship refuses to start unless the scripts and the checker it runs from this
+# checkout are origin/dev's (SHIP_LOCAL_SCRIPTS=1 runs local copies).
+#
 # Steps:
 #   0. playground: when the canvas has changed since dev's committed page
 #      was built, the page is rebuilt at the dev tip
@@ -70,6 +73,23 @@ done
 mkdir -p "$OUT"
 say() { printf '\n== %s\n' "$*"; }
 die() { echo "ship.sh: $*" >&2; exit 2; }
+
+# Ship runs these from this checkout, so they must be dev's. On 2026-11-21
+# two runs used an old ship.sh: the checkout was behind dev, then on master.
+# Refused rather than pulled: the checkout may hold someone else's work.
+# SHIP_LOCAL_SCRIPTS=1 runs local copies (for changing ship itself).
+SHIP_FILES="Makefile scripts/ship.sh scripts/compat.sh scripts/live-state.sh scripts/parity-tabs.py scripts/build-playground.sh crates/helmsman-compat"
+if [ "$REPORT_ONLY" = 0 ] && [ "${SHIP_LOCAL_SCRIPTS:-0}" != 1 ]; then
+  git -C "$ROOT" fetch -q origin dev || die "fetching helmsman's dev failed"
+  # shellcheck disable=SC2086 # SHIP_FILES is a list of paths
+  stale=$(git -C "$ROOT" diff --name-only origin/dev -- $SHIP_FILES)
+  if [ -n "$stale" ]; then
+    echo "ship.sh: this checkout's ship differs from origin/dev ($(git -C "$ROOT" rev-parse --abbrev-ref HEAD) at $(git -C "$ROOT" rev-parse --short=12 HEAD)):" >&2
+    printf '  %s\n' $stale >&2
+    echo "ship.sh: nothing done. Update it and run again:  git -C $ROOT checkout dev && git -C $ROOT pull --ff-only && make -C $ROOT ship" >&2
+    exit 2
+  fi
+fi
 
 default_of() {
   case "$1" in
@@ -366,12 +386,14 @@ if [ -n "$merge" ]; then
   wt=$MAIN/.claude/worktrees/$(echo "$br" | tr '/' '-')
   git -C "$MAIN" worktree add -q -b "$br" "$wt" origin/master &&
     git -C "$wt" revert --no-edit -m 1 "$merge" >/dev/null &&
-    git -C "$wt" push -q -u origin "$br" &&
+    git -C "$wt" -c http.postBuffer=524288000 push -q -u origin "$br" &&
     gh pr create --repo "$(slug helmsman)" --draft --base master --head "$br" \
       --title "Revert the promotion of $(git -C "$MAIN" log -1 --format=%cs "$merge"): live regressed" \
       --body "make ship found features that pass on the candidate and fail live:$regress. Report: target/ship/report.md in the checkout that ran it. Merge to take master back to before the promotion, or close and fix forward. Opened as a draft by scripts/ship.sh; nothing was reset or force-pushed." ||
     echo "ship.sh: opening the revert pull request failed; revert by hand: git revert -m 1 $merge on master" >&2
   git -C "$MAIN" worktree remove --force "$wt" 2>/dev/null
+  # Pushed or not, the local branch is done with (one was left on 2026-11-21).
+  git -C "$MAIN" branch -q -D "$br" 2>/dev/null
 else
   echo "ship.sh: helmsman was not promoted by this run, so there is nothing of its to revert; the regression is in the relay, the device library or the site." >&2
 fi

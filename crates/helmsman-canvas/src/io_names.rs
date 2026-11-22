@@ -390,7 +390,8 @@ mod tests {
             "on when the tank is nearly empty",
         ));
         v.instruct.draft = "Keep the tank topped up.".into();
-        v.send_instruction(&egui::Context::default());
+        // The named points make it a big ask: held until the engineer picks.
+        v.send_instruction_as(&egui::Context::default(), crate::instruct::Way::Steps);
         let body = v.link.sent.last().expect("a request").1.body.clone();
         assert!(
             body.contains("- level_low: BOOL input, on when the tank is nearly empty"),
