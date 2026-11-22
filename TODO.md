@@ -604,6 +604,88 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-20
   by: claude-session 44a269b3
 
+## Canvas overhaul (interview 2026-11-21)
+
+Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, dive into blocks, bloom, fast snap navigation, device-library graphics on connections, and convert technical drawings (panel layouts, CAD, DXF, schematics) into matched components, "starting now". Decided in the interview that day: (1) one 3D stack for every level: plant and devices on top, programs and POUs in the middle, the ST diagram's blocks at the bottom; a dive goes down a level; (2) rendered by egui on glow with our own GL pass through a paint callback (camera, picking, two-pass bloom), no engine crate and no backend change; (3) for engineers and demos first: 3D on a desktop GPU, the 2D view kept reachable and tested; (4) two tracks at once: drawings now, and the 3D canvas, then navigation, then device graphics; (5) dive: a fly-through by default and a free orbit over the whole stack as a second mode, both offered; (6) drawings start with ASCII DXF panel layouts, read by a small reader of our own (no new crate, wasm-safe), built against DXFs vendors publish for parts already in the library; (7) a drawing gives devices matched to the library with a draft io.map, their placement in the 3D map and its wiring as connections; (8) a part not in the library or matching more than one record is shown and the engineer decides: never a guessed model; (9) device graphics are line art per device family in the canvas's own style (the library has no images, and vendor photos are not ours to publish); (10) first milestone: the playground's example in 3D behind a toggle, 2D still the default.
+
+- [ ] **The 3D canvas: the playground's example in three levels, behind a toggle** — The first milestone of the overhaul (decisions 1, 2, 3, 10 above). A GL pass inside egui's paint callback on the glow backend the canvas already uses: a scene of nodes and wires from `helmsman-diagram` (POUs as the middle level, a POU's blocks below it, folds and regions as depth within a level), a perspective camera, picking by ray, and a bloom of two passes on what a traced scan lights (`live::annotate`). The egui panes stay as they are. The top level (plant and devices) is `canvas-3d-devices`. A toggle shows it; 2D stays the default until Nick says otherwise.
+  needs: nothing; WebGL2 in the browser build (what glow targets there) is the floor
+  result: the playground's example program in 3D: three levels, live wires glow during a simulated scan, a dive and a way back, `make canvas-smoke` leaves a screenshot of it, the 2D view untouched
+  est: 2w
+  difficulty: high
+  id: canvas-3d-mvp
+  asked: 2026-11-21
+  by: session canvas-overhaul interview
+
+- [ ] **Navigation in the 3D canvas: fly-through, free orbit, snap keys** — Decision 5: both dive styles as options. Fly-through: an eased move of about 300 ms down into a block, the parent left as a ghost above, back flies up. Free orbit: pan, orbit and zoom over the whole stack. Snap: a key per level, bookmarks for places, and `jump.rs` / `find.rs` move the camera to what they find.
+  needs: canvas-3d-mvp
+  result: any block is reached in one or two keys from anywhere; the mode is a setting the desk keeps; `?` lists the controls
+  depends: canvas-3d-mvp
+  est: 1w
+  difficulty: med
+  id: canvas-3d-nav
+  asked: 2026-11-21
+  by: session canvas-overhaul interview
+
+- [ ] **The device level of the 3D canvas: the plant on top, wired down to the program** — The top of the stack (decision 1): a box, its nodes, each device of the io.map and what is wired to its points (`wired=`), with a connection from a point to the blocks that read or write its signal. A drawing's placement and wiring land here (`drawing-place-wire`).
+  needs: canvas-3d-mvp
+  result: from a device on top, a dive follows its point into the program that uses it, on a box and in the playground
+  depends: canvas-3d-mvp
+  est: 1w
+  difficulty: med
+  id: canvas-3d-devices
+  asked: 2026-11-21
+  by: session canvas-overhaul interview
+
+- [ ] **Device graphics: line art per device family on the map's connections** — Decision 9. The library (helmsman-devices) has no images and vendor photos cannot go in a public repository, so a glyph per family (remote I/O block, drive, proximity sensor, photoelectric sensor, valve, switch, ...) drawn in the canvas's style, picked from a record's kind, with a generic one for an unknown part. Vector, so it takes the bloom. The canvas already has `glyphs.rs` and `assets/glyphs`: start from what is there.
+  needs: canvas-3d-devices; a `kind` on each library record that lacks one
+  result: every device and wired part on the map shows what it is at a glance, with no image fetched from a vendor
+  depends: canvas-3d-devices
+  est: 4d
+  difficulty: med
+  id: device-glyphs
+  asked: 2026-11-21
+  by: session canvas-overhaul interview
+
+- [ ] **Read a DXF panel layout: a reader of our own, and its parts matched to the library** — Decisions 6 and 8; starts now, beside `canvas-3d-mvp`. A new crate `helmsman-drawing` with no dependencies (it must build for wasm32): ASCII DXF's group-code pairs, BLOCKS and INSERT with ATTRIB, TEXT and MTEXT, LINE and LWPOLYLINE; binary DXF and anything else is refused by name, not skipped silently. Each inserted part's tag, part number and position come out; a part is matched to a library record by order number or model text (`devrecord`, the index the box and the playground already read) as matched, ambiguous or unknown. Fixtures: the DXFs vendors publish for parts in the library (Moxa E1213, Murrelektronik IMPACT67, ifm sensors), fetched with the library's `docs-fetch.py` and kept with their source and licence; a file whose licence forbids keeping is fetched in the test's cache, not committed. Hostile input by default: truncated files, a block that inserts itself, huge counts.
+  needs: nothing
+  result: a DXF in, a list of parts out with a position and a matched / ambiguous / unknown status each, as a library call and a test over real vendor files
+  est: 1w
+  difficulty: med
+  id: drawing-dxf-read
+  asked: 2026-11-21
+  by: session canvas-overhaul interview
+
+- [ ] **A drawing in the canvas: review its parts, get the devices and a draft io.map** — Decisions 7 and 8. Upload a DXF in the Devices tab (on a box and in the playground): the review lists every part with its status; the engineer picks among ambiguous matches and an unknown part stays as a generic device with its tag. Confirming adds the devices and writes draft map lines (`wired=` where a record matched) through the review the Agent's proposals already use.
+  needs: drawing-dxf-read
+  result: a panel's devices in the project from its drawing, nothing added that the engineer did not see
+  depends: drawing-dxf-read
+  est: 1w
+  difficulty: med
+  id: drawing-review
+  asked: 2026-11-21
+  by: session canvas-overhaul interview
+
+- [ ] **A drawing's placement and wiring on the 3D map** — Decision 7: devices sit on the device level where the panel has them, and the drawing's wires (terminal to channel, where the layout carries them) become the map's connections. A panel layout often has no wiring: then placement only, and the wiring waits for schematics (`drawing-schematics`).
+  needs: drawing-review, canvas-3d-devices
+  result: the device level of a project made from a drawing looks like its cabinet
+  depends: drawing-review, canvas-3d-devices
+  est: 1w
+  difficulty: high
+  id: drawing-place-wire
+  asked: 2026-11-21
+  by: session canvas-overhaul interview
+
+- [ ] **Later inputs: schematics as PDF, then native CAD** — Not first (decision 6). A schematic as PDF or a scan needs a model reading the page, a confirm step for every wire, and a relay profile (Nick's deploy). DWG, EPLAN and STEP need a vendor's library or a converter: a dependency and licence decision to bring to Nick before any code.
+  needs: drawing-review in use on real files; a real customer schematic
+  result: a decision per format, with what it costs
+  depends: drawing-review
+  est: 3h
+  difficulty: low
+  id: drawing-schematics
+  asked: 2026-11-21
+  by: session canvas-overhaul interview
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
