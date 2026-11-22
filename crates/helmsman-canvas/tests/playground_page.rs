@@ -85,7 +85,7 @@ fn only_a_demo_function_url_passes_for_the_free_chat() {
         "https://.lambda-url.us-east-1.on.aws",
         "https://a.b.lambda-url.us-east-1.on.aws",
         "https://evil.example",
-        MODEL_API,
+        "https://api.anthropic.com",
         "'self'",
     ] {
         assert!(!is_free_chat(bad), "{bad}");

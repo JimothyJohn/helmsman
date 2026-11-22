@@ -4601,17 +4601,6 @@ mod simulated {
     #[test]
     fn the_agent_tab_has_no_key_and_no_model_and_keeps_the_panel_width() {
         use crate::claude::{Free, Incoming};
-        let mut h = Harness::new(App::sim());
-        // Docked right: the Agent at the right pane's default width, its narrowest place.
-        h.app.chrome.dock(crate::editor::Pane::Claude, true);
-        h.wait(0.3);
-        let right = h.rect("right");
-        h.press("tab claude");
-        h.wait(0.3);
-        let grew = |h: &Harness, what: &str| {
-            let r = right.left() - h.rect("right").left();
-            assert!((0.0..=8.0).contains(&r), "{what}: the right panel grew {r} pt");
-        };
         // No key field and no model picker, whatever the state.
         fn bare(h: &mut Harness, what: &str) {
             assert!(!h.has("agent key"), "{what}: a key field");
@@ -4628,6 +4617,17 @@ mod simulated {
                 assert!(!text.contains(word), "{what}: the tab shows {word:?}");
             }
         }
+        let mut h = Harness::new(App::sim());
+        // Docked right: the Agent at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        h.wait(0.3);
+        let right = h.rect("right");
+        h.press("tab claude");
+        h.wait(0.3);
+        let grew = |h: &Harness, what: &str| {
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&r), "{what}: the right panel grew {r} pt");
+        };
         // Still looking for a proxy: the chat box, no form.
         bare(&mut h, "checking for a proxy");
         // No proxy and no free chat in this build: one line, no box.
