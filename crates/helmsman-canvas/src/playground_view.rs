@@ -157,8 +157,6 @@ pub struct PlaygroundView {
     seen: Seen,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
-    /// The diagram in 3D, behind its toggle ([`crate::view3d`]).
-    pub view3d: crate::view3d::View3d,
     /// The Agent's last change, marked on the diagram and in the code
     /// until the file is edited ([`crate::agent_marks`]).
     pub agent_change: Option<crate::agent_marks::AgentChange>,
@@ -335,7 +333,6 @@ impl PlaygroundView {
             layers: Layers::load(tweaks),
             fresh: false,
             dmenu: crate::diagram_menu::Menu::default(),
-            view3d: crate::view3d::View3d::default(),
             ports_memo: std::cell::RefCell::new(None),
             viewer_of: String::new(),
             pending: None,
@@ -3668,15 +3665,6 @@ impl Body for PlaygroundView {
                 .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
             v.crumbs_ui(ui, &[]);
             let area = ui.available_rect_before_wrap();
-            if self.view3d.on {
-                let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
-                self.view3d.ui(ui, v, scan);
-                self.view3d.toggle_ui(ui, area);
-                return;
-            }
-            if self.view3d.wants_release() {
-                self.view3d.release(ui, area);
-            }
             v.breaks.clone_from(&self.session.breaks);
             v.paused = self.session.paused_at();
             let now = ui.input(|i| i.time);
@@ -3685,7 +3673,6 @@ impl Body for PlaygroundView {
             }
             v.menu_open = self.dmenu.is_open() || self.sim_popup.is_some();
             v.canvas(ui, scan);
-            self.view3d.toggle_ui(ui, area);
             let reads = v.reads_on_screen();
             // The switches over the Read blocks take the right-click first.
             v.secondary_on_controls(ui, &reads);

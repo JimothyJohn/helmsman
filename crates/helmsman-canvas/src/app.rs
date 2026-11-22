@@ -2118,13 +2118,6 @@ impl eframe::App for App {
         self.show(ui);
     }
 
-    /// The 3D view's GL objects go with the window.
-    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
-        if let (Some(gl), Some(s)) = (gl, &self.sim) {
-            s.view3d.destroy(gl);
-        }
-    }
-
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(CHROME_KEY, self.chrome.saved());
         storage.set_string(crate::pane_layout::LAYOUTS_KEY, self.layouts.saved());
