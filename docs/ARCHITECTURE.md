@@ -3894,20 +3894,22 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   its scope and the earlier instructions for the file (`instruct.rs`,
   above); a checked answer is written into the file and never run. On a
   built-in example the program becomes a project of its own, named once.
-- **The key.** Pasted into a password field, held in page memory; an
-  explicit "Remember on this device" (off by default, with a warning)
-  keeps it in `localStorage`, and unticking or Forget removes it. It goes
-  only into the `x-api-key` header of a request to
-  `https://api.anthropic.com/v1/messages` with
-  `anthropic-dangerous-direct-browser-access: true`; never into a URL, a
-  body or a log (`ApiKey`'s and the request's `Debug` redact it). The
-  page's CSP allows `connect-src 'self' https://api.anthropic.com` only.
+- **The key and the model.** The page never asks for a key and never
+  offers a model. The model is always `claude-sonnet-5-5` on the routes
+  that name one (`claude::MODEL`, with the server-side refusal fallback).
+  The ways to an answer, in order: the local proxy (below), the free chat
+  (below), and in a native build only the machine's `ANTHROPIC_API_KEY`
+  (`Route::Direct`, `x-api-key` to `api.anthropic.com`; `ApiKey`'s and the
+  request's `Debug` redact it). With none of them the Agent tab says it is
+  not available in this build. A key an earlier build stored in
+  `localStorage` is removed on load. The page's CSP allows
+  `connect-src 'self'` and, on a free-chat build, the relay's origin.
 - **Local proxy** (`scripts/playground-serve.sh`): the playground built
   for `/`, served on 127.0.0.1 by helmsman-agent's `playground-proxy`
   example, whose `POST /proxy/v1/messages` adds `x-api-key` from
   `ANTHROPIC_API_KEY` and streams the answer back (the agent crate's
   rustls client, no new crate). The page finds it (`GET /proxy/health`,
-  asked only when served from localhost) and hides the key field. It
+  asked only when served from localhost) and the page answers through it. It
   requires its own `Host`, a `x-helmsman-playground: 1` header (forcing a
   preflight it never grants), a same-origin `Origin` when one is sent,
   1 MiB bodies; it passes on only `anthropic-version` and `anthropic-beta`
@@ -3918,16 +3920,16 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   (`claude::Route::Free`, the relay's `docs/demo.md`): the body is the
   turns and nothing else, since the relay there pins the prompt, the model
   and the output cap, and earlier turns are dropped oldest first to fit
-  its limits. The Agent tab then has no key field and no model picker,
-  and one notice under the box saying the text goes to a hosted model. The
+  its limits. The Agent tab has no key field and no model picker in any
+  state, and one notice under the box saying the text goes to a hosted model. The
   page asks the relay once whether the chat is open
   (`GET /demo/v1/status`); closed or out of reach, the tab says so in
   place of the box and asks one question (which service the visitor would
   want), sent once to `POST /demo/v1/survey`. The build puts the relay's
-  origin in the page's `connect-src` in place of the model API's, so a
-  page on the free chat cannot reach the model API at all. A local proxy,
+  origin in the page's `connect-src`, so no page can reach the model API
+  at all. A local proxy,
   when there is one, still wins. Tests: `playground_tests.rs` ("the free
-  chat"), `the_free_chat_tab_has_no_key_and_keeps_the_panel_width`
+  chat"), `the_agent_tab_has_no_key_and_no_model_and_keeps_the_panel_width`
   (`ui_tests.rs`).
 - **The Agent ladder** (`agent_ladder_tests.rs`, ignored: it spends
   tokens). The page's instruction loop (`instruct`, `verify`, the
@@ -4176,8 +4178,8 @@ fault.
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; the box serves HTTPS with a self-signed certificate whose fingerprint the person checks once (journal, ⋯ menu), the cookie is `Secure` over it, and plain HTTP is served only from the box's own host | built (`canvas-token`, `box-https`; `helmsman-plc/tests/https.rs`, `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
-| playground visitor ↔ Claude | the visitor's own key, program and question | the key only in `x-api-key` to api.anthropic.com (redacted `Debug`, page CSP `connect-src` to that host and self), memory unless "remember" is ticked; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run; or the local proxy holds the key | built (`playground`) |
-| playground visitor ↔ free chat | the program and the instruction; one survey answer | a page built with `HELMSMAN_FREE_CHAT_URL` holds no key and sends only the turns, to that one origin (page CSP `connect-src` to it and self, no credentials, no referrer); what a stranger can make it cost is bounded by the relay's demo function, not by the page (its own credit-limited key, one pinned profile, counters that close it: the relay's `docs/demo.md`); the answer is checked like any other and never run | page side built, off until the published page is built with the address (`free-chat`) |
+| playground visitor ↔ Claude | the program and question | the page holds no key (the local proxy or the free chat's relay holds it; a native build reads the machine's `ANTHROPIC_API_KEY`, redacted in `Debug`); page CSP `connect-src` to self and the relay; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run | built (`playground`) |
+| playground visitor ↔ free chat | the program and the instruction; one survey answer | a page built with `HELMSMAN_FREE_CHAT_URL` sends only the turns, to that one origin (page CSP `connect-src` to it and self, no credentials, no referrer); what a stranger can make it cost is bounded by the relay's demo function, not by the page (its own credit-limited key, one pinned profile, counters that close it: the relay's `docs/demo.md`); the answer is checked like any other and never run | page side built, off until the published page is built with the address (`free-chat`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 

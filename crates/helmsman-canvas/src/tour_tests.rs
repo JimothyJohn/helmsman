@@ -280,15 +280,15 @@ fn every_step_has_words_and_the_actions_are_numbered() {
     assert!(words(Step::Deploy, &s, "⌘D").1.contains("⌘D"));
 }
 
-/// A page on the free chat has no key field, so its Agent step never asks
-/// for a key; the others still do.
+/// No page asks for a key: neither Agent step says "key" or "paste".
 #[test]
-fn the_agent_step_asks_for_a_key_only_where_there_is_a_key_field() {
+fn the_agent_step_never_asks_for_a_key() {
     let free = crate::tour::agent_step(true);
     let own = crate::tour::agent_step(false);
-    assert!(!free.to_lowercase().contains("key") && free.contains("free to try"));
-    assert!(own.contains("Paste a key"));
+    assert!(free.contains("free to try"));
     for text in [free, own] {
+        let low = text.to_lowercase();
+        assert!(!low.contains("key") && !low.contains("paste"), "{text}");
         assert!(text.contains("or skip this step"));
     }
 }
@@ -300,12 +300,7 @@ fn anchors_fall_back_from_the_control_to_its_tab_to_its_pane() {
     t.step = Step::OpenBlink;
     assert_eq!(t.anchors(&s), ["project blink", "pane files", "left"]);
     t.step = Step::Agent;
-    assert_eq!(t.anchors(&s)[0], "agent key");
-    let keyed = Seen {
-        keyed: true,
-        ..s.clone()
-    };
-    assert_eq!(t.anchors(&keyed)[0], "agent instruction");
+    assert_eq!(t.anchors(&s), ["agent instruction", "tab claude"]);
     t.step = Step::Welcome;
     assert_eq!(t.anchors(&s), [] as [String; 0]);
 }

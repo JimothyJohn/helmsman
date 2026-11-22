@@ -6,7 +6,7 @@ Structured Text file should do, and press
 **Send**, the yellow paper plane (or <kbd>Enter</kbd>). The file is updated in place and the editor shows it; there is
 no conversation to read through.
 
-<img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
+<img src="img/agent-tab.png" alt="The Agent tab: the instruction box and Send." width="300">
 
 While it works, the tab shows how long the instruction has been running
 and the range it takes for a file of that size, from the least to the

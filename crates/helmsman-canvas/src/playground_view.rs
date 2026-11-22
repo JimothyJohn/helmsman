@@ -11,7 +11,7 @@ use helmsman_diagram::Scan;
 use helmsman_iec::{Ty, Value};
 
 use crate::arrange::Layers;
-use crate::claude::{Chat, Model, Phase, Proxy, Request};
+use crate::claude::{Chat, Phase, Proxy, Request};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
@@ -88,7 +88,10 @@ impl Link {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = ctx;
-            self.inbox.push(crate::claude::Incoming::Proxy(false));
+            // Natively there is no proxy to find; the tests start with
+            // one answering, so the Agent tab has a route (a test that
+            // wants none says so with `Incoming::Proxy(false)`).
+            self.inbox.push(crate::claude::Incoming::Proxy(cfg!(test)));
         }
     }
 
@@ -322,9 +325,7 @@ impl PlaygroundView {
     #[must_use]
     pub fn with_stores(projects: Box<dyn Storage>, tweaks: Box<dyn Storage>) -> Self {
         #[cfg(target_arch = "wasm32")]
-        let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::web::LocalKeyStore);
-        #[cfg(not(target_arch = "wasm32"))]
-        let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::claude::NoStore);
+        crate::web::clear_old_key();
         let proj = SimProjects::load(projects);
         let mut v = Self {
             session: Session::new(&proj.build_src()),
@@ -339,7 +340,7 @@ impl PlaygroundView {
             viewer_of: String::new(),
             pending: None,
             last_pick: None,
-            chat: Chat::new(store),
+            chat: Chat::new(),
             link: Link::default(),
             proxy_asked: false,
             free_asked: false,
@@ -1032,7 +1033,7 @@ impl PlaygroundView {
             agent: Some(agent),
             quick: false,
         });
-        let req = crate::claude::request_turn(&route, self.chat.model, &[], message, turn);
+        let req = crate::claude::request_turn(&route, &[], message, turn);
         let seq = self.side_answer.start();
         self.side.send(seq, req, ctx);
     }
@@ -1263,7 +1264,7 @@ impl PlaygroundView {
             agent: Some(crate::start_state::AGENT),
             quick: false,
         });
-        let req = crate::claude::request_turn(&route, self.chat.model, &[], &message, turn);
+        let req = crate::claude::request_turn(&route, &[], &message, turn);
         let seq = self.start_answer.start();
         self.start_link.send(seq, req, ctx);
         self.start.asked();
@@ -3177,7 +3178,6 @@ impl PlaygroundView {
                 trend.signals.hash(h);
             }),
             asks: self.chat.seq(),
-            keyed: self.chat.route().is_ok(),
             trend_open: chrome.trend && chrome.bottom == editor::Bottom::Trend,
         }
     }
@@ -4089,10 +4089,16 @@ impl PlaygroundView {
             // Room for the scroll bar: a full-width field plus the bar is
             // wider than the panel, and a resizable panel grows to fit.
             ui.set_max_width(ui.available_width() - 12.0);
-            // The free chat: no key and no model to choose. Closed, it
-            // says so and asks its one question in place of the chat box.
+            // The page never asks for a key or a model. The free chat,
+            // closed, says so and asks its one question in place of the
+            // chat box; with no route at all the tab says so.
             let free = self.chat.free_base().is_some();
             if free && self.free_closed_ui(ui, chrome) {
+                return;
+            }
+            if self.chat.unavailable() {
+                let r = ui.label(RichText::new(crate::claude::UNAVAILABLE_TEXT).color(t.muted));
+                chrome.hit("agent unavailable", r.rect);
                 return;
             }
             match self.chat.proxy {
@@ -4105,10 +4111,7 @@ impl PlaygroundView {
                     ui.label(RichText::new("Checking for a local proxy…").color(t.muted))
                         .tip("With a local proxy the API key stays on this machine.");
                 }
-                Proxy::No => self.key_ui(ui, chrome),
-            }
-            if !free {
-                self.model_ui(ui);
+                Proxy::No => {}
             }
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
@@ -4247,32 +4250,6 @@ impl PlaygroundView {
         true
     }
 
-    /// The model picker of the key and proxy routes.
-    fn model_ui(&mut self, ui: &mut egui::Ui) {
-        let t = theme(ui);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Model").color(t.muted))
-                .tip("The model that answers. A larger one is slower and costs more.");
-            // No wider than the panel: a row that overflows a resizable
-            // panel widens it every frame. `width` is only a floor, so
-            // the selected text is truncated to the room (2026-11-08:
-            // with two tabs the panel is narrower than this row was).
-            egui::ComboBox::from_id_salt("pg-model")
-                .width((ui.available_width() - 40.0).max(60.0))
-                .wrap_mode(egui::TextWrapMode::Truncate)
-                // The name alone: the note in brackets is in the list.
-                .selected_text(self.chat.model.label().split(" (").next().unwrap_or_default())
-                .show_ui(ui, |ui| {
-                    for m in Model::ALL {
-                        ui.selectable_value(&mut self.chat.model, m, m.label())
-                            .tip(format!("Answers with {}.", m.label()));
-                    }
-                })
-                .response
-                .tip("The model that answers. A larger one is slower and costs more.");
-        });
-    }
-
     /// The Agent tab's scope line (card agent-scoped-edits), only while a
     /// selection or a pick narrows it: what the next instruction may
     /// change and which rule gave it, with Whole file.
@@ -4298,68 +4275,6 @@ impl PlaygroundView {
             self.whole_file(&ui.ctx().clone());
         }
         ui.add_space(4.0);
-    }
-
-    fn key_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let held = "Held in this page only; sent only to api.anthropic.com, billed to your account.";
-        let key_tip = if self.chat.from_env {
-            format!("{held} Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
-        } else {
-            held.to_string()
-        };
-        ui.label(RichText::new("Anthropic API key").strong())
-            .tip(&key_tip);
-        let r = ui
-            .add(
-                egui::TextEdit::singleline(self.chat.key_mut())
-                    .id_salt("pg-key")
-                    .password(true)
-                    .hint_text("sk-ant-…")
-                    .desired_width(f32::INFINITY),
-            )
-            .tip(&key_tip);
-        chrome.hit("agent key", r.rect);
-        if r.changed() {
-            self.chat.key_changed();
-        }
-        if self.chat.has_key() && !self.chat.key_looks_right() {
-            ui.label(
-                RichText::new("That does not look like an Anthropic key (sk-ant-…).")
-                    .small()
-                    .color(crate::theme::theme(ui).ink(RED)),
-            );
-        }
-        let mut remember = self.chat.remember;
-        if ui
-            .checkbox(&mut remember, "Remember on this device")
-            .tip("Stores the key in this browser's localStorage.")
-            .changed()
-        {
-            self.chat.set_remember(remember);
-        }
-        if remember {
-            ui.label(
-                RichText::new(
-                    "Stored in this browser's localStorage, readable by any script on this site. \
-                     Untick, or Forget, on a shared computer.",
-                )
-                .small()
-                .color(crate::theme::theme(ui).ink(RED)),
-            );
-        }
-        // Wrapped: in a plain row a label extends, and a row wider than a
-        // resizable panel widens it every frame.
-        ui.horizontal_wrapped(|ui| {
-            if self.chat.has_key()
-                && ui
-                    .button("Forget key")
-                    .tip("Clears the key from this page and this browser.")
-                    .clicked()
-            {
-                self.chat.forget_key();
-            }
-        });
-        ui.add_space(6.0);
     }
 
     /// Draws the trend; returns the rect it filled (the lanes' handles go
