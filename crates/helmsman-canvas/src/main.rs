@@ -14,6 +14,8 @@
 
 // Screen geometry is f32 throughout; counts and sim values convert into it.
 // Drawing code reads best with short geometry names (r, z, p, x, y).
+// The one module with `unsafe` is gl3d.rs (the GL pass, docs/ARCHITECTURE.md).
+#![deny(unsafe_code)]
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -35,6 +37,9 @@ mod ask;
 mod ask_tests;
 mod assign;
 mod assign_ui;
+mod batch3d;
+#[cfg(test)]
+mod batch3d_tests;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;
@@ -49,6 +54,9 @@ mod box_spec;
 mod box_tests;
 mod box_trend;
 mod box_view;
+mod cam3d;
+#[cfg(test)]
+mod cam3d_tests;
 mod chat_about;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod chat_about_tests;
@@ -81,6 +89,7 @@ mod find;
 mod front;
 #[cfg(test)]
 mod front_tests;
+mod gl3d;
 mod glyph_lib;
 mod glyphs;
 mod help;
@@ -124,6 +133,9 @@ mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod review_tests;
 mod review_view;
+mod scene3d;
+#[cfg(test)]
+mod scene3d_tests;
 mod scope;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod scope_tests;
@@ -163,6 +175,9 @@ mod ui_tests;
 mod verify;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod verify_tests;
+mod view3d;
+#[cfg(test)]
+mod view3d_tests;
 mod watch;
 #[cfg(target_arch = "wasm32")]
 mod web;
