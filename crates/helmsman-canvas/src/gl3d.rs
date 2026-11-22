@@ -35,15 +35,24 @@ use eframe::egui::PaintCallbackInfo;
 use eframe::egui_glow::{Painter, ShaderVersion};
 use eframe::glow::{self, HasContext as _};
 
-use crate::batch3d::{Batch, LINE_STRIDE, SOLID_STRIDE};
-use crate::cam3d::M4;
+use crate::batch3d::{Batch, LINE_STRIDE, POOL_STRIDE, SOLID_STRIDE};
+use crate::cam3d::{M4, V3};
 
 /// What one frame draws.
 pub struct Frame {
     pub vp: M4,
+    pub eye: V3,
     pub batch: Batch,
+    /// The page's colour, as the theme has it (sRGB).
     pub bg: [f32; 3],
-    pub bloom: bool,
+    /// Fog: the page's colour, linear, and the reciprocal of the distance
+    /// where it takes hold.
+    pub fog: [f32; 4],
+    /// The clock the pulses run on, seconds.
+    pub time: f32,
+    /// How much of the blurred light is added, and the exposure.
+    pub bloom: f32,
+    pub exposure: f32,
     /// Physical pixels to a point: the lines' widths are in points.
     pub ppp: f32,
 }
@@ -138,32 +147,76 @@ in vec3 a_pos;
 in vec3 a_nrm;
 in vec4 a_col;
 in float a_emit;
+in vec3 a_ctr;
+in vec3 a_half;
+in float a_mat;
+out vec3 v_pos;
 out vec3 v_nrm;
 out vec4 v_col;
 out float v_emit;
+out vec3 v_ctr;
+out vec3 v_half;
+out float v_mat;
 void main() {
+    v_pos = a_pos;
     v_nrm = a_nrm;
     v_col = a_col;
     v_emit = a_emit;
+    v_ctr = a_ctr;
+    v_half = a_half;
+    v_mat = a_mat;
     gl_Position = u_vp * vec4(a_pos, 1.0);
 }
 ";
 
 const SOLID_FS: &str = "
-uniform float u_bright;
+uniform vec3 u_eye;
+uniform vec4 u_fog;
+in vec3 v_pos;
 in vec3 v_nrm;
 in vec4 v_col;
 in float v_emit;
+in vec3 v_ctr;
+in vec3 v_half;
+in float v_mat;
 out vec4 o_col;
 void main() {
-    if (u_bright > 0.5) {
-        o_col = v_emit > 0.5 ? vec4(v_col.rgb, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
-        return;
-    }
     vec3 n = normalize(v_nrm);
-    float l = 0.42 + 0.58 * max(dot(n, normalize(vec3(-0.3, 0.9, 0.5))), 0.0);
-    vec3 c = v_col.rgb * l + v_col.rgb * v_emit * 0.35;
-    o_col = vec4(c, v_col.a);
+    vec3 view = normalize(u_eye - v_pos);
+    float dist = length(u_eye - v_pos);
+    vec3 key = normalize(vec3(-0.35, 0.85, 0.4));
+    vec3 fill = normalize(vec3(0.6, 0.25, -0.5));
+    float hemi = 0.5 + 0.5 * n.y;
+    float diffuse = 0.34 * hemi + 0.72 * max(dot(n, key), 0.0) + 0.18 * max(dot(n, fill), 0.0);
+    vec3 base = v_col.rgb;
+    // Distance to the nearest edge of the face this fragment is on: a
+    // bevel that catches the light.
+    vec3 gap = v_half - abs(v_pos - v_ctr);
+    vec3 an = abs(n);
+    float edge = min(an.x > 0.5 ? 1e3 : gap.x, min(an.y > 0.5 ? 1e3 : gap.y, an.z > 0.5 ? 1e3 : gap.z));
+    float bevel = 1.0 - smoothstep(0.0, 0.07, edge);
+    float rim = pow(1.0 - max(dot(n, view), 0.0), 3.0);
+    vec3 shaded = base * diffuse;
+    float gloss = 0.0;
+    if (v_mat > 0.5 && v_mat < 1.5) {
+        // The board: a faint grid, and a sheen that grows toward the
+        // horizon, like a glossy floor.
+        vec2 g = abs(fract(v_pos.xz) - 0.5);
+        float line = smoothstep(0.46, 0.5, max(g.x, g.y));
+        float fade = exp(-dist * 0.03);
+        shaded += base * line * 1.6 * fade * step(0.5, n.y);
+        gloss = pow(1.0 - max(dot(n, view), 0.0), 4.0) * step(0.5, n.y);
+        shaded += u_fog.rgb * gloss * 3.0 + vec3(0.02, 0.03, 0.04) * gloss;
+    } else {
+        shaded += base * bevel * 0.5;
+        shaded += base * rim * 0.25;
+        if (v_mat > 2.5) {
+            shaded += base * bevel * 0.6;
+        }
+    }
+    float f = 1.0 - exp(-pow(dist * u_fog.w, 2.0));
+    vec3 rgb = mix(shaded, u_fog.rgb, f * 0.85) + v_col.rgb * v_emit * (1.0 - 0.6 * f) * (0.55 + 0.45 * bevel + 0.2);
+    o_col = vec4(rgb * v_col.a, v_col.a);
 }
 ";
 
@@ -177,15 +230,27 @@ in vec2 a_corner;
 in vec4 a_col;
 in float a_width;
 in float a_emit;
+in float a_phase;
+in float a_flow;
 out vec4 v_col;
 out float v_emit;
+out float v_across;
+out float v_along;
+out float v_flow;
+out float v_w;
+out float v_depth;
 void main() {
     vec4 ca = u_vp * vec4(a_a, 1.0);
     vec4 cb = u_vp * vec4(a_b, 1.0);
     float near = 0.05;
     v_col = a_col;
     v_emit = a_emit;
+    v_across = a_corner.y;
+    v_along = a_phase + a_corner.x * length(a_b - a_a);
+    v_flow = a_flow;
+    v_w = max(a_width * u_ppp, 2.0);
     if (ca.w < near && cb.w < near) {
+        v_depth = 1.0;
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         return;
     }
@@ -201,22 +266,63 @@ void main() {
     vec2 dir = len > 0.0001 ? d / len : vec2(1.0, 0.0);
     vec2 nrm = vec2(-dir.y, dir.x);
     vec4 c = mix(ca, cb, a_corner.x);
-    vec2 off = (nrm * a_corner.y + dir * (a_corner.x * 2.0 - 1.0)) * a_width * u_ppp * 0.5 * 2.0 / u_res;
-    gl_Position = vec4(c.xy + off * c.w, c.z - 0.0004 * c.w, c.w);
+    float half_w = v_w * 0.5 + 1.0;
+    vec2 off = (nrm * a_corner.y + dir * (a_corner.x * 2.0 - 1.0)) * half_w * 2.0 / u_res;
+    v_across = a_corner.y * half_w / (v_w * 0.5);
+    v_depth = c.w;
+    gl_Position = vec4(c.xy + off * c.w, c.z - 0.0006 * c.w, c.w);
 }
 ";
 
 const LINE_FS: &str = "
-uniform float u_bright;
+uniform float u_time;
+uniform vec4 u_fog;
 in vec4 v_col;
 in float v_emit;
+in float v_across;
+in float v_along;
+in float v_flow;
+in float v_w;
+in float v_depth;
 out vec4 o_col;
 void main() {
-    if (u_bright > 0.5) {
-        o_col = v_emit > 0.5 ? vec4(v_col.rgb, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
-        return;
-    }
-    o_col = vec4(v_col.rgb + v_col.rgb * v_emit * 0.35, v_col.a);
+    float d = abs(v_across);
+    float cov = 1.0 - smoothstep(1.0 - 2.0 / v_w, 1.0 + 1.0 / v_w, d);
+    float core = 1.0 - smoothstep(0.0, 0.75, d);
+    // Pulses run along the wire in the direction of the data.
+    float ph = fract(v_along / 2.4 - u_time);
+    float head = pow(1.0 - ph, 5.0) * smoothstep(0.0, 0.04, ph);
+    float emit = v_emit * (1.0 + v_flow * 2.6 * head);
+    vec3 rgb = v_col.rgb * (0.55 + 0.45 * core) + v_col.rgb * emit * (0.6 + 0.8 * core);
+    float f = 1.0 - exp(-pow(v_depth * u_fog.w, 2.0));
+    rgb = mix(rgb, u_fog.rgb, f * 0.6);
+    float a = cov * v_col.a;
+    o_col = vec4(rgb * a, a);
+}
+";
+
+const POOL_VS: &str = "
+uniform mat4 u_vp;
+in vec3 a_pos;
+in vec2 a_uv;
+in vec3 a_col;
+out vec2 v_uv;
+out vec3 v_col;
+void main() {
+    v_uv = a_uv;
+    v_col = a_col;
+    gl_Position = u_vp * vec4(a_pos, 1.0);
+}
+";
+
+const POOL_FS: &str = "
+in vec2 v_uv;
+in vec3 v_col;
+out vec4 o_col;
+void main() {
+    float f = clamp((1.0 - abs(v_uv.x)) * (1.0 - abs(v_uv.y)), 0.0, 1.0);
+    f = f * f * (3.0 - 2.0 * f);
+    o_col = vec4(v_col * f * f, 0.0);
 }
 ";
 
@@ -229,40 +335,99 @@ void main() {
 }
 ";
 
-const BLUR_FS: &str = "
+const BRIGHT_FS: &str = "
 uniform sampler2D u_tex;
-uniform vec2 u_step;
+uniform vec2 u_texel;
+uniform float u_thr;
+in vec2 v_uv;
+out vec4 o_col;
+vec3 prefilter(vec3 c) {
+    float m = max(c.r, max(c.g, c.b));
+    float w = max(m - u_thr, 0.0) / max(m, 0.0001);
+    return c * w;
+}
+void main() {
+    vec3 c = prefilter(texture(u_tex, v_uv + u_texel * vec2(-0.5, -0.5)).rgb)
+        + prefilter(texture(u_tex, v_uv + u_texel * vec2(0.5, -0.5)).rgb)
+        + prefilter(texture(u_tex, v_uv + u_texel * vec2(-0.5, 0.5)).rgb)
+        + prefilter(texture(u_tex, v_uv + u_texel * vec2(0.5, 0.5)).rgb);
+    o_col = vec4(c * 0.25, 1.0);
+}
+";
+
+const DOWN_FS: &str = "
+uniform sampler2D u_tex;
+uniform vec2 u_texel;
 in vec2 v_uv;
 out vec4 o_col;
 void main() {
-    vec3 c = texture(u_tex, v_uv).rgb * 0.227027;
-    c += texture(u_tex, v_uv + u_step * 1.0).rgb * 0.1945946;
-    c += texture(u_tex, v_uv - u_step * 1.0).rgb * 0.1945946;
-    c += texture(u_tex, v_uv + u_step * 2.0).rgb * 0.1216216;
-    c += texture(u_tex, v_uv - u_step * 2.0).rgb * 0.1216216;
-    c += texture(u_tex, v_uv + u_step * 3.0).rgb * 0.054054;
-    c += texture(u_tex, v_uv - u_step * 3.0).rgb * 0.054054;
-    c += texture(u_tex, v_uv + u_step * 4.0).rgb * 0.016216;
-    c += texture(u_tex, v_uv - u_step * 4.0).rgb * 0.016216;
-    o_col = vec4(c, 1.0);
+    vec3 c = texture(u_tex, v_uv + u_texel * vec2(-1.0, -1.0)).rgb
+        + texture(u_tex, v_uv + u_texel * vec2(1.0, -1.0)).rgb
+        + texture(u_tex, v_uv + u_texel * vec2(-1.0, 1.0)).rgb
+        + texture(u_tex, v_uv + u_texel * vec2(1.0, 1.0)).rgb;
+    o_col = vec4(c * 0.25, 1.0);
+}
+";
+
+const UP_FS: &str = "
+uniform sampler2D u_base;
+uniform sampler2D u_lo;
+uniform vec2 u_texel;
+uniform float u_k;
+in vec2 v_uv;
+out vec4 o_col;
+void main() {
+    vec3 t = texture(u_lo, v_uv).rgb * 4.0;
+    t += texture(u_lo, v_uv + u_texel * vec2(-1.0, 0.0)).rgb * 2.0;
+    t += texture(u_lo, v_uv + u_texel * vec2(1.0, 0.0)).rgb * 2.0;
+    t += texture(u_lo, v_uv + u_texel * vec2(0.0, -1.0)).rgb * 2.0;
+    t += texture(u_lo, v_uv + u_texel * vec2(0.0, 1.0)).rgb * 2.0;
+    t += texture(u_lo, v_uv + u_texel * vec2(-1.0, -1.0)).rgb;
+    t += texture(u_lo, v_uv + u_texel * vec2(1.0, -1.0)).rgb;
+    t += texture(u_lo, v_uv + u_texel * vec2(-1.0, 1.0)).rgb;
+    t += texture(u_lo, v_uv + u_texel * vec2(1.0, 1.0)).rgb;
+    o_col = vec4(texture(u_base, v_uv).rgb + t * (u_k / 16.0), 1.0);
 }
 ";
 
 const COMPOSITE_FS: &str = "
 uniform sampler2D u_scene;
 uniform sampler2D u_bloom;
-uniform float u_strength;
+uniform float u_bloom_k;
+uniform float u_exposure;
+uniform vec3 u_bg;
 in vec2 v_uv;
 out vec4 o_col;
+vec3 aces(vec3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
 void main() {
-    vec3 s = texture(u_scene, v_uv).rgb;
-    vec3 b = texture(u_bloom, v_uv).rgb;
-    o_col = vec4(s + b * u_strength, 1.0);
+    vec4 s = texture(u_scene, v_uv);
+    vec3 bl = texture(u_bloom, v_uv).rgb * u_bloom_k;
+    vec3 hdr = (s.rgb + bl) * u_exposure;
+    vec3 tm = aces(hdr);
+    vec3 enc = pow(tm, vec3(1.0 / 2.2));
+    // Where nothing is drawn the page shows, less where light spills.
+    float spill = clamp(dot(tm, vec3(0.333)) * 1.5, 0.0, 1.0);
+    vec3 rgb = enc + u_bg * (1.0 - s.a) * (1.0 - spill);
+    rgb += (hash(gl_FragCoord.xy) - 0.5) / 255.0;
+    o_col = vec4(rgb, 1.0);
 }
 ";
 
 /// A linked program.
 struct Prog(glow::Program);
+
+/// The pixel format of the scene and the bloom: half floats where the
+/// context can render to them, else bytes (checked at startup).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Half,
+    Byte,
+}
 
 /// An offscreen target: colour texture, optional depth.
 struct Target {
@@ -272,17 +437,26 @@ struct Target {
     size: (i32, i32),
 }
 
+/// Levels of the bloom's chain: each half the size of the one before,
+/// the first half the size of the view.
+const LEVELS: usize = 5;
+
 struct Res {
+    fmt: Format,
     vao: glow::VertexArray,
     vbo: glow::Buffer,
     solid: Prog,
     line: Prog,
-    blur: Prog,
+    pool: Prog,
+    bright: Prog,
+    down: Prog,
+    up: Prog,
     composite: Prog,
     scene: Option<Target>,
-    /// Half size: the bright pass, then the blur ping-pong.
-    glow_a: Option<Target>,
-    glow_b: Option<Target>,
+    /// The way down: bright pass, then each level a blur of the last.
+    downs: Vec<Target>,
+    /// The way up: each level plus the one below it, widened.
+    ups: Vec<Target>,
 }
 
 fn header(gl: &glow::Context) -> Result<String, String> {
@@ -293,7 +467,7 @@ fn header(gl: &glow::Context) -> Result<String, String> {
     }
     let mut h = v.version_declaration().to_string();
     if v.is_embedded() {
-        h.push_str("precision highp float;\n");
+        h.push_str("precision highp float;\nprecision highp sampler2D;\n");
     }
     Ok(h)
 }
@@ -339,7 +513,11 @@ fn compile(gl: &glow::Context, header: &str, vs: &str, fs: &str, attribs: &[&str
     }
 }
 
-fn target(gl: &glow::Context, size: (i32, i32), depth: bool) -> Result<Target, String> {
+fn target(gl: &glow::Context, size: (i32, i32), depth: bool, fmt: Format) -> Result<Target, String> {
+    let (internal, ty) = match fmt {
+        Format::Half => (glow::RGBA16F, glow::HALF_FLOAT),
+        Format::Byte => (glow::RGBA8, glow::UNSIGNED_BYTE),
+    };
     // SAFETY: a texture, a framebuffer and a renderbuffer made and bound
     // here on the painting context; bindings are put back to none before
     // the return, and the handles are freed by `Target::delete`.
@@ -349,12 +527,12 @@ fn target(gl: &glow::Context, size: (i32, i32), depth: bool) -> Result<Target, S
         gl.tex_image_2d(
             glow::TEXTURE_2D,
             0,
-            glow::RGBA8 as i32,
+            internal as i32,
             size.0,
             size.1,
             0,
             glow::RGBA,
-            glow::UNSIGNED_BYTE,
+            ty,
             glow::PixelUnpackData::Slice(None),
         );
         for (p, v) in [
@@ -419,41 +597,81 @@ impl Target {
     }
 }
 
-/// The attributes of the solid and the line vertex: name and floats.
-const SOLID_ATTRS: [(&str, i32); 4] = [("a_pos", 3), ("a_nrm", 3), ("a_col", 4), ("a_emit", 1)];
-const LINE_ATTRS: [(&str, i32); 6] = [
+/// The attributes of the vertices, in the order the batch lays them out:
+/// name and floats.
+const SOLID_ATTRS: [(&str, i32); 7] = [
+    ("a_pos", 3),
+    ("a_nrm", 3),
+    ("a_col", 4),
+    ("a_emit", 1),
+    ("a_ctr", 3),
+    ("a_half", 3),
+    ("a_mat", 1),
+];
+const LINE_ATTRS: [(&str, i32); 8] = [
     ("a_a", 3),
     ("a_b", 3),
     ("a_corner", 2),
     ("a_col", 4),
     ("a_width", 1),
     ("a_emit", 1),
+    ("a_phase", 1),
+    ("a_flow", 1),
 ];
+const POOL_ATTRS: [(&str, i32); 3] = [("a_pos", 3), ("a_uv", 2), ("a_col", 3)];
 
 fn bytes(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_ne_bytes()).collect()
 }
 
+fn names(a: &[(&'static str, i32)]) -> Vec<&'static str> {
+    a.iter().map(|x| x.0).collect()
+}
+
+/// Whether the context can render to half-float targets: a small one is
+/// tried (WebGL2 needs `EXT_color_buffer_float` or `_half_float`, which
+/// glow enables when the browser has them).
+fn half_float_works(gl: &glow::Context) -> bool {
+    match target(gl, (4, 4), false, Format::Half) {
+        Ok(t) => {
+            t.delete(gl);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 impl Res {
     fn new(gl: &glow::Context) -> Result<Self, String> {
         let h = header(gl)?;
-        let names = |a: &[(&'static str, i32)]| a.iter().map(|x| x.0).collect::<Vec<_>>();
+        let fmt = if half_float_works(gl) {
+            Format::Half
+        } else {
+            Format::Byte
+        };
         let solid = compile(gl, &h, SOLID_VS, SOLID_FS, &names(&SOLID_ATTRS))?;
         let line = compile(gl, &h, LINE_VS, LINE_FS, &names(&LINE_ATTRS))?;
-        let blur = compile(gl, &h, QUAD_VS, BLUR_FS, &[])?;
+        let pool = compile(gl, &h, POOL_VS, POOL_FS, &names(&POOL_ATTRS))?;
+        let bright = compile(gl, &h, QUAD_VS, BRIGHT_FS, &[])?;
+        let down = compile(gl, &h, QUAD_VS, DOWN_FS, &[])?;
+        let up = compile(gl, &h, QUAD_VS, UP_FS, &[])?;
         let composite = compile(gl, &h, QUAD_VS, COMPOSITE_FS, &[])?;
         // SAFETY: a vertex array and a buffer made on the painting context.
         let (vao, vbo) = unsafe { (gl.create_vertex_array()?, gl.create_buffer()?) };
         Ok(Self {
+            fmt,
             vao,
             vbo,
             solid,
             line,
-            blur,
+            pool,
+            bright,
+            down,
+            up,
             composite,
             scene: None,
-            glow_a: None,
-            glow_b: None,
+            downs: Vec::new(),
+            ups: Vec::new(),
         })
     }
 
@@ -462,44 +680,55 @@ impl Res {
         unsafe {
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.vbo);
-            for p in [&self.solid, &self.line, &self.blur, &self.composite] {
+            for p in [
+                &self.solid,
+                &self.line,
+                &self.pool,
+                &self.bright,
+                &self.down,
+                &self.up,
+                &self.composite,
+            ] {
                 gl.delete_program(p.0);
             }
         }
-        for t in [&self.scene, &self.glow_a, &self.glow_b].into_iter().flatten() {
+        for t in self.scene.iter().chain(&self.downs).chain(&self.ups) {
             t.delete(gl);
         }
     }
 
     /// The targets for a viewport of `size` pixels, made again when it changed.
     fn fit(&mut self, gl: &glow::Context, size: (i32, i32)) -> Result<(), String> {
-        let half = ((size.0 / 2).max(1), (size.1 / 2).max(1));
-        let stale = |t: &Option<Target>, want: (i32, i32)| t.as_ref().is_none_or(|t| t.size != want);
-        if stale(&self.scene, size) || stale(&self.glow_a, half) || stale(&self.glow_b, half) {
-            for t in [self.scene.take(), self.glow_a.take(), self.glow_b.take()]
-                .into_iter()
-                .flatten()
-            {
-                t.delete(gl);
-            }
-            self.scene = Some(target(gl, size, true)?);
-            self.glow_a = Some(target(gl, half, true)?);
-            self.glow_b = Some(target(gl, half, false)?);
+        let level = |i: usize| ((size.0 >> (i + 1)).max(1), (size.1 >> (i + 1)).max(1));
+        let fresh = self.scene.as_ref().is_some_and(|t| t.size == size) && self.downs.len() == LEVELS;
+        if fresh {
+            return Ok(());
+        }
+        for t in self.scene.take().iter().chain(&self.downs).chain(&self.ups) {
+            t.delete(gl);
+        }
+        self.downs.clear();
+        self.ups.clear();
+        self.scene = Some(target(gl, size, true, self.fmt)?);
+        for i in 0..LEVELS {
+            self.downs.push(target(gl, level(i), false, self.fmt)?);
+        }
+        for i in 0..LEVELS - 1 {
+            self.ups.push(target(gl, level(i), false, self.fmt)?);
         }
         Ok(())
     }
 
-    /// Draws `verts` (a batch's floats) with `prog` as triangles or as
-    /// the line quads.
+    /// Draws `verts` (a batch's floats) with `prog` as triangles.
     fn geometry(&self, gl: &glow::Context, prog: &Prog, verts: &[f32], attrs: &[(&str, i32)], stride: usize) {
         if verts.is_empty() {
             return;
         }
         // SAFETY: uploads into this module's buffer and draws from it; the
-        // attribute layout is the batch's (`SOLID_STRIDE`, `LINE_STRIDE`),
-        // and `verts` is a whole number of vertices (the batch's builders
-        // push `stride` floats at a time), so the draw reads nothing past
-        // the upload.
+        // attribute layout is the batch's (`SOLID_STRIDE`, `LINE_STRIDE`,
+        // `POOL_STRIDE`), and `verts` is a whole number of vertices (the
+        // batch's builders push `stride` floats at a time), so the draw
+        // reads nothing past the upload.
         unsafe {
             gl.use_program(Some(prog.0));
             gl.bind_vertex_array(Some(self.vao));
@@ -518,25 +747,27 @@ impl Res {
         }
     }
 
-    fn set_view(gl: &glow::Context, prog: &Prog, vp: &M4, res: (f32, f32), ppp: f32, bright: bool) {
-        // SAFETY: uniforms of a program of this module, which is in use.
+    /// The uniforms the scene programs share.
+    fn set_scene(&self, gl: &glow::Context, f: &Frame, res: (f32, f32)) {
+        // SAFETY: uniforms of programs of this module (the location is
+        // `None` where a program has no such uniform, which GL ignores).
         unsafe {
-            gl.use_program(Some(prog.0));
-            gl.uniform_matrix_4_f32_slice(gl.get_uniform_location(prog.0, "u_vp").as_ref(), false, vp);
-            gl.uniform_2_f32(gl.get_uniform_location(prog.0, "u_res").as_ref(), res.0, res.1);
-            gl.uniform_1_f32(
-                gl.get_uniform_location(prog.0, "u_bright").as_ref(),
-                f32::from(u8::from(bright)),
-            );
-            gl.uniform_1_f32(gl.get_uniform_location(prog.0, "u_ppp").as_ref(), ppp);
+            for p in [&self.solid, &self.line, &self.pool] {
+                gl.use_program(Some(p.0));
+                let at = |n: &str| gl.get_uniform_location(p.0, n);
+                gl.uniform_matrix_4_f32_slice(at("u_vp").as_ref(), false, &f.vp);
+                gl.uniform_2_f32(at("u_res").as_ref(), res.0, res.1);
+                gl.uniform_1_f32(at("u_ppp").as_ref(), f.ppp);
+                gl.uniform_1_f32(at("u_time").as_ref(), f.time);
+                gl.uniform_3_f32(at("u_eye").as_ref(), f.eye[0], f.eye[1], f.eye[2]);
+                gl.uniform_4_f32(at("u_fog").as_ref(), f.fog[0], f.fog[1], f.fog[2], f.fog[3]);
+            }
         }
     }
 
-    /// Scene geometry in the target bound now: opaque, then the ghosts.
-    fn scene_pass(&self, gl: &glow::Context, f: &Frame, res: (f32, f32), bright: bool) {
-        let ppp = if bright { f.ppp * 0.5 } else { f.ppp };
-        Self::set_view(gl, &self.solid, &f.vp, res, ppp, bright);
-        Self::set_view(gl, &self.line, &f.vp, res, ppp, bright);
+    /// The scene into the target bound now: opaque blocks, the light on
+    /// the floor, then what blends (slabs, wires, the ghosts of a dive).
+    fn scene_pass(&self, gl: &glow::Context, f: &Frame) {
         // SAFETY: state calls on the painting context; egui's are
         // re-applied after the callback (module doc).
         unsafe {
@@ -546,17 +777,24 @@ impl Res {
             gl.depth_mask(true);
         }
         self.geometry(gl, &self.solid, &f.batch.solids, &SOLID_ATTRS, SOLID_STRIDE);
-        self.geometry(gl, &self.line, &f.batch.lines, &LINE_ATTRS, LINE_STRIDE);
-        if bright {
-            return;
-        }
         // SAFETY: as above.
         unsafe {
             gl.enable(glow::BLEND);
-            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            gl.blend_func_separate(glow::ONE, glow::ONE, glow::ZERO, glow::ONE);
             gl.depth_mask(false);
         }
+        self.geometry(gl, &self.pool, &f.batch.pools, &POOL_ATTRS, POOL_STRIDE);
+        // SAFETY: as above.
+        unsafe {
+            gl.blend_func_separate(
+                glow::ONE,
+                glow::ONE_MINUS_SRC_ALPHA,
+                glow::ONE,
+                glow::ONE_MINUS_SRC_ALPHA,
+            );
+        }
         self.geometry(gl, &self.solid, &f.batch.solids_ghost, &SOLID_ATTRS, SOLID_STRIDE);
+        self.geometry(gl, &self.line, &f.batch.lines, &LINE_ATTRS, LINE_STRIDE);
         self.geometry(gl, &self.line, &f.batch.lines_ghost, &LINE_ATTRS, LINE_STRIDE);
         // SAFETY: as above.
         unsafe {
@@ -565,8 +803,8 @@ impl Res {
         }
     }
 
-    /// A full-screen pass of `prog` into `to` (or the screen), reading the
-    /// textures in `from`, on units 0, 1, ...
+    /// A full-screen pass of `prog` into `to` (or the screen) over `view`,
+    /// reading the textures in `from` on units 0, 1, ...
     fn quad(
         &self,
         gl: &glow::Context,
@@ -607,83 +845,118 @@ impl Res {
         screen: Option<glow::Framebuffer>,
     ) -> Result<(), String> {
         self.fit(gl, size)?;
-        let (Some(scene), Some(ga), Some(gb)) = (&self.scene, &self.glow_a, &self.glow_b) else {
-            return Ok(());
-        };
-        let half = ga.size;
-        // SAFETY: clears the targets bound just before; scissor is off
-        // for the offscreen passes (its box is the window's, not theirs).
+        let Some(scene) = &self.scene else { return Ok(()) };
+        // SAFETY: clears the target bound just before; scissor is off for
+        // the offscreen passes (its box is the window's, not theirs).
         unsafe {
             gl.disable(glow::SCISSOR_TEST);
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(scene.fbo));
             gl.viewport(0, 0, size.0, size.1);
-            gl.clear_color(f.bg[0], f.bg[1], f.bg[2], 1.0);
+            gl.clear_color(0.0, 0.0, 0.0, 0.0);
             gl.clear_depth_f32(1.0);
             gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
         }
-        self.scene_pass(gl, f, (size.0 as f32, size.1 as f32), false);
-        let glowing = f.bloom && f.batch.any_lit;
-        if glowing {
-            // Bright pass: only what is lit, the rest black but still in
-            // front of what is behind it.
-            // SAFETY: as the scene clear above, on the half-size target.
-            unsafe {
-                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(ga.fbo));
-                gl.viewport(0, 0, half.0, half.1);
-                gl.clear_color(0.0, 0.0, 0.0, 1.0);
-                gl.clear_depth_f32(1.0);
-                gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
-            }
-            self.scene_pass(gl, f, (half.0 as f32, half.1 as f32), true);
-            let step = |dx: f32, dy: f32| {
-                move |gl: &glow::Context, p: &glow::Program| {
-                    // SAFETY: uniforms of the blur program, in use.
+        self.set_scene(gl, f, (size.0 as f32, size.1 as f32));
+        self.scene_pass(gl, f);
+        let hdr = self.fmt == Format::Half;
+        // Half floats keep what is brighter than white; bytes cannot, so
+        // the threshold sits lower there.
+        let thr = if hdr { 0.9 } else { 0.7 };
+        let strength = if f.batch.any_lit { f.bloom } else { 0.0 };
+        if strength > 0.0 {
+            let lvl = |i: usize| (self.downs[i].size.0, self.downs[i].size.1);
+            let texel = |s: (i32, i32)| (1.0 / s.0 as f32, 1.0 / s.1 as f32);
+            // The way down.
+            let t0 = texel(size);
+            self.quad(
+                gl,
+                &self.bright,
+                Some(self.downs[0].fbo),
+                (0, 0, lvl(0).0, lvl(0).1),
+                &[scene.tex],
+                |gl, p| {
+                    // SAFETY: uniforms of the bright pass, in use.
                     unsafe {
                         gl.uniform_1_i32(gl.get_uniform_location(*p, "u_tex").as_ref(), 0);
-                        gl.uniform_2_f32(gl.get_uniform_location(*p, "u_step").as_ref(), dx, dy);
+                        gl.uniform_2_f32(gl.get_uniform_location(*p, "u_texel").as_ref(), t0.0, t0.1);
+                        gl.uniform_1_f32(gl.get_uniform_location(*p, "u_thr").as_ref(), thr);
                     }
-                }
-            };
-            let (tx, ty) = (1.0 / half.0 as f32, 1.0 / half.1 as f32);
-            for _ in 0..2 {
+                },
+            );
+            for i in 1..LEVELS {
+                let t = texel(lvl(i - 1));
                 self.quad(
                     gl,
-                    &self.blur,
-                    Some(gb.fbo),
-                    (0, 0, half.0, half.1),
-                    &[ga.tex],
-                    step(tx, 0.0),
+                    &self.down,
+                    Some(self.downs[i].fbo),
+                    (0, 0, lvl(i).0, lvl(i).1),
+                    &[self.downs[i - 1].tex],
+                    |gl, p| {
+                        // SAFETY: uniforms of the down pass, in use.
+                        unsafe {
+                            gl.uniform_1_i32(gl.get_uniform_location(*p, "u_tex").as_ref(), 0);
+                            gl.uniform_2_f32(gl.get_uniform_location(*p, "u_texel").as_ref(), t.0, t.1);
+                        }
+                    },
                 );
+            }
+            // The way up: each level takes the widened sum of those below.
+            for i in (0..LEVELS - 1).rev() {
+                let lo = if i == LEVELS - 2 {
+                    &self.downs[i + 1]
+                } else {
+                    &self.ups[i + 1]
+                };
+                let t = texel((lo.size.0, lo.size.1));
                 self.quad(
                     gl,
-                    &self.blur,
-                    Some(ga.fbo),
-                    (0, 0, half.0, half.1),
-                    &[gb.tex],
-                    step(0.0, ty),
+                    &self.up,
+                    Some(self.ups[i].fbo),
+                    (0, 0, lvl(i).0, lvl(i).1),
+                    &[self.downs[i].tex, lo.tex],
+                    |gl, p| {
+                        // SAFETY: uniforms of the up pass, in use.
+                        unsafe {
+                            gl.uniform_1_i32(gl.get_uniform_location(*p, "u_base").as_ref(), 0);
+                            gl.uniform_1_i32(gl.get_uniform_location(*p, "u_lo").as_ref(), 1);
+                            gl.uniform_2_f32(gl.get_uniform_location(*p, "u_texel").as_ref(), t.0, t.1);
+                            gl.uniform_1_f32(gl.get_uniform_location(*p, "u_k").as_ref(), 0.65);
+                        }
+                    },
                 );
             }
         }
         // The composite onto egui's framebuffer, in the callback's
         // rectangle, with the scissor egui set for it.
-        let strength = if glowing { 1.1 } else { 0.0 };
-        // SAFETY: back to egui's target and viewport; the scissor test is
-        // on again, as egui had it.
+        // SAFETY: back to egui's target; the scissor test is on again, as
+        // egui had it.
         unsafe {
             gl.enable(glow::SCISSOR_TEST);
         }
+        let bloom_tex = if strength > 0.0 {
+            self.ups[0].tex
+        } else {
+            scene.tex
+        };
         self.quad(
             gl,
             &self.composite,
             screen,
             (at.0, at.1, size.0, size.1),
-            &[scene.tex, ga.tex],
+            &[scene.tex, bloom_tex],
             |gl, p| {
                 // SAFETY: uniforms of the composite program, in use.
                 unsafe {
                     gl.uniform_1_i32(gl.get_uniform_location(*p, "u_scene").as_ref(), 0);
                     gl.uniform_1_i32(gl.get_uniform_location(*p, "u_bloom").as_ref(), 1);
-                    gl.uniform_1_f32(gl.get_uniform_location(*p, "u_strength").as_ref(), strength);
+                    gl.uniform_1_f32(gl.get_uniform_location(*p, "u_bloom_k").as_ref(), strength);
+                    gl.uniform_1_f32(gl.get_uniform_location(*p, "u_exposure").as_ref(), f.exposure);
+                    gl.uniform_3_f32(
+                        gl.get_uniform_location(*p, "u_bg").as_ref(),
+                        f.bg[0],
+                        f.bg[1],
+                        f.bg[2],
+                    );
                 }
             },
         );

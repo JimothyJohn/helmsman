@@ -3624,30 +3624,46 @@ in `tests/site.rs`, `site_tests.rs`).
   docs/UI.md's clean-up; the site returns with a fleet view. The box side
   above is unchanged.
 
-## The diagram in 3D (`canvas-3d-mvp`)
+## The diagram in 3D (`canvas-3d-mvp`, `canvas-3d-nav`)
 
-A toggle ("3D" on the diagram's left edge, "2D" back) in the playground
-shows the program's POUs as nodes (the middle level, y = 9) over one board
-per POU of blocks and wires (the bottom level, from the deterministic
-layout); regions lift what they hold. 2D is the default and is untouched
-while the toggle is off. A double click or Enter on a POU flies the camera
-down to its blocks in 0.3 s, eased, the middle level left as a faint ghost
-above; Escape flies back. The top level (plant and devices) is
-`canvas-3d-devices`; free orbit and snap keys are `canvas-3d-nav`.
+The `3` key (or the "3D" button at the top of the diagram's middle) shows
+the playground's program as a stack: the program's POUs as nodes high up
+(the middle level), each over its board of blocks and wires (the bottom
+level, from the deterministic layout), joined by thick links and four
+struts, with regions lifted as slabs. 2D is the default and is untouched
+while 3D is off. The camera orbits (drag), pans (right-drag, Shift-drag,
+W A S D, a trackpad's two-finger scroll on a desktop build) and zooms
+toward the pointer (wheel, pinch); `F` frames everything, `1` is the
+opening view, `2`, Enter or a double click dives into a POU's blocks, `Q`
+and `E` step between POUs, `Esc` climbs, a click on a block picks it
+(the code's line follows, as in 2D) and flies to it. Every move is eased
+over 0.3 s and a hand on the pointer stops it. The top level (plant and
+devices) is `canvas-3d-devices`.
 
-- `scene3d.rs` (scene from `helmsman-diagram`), `cam3d.rs` (matrices, ray,
-  framing, easing), `batch3d.rs` (vertex data and theme colours) and
-  `view3d.rs` (`Nav`, the egui view and its labels) hold no GL; their
-  tests are `*3d_tests.rs`.
-- `gl3d.rs` is the GL pass: an `egui_glow::CallbackFn` into an offscreen
-  target, a bright pass of what a traced scan lights (`live::annotate`), a
-  two-pass blur at half size, and a composite onto egui's framebuffer. No
-  new dependency (`eframe::glow`). Shaders take their version line from
-  `ShaderVersion` (GLSL 1.40 native, ES 3.00 in the browser); a context
-  without them leaves the view on a message and the 2D button.
+- Pure, with tests (`*3d_tests.rs`), no GL and no egui: `scene3d.rs`
+  (scene from `helmsman-diagram`), `cam3d.rs` (matrices, rays, framing,
+  the `Orbit` camera with its limits and flights), `labels3d.rs` (every
+  label 2D draws, anchored in the scene, and the placement that fades,
+  shrinks to a readable minimum, nudges and culls with the nearest first),
+  `anim3d.rs` (glows that ease and flare, pulses: functions of a clock the
+  caller passes in) and `batch3d.rs` (vertex data in linear colours from
+  the theme).
+- `view3d.rs` is the egui side: input, `Nav`, the labels drawn over the
+  pass. It asks for a repaint only while something moves (a flight, a
+  glow, a wire carrying pulses).
+- `gl3d.rs` is the GL pass, in an `egui_glow::CallbackFn`: the scene into
+  a half-float target (bytes where the context cannot render to floats,
+  tried at startup) with shaded, bevelled blocks, a gridded glossy board,
+  distance fog, antialiased wires with travelling pulses and the soft pool
+  of light a lit thing throws on the floor; a bright pass, a five-level
+  down and up blur chain, and a composite with ACES tone mapping and one
+  gamma encode. No new dependency (`eframe::glow`). Shaders take their
+  version line from `ShaderVersion` (GLSL 1.40 native, ES 3.00 in the
+  browser); a context without them leaves the view on a message and the
+  2D button.
 - **`unsafe`**: `gl3d.rs` is the one module of the canvas with it (glow's
-  calls are `unsafe fn`); main.rs denies `unsafe_code` for the rest, and
-  every block carries its safety comment.
+  calls are `unsafe fn`; Nick's ruling, 2026-11-21); main.rs denies
+  `unsafe_code` for the rest, and every block carries its safety comment.
 
 ## The canvas's loading screen
 

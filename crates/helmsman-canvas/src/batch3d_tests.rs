@@ -17,7 +17,10 @@ fn batch(focus: Focus, scans: usize, dark: bool) -> (Batch, usize) {
     let v = Viewer::new(src, s.build.as_ref().unwrap().module.clone().unwrap());
     let scene = scene_of(&v, s.trace.as_ref().map(|t| t as &dyn helmsman_diagram::Scan));
     let boxes = scene.solids.len();
-    (batch3d::build(&scene, focus, &Theme::for_mode(dark)), boxes)
+    (
+        batch3d::build(&scene, focus, &Theme::for_mode(dark), None, 0.0),
+        boxes,
+    )
 }
 
 #[test]
@@ -49,10 +52,12 @@ fn in_a_dive_the_middle_level_is_a_ghost_and_the_board_is_not() {
     assert!(dive.solids_ghost.len() > over.solids_ghost.len());
     assert!(!dive.solids.is_empty(), "the board's blocks stay solid");
     // A ghost does not glow: it must not feed the bloom.
+    // (A region's veil is a ghost that glows a little: only the faint
+    // ones, the dimmed levels, are held to it.)
     let glowing_ghost = dive
         .solids_ghost
         .chunks(SOLID_STRIDE)
-        .any(|v| v[SOLID_STRIDE - 1] > 0.5);
+        .any(|v| v[9] < 0.3 && v[10] > 0.0);
     assert!(!glowing_ghost);
 }
 

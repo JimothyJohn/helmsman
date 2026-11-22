@@ -28,6 +28,9 @@
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod agent_ladder_tests;
 mod agent_marks;
+mod anim3d;
+#[cfg(test)]
+mod anim3d_tests;
 mod app;
 mod arrange;
 #[cfg(test)]
@@ -105,6 +108,9 @@ mod instruct_tests;
 mod io_cards;
 mod io_names;
 mod jump;
+mod labels3d;
+#[cfg(test)]
+mod labels3d_tests;
 mod lamps;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod link_tests;

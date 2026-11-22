@@ -3668,6 +3668,7 @@ impl Body for PlaygroundView {
                 .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
             v.crumbs_ui(ui, &[]);
             let area = ui.available_rect_before_wrap();
+            self.view3d.key_ui(ui, area);
             if self.view3d.on {
                 let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
                 self.view3d.ui(ui, v, scan);

@@ -18,17 +18,21 @@ use helmsman_iec::Value;
 use crate::cam3d::{Aabb, Ray, V3, pick};
 
 /// World units per diagram unit.
-pub const UNIT: f32 = 1.0 / 40.0;
-/// Height of the middle level above the bottom one.
-pub const MIDDLE_Y: f32 = 9.0;
+pub const UNIT: f32 = 1.0 / 26.0;
+/// Height of the middle level above the bottom one: the levels stand well
+/// apart, so orbiting shows a stack and not a plate with a tag over it.
+pub const MIDDLE_Y: f32 = 11.0;
 /// How tall a block stands on its board.
-pub const BLOCK_H: f32 = 0.35;
-/// How much a nesting region lifts what it holds.
-pub const LIFT: f32 = 0.3;
+pub const BLOCK_H: f32 = 0.8;
+/// How thick a region's slab is, and how much each nesting level lifts it.
+pub const SLAB_H: f32 = 0.4;
+pub const LIFT: f32 = 1.5;
 /// Space between boards.
-pub const GAP: f32 = 3.0;
+pub const GAP: f32 = 7.0;
 /// A POU node's size (x, y, z).
-pub const POU_SIZE: V3 = [4.5, 0.7, 2.2];
+pub const POU_SIZE: V3 = [9.0, 1.1, 4.5];
+/// Height of a wire over its block's foot.
+pub const WIRE_Y: f32 = 0.45;
 
 /// What is on one scope of the scene.
 pub struct ScopeIn<'a> {
@@ -90,6 +94,8 @@ pub enum Flow {
     On,
     /// A link between levels or between POUs.
     Link,
+    /// A thin strut of the stack between a POU node and its board.
+    Strut,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -102,6 +108,9 @@ pub struct Solid {
     pub level: Level,
     pub scope: usize,
     pub label: String,
+    /// A number that changes when what the block carries does (a flare
+    /// at the change, `anim3d`).
+    pub sig: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -111,6 +120,9 @@ pub struct Seg {
     pub flow: Flow,
     pub level: Level,
     pub scope: usize,
+    /// How far along its wire (world units) this piece starts: the
+    /// travelling pulses run on across the elbows.
+    pub phase0: f32,
 }
 
 impl Seg {
@@ -128,6 +140,12 @@ pub struct Scene {
     pub boards: Vec<Aabb>,
     /// Per scope: its POU node.
     pub pous: Vec<Aabb>,
+    /// Per scope: where its diagram's (0, 0) stands on the board (x, z).
+    pub origins: Vec<(f32, f32)>,
+    /// Per scope, per node (by id): the block's box.
+    pub nodes: Vec<Vec<Aabb>>,
+    /// Per scope, per region (by id): the slab's box.
+    pub regions: Vec<Vec<Aabb>>,
 }
 
 impl Scene {
@@ -141,6 +159,25 @@ impl Scene {
             .copied()
             .reduce(|a, b| a.union(&b))
             .unwrap_or(Aabb::new([-1.0, 0.0, -1.0], [1.0, 1.0, 1.0]))
+    }
+
+    /// The corners of what is in the scene (of one scope's board, or of
+    /// every board and POU node): what a framing fits to the view.
+    #[must_use]
+    pub fn frame_points(&self, scope: Option<usize>) -> Vec<V3> {
+        let mut v = Vec::new();
+        let all = scope.is_none();
+        for (i, b) in self.boards.iter().enumerate() {
+            if all || scope == Some(i) {
+                v.extend(b.corners());
+            }
+        }
+        if all {
+            for p in &self.pous {
+                v.extend(p.corners());
+            }
+        }
+        v
     }
 
     /// The item under `ray`: with `dive` set, only the blocks of that
@@ -200,6 +237,21 @@ fn num(v: f32) -> f32 {
     if v.is_finite() { v } else { 0.0 }
 }
 
+/// A number for what a node's outputs hold: equal while they are equal.
+fn signature(values: &[Option<Value>]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for v in values {
+        let x = match v {
+            None => 0,
+            Some(Value::Bool(b)) => 1 + u64::from(*b),
+            Some(Value::Int(i)) => (*i as u64).wrapping_mul(31).wrapping_add(7),
+            Some(Value::Real(r)) => r.to_bits().wrapping_add(13),
+        };
+        h = (h ^ x).wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
 /// The scene of `scopes`.
 #[must_use]
 pub fn build(scopes: &[ScopeIn]) -> Scene {
@@ -208,6 +260,9 @@ pub fn build(scopes: &[ScopeIn]) -> Scene {
         segs: Vec::new(),
         boards: Vec::new(),
         pous: Vec::new(),
+        origins: Vec::new(),
+        nodes: Vec::new(),
+        regions: Vec::new(),
     };
     // Boards side by side along x; a called scope one row further along z.
     let depths: Vec<usize> = (0..scopes.len())
@@ -233,14 +288,15 @@ pub fn build(scopes: &[ScopeIn]) -> Scene {
         x += w.max(POU_SIZE[0]) + GAP;
         let at = |px: f32, py: f32| (ox + num(px) * UNIT, oz + num(py) * UNIT);
         let mut board = Aabb::new([ox, -0.12, oz], [ox + w.max(0.5), 0.0, oz + h.max(0.5)]);
-        // Regions: slabs under their blocks, outermost first so a nested
-        // one sits above its parent.
+        // Regions: slabs under their blocks; a nested one rides higher.
+        let mut slabs = Vec::with_capacity(d.regions.len());
         for r in &d.regions {
-            let lift = (depth(d, r.parent) as f32) * LIFT;
+            let top = depth(d, Some(r.id)) as f32 * LIFT;
             let (x0, z0) = at(r.rect.x, r.rect.y);
             let (x1, z1) = at(r.rect.right(), r.rect.bottom());
-            let b = Aabb::new([x0, lift - 0.04, z0], [x1.max(x0), lift, z1.max(z0)]);
+            let b = Aabb::new([x0, top - SLAB_H, z0], [x1.max(x0), top, z1.max(z0)]);
             board = board.union(&b);
+            slabs.push(b);
             sc.solids.push(Solid {
                 item: None,
                 bounds: b,
@@ -252,13 +308,15 @@ pub fn build(scopes: &[ScopeIn]) -> Scene {
                 level: Level::Bottom,
                 scope: i,
                 label: r.label.clone(),
+                sig: 0,
             });
         }
-        // Blocks.
-        let mut tops: Vec<f32> = Vec::with_capacity(d.nodes.len());
+        // Blocks, standing on the slab of their region.
+        let mut lifts: Vec<f32> = Vec::with_capacity(d.nodes.len());
+        let mut boxes: Vec<Aabb> = Vec::with_capacity(d.nodes.len());
         for n in &d.nodes {
             let lift = depth(d, n.region) as f32 * LIFT;
-            tops.push(lift + BLOCK_H);
+            lifts.push(lift);
             let (x0, z0) = at(n.rect.x, n.rect.y);
             let (x1, z1) = at(n.rect.right(), n.rect.bottom());
             let b = Aabb::new(
@@ -266,12 +324,11 @@ pub fn build(scopes: &[ScopeIn]) -> Scene {
                 [x1.max(x0 + 0.05), lift + BLOCK_H, z1.max(z0 + 0.05)],
             );
             board = board.union(&b);
+            boxes.push(b);
+            let vals = s.live.and_then(|l| l.values.get(n.id.0 as usize));
             let lit = s.live.is_some_and(|l| {
-                let i = n.id.0 as usize;
-                l.ran.get(i).copied().unwrap_or(false)
-                    && l.values
-                        .get(i)
-                        .is_some_and(|o| o.iter().flatten().any(|v| truthy(*v)))
+                l.ran.get(n.id.0 as usize).copied().unwrap_or(false)
+                    && vals.is_some_and(|o| o.iter().flatten().any(|v| truthy(*v)))
             });
             sc.solids.push(Solid {
                 item: Some(Item::Block(i, n.id)),
@@ -281,33 +338,48 @@ pub fn build(scopes: &[ScopeIn]) -> Scene {
                 level: Level::Bottom,
                 scope: i,
                 label: n.label.clone(),
+                sig: vals.map_or(0, |v| signature(v)),
             });
         }
-        // Wires, as elbows at the height of the blocks' middle.
+        // Wires: elbows at the height of their blocks' feet, stepping
+        // between slabs where they differ.
         for (wi, w) in d.wires.iter().enumerate() {
             let (Some(from), Some(to)) = (d.nodes.get(w.from.0 as usize), d.nodes.get(w.to.0 as usize))
             else {
                 continue;
             };
-            let y = tops[w.from.0 as usize].min(tops[w.to.0 as usize]) - BLOCK_H / 2.0;
-            let (ax, az) = at(out_port(from, w.out).0, out_port(from, w.out).1);
-            let (bx, bz) = at(in_port(to, w.inp).0, in_port(to, w.inp).1);
+            let (ya, yb) = (lifts[w.from.0 as usize] + WIRE_Y, lifts[w.to.0 as usize] + WIRE_Y);
+            let (px, py) = out_port(from, w.out);
+            let (qx, qy) = in_port(to, w.inp);
+            let (ax, az) = at(px, py);
+            let (bx, bz) = at(qx, qy);
             let mx = f32::midpoint(ax, bx);
             let flow = match s.live.and_then(|l| l.wire(d, wi)) {
                 Some(v) if truthy(v) => Flow::On,
                 Some(_) => Flow::Off,
                 None => Flow::Idle,
             };
-            let pts = [[ax, y, az], [mx, y, az], [mx, y, bz], [bx, y, bz]];
+            let pts = [
+                [ax, ya, az],
+                [mx, ya, az],
+                [mx, ya, bz],
+                [mx, yb, bz],
+                [bx, yb, bz],
+            ];
+            let mut run = 0.0_f32;
             for p in pts.windows(2) {
-                if p[0].iter().zip(&p[1]).any(|(a, b)| (a - b).abs() > 1e-6) {
+                let len =
+                    crate::cam3d::dot(crate::cam3d::sub(p[1], p[0]), crate::cam3d::sub(p[1], p[0])).sqrt();
+                if len > 1e-5 {
                     sc.segs.push(Seg {
                         a: p[0],
                         b: p[1],
                         flow,
                         level: Level::Bottom,
                         scope: i,
+                        phase0: run,
                     });
+                    run += len;
                 }
             }
         }
@@ -322,6 +394,7 @@ pub fn build(scopes: &[ScopeIn]) -> Scene {
             level: Level::Bottom,
             scope: i,
             label: String::new(),
+            sig: 0,
         });
         // Its POU node, over the board's middle.
         let c = board.center();
@@ -342,17 +415,39 @@ pub fn build(scopes: &[ScopeIn]) -> Scene {
             level: Level::Middle,
             scope: i,
             label: s.label.clone(),
+            sig: 0,
         });
-        // The stem down to the board.
+        // The way down: a thick link from the node's middle to the board
+        // and a strut at each corner of the board.
+        let floor = board.max[1].max(0.0);
         sc.segs.push(Seg {
             a: [c[0], MIDDLE_Y, c[2]],
-            b: [c[0], board.max[1].max(0.0), c[2]],
+            b: [c[0], floor, c[2]],
             flow: Flow::Link,
             level: Level::Middle,
             scope: i,
+            phase0: 0.0,
         });
+        for (cx, cz, px, pz) in [
+            (board.min[0], board.min[2], p.min[0], p.min[2]),
+            (board.max[0], board.min[2], p.max[0], p.min[2]),
+            (board.min[0], board.max[2], p.min[0], p.max[2]),
+            (board.max[0], board.max[2], p.max[0], p.max[2]),
+        ] {
+            sc.segs.push(Seg {
+                a: [px, MIDDLE_Y, pz],
+                b: [cx, floor, cz],
+                flow: Flow::Strut,
+                level: Level::Middle,
+                scope: i,
+                phase0: 0.0,
+            });
+        }
         sc.boards.push(board);
         sc.pous.push(p);
+        sc.origins.push((ox, oz));
+        sc.nodes.push(boxes);
+        sc.regions.push(slabs);
     }
     // The calls between POUs.
     for (i, s) in scopes.iter().enumerate() {
@@ -364,6 +459,7 @@ pub fn build(scopes: &[ScopeIn]) -> Scene {
                 flow: Flow::Link,
                 level: Level::Middle,
                 scope: i,
+                phase0: 0.0,
             });
         }
     }

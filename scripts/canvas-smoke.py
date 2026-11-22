@@ -91,10 +91,6 @@ BOTTOM_TABS = (330, 575, 300, 50)
 MESSAGES = (330, 640, 700, 200)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
-# The 3D toggle over the diagram's left edge, and the POU node in the 3D
-# overview, in points.
-TOGGLE_3D = (352, 489)
-POU_3D = (860, 275)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt), and the bottom panel's Trend and
 # Messages.
@@ -240,14 +236,31 @@ def playground(ctx, base, out):
         m.move(800, 200, steps=12); m.up()
     r.step("diagram-selected", band, DIAGRAM, 800)
     r.step("diagram-deselected", lambda: r.key("Escape"), DIAGRAM, 500)
-    # The diagram in 3D (canvas-3d-mvp): the toggle on the diagram's left
-    # edge, a double click on the POU node dives to its blocks, Escape
-    # climbs, the toggle again goes back to the flat diagram. Headless
+    # The diagram in 3D (canvas-3d-mvp, canvas-3d-nav). Keys and drags
+    # start from the middle of the diagram (DIAGRAM's), so no pixel of the
+    # toggle button is needed: the `3` key turns 3D on with the pointer
+    # over the diagram. A drag orbits, the wheel zooms toward the pointer,
+    # F frames everything, 1 is the opening view, a click flies to what it
+    # hits, 2 dives into the POU's blocks, Escape climbs. Headless
     # Chromium needs a software WebGL2 (the launch flags in main).
-    r.step("3d-on", lambda: r.click(*TOGGLE_3D), DIAGRAM, 2500)
-    r.step("3d-dive", lambda: r.page.mouse.dblclick(*POU_3D), DIAGRAM, 1500)
+    cx, cy = DIAGRAM[0] + DIAGRAM[2] // 2, DIAGRAM[1] + DIAGRAM[3] // 2
+    m = r.page.mouse
+    m.move(cx, cy)
+    r.step("3d-on", lambda: r.key("3"), DIAGRAM, 3000)
+    def orbit():
+        m.move(cx, cy); m.down(); m.move(cx + 140, cy - 70, steps=10); m.up()
+    r.step("3d-orbit", orbit, DIAGRAM, 1500)
+    def zoom():
+        m.move(cx - 80, cy)
+        for _ in range(3):
+            m.wheel(0, -120); r.wait(60)
+    r.step("3d-zoom", zoom, DIAGRAM, 1500)
+    r.step("3d-frame-all", lambda: r.key("f"), DIAGRAM, 1500)
+    r.step("3d-opening-view", lambda: r.key("1"), DIAGRAM, 1500)
+    r.step("3d-click-fly", lambda: r.click(cx - 60, cy - 40), DIAGRAM, 1500)
+    r.step("3d-dive", lambda: r.key("2"), DIAGRAM, 1500)
     r.step("3d-up", lambda: r.key("Escape"), DIAGRAM, 1500)
-    r.step("3d-off", lambda: r.click(*TOGGLE_3D), DIAGRAM, 1000)
+    r.step("3d-off", lambda: r.key("3"), DIAGRAM, 1000)
     r.step("trend-hidden", lambda: r.key("Alt+Shift+Digit2"), BOTTOM_TABS)
     r.key("Alt+Shift+Digit2"); r.wait(400)
     # Alt+Shift+5 docks the Code tab on the right, the I/O shown on the

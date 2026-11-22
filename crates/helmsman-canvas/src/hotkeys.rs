@@ -504,6 +504,27 @@ pub fn markdown() -> String {
         "| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, \
          zoomed in and framed (with the pointer over the diagram) | |\n",
     );
+    for (key, does) in [
+        (
+            "3",
+            "The diagram in 3D, and back to the flat one (with the pointer over the diagram)",
+        ),
+        (
+            "Drag; right-drag or Shift-drag; wheel, pinch",
+            "In 3D: orbit; pan; zoom toward the pointer (a trackpad's two-finger scroll pans on a desktop build)",
+        ),
+        ("W A S D, arrows", "In 3D: pan"),
+        ("F, Home", "In 3D: frame the whole stack, keeping the angle"),
+        ("1, R", "In 3D: the whole stack at the opening angle"),
+        (
+            "2, Enter, double-click",
+            "In 3D: dive into the picked POU's blocks (else the one under the pointer)",
+        ),
+        ("E, Q", "In 3D: the next or the previous POU's blocks"),
+        ("Esc", "In 3D: up from the blocks to the whole stack"),
+    ] {
+        let _ = writeln!(out, "| {key} | {does} | |");
+    }
     out.push_str("\nReserved, not built yet: F2 / Shift F2 for the Agent.\n");
     out
 }

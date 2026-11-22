@@ -3,8 +3,8 @@
 //! its target) never gives a NaN.
 
 use crate::cam3d::{
-    Aabb, Camera, FLIGHT, Flight, M4, Pose, Ray, V3, ease, finite, framing, look_at, perspective, pick, unit,
-    view_dir,
+    Aabb, Camera, FLIGHT, Limits, M4, Orbit, OrbitFlight, PITCH_MAX, PITCH_MIN, Pose, Ray, V3, ease, finite,
+    framing, look_at, perspective, pick, unit,
 };
 
 fn cam() -> Camera {
@@ -139,7 +139,7 @@ fn a_framing_holds_every_corner_of_its_box_on_screen() {
     for b in boxes {
         for aspect in [0.6, 1.0, 1.78, 3.0] {
             let size = (600.0 * aspect, 600.0);
-            let c = Camera::new(framing(&b, aspect, view_dir()), size);
+            let c = Camera::new(framing(&b, aspect, [0.0, -0.8, -0.6]), size);
             for p in b.corners() {
                 let (x, y, _) = c
                     .project(p)
@@ -159,7 +159,7 @@ fn a_framing_of_nothing_sensible_is_still_a_pose() {
     let inf = Aabb::new([-f32::INFINITY; 3], [f32::INFINITY; 3]);
     for b in [nan, inf] {
         for aspect in [0.0, f32::NAN, -1.0, f32::INFINITY] {
-            let p = framing(&b, aspect, view_dir());
+            let p = framing(&b, aspect, [0.0, -0.8, -0.6]);
             assert!(finite(p.eye) && finite(p.target), "{b:?} {aspect}");
         }
     }
@@ -217,37 +217,189 @@ fn the_ease_runs_zero_to_one_slow_at_both_ends() {
     assert_eq!(ease(f32::NAN), 1.0);
 }
 
+fn limits() -> Limits {
+    Limits::of(&Aabb::new([0.0, 0.0, 0.0], [30.0, 16.0, 25.0]))
+}
+
+fn sane(o: &Orbit, l: &Limits) {
+    assert!(
+        finite(o.target) && o.yaw.is_finite() && o.pitch.is_finite() && o.dist.is_finite(),
+        "{o:?}"
+    );
+    assert!((PITCH_MIN..=PITCH_MAX).contains(&o.pitch), "{o:?}");
+    assert!(
+        o.dist >= l.dist.0 - 1e-3 && o.dist <= l.dist.1 + 1e-3,
+        "{o:?} within {:?}",
+        l.dist
+    );
+    for i in 0..3 {
+        assert!(
+            o.target[i] >= l.bounds.min[i] - 1e-3 && o.target[i] <= l.bounds.max[i] + 1e-3,
+            "{o:?}"
+        );
+    }
+    assert!(finite(o.pose().eye), "{o:?}");
+}
+
 #[test]
-fn a_flight_leaves_arrives_and_survives_a_bad_clock() {
-    let a = Pose {
-        eye: [0.0, 10.0, 10.0],
-        target: [0.0; 3],
+fn orbit_pan_and_zoom_stay_finite_and_in_limits_whatever_they_are_given() {
+    let l = limits();
+    let hostile = [
+        0.0,
+        1.0,
+        -1.0,
+        1e6,
+        -1e6,
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::MAX,
+    ];
+    let mut o = Orbit::default();
+    for &a in &hostile {
+        for &b in &hostile {
+            o = o.orbited(a, b, &l);
+            sane(&o, &l);
+            o = o.panned(a, b, 600.0, &l);
+            sane(&o, &l);
+            o = o.zoomed_at(a, b, (800.0, 600.0), a, &l);
+            sane(&o, &l);
+            o = o.zoomed_at(400.0, 300.0, (0.0, 0.0), b, &l);
+            sane(&o, &l);
+            o = o.panned(a, b, f32::NAN, &l);
+            sane(&o, &l);
+        }
+    }
+    // A camera that started as garbage is made sane too.
+    let junk = Orbit {
+        target: [f32::NAN, 1e30, -1e30],
+        yaw: f32::NAN,
+        pitch: 99.0,
+        dist: -4.0,
     };
-    let b = Pose {
-        eye: [5.0, 2.0, 3.0],
-        target: [5.0, 0.0, 0.0],
+    sane(&junk.limited(&l), &l);
+    let nan_limits = Limits::of(&Aabb::new([f32::NAN; 3], [f32::NAN; 3]));
+    sane(&Orbit::default().limited(&nan_limits), &nan_limits);
+}
+
+#[test]
+fn the_pitch_cannot_go_under_the_floor_or_over_the_top() {
+    let l = limits();
+    let down = Orbit::default().orbited(0.0, -1e4, &l);
+    assert_eq!(down.pitch, PITCH_MIN);
+    let up = Orbit::default().orbited(0.0, 1e4, &l);
+    assert_eq!(up.pitch, PITCH_MAX);
+    assert!(down.pose().eye[1] >= down.target[1], "never below its target");
+}
+
+#[test]
+fn a_drag_turns_the_view_and_a_pan_moves_the_scene_with_the_pointer() {
+    let l = limits();
+    let o = Orbit::default();
+    let turned = o.orbited(100.0, 0.0, &l);
+    assert!((turned.yaw - o.yaw).abs() > 0.5 || (turned.yaw - o.yaw).abs() > 5.0);
+    // Dragging right moves what is under the pointer right: the target
+    // goes left on screen's right axis.
+    let size = (800.0, 600.0);
+    let p = [10.0, 8.0, 12.0];
+    let before = Camera::new(o.pose(), size).project(p).unwrap();
+    let moved = o.panned(50.0, 0.0, size.1, &l);
+    let after = Camera::new(moved.pose(), size).project(p).unwrap();
+    assert!(after.0 > before.0 + 10.0, "{before:?} -> {after:?}");
+}
+
+#[test]
+fn zooming_toward_the_pointer_keeps_the_point_under_it() {
+    let l = limits();
+    let size = (900.0, 600.0);
+    let o = Orbit {
+        target: [15.0, 6.0, 12.0],
+        dist: 40.0,
+        ..Orbit::default()
     };
-    let f = Flight::new(a, b, 100.0);
-    assert_eq!(f.at(100.0), (a, false));
+    for (px, py) in [(450.0, 300.0), (100.0, 80.0), (800.0, 500.0), (450.0, 50.0)] {
+        for factor in [1.5, 0.7, 3.0] {
+            let cam = Camera::new(o.pose(), size);
+            // The point of the plane through the target that the pointer is on.
+            let r = cam.ray(px, py).unwrap();
+            let (_, _, f) = o.pose().basis();
+            let c = r.dir[0] * f[0] + r.dir[1] * f[1] + r.dir[2] * f[2];
+            let t = o.dist / c;
+            let p = [
+                r.origin[0] + r.dir[0] * t,
+                r.origin[1] + r.dir[1] * t,
+                r.origin[2] + r.dir[2] * t,
+            ];
+            let z = o.zoomed_at(px, py, size, factor, &l);
+            // Inside the limits it is a plain zoom, and the point stays.
+            if (l.dist.0..=l.dist.1).contains(&(o.dist / factor)) {
+                assert!((z.dist - o.dist / factor).abs() < 1e-3, "{z:?}");
+                let (sx, sy, _) = Camera::new(z.pose(), size).project(p).unwrap();
+                assert!(
+                    (sx - px).abs() < 0.05 && (sy - py).abs() < 0.05,
+                    "{px},{py} -> {sx},{sy} (x{factor})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_zoom_cannot_pass_its_limits_and_a_frame_holds_its_box() {
+    let l = limits();
+    let mut o = Orbit::default();
+    for _ in 0..100 {
+        o = o.zoomed_at(400.0, 300.0, (800.0, 600.0), 10.0, &l);
+    }
+    assert_eq!(o.dist, l.dist.0);
+    for _ in 0..100 {
+        o = o.zoomed_at(400.0, 300.0, (800.0, 600.0), 0.1, &l);
+    }
+    assert_eq!(o.dist, l.dist.1);
+    let b = Aabb::new([0.0, 0.0, 0.0], [30.0, 16.0, 25.0]);
+    for aspect in [0.7, 1.0, 1.6, 2.4] {
+        let f = Orbit::default().framing(&b, aspect);
+        let size = (600.0 * aspect, 600.0);
+        let cam = Camera::new(f.pose(), size);
+        for p in b.corners() {
+            let (x, y, _) = cam.project(p).unwrap();
+            assert!(
+                (0.0..=size.0).contains(&x) && (0.0..=size.1).contains(&y),
+                "{p:?} {x},{y} at {aspect}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_flight_leaves_arrives_takes_the_short_way_round_and_survives_a_bad_clock() {
+    let a = Orbit {
+        yaw: 0.1,
+        ..Orbit::default()
+    };
+    let b = Orbit {
+        target: [5.0, 1.0, 3.0],
+        yaw: std::f32::consts::TAU - 0.1,
+        pitch: 0.9,
+        dist: 9.0,
+    };
+    let f = OrbitFlight::new(a, b, 100.0);
+    assert_eq!(f.at(100.0), (a.fixed(), false));
     assert_eq!(
         f.at(50.0),
-        (a, false),
+        (a.fixed(), false),
         "a clock that ran backwards stays at the start"
     );
     let (mid, done) = f.at(100.0 + FLIGHT / 2.0);
     assert!(!done);
-    assert!((mid.eye[0] - 2.5).abs() < 1e-3, "halfway at the half: {mid:?}");
-    assert_eq!(f.at(100.0 + FLIGHT + 1e-6), (b, true));
-    assert_eq!(f.at(1e9), (b, true));
-    assert_eq!(f.at(f64::NAN), (b, true));
-    assert_eq!(f.at(f64::INFINITY), (b, true));
-    let bad = Flight::new(
-        Pose {
-            eye: [f32::NAN; 3],
-            target: [0.0; 3],
-        },
-        b,
-        0.0,
+    assert!(
+        mid.yaw.rem_euclid(std::f32::consts::TAU) < 0.2 || mid.yaw.rem_euclid(std::f32::consts::TAU) > 6.1,
+        "{mid:?}"
     );
-    assert!(finite(bad.at(0.1).0.eye));
+    assert_eq!(f.at(100.0 + FLIGHT + 1e-6), (b.fixed(), true));
+    assert_eq!(f.at(f64::NAN), (b.fixed(), true));
+    assert_eq!(f.at(f64::INFINITY), (b.fixed(), true));
+    for t in [100.05, 100.1, 100.2] {
+        assert!(finite(f.at(t).0.pose().eye));
+    }
 }

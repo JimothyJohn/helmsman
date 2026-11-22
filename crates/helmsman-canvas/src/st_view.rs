@@ -3105,7 +3105,7 @@ fn var_of<'a>(vars: Option<&'a std::collections::HashMap<String, Var>>, path: &s
 /// What a node's value is, as it should read: a whole TIME variable's
 /// in a time literal's unit, anything else as the value prints. `None`:
 /// the node is a literal or a constant, whose label says it all.
-fn value_text(
+pub(crate) fn value_text(
     d: &Diagram,
     n: NodeId,
     v: Value,
@@ -3136,6 +3136,17 @@ fn value_text(
             }
         }
         v => Some(v.to_string()),
+    }
+}
+
+/// What a region's gate says at its right: the state of the arm.
+#[must_use]
+pub(crate) fn gate_state(g: Option<Gate>) -> String {
+    match g {
+        Some(Gate::Open(n)) => format!("taken ×{n}"),
+        Some(Gate::Closed) => "skipped".into(),
+        Some(Gate::NotReached) => "not reached".into(),
+        None => String::new(),
     }
 }
 
