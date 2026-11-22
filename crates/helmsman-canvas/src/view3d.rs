@@ -589,7 +589,18 @@ impl View3d {
             && let Some(item) = self.hover
         {
             self.picked = Some(item);
-            if let Item::Block(s, n) = item {
+            // A block selects its statement; a lamp selects the first
+            // statement that writes its output.
+            let node = match item {
+                Item::Block(s, n) => Some((s, n)),
+                Item::Indicator(s, k) => scene
+                    .indicators
+                    .iter()
+                    .find(|x| x.scope == s && x.order == k)
+                    .and_then(|x| x.writers.first().map(|n| (s, *n))),
+                Item::Board(_) => None,
+            };
+            if let Some((s, n)) = node {
                 v.scope = s.min(v.scopes.len().saturating_sub(1));
                 v.pick = Some(Pick::Node(n));
             }

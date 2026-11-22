@@ -148,7 +148,7 @@ fn first_screen(b: &crate::view3d::Built, size: (f32, f32)) -> Camera {
 }
 
 #[test]
-fn the_first_screen_names_nearly_every_block() {
+fn the_first_screen_names_every_block_in_the_size_2d_writes_them() {
     for size in [(1000.0, 560.0), (700.0, 500.0), (1400.0, 800.0)] {
         for name in PROGRAMS {
             let (v, s) = viewer(example(name).src, 3);
@@ -164,13 +164,20 @@ fn the_first_screen_names_nearly_every_block() {
                 .filter(|l| !named.contains(&l.item.unwrap()))
                 .map(|l| l.text.clone())
                 .collect();
-            // Fewer, better-placed labels beat nudged piles: a block whose
-            // name has no room is left out, but nearly all are named.
-            let blocks = b.labels.iter().filter(|l| l.kind == Kind::Node).count();
+            assert!(missing.is_empty(), "{name} at {size:?}: no label on {missing:?}");
+            // The type is the 2D view's size for every tile, far rows too:
+            // near and far names differ by a quarter at most.
+            let fonts: Vec<f32> = placed
+                .iter()
+                .filter(|p| b.labels[p.index].kind == Kind::Node)
+                .map(|p| p.font)
+                .collect();
+            let (lo, hi) = fonts
+                .iter()
+                .fold((f32::MAX, 0.0_f32), |a, f| (a.0.min(*f), a.1.max(*f)));
             assert!(
-                missing.len() * 8 <= blocks,
-                "{name} at {size:?}: no label on {} of {blocks}: {missing:?}",
-                missing.len()
+                hi <= lo * 1.25 + 1e-3,
+                "{name} at {size:?}: names from {lo} to {hi} points"
             );
         }
     }
@@ -327,5 +334,57 @@ END_PROGRAM
     for p in place(&b.labels, &cam, &o) {
         let l = &b.labels[p.index];
         assert!(l.scope == 0 || l.kind == Kind::Title, "{l:?}");
+    }
+}
+
+#[test]
+fn a_buttons_state_shares_its_names_line_and_sits_on_no_other_tile() {
+    for name in ["Traffic light", "Logic: AND, OR, NOT"] {
+        let (v, s) = viewer(example(name).src, 3);
+        let io: Vec<crate::playground::Point> = s.inputs().chain(s.outputs()).cloned().collect();
+        let b = built_of(&v, scan(&s), &io);
+        let mut checked = 0;
+        for sol in b
+            .scene
+            .solids
+            .iter()
+            .filter(|x| x.role == crate::scene3d::Role::Button)
+        {
+            let Some(Item::Block(sc, n)) = sol.item else {
+                continue;
+            };
+            let mine: Vec<&Label> = b
+                .labels
+                .iter()
+                .filter(|l| l.item == Some(Item::Block(sc, n)))
+                .collect();
+            let value = b
+                .labels
+                .iter()
+                .find(|l| {
+                    l.kind == Kind::Value
+                        && (l.at[2] - mine[0].at[2]).abs() < 1e-4
+                        && (l.at[0] - mine[0].at[0]).abs() < 0.3
+                })
+                .expect("its state, on the name's line");
+            assert!(value.at[0] > mine[0].at[0], "the state is right of the name");
+            assert_eq!(
+                (mine[0].align, value.align),
+                (crate::labels3d::Align::Right, crate::labels3d::Align::Left)
+            );
+            // On no tile but its own row's gap: not inside another tile.
+            for (k, other) in b.scene.nodes[sc].iter().enumerate() {
+                if k == n.0 as usize {
+                    continue;
+                }
+                let inside = value.at[0] >= other.min[0]
+                    && value.at[0] <= other.max[0]
+                    && value.at[2] >= other.min[2]
+                    && value.at[2] <= other.max[2];
+                assert!(!inside, "{name}: the state of {n:?} sits on tile {k}");
+            }
+            checked += 1;
+        }
+        assert!(checked > 0, "{name}");
     }
 }

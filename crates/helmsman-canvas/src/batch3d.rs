@@ -265,7 +265,7 @@ pub fn build(scene: &Scene, focus: Focus, look: &Look, rig: &Rig, glows: Option<
             .solids
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.scope == i && s.role == Role::Region)
+            .filter(|(_, s)| s.scope == i && matches!(s.role, Role::Region | Role::Panel))
         {
             let g = glow_of(k, s.lit);
             let (base, half) = footprint(&s.bounds, 0.0);
@@ -278,8 +278,8 @@ pub fn build(scene: &Scene, focus: Focus, look: &Look, rig: &Rig, glows: Option<
                 half,
                 s.bounds.max[1] - s.bounds.min[1],
                 0.5,
-                look.tile_color(Role::Region),
-                a * 0.9,
+                look.tile_color(s.role),
+                if s.role == Role::Panel { a } else { a * 0.9 },
                 g.live() * 0.5,
                 0.0,
             );
@@ -290,7 +290,7 @@ pub fn build(scene: &Scene, focus: Focus, look: &Look, rig: &Rig, glows: Option<
         let mut items: Vec<(f32, Vec<f32>)> = Vec::new();
         let mut shadows: Vec<f32> = Vec::new();
         for (k, s) in scene.solids.iter().enumerate().filter(|(_, s)| s.scope == i) {
-            if matches!(s.role, Role::Board | Role::Region) {
+            if matches!(s.role, Role::Board | Role::Region | Role::Panel) {
                 continue;
             }
             let g = glow_of(k, s.lit);
@@ -388,8 +388,12 @@ fn block(
                 0.0,
                 0.0,
             );
-            let r = (0.36 * w.min(d)).clamp(0.2, 0.8);
-            let (cx, cz) = (base[0], base[2]);
+            // The cap sits toward the back of the tile; its name and state
+            // run along the front strip.
+            let r = (0.36 * w.min(d))
+                .clamp(0.2, 0.8)
+                .min(((d - 0.6) / 2.0).max(0.15) / 1.18);
+            let (cx, cz) = (base[0], base[2] - half[1] + r * 1.18 + 0.08);
             let y = base[1] + h * 0.6;
             let neutral = if look.dark {
                 [0.5, 0.52, 0.56]
@@ -440,22 +444,26 @@ fn block(
             }
         }
         Role::Lamp => {
-            let plate = h * 0.7;
+            // The panel is the plate: a dark socket and the glass on it.
+            let r = (0.42 * w.min(d)).clamp(0.3, 0.72);
+            let (cx, cz) = (base[0], base[2]);
+            let sock = mix(color, [0.0; 3], 0.45);
+            let mut ring = Vec::new();
             tile(
                 under,
-                over,
+                &mut ring,
                 look,
-                base,
-                half,
-                plate,
-                look.radius,
-                color,
+                [cx, base[1], cz],
+                [r * 1.22, r * 1.22],
+                0.06,
+                r * 1.22,
+                sock,
                 a,
                 0.0,
                 0.0,
             );
-            let r = (0.42 * w.min(d)).clamp(0.3, 0.72);
-            let c = [base[0], base[1] + plate + r * 0.5, base[2]];
+            over.extend(ring);
+            let c = [cx, base[1] + 0.06 + r * 0.5, cz];
             let hue = Look::hue(s.hue);
             sprite(
                 over,
@@ -476,7 +484,7 @@ fn block(
                 );
                 flat(
                     glow,
-                    [base[0], base[1] + plate + 0.01, base[2]],
+                    [cx, base[1] + 0.07, cz],
                     [r * 2.0, r * 2.0],
                     r * 2.0,
                     r * 2.0,
@@ -495,7 +503,7 @@ fn block(
             } else {
                 [0.82, 0.83, 0.86]
             };
-            let z = base[2] + half[1] * 0.35;
+            let z = base[2] - half[1] * 0.45;
             flat(
                 over,
                 [base[0], ty + 0.004, z],

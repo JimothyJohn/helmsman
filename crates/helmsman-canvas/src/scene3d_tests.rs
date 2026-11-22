@@ -231,14 +231,9 @@ fn from_the_overview_an_empty_spot_of_a_board_picks_the_board_and_empty_space_no
         let p = found.expect("an empty spot");
         let (x, y, _) = cam.project(p).unwrap();
         let got = scene.pick(&cam.ray(x, y).unwrap(), None);
-        // Another board nearer the camera may be in the way; never a block
-        // of this one.
-        assert!(
-            got == Some(Item::Board(i))
-                || matches!(got, Some(Item::Board(_) | Item::Block(..)))
-                    && got != Some(Item::Block(i, NodeId(0))),
-            "board {i}: {got:?}"
-        );
+        // Something of the stack is there: the board, or a tile standing
+        // in front of that spot at this angle.
+        assert!(got.is_some(), "board {i}: nothing under a spot of it");
     }
     assert_eq!(scene.pick(&cam.ray(1.0, 1.0).unwrap(), None), None);
 }
@@ -352,7 +347,7 @@ fn a_live_that_does_not_fit_the_diagram_does_not_panic() {
 // ---- the simulation's inputs and outputs ----
 
 #[test]
-fn the_traffic_light_has_a_switch_and_three_lamps() {
+fn the_traffic_light_has_a_switch_and_its_three_lamps_on_one_panel() {
     let (v, s) = viewer(example("Traffic light").src, 2);
     let scene = scene_io(&v, &s);
     let r = roles(&scene, 0);
@@ -362,10 +357,12 @@ fn the_traffic_light_has_a_switch_and_three_lamps() {
             .map(|(l, _)| l.to_ascii_lowercase())
             .collect()
     };
-    let lamps = of(Role::Lamp);
+    // The statements that write the outputs stay plain assignment tiles.
+    let writes = of(Role::Write);
     for name in ["red :=", "yellow :=", "green :="] {
-        assert!(lamps.iter().any(|l| l == name), "{name} in {lamps:?}");
+        assert!(writes.iter().any(|l| l == name), "{name} in {writes:?}");
     }
+    assert!(of(Role::Lamp).is_empty(), "no lamp among the tiles: {r:?}");
     let buttons = of(Role::Button);
     assert!(
         !buttons.is_empty() && buttons.iter().all(|b| b == "run"),
@@ -374,7 +371,6 @@ fn the_traffic_light_has_a_switch_and_three_lamps() {
     // The internal variable and the timer's member stay plain blocks.
     assert!(r.iter().any(|(l, role)| l == "PHASE" && *role == Role::Read));
     assert!(r.iter().all(|(l, role)| !(l == "T.Q" && *role != Role::Read)));
-    // Every control is the program's input, run, a switch (not a hold).
     assert!(
         scene
             .controls
@@ -382,6 +378,18 @@ fn the_traffic_light_has_a_switch_and_three_lamps() {
             .all(|c| c.name == "RUN" && c.widget == Widget::Toggle)
     );
     assert_eq!(scene.controls.len(), buttons.len());
+    // Red over yellow over green, in one housing.
+    let names: Vec<&str> = scene.indicators.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["RED", "YELLOW", "GREEN"]);
+    let panels = scene.solids.iter().filter(|s| s.role == Role::Panel).count();
+    assert_eq!(panels, 1, "one housing");
+    let z: Vec<f32> = scene.indicators.iter().map(|i| i.cell.min[2]).collect();
+    assert!(
+        z[0] < z[1] && z[1] < z[2],
+        "one column, first declared first: {z:?}"
+    );
+    let x: Vec<f32> = scene.indicators.iter().map(|i| i.cell.min[0]).collect();
+    assert!(x.iter().all(|v| (v - x[0]).abs() < 1e-4), "{x:?}");
 }
 
 #[test]
@@ -390,9 +398,11 @@ fn blink_is_one_lamp_and_logic_is_two_switches_and_three_lamps() {
     let scene = scene_io(&v, &s);
     let r = roles(&scene, 0);
     assert!(
-        r.iter().any(|(l, role)| l == "LAMP :=" && *role == Role::Lamp),
+        r.iter().any(|(l, role)| l == "LAMP :=" && *role == Role::Write),
         "{r:?}"
     );
+    assert_eq!(scene.indicators.len(), 1);
+    assert_eq!(scene.indicators[0].name, "LAMP");
     // Reading the output (NOT lamp) is a block, not a button.
     assert!(r.iter().all(|(_, role)| *role != Role::Button), "{r:?}");
     assert_eq!(scene.controls, Vec::new());
@@ -401,9 +411,10 @@ fn blink_is_one_lamp_and_logic_is_two_switches_and_three_lamps() {
     let r = roles(&scene, 0);
     let n = |role: Role| r.iter().filter(|(_, x)| *x == role).count();
     assert!(n(Role::Button) >= 2, "{r:?}");
-    assert_eq!(n(Role::Lamp), 3, "{r:?}");
-    let names: BTreeSet<&str> = scene.controls.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, BTreeSet::from(["A", "B"]));
+    let names: Vec<&str> = scene.indicators.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["BOTH", "EITHER", "NEITHER"]);
+    let inputs: BTreeSet<&str> = scene.controls.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(inputs, BTreeSet::from(["A", "B"]));
 }
 
 #[test]
@@ -478,7 +489,11 @@ fn numbers_get_a_control_and_a_readout() {
     let scene = scene_io(&v, &s);
     let r = roles(&scene, 0);
     assert!(r.iter().any(|(_, x)| *x == Role::Numeric), "{r:?}");
-    assert!(r.iter().any(|(_, x)| *x == Role::Readout), "{r:?}");
+    assert!(
+        scene.solids.iter().any(|s| s.role == Role::Readout),
+        "a readout on the panel"
+    );
+    assert!(scene.indicators[0].numeric);
     assert!(matches!(scene.controls[0].widget, Widget::Int { .. }));
 }
 
@@ -549,9 +564,9 @@ fn a_lamp_says_its_colour_by_its_name() {
             .find(|x| x.role == Role::Lamp && x.label.eq_ignore_ascii_case(l))
             .map(|x| x.hue)
     };
-    assert_eq!(hue("red :="), Some(Hue::Red));
-    assert_eq!(hue("yellow :="), Some(Hue::Amber));
-    assert_eq!(hue("green :="), Some(Hue::Green));
+    assert_eq!(hue("red"), Some(Hue::Red));
+    assert_eq!(hue("yellow"), Some(Hue::Amber));
+    assert_eq!(hue("green"), Some(Hue::Green));
 }
 
 #[test]
@@ -582,4 +597,253 @@ fn a_numbers_place_on_its_range_is_zero_to_one_whatever_it_is() {
         let f = fill_of(&p(Widget::Real, v));
         assert!((0.0..=1.0).contains(&f), "{v:?} {f}");
     }
+}
+
+// ---- the indicator panel ----
+
+fn tiles_of(scene: &Scene, scope: usize) -> Vec<Aabb> {
+    scene
+        .solids
+        .iter()
+        .filter(|s| s.scope == scope && matches!(s.item, Some(Item::Block(..))))
+        .map(|s| s.bounds)
+        .collect()
+}
+
+fn apart(a: &Aabb, b: &Aabb) -> bool {
+    a.max[0] <= b.min[0] || b.max[0] <= a.min[0] || a.max[2] <= b.min[2] || b.max[2] <= a.min[2]
+}
+
+fn inside_xz(a: &Aabb, b: &Aabb) -> bool {
+    [0, 2]
+        .iter()
+        .all(|&i| a.min[i] >= b.min[i] - 1e-4 && a.max[i] <= b.max[i] + 1e-4)
+}
+
+fn inside(a: &Aabb, b: &Aabb) -> bool {
+    (0..3).all(|i| a.min[i] >= b.min[i] - 1e-4 && a.max[i] <= b.max[i] + 1e-4)
+}
+
+/// A program with `n` outputs, each written from an input.
+fn outputs_program(n: usize) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::from("PROGRAM p\nVAR_INPUT go : BOOL; END_VAR\nVAR_OUTPUT\n");
+    for k in 0..n {
+        let _ = writeln!(s, "  o{k} : BOOL;");
+    }
+    s += "END_VAR\n";
+    for k in 0..n {
+        let _ = writeln!(s, "o{k} := go;");
+    }
+    s + "END_PROGRAM\n"
+}
+
+/// The panel contract: one indicator for each written output, in order of
+/// declaration, on housings inside the board, clear of each other and of
+/// every tile, each writer's wire ending at its indicator.
+fn check_panel(v: &Viewer, s: &Session, expect: &[&str]) {
+    let scene = scene_io(v, s);
+    let names: Vec<&str> = scene.indicators.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(
+        names, expect,
+        "one indicator for each written output, in order of declaration"
+    );
+    let board = &scene.boards[0];
+    let panels: Vec<Aabb> = scene
+        .solids
+        .iter()
+        .filter(|s| s.role == Role::Panel)
+        .map(|s| s.bounds)
+        .collect();
+    if expect.is_empty() {
+        assert!(panels.is_empty(), "no outputs, no panel");
+        return;
+    }
+    let tiles = tiles_of(&scene, 0);
+    for p in &panels {
+        assert!(inside(p, board), "{p:?} outside {board:?}");
+        for t in &tiles {
+            assert!(apart(p, t), "housing {p:?} on tile {t:?}");
+        }
+    }
+    for (i, a) in scene.indicators.iter().enumerate() {
+        assert!(
+            panels.iter().any(|p| inside_xz(&a.cell, p)),
+            "{} is on no housing",
+            a.name
+        );
+        assert!(inside(&a.cell, board), "{} is off the board", a.name);
+        for b in &scene.indicators[i + 1..] {
+            assert!(apart(&a.cell, &b.cell), "{} overlaps {}", a.name, b.name);
+        }
+        for t in &tiles {
+            assert!(apart(&a.cell, t), "{} on a tile", a.name);
+        }
+        // Each writer has a wire that ends at the housing's edge at this lamp.
+        let house = panels.iter().find(|p| inside_xz(&a.cell, p)).unwrap();
+        let lz = f32::midpoint(a.cell.min[2], a.cell.max[2]);
+        let ends = scene
+            .segs
+            .iter()
+            .filter(|g| (g.b[0] - house.min[0]).abs() < 1e-3 && (g.b[2] - lz).abs() < 1e-3)
+            .count();
+        assert_eq!(ends, a.writers.len(), "{}: a wire from each writer", a.name);
+        assert_ne!(a.writers, Vec::<NodeId>::new());
+    }
+    // The order along a column is the order of declaration (far to near).
+    let mut by_col: std::collections::BTreeMap<i32, Vec<(usize, f32)>> = std::collections::BTreeMap::new();
+    for a in &scene.indicators {
+        by_col
+            .entry((a.cell.min[0] * 100.0).round() as i32)
+            .or_default()
+            .push((a.order, a.cell.min[2]));
+    }
+    for col in by_col.values() {
+        for w in col.windows(2) {
+            assert!(w[0].0 < w[1].0 && w[0].1 < w[1].1, "{col:?}");
+        }
+    }
+    // The panel is at the output side: right of every tile.
+    for p in &panels {
+        assert!(tiles.iter().all(|t| t.max[0] <= p.min[0] + 1e-4));
+    }
+}
+
+#[test]
+fn the_panel_holds_each_written_output_once_in_declaration_order() {
+    for (name, expect) in [
+        ("Traffic light", vec!["RED", "YELLOW", "GREEN"]),
+        ("Blink", vec!["LAMP"]),
+        ("Logic: AND, OR, NOT", vec!["BOTH", "EITHER", "NEITHER"]),
+    ] {
+        let (v, s) = viewer(example(name).src, 2);
+        check_panel(&v, &s, &expect);
+    }
+}
+
+#[test]
+fn with_no_outputs_there_is_no_panel_and_with_one_there_is_one_lamp() {
+    let (v, s) = viewer(
+        "PROGRAM p\nVAR_INPUT go : BOOL; END_VAR\nVAR x : BOOL; END_VAR\nx := go;\nEND_PROGRAM\n",
+        1,
+    );
+    check_panel(&v, &s, &[]);
+    let (v, s) = viewer(
+        "PROGRAM p\nVAR_INPUT go : BOOL; END_VAR\nVAR_OUTPUT only : BOOL; END_VAR\nonly := go;\nEND_PROGRAM\n",
+        1,
+    );
+    check_panel(&v, &s, &["ONLY"]);
+}
+
+#[test]
+fn an_output_never_written_has_no_indicator_and_one_written_twice_has_one_with_two_wires() {
+    let src = "PROGRAM p
+VAR_INPUT go : BOOL; END_VAR
+VAR_OUTPUT idle : BOOL; twice : BOOL; once : BOOL; END_VAR
+IF go THEN
+  twice := TRUE;
+ELSE
+  twice := FALSE;
+END_IF;
+once := go;
+END_PROGRAM
+";
+    let (v, s) = viewer(src, 2);
+    check_panel(&v, &s, &["TWICE", "ONCE"]);
+    let scene = scene_io(&v, &s);
+    assert_eq!(
+        scene.indicators[0].writers.len(),
+        2,
+        "written in two places: one lamp, a wire from each"
+    );
+    assert_eq!(scene.indicators[1].writers.len(), 1);
+}
+
+#[test]
+fn forty_outputs_wrap_into_columns_on_the_board_with_nothing_on_anything() {
+    let src = outputs_program(40);
+    let (v, s) = viewer(&src, 1);
+    let want: Vec<String> = (0..40).map(|k| format!("O{k}")).collect();
+    let want: Vec<&str> = want.iter().map(String::as_str).collect();
+    check_panel(&v, &s, &want);
+    let scene = scene_io(&v, &s);
+    let panels = scene.solids.iter().filter(|s| s.role == Role::Panel).count();
+    assert!(panels > 1, "the column wrapped: {panels} housings");
+    for sol in &scene.solids {
+        assert!(
+            inside(&sol.bounds, &scene.boards[0]) || sol.role == Role::Board,
+            "{:?} {:?}",
+            sol.role,
+            sol.bounds
+        );
+    }
+}
+
+#[test]
+fn the_panel_is_the_same_whatever_the_theme_and_never_pushes_a_tile() {
+    let (v, s) = viewer(example("Traffic light").src, 2);
+    let with = scene_io(&v, &s);
+    let without = built_of(&v, scan(&s), &[]).scene;
+    // The tiles are where the layout put them with or without the panel.
+    assert_eq!(tiles_of(&with, 0), tiles_of(&without, 0));
+    assert_eq!(without.indicators, Vec::new());
+}
+
+#[test]
+fn a_write_wire_is_live_when_its_lamp_is_and_a_diagram_wire_has_no_tight_kink() {
+    let (v, s) = viewer(example("Logic: AND, OR, NOT").src, 2);
+    let mut s = s;
+    assert!(s.set_input("a", Value::Bool(true)));
+    assert!(s.set_input("b", Value::Bool(true)));
+    s.step();
+    let scene = scene_io(&v, &s);
+    for ind in &scene.indicators {
+        let house = scene
+            .solids
+            .iter()
+            .find(|x| x.role == Role::Panel)
+            .unwrap()
+            .bounds;
+        let lz = f32::midpoint(ind.cell.min[2], ind.cell.max[2]);
+        let lit = scene
+            .solids
+            .iter()
+            .find(|x| x.item == Some(Item::Indicator(0, ind.order)))
+            .unwrap()
+            .lit;
+        for g in scene
+            .segs
+            .iter()
+            .filter(|g| (g.b[0] - house.min[0]).abs() < 1e-3 && (g.b[2] - lz).abs() < 1e-3)
+        {
+            assert_eq!(g.flow == Flow::On, lit, "{}: the wire follows the lamp", ind.name);
+        }
+    }
+    // No two bends of opposite turn within a short run (a lightning
+    // bolt): consecutive turns in a wire are never both sharp and close.
+    for pair in [
+        ([0.0, 0.0], [0.2, 3.0]),
+        ([0.0, 0.0], [3.0, 0.2]),
+        ([0.0, 0.0], [0.4, 0.4]),
+    ] {
+        assert_eq!(scene3d::route(pair.0, pair.1).len(), 2, "{pair:?} is straight");
+    }
+    let r = scene3d::route([0.0, 0.0], [4.0, 3.0]);
+    assert!(r.len() > 4 && r.first() == Some(&[0.0, 0.0]) && r.last() == Some(&[4.0, 3.0]));
+    // Rounded: no corner is a right angle between two long legs.
+    for w in r.windows(3) {
+        let (a, b) = (
+            [w[1][0] - w[0][0], w[1][1] - w[0][1]],
+            [w[2][0] - w[1][0], w[2][1] - w[1][1]],
+        );
+        let (la, lb) = (a[0].hypot(a[1]), b[0].hypot(b[1]));
+        if la > 1e-4 && lb > 1e-4 {
+            let cos = (a[0] * b[0] + a[1] * b[1]) / (la * lb);
+            assert!(cos > -0.01, "a sharp turn: {w:?}");
+        }
+    }
+    for p in scene3d::round_path(&[[0.0, 0.0], [f32::NAN, 1.0], [2.0, 0.0]], 0.3) {
+        assert!(p[0].is_finite() && p[1].is_finite());
+    }
+    assert_eq!(scene3d::round_path(&[], 0.3), Vec::<[f32; 2]>::new());
 }

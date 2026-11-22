@@ -745,3 +745,128 @@ fn a_numeric_drag_moves_the_value_inside_its_range_whatever_the_delta() {
         matches!(nudged(Widget::Time, Value::Int(1_000_000_000), 5.0), Some(Value::Int(ns)) if ns == 1_050_000_000)
     );
 }
+
+#[test]
+fn near_and_far_tiles_of_one_size_differ_by_a_quarter_at_most_on_the_first_screen() {
+    for name in ["Traffic light", "Blink", "Logic: AND, OR, NOT"] {
+        let (v, s) = viewer(example(name).src);
+        let scene = scene_of(&v, scan(&s));
+        let size = (1000.0, 560.0);
+        let mut nav = Nav::default();
+        let cam = Camera::new(nav.pose(&scene, size.0 / size.1, 0.0), size);
+        // Tiles of the same world size, their on-screen widths.
+        let mut groups: std::collections::BTreeMap<(i32, i32), Vec<f32>> = std::collections::BTreeMap::new();
+        for sol in scene
+            .solids
+            .iter()
+            .filter(|s| matches!(s.item, Some(Item::Block(..))))
+        {
+            let b = &sol.bounds;
+            let (w, d) = (b.max[0] - b.min[0], b.max[2] - b.min[2]);
+            let y = b.max[1];
+            let xs: Vec<f32> = [
+                [b.min[0], b.min[2]],
+                [b.max[0], b.min[2]],
+                [b.min[0], b.max[2]],
+                [b.max[0], b.max[2]],
+            ]
+            .iter()
+            .filter_map(|c| cam.project([c[0], y, c[1]]).map(|q| q.0))
+            .collect();
+            if xs.len() < 4 {
+                continue;
+            }
+            let (lo, hi) = xs
+                .iter()
+                .fold((f32::MAX, f32::MIN), |a, x| (a.0.min(*x), a.1.max(*x)));
+            groups
+                .entry(((w * 50.0).round() as i32, (d * 50.0).round() as i32))
+                .or_default()
+                .push(hi - lo);
+        }
+        let mut compared = 0;
+        for (k, v) in &groups {
+            if v.len() < 2 {
+                continue;
+            }
+            let (lo, hi) = v
+                .iter()
+                .fold((f32::MAX, 0.0_f32), |a, w| (a.0.min(*w), a.1.max(*w)));
+            assert!(
+                hi <= lo * 1.25,
+                "{name}: tiles of size {k:?} from {lo} to {hi} px wide"
+            );
+            compared += 1;
+        }
+        assert!(compared > 0, "{name}: nothing to compare");
+    }
+}
+
+#[test]
+fn a_long_board_opens_broadside_and_fills_the_pane_along_its_long_side() {
+    let (v, s) = viewer(example("Logic: AND, OR, NOT").src);
+    let scene = scene_of(&v, scan(&s));
+    let size = (1000.0, 560.0);
+    let mut nav = Nav::default();
+    let o = nav.orbit(&scene, size.0 / size.1, 0.0);
+    let cam = Camera::new(o.pose(), size);
+    let xs: Vec<f32> = scene
+        .frame_points(None)
+        .iter()
+        .filter_map(|p| cam.project(*p).map(|q| q.0))
+        .collect();
+    let (lo, hi) = xs
+        .iter()
+        .fold((f32::MAX, f32::MIN), |a, x| (a.0.min(*x), a.1.max(*x)));
+    assert!(
+        (hi - lo) / size.0 > 0.85,
+        "fills {} of the width",
+        (hi - lo) / size.0
+    );
+    // Still a scene with height, not a tilted flat picture: the pitch is
+    // well above the floor and well below straight down.
+    assert!(o.pitch > 0.4 && o.pitch < 1.2, "{}", o.pitch);
+}
+
+#[test]
+fn a_click_on_a_lamp_selects_the_statement_that_writes_it() {
+    let (mut v, s) = viewer(SWITCH);
+    let ctx = egui::Context::default();
+    let mut view = View3d::default();
+    view.set_on(true);
+    let size = Vec2::new(1200.0, 800.0);
+    frame(&ctx, &mut view, &mut v, &s, size, 0.0, vec![ptr(5.0, 5.0)]);
+    frame(&ctx, &mut view, &mut v, &s, size, 0.1, vec![]);
+    let io: Vec<Point> = s.inputs().chain(s.outputs()).cloned().collect();
+    let b = built_of(&v, None, &io);
+    let ind = &b.scene.indicators[0];
+    let cam = Camera::new(view.nav.orbit_now_for_test().pose(), (size.x, size.y));
+    let c = ind.cell.center();
+    let (x, y, _) = cam.project(c).unwrap();
+    let at = Pos2::new(x, y);
+    frame(&ctx, &mut view, &mut v, &s, size, 0.2, vec![ptr(at.x, at.y)]);
+    frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.3,
+        vec![button(at, PointerButton::Primary, true)],
+    );
+    frame(
+        &ctx,
+        &mut view,
+        &mut v,
+        &s,
+        size,
+        0.4,
+        vec![button(at, PointerButton::Primary, false)],
+    );
+    assert_eq!(view.picked, Some(Item::Indicator(0, 0)));
+    assert_eq!(
+        v.pick,
+        Some(crate::st_view::Pick::Node(ind.writers[0])),
+        "the first writer is selected"
+    );
+}

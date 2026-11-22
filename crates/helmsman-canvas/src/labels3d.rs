@@ -94,7 +94,7 @@ pub fn labels(scopes: &[ScopeIn], vars: &[Option<&HashMap<String, Var>>], scene:
     let special: std::collections::HashSet<(usize, u32)> = scene
         .solids
         .iter()
-        .filter(|s| matches!(s.role, Role::Button | Role::Lamp | Role::Numeric | Role::Readout))
+        .filter(|s| matches!(s.role, Role::Button | Role::Numeric))
         .filter_map(|s| match s.item {
             Some(Item::Block(sc, n)) => Some((sc, n.0)),
             _ => None,
@@ -169,7 +169,7 @@ pub fn labels(scopes: &[ScopeIn], vars: &[Option<&HashMap<String, Var>>], scene:
             };
             let front = special.contains(&(i, n.id.0));
             let (cz, name_w) = if front {
-                (b.max[2] + 0.5, wide * 1.4)
+                (b.max[2] - crate::look3d::INSET - 0.3, wide)
             } else {
                 (cz, wide)
             };
@@ -182,6 +182,12 @@ pub fn labels(scopes: &[ScopeIn], vars: &[Option<&HashMap<String, Var>>], scene:
             };
             let mut l = Label::new([cx, top, cz], text, Kind::Node, i, name_w, 11.5);
             l.item = Some(Item::Block(i, n.id));
+            if front {
+                // The name ends at the middle, the state starts there:
+                // one line in front of the tile.
+                l.align = Align::Right;
+                l.at[0] -= 0.12;
+            }
             out.push(l);
             if front {
                 // The state under the name; no port names on these.
@@ -190,7 +196,8 @@ pub fn labels(scopes: &[ScopeIn], vars: &[Option<&HashMap<String, Var>>], scene:
                     .and_then(|l| l.values.get(n.id.0 as usize)?.first().copied().flatten())
                     && let Some(text) = value_text(d, n.id, val, v)
                 {
-                    let mut vl = Label::new([cx, top, b.max[2] + 0.86], text, Kind::Value, i, wide, 10.0);
+                    let mut vl = Label::new([cx + 0.12, top, cz], text, Kind::Value, i, wide, 10.0);
+                    vl.align = Align::Left;
                     vl.tone = match val {
                         Value::Bool(true) => Tone::True,
                         Value::Bool(false) => Tone::False,
@@ -232,6 +239,46 @@ pub fn labels(scopes: &[ScopeIn], vars: &[Option<&HashMap<String, Var>>], scene:
                 };
                 out.push(l);
             }
+        }
+        // The panel's indicators: name and state beside each lamp.
+        for ind in scene.indicators.iter().filter(|x| x.scope == i) {
+            let Some(p) = s.io.iter().find(|p| p.name == ind.name) else {
+                continue;
+            };
+            let top = ind.cell.max[1];
+            let x = ind.cell.max[0] + 0.45;
+            let zc = f32::midpoint(ind.cell.min[2], ind.cell.max[2]);
+            let mut name = Label::new(
+                [x, top, zc - 0.32],
+                p.name.to_ascii_lowercase(),
+                Kind::Node,
+                i,
+                crate::scene3d::LABEL_W - 0.6,
+                12.0,
+            );
+            name.align = Align::Left;
+            name.item = Some(Item::Indicator(i, ind.order));
+            out.push(name);
+            let text = ind
+                .writers
+                .first()
+                .and_then(|w| value_text(d, *w, p.value, v))
+                .unwrap_or_else(|| p.value.to_string());
+            let mut val = Label::new(
+                [x, top, zc + 0.34],
+                text,
+                Kind::Value,
+                i,
+                crate::scene3d::LABEL_W - 0.6,
+                10.5,
+            );
+            val.align = Align::Left;
+            val.tone = match p.value {
+                Value::Bool(true) => Tone::True,
+                Value::Bool(false) => Tone::False,
+                _ => Tone::Normal,
+            };
+            out.push(val);
         }
         for (k, w) in d.wires.iter().enumerate() {
             let Some(val) = s.live.and_then(|l| l.wire(d, k)) else {

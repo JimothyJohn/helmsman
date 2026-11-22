@@ -35,6 +35,9 @@ pub struct Look {
     pub idle: [f32; 3],
 }
 
+/// How far a tile is drawn inside its box (the look's `inset`).
+pub const INSET: f32 = 0.07;
+
 fn rgb(c: Color32) -> [f32; 3] {
     let [r, g, b, _] = c.to_array();
     [f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0]
@@ -66,7 +69,7 @@ impl Look {
             dark: t.dark,
             radius: 0.3,
             tile_h: 0.36,
-            inset: 0.07,
+            inset: INSET,
             layers: 6,
             shadow_sigma: 0.2,
             shadow_opacity: if t.dark { 0.5 } else { 0.2 },
@@ -109,6 +112,14 @@ impl Look {
             Role::Button | Role::Lamp => lift(0.05),
             Role::Numeric => tint(SELECT, 0.15),
             Role::Readout => lift(-0.03),
+            // The housing of the indicators: darker than the tiles.
+            Role::Panel => {
+                if self.dark {
+                    grey(0.085)
+                } else {
+                    grey(0.83)
+                }
+            }
         };
         c.map(|v| v.clamp(0.0, 1.0))
     }

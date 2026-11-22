@@ -13,10 +13,10 @@ pub type M4 = [f32; 16];
 const UP: V3 = [0.0, 1.0, 0.0];
 /// Nearest and farthest the view draws, in world units.
 pub const NEAR: f32 = 0.1;
-pub const FAR: f32 = 400.0;
+pub const FAR: f32 = 4000.0;
 /// Vertical field of view, radians (34 degrees: a deep scene keeps its
 /// far side readable).
-pub const FOV_Y: f32 = 0.6;
+pub const FOV_Y: f32 = 0.26;
 /// How long a dive or a climb takes, seconds.
 pub const FLIGHT: f64 = 0.3;
 
@@ -431,8 +431,8 @@ pub const PITCH_MIN: f32 = 0.24;
 pub const PITCH_MAX: f32 = 1.5;
 /// The angles the view opens at: a little from the left, well above, so
 /// the stack's height shows.
-pub const YAW0: f32 = -0.55;
-pub const PITCH0: f32 = 0.55;
+pub const YAW0: f32 = -0.3;
+pub const PITCH0: f32 = 0.9;
 
 /// An orbit camera: it looks at `target` from `dist` away along the
 /// direction `yaw` and `pitch` give. The one state the pointer, the keys
@@ -480,7 +480,7 @@ impl Limits {
         let m = scale(r, 1.0 / 3.0);
         Self {
             bounds: Aabb::new(sub(b.min, m), add(b.max, m)),
-            dist: (2.0, (radius * 6.0).max(8.0)),
+            dist: (2.0, (radius * 16.0).max(30.0)),
         }
     }
 }
@@ -612,21 +612,41 @@ impl Orbit {
         self.framing_points(&b.corners(), aspect)
     }
 
-    /// Frames the points `pts` from the angle, within a half turn of
-    /// this camera's, that fills the view best: a long board is seen from
-    /// along its length. The pitch is kept.
+    /// Frames the points `pts` from the opening angle for their shape:
+    /// the long side of the board runs along the pane's long side (a wide
+    /// board is seen broadside, a deep one from its end), a roughly square
+    /// one from the usual angle. The pitch is kept.
     #[must_use]
     pub fn framing_best(&self, pts: &[V3], aspect: f32) -> Self {
-        (-3..=3)
-            .map(|k| {
-                Self {
-                    yaw: self.yaw + k as f32 * 0.25,
-                    ..*self
-                }
-                .framing_points(pts, aspect)
-            })
-            .min_by(|a, b| a.dist.total_cmp(&b.dist))
-            .unwrap_or(*self)
+        let pts: Vec<V3> = pts.iter().copied().filter(|p| finite(*p)).collect();
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for p in &pts {
+            for i in 0..3 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+        }
+        let (ex, ez) = (hi[0] - lo[0], hi[2] - lo[2]);
+        let aspect = if aspect.is_finite() && aspect > 0.05 {
+            aspect
+        } else {
+            1.0
+        };
+        // Which way the board's long side should point on screen.
+        let board_wide = ex >= ez;
+        let pane_wide = aspect >= 1.0;
+        let square = ex.max(ez) < 1.15 * ex.min(ez).max(1e-3);
+        // A square board keeps the usual angle; a long one is seen nearly
+        // broadside, so its long side reads along the pane and not as a
+        // slope.
+        let yaw = if square {
+            YAW0
+        } else if board_wide == pane_wide {
+            -0.08
+        } else {
+            std::f32::consts::FRAC_PI_2 - 0.08
+        };
+        Self { yaw, ..*self }.framing_points(&pts, aspect)
     }
 
     /// Frames the points `pts`.
