@@ -11,8 +11,8 @@ use helmsman_iec::{Ty, Value};
 use crate::app::{App, Source};
 use crate::claude::{
     self, ANTHROPIC_URL, API_VERSION, Answer, ApiKey, Chat, Context, Event as SseEvent, Exchange,
-    FALLBACK_BETA, Incoming, KeyStore, MAX_ANSWER, MAX_PROGRAM, Model, PROXY_URL, Phase, Proxy, Route,
-    Segment, Sse, extract_program, request, segments,
+    FALLBACK_BETA, Incoming, MAX_ANSWER, MAX_PROGRAM, PROXY_URL, Phase, Proxy, Route, Segment, Sse,
+    extract_program, request, segments,
 };
 use crate::editor::{Chrome, Pane, highlight};
 use crate::playground::{
@@ -714,8 +714,8 @@ fn ctx<'a>(source: &'a str, diags: &'a [String]) -> Context<'a> {
 }
 
 /// The request for `c`'s user message, with no earlier turns.
-fn ask_for(route: &Route, model: Model, c: &Context<'_>) -> claude::Request {
-    request(route, model, &[], &claude::user_message(c))
+fn ask_for(route: &Route, c: &Context<'_>) -> claude::Request {
+    request(route, &[], &claude::user_message(c))
 }
 
 fn header<'a>(r: &'a claude::Request, name: &str) -> Option<&'a str> {
@@ -729,11 +729,7 @@ fn header<'a>(r: &'a claude::Request, name: &str) -> Option<&'a str> {
 fn the_direct_request_carries_the_key_only_in_its_header_to_the_api() {
     let key = ApiKey::new(KEY).unwrap();
     let diags = vec!["3:7: unknown variable MOTR".to_string()];
-    let r = ask_for(
-        &Route::Direct(key.clone()),
-        Model::default(),
-        &ctx("PROGRAM p END_PROGRAM", &diags),
-    );
+    let r = ask_for(&Route::Direct(key.clone()), &ctx("PROGRAM p END_PROGRAM", &diags));
     assert_eq!(r.url, ANTHROPIC_URL);
     assert_eq!(r.url, "https://api.anthropic.com/v1/messages");
     assert_eq!(header(&r, "x-api-key"), Some(KEY));
@@ -813,24 +809,22 @@ fn the_prompt_says_strings_and_dates_work_and_what_it_shows_compiles() {
 }
 
 #[test]
-fn haiku_has_no_fallback_and_the_proxy_route_has_no_key() {
-    let r = ask_for(&Route::Proxy, Model::Haiku, &ctx("x", &[]));
+fn the_proxy_route_has_no_key_and_asks_sonnet_with_the_fallback() {
+    let r = ask_for(&Route::Proxy, &ctx("x", &[]));
     assert_eq!(r.url, PROXY_URL);
     assert_eq!(header(&r, "x-api-key"), None);
     assert_eq!(header(&r, "anthropic-dangerous-direct-browser-access"), None);
     assert_eq!(header(&r, "x-helmsman-playground"), Some("1"));
-    assert_eq!(header(&r, "anthropic-beta"), None);
+    assert_eq!(header(&r, "anthropic-beta"), Some(FALLBACK_BETA));
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
-    assert_eq!(body["model"], "claude-haiku-5-5");
-    assert!(body.get("fallbacks").is_none());
+    assert_eq!(body["model"], "claude-sonnet-5-5");
+    assert_eq!(body["fallbacks"], "default");
     assert!(
         body["messages"][0]["content"]
             .as_str()
             .unwrap()
             .contains("none: it compiles")
     );
-    let opus = ask_for(&Route::Proxy, Model::Opus, &ctx("x", &[]));
-    assert!(opus.body.contains("\"claude-opus-5-5\""));
 }
 
 /// The answers of one instruction that failed their checks go back as
@@ -844,7 +838,7 @@ fn every_earlier_turn_is_sent_back_until_the_byte_cap() {
             answer: format!("a{k}"),
         })
         .collect();
-    let r = request(&Route::Proxy, Model::default(), &history, "x");
+    let r = request(&Route::Proxy, &history, "x");
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
     let msgs = body["messages"].as_array().unwrap();
     assert_eq!(msgs.len(), 10 * 2 + 1);
@@ -1146,8 +1140,10 @@ fn keys_are_trimmed_and_refused_when_they_could_not_be_a_header() {
     assert!(ApiKey::new("sk-ant-ü").is_none());
     assert!(ApiKey::new(&"k".repeat(600)).is_none());
     let k = ApiKey::new(&format!("  {KEY}\n")).unwrap();
-    assert!(k.looks_right());
-    assert!(!ApiKey::new("hunter2").unwrap().looks_right());
+    assert_eq!(
+        header(&request(&Route::Direct(k), &[], "x"), "x-api-key"),
+        Some(KEY)
+    );
 }
 
 /// A project store two views can share: what one saves, the next loads.
@@ -1375,57 +1371,26 @@ fn http_errors_say_what_to_do() {
 
 // ---- Claude: the panel -------------------------------------------------
 
-/// A key store that records what was asked of it.
-#[derive(Clone, Default)]
-struct Spy(Rc<RefCell<Vec<String>>>, Rc<RefCell<Option<String>>>);
-
-impl KeyStore for Spy {
-    fn load(&self) -> Option<String> {
-        self.1.borrow().clone()
-    }
-    fn save(&mut self, key: &str) {
-        self.0.borrow_mut().push("save".into());
-        *self.1.borrow_mut() = Some(key.into());
-    }
-    fn forget(&mut self) {
-        self.0.borrow_mut().push("forget".into());
-        *self.1.borrow_mut() = None;
-    }
-}
-
 #[test]
-fn the_key_stays_in_memory_unless_remember_is_ticked() {
-    let spy = Spy::default();
-    let mut chat = Chat::new(Box::new(spy.clone()));
-    assert!(!chat.remember, "off by default");
-    chat.key_mut().push_str(KEY);
-    chat.key_changed();
-    assert!(spy.1.borrow().is_none(), "nothing stored");
+fn a_panel_holds_no_key_until_the_machine_gives_one_and_never_shows_it() {
+    let mut chat = Chat::new();
+    assert!(!chat.has_key(), "nothing typed, nothing stored");
+    chat.take_env(Some(KEY.into()));
+    assert!(chat.has_key());
     assert!(!format!("{chat:?}").contains(KEY));
-    chat.set_remember(true);
-    assert_eq!(spy.1.borrow().as_deref(), Some(KEY));
-    // A new page load finds it, ticked.
-    let again = Chat::new(Box::new(spy.clone()));
-    assert!(again.remember && again.has_key());
-    chat.set_remember(false);
-    assert!(spy.1.borrow().is_none(), "unticking removes it");
-    chat.set_remember(true);
-    chat.forget_key();
-    assert!(!chat.has_key() && !chat.remember);
-    assert!(spy.1.borrow().is_none());
 }
 
 #[test]
 fn asking_needs_a_key_or_the_proxy_and_one_answer_at_a_time() {
-    let mut chat = Chat::new(Box::new(claude::NoStore));
+    let mut chat = Chat::new();
     assert!(chat.send("why?", &[]).is_err(), "still checking for a proxy");
     chat.receive(Incoming::Proxy(false));
     assert_eq!(chat.proxy, Proxy::No);
     assert_eq!(
         chat.send("why?", &[]).unwrap_err(),
-        "Paste an Anthropic API key first."
+        "The Agent is not available in this build."
     );
-    chat.key_mut().push_str(KEY);
+    chat.take_env(Some(KEY.into()));
     let (seq, req) = chat.send("why?", &[]).unwrap();
     assert_eq!(req.url, ANTHROPIC_URL);
     assert!(chat.busy());
@@ -1444,14 +1409,14 @@ fn asking_needs_a_key_or_the_proxy_and_one_answer_at_a_time() {
     assert!(
         matches!(&chat.answer.as_ref().unwrap().phase, Phase::Failed(w) if w.contains("Failed to fetch"))
     );
-    let mut proxied = Chat::new(Box::new(claude::NoStore));
+    let mut proxied = Chat::new();
     proxied.receive(Incoming::Proxy(true));
     assert_eq!(proxied.send("q", &[]).unwrap().1.url, PROXY_URL);
 }
 
 #[test]
 fn a_stopped_answer_ignores_what_arrives_late() {
-    let mut chat = Chat::new(Box::new(claude::NoStore));
+    let mut chat = Chat::new();
     chat.receive(Incoming::Proxy(true));
     let (seq, _) = chat.send("q", &[]).unwrap();
     chat.stop();
@@ -1959,7 +1924,10 @@ fn the_playground_opens_running_the_first_example() {
     assert!(s.view.session.scans >= 30, "{}", s.view.session.scans);
     assert!(s.view.viewer.is_some(), "the diagram is up");
     assert_eq!(s.view.viewer.as_ref().unwrap().because, None, "no path lit");
-    assert!(s.view.chat.proxy == Proxy::No, "no proxy natively");
+    assert!(
+        s.view.chat.proxy == Proxy::Yes,
+        "the test link answers with a proxy"
+    );
 }
 
 #[test]
@@ -2212,14 +2180,15 @@ fn an_instruction_on_an_example_lands_its_program_named_and_never_runs_it() {
     let mut s = Screen::as_opened();
     s.chrome.show(Pane::Claude);
     s.frame(vec![]);
+    s.view.chat.receive(Incoming::Proxy(false));
     s.view.instruct.draft = "a latch please".into();
     s.view.send_instruction(&s.ctx.clone());
     let o = s.view.instruct.outcome.clone().expect("said why");
     assert_eq!(o.kind, Kind::Failed);
-    assert_eq!(o.status, "Paste an Anthropic API key first.");
+    assert_eq!(o.status, claude::UNAVAILABLE_TEXT);
     assert_eq!(s.view.instruct.draft, "a latch please", "kept to send again");
     assert_eq!(s.view.link.sent.len(), 0);
-    s.view.chat.key_mut().push_str(KEY);
+    s.view.chat.take_env(Some(KEY.into()));
     s.view.send_instruction(&s.ctx.clone());
     assert_eq!(s.view.link.sent.len(), 1);
     assert_eq!(s.view.instruct.draft, "", "the box empties");
@@ -2436,30 +2405,52 @@ fn a_page_no_box_serves_runs_the_simulation() {
     assert!(app.boxv.is_none() && app.review.is_none(), "no box asked");
 }
 
-/// Nick, 2026-11-01: developing natively, an empty key field takes the
-/// shell's `ANTHROPIC_API_KEY` and the panel says so.
+/// Nick, 2026-11-01: developing natively, the shell's `ANTHROPIC_API_KEY`
+/// is the machine's key; nothing else can give the panel one.
 #[test]
-fn an_empty_key_is_preloaded_from_the_environment_and_said_so() {
-    use crate::claude::{Chat, NoStore};
-    let mut c = Chat::new(Box::new(NoStore));
-    assert!(!c.has_key() && !c.from_env);
+fn the_machines_key_is_taken_from_the_environment_and_nothing_else_is() {
+    use crate::claude::Chat;
+    let mut c = Chat::new();
+    assert!(!c.has_key());
+    assert!(!c.unavailable(), "still looking for a proxy");
+    c.receive(Incoming::Proxy(false));
+    assert!(c.unavailable(), "no proxy, no free chat, no key");
     c.take_env(Some("not a key".into()));
     assert!(!c.has_key(), "nonsense is not taken");
     c.take_env(Some("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into()));
-    assert!(
-        c.has_key() && c.from_env && !c.remember,
-        "taken, said so, not remembered"
-    );
-    // The user types over it: no longer the environment's.
-    c.key_mut().push('x');
-    c.key_changed();
-    assert!(!c.from_env);
+    assert!(c.has_key());
     // A key already held is never replaced.
-    let mut keep = Chat::new(Box::new(NoStore));
-    *keep.key_mut() = "sk-ant-api03-keptkeptkeptkeptkeptkeptkept".into();
-    keep.take_env(Some("sk-ant-api03-otherotherotherotherotherother".into()));
-    assert!(keep.key_mut().starts_with("sk-ant-api03-kept") && !keep.from_env);
+    assert!(!c.unavailable());
+    c.take_env(Some("sk-ant-api03-otherotherotherotherotherother".into()));
+    let (_, req) = c.send("q", &[]).unwrap();
+    assert_eq!(
+        header(&req, "x-api-key"),
+        Some("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789")
+    );
 }
+
+/// The page never names a model of its own choosing: every route that
+/// sends one sends Sonnet 5.5, and the free chat sends none.
+#[test]
+fn no_request_names_a_model_other_than_sonnet() {
+    let key = ApiKey::new(KEY).unwrap();
+    let history = [Exchange {
+        asked: "a".into(),
+        answer: "b".into(),
+    }];
+    for route in [Route::Proxy, Route::Direct(key)] {
+        for h in [&history[..], &[]] {
+            let r = request(&route, h, "x");
+            let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+            assert_eq!(body["model"], "claude-sonnet-5-5", "{route:?}");
+            assert_eq!(body["fallbacks"], "default");
+        }
+    }
+    let free = request(&Route::Free(RELAY.into()), &history, "x");
+    let body: serde_json::Value = serde_json::from_str(&free.body).unwrap();
+    assert!(body.get("model").is_none());
+}
+
 // ---- simulation semantics ----------------------------------------------
 
 /// `blink` with a comment changed: the same variables.
@@ -2952,7 +2943,7 @@ fn the_free_route_sends_the_turns_and_nothing_else() {
         asked: "make it blink".into(),
         answer: "Why: it blinks.".into(),
     }];
-    let r = request(&Route::Free(RELAY.into()), Model::Opus, &history, "faster");
+    let r = request(&Route::Free(RELAY.into()), &history, "faster");
     assert_eq!(r.url, "https://relay.example/demo/v1/messages");
     assert_eq!(r.headers(), [("content-type", "application/json".to_string())]);
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
@@ -2979,7 +2970,7 @@ fn the_free_route_drops_the_oldest_turns_to_fit_the_relay() {
         answer: format!("{i}:{}", "\"\n".repeat(bytes / 2)),
     };
     let many: Vec<Exchange> = (0..60).map(|i| turn(i, 10)).collect();
-    let r = request(&Route::Free(RELAY.into()), Model::Sonnet, &many, "now");
+    let r = request(&Route::Free(RELAY.into()), &many, "now");
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
     let m = body["messages"].as_array().unwrap();
     assert_eq!(m.len(), claude::FREE_MAX_MESSAGES);
@@ -2991,7 +2982,7 @@ fn the_free_route_drops_the_oldest_turns_to_fit_the_relay() {
 
     // Each answer is 60 KiB typed and twice that sent.
     let big: Vec<Exchange> = (0..6).map(|i| turn(i, 60 * 1024)).collect();
-    let r = request(&Route::Free(RELAY.into()), Model::Sonnet, &big, "now");
+    let r = request(&Route::Free(RELAY.into()), &big, "now");
     assert!(r.body.len() <= claude::FREE_MAX_BODY, "{}", r.body.len());
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
     let m = body["messages"].as_array().unwrap();
@@ -2999,7 +2990,7 @@ fn the_free_route_drops_the_oldest_turns_to_fit_the_relay() {
     assert_eq!(m[0]["content"], "ask 5");
     // An instruction larger than the limit still goes, alone.
     let huge = "x".repeat(claude::FREE_MAX_BODY + 1);
-    let r = request(&Route::Free(RELAY.into()), Model::Sonnet, &big, &huge);
+    let r = request(&Route::Free(RELAY.into()), &big, &huge);
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
     assert_eq!(body["messages"].as_array().unwrap().len(), 1);
 }
@@ -3031,10 +3022,10 @@ fn the_free_chat_says_whether_it_is_open() {
 #[test]
 fn a_chat_with_a_free_route_needs_no_key_and_follows_its_state() {
     use claude::Free;
-    let mut chat = Chat::new(Box::new(claude::NoStore));
+    let mut chat = Chat::new();
     chat.receive(Incoming::Proxy(false));
     assert_eq!(chat.free_base(), None);
-    assert_eq!(chat.route(), Err("Paste an Anthropic API key first."));
+    assert_eq!(chat.route(), Err(claude::UNAVAILABLE_TEXT));
     chat.set_free_base("https://relay.example/");
     assert_eq!(chat.free_base(), Some(RELAY));
     assert_eq!(chat.route(), Err("Checking the free chat…"));
@@ -3043,7 +3034,7 @@ fn a_chat_with_a_free_route_needs_no_key_and_follows_its_state() {
     chat.receive(Incoming::Free(Free::Open));
     assert_eq!(chat.route(), Ok(Route::Free(RELAY.into())));
     // A key typed earlier is never sent to the relay.
-    chat.key_mut().push_str(KEY);
+    chat.take_env(Some(KEY.into()));
     let (seq, req) = chat.send("q", &[]).unwrap();
     assert_eq!(req.url, "https://relay.example/demo/v1/messages");
     assert!(!format!("{:?} {}", req.headers(), req.body).contains(KEY));
@@ -3070,7 +3061,7 @@ fn a_chat_with_a_free_route_needs_no_key_and_follows_its_state() {
     assert_eq!(chat.free, Free::Open);
 
     // A local proxy (development) stands in for the free chat.
-    let mut dev = Chat::new(Box::new(claude::NoStore));
+    let mut dev = Chat::new();
     dev.set_free_base(RELAY);
     dev.receive(Incoming::Proxy(true));
     assert_eq!(dev.free_base(), None);
@@ -3081,10 +3072,10 @@ fn a_chat_with_a_free_route_needs_no_key_and_follows_its_state() {
 /// at most 40 characters of the visitor's words.
 #[test]
 fn the_survey_is_answered_once_and_other_is_short() {
-    let mut none = Chat::new(Box::new(claude::NoStore));
+    let mut none = Chat::new();
     assert!(none.survey("google", "").is_none(), "no free chat: no survey");
 
-    let mut chat = Chat::new(Box::new(claude::NoStore));
+    let mut chat = Chat::new();
     chat.set_free_base(RELAY);
     assert!(chat.survey("other", "   ").is_none(), "nothing typed");
     assert!(!chat.surveyed);
@@ -3100,7 +3091,7 @@ fn the_survey_is_answered_once_and_other_is_short() {
     assert!(chat.surveyed);
     assert!(chat.survey("google", "").is_none(), "once");
 
-    let mut fixed = Chat::new(Box::new(claude::NoStore));
+    let mut fixed = Chat::new();
     fixed.set_free_base(RELAY);
     let r = fixed.survey("own-hardware", "typed but not sent").unwrap();
     assert_eq!(r.body, r#"{"choice":"own-hardware"}"#);
@@ -3149,7 +3140,7 @@ fn a_click_off_the_name_question_keeps_the_agents_answer() {
     let mut s = Screen::as_opened();
     s.chrome.show(Pane::Claude);
     s.frame(vec![]);
-    s.view.chat.key_mut().push_str(KEY);
+    s.view.chat.take_env(Some(KEY.into()));
     s.view.instruct.draft = "a latch please".into();
     s.view.send_instruction(&s.ctx.clone());
     let latch = STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n"));

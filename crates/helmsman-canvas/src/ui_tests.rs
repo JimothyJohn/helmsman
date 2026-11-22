@@ -4592,12 +4592,14 @@ mod simulated {
         assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
     }
 
-    /// A page built with the free chat: no key field and no model picker,
-    /// one notice under the Agent's box. Closed or out of reach, the tab
-    /// says so in place of the box and asks its one question. The right
-    /// panel keeps its default width through every one of these states.
+    /// The Agent tab never has a key field or a model picker, in any
+    /// state: no route, the local proxy, the free chat open, closed or out
+    /// of reach. With no route at all it says so in one line; closed or out
+    /// of reach, the free chat says so in place of the box and asks its one
+    /// question. The right panel keeps its default width through every one
+    /// of these states.
     #[test]
-    fn the_free_chat_tab_has_no_key_and_keeps_the_panel_width() {
+    fn the_agent_tab_has_no_key_and_no_model_and_keeps_the_panel_width() {
         use crate::claude::{Free, Incoming};
         let mut h = Harness::new(App::sim());
         // Docked right: the Agent at the right pane's default width, its narrowest place.
@@ -4606,11 +4608,41 @@ mod simulated {
         let right = h.rect("right");
         h.press("tab claude");
         h.wait(0.3);
-        assert!(h.has("agent key"), "with no free chat the page asks for a key");
         let grew = |h: &Harness, what: &str| {
             let r = right.left() - h.rect("right").left();
             assert!((0.0..=8.0).contains(&r), "{what}: the right panel grew {r} pt");
         };
+        // No key field and no model picker, whatever the state.
+        fn bare(h: &mut Harness, what: &str) {
+            assert!(!h.has("agent key"), "{what}: a key field");
+            let text = crate::ui_tests::all_text(h);
+            for word in [
+                "API key",
+                "Remember on this device",
+                "Forget key",
+                "Model",
+                "Sonnet",
+                "Opus",
+                "Haiku",
+            ] {
+                assert!(!text.contains(word), "{what}: the tab shows {word:?}");
+            }
+        }
+        // Still looking for a proxy: the chat box, no form.
+        bare(&mut h, "checking for a proxy");
+        // No proxy and no free chat in this build: one line, no box.
+        h.app.sim.as_mut().unwrap().chat.receive(Incoming::Proxy(false));
+        h.wait(0.3);
+        bare(&mut h, "no route");
+        assert!(h.has("agent unavailable") && !h.has("agent instruction"));
+        grew(&h, "no route");
+        // The local proxy: the chat box, no form.
+        h.app.sim.as_mut().unwrap().chat.receive(Incoming::Proxy(true));
+        h.wait(0.3);
+        bare(&mut h, "local proxy");
+        assert!(h.has("agent instruction") && !h.has("agent unavailable"));
+        grew(&h, "local proxy");
+        h.app.sim.as_mut().unwrap().chat.receive(Incoming::Proxy(false));
         h.app
             .sim
             .as_mut()
@@ -4618,7 +4650,8 @@ mod simulated {
             .chat
             .set_free_base("https://relay.example");
         h.wait(0.3);
-        assert!(!h.has("agent key") && h.has("agent instruction"));
+        bare(&mut h, "free checking");
+        assert!(h.has("agent instruction") && !h.has("agent unavailable"));
         grew(&h, "checking");
         assert_eq!(
             h.app.sim.as_ref().unwrap().link.free_checks,
@@ -4632,7 +4665,8 @@ mod simulated {
             .chat
             .receive(Incoming::Free(Free::Open));
         h.wait(0.3);
-        assert!(!h.has("agent key") && h.has("agent instruction"));
+        bare(&mut h, "free open");
+        assert!(h.has("agent instruction"));
         assert!(!h.has("agent free closed") && !h.has("survey google"));
         grew(&h, "open");
         for state in [
@@ -4643,7 +4677,8 @@ mod simulated {
             h.app.sim.as_mut().unwrap().chat.receive(Incoming::Free(state));
             h.wait(0.3);
             assert!(h.has("agent free closed"), "{state:?}");
-            assert!(!h.has("agent instruction") && !h.has("agent key"), "{state:?}");
+            bare(&mut h, &format!("{state:?}"));
+            assert!(!h.has("agent instruction"), "{state:?}");
             assert_eq!(
                 h.has("survey google") && h.has("survey other field"),
                 state != Free::Unreachable,
@@ -6373,12 +6408,18 @@ mod tour {
         card_is_fair(&h, "agent tab");
         h.press("tab claude");
         h.wait(0.3);
-        assert_eq!(anchor(&h).as_deref(), Some("agent key"));
-        card_is_fair(&h, "key");
-        h.press("agent key");
-        h.frame(vec![Event::Text("sk-ant-api03-tour".into())]);
+        // The tab never asks for a key: the card points at the box.
+        assert!(!h.has("agent key"));
+        // The local proxy answers (the page's way to a model here).
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .chat
+            .receive(crate::claude::Incoming::Proxy(true));
         h.wait(0.2);
         assert_eq!(anchor(&h).as_deref(), Some("agent instruction"));
+        card_is_fair(&h, "instruction");
         h.press("agent instruction");
         h.frame(vec![Event::Text(
             "keep the lamp on for 1 s and off for 2 s".into(),

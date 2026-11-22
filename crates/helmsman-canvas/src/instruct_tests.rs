@@ -917,13 +917,13 @@ fn the_estimate_is_a_range_that_grows_with_the_file_and_the_clock_says_when_it_i
 /// relay refuses a body with any field but the messages.
 #[test]
 fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
-    use crate::claude::{Free, NoStore, Takes, Turn};
+    use crate::claude::{Free, Takes, Turn};
     let turn = Turn {
         agent: Some("edits"),
         quick: true,
     };
     let body_with = |status: &str| {
-        let mut chat = crate::claude::Chat::new(Box::new(NoStore));
+        let mut chat = crate::claude::Chat::new();
         chat.receive(Incoming::Proxy(false));
         chat.set_free_base("https://relay.example");
         chat.receive(Incoming::Takes(Takes::from_status(status)));
@@ -955,13 +955,7 @@ fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
         json!({"messages": msgs, "agent": "edits", "thinking": "off"})
     );
     // A key or the proxy answers every turn the same way: nothing added.
-    let direct = crate::claude::request_turn(
-        &crate::claude::Route::Proxy,
-        crate::claude::Model::default(),
-        &[],
-        "q",
-        turn,
-    );
+    let direct = crate::claude::request_turn(&crate::claude::Route::Proxy, &[], "q", turn);
     let body: serde_json::Value = serde_json::from_str(&direct.body).unwrap();
     assert_eq!(body.get("agent"), None);
     assert_eq!(body.get("thinking"), None);
