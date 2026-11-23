@@ -4,6 +4,17 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
+- [ ] **Take the History tab out, now that Describe has the clock?** — the Agent tab card said "move the history clock here". The clock and its searchable list of versions are in the Describe tab (simulation); the History tab is still in the tab row, because taking a tab out changes saved layouts, the View menu and the tab shortcuts. On a box the versions are still only in its History tab.
+  options: remove it in the simulation | remove it everywhere and give a box the clock too | keep both
+  id: history-tab-after-clock
+  asked: 2026-11-23
+  by: session 85e550b0
+- [ ] **"Real device: always stop and reset after a change": is a deploy enough?** — on a box a described change is saved into the project and nothing runs until Deploy, which starts the program from scratch. So nothing was changed for a box in the Agent tab card. If you meant the box should deploy (stop, reset, run) by itself when a described change lands, that is a different and bigger thing.
+  options: a deploy is enough | deploy by itself after a described change
+  id: box-reset-after-change
+  asked: 2026-11-23
+  by: session 85e550b0
+
 
 ## Needs your hands
 
@@ -694,7 +705,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   depends: diagram-names-values
   difficulty: med
   id: label-layer
-- [ ] **Agent tab** — (1) no "Stop and reset after a change" checkbox: a real device always stops and resets, the simulation takes live changes by default, the choice lives in the user settings. (2) The input grows as typed to about 4 lines then scrolls inside, anchored at the bottom and growing upward so the output does not move, height eased over about 100 ms, back to one prompt's height on Enter. (3) Output stays green and red, and can be selected and copied. (4) The history arrows restore both the prompt and its output for that step (today the prompt stays blank and the output stays on the latest step). (5) Bug: stepping through history writes to the message log and raises the error count; it must write nothing. (6) The history clock moves here: a click turns the lower area into a searchable index of the commit messages, beside back and forward.
+- [x] **Agent tab** — (1) no "Stop and reset after a change" checkbox: a real device always stops and resets, the simulation takes live changes by default, the choice lives in the user settings. (2) The input grows as typed to about 4 lines then scrolls inside, anchored at the bottom and growing upward so the output does not move, height eased over about 100 ms, back to one prompt's height on Enter. (3) Output stays green and red, and can be selected and copied. (4) The history arrows restore both the prompt and its output for that step (today the prompt stays blank and the output stays on the latest step). (5) Bug: stepping through history writes to the message log and raises the error count; it must write nothing. (6) The history clock moves here: a click turns the lower area into a searchable index of the commit messages, beside back and forward.
   depends: diagram-names-values
   result: one PR for the Agent tab
   est: 2d
@@ -715,7 +726,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 2d
   difficulty: med
   id: fb-io-tab
-- [ ] **Files tab** — a header naming the file system; under programs, Examples and My Files as sections that fold.
+- [x] **Files tab** — a header naming the file system; under programs, Examples and My Files as sections that fold.
   est: 4h
   difficulty: low
   id: fb-files-tab
@@ -727,7 +738,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 3h
   difficulty: low
   id: fb-trend-legend
-- [ ] **Canvas: no semantic zoom, corner controls** — the abstraction layers by zoom (structured text zoomed out, function blocks mid-zoom) off for now: they look glitchy and like another interface. Switched off at the view, the folding kept: later, zooming out merges nodes into labelled groups in the same style with smooth transitions. Background drag stays box select, Space and drag stays pan. Bottom right: a pan (hand) toggle, zoom in, zoom out.
+- [x] **Canvas: no semantic zoom, corner controls** — the abstraction layers by zoom (structured text zoomed out, function blocks mid-zoom) off for now: they look glitchy and like another interface. Switched off at the view, the folding kept: later, zooming out merges nodes into labelled groups in the same style with smooth transitions. Background drag stays box select, Space and drag stays pan. Bottom right: a pan (hand) toggle, zoom in, zoom out.
   est: 1d
   difficulty: med
   id: fb-canvas-zoom

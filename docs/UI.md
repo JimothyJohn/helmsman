@@ -110,7 +110,10 @@ this; change it here first when a decision changes.
   say why.
 - **Panes collapse** from their chevron, their Alt key, or a double click
   on any of their tabs (Nick, 2026-11-07), on either side.
-- **The tabs (left pane 320 pt):** Files (the projects, the
+- **The tabs (left pane 320 pt):** Files (a heading naming where the
+  projects are kept, "Files in this browser" or "Files on the box", then
+  the projects in two sections that fold with a click and are
+  remembered, My Files and Examples, none on a box; the
   open one expanded with its files under it, Nick 2026-11-13: no
   separate files section and no program tree, the diagram's crumbs
   reach the POUs; a right-click on a project offers Copy, Rename,
@@ -267,8 +270,16 @@ this; change it here first when a decision changes.
   the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
-  and the Agent's one-sentence reason. In the simulation (Nick,
-  2026-11-13) the box takes the tab's height and scrolls past it; Shift
+  and the Agent's one-sentence reason. In the simulation the answer area
+  is on top and the box under it at the tab's bottom edge, one row
+  growing upward to four and scrolling inside past that, eased over
+  0.1 s, so the output does not move (Nick, 2026-11-23; from 2026-11-13
+  to then the box was on top and took the tab's height). The output can
+  be selected. The arrows restore the prompt and the output of the step
+  shown and log nothing; the clock beside them turns the answer area into
+  the searchable list of versions. No "Stop and reset" checkbox: a
+  described change runs at once in the simulation unless View › Reset
+  after a described change is on. Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
   instruction sent, greyed. On a new project (a built-in example
@@ -361,6 +372,18 @@ this; change it here first when a decision changes.
   longer pans the diagram: Space and a drag, or the middle button, do; the
   arrow keys and W A S D too, and the wheel zooms. Hovering empty space
   says so.
+- **Zoom only scales; corner controls (Nick, 2026-11-23).** The diagram is
+  drawn the same way at every zoom: it no longer swaps to lines of text
+  zoomed out or to the sections' blocks mid-zoom (it looked glitchy and like
+  another interface), and stays at the one level a small program has when
+  first fitted. Folds the reader makes (a double click, the tabs, the CASE
+  and interlock tables) work as before; zooming out will later merge nodes
+  into labelled groups in the same style
+  (`st_zoom::SEMANTIC_ZOOM`). In the diagram's bottom-right corner, left of
+  the lamps: a hand (while on, a drag on empty space moves the view instead
+  of drawing a box; off by default, not saved with the project), zoom in
+  and zoom out (one step about the middle, the wheel's limits). Each is a
+  44 pt glyph with a tooltip.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).

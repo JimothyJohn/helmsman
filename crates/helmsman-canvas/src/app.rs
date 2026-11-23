@@ -1902,6 +1902,21 @@ impl App {
                 ) {
                     chrome.light = !light;
                 }
+                // The simulation only: a box's program changes with a
+                // deploy, which always starts it from scratch.
+                if self.sim.is_some() {
+                    let resets = chrome.agent_resets;
+                    if menu_item(
+                        ui,
+                        &mut chrome,
+                        "view agent resets",
+                        "Reset after a described change",
+                        resets,
+                        "On: the simulation stops with every value back at its start when a described change lands. Off: the changed program runs at once. Kept in this browser.",
+                    ) {
+                        chrome.agent_resets = !resets;
+                    }
+                }
             });
             hits.push(("bar view".to_string(), v.response.rect));
             let h = ui.menu_button("Help", |ui| {

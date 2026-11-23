@@ -319,6 +319,10 @@ pub struct Chrome {
     pub io_fold_in: bool,
     /// The I/O tab's Outputs are folded away. Remembered.
     pub io_fold_out: bool,
+    /// The Files tab's My Files section is folded away. Remembered.
+    pub files_fold_mine: bool,
+    /// The Files tab's Examples section is folded away. Remembered.
+    pub files_fold_examples: bool,
 }
 
 impl Default for Chrome {
@@ -348,15 +352,33 @@ impl Default for Chrome {
             hints: crate::st_hints::Hints::default(),
             folds: crate::st_fold::Folds::default(),
             advanced: false,
-            agent_resets: true,
+            agent_resets: false,
             io_grid: false,
             io_fold_in: false,
             io_fold_out: false,
+            files_fold_mine: false,
+            files_fold_examples: false,
         }
     }
 }
 
 impl Chrome {
+    /// Whether the Files tab's section for `g` is folded away.
+    #[must_use]
+    pub const fn files_folded(&self, g: crate::projects::Group) -> bool {
+        match g {
+            crate::projects::Group::Mine => self.files_fold_mine,
+            crate::projects::Group::FirstSteps => self.files_fold_examples,
+        }
+    }
+
+    pub(crate) const fn set_files_folded(&mut self, g: crate::projects::Group, folded: bool) {
+        match g {
+            crate::projects::Group::Mine => self.files_fold_mine = folded,
+            crate::projects::Group::FirstSteps => self.files_fold_examples = folded,
+        }
+    }
+
     /// What is kept per browser, as text. `dock=2` marks the layout of
     /// 2026-11-13 (every tab in one left pane); a text without it is
     /// from before, and its panes are not read back.
@@ -380,7 +402,7 @@ impl Chrome {
             format!(" hidden={}", list(&self.hidden))
         };
         format!(
-            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={} iogrid={} iofold={}{}{colors}",
+            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={} iogrid={} iofold={}{} filefold={}{}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             list(&self.lefts),
@@ -394,7 +416,9 @@ impl Chrome {
             u8::from(self.agent_resets),
             u8::from(self.io_grid),
             u8::from(self.io_fold_in),
-            u8::from(self.io_fold_out)
+            u8::from(self.io_fold_out),
+            u8::from(self.files_fold_mine),
+            u8::from(self.files_fold_examples)
         )
     }
 
@@ -423,6 +447,10 @@ impl Chrome {
                 Some(("iofold", v)) => {
                     c.io_fold_in = v.starts_with('1');
                     c.io_fold_out = v.ends_with('1') && v.len() == 2;
+                }
+                Some(("filefold", v)) => {
+                    c.files_fold_mine = v.starts_with('1');
+                    c.files_fold_examples = v.ends_with('1') && v.len() == 2;
                 }
                 Some(("colors", v)) => {
                     c.colors = v

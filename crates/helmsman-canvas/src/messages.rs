@@ -57,6 +57,9 @@ pub struct Log {
     /// An error came in and the Editor has not been told yet
     /// ([`Self::take_fresh`]).
     fresh: bool,
+    /// Nothing is taken while this holds: what changes while the
+    /// engineer steps through History is the old version's, not news.
+    pub muted: bool,
 }
 
 /// How long the Messages tab pulses after an error comes in, seconds.
@@ -70,6 +73,7 @@ impl Default for Log {
             error_at: None,
             unseen: 0,
             fresh: false,
+            muted: false,
         }
     }
 }
@@ -113,6 +117,9 @@ impl Log {
     }
 
     fn push_message(&mut self, at: f64, level: Level, text: String, detail: Option<String>) {
+        if self.muted {
+            return;
+        }
         if self
             .items
             .back()

@@ -83,11 +83,18 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
         return None;
     }
     let newest: Vec<&RevisionRow> = rows.iter().rev().collect();
-    let here = at.and_then(|n| newest.iter().position(|r| r.n == n)).unwrap_or(0);
+    // The row on show: the newest when none is picked. A version on show
+    // that is not among `rows` (a searched list) marks none of them, and
+    // the steps are off.
+    let shown = at.map_or(Some(0), |n| newest.iter().position(|r| r.n == n));
+    let here = shown.unwrap_or(usize::MAX);
     let mut pick = None;
     ui.horizontal(|ui| {
         let r = ui
-            .add_enabled(here > 0, egui::Button::new(RichText::new("▲ Newer").size(18.0)))
+            .add_enabled(
+                shown.is_some_and(|k| k > 0),
+                egui::Button::new(RichText::new("▲ Newer").size(18.0)),
+            )
             .tip("Runs the next newer version (Up key).");
         chrome.hit("history newer", r.rect);
         if r.clicked() {
@@ -95,7 +102,7 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
         }
         let r = ui
             .add_enabled(
-                here + 1 < newest.len(),
+                shown.is_some_and(|k| k + 1 < newest.len()),
                 egui::Button::new(RichText::new("▼ Older").size(18.0)),
             )
             .tip("Runs the next older version (Down key).");
@@ -112,9 +119,9 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
                 i.key_pressed(egui::Key::ArrowDown),
             )
         });
-        if up && here > 0 {
+        if up && shown.is_some_and(|k| k > 0) {
             pick = Some(Pick::Show(newest[here - 1].n));
-        } else if down && here + 1 < newest.len() {
+        } else if down && shown.is_some_and(|k| k + 1 < newest.len()) {
             pick = Some(Pick::Show(newest[here + 1].n));
         }
     }

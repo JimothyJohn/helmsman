@@ -50,10 +50,15 @@ or output another way ("green lamp" for `GreenLamp`, or `StratPB` for
 in. None of this is sent anywhere.
 
 On a box nothing runs until you deploy it, as with any edit of your own.
-In the simulation the changed program is loaded stopped, with every
-variable, timer and output back at its start, so Run starts it from
-scratch. To have it run at once, clear "Stop and reset after a change"
-in the Describe tab; the choice is remembered in this browser.
+In the simulation the changed program runs at once. To have it load
+stopped instead, with every variable, timer and output back at its
+start, turn on **View › Reset after a described change**; the choice is
+remembered in this browser.
+
+The instruction box sits at the bottom of the tab, one row tall. It
+grows upward as you type, to four rows, and scrolls inside after that,
+so the answer above it stays where it is. The answer's text can be
+selected and copied.
 
 What the change did is marked until your next edit. In the code, lines
 it added are on a green ground and a red rule stands where it removed
@@ -129,7 +134,14 @@ arrow steps back one revision, the right arrow forward one, as far as
 the first revision and the newest. Each revision shown runs at once,
 marked green and red with what it changed, and its tooltip names the
 instruction behind it. Saving keeps the version shown; an edit of your
-own puts the arrows away.
+own puts the arrows away. Each step also puts that version's instruction
+back in the box and what came of it in the answer area, and writes
+nothing to the Messages.
+
+The clock beside the arrows turns the answer area into the list of the
+project's versions, newest first, with a box to search what each one
+says. A click runs a version, as the arrows do; the clock again brings
+the answer back.
 
 ## Follow-ups
 
