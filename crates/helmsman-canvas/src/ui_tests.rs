@@ -1190,13 +1190,14 @@ END_PROGRAM",
     /// Nick, 2026-11-13: "I would love to see progressive changes being
     /// made rather than waiting a long time assuming something is
     /// happening." Nick, 2026-11-14: the thoughts flickered; only major
-    /// updates. While the Agent thinks: the time and "Planning", never the
-    /// thinking; then its reason; once it writes: the code as it arrives,
-    /// in the Agent tab and in the Code tab, marked a draft; the file
-    /// itself unchanged until the checks pass; both panes keep their
-    /// widths throughout.
+    /// updates. Nick, 2026-11-22: "don't need to share the code of the
+    /// output ... you're just waiting for an answer". The Describe tab
+    /// says one line and the clock from send to answer, never the
+    /// thinking, the reason or the code; the Code tab still shows the
+    /// draft as it arrives; the file itself unchanged until the checks
+    /// pass; both panes keep their widths throughout.
     #[test]
-    fn the_agent_shows_its_stage_then_the_code_as_it_is_written() {
+    fn the_tab_waits_in_one_line_while_the_code_tab_shows_the_draft() {
         use crate::claude::Incoming;
         use crate::instruct_tests::{LAMP, follows};
         let ev = |name: &str, data: serde_json::Value| format!("event: {name}\ndata: {data}\n\n");
@@ -1229,7 +1230,7 @@ END_PROGRAM",
                 .push(Incoming::Chunk { seq, text });
             h.wait(0.3);
         };
-        assert!(h.drew("Sending to the Agent · "), "the clock from the start");
+        assert!(h.drew("Working on it · "), "the clock from the start");
         assert!(
             h.drew("takes 5 to 30 s"),
             "and how long it takes, least to most (9 lines)"
@@ -1244,7 +1245,7 @@ END_PROGRAM",
             ]
             .concat(),
         );
-        assert!(h.drew("Planning the change · "));
+        assert!(h.drew("Working on it · "), "thinking: the same line");
         assert!(
             !h.drew("A comment after the assignment says why"),
             "the thinking itself is never shown"
@@ -1263,16 +1264,18 @@ END_PROGRAM",
             .concat(),
         );
         let lines = head.lines().count();
+        assert!(lines > 0);
+        assert!(h.drew("Working on it · "), "writing: the same line");
         assert!(
-            h.drew(&format!("Writing main.st · {lines} lines")),
-            "the lines so far"
+            !h.has("agent draft") && !h.has("agent plan"),
+            "no code or reason in the tab"
         );
-        assert!(h.has("agent draft"));
-        assert!(h.has("agent plan") && h.drew("it says why the lamp is on."));
-        let plan = h.rect("agent plan");
-        assert!(plan.bottom() <= h.size.y, "the reason is on screen: {plan:?}");
-        let draft = h.rect("agent draft");
-        assert!(draft.bottom() <= h.size.y, "the draft is on screen: {draft:?}");
+        assert!(
+            !h.drew("it says why the lamp is on."),
+            "the reason waits for the answer"
+        );
+        let working = h.rect("agent working");
+        assert!(working.bottom() <= h.size.y, "the line is on screen: {working:?}");
         assert!(h.has("st draft"), "the Code tab shows the draft");
         assert!(h.drew("END_VAR"), "the code written so far is drawn");
         assert_eq!(
@@ -1387,7 +1390,7 @@ END_PROGRAM",
         h.frame(vec![Event::Text("comment it".into())]);
         h.press("agent send");
         h.wait(4.0);
-        assert!(h.drew("Sending to the Agent · 4 s · takes 5 to 30 s"));
+        assert!(h.drew("Working on it · 4 s · takes 5 to 30 s"));
         // Code that does not compile: the Agent is asked again.
         let v = h.app.sim.as_mut().unwrap();
         let (seq, _) = v.link.sent.last().cloned().unwrap();
@@ -1402,7 +1405,7 @@ END_PROGRAM",
         v.link.inbox.push(Incoming::End { seq });
         h.wait(2.0);
         assert_eq!(h.app.sim.as_ref().unwrap().link.sent.len(), 2, "a retry");
-        assert!(h.drew("Try 2 of 3"));
+        assert!(h.drew("Fixing what failed, try 2 of 3"));
         assert!(
             h.drew("6 s · takes 5 to 30 s"),
             "the clock started again at the retry"
@@ -1478,11 +1481,19 @@ END_PROGRAM",
             assert!(!h.has(gone), "{gone}");
         }
         assert!(h.has("agent instruction") && h.has("agent send"));
+        // Nick, 2026-11-22: at least half the tab is the answer's.
         let field = h.rect("agent instruction");
+        let area = h.rect("agent answer area");
+        let tab = h.rect("right");
         assert!(
-            field.height() > 0.5 * h.rect("right").height(),
-            "the box takes the tab's height: {field:?} in {:?}",
-            h.rect("right")
+            area.height() >= 0.45 * tab.height(),
+            "the answer area: {area:?} in {tab:?}"
+        );
+        assert!(field.bottom() < area.top(), "the box above it");
+        assert!(area.bottom() <= h.size.y, "on screen: {area:?}");
+        assert!(
+            field.height() >= 3.0 * 18.0,
+            "the box still takes a few lines: {field:?}"
         );
         h.click(field.center());
         h.frame(vec![Event::Text("comment it".into())]);
@@ -1522,10 +1533,9 @@ END_PROGRAM",
                 .join("\n");
             assert!(logged.contains("Why: it says why the lamp is on."), "{logged}");
         }
-        assert!(
-            !h.has("agent result"),
-            "a change that landed is not described in the tab"
-        );
+        assert!(h.has("agent result"), "a change that landed says so, in one line");
+        assert!(h.drew("Done: it says why the lamp is on."));
+        assert!(!h.has("agent details"), "nothing to look up");
         assert!(h.has("agent back") && h.has("agent forward"));
         assert!(
             !h.drew("Before") && !h.drew("After"),
@@ -1593,7 +1603,9 @@ END_PROGRAM",
     }
 
     /// A refused answer: an error in the Messages (red count, opened), the
-    /// box outlined, and one line in the tab that opens the Messages.
+    /// box outlined, and in the tab what failed, in red, with a line that
+    /// opens the Messages (Nick, 2026-11-22: "the error messages are
+    /// invisible").
     #[test]
     fn a_refused_answer_is_an_error_in_the_messages_and_one_red_line() {
         use crate::instruct_tests::LAMP;
@@ -1622,11 +1634,93 @@ END_PROGRAM",
         let v = h.app.sim.as_ref().unwrap();
         assert_eq!(v.proj.files["main.st"], LAMP, "nothing written");
         assert!(v.log.errors() >= 1, "an error, so the Messages count it red");
-        assert!(h.has("agent result"));
+        assert!(h.has("agent result") && h.drew("Not changed:"));
+        assert!(h.drew("The code does not compile"), "what failed is in the tab");
+        let area = h.rect("agent answer area");
+        assert!(
+            h.rect("agent result").top() >= area.top() && h.rect("agent details").bottom() <= area.bottom()
+        );
+        assert!(area.bottom() <= h.size.y, "on screen: {area:?}");
         h.app.chrome.trend = false;
-        h.press("agent result");
+        h.press("agent details");
         assert!(h.app.chrome.trend, "the line opens the Messages");
         assert_eq!(h.app.chrome.bottom, crate::editor::Bottom::Messages);
+    }
+
+    /// Nick, 2026-11-22, on the programs that came back wrong: help with
+    /// the words, in the tab. An empty box offers examples in the
+    /// program's own names, one click puts one in the box; a name typed
+    /// as words is offered as declared, one click puts it in; the panels
+    /// keep their width at the right pane's default, with the longest
+    /// names.
+    #[test]
+    fn the_tab_offers_examples_and_fixes_names_at_the_panels_width() {
+        let long = "Conveyor_Infeed_Photo_Eye_Blocked_Too_Long_Alarm_Lamp";
+        let src = format!(
+            "PROGRAM line\nVAR_INPUT\n  StartPB : BOOL;\n  StopPB : BOOL;\nEND_VAR\nVAR_OUTPUT\n  GreenLamp : BOOL;\n  {long} : BOOL;\nEND_VAR\nGreenLamp := StartPB AND NOT StopPB;\n{long} := StopPB;\nEND_PROGRAM\n"
+        );
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        h.press("tab claude");
+        h.wait(0.2);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(crate::claude::Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), src.clone());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.3);
+        let kept = |h: &Harness, what: &str| {
+            assert!((h.rect("left").right() - left.right()).abs() <= 8.0, "{what}");
+            assert!((right.left() - h.rect("right").left()).abs() <= 8.0, "{what}");
+        };
+        assert!(h.has("phrase examples") && h.has("phrase example 0"));
+        assert!(
+            h.drew("Turn GreenLamp on when StartPB is pressed and keep it on until StopPB is pressed"),
+            "spelled as the source writes them"
+        );
+        let area = h.rect("agent answer area");
+        assert!(
+            h.rect("phrase example 0").top() >= area.top(),
+            "in the answer area"
+        );
+        kept(&h, "examples");
+        h.press("phrase example 0");
+        h.wait(0.2);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().instruct.draft,
+            "Turn GreenLamp on when StartPB is pressed and keep it on until StopPB is pressed"
+        );
+        assert!(!h.has("phrase examples"), "a box with words in it: no examples");
+        // Words for a name: the fix, then the name in the box.
+        let typed = "flash the conveyor infeed photo eye blocked too long alarm lamp while stop pb is held";
+        h.app.sim.as_mut().unwrap().instruct.draft = typed.into();
+        h.wait(0.2);
+        assert!(h.has("phrase fix 0") && h.has("phrase fix 1"), "both names");
+        assert!(h.drew("\u{201c}stop pb\u{201d} is StopPB in this program."));
+        kept(&h, "fixes");
+        h.press("phrase fix 0");
+        h.wait(0.2);
+        assert!(h.has("phrase fix 0") && !h.has("phrase fix 1"), "one left");
+        h.press("phrase fix 0");
+        h.wait(0.2);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().instruct.draft,
+            format!("flash the {long} while StopPB is held")
+        );
+        assert!(!h.has("phrase fix 0"), "nothing left to fix");
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().proj.files["main.st"],
+            src,
+            "nothing was sent or written"
+        );
+        assert!(
+            h.app.sim.as_ref().unwrap().link.sent.is_empty(),
+            "nothing was sent"
+        );
     }
 
     /// Shift+Enter goes on with a list, and ends it on an empty item.
@@ -1761,8 +1855,8 @@ END_PROGRAM",
     }
 
     #[test]
-    fn the_third_tab_reads_agent() {
-        assert_eq!(crate::editor::Tab::Claude.label(), "Agent");
+    fn the_third_tab_reads_describe() {
+        assert_eq!(crate::editor::Tab::Claude.label(), "Describe");
     }
 
     #[test]

@@ -41,7 +41,7 @@ impl Tab {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Claude => "Agent",
+            Self::Claude => "Describe",
         }
     }
 
@@ -50,7 +50,7 @@ impl Tab {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Io => "I/O: the program's inputs and outputs with their live values.",
-            Self::Claude => "Agent: ask the agent about the program, or have it propose a change.",
+            Self::Claude => "Describe: say what the program should do, and the change is made and checked.",
         }
     }
 }

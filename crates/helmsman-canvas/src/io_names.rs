@@ -190,7 +190,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, list: &mut IoList) {
         .show(ui, |ui| {
             ui.add(
                 egui::Label::new(
-                    RichText::new("Say what each point is. The Agent writes the program, its checks and its fault tests in these names.")
+                    RichText::new("Say what each point is. The program, its checks and its fault tests are written in these names.")
                         .color(t.muted)
                         .size(size),
                 )
@@ -245,7 +245,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, list: &mut IoList) {
                             .char_limit(MAX_WHAT)
                             .desired_width(room),
                     )
-                    .tip("In a few words. The Agent reads this as the point's meaning.");
+                    .tip("In a few words: what the point is.");
                 chrome.hit(format!("io what {}", k + 1), r.rect);
                 ui.add_space(4.0);
             }
