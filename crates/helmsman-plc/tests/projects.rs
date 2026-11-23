@@ -498,9 +498,16 @@ fn file(addr: SocketAddr, p: &str, f: &str) -> Resp {
     get(addr, &format!("/api/projects/{p}/files/{f}"))
 }
 
+#[cfg(unix)]
 fn is_executable(m: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
     m.permissions().mode() & 0o111 != 0
+}
+
+/// Windows has no execute bit.
+#[cfg(not(unix))]
+fn is_executable(_: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// Every file under `dir`, recursively, as relative paths.
@@ -514,7 +521,14 @@ fn tree(dir: &Path) -> Vec<String> {
             if e.file_type().unwrap().is_dir() {
                 stack.push(p.clone());
             }
-            out.push(p.strip_prefix(dir).unwrap().display().to_string());
+            // Slash-separated whatever the host's separator.
+            out.push(
+                p.strip_prefix(dir)
+                    .unwrap()
+                    .display()
+                    .to_string()
+                    .replace('\\', "/"),
+            );
         }
     }
     out.sort();

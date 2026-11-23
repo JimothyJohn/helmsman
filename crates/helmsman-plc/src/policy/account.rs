@@ -44,8 +44,8 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::{self, Write as _};
-use std::fs;
-use std::io::{self, BufRead, Read as _};
+
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -826,7 +826,7 @@ impl Logins {
 
 fn random_token() -> io::Result<String> {
     let mut b = [0u8; 32];
-    fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+    crate::os_random::fill(&mut b)?;
     Ok(hex(&b))
 }
 

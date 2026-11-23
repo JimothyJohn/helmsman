@@ -355,3 +355,33 @@ jobs:
           path: target/canvas-smoke
           retention-days: 7
           if-no-files-found: ignore
+
+  # The box on Windows x86_64: helmsman-plc and the crates it builds with.
+  # Raw Ethernet (helmsman-l2), systemd/credentials and the firstboot shell
+  # script stay Linux/Unix-only (docs/ARCHITECTURE.md, Platforms). Not a
+  # required check; a skipped job reports success. Same trigger as `gate`.
+  box-windows:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    name: box (windows-latest)
+    runs-on: windows-latest
+    steps:
+      # The runner's git turns LF into CRLF on checkout; the tests read the
+      # repo's text files (device profiles, ST programs) and expect LF.
+      - name: Check out LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
+      - name: Build everything the box has (all errors at once)
+        run: cargo check -p helmsman-plc --all-targets --locked --keep-going
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p helmsman-plc --all-targets --locked -- -D warnings
+      - name: Test the box
+        run: cargo test -p helmsman-plc --locked --no-fail-fast

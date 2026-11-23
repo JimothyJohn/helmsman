@@ -25,7 +25,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Write as _};
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -173,7 +173,7 @@ fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
 /// `/dev/urandom` cannot be read.
 pub fn salt() -> io::Result<[u8; 16]> {
     let mut b = [0u8; 16];
-    fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+    crate::os_random::fill(&mut b)?;
     Ok(b)
 }
 

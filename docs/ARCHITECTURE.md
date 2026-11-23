@@ -86,6 +86,17 @@ Planned owners, not yet crates: the relay (separate stack, private per
 (`wasm-tier`) is built inside `helmsman-plc` (`wasm.rs`, the `wasm`
 feature), below.
 
+## Platforms
+
+CI builds, lints and tests the box (`helmsman-plc` and the crates it needs) on
+Linux x86_64 (`gate`), Linux aarch64 and macOS on Apple Silicon (`box (...)`
+in ci.yml) and Windows x86_64 (`box (windows-latest)`). EtherNet/IP and Modbus
+TCP run on all four. Unix-only, so absent or refused on Windows: raw Ethernet
+(`helmsman-l2`, `--dhcp`, PROFINET), the `deploy/` systemd and firstboot
+scripts and their tests, and `--time-zone` (it reads `/usr/share/zoneinfo`).
+Linux-only: the packet socket and the gpio board. Windows files take the
+account's ACL instead of mode bits (0600 / 0700).
+
 ## One scan, as built
 
 With a single program (the default deploy) each scan, every `--scan-ms`
