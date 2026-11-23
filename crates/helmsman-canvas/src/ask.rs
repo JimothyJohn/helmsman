@@ -326,17 +326,17 @@ impl Card {
     pub fn status(&self) -> Option<&'static str> {
         match self.state {
             State::Asking | State::Open => None,
-            State::Sent => Some("The Agent is working with your answer."),
+            State::Sent => Some("Working with your answer."),
             State::Waiting => Some("Your answer is checked against the change when it is ready."),
             State::Checking => Some("Checking the change against your answer…"),
             State::Covered => Some("The change does what you answered."),
-            State::Amending => Some("The change did not do that yet: the Agent is correcting it."),
+            State::Amending => Some("The change did not do that yet: correcting it."),
             State::Unchecked => {
                 Some("The change is written. Your answer could not be compared with it in time.")
             }
-            State::Kept => Some(
-                "The Agent could not make the change do that. It is written as it first passed its checks.",
-            ),
+            State::Kept => {
+                Some("The change could not be made to do that. It is written as it first passed its checks.")
+            }
         }
     }
 }
@@ -369,14 +369,14 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, card: &Card) ->
                     ui.set_max_width(ui.available_width() - 12.0);
                     let r = ui
                         .add(egui::Label::new(RichText::new(&q.text).strong()).wrap())
-                        .tip("A question about how the machine should behave, asked while the Agent works. Answer it with one click, or leave it: the Agent goes on either way.");
+                        .tip("A question about how the machine should behave, asked while the change is made. Answer it with one click, or leave it: the change goes on either way.");
                     chrome.hit("agent question", r.rect);
                     match card.picked {
                         None => {
                             for (k, answer) in q.answers.iter().enumerate() {
                                 let r = ui
                                     .add(egui::Button::new(RichText::new(answer)).wrap())
-                                    .tip("Pick this answer. The Agent's change is checked against it before it is written.");
+                                    .tip("Pick this answer. The change is checked against it before it is written.");
                                 chrome.hit(format!("agent answer {k}"), r.rect);
                                 if r.clicked() {
                                     clicked = Some(k);
