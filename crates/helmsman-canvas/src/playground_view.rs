@@ -2580,6 +2580,72 @@ impl PlaygroundView {
         self.log_outcome();
     }
 
+    /// Offer `k` under the last answer, clicked ([`crate::offers`]): an
+    /// instruction is sent as the engineer's own; a rename is written
+    /// into every file it touches and saved as one revision with its
+    /// History entry, as a described change is, so Undo and the arrows
+    /// take it back the same way.
+    pub fn take_offer(&mut self, k: usize, ctx: &egui::Context) {
+        use crate::offers::What;
+        match self.instruct.offer(k).cloned() {
+            Some(What::Instead { text }) => {
+                self.instruct.draft = text;
+                self.send_instruction(ctx);
+            }
+            Some(What::Rename { old, new }) => self.rename_everywhere(&old, &new),
+            None => {}
+        }
+    }
+
+    /// `old` renamed to `new` in the open project, saved as one revision.
+    fn rename_everywhere(&mut self, old: &str, new: &str) {
+        let plan = match crate::offers::plan(&self.proj.files, old, new) {
+            Ok(p) => p,
+            Err(why) => {
+                self.instruct.offer_refused(&why);
+                return self.log_outcome();
+            }
+        };
+        if self.proj.dirty() {
+            self.proj.save();
+        }
+        let saved: std::collections::BTreeMap<String, String> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        if self.proj.revisions().last().is_none_or(|r| r.files != saved) {
+            self.proj.save_as("saved before the rename", None);
+        }
+        let before = self.proj.revisions().last().map(|r| r.n);
+        let record = crate::instruct::Instruct::rename_record(old, new, &plan.lines());
+        let count = plan.files.len();
+        // Undo is offered while the file on screen is as the rename left it.
+        let shown = plan
+            .files
+            .iter()
+            .find(|(f, ..)| *f == self.proj.current)
+            .or_else(|| plan.files.iter().find(|(f, ..)| f.ends_with(".st")))
+            .or(plan.files.first())
+            .map(|(f, t, _)| (f.clone(), t.clone()));
+        for (f, text, _) in plan.files {
+            self.proj.files.insert(f, text);
+        }
+        self.proj
+            .save_as(&format!("Renamed {old} to {new}"), Some(&record));
+        self.reload_running();
+        let undo = before.zip(shown).map(|(revision, (file, text))| crate::instruct::Undo {
+            project: self.proj.open.clone(),
+            file,
+            revision,
+            text,
+        });
+        self.instruct.renamed(old, new, count, undo);
+        self.log_outcome();
+    }
+
     /// Why Undo is off now, if it is.
     fn undo_blocked(&self) -> Option<String> {
         let u = self.instruct.undo()?;
@@ -4193,6 +4259,7 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::RunSteps) => self.run_steps(&ctx),
                 Some(crate::instruct::Act::Revision(n)) => self.show_revision(n),
                 Some(crate::instruct::Act::Answer(k)) => self.answer_question(k, &ctx),
+                Some(crate::instruct::Act::Offer(k)) => self.take_offer(k, &ctx),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });

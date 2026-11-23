@@ -914,3 +914,111 @@ fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
     assert_eq!(body.get("agent"), None);
     assert_eq!(body.get("thinking"), None);
 }
+
+// ---- offers (`crate::offers`, Nick 2026-11-23) ----
+
+/// What cannot be done as written comes back as one reason and the
+/// nearest things to click, nothing written; the rename, clicked, is in
+/// every file, saved as one revision with its History entry, and Undo
+/// takes it back.
+#[test]
+fn a_rename_offered_is_one_click_one_revision_and_one_undo() {
+    let mut v = mine();
+    let before = v.proj.files.clone();
+    instruct(
+        &mut v,
+        "make the lamp orange",
+        &["Why: The lamp is an on/off output, so its colour comes from its name.\nOffer: rename lamp orange_lamp\nOffer: rename nowhere somewhere\n"],
+    );
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Said);
+    assert_eq!(
+        o.status,
+        "The lamp is an on/off output, so its colour comes from its name."
+    );
+    assert_eq!(instruct::answer(&o).tone, instruct::Tone::Note, "no alarm");
+    assert_eq!(o.offers.len(), 1, "what cannot be done is not offered: {o:?}");
+    assert_eq!(o.offers[0].label(), "Rename lamp to orange_lamp");
+    let touched: Vec<&str> = o.offers[0].touches.iter().filter_map(|t| t.split(':').next()).collect();
+    assert_eq!(touched, ["main.st", "test_lamp.st"]);
+    assert_eq!(v.proj.files, before, "an offer writes nothing");
+    let revs = v.proj.revisions().len();
+
+    v.take_offer(0, &egui::Context::default());
+    assert!(v.proj.files["main.st"].contains("orange_lamp := start;"));
+    assert!(v.proj.files["test_lamp.st"].contains("lamp_follows(COND := orange_lamp);"));
+    assert!(v.session.src.contains("orange_lamp := start;"), "the editor shows it");
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied);
+    assert_eq!(o.status, "Renamed lamp to orange_lamp in 2 files.");
+    assert!(o.offers.is_empty());
+    let all = v.proj.revisions();
+    assert_eq!(all.len(), revs + 1, "one revision");
+    let last = all.last().unwrap();
+    assert_eq!(last.what, "Renamed lamp to orange_lamp");
+    assert!(!v.proj.dirty(), "saved");
+    // History reads it back as an instruction carried out on the file.
+    let page = instruct::Instruct::rename_record("lamp", "orange_lamp", &["main.st: 2 use(s)".to_string()]);
+    assert_eq!(recent([page.as_str()], "main.st"), ["Rename lamp to orange_lamp"]);
+
+    v.undo_change();
+    assert_eq!(v.proj.files["main.st"], LAMP);
+    assert_eq!(v.proj.files["test_lamp.st"], FOLLOWS);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+}
+
+/// The files moved on since the offer was made: the click changes
+/// nothing and says why.
+#[test]
+fn a_rename_that_no_longer_fits_the_files_changes_nothing_and_says_why() {
+    let mut v = mine();
+    instruct(&mut v, "call the lamp light", &["Offer: rename lamp light\n"]);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!((o.kind, o.status.as_str(), o.offers.len()), (Kind::Said, "", 1));
+    // A variable of that name meanwhile.
+    let taken = LAMP.replace("  lamp : BOOL;", "  lamp : BOOL;\n  light : BOOL;");
+    v.proj.files.insert("main.st".into(), taken.clone());
+    v.take_offer(0, &egui::Context::default());
+    assert_eq!(v.proj.files["main.st"], taken);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Refused);
+    assert_eq!(o.problems, ["The program already has a variable light."]);
+}
+
+/// "Leave it" takes the buttons away and keeps the reason; an instruction
+/// offered is sent as the engineer's own.
+#[test]
+fn leave_it_keeps_the_reason_and_an_instruction_offered_is_sent() {
+    let mut v = mine();
+    instruct(
+        &mut v,
+        "make the lamp orange",
+        &["The lamp has no colour.\nOffer: instead Comment what lamp does\n"],
+    );
+    assert_eq!(
+        v.instruct.offer(0),
+        Some(&crate::offers::What::Instead {
+            text: "Comment what lamp does".into()
+        })
+    );
+    let mut left = v.instruct.clone();
+    left.leave_offers();
+    let o = left.outcome.unwrap();
+    assert_eq!((o.status.as_str(), o.offers.len()), ("The lamp has no colour.", 0));
+
+    v.take_offer(0, &egui::Context::default());
+    let run = v.instruct.run.as_ref().expect("sent");
+    assert_eq!(run.instruction, "Comment what lamp does");
+    assert!(v.instruct.draft.is_empty(), "the box is empty again");
+}
+
+/// Both prompts the canvas itself sends ask for offers, never for a bare
+/// refusal.
+#[test]
+fn the_canvas_prompts_ask_for_the_nearest_thing_and_never_for_a_bare_refusal() {
+    for p in [crate::claude::SYSTEM, instruct::BOX_RULES] {
+        assert!(p.contains("Offer: rename <old> <new>"), "{p}");
+        assert!(p.contains("Offer: instead "), "{p}");
+        assert!(!p.contains("sentences that say why"), "{p}");
+    }
+}

@@ -1812,8 +1812,26 @@ END_PROGRAM",
                 text: String::new(),
             }),
             review: vec![3, 4],
+            offers: Vec::new(),
         };
+        // What stands in the way, with the nearest things on offer, at
+        // the panel's default width: long names and a long instruction.
+        let mut offered = outcome(Kind::Said, &long);
+        offered.offers = vec![
+            crate::offers::Offer {
+                what: crate::offers::What::Rename {
+                    old: "conveyor_infeed_photo_eye_blocked_for_too_long".into(),
+                    new: "conveyor_infeed_photo_eye_blocked_much_too_long".into(),
+                },
+                touches: vec![long.clone(), long.clone(), long.clone()],
+            },
+            crate::offers::Offer {
+                what: crate::offers::What::Instead { text: word.clone() },
+                touches: Vec::new(),
+            },
+        ];
         let states = [
+            (offered, "agent offer leave"),
             (
                 outcome(Kind::Applied, &format!("Updated {word}.st: 2 scenarios passed")),
                 "agent undo",
