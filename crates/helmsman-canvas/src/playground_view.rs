@@ -170,6 +170,8 @@ pub struct PlaygroundView {
     /// The menu a right click on the diagram opened
     /// (`crate::diagram_menu`).
     pub dmenu: crate::diagram_menu::Menu,
+    /// The question "what value?" open on a literal of the diagram.
+    pub value_ask: Option<crate::by_hand::ValueAsk>,
     /// The program's ports as last read, by the source they came from:
     /// the I/O tab and the diagram ask every frame.
     ports_memo: std::cell::RefCell<Option<(String, Vec<crate::device_form::Port>)>>,
@@ -336,6 +338,7 @@ impl PlaygroundView {
             layers: Layers::load(tweaks),
             fresh: false,
             dmenu: crate::diagram_menu::Menu::default(),
+            value_ask: None,
             ports_memo: std::cell::RefCell::new(None),
             viewer_of: String::new(),
             pending: None,
@@ -2598,7 +2601,7 @@ impl PlaygroundView {
     }
 
     /// `old` renamed to `new` in the open project, saved as one revision.
-    fn rename_everywhere(&mut self, old: &str, new: &str) {
+    pub fn rename_everywhere(&mut self, old: &str, new: &str) {
         let plan = match crate::offers::plan(&self.proj.files, old, new) {
             Ok(p) => p,
             Err(why) => {
@@ -2606,6 +2609,35 @@ impl PlaygroundView {
                 return self.log_outcome();
             }
         };
+        let record = crate::instruct::Instruct::rename_record(old, new, &plan.lines());
+        let count = plan.files.len();
+        let changed = plan.files.into_iter().map(|(f, t, _)| (f, t)).collect();
+        let undo = self.commit_by_hand(changed, &format!("Renamed {old} to {new}"), &record);
+        self.instruct.renamed(old, new, count, undo);
+        self.log_outcome();
+    }
+
+    /// A literal of the diagram written `new` (`text` is its file after),
+    /// saved as one revision.
+    pub fn set_value(&mut self, lit: &crate::by_hand::Literal, new: &str, text: String) {
+        let record = crate::by_hand::value_record(lit, new);
+        let what = format!("Set {} to {new}", lit.text);
+        let undo = self.commit_by_hand(vec![(lit.file.clone(), text)], &what, &record);
+        self.instruct.value_set(&lit.text, new, &lit.file, undo);
+        self.log_outcome();
+    }
+
+    /// Files changed by hand (a rename, a set value) into the open
+    /// project as one revision with its History entry, the way a
+    /// described change is written: unsaved edits are saved first as
+    /// their own revision, and the program runs on with the change.
+    /// Returns what Undo restores.
+    fn commit_by_hand(
+        &mut self,
+        changed: Vec<(String, String)>,
+        what: &str,
+        record: &str,
+    ) -> Option<crate::instruct::Undo> {
         if self.proj.dirty() {
             self.proj.save();
         }
@@ -2617,39 +2649,49 @@ impl PlaygroundView {
             .map(|(n, t)| (n.clone(), t.clone()))
             .collect();
         if self.proj.revisions().last().is_none_or(|r| r.files != saved) {
-            self.proj.save_as("saved before the rename", None);
+            self.proj.save_as("saved before the change by hand", None);
         }
         let before = self.proj.revisions().last().map(|r| r.n);
-        let record = crate::instruct::Instruct::rename_record(old, new, &plan.lines());
-        let count = plan.files.len();
-        // Undo is offered while the file on screen is as the rename left it.
-        let shown = plan
-            .files
+        // Undo is offered while the file on screen is as the change left it.
+        let is_st = |f: &str| helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St);
+        let shown = changed
             .iter()
-            .find(|(f, ..)| *f == self.proj.current)
-            .or_else(|| {
-                plan.files
-                    .iter()
-                    .find(|(f, ..)| helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St))
-            })
-            .or(plan.files.first())
-            .map(|(f, t, _)| (f.clone(), t.clone()));
-        for (f, text, _) in plan.files {
+            .find(|(f, _)| *f == self.proj.current)
+            .or_else(|| changed.iter().find(|(f, _)| is_st(f)))
+            .or(changed.first())
+            .cloned();
+        for (f, text) in changed {
             self.proj.files.insert(f, text);
         }
-        self.proj
-            .save_as(&format!("Renamed {old} to {new}"), Some(&record));
+        self.proj.save_as(what, Some(record));
         self.reload_running();
-        let undo = before
+        before
             .zip(shown)
             .map(|(revision, (file, text))| crate::instruct::Undo {
                 project: self.proj.open.clone(),
                 file,
                 revision,
                 text,
-            });
-        self.instruct.renamed(old, new, count, undo);
-        self.log_outcome();
+            })
+    }
+
+    /// What block `n` of the diagram lets the engineer change by hand
+    /// ([`crate::by_hand`]): nothing in a read-only example, or while the
+    /// diagram is older than the code.
+    fn by_hand_target(&self, n: helmsman_diagram::NodeId) -> Option<crate::by_hand::Target> {
+        if self.assign_write().is_err() {
+            return None;
+        }
+        let v = self.viewer.as_ref().filter(|v| v.src == self.proj.build_src())?;
+        crate::by_hand::target(v.diagram(), n, &|l| self.proj.locate(l), &self.proj.files)
+    }
+
+    /// Opens the question for a name or a value.
+    fn by_hand_ask(&mut self, t: crate::by_hand::Target) {
+        match t {
+            crate::by_hand::Target::Name(n) => self.devices_ui.renaming = Some((n.clone(), n)),
+            crate::by_hand::Target::Value(l) => self.value_ask = Some(crate::by_hand::ValueAsk::new(l)),
+        }
     }
 
     /// Why Undo is off now, if it is.
@@ -2896,14 +2938,15 @@ impl PlaygroundView {
         if let Some(crate::devices::DeviceAct::Rename(plan)) =
             self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
         {
-            for (f, text, _) in plan.files {
-                if let Some(t) = self.proj.files.get_mut(&f) {
-                    *t = text;
-                }
+            self.rename_everywhere(&plan.old, &plan.new);
+        }
+        if let Some(mut ask) = self.value_ask.take() {
+            let mut open = true;
+            match ask.ui(&ui.ctx().clone(), chrome, &self.proj.files, &mut open) {
+                Some(text) => self.set_value(&ask.lit, ask.text.trim(), text),
+                None if open => self.value_ask = Some(ask),
+                None => {}
             }
-            self.proj
-                .note(format!("Renamed {} to {}.", plan.old, plan.new), false);
-            self.edited(f64::NEG_INFINITY);
         }
         if self.devices_ui.assigning.is_some() {
             self.assign_context();
@@ -3808,7 +3851,24 @@ impl Body for PlaygroundView {
             if let Some(n) = self.dmenu.take_chat() {
                 self.chat_about_node(n, chrome);
             }
+            if let Some(n) = self.dmenu.take_edit_query() {
+                let t = self.by_hand_target(n);
+                self.dmenu.set_edit(t);
+            }
             self.map_inputs(ui, area, &reads);
+            // A double click on an input's block is "Simulate this input"
+            // (above); its name is in the right-click menu.
+            let asked = self
+                .viewer
+                .as_mut()
+                .and_then(|v| v.edit_ask.take())
+                .filter(|_| self.sim_popup.is_none());
+            if let Some(t) = asked
+                .and_then(|n| self.by_hand_target(n))
+                .or_else(|| self.dmenu.take_edit())
+            {
+                self.by_hand_ask(t);
+            }
             if let Some(line) = jump {
                 match self.proj.locate(line) {
                     Some((file, l)) => self.goto(&file, l, chrome),
@@ -3858,6 +3918,8 @@ impl PlaygroundView {
         let mut chat = crate::assign_ui::RowChat {
             full: self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS,
             asked: Vec::new(),
+            rename_off: self.assign_write().err(),
+            rename: Vec::new(),
         };
         // What the diagram says of each point; nothing while there is none.
         let cards = self.viewer.as_ref().map(crate::st_view::Viewer::output_cards);
@@ -4016,6 +4078,10 @@ impl PlaygroundView {
         for name in chat.asked {
             self.chat_about_signal(&name, chrome);
         }
+        if let Some(name) = chat.rename.pop() {
+            let name = crate::by_hand::spelled(&self.proj.files, &name);
+            self.devices_ui.renaming = Some((name.clone(), name));
+        }
         for (port, ask) in asks {
             self.assign_ask(port, ask);
         }
@@ -4132,17 +4198,28 @@ impl PlaygroundView {
             .collect();
         // The heading shares the signals' row: on a line of its own it
         // and the slider left the plot the smallest part of the panel.
-        // The rows scroll past a quarter of the panel: an Agent's program
-        // has dozens of points, and unbounded their rows took the whole
-        // panel and left the plot no height (Nick, 2026-11-22).
-        let rows_h = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
-        egui::ScrollArea::vertical()
+        // The rows wrap, and scroll past a third of the tab: an Agent's
+        // program has dozens of points, and unbounded their rows took the
+        // whole panel and left the plot no height (Nick, 2026-11-22; the
+        // third, 2026-11-23).
+        // Whole rows only: a cap that cuts a row in half shows a sliver.
+        let (row, gap) = (
+            (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).ceil(),
+            ui.spacing().item_spacing.y,
+        );
+        let cap = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
+        let rows = ((cap + gap) / (row + gap)).floor().max(1.0);
+        let rows_h = rows * (row + gap) - gap;
+        let legend = egui::ScrollArea::vertical()
             .id_salt("pg-trend-signals")
             .max_height(rows_h)
             .show(ui, |ui| {
                 // Room for the scroll bar, or the panel grows to fit it.
                 ui.set_max_width(ui.available_width() - 12.0);
                 ui.horizontal_wrapped(|ui| {
+                    // A button that does not fit moves to the next row
+                    // whole; left to wrap its text it became a sliver.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.label(RichText::new("Signals").strong().color(t.muted))
                         .tip(format!(
                             "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
@@ -4154,15 +4231,16 @@ impl PlaygroundView {
                         } else {
                             "Click to pin it to the trend."
                         };
-                        if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
-                            .tip(tip)
-                            .clicked()
-                        {
+                        let b =
+                            crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(tip);
+                        chrome.hit(format!("trend signal {}", name.to_ascii_lowercase()), b.rect);
+                        if b.clicked() {
                             self.session.trend.toggle(name);
                         }
                     }
                 });
             });
+        chrome.hit("trend signals", legend.inner_rect);
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
         let plot = self.trend_plot(ui, chrome);
@@ -4598,9 +4676,9 @@ pub fn window_label(ms: u64) -> String {
 /// Width of a lane's label column, which is also its drag handle.
 const LANE_HANDLE_W: f32 = 88.0;
 
-/// The Trend tab's signal buttons take at most this share of its height
-/// before they scroll, so the plot keeps the rest.
-const SIGNAL_ROWS_SHARE: f32 = 0.25;
+/// The Trend tab's signal buttons wrap, and take at most this share of its
+/// height before they scroll, so the plot keeps the rest.
+const SIGNAL_ROWS_SHARE: f32 = 1.0 / 3.0;
 /// ... and never less than one row of them.
 const SIGNAL_ROWS_MIN: f32 = 34.0;
 

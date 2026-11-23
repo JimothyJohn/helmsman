@@ -75,6 +75,10 @@ pub struct RowChat {
     pub full: bool,
     /// The points it was chosen on this frame.
     pub asked: Vec<String>,
+    /// Why "Rename…" is off, if it is (a read-only project); `None`: on.
+    pub rename_off: Option<String>,
+    /// The points "Rename…" was chosen on this frame.
+    pub rename: Vec<String>,
 }
 
 /// A right-click menu on a point's row or card in the I/O tab: `anchor`
@@ -100,6 +104,18 @@ pub fn row_menu(
         };
         if crate::devices::menu_item(ui, chrome, "menu chat about", "Chat about this", !chat.full, tip) {
             chat.asked.push(name.to_string());
+        }
+        if crate::devices::menu_item(
+            ui,
+            chrome,
+            "menu rename io",
+            "Rename…",
+            chat.rename_off.is_none(),
+            chat.rename_off.as_deref().unwrap_or(
+                "Renames this everywhere in the project, the wiring and the tests with the program.",
+            ),
+        ) {
+            chat.rename.push(name.to_string());
         }
         if let Some(m) = m
             && let Some(a) = port_items(ui, chrome, m)

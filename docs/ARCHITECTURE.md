@@ -3418,11 +3418,31 @@ the end of this section.
   Chat about this while `Viewer::chat_ok` (the diagram is of the text the
   host's files hold; a box always), and a program port's block has the
   io.map items. Both hosts draw `Menu`; none of its items changes the
-  code. On the diagram the user moves blocks (`diagram.layout`), folds,
-  zooms, selects and switches inputs (the simulation's virtual inputs, a
-  box's forces); code changes are typed or asked of the Agent.
+  program's logic. On the diagram the user moves blocks (`diagram.layout`),
+  folds, zooms, selects and switches inputs (the simulation's virtual
+  inputs, a box's forces); logic changes are typed or asked of the Agent.
   The removed code edits, with what they taught, are recorded in
   `docs/decisions/diagram-edits.md`.
+  Names and set values are changed by hand (`diagram-names-values`, Nick
+  2026-11-23, `by_hand.rs`). `by_hand::target` says what a block offers: the
+  variable a Read, Write, Access, function block call or FOR names, spelled
+  as the program spells it, or the literal a Const is (an operator drawn
+  with its one literal stands for it), found in its file by
+  `helmsman_iec::literal_at` at the block's position, so a diagram older
+  than the files offers no value. The menu asks the host for it one frame
+  after it opens (`Menu::take_edit_query`, `set_edit`) and shows "Rename…"
+  or "Set value…" last; a double click asks the same (`Viewer::edit_ask`),
+  except on an input's block in the simulation, where it stays "Simulate
+  this input". A name goes through the Devices tab's rename question and
+  `device_form::rename_plan` (the name of a program, function block or
+  function is left alone: `rename_ident`); a value through
+  `by_hand::set_value`, which takes one literal (`is_literal`), replaces
+  that literal's characters and refuses a project that built before and
+  would not after. The I/O rows have "Rename…" too (`assign_ui::row_menu`).
+  Every one is saved as a described change is: one revision with its Agent
+  page, the outcome and Undo in the Describe tab (`rename_everywhere`,
+  `set_value` and, on the page, `commit_by_hand`; on a box `save_agent`).
+  The Devices tab's own Rename… is saved the same way now.
 
 ## Explain mode (`explain-mode`, built)
 

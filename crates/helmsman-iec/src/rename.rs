@@ -41,9 +41,13 @@ pub fn rename_ident(src: &str, old: &str, new: &str) -> Result<(String, usize), 
     }
     let mut at = Vec::new();
     let mut prev_dot = false;
+    // The name of a program, function block or function is not a
+    // variable's, even when one is called the same.
+    let mut prev_pou = false;
     for (t, p) in &toks {
         if let Tok::Ident(w) = t
             && !prev_dot
+            && !prev_pou
             && *w == want
             && let Some(line) = starts.get(p.line as usize - 1)
         {
@@ -56,6 +60,8 @@ pub fn rename_ident(src: &str, old: &str, new: &str) -> Result<(String, usize), 
             }
         }
         prev_dot = *t == Tok::Dot;
+        prev_pou =
+            matches!(t, Tok::Ident(w) if matches!(w.as_str(), "PROGRAM" | "FUNCTION_BLOCK" | "FUNCTION"));
     }
     let mut out = String::with_capacity(src.len());
     let mut last = 0;
@@ -81,6 +87,19 @@ mod tests {
     use super::rename_ident;
 
     const SRC: &str = "PROGRAM latch\nVAR_INPUT\n  start : BOOL; (* start button *)\n  stop : BOOL;\nEND_VAR\nVAR_OUTPUT\n  motor : BOOL;\nEND_VAR\nVAR\n  t : TON;\nEND_VAR\n// start is in this comment too\nmotor := (START OR motor) AND NOT stop; { start }\nt(IN := start);\nmotor := t.start;\nEND_PROGRAM\n";
+
+    #[test]
+    fn a_program_called_as_the_variable_keeps_its_name() {
+        let src = "PROGRAM lamp\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := TRUE;\nEND_PROGRAM\nFUNCTION_BLOCK Lamp\nEND_FUNCTION_BLOCK\n";
+        let (out, n) = rename_ident(src, "lamp", "beacon").unwrap();
+        assert_eq!(n, 2, "{out}");
+        assert!(out.starts_with("PROGRAM lamp\n"), "{out}");
+        assert!(out.contains("FUNCTION_BLOCK Lamp\n"), "{out}");
+        assert!(
+            out.contains("  beacon : BOOL;") && out.contains("beacon := TRUE;"),
+            "{out}"
+        );
+    }
 
     #[test]
     fn renames_every_use_and_nothing_else() {

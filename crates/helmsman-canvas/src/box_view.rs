@@ -132,6 +132,8 @@ pub struct BoxView {
     /// The diagram's right-click menu: the chat and what io.map can take
     /// (`crate::assign`); the code is changed in the editor.
     pub dmenu: crate::diagram_menu::Menu,
+    /// The question "what value?" open on a literal of the diagram.
+    pub value_ask: Option<crate::by_hand::ValueAsk>,
     /// The program's ports as last read, by the text they came from: the
     /// diagram and the I/O tab ask every frame.
     ports_memo: std::cell::RefCell<Option<(String, Vec<crate::device_form::Port>)>>,
@@ -362,6 +364,7 @@ impl BoxView {
             last_pick: None,
             io_open: std::collections::BTreeSet::new(),
             dmenu: crate::diagram_menu::Menu::default(),
+            value_ask: None,
             ports_memo: std::cell::RefCell::new(None),
             open_at: None,
             #[cfg(target_arch = "wasm32")]
@@ -1788,7 +1791,49 @@ impl BoxView {
         }
     }
 
-    fn rename_everywhere(&mut self, old: &str, new: &str) {
+    /// A literal of the diagram written `new` (`text` is its file after),
+    /// saved on the box with its History entry.
+    pub fn set_value(&mut self, lit: &crate::by_hand::Literal, new: &str, text: String) {
+        let Some(project) = self.projects.open.as_ref().map(|o| o.name.clone()) else {
+            return;
+        };
+        let before = self.projects.history.last().map(|r| r.n);
+        let record = crate::by_hand::value_record(lit, new);
+        self.projects.save_agent(&lit.file, &text, &record, &[]);
+        let undo = before.map(|revision| crate::instruct::Undo {
+            project,
+            file: lit.file.clone(),
+            revision,
+            text,
+        });
+        self.instruct.value_set(&lit.text, new, &lit.file, undo);
+        self.log_agent();
+    }
+
+    /// What block `n` of the diagram lets the engineer change by hand
+    /// ([`crate::by_hand`]): nothing for someone who may not write, or
+    /// while the diagram's lines are not the open project's.
+    fn by_hand_target(&self, n: helmsman_diagram::NodeId) -> Option<crate::by_hand::Target> {
+        if self.assign_write().is_err() {
+            return None;
+        }
+        let v = self.view.as_ref()?;
+        let (_, _, files) = self.agent_files()?;
+        let locate = box_locate(&v.src, &files, self.diagram_running());
+        crate::by_hand::target(v.diagram(), n, &locate, &files)
+    }
+
+    /// Opens the question for a name or a value.
+    fn by_hand_ask(&mut self, t: crate::by_hand::Target) {
+        match t {
+            crate::by_hand::Target::Name(n) => self.devices_ui.renaming = Some((n.clone(), n)),
+            crate::by_hand::Target::Value(l) => self.value_ask = Some(crate::by_hand::ValueAsk::new(l)),
+        }
+    }
+
+    /// `old` renamed to `new` in the open project, saved on the box in
+    /// every file with one History entry.
+    pub fn rename_everywhere(&mut self, old: &str, new: &str) {
         let files: crate::scope::Files = self.loaded_files().into_iter().collect();
         let plan = match crate::offers::plan(&files, old, new) {
             Ok(p) => p,
@@ -1955,12 +2000,16 @@ impl BoxView {
         }
         if let Some(crate::devices::DeviceAct::Rename(plan)) =
             self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
-            && let Some(o) = &mut self.projects.open
         {
-            for (f, text, _) in plan.files {
-                if let Some(b) = o.bufs.get_mut(&f).filter(|b| b.loaded) {
-                    b.text = text;
-                }
+            self.rename_everywhere(&plan.old, &plan.new);
+        }
+        if let Some(mut ask) = self.value_ask.take() {
+            let files = self.agent_files().map(|(_, _, f)| f).unwrap_or_default();
+            let mut open = true;
+            match ask.ui(&ui.ctx().clone(), chrome, &files, &mut open) {
+                Some(text) => self.set_value(&ask.lit, ask.text.trim(), text),
+                None if open => self.value_ask = Some(ask),
+                None => {}
             }
         }
         if self.devices_ui.assigning.is_some() {
@@ -3339,6 +3388,8 @@ impl Body for BoxView {
         let mut chat = crate::assign_ui::RowChat {
             full: self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS,
             asked: Vec::new(),
+            rename_off: self.assign_write().err(),
+            rename: Vec::new(),
         };
         let known = &self.devices_ui.wired;
         // What the diagram says of each point; nothing while there is none.
@@ -3504,6 +3555,11 @@ impl Body for BoxView {
         for name in chat.asked {
             self.chat_about_signal(&name, chrome);
         }
+        if let Some(name) = chat.rename.pop() {
+            let files = self.agent_files().map(|(_, _, f)| f).unwrap_or_default();
+            let name = crate::by_hand::spelled(&files, &name);
+            self.devices_ui.renaming = Some((name.clone(), name));
+        }
         for (port, ask) in asks {
             self.assign_ask(port, ask);
         }
@@ -3567,6 +3623,17 @@ impl Body for BoxView {
         }
         if let Some(n) = self.dmenu.take_chat() {
             self.chat_about_node(n, chrome);
+        }
+        if let Some(n) = self.dmenu.take_edit_query() {
+            let t = self.by_hand_target(n);
+            self.dmenu.set_edit(t);
+        }
+        let asked = self.view.as_mut().and_then(|v| v.edit_ask.take());
+        if let Some(t) = asked
+            .and_then(|n| self.by_hand_target(n))
+            .or_else(|| self.dmenu.take_edit())
+        {
+            self.by_hand_ask(t);
         }
         if let Some((at, line)) = jump {
             match at {

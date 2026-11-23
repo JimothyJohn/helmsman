@@ -300,6 +300,9 @@ pub struct Viewer {
     pub chat_ok: bool,
     /// The right click the host has not taken yet.
     pub gesture: Option<crate::diagram_menu::Gesture>,
+    /// A double click on a block that names a variable or is a literal,
+    /// which the host has not taken yet ([`crate::by_hand`]).
+    pub edit_ask: Option<NodeId>,
     /// What io.map can do with each of the program's inputs and outputs
     /// (the host sets it each frame): the diagram's menu on the block of a
     /// port offers "Assign to device I/O…", since it changes io.map and not
@@ -667,6 +670,7 @@ impl Viewer {
             change: None,
             chat_ok: false,
             gesture: None,
+            edit_ask: None,
             assign: Vec::new(),
             folds,
             opened: std::collections::BTreeSet::new(),
@@ -2411,9 +2415,28 @@ impl Viewer {
             let into = response
                 .interact_pointer_pos()
                 .and_then(|p| self.instance_at(cam, p));
-            match into {
-                Some(k) => self.open(k),
-                None => self.cams[self.scope].fitted = false,
+            // A block that names a variable or is a literal asks for its
+            // new name or value (while the diagram is of the host's text).
+            let by_hand = response
+                .interact_pointer_pos()
+                .filter(|_| self.chat_ok)
+                .and_then(|p| self.hit_at(cam, p))
+                .filter(|n| {
+                    crate::by_hand::literal_node(self.diagram(), *n).is_some()
+                        || self.diagram().nodes.get(n.0 as usize).is_some_and(|n| {
+                            matches!(
+                                n.kind,
+                                NodeKind::Read { .. }
+                                    | NodeKind::Write { .. }
+                                    | NodeKind::Access { .. }
+                                    | NodeKind::For { .. }
+                            )
+                        })
+                });
+            match (into, by_hand) {
+                (Some(k), _) => self.open(k),
+                (None, Some(n)) => self.edit_ask = Some(n),
+                (None, None) => self.cams[self.scope].fitted = false,
             }
         }
         // A primary drag that starts on a block moves it, on a region's

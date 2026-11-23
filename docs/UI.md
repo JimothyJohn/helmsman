@@ -13,7 +13,14 @@ this; change it here first when a decision changes.
   holds Chat about this and the io.map items (Assign to device I/O…, Back
   to simulated I/O), none of which changes the code. What was built and why it
   went: docs/decisions/diagram-edits.md. (The node-graph Lab
-  editor is gone.)
+  editor is gone.) **Names and set values are the exception** (Nick,
+  2026-11-23: "I do want to be able to change set values, labels, and names
+  on the visual panel, but I don't want to manipulate the logic"): Rename…
+  on a block that names a variable and on an I/O row, Set value… on a
+  constant or a timer's preset, a double click for either, and the code
+  follows. Each is saved as one revision with a History entry, as a
+  described change is, and Undo takes it back. The label is the variable's
+  name; a label of its own is a later layer (TODO.md `label-layer`).
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the
   page. Same screens, same buttons; the source is a setting, not a mode.
