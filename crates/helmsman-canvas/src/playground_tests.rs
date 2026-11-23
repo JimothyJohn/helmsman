@@ -1388,7 +1388,7 @@ fn asking_needs_a_key_or_the_proxy_and_one_answer_at_a_time() {
     assert_eq!(chat.proxy, Proxy::No);
     assert_eq!(
         chat.send("why?", &[]).unwrap_err(),
-        "The Agent is not available in this build."
+        "Describing a change is not available in this build."
     );
     chat.take_env(Some(KEY.into()));
     let (seq, req) = chat.send("why?", &[]).unwrap();

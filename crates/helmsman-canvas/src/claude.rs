@@ -980,7 +980,7 @@ pub enum Proxy {
 }
 
 /// Said where no route exists: no proxy, no free chat, no machine key.
-pub const UNAVAILABLE_TEXT: &str = "The Agent is not available in this build.";
+pub const UNAVAILABLE_TEXT: &str = "Describing a change is not available in this build.";
 
 /// The relay's error type for a free chat that is closed.
 pub const FREE_CLOSED: &str = "free_chat_closed";
