@@ -58,7 +58,7 @@ pub const MAX_PINS: usize = 16;
 /// People whose pins the box keeps.
 pub const MAX_OWNERS: usize = 256;
 /// How long a page's ask keeps a signal tracked.
-pub const LEASE: Duration = Duration::from_secs(24 * 3600);
+pub const LEASE: Duration = Duration::from_hours(24);
 /// The most the pins file is read.
 pub const MAX_PINS_FILE: usize = 64 * 1024;
 /// The longest owner or signal name read back from the pins file.

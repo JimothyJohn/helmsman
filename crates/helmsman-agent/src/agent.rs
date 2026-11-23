@@ -45,7 +45,7 @@ impl Default for Budget {
             steps: 24,
             output_tokens: 200_000,
             tools_per_turn: 16,
-            time: Duration::from_secs(15 * 60),
+            time: Duration::from_mins(15),
         }
     }
 }

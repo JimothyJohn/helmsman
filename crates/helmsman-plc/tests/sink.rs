@@ -1130,6 +1130,9 @@ fn sinks_publish_what_fires_end_to_end() {
 }
 
 #[test]
+// 1_704_067_200 is 2024-01-01T00:00Z as a Unix timestamp: seconds read
+// truer than clippy's `from_hours(473352)`.
+#[allow(clippy::duration_suboptimal_units)]
 fn wall_clock_before_2024_is_untrusted() {
     use helmsman_plc::sink::wall_ms;
     use std::time::{SystemTime, UNIX_EPOCH};
