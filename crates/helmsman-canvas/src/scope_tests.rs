@@ -535,6 +535,36 @@ mod in_the_page {
     use crate::scope::Scope;
     use crate::st_view::Pick;
 
+    /// Nick, 2026-11-22: asked to change the lights with a requirement test
+    /// open, the Agent answered that the test was all it could edit and the
+    /// program was out of its reach. A test is the program's check, sent
+    /// with every instruction; the program is what an instruction changes.
+    /// So with a test open (or lines of one selected) the scope is the
+    /// program, even where the program's name sorts after the test's.
+    #[test]
+    fn with_a_requirement_test_open_the_agent_edits_the_program() {
+        let mut v = mine();
+        v.proj.open_file("test_lamp.st");
+        assert_eq!(v.proj.current, "test_lamp.st");
+        assert_eq!(v.scope(), Scope::File("main.st".into()));
+        v.selection = Some(("test_lamp.st".into(), 2, 4));
+        assert_eq!(
+            v.scope(),
+            Scope::File("main.st".into()),
+            "a selection in the test"
+        );
+        v.selection = None;
+        // `traffic.st` after `test_axis_cycle.st` in name order.
+        let text = v.proj.files.remove("main.st").unwrap();
+        v.proj.files.insert("traffic.st".into(), text);
+        v.proj.add_file("test_axis_cycle.st", FOLLOWS.into());
+        v.proj.open_file("test_axis_cycle.st");
+        assert_eq!(v.scope(), Scope::File("traffic.st".into()));
+        // A project of tests alone has no program to change.
+        v.proj.files.remove("traffic.st");
+        assert_eq!(v.scope(), Scope::NewProject);
+    }
+
     #[test]
     fn the_instruction_goes_with_its_scope_in_an_envelope() {
         let mut v = mine();
