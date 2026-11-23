@@ -655,7 +655,7 @@ mod in_the_page {
         assert!(!v.proj.dirty(), "saved");
         let r = v.proj.revisions().last().unwrap();
         assert_eq!(v.proj.revisions().len(), revs + 1, "one revision");
-        assert_eq!(r.what, "Agent: comment it");
+        assert_eq!(r.what, "Described: comment it");
         assert!(
             r.page
                 .as_deref()
@@ -688,7 +688,7 @@ mod in_the_page {
         assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
         assert_eq!(v.proj.files["main.st"], said);
         let r = v.proj.revisions().last().unwrap();
-        assert_eq!(r.what, "Agent: say why");
+        assert_eq!(r.what, "Described: say why");
         assert_eq!(v.proj.revisions().len(), revs + 2);
         // Unsaved edits are saved first, as their own revision.
         v.proj.current_text_mut().unwrap().push_str("(* mine *)\n");

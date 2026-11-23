@@ -405,7 +405,7 @@ fn save(
     match p.save(name, file, text.as_bytes(), if_match) {
         Ok(version) => {
             let event = match page {
-                Some(_) => format!("took the Agent's answer into {file}"),
+                Some(_) => format!("took the described change into {file}"),
                 None => format!("saved {file}"),
             };
             let revision = p.record_revision(name, &by(req), &event, page).ok();

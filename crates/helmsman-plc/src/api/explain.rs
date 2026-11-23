@@ -251,10 +251,7 @@ fn skipped(b: &Blocked) -> Json {
 /// agent's, streamed. A client that goes away does not stop the turn.
 pub fn serve(chat: &Chat, stream: &mut Conn, job: Job) {
     let Some(_slot) = chat.slot() else {
-        let _ = http::respond(
-            stream,
-            &Response::error(503, "the agent is busy with other chats; try again"),
-        );
+        let _ = http::respond(stream, &Response::error(503, "busy with other chats; try again"));
         return;
     };
     let mut alive = http::start_stream(stream).is_ok();

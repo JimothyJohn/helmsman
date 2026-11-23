@@ -3,7 +3,7 @@
 The editor reads your Structured Text for patterns that compile and still
 cause trouble on a real machine. Each finding is listed under the editor
 as a warning, with a stable ID, the file and the line, and it is sent to
-the Agent with the compile errors when you ask it for code. The IDs are
+Helmsman with the compile errors when you ask it for code. The IDs are
 the same on the page, on a box and in the audit trail, so you can look
 one up.
 
@@ -64,8 +64,7 @@ HELMSMAN-L2.
 
 - In the editor, in the list under the code, and in the Messages tab.
   A finding that holds the code says so on its row.
-- In the Agent's answer: a finding the answer adds is sent back to the
-  Agent for another try. A finding the project already had is not blamed
+- In the answer: a finding the answer adds is sent back to Helmsman for another try. A finding the project already had is not blamed
   on the answer.
 - On a box, a deploy that holds a finding is refused before anything
   changes, and the answer lists the finding with its line.

@@ -33,4 +33,4 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | Alt ↑ | Up one level in the diagram | |
 | E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (with the pointer over the diagram) | |
 
-Reserved, not built yet: F2 / Shift F2 for the Agent.
+Reserved, not built yet: F2 / Shift F2 for the Describe tab.

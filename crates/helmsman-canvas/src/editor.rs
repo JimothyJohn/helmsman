@@ -1920,7 +1920,7 @@ fn removed_rules(
             out.response.id.with(("removed", *line)),
             egui::Sense::hover(),
         );
-        let mut tip = format!("The Agent removed {n} line(s) here:");
+        let mut tip = format!("The change removed {n} line(s) here:");
         for g in gone {
             tip.push('\n');
             tip.push_str(g);

@@ -268,14 +268,14 @@ impl Card {
         let text = match answer {
             Ok(text) => text,
             Err(why) => {
-                self.line = Some(format!("The Agent did not answer: {}.", quoted_plain(why, 80)));
+                self.line = Some(format!("No answer: {}.", quoted_plain(why, 80)));
                 return;
             }
         };
         match parse(text, inputs) {
             Err(why) => {
                 self.line = Some(format!(
-                    "The Agent's answer cannot be used, so nothing is proposed. {why}"
+                    "The answer cannot be used, so nothing is proposed. {why}"
                 ));
             }
             Ok(set) if set.is_empty() => {

@@ -328,13 +328,13 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
                 .into(),
         ),
         Step::Agent => (
-            "Ask the agent",
+            "Describe a change",
             agent_step(crate::claude::FREE_CHAT_URL.is_some()).into(),
         ),
         Step::Done => (
             "That is the whole loop",
             "You made an example your own, changed it, deployed it and watched it run. The help \
-             pages go further: the tests the Agent writes with each change and how they gate \
+             pages go further: the tests written with each change and how they gate \
              Deploy, remote I/O in Devices, and the keyboard shortcuts."
                 .into(),
         ),
@@ -346,12 +346,12 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
 #[must_use]
 pub fn agent_step(free: bool) -> &'static str {
     if free {
-        "The Agent tab changes the program from an instruction in plain words. Its answer is \
+        "The Describe tab changes the program from an instruction in plain words. The answer is \
          compiled and tested before it is written into the file. In the playground it is free \
-         to try during the early release. Ask for a change, for example \"keep the lamp on for \
+         to try. Ask for a change, for example \"keep the lamp on for \
          1 s and off for 2 s\", or skip this step."
     } else {
-        "The Agent tab changes the program from an instruction in plain words. Its answer is \
+        "The Describe tab changes the program from an instruction in plain words. The answer is \
          compiled and tested before it is written into the file. Ask for a change, for example \
          \"keep the lamp on for 1 s and off for 2 s\", or skip this step."
     }
@@ -518,7 +518,7 @@ pub fn ui(
                                     ui,
                                     Button::SkipStep,
                                     "Skip this step",
-                                    "Goes to the last card without asking the agent.",
+                                    "Goes to the last card without asking for a change.",
                                     false,
                                 );
                             }

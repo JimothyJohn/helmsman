@@ -773,8 +773,8 @@ fn every_refusal_says_why_nothing_was_sent_and_the_button_comes_back() {
         ),
         (
             502,
-            r#"{"error":"the agent service could not be reached. Nothing was sent"}"#,
-            "Not sent: the agent service could not be reached",
+            r#"{"error":"the answer service could not be reached. Nothing was sent"}"#,
+            "Not sent: the answer service could not be reached",
         ),
         (403, r#"{"error":"x"}"#, "Not sent: only an engineer can publish"),
         (

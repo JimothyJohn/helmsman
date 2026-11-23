@@ -413,7 +413,7 @@ fn send(addr: SocketAddr, method: &str, path: &str, bearer: Option<&str>, ctype:
     }
 }
 
-/// The chat route's setup with `relay` as the agent service.
+/// The chat route's setup with `relay` as the answer service.
 fn setup(relay: &FakeRelay) -> chat::Setup {
     let mut rc = relay::Config::new(relay.url(), RELAY_TOKEN.into(), "v7".into());
     rc.timeouts = Timeouts {

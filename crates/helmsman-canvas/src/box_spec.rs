@@ -117,7 +117,7 @@ impl BoxSpec {
             None => {
                 p.refused = Some(if status == 201 {
                     format!(
-                        "The box kept {name} but did not say where, so the agent was not asked. Nothing was sent to the agent."
+                        "The box kept {name} but did not say where, so nothing was asked. Nothing was sent."
                     )
                 } else {
                     crate::device_vendor::refusal_words(status, body, name)

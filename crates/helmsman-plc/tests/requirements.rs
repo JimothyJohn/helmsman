@@ -597,7 +597,7 @@ fn data(text: &str) -> Json {
 fn agent_writes(b: &Bench) -> usize {
     b.history()
         .iter()
-        .filter(|r| r["what"].as_str().unwrap_or("").starts_with("the agent wrote"))
+        .filter(|r| r["what"].as_str().unwrap_or("").starts_with("Helmsman wrote"))
         .count()
 }
 
@@ -865,7 +865,7 @@ fn an_unreachable_relay_is_offline_and_the_requirement_is_written_down() {
     assert_eq!(d["stop"], "offline");
     assert_eq!(
         d["why"],
-        "the agent is offline; the requirement is written down with no test yet"
+        "the answer service is offline; the requirement is written down with no test yet"
     );
 }
 

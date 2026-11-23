@@ -888,14 +888,14 @@ impl FilesUi {
                     )
                     .tip(match &a {
                         Act::DeleteProject(_) | Act::DeleteFile(_) => "Deletes it. There is no undo.",
-                        Act::UseAnswer { .. } => "Saves the edits here, then opens the agent's code.",
+                        Act::UseAnswer { .. } => "Saves the edits here, then opens the answer's code.",
                         _ => "Opens it. The edits here are lost.",
                     });
                 chrome.hit("confirm yes", yes.rect);
                 if let Act::UseAnswer { name, text, .. } = &a {
                     let drop = ui
                         .add(egui::Button::new("Drop them, then open").min_size(tall))
-                        .tip("Opens the agent's code. The edits here are lost.");
+                        .tip("Opens the answer's code. The edits here are lost.");
                     chrome.hit("confirm drop", drop.rect);
                     if drop.clicked() {
                         out = Some(Act::UseAnswer {
