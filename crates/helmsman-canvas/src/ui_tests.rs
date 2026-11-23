@@ -4499,6 +4499,46 @@ mod simulated {
         assert_eq!(window_label(600_000), "10 min");
     }
 
+    /// With a requirement test open the next instruction changes the
+    /// program, a file that is not the one on screen: the tab says which,
+    /// at the right pane's default width, and stops saying it once the
+    /// program itself is open.
+    #[test]
+    fn the_scope_line_names_the_program_while_another_file_is_open() {
+        use crate::scope::Scope;
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        h.wait(0.3);
+        let right = h.rect("right");
+        h.press("pane code");
+        h.press("tab claude");
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+        }
+        h.wait(0.3);
+        assert!(!h.has("agent scope"), "the open file is the scope");
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.add_file(
+                "test_a_long_requirement_name_for_the_lamp.st",
+                "PROGRAM test_a_long_requirement_name_for_the_lamp\nEND_PROGRAM\n".into(),
+            );
+            sim.proj.open_file("test_a_long_requirement_name_for_the_lamp.st");
+        }
+        h.wait(0.3);
+        let scope = h.app.sim.as_ref().unwrap().scope();
+        assert_eq!(scope, Scope::File("main.st".into()));
+        assert!(h.has("agent scope"));
+        assert!(!h.has("scope whole file"), "nothing narrows it");
+        let r = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
+        h.app.sim.as_mut().unwrap().proj.open_file("main.st");
+        h.wait(0.3);
+        assert!(!h.has("agent scope"));
+    }
+
     /// Card agent-scoped-edits: the Agent tab says what the next
     /// instruction may change before it is sent. A built-in example: a new
     /// project; a project of one's own: the open file (both in the box's
