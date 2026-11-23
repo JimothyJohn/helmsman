@@ -504,7 +504,7 @@ pub fn markdown() -> String {
         "| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, \
          zoomed in and framed (with the pointer over the diagram) | |\n",
     );
-    out.push_str("\nReserved, not built yet: F2 / Shift F2 for the Agent.\n");
+    out.push_str("\nReserved, not built yet: F2 / Shift F2 for the Describe tab.\n");
     out
 }
 

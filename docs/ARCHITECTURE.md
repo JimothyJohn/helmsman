@@ -76,6 +76,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-devconf` | Configuration of third-party devices over their own configuration protocols, std only with no dependencies: `moxa_e1200` is the Moxa ioLogik E1200 web console (HTTP client, form and export readers, export / form / set / restart / import / change-password) and `moxa_e1200::sim` (feature `sim`) is a simulated console for tests. A library for now: nothing in the box calls it yet. | built: against its simulator only; the real console was mapped by hand (2026-11-12) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
+| `helmsman-drawing` | Parts out of a technical drawing, no I/O and no dependencies (wasm-safe): a reader for ASCII DXF (`dxf`: group-code pairs, BLOCKS, INSERT with ATTRIB / ATTDEF, TEXT, MTEXT, LINE, LWPOLYLINE; binary DXF, other entity types and other sections are named in the result, never skipped silently; truncated or malformed input is an error value), the parts a drawing inserts with tag, part number, position, rotation and, for a block with no attributes, the text beside it (`parts`; self-inserting blocks terminate, depth and count are capped), and each part's match to a device-library record as `Matched`, `Ambiguous` or `Unknown` by exact order number or model text (`matching`; takes the library as a slice of `LibraryRecord`, built by the caller from `helmsman_project::devlib`; text beside a part never decides alone). Not wired into the canvas or the box yet (TODO.md `drawing-review`). | built: against a hand-made panel layout and hostile inputs; no vendor DXF yet (`tests/fixtures/README.md`) |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, and v2 relay-held sessions for harness profiles; HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
 | `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 | `helmsman-compat` | The release train's checker (docs/COMPAT.md): the contracts between helmsman, agent-relay, helmsman-devices and helmsman-hardware, checked black-box against a box and a relay built at any ref (a devices checkout served as the library, `agent-relay-local` in front of a stub model, the node firmware's pins against the board's netlist). Run by `scripts/compat.sh` (`make compat`); never on a box. | built: against its own tests and the four repositories at dev and live |
@@ -84,6 +85,17 @@ Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
 (`wasm-tier`) is built inside `helmsman-plc` (`wasm.rs`, the `wasm`
 feature), below.
+
+## Platforms
+
+CI builds, lints and tests the box (`helmsman-plc` and the crates it needs) on
+Linux x86_64 (`gate`), Linux aarch64 and macOS on Apple Silicon (`box (...)`
+in ci.yml) and Windows x86_64 (`box (windows-latest)`). EtherNet/IP and Modbus
+TCP run on all four. Unix-only, so absent or refused on Windows: raw Ethernet
+(`helmsman-l2`, `--dhcp`, PROFINET), the `deploy/` systemd and firstboot
+scripts and their tests, and `--time-zone` (it reads `/usr/share/zoneinfo`).
+Linux-only: the packet socket and the gpio board. Windows files take the
+account's ACL instead of mode bits (0600 / 0700).
 
 ## One scan, as built
 
@@ -924,7 +936,7 @@ test: a project's own CI still fails on one.
 The Requirements tab of the right panel (archived 2026-11-08) showed one row per test, green or
 red with why.
 
-The Agent tab is one path in the page and on a box (`agent-instruct`,
+The Describe tab is one path in the page and on a box (`agent-instruct`,
 crates/helmsman-canvas/src/instruct.rs; Nick 2026-11-05: no chat). The
 engineer types an instruction; the request carries the whole file in its
 scope (`scope::Scope::envelope`), the program and its errors, and the
@@ -966,7 +978,7 @@ box, Send or Stop, Undo, and a status line with the reason.
 makes the diagram something to point at. A right click on a block has the
 item, on the page and on a box; an input's or output's row will call
 `chat_about_signal(name, chrome)` on either view. Choosing it sends
-nothing: it opens the Agent tab and adds a chip to `Instruct::chips`,
+nothing: it opens the Describe tab and adds a chip to `Instruct::chips`,
 drawn above the instruction box (`instruct::chips_ui`: wrapped by hand
 and cut to the column, an x on each, at most eight, none twice). A chip
 holds the name, kind, file:line, the statement (cut at 40 lines or 2000
@@ -1001,7 +1013,7 @@ pick it; a plain click on a block picks it and makes it the whole
 selection, and a plain click on empty space or Esc clears it (Nick,
 2026-11-17). So does a click anywhere off the diagram
 (`app::clicked_off_the_diagram`, after the frame is drawn), except in the
-Agent tab and on its tab button, where the selection is being used: its
+Describe tab and on its tab button, where the selection is being used: its
 chips, and the instruction typed about it. Only a released click changes
 the selection: a press that becomes a drag (a block moved, the view
 moved, a band) leaves it as it was, and while a band is being drawn the
@@ -1265,7 +1277,7 @@ the person between screens.
   changes something, and a box desk that is not a desk at all is not
   fought over: the browser keeps it and the page says so.
 - **The Agent's conversation and the device form** (`desk-agent-and-forms`).
-  The desk also keeps the Agent tab's turns with the box's agent and the
+  The desk also keeps the Describe tab's turns with the box's agent and the
   last instruction's outcome (`desk::Conversation`), and a half-filled New
   device form with its points (`devices::NewDevice`; the EDS by its file
   name in the project, never its bytes). The conversation is capped at
@@ -3288,7 +3300,7 @@ the end of this section.
   button can be drawn twice: both report to `PlaygroundView::hold` and the
   input is on while either is held. A right-click on a card offers "Chat
   about this" (`assign_ui::row_menu`, `chat_about_signal`: a chip for the
-  point on the Agent tab, nothing sent) above the port's assignment
+  point on the Describe tab, nothing sent) above the port's assignment
   items. An input set by hand while the simulation is stopped or paused
   is set all the same (`PlaygroundView::set_by_hand`: the panel's values
   outlive Stop, so that is how a machine is set up before it starts), and
@@ -3482,7 +3494,7 @@ Markdown. `--relay-design-agent V` names the profile (default
 ## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
 
 For someone in trouble who did not write the program (Nick, 2026-11-07,
-interview). The box's Agent tab has two modes, "Change the program" (the
+interview). The box's Describe tab has two modes, "Change the program" (the
 instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`),
 switched by a two-glyph toggle (< > and ?) at the tab's top right; the
 heading names the mode, with a dot for the agent's state beside it (green
@@ -3701,7 +3713,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
   laptop's, a tablet's and a phone's width).
 - **Name the I/O first** (`io_names.rs`; Nick, 2026-11-14): while an
-  instruction makes a new project (`Scope::NewProject`), the Agent tab
+  instruction makes a new project (`Scope::NewProject`), the Describe tab
   carries a fold where the engineer lists the program's points: a name,
   input or output, BOOL / INT / REAL, and what it is in a few words
   (`PlaygroundView::new_io`). `send_instruction` puts the list ahead of
@@ -3711,7 +3723,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   written from such a list. Contracts in `io_names.rs`'s tests and
   `ui_tests/io_names.rs` (the pane keeps its width with long names).
 - **Spec mode** (`spec_mode.rs`; Nick, 2026-11-15): with `Scope::NewProject`
-  the Agent tab offers "From a spec…", a window (`spec_mode::form_ui`)
+  the Describe tab offers "From a spec…", a window (`spec_mode::form_ui`)
   where a specification is pasted or `.md` / `.txt` files are added
   (`Spec::add_file` holds `helmsman_project::check_text`'s rules and
   refuses with the reason; the wasm picker is `web::pick_spec_file`, which
@@ -3746,7 +3758,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   is not built. Contracts in `spec_mode_tests.rs` and
   `ui_tests/spec_mode.rs`.
   - **On a box** (`box_spec.rs`, `box_view.rs`; Nick, 2026-11-15, "in both"):
-    the same window and review with `Spec::on_box`. The Agent tab's "From a
+    the same window and review with `Spec::on_box`. The Describe tab's "From a
     spec…" is for an engineer (`BoxView::spec_entry_blocked`) with the
     agent reachable, a project open or not. `Spec` also takes PDFs
     (`Pdf`): the box's caps (`BOX_PDF` 2 MiB, `BOX_PDFS` 5, `BOX_HISTORY`
@@ -3833,7 +3845,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   with no `NAME_ok`, a red requirement test. Each is one line of what
   went wrong, the better way when a rule knows one, and two buttons. Fix
   it (`PlaygroundView::fix_noticed`) puts an instruction that carries the
-  failure in the Agent's box, shows the Agent tab and sends it through the
+  failure in the Agent's box, shows the Describe tab and sends it through the
   usual checks; Not now hides it until something else is wrong. The words
   come from rules, not the model, so watching spends no model turn; only
   the click does. `watch::Watching` holds it back while an edit is
@@ -3868,20 +3880,22 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   its scope and the earlier instructions for the file (`instruct.rs`,
   above); a checked answer is written into the file and never run. On a
   built-in example the program becomes a project of its own, named once.
-- **The key.** Pasted into a password field, held in page memory; an
-  explicit "Remember on this device" (off by default, with a warning)
-  keeps it in `localStorage`, and unticking or Forget removes it. It goes
-  only into the `x-api-key` header of a request to
-  `https://api.anthropic.com/v1/messages` with
-  `anthropic-dangerous-direct-browser-access: true`; never into a URL, a
-  body or a log (`ApiKey`'s and the request's `Debug` redact it). The
-  page's CSP allows `connect-src 'self' https://api.anthropic.com` only.
+- **The key and the model.** The page never asks for a key and never
+  offers a model. The model is always `claude-sonnet-5-5` on the routes
+  that name one (`claude::MODEL`, with the server-side refusal fallback).
+  The ways to an answer, in order: the local proxy (below), the free chat
+  (below), and in a native build only the machine's `ANTHROPIC_API_KEY`
+  (`Route::Direct`, `x-api-key` to `api.anthropic.com`; `ApiKey`'s and the
+  request's `Debug` redact it). With none of them the Describe tab says it is
+  not available in this build. A key an earlier build stored in
+  `localStorage` is removed on load. The page's CSP allows
+  `connect-src 'self'` and, on a free-chat build, the relay's origin.
 - **Local proxy** (`scripts/playground-serve.sh`): the playground built
   for `/`, served on 127.0.0.1 by helmsman-agent's `playground-proxy`
   example, whose `POST /proxy/v1/messages` adds `x-api-key` from
   `ANTHROPIC_API_KEY` and streams the answer back (the agent crate's
   rustls client, no new crate). The page finds it (`GET /proxy/health`,
-  asked only when served from localhost) and hides the key field. It
+  asked only when served from localhost) and the page answers through it. It
   requires its own `Host`, a `x-helmsman-playground: 1` header (forcing a
   preflight it never grants), a same-origin `Origin` when one is sent,
   1 MiB bodies; it passes on only `anthropic-version` and `anthropic-beta`
@@ -3892,16 +3906,16 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   (`claude::Route::Free`, the relay's `docs/demo.md`): the body is the
   turns and nothing else, since the relay there pins the prompt, the model
   and the output cap, and earlier turns are dropped oldest first to fit
-  its limits. The Agent tab then has no key field and no model picker,
-  and one notice under the box saying the text goes to a hosted model. The
+  its limits. The Describe tab has no key field and no model picker in any
+  state, and one notice under the box saying the text goes to a hosted model. The
   page asks the relay once whether the chat is open
   (`GET /demo/v1/status`); closed or out of reach, the tab says so in
   place of the box and asks one question (which service the visitor would
   want), sent once to `POST /demo/v1/survey`. The build puts the relay's
-  origin in the page's `connect-src` in place of the model API's, so a
-  page on the free chat cannot reach the model API at all. A local proxy,
+  origin in the page's `connect-src`, so no page can reach the model API
+  at all. A local proxy,
   when there is one, still wins. Tests: `playground_tests.rs` ("the free
-  chat"), `the_free_chat_tab_has_no_key_and_keeps_the_panel_width`
+  chat"), `the_agent_tab_has_no_key_and_no_model_and_keeps_the_panel_width`
   (`ui_tests.rs`).
 - **The Agent ladder** (`agent_ladder_tests.rs`, ignored: it spends
   tokens). The page's instruction loop (`instruct`, `verify`, the
@@ -4150,8 +4164,8 @@ fault.
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; the box serves HTTPS with a self-signed certificate whose fingerprint the person checks once (journal, ⋯ menu), the cookie is `Secure` over it, and plain HTTP is served only from the box's own host | built (`canvas-token`, `box-https`; `helmsman-plc/tests/https.rs`, `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
-| playground visitor ↔ Claude | the visitor's own key, program and question | the key only in `x-api-key` to api.anthropic.com (redacted `Debug`, page CSP `connect-src` to that host and self), memory unless "remember" is ticked; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run; or the local proxy holds the key | built (`playground`) |
-| playground visitor ↔ free chat | the program and the instruction; one survey answer | a page built with `HELMSMAN_FREE_CHAT_URL` holds no key and sends only the turns, to that one origin (page CSP `connect-src` to it and self, no credentials, no referrer); what a stranger can make it cost is bounded by the relay's demo function, not by the page (its own credit-limited key, one pinned profile, counters that close it: the relay's `docs/demo.md`); the answer is checked like any other and never run | page side built, off until the published page is built with the address (`free-chat`) |
+| playground visitor ↔ Claude | the program and question | the page holds no key (the local proxy or the free chat's relay holds it; a native build reads the machine's `ANTHROPIC_API_KEY`, redacted in `Debug`); page CSP `connect-src` to self and the relay; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run | built (`playground`) |
+| playground visitor ↔ free chat | the program and the instruction; one survey answer | a page built with `HELMSMAN_FREE_CHAT_URL` sends only the turns, to that one origin (page CSP `connect-src` to it and self, no credentials, no referrer); what a stranger can make it cost is bounded by the relay's demo function, not by the page (its own credit-limited key, one pinned profile, counters that close it: the relay's `docs/demo.md`); the answer is checked like any other and never run | page side built, off until the published page is built with the address (`free-chat`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 

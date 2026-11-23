@@ -322,7 +322,7 @@ fn an_instruction_updates_the_open_file_keeps_a_revision_and_says_so() {
     let all = v.proj.revisions();
     assert_eq!(all.len(), revs + 1);
     let r = all.last().unwrap();
-    assert_eq!(r.what, "Agent: say why the lamp is on");
+    assert_eq!(r.what, "Described: say why the lamp is on");
     let p = r.page.as_deref().unwrap();
     assert!(
         p.starts_with("Instruction: say why the lamp is on\nFile: main.st\nWhy: it says so.\n"),
@@ -462,7 +462,7 @@ fn an_answer_that_does_not_compile_is_never_written() {
     assert_eq!(o.kind, Kind::Refused, "{o:?}");
     assert_eq!(
         o.status,
-        "main.st is unchanged: the Agent's answer did not pass its checks in 3 tries."
+        "main.st is unchanged: the answer did not pass its checks in 3 tries."
     );
     assert!(o.problems.iter().any(|p| p.contains("does not compile")), "{o:?}");
     assert_eq!(v.proj.files, before);
@@ -578,7 +578,7 @@ fn undo_restores_the_version_before_the_change_and_keeps_it_in_history() {
         format!("restored revision {}", u.revision)
     );
     assert!(
-        all.iter().any(|r| r.what == "Agent: comment it"),
+        all.iter().any(|r| r.what == "Described: comment it"),
         "the change stays in History"
     );
     let o = v.instruct.outcome.clone().unwrap();
@@ -802,52 +802,6 @@ fn the_code_written_so_far_is_the_files_block_and_never_a_scenario() {
     );
 }
 
-#[test]
-fn the_stage_follows_the_answer_order() {
-    use crate::instruct::{Stage, stage, why_line};
-    assert_eq!(stage(false, ""), Stage::Waiting);
-    assert_eq!(stage(true, ""), Stage::Planning, "thinking");
-    assert_eq!(stage(false, "Why: the lamp latc"), Stage::Planning);
-    assert_eq!(why_line("Why: the lamp latc"), None, "a line still coming");
-    assert_eq!(
-        why_line("Why: the lamp latches.\n").as_deref(),
-        Some("the lamp latches.")
-    );
-    assert_eq!(why_line("The lamp.\n"), None, "no Why line");
-    let code = "Why: x.\n\n```st\nPROGRAM p\nEND_PROGRAM\n";
-    assert_eq!(stage(true, code), Stage::Writing(2));
-    let one = format!("{code}```\n\n```st scenario\nPROGRAM t\n");
-    assert_eq!(stage(true, &one), Stage::Checks(1));
-    assert_eq!(
-        stage(true, &format!("{one}```\n```st scenario\n")),
-        Stage::Checks(2)
-    );
-    assert_eq!(
-        stage(true, "I cannot do that: the program has no lamp."),
-        Stage::Planning,
-        "a refusal never claims to write"
-    );
-}
-
-proptest::proptest! {
-    /// The status line never steps back as an answer streams in, cut
-    /// anywhere: it moves from one stage to the next, never between them.
-    #[test]
-    fn the_stage_only_moves_forward(cuts in proptest::collection::vec(0usize..400, 0..12)) {
-        use crate::instruct::stage;
-        let answer = format!("{}\n\n```st scenario\nPROGRAM test_b\nEND_PROGRAM\n```\n", st(LAMP));
-        let mut at: Vec<usize> = cuts.into_iter().map(|c| c.min(answer.len())).filter(|c| answer.is_char_boundary(*c)).collect();
-        at.push(answer.len());
-        at.sort_unstable();
-        let mut last = stage(true, "");
-        for c in at {
-            let now = stage(true, &answer[..c]);
-            proptest::prop_assert!(now >= last, "{last:?} then {now:?} at {c}");
-            last = now;
-        }
-    }
-}
-
 proptest::proptest! {
     /// What the tab shows only ever grows as the answer streams in, and
     /// ends as the whole file: a draft never jumps back or flickers.
@@ -917,13 +871,13 @@ fn the_estimate_is_a_range_that_grows_with_the_file_and_the_clock_says_when_it_i
 /// relay refuses a body with any field but the messages.
 #[test]
 fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
-    use crate::claude::{Free, NoStore, Takes, Turn};
+    use crate::claude::{Free, Takes, Turn};
     let turn = Turn {
         agent: Some("edits"),
         quick: true,
     };
     let body_with = |status: &str| {
-        let mut chat = crate::claude::Chat::new(Box::new(NoStore));
+        let mut chat = crate::claude::Chat::new();
         chat.receive(Incoming::Proxy(false));
         chat.set_free_base("https://relay.example");
         chat.receive(Incoming::Takes(Takes::from_status(status)));
@@ -955,13 +909,7 @@ fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
         json!({"messages": msgs, "agent": "edits", "thinking": "off"})
     );
     // A key or the proxy answers every turn the same way: nothing added.
-    let direct = crate::claude::request_turn(
-        &crate::claude::Route::Proxy,
-        crate::claude::Model::default(),
-        &[],
-        "q",
-        turn,
-    );
+    let direct = crate::claude::request_turn(&crate::claude::Route::Proxy, &[], "q", turn);
     let body: serde_json::Value = serde_json::from_str(&direct.body).unwrap();
     assert_eq!(body.get("agent"), None);
     assert_eq!(body.get("thinking"), None);

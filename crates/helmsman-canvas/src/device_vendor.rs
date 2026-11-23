@@ -104,7 +104,7 @@ pub fn classify(name: &str) -> Result<File, String> {
         "pdf" => Ok(File::Pdf),
         "eds" | "xml" | "iodd" | "txt" | "md" => Ok(File::Text),
         _ => Err(format!(
-            "{} is not a file the agent can read here: pick an EDS, an IODD (XML), a PDF manual, or a text file.",
+            "{} is not a file Helmsman can read here: pick an EDS, an IODD (XML), a PDF manual, or a text file.",
             clean(&safe, 60, false)
         )),
     }
@@ -126,7 +126,7 @@ pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
     let over = size > max as f64;
     over.then(|| {
         format!(
-            "{shown} is {:.1} MB: {what}. Nothing was sent to the agent. Send the pages that matter, or the EDS.",
+            "{shown} is {:.1} MB: {what}. Nothing was sent. Send the pages that matter, or the EDS.",
             size / 1_048_576.0
         )
     })
@@ -139,7 +139,7 @@ pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
 pub fn refusal_words(status: u16, body: &str, name: &str) -> String {
     let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
     let why = clean(j["error"].as_str().unwrap_or_default(), 200, false);
-    let none = "Nothing was sent to the agent.";
+    let none = "Nothing was sent.";
     let (_, text) = match status {
         0 => (
             Tone::Error,
@@ -384,11 +384,11 @@ impl VendorUi {
     pub fn offer(&self) -> Result<(), String> {
         let c = self.context();
         if !c.on_box {
-            return Err("The agent runs on a box. This page has none to ask.".into());
+            return Err("Reading a vendor's file needs a box. This page has none to ask.".into());
         }
         if let Err(why) = c.engineer {
             return Err(if why.is_empty() {
-                "Sign in as an engineer to hand the agent a file.".into()
+                "Sign in as an engineer to hand Helmsman a file.".into()
             } else {
                 why
             });
@@ -397,7 +397,7 @@ impl VendorUi {
         match self.stage {
             Stage::Idle => Ok(()),
             Stage::Picking | Stage::Uploading(_) => Err("Waiting for the file to reach the box.".into()),
-            Stage::Waiting(_) => Err("The agent is reading it.".into()),
+            Stage::Waiting(_) => Err("Reading it.".into()),
         }
     }
 
@@ -470,10 +470,7 @@ impl VendorUi {
         };
         if bytes.is_empty() {
             self.stage = Stage::Idle;
-            return self.say(
-                Tone::Error,
-                format!("{shown} is empty. Nothing was sent to the agent."),
-            );
+            return self.say(Tone::Error, format!("{shown} is empty. Nothing was sent."));
         }
         if let Some(why) = pick_refusal(name, bytes.len() as f64) {
             self.stage = Stage::Idle;
@@ -499,16 +496,14 @@ impl VendorUi {
         };
         let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
         let name = self.sent_name.clone();
-        let none = "Nothing was sent to the agent.";
+        let none = "Nothing was sent.";
         let (tone, text) = match status {
             201 => {
                 let Some(id) = j["id"].as_u64() else {
                     self.stage = Stage::Idle;
                     return self.say(
                         Tone::Error,
-                        format!(
-                            "The box kept {name} but did not say where, so the agent was not asked. {none}"
-                        ),
+                        format!("The box kept {name} but did not say where, so nothing was asked. {none}"),
                     );
                 };
                 let Some(t) = &self.target else {
@@ -517,7 +512,7 @@ impl VendorUi {
                 };
                 self.ask = Some(ask_for(t, id, kind));
                 self.asked_for = Some(t.address.clone());
-                self.say(Tone::Info, format!("The box has {name}. Asking the agent…"));
+                self.say(Tone::Info, format!("The box has {name}. Asking Helmsman…"));
                 return;
             }
             _ => (Tone::Error, refusal_words(status, body, &name)),
@@ -536,7 +531,7 @@ impl VendorUi {
                 let name = self.sent_name.clone();
                 self.say(
                     Tone::Info,
-                    format!("The agent is reading {name}. Its profile shows here when it has one."),
+                    format!("Reading {name}. Its profile shows here when it has one."),
                 );
             }
             Err(why) => {
@@ -546,7 +541,7 @@ impl VendorUi {
                 self.say(
                     Tone::Error,
                     format!(
-                        "The box has {name}, but the agent could not be asked: {}. Press the button again.",
+                        "The box has {name}, but Helmsman could not be asked: {}. Press the button again.",
                         clean(&why, 200, false)
                     ),
                 );
@@ -563,7 +558,7 @@ impl VendorUi {
         if want != seq {
             // Another message went, or the turn was stopped from the page.
             self.stage = Stage::Idle;
-            return self.say(Tone::Error, "The agent was stopped.".into());
+            return self.say(Tone::Error, "Stopped.".into());
         }
         let Some(end) = end else { return };
         self.stage = Stage::Idle;
@@ -571,9 +566,9 @@ impl VendorUi {
             End::Done { stop, why } if stop == "end_turn" => {
                 let said = clean(text, MAX_SAID, true);
                 let text = if said.is_empty() {
-                    "The agent finished without a profile and without a word.".to_string()
+                    "Finished without a profile and without a word.".to_string()
                 } else {
-                    format!("The agent finished. It said: {said}")
+                    format!("Finished. Helmsman said: {said}")
                 };
                 let _ = why;
                 self.say(Tone::Done, text);
@@ -582,16 +577,13 @@ impl VendorUi {
                 let why = why.clone().unwrap_or_else(|| format!("it stopped ({stop})"));
                 self.say(
                     Tone::Error,
-                    format!("The agent did not finish: {}.", clean(&why, 200, false)),
+                    format!("Did not finish: {}.", clean(&why, 200, false)),
                 );
             }
             End::Failed(why) => {
-                self.say(
-                    Tone::Error,
-                    format!("The agent could not answer: {}.", clean(why, 200, false)),
-                );
+                self.say(Tone::Error, format!("No answer: {}.", clean(why, 200, false)));
             }
-            End::Stopped => self.say(Tone::Error, "The agent was stopped.".into()),
+            End::Stopped => self.say(Tone::Error, "Stopped.".into()),
         }
     }
 
@@ -610,7 +602,7 @@ impl VendorUi {
         let me = self.target.as_ref().is_some_and(|x| x.address == target.address);
         let busy = me && !matches!(self.stage, Stage::Idle);
         let tip = match &offer {
-            Ok(()) => "Pick the vendor's file for this device: an EDS, an IODD, or a manual (a PDF up to 2 MB, text up to 1 MB). The box keeps it in memory, and the agent reads it through the box's relay and proposes a profile with the channel names. You check the names above before anything is saved.".to_string(),
+            Ok(()) => "Pick the vendor's file for this device: an EDS, an IODD, or a manual (a PDF up to 2 MB, text up to 1 MB). The box keeps it in memory, and Helmsman reads it and proposes a profile with the channel names. You check the names above before anything is saved.".to_string(),
             Err(why) => why.clone(),
         };
         ui.horizontal_wrapped(|ui| {

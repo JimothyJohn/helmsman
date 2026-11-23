@@ -18,6 +18,8 @@ cargo check -q -p helmsman-plc --no-default-features --all-targets
 # The canvas for the browser: clippy, not check, so a warning that only
 # shows on wasm32 (the web.rs glue is wasm-only) fails here (2026-11-08).
 cargo clippy -q --target wasm32-unknown-unknown -p helmsman-canvas -- -D warnings
+# helmsman-drawing (the DXF reader) runs in the browser too: clippy for wasm32.
+cargo clippy -q --target wasm32-unknown-unknown -p helmsman-drawing -- -D warnings
 # helmsman-iec without std (the edge node's build, docs/EDGE.md Phase 0):
 # clippy, so a std-only call fails here and not on the Xtensa toolchain.
 cargo clippy -q -p helmsman-iec --no-default-features --features libm --target thumbv7em-none-eabihf -- -D warnings
@@ -32,5 +34,10 @@ case "$(uname -s)" in
   Darwin) cargo clippy -q -p helmsman-l2 --target aarch64-unknown-linux-gnu -- -D warnings ;;
   *) ;;
 esac
+# The Windows half (code behind `cfg(not(unix))` / `cfg(windows)`) is not
+# linted here: ring and rusqlite build C, which needs MSVC's cl on the
+# target, so `cargo clippy --target x86_64-pc-windows-msvc` stops in their
+# build scripts on any Mac or Linux. CI's `box (windows-latest)` job is its
+# lint (2026-11-23).
 cargo clippy -q -p helmsman-proto --no-default-features --target thumbv7em-none-eabihf -- -D warnings
 cargo clippy -q -p helmsman-nodecore --target thumbv7em-none-eabihf -- -D warnings

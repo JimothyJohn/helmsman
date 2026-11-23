@@ -54,8 +54,8 @@ for its name and key.
 ## The diagram
 
 The diagram is the program, drawn from its Structured Text and lit from
-the controller as it runs. The code is written in the editor or asked of
-the Agent; on the diagram you read the program, move its blocks and
+the controller as it runs. The code is written in the editor or described in
+the Describe tab; on the diagram you read the program, move its blocks and
 switch its inputs. What you can do:
 
 - **Read it.** Each block is a variable, a block instance, an operator or
@@ -155,16 +155,16 @@ redrawn.
 
 ## The panes
 
-- **The left pane** holds every tab, the **Agent** first and showing when
+- **The left pane** holds every tab, the **Describe** tab first and showing when
   the page opens, so the diagram keeps the rest of the width. Drag a
   tab's glyph to the right edge of the window to dock it in a pane on the
-  right, beside the one on the left (the Code tab and the Agent side by
+  right, beside the one on the left (the Code tab and the Describe tab side by
   side, say), and drag it back onto the left pane to return it.
   <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>5</kbd> sends the tab the left pane shows to the
   right and shows the next one on the left; <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>
   shows or hides the right pane once a tab is there. The layout is kept
-  in the browser. The tabs: **Agent**, where you type what the open file
-  should do and it is updated (see [The Agent](agent.html)). **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
+  in the browser. The tabs: **Describe**, where you type what the open file
+  should do and it is updated (see [Describing a change](agent.html)). **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
   the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
@@ -205,7 +205,7 @@ redrawn.
   right-click a wired signal to rename it:
   the io.map line and every use in the program change together, listed
   before you confirm. One map may mix Modbus
-  TCP and EtherNet/IP devices. The agent reads the same listing, network
+  TCP and EtherNet/IP devices. Helmsman reads the same listing, network
   included. Under that, **Plant states**: the quantities a project's
   plant model keeps for the machine it stands in for (mark a variable
   with `{state unit=m}` on its line), each with the simulation's value

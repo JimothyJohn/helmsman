@@ -334,7 +334,7 @@ pub fn message(data: &Json) -> String {
 fn unreachable(e: &RelayError) -> String {
     match e {
         RelayError::Unreachable(_) | RelayError::Timeout | RelayError::CutOff => {
-            "the Agent could not be reached".into()
+            "the review service could not be reached".into()
         }
         RelayError::Status { status, kind, .. } if *status == 404 && kind == "unknown_agent_version" => {
             "this relay does not offer the install review".into()
@@ -342,7 +342,7 @@ fn unreachable(e: &RelayError) -> String {
         RelayError::Status { status, .. } if *status == 401 || *status == 403 => {
             "the relay refused this box's token".into()
         }
-        RelayError::Status { retryable: true, .. } => "the Agent is busy or down; try again".into(),
+        RelayError::Status { retryable: true, .. } => "the review service is busy or down; try again".into(),
         _ => "the review could not be read".into(),
     }
 }
@@ -351,10 +351,10 @@ fn unreachable(e: &RelayError) -> String {
 #[must_use]
 pub fn run(chat: Option<&Chat>, v: &Verified) -> Outcome {
     let Some(chat) = chat else {
-        return Outcome::Unread("the Agent is not set up on this box (no relay)".into());
+        return Outcome::Unread("reviews are not set up on this box (no relay)".into());
     };
     let Some(_slot) = chat.slot() else {
-        return Outcome::Unread("the Agent is busy with other requests; try again".into());
+        return Outcome::Unread("the review service is busy with other requests; try again".into());
     };
     let messages = [json!({
         "role": "user",
@@ -577,11 +577,11 @@ mod tests {
         let note = audit_note(&json!({ "review": reviewed(&v) }));
         assert_eq!(note, "; review: not refused, risk low: A stack light.");
         let note = audit_note(
-            &json!({ "review": not_reviewed("the Agent could not be reached", Some("engineer (PIN)")) }),
+            &json!({ "review": not_reviewed("the review service could not be reached", Some("engineer (PIN)")) }),
         );
         assert_eq!(
             note,
-            "; installed without a review (the Agent could not be reached) by engineer (PIN)"
+            "; installed without a review (the review service could not be reached) by engineer (PIN)"
         );
         assert_eq!(
             audit_note(&json!({ "review": not_asked() })),

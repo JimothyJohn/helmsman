@@ -1615,6 +1615,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-drawing"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "helmsman-iec"
 version = "0.1.0"
 dependencies = [

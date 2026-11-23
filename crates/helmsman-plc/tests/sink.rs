@@ -549,8 +549,11 @@ fn statuses_and_garbage_are_classified() {
 #[test]
 fn a_closed_port_is_a_connect_error() {
     let url = Url::parse(&format!("http://127.0.0.1:{}/", closed_port())).unwrap();
+    // Windows retries a refused loopback connect for about two seconds
+    // before it reports the refusal, so 2 s is a timeout there.
+    let wait = Duration::from_secs(if cfg!(windows) { 10 } else { 2 });
     assert!(matches!(
-        post(&url, Duration::from_secs(2), true),
+        post(&url, wait, true),
         Outcome::Retry(SendError::Connect(_))
     ));
 }

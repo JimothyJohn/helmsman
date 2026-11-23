@@ -500,7 +500,7 @@ fn accept(req: &Request, ctx: &Ctx) -> Response {
         .record_revision(
             &a.project,
             &by(req),
-            &format!("saved {file} from the agent's proposal"),
+            &format!("saved {file} from Helmsman's proposal"),
             None,
         )
         .ok();
@@ -557,22 +557,22 @@ fn relay_refusal(e: &helmsman_agent::publish::Error) -> (u16, String, String, bo
                 409 | 429 | 502 | 503 => (*status, message.clone()),
                 401 | 403 | 404 => (
                     502,
-                    "the agent service does not offer publishing to this box: the agent version it asks for is not served to it. Nothing was sent"
+                    "the answer service does not offer publishing to this box: the version it asks for is not served to it. Nothing was sent"
                         .to_string(),
                 ),
-                _ => (502, "the agent service could not publish it".to_string()),
+                _ => (502, "the answer service could not publish it".to_string()),
             };
             (code, words, kind.clone(), *retryable)
         }
         Error::Unreachable(_) => (
             502,
-            "the agent service could not be reached. Nothing was sent".into(),
+            "the answer service could not be reached. Nothing was sent".into(),
             "relay_unreachable".into(),
             true,
         ),
         Error::Malformed => (
             502,
-            "the agent service's answer was not understood".into(),
+            "the answer service's answer was not understood".into(),
             "relay_malformed".into(),
             false,
         ),
@@ -595,7 +595,7 @@ fn publish(req: &Request, ctx: &Ctx) -> Response {
             if ctx.projects.is_none() {
                 "no projects on this box (--projects)"
             } else {
-                "publishing goes through the agent service, which this box has none of (--relay)"
+                "publishing goes through the answer service, which this box has none of (--relay)"
             },
             &[],
             "device profile publish: not available",

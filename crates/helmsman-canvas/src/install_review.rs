@@ -133,8 +133,8 @@ impl BundleReview {
     #[must_use]
     pub fn headline(&self) -> String {
         match self.state {
-            State::Reviewed => "The Agent read this bundle and found nothing to refuse. The approval below still applies in full.".into(),
-            State::Refused => "The Agent advises against installing this bundle. Nothing was installed.".into(),
+            State::Reviewed => "Helmsman read this bundle and found nothing to refuse. The approval below still applies in full.".into(),
+            State::Refused => "Helmsman advises against installing this bundle. Nothing was installed.".into(),
             State::NotReviewed => match &self.went_on_by {
                 Some(by) => format!("This bundle was not reviewed ({}). {by} went on without a review.", self.why),
                 None => format!("This bundle was not reviewed: {}.", self.why),
@@ -230,9 +230,10 @@ mod tests {
         assert!(r.read());
         let r = BundleReview::parse(&json!({ "state": "refused", "verdict": verdict() })).unwrap();
         assert!(r.headline().contains("advises against"));
-        let r =
-            BundleReview::parse(&json!({ "state": "not_reviewed", "why": "the Agent could not be reached" }))
-                .unwrap();
+        let r = BundleReview::parse(
+            &json!({ "state": "not_reviewed", "why": "the review service could not be reached" }),
+        )
+        .unwrap();
         assert!(!r.read());
         assert!(r.headline().contains("could not be reached"));
         let r = BundleReview::parse(

@@ -349,7 +349,7 @@ fn a_refusal_from_the_relay_is_one_quiet_line() {
     });
     h.wait(0.3);
     assert!(!h.has("start card") && h.has("start line"));
-    assert!(h.drew("did not answer"));
+    assert!(h.drew("No answer:"));
     assert!(h.has("start send"), "and it can be asked again");
 }
 

@@ -17,6 +17,12 @@ this; change it here first when a decision changes.
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the
   page. Same screens, same buttons; the source is a setting, not a mode.
+- **Runs in every engine, with or without a GPU.** Chromium (Chrome, Edge),
+  Firefox and WebKit (Safari on a Mac or iPad) each need WebGL2. `make
+  canvas-smoke BROWSER=all` and `NOGPU=1` drive all three headless, with
+  hardware drawing and in software, on every PR (the `canvas-browsers` job).
+  A browser with no WebGL2 shows a notice (loading/loading.js) in place of
+  the app.
 - **Two screens: Editor and Monitor.** No Lab, Live, Site, Demo, Andon or
   Playground modes.
 - **Navigation is never lost.** The header is always there: project name,
@@ -260,7 +266,7 @@ this; change it here first when a decision changes.
   against the one request's cap, and Build; the draft comes back on a
   review screen (the name, the I/O, each requirement passed or not, the
   untested ones, the reason) and nothing is made until Accept. On a box
-  (Nick, 2026-11-15; `crate::box_spec`) the Agent tab offers it to an
+  (Nick, 2026-11-15; `crate::box_spec`) the Describe tab offers it to an
   engineer with a project open or not, the window also takes `.pdf`
   files with the box's caps beside the total, the review lists the
   inputs that need a device, and Accept sends the project to the box as
@@ -333,7 +339,7 @@ this; change it here first when a decision changes.
   box; the blocks it touches are selected (Shift or Ctrl/Cmd adds). Shift
   or Ctrl/Cmd and a click toggles one block. A plain click on a block
   selects that block alone; a click on empty space, a click anywhere off
-  the diagram (the Agent tab aside, where the selection is used) or Esc
+  the diagram (the Describe tab aside, where the selection is used) or Esc
   deselects (Nick, 2026-11-17). Only a released click changes the
   selection: while the button is down the highlights stay, and a box
   being drawn shows what it touches. The proposal review's diagram takes

@@ -209,7 +209,7 @@ impl ReviewView {
     fn left(&mut self, ui: &mut egui::Ui) {
         let t = theme(ui);
         ui.heading(RichText::new("Proposals").color(t.accent))
-            .tip("Drafts the agent made. Approving one goes through the box's policy.");
+            .tip("Drafts Helmsman made. Approving one goes through the box's policy.");
         ui.separator();
         self.login_ui(ui);
         ui.separator();
@@ -454,7 +454,7 @@ impl ReviewView {
     fn install_ui(&mut self, ui: &mut egui::Ui) {
         let t = theme(ui);
         ui.label(RichText::new("Install from a marketplace").strong())
-            .tip("The box fetches the bundle from the marketplace's signed index and checks it. The Agent then reads it and can refuse. What passes becomes a draft here, approved like any other.");
+            .tip("The box fetches the bundle from the marketplace's signed index and checks it. Helmsman then reads it and can refuse. What passes becomes a draft here, approved like any other.");
         // Capped to the panel: a long address must not widen it.
         let width = (ui.available_width() - 12.0).max(80.0);
         ui.label(RichText::new("Index address").small().color(t.muted));
@@ -481,7 +481,7 @@ impl ReviewView {
             .tip(if busy {
                 "The box is fetching and reviewing the bundle."
             } else {
-                "Fetches the bundle, has the Agent read it, and makes a draft if the Agent does not refuse. Nothing runs until it is approved."
+                "Fetches the bundle, has Helmsman read it, and makes a draft if it does not refuse. Nothing runs until it is approved."
             });
         self.rects.push(("install go".into(), go.rect));
         if go.clicked() {
@@ -532,8 +532,8 @@ impl ReviewView {
             section(ui, "Bundle");
             bundle_ui(ui, o);
             if let Some(r) = o.bundle_review() {
-                section(ui, "The Agent's review")
-                    .tip("The Agent read the bundle's modules before the box made this draft. It can only describe and refuse; the approval below is the box's own.");
+                section(ui, "Helmsman's review")
+                    .tip("Helmsman read the bundle's modules before the box made this draft. It can only describe and refuse; the approval below is the box's own.");
                 review_ui(ui, &r);
             }
         }
@@ -706,7 +706,7 @@ fn header(ui: &mut egui::Ui, o: &Open) {
     }
     if let Some(n) = o.json["note"].as_str() {
         ui.label(
-            RichText::new(format!("Agent's note: {n}"))
+            RichText::new(format!("Helmsman's note: {n}"))
                 .italics()
                 .color(t.muted),
         );
@@ -810,7 +810,7 @@ fn install_result_ui(ui: &mut egui::Ui, state: &mut Review, out: &mut Out) {
             let go = ui
                 .add_enabled(engineer, egui::Button::new("Install without a review"))
                 .tip(if engineer {
-                    "Makes the draft without the Agent's reading. It is recorded as installed without a review, with who went on."
+                    "Makes the draft without Helmsman's reading. It is recorded as installed without a review, with who went on."
                 } else {
                     "Needs an engineer signed in (left panel)."
                 });

@@ -35,7 +35,7 @@ pub enum Step {
     Watch,
     /// Change the trend's window or its signals.
     Trend,
-    /// Paste a key and send an instruction, or skip.
+    /// Send an instruction, or skip.
     Agent,
     /// The closing card.
     Done,
@@ -112,8 +112,6 @@ pub struct Seen {
     pub trend: u64,
     /// Requests sent to the Agent so far.
     pub asks: u64,
-    /// The Agent has a way to answer (a key typed, or the local proxy).
-    pub keyed: bool,
     /// The trend panel is open on the Trend tab.
     pub trend_open: bool,
 }
@@ -257,8 +255,7 @@ impl Tour {
                 Step::Deploy => &["file deploy", "bar file"],
                 Step::Watch => &["io outputs", "tab io"],
                 Step::Trend => &["trend window", "bottom trend"],
-                Step::Agent if seen.keyed => &["agent instruction", "tab claude"],
-                Step::Agent => &["agent key", "tab claude"],
+                Step::Agent => &["agent instruction", "tab claude"],
             }
         };
         keys.iter().map(|k| (*k).to_string()).collect()
@@ -331,32 +328,31 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
                 .into(),
         ),
         Step::Agent => (
-            "Ask the agent",
+            "Describe a change",
             agent_step(crate::claude::FREE_CHAT_URL.is_some()).into(),
         ),
         Step::Done => (
             "That is the whole loop",
             "You made an example your own, changed it, deployed it and watched it run. The help \
-             pages go further: the tests the Agent writes with each change and how they gate \
+             pages go further: the tests written with each change and how they gate \
              Deploy, remote I/O in Devices, and the keyboard shortcuts."
                 .into(),
         ),
     }
 }
 
-/// The Agent step's words. A page built with the free chat (`free`) has no
-/// key to paste; the others run on the visitor's own.
+/// The Agent step's words. A page built with the free chat (`free`) says
+/// it is free to try; no page asks for a key.
 #[must_use]
 pub fn agent_step(free: bool) -> &'static str {
     if free {
-        "The Agent tab changes the program from an instruction in plain words. Its answer is \
+        "The Describe tab changes the program from an instruction in plain words. The answer is \
          compiled and tested before it is written into the file. In the playground it is free \
-         to try during the early release. Ask for a change, for example \"keep the lamp on for \
+         to try. Ask for a change, for example \"keep the lamp on for \
          1 s and off for 2 s\", or skip this step."
     } else {
-        "The Agent tab changes the program from an instruction in plain words. Its answer is \
-         compiled and tested before it is written into the file. In the playground it runs on \
-         your own API key, held in this page. Paste a key and ask for a change, for example \
+        "The Describe tab changes the program from an instruction in plain words. The answer is \
+         compiled and tested before it is written into the file. Ask for a change, for example \
          \"keep the lamp on for 1 s and off for 2 s\", or skip this step."
     }
 }
@@ -522,7 +518,7 @@ pub fn ui(
                                     ui,
                                     Button::SkipStep,
                                     "Skip this step",
-                                    "Goes to the last card without asking the agent.",
+                                    "Goes to the last card without asking for a change.",
                                     false,
                                 );
                             }

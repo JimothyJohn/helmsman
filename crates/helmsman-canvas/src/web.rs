@@ -17,7 +17,7 @@ use eframe::wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::box_projects::{PCall, PReq};
-use crate::claude::{Incoming, KeyStore, PROXY_HEALTH, PROXY_HELLO, Request as ClaudeRequest};
+use crate::claude::{Incoming, PROXY_HEALTH, PROXY_HELLO, Request as ClaudeRequest};
 use crate::remote::{Cmd, Gets, Inbox, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
 
@@ -505,31 +505,18 @@ async fn claude(
     }
 }
 
-/// A key the user asked this browser to remember, in `localStorage`.
-#[derive(Debug, Default)]
-pub struct LocalKeyStore;
-
-const KEY_SLOT: &str = "helmsman-playground/anthropic-api-key";
+/// An earlier build let a visitor paste an API key and keep it here. No
+/// build asks for one now, so a key left in this browser is removed.
+const OLD_KEY_SLOT: &str = "helmsman-playground/anthropic-api-key";
 
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
 }
 
-impl KeyStore for LocalKeyStore {
-    fn load(&self) -> Option<String> {
-        local_storage()?.get_item(KEY_SLOT).ok().flatten()
-    }
-
-    fn save(&mut self, key: &str) {
-        if let Some(s) = local_storage() {
-            let _ = s.set_item(KEY_SLOT, key);
-        }
-    }
-
-    fn forget(&mut self) {
-        if let Some(s) = local_storage() {
-            let _ = s.remove_item(KEY_SLOT);
-        }
+/// Removes any API key an earlier build stored in this browser.
+pub fn clear_old_key() {
+    if let Some(s) = local_storage() {
+        let _ = s.remove_item(OLD_KEY_SLOT);
     }
 }
 

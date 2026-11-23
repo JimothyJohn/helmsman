@@ -466,14 +466,10 @@ fn head(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) -> bool
     let mut open = false;
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("HELMSMAN").color(t.accent).size(22.0).strong());
-        // A phone has no room for it beside the button.
-        if ui.max_rect().width() > 480.0 {
-            ui.label(RichText::new("early release").color(t.muted).size(SMALL));
-        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let r = ui
                 .add(egui::Button::new(RichText::new("Open the editor").size(BODY)))
-                .tip("The program, its live diagram, its files and the Agent, on this same tank.");
+                .tip("The program, its live diagram, its files and the Describe tab, on this same tank.");
             chrome.hit("front open editor", r.rect);
             open = r.clicked();
         });
@@ -493,7 +489,7 @@ fn head(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) -> bool
     ui.add(
         egui::Label::new(
             RichText::new(
-                "The Agent wrote this tank's program from the request below. Each proof is a test that breaks something on the machine and checks the program keeps it safe. Break it yourself with the buttons under the tank.",
+                "Helmsman wrote this tank's program from the request below. Each proof is a test that breaks something on the machine and checks the program keeps it safe. Break it yourself with the buttons under the tank.",
             )
             .color(t.muted)
             .size(BODY),
@@ -514,7 +510,7 @@ fn heading(ui: &mut egui::Ui, t: &crate::theme::Theme, text: &str) {
 /// the program being written, and once it is, who wrote it and when, with
 /// the program behind a fold.
 fn asked(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &Front, now: f64) {
-    heading(ui, t, "What the Agent was asked");
+    heading(ui, t, "What Helmsman was asked");
     let names: Vec<&str> = IO.iter().map(|(n, _)| *n).collect();
     let r = ui
         .add(
@@ -553,11 +549,9 @@ fn asked(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &Fr
             )]
             let so_far = (part * lines as f64) as usize;
             ui.label(
-                RichText::new(format!(
-                    "The Agent is writing the program: line {so_far} of {lines}"
-                ))
-                .color(t.muted)
-                .size(BODY),
+                RichText::new(format!("Writing the program: line {so_far} of {lines}"))
+                    .color(t.muted)
+                    .size(BODY),
             );
         });
         return;
@@ -568,7 +562,7 @@ fn asked(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &Fr
     let r = ui.add(
         egui::Label::new(
             RichText::new(format!(
-                "The Agent wrote the program from this on {}, in {} requests and {} seconds. It is shown as written.",
+                "Helmsman wrote the program from this on {}, in {} requests and {} seconds. It is shown as written.",
                 recorded("on"),
                 recorded("requests"),
                 recorded("seconds")
@@ -930,7 +924,7 @@ fn foot(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) -> bool
             .add(egui::Button::new(
                 RichText::new("Change this program yourself").size(BODY).strong(),
             ))
-            .tip("Opens the editor on this tank. Tell the Agent what to change in plain words; every change is proved the same way before it lands.");
+            .tip("Opens the editor on this tank. Say what to change in plain words; every change is proved the same way before it lands.");
         chrome.hit("front change", r.rect);
         open = r.clicked();
         ui.label(

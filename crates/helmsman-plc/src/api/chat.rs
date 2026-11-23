@@ -296,10 +296,10 @@ fn set(link: &Mutex<Link>, state: State, reason: Option<(String, String)>) {
 
 fn status_json(l: &Link) -> Json {
     let message = match l.state {
-        State::Unknown => "the agent has not been reached yet",
-        State::Online => "the agent is online",
+        State::Unknown => "the answer service has not been reached yet",
+        State::Online => "the answer service is online",
         State::Offline => {
-            "the agent is offline: installed modules keep running; chat takes param changes only, like \"set conveyor speed to 2.5\""
+            "the answer service is offline: installed modules keep running; chat takes param changes only, like \"set conveyor speed to 2.5\""
         }
     };
     json!({
@@ -788,10 +788,7 @@ impl Chat {
         let id = id.as_str();
         let Some(_slot) = self.slot() else {
             self.release(id, conv, fresh);
-            let _ = http::respond(
-                stream,
-                &Response::error(503, "the agent is busy with other chats; try again"),
-            );
+            let _ = http::respond(stream, &Response::error(503, "busy with other chats; try again"));
             return;
         };
         let mut alive = http::start_stream(stream).is_ok();
@@ -964,7 +961,7 @@ impl Chat {
         send(
             "done",
             &json!({
-                "stop": "offline", "why": "the agent is offline; this message was read by rule",
+                "stop": "offline", "why": "the answer service is offline; this message was read by rule",
                 "steps": 0, "output_tokens": 0, "proposals": proposals,
             }),
         );

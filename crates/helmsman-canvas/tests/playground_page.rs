@@ -1,8 +1,8 @@
 //! The published playground (docs/playground/, served by GitHub Pages
 //! from master) is a page that opens in playground mode, loads only what
-//! is beside it, and may talk only to its own site and one other origin:
-//! the relay's demo function when it is built for the free chat, else the
-//! Claude API for a visitor's own key.
+//! is beside it, and may talk only to its own site and, when it is built
+//! for the free chat, the relay's demo function. It holds no key, so the
+//! Claude API is never among the origins.
 
 use std::path::Path;
 
@@ -20,9 +20,6 @@ fn csp(html: &str) -> &str {
     &rest[start..start + end]
 }
 
-/// The model API, for a page that takes the visitor's own key.
-const MODEL_API: &str = "https://api.anthropic.com";
-
 /// Whether `origin` is a function URL of the relay's demo (the free chat):
 /// `https://<label>.lambda-url.<region>.on.aws`, nothing after it.
 fn is_free_chat(origin: &str) -> bool {
@@ -35,8 +32,8 @@ fn is_free_chat(origin: &str) -> bool {
         })
 }
 
-/// The page may connect to itself and to exactly one other origin, which
-/// `other` accepts.
+/// The page may connect to itself and to at most one other origin, which
+/// `other` accepts (`None`: the page may connect to itself only).
 fn check(html: &str, other: impl Fn(&str) -> bool) {
     assert!(html.contains("<canvas id=\"canvas\" data-mode=\"playground\">"));
     let csp = csp(html);
@@ -55,13 +52,15 @@ fn check(html: &str, other: impl Fn(&str) -> bool) {
         .collect();
     assert_eq!(connect.len(), 1, "one connect-src: {csp}");
     let sources: Vec<&str> = connect[0].split_whitespace().skip(1).collect();
-    assert_eq!(sources.len(), 2, "itself and one origin: {csp}");
-    assert_eq!(sources[0], "'self'", "{csp}");
     assert!(
-        other(sources[1]),
-        "connect-src may not name {}: {csp}",
-        sources[1]
+        matches!(sources.len(), 1 | 2),
+        "itself and at most one origin: {csp}"
     );
+    assert_eq!(sources[0], "'self'", "{csp}");
+    assert!(!csp.contains("anthropic"), "no way to the model API: {csp}");
+    if let Some(o) = sources.get(1) {
+        assert!(other(o), "connect-src may not name {o}: {csp}");
+    }
     assert!(!csp.contains('*') && !csp.contains("http:"), "{csp}");
 }
 
@@ -86,7 +85,7 @@ fn only_a_demo_function_url_passes_for_the_free_chat() {
         "https://.lambda-url.us-east-1.on.aws",
         "https://a.b.lambda-url.us-east-1.on.aws",
         "https://evil.example",
-        MODEL_API,
+        "https://api.anthropic.com",
         "'self'",
     ] {
         assert!(!is_free_chat(bad), "{bad}");
@@ -196,11 +195,13 @@ fn the_app_tells_the_screen_how_starting_went() {
 
 #[test]
 fn the_source_page_is_locked_to_the_api() {
-    // The source names the model API; a build for the free chat replaces
-    // it with the relay's origin (scripts/build-playground.sh, which stops
-    // if this line is not the one it knows).
+    // The source allows itself only; a build for the free chat adds the
+    // relay's origin (scripts/build-playground.sh, which stops if this
+    // line is not the one it knows).
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    check(&read(&root.join("playground.html")), |o| o == MODEL_API);
+    check(&read(&root.join("playground.html")), |o| {
+        panic!("{o} in the source page")
+    });
 }
 
 #[test]
@@ -208,9 +209,8 @@ fn the_published_page_is_built_and_complete() {
     const PUBLIC_URL: &str = "/playground/";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/playground");
     let html = read(&dir.join("index.html"));
-    // Published on the free chat, or on the visitor's own key: one of the
-    // two, never both, and nothing else.
-    check(&html, |o| o == MODEL_API || is_free_chat(o));
+    // Published on the free chat and nothing else.
+    check(&html, is_free_chat);
     // trunk's loader, from the Pages path, and the files it names are there.
     assert!(
         !html.contains("/helmsman/playground/"),

@@ -238,19 +238,21 @@ impl State {
     /// Keeps `password` for device `id`: directory 0700, file 0600,
     /// written whole beside the old one and renamed over it.
     fn keep(&self, id: &str, password: &str) -> io::Result<()> {
-        use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&self.setup.dir)?;
+        // Windows has no mode bits: the directory and file take the ACL of
+        // the account's profile directory they sit in.
+        let mut dir = fs::DirBuilder::new();
+        dir.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
+        dir.create(&self.setup.dir)?;
         let path = self.secret_path(id);
         let tmp = path.with_extension("password.tmp");
         let _ = fs::remove_file(&tmp);
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        let mut f = opts.open(&tmp)?;
         f.write_all(password.as_bytes())?;
         f.write_all(b"\n")?;
         f.sync_all()?;

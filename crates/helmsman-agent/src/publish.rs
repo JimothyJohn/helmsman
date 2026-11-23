@@ -56,9 +56,9 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unreachable(why) => write!(f, "the agent service could not be reached: {why}"),
+            Self::Unreachable(why) => write!(f, "the answer service could not be reached: {why}"),
             Self::Refused { message, .. } => f.write_str(message),
-            Self::Malformed => f.write_str("the agent service's answer was not understood"),
+            Self::Malformed => f.write_str("the answer service's answer was not understood"),
         }
     }
 }

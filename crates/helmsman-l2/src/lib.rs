@@ -17,7 +17,10 @@
 //! [`parse_bpf`] (the walk over a BPF read buffer) and [`wanted`] are
 //! plain functions, tested without a device.
 
+// The socket code below is Unix-only (helmsman-l2 does nothing on Windows).
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::time::Duration;
 
 /// A MAC address.
@@ -117,8 +120,10 @@ pub struct Addresses {
 
 /// How long a `recv` waits when the caller gives no time at all: a
 /// timeout of zero would mean "for ever" to both kernels.
+#[cfg(unix)]
 const SHORTEST_WAIT: Duration = Duration::from_millis(1);
 
+#[cfg(unix)]
 fn timeval(d: Duration) -> (i64, i64) {
     let d = d.max(SHORTEST_WAIT);
     (
@@ -127,6 +132,7 @@ fn timeval(d: Duration) -> (i64, i64) {
     )
 }
 
+#[cfg(unix)]
 fn permission(e: io::Error, what: &str) -> io::Error {
     if e.kind() == io::ErrorKind::PermissionDenied {
         io::Error::new(io::ErrorKind::PermissionDenied, format!("{what}: {e}"))
@@ -258,6 +264,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_zero_timeout_becomes_the_shortest_wait() {
         assert_eq!(timeval(Duration::ZERO), (0, 1000));

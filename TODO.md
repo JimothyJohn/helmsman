@@ -4,6 +4,13 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
+- [ ] **With 3D dropped, do device graphics and a drawing's placement come to the 2D canvas, or go too?** — The overhaul had four parts: the 3D canvas (dropped 2026-11-22), navigation, device-library graphics on connections, and drawings. Two cards were built on the 3D device level and now have nowhere to land: `device-glyphs` (a line-art glyph per device family where a device or a wired part shows) and `drawing-place-wire` (a drawing's devices placed as in the cabinet, its wires as connections). In 2D the glyphs could go where a device already shows today (the Devices and I/O tabs, a point's read and write blocks in the diagram), and placement would need a new 2D panel view of its own. The drawing cards that do not need a map (`drawing-review`: a drawing's parts into devices and a draft io.map) are not affected and go on.
+  options: glyphs in the tabs and diagram, no placement view | both, with a 2D panel view | drop both
+  result: `device-glyphs` and `drawing-place-wire` are rewritten for 2D or removed
+  id: overhaul-after-3d
+  asked: 2026-11-22
+  by: session canvas-overhaul interview
+
 
 ## Needs your hands
 
@@ -141,6 +148,24 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 ## Next to build
+
+- [ ] **Windows: what the green CI job does not prove yet** — the box builds, lints and passes its tests on windows-latest since #565 (2026-11-23), with these left open. (1) Names Windows treats as devices (`con`, `nul`, `aux`, `com1`, `lpt1`, with or without `.st`) as project and file names: not tested; a write to `nul.st` may vanish without an error. (2) Shutdown: no test sends Ctrl-C or a terminate on Windows, so RETAIN on exit is unproven there (the SIGTERM test is Unix-only). (3) `--time-zone` and the zone tests are Unix-only (no tz database on Windows). (4) The Windows job checks out with LF; a project with CRLF files is not tested on any platform. (5) EtherNet/IP and Modbus TCP pass on loopback there, never against a device. (6) `hammering_the_api_does_not_hold_up_the_scan` allows an 8x fall on Windows against 4x elsewhere (154 ticks against 680 on the runner): measure on a real Windows machine before calling the scan timing good there. (7) `box (windows-latest)`, `box (macos-latest)` and `box (ubuntu-24.04-arm)` are not required checks.
+  needs: a Windows machine for (5) and (6); the rest runs in CI
+  result: each point has a test or a line in docs/ARCHITECTURE.md "Platforms" saying it is not supported
+  est: 1d
+  difficulty: med
+  id: windows-open-points
+  asked: 2026-11-23
+  by: claude-session 734e70dc
+
+- [ ] **The compiler's stack use stops depending on who calls it** — a program nested to the limit needs more stack than a 2 MiB thread has in a debug build with full debug info: 190 chained `+` took 2 to 2.5 MiB, 64 parentheses 1.5 to 2 MiB (macOS arm64, 2026-11-22; `nesting_up_to_the_limit_runs` overflowed in the new macOS CI job). Release fits (under 768 KiB at worst), so what ships is safe on a 2 MiB thread; a debug box compiling on one can be crashed by a hostile program, and the browser build (1 MiB main stack by default) is not measured. Nick, 2026-11-22: give the test 4 MiB now (done), fix it properly here. Ways: compile on a thread of the compiler's own with a set stack (not in the browser), handle long operator chains without recursion, or both.
+  needs: nothing; start by measuring the wasm build at the limit
+  result: the deepest allowed program compiles on a 1 MiB stack in every build, the test goes back to a small stack and says so
+  est: 1d
+  difficulty: high
+  id: compiler-own-stack
+  asked: 2026-11-22
+  by: claude-session 734e70dc
 
 - [ ] **Named start states for the simulation: set a machine up once, pick it again** — Nick, 2026-11-16: "the user should be able to rapidly configure the state of the machine for various scenarios manually and with the agent before starting." Built first (#493): an input set by hand while the program is stopped is what it starts with, the values outlive Stop, and a quiet line says nothing reacts yet. Decided by interview that day: this card follows, simulation only; a stopped box only reminds. Left: a start state gets a name ("part seated, guard open") and is saved in the project as a text file the diff shows, one `input = value` a line; the I/O tab lists them above Inputs and a click sets every input of one while the program is stopped (running: asked first, since it moves the machine); the Agent writes one on request, checked against the program's inputs and their types before it is offered. Open in the design: whether a start state also names kept values (a step number, a latch), which the panel cannot set today. The Agent's first half is built (2026-11-17, PR feat/agent-start-state with agent-relay `start-v1`): a field above the Inputs takes the state in words, the Agent proposes input values, and nothing is set until Set these; it works once the relay is deployed with the `start` agent, and it is not yet a saved, named state.
   needs: #492 and #493 in dev; the Agent's part needs a relay profile with the new block (a new id, Nick's deploy)
@@ -608,46 +633,19 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, dive into blocks, bloom, fast snap navigation, device-library graphics on connections, and convert technical drawings (panel layouts, CAD, DXF, schematics) into matched components, "starting now". Decided in the interview that day: (1) one 3D stack for every level: plant and devices on top, programs and POUs in the middle, the ST diagram's blocks at the bottom; a dive goes down a level; (2) rendered by egui on glow with our own GL pass through a paint callback (camera, picking, two-pass bloom), no engine crate and no backend change; (3) for engineers and demos first: 3D on a desktop GPU, the 2D view kept reachable and tested; (4) two tracks at once: drawings now, and the 3D canvas, then navigation, then device graphics; (5) dive: a fly-through by default and a free orbit over the whole stack as a second mode, both offered; (6) drawings start with ASCII DXF panel layouts, read by a small reader of our own (no new crate, wasm-safe), built against DXFs vendors publish for parts already in the library; (7) a drawing gives devices matched to the library with a draft io.map, their placement in the 3D map and its wiring as connections; (8) a part not in the library or matching more than one record is shown and the engineer decides: never a guessed model; (9) device graphics are line art per device family in the canvas's own style (the library has no images, and vendor photos are not ours to publish); (10) first milestone: the playground's example in 3D behind a toggle, 2D still the default.
 
-- [ ] **The 3D canvas: the playground's example in three levels, behind a toggle** — The first milestone of the overhaul (decisions 1, 2, 3, 10 above). A GL pass inside egui's paint callback on the glow backend the canvas already uses: a scene of nodes and wires from `helmsman-diagram` (POUs as the middle level, a POU's blocks below it, folds and regions as depth within a level), a perspective camera, picking by ray, and a bloom of two passes on what a traced scan lights (`live::annotate`). The egui panes stay as they are. The top level (plant and devices) is `canvas-3d-devices`. A toggle shows it; 2D stays the default until Nick says otherwise.
-  needs: nothing; WebGL2 in the browser build (what glow targets there) is the floor
-  result: the playground's example program in 3D: three levels, live wires glow during a simulated scan, a dive and a way back, `make canvas-smoke` leaves a screenshot of it, the 2D view untouched
-  est: 2w
-  difficulty: high
-  id: canvas-3d-mvp
-  asked: 2026-11-21
-  by: session canvas-overhaul interview
-
-- [ ] **Navigation in the 3D canvas: fly-through, free orbit, snap keys** — Decision 5: both dive styles as options. Fly-through: an eased move of about 300 ms down into a block, the parent left as a ghost above, back flies up. Free orbit: pan, orbit and zoom over the whole stack. Snap: a key per level, bookmarks for places, and `jump.rs` / `find.rs` move the camera to what they find.
-  needs: canvas-3d-mvp
-  result: any block is reached in one or two keys from anywhere; the mode is a setting the desk keeps; `?` lists the controls
-  depends: canvas-3d-mvp
-  est: 1w
-  difficulty: med
-  id: canvas-3d-nav
-  asked: 2026-11-21
-  by: session canvas-overhaul interview
-
-- [ ] **The device level of the 3D canvas: the plant on top, wired down to the program** — The top of the stack (decision 1): a box, its nodes, each device of the io.map and what is wired to its points (`wired=`), with a connection from a point to the blocks that read or write its signal. A drawing's placement and wiring land here (`drawing-place-wire`).
-  needs: canvas-3d-mvp
-  result: from a device on top, a dive follows its point into the program that uses it, on a box and in the playground
-  depends: canvas-3d-mvp
-  est: 1w
-  difficulty: med
-  id: canvas-3d-devices
-  asked: 2026-11-21
-  by: session canvas-overhaul interview
+Nick, 2026-11-22, after four rounds of a 3D view in the playground (#549 in dev and reverted, draft #552 closed; the last whole state is the branch `feat/canvas-3d-mvp`): "just stick with the 2D and eliminate 3D", "let's go minimalistic", and why: "3D really was supposed to be more immersive and helpful, not just a pretty version of 2D". Decisions 1, 2, 3, 5 and 10 above are withdrawn and their cards (`canvas-3d-mvp`, `canvas-3d-nav`, `canvas-3d-devices`) removed: the canvas stays the 2D diagram. What the rounds showed, for whoever tries again: one program on one board has nothing for height to mean, so a 3D view of it is the 2D layout tilted; the idea needs the levels (plant, devices, programs, blocks) to exist first. The drawings track (decisions 6, 7, 8) stands. Whether device graphics and a drawing's placement come to the 2D canvas is a question above (`overhaul-after-3d`).
 
 - [ ] **Device graphics: line art per device family on the map's connections** — Decision 9. The library (helmsman-devices) has no images and vendor photos cannot go in a public repository, so a glyph per family (remote I/O block, drive, proximity sensor, photoelectric sensor, valve, switch, ...) drawn in the canvas's style, picked from a record's kind, with a generic one for an unknown part. Vector, so it takes the bloom. The canvas already has `glyphs.rs` and `assets/glyphs`: start from what is there.
-  needs: canvas-3d-devices; a `kind` on each library record that lacks one
+  needs: Nick's answer to `overhaul-after-3d` (the 3D device level it was to sit on is dropped); a `kind` on each library record that lacks one
   result: every device and wired part on the map shows what it is at a glance, with no image fetched from a vendor
-  depends: canvas-3d-devices
+  depends: overhaul-after-3d
   est: 4d
   difficulty: med
   id: device-glyphs
   asked: 2026-11-21
   by: session canvas-overhaul interview
 
-- [ ] **Read a DXF panel layout: a reader of our own, and its parts matched to the library** — Decisions 6 and 8; starts now, beside `canvas-3d-mvp`. A new crate `helmsman-drawing` with no dependencies (it must build for wasm32): ASCII DXF's group-code pairs, BLOCKS and INSERT with ATTRIB, TEXT and MTEXT, LINE and LWPOLYLINE; binary DXF and anything else is refused by name, not skipped silently. Each inserted part's tag, part number and position come out; a part is matched to a library record by order number or model text (`devrecord`, the index the box and the playground already read) as matched, ambiguous or unknown. Fixtures: the DXFs vendors publish for parts in the library (Moxa E1213, Murrelektronik IMPACT67, ifm sensors), fetched with the library's `docs-fetch.py` and kept with their source and licence; a file whose licence forbids keeping is fetched in the test's cache, not committed. Hostile input by default: truncated files, a block that inserts itself, huge counts.
+- [ ] **Read a DXF panel layout: a reader of our own, and its parts matched to the library** — Decisions 6 and 8; A new crate `helmsman-drawing` with no dependencies (it must build for wasm32): ASCII DXF's group-code pairs, BLOCKS and INSERT with ATTRIB, TEXT and MTEXT, LINE and LWPOLYLINE; binary DXF and anything else is refused by name, not skipped silently. Each inserted part's tag, part number and position come out; a part is matched to a library record by order number or model text (`devrecord`, the index the box and the playground already read) as matched, ambiguous or unknown. Fixtures: the DXFs vendors publish for parts in the library (Moxa E1213, Murrelektronik IMPACT67, ifm sensors), fetched with the library's `docs-fetch.py` and kept with their source and licence; a file whose licence forbids keeping is fetched in the test's cache, not committed. Hostile input by default: truncated files, a block that inserts itself, huge counts.
   needs: nothing
   result: a DXF in, a list of parts out with a position and a matched / ambiguous / unknown status each, as a library call and a test over real vendor files
   est: 1w
@@ -667,9 +665,9 @@ Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, 
   by: session canvas-overhaul interview
 
 - [ ] **A drawing's placement and wiring on the 3D map** — Decision 7: devices sit on the device level where the panel has them, and the drawing's wires (terminal to channel, where the layout carries them) become the map's connections. A panel layout often has no wiring: then placement only, and the wiring waits for schematics (`drawing-schematics`).
-  needs: drawing-review, canvas-3d-devices
+  needs: drawing-review; Nick's answer to `overhaul-after-3d` (there is no 3D map to place devices on)
   result: the device level of a project made from a drawing looks like its cabinet
-  depends: drawing-review, canvas-3d-devices
+  depends: drawing-review, overhaul-after-3d
   est: 1w
   difficulty: high
   id: drawing-place-wire

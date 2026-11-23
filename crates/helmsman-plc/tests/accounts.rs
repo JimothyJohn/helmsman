@@ -21,9 +21,7 @@ use helmsman_plc::api::{
     Publisher, Shared, swap,
 };
 use helmsman_plc::manifest::ModuleDir;
-use helmsman_plc::policy::account::{
-    self, Accounts, LoginRefused, Logins, Mode, SessionLimits, SessionRefused,
-};
+use helmsman_plc::policy::account::{self, Accounts, LoginRefused, Logins, SessionLimits, SessionRefused};
 use helmsman_plc::policy::pin::{Clock, Gate, Pins};
 use helmsman_plc::policy::{FLOOR, Lockout, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
@@ -138,6 +136,7 @@ fn the_file_round_trips_and_never_holds_a_password() {
 #[cfg(unix)]
 #[test]
 fn an_accounts_file_others_can_read_is_refused_and_so_is_every_credential() {
+    use helmsman_plc::policy::account::Mode;
     use std::os::unix::fs::PermissionsExt;
     let dir = tmp("perms");
     accounts().save(&dir).unwrap();

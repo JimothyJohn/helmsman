@@ -11,7 +11,7 @@ use helmsman_diagram::Scan;
 use helmsman_iec::{Ty, Value};
 
 use crate::arrange::Layers;
-use crate::claude::{Chat, Model, Phase, Proxy, Request};
+use crate::claude::{Chat, Phase, Proxy, Request};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
@@ -88,7 +88,10 @@ impl Link {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = ctx;
-            self.inbox.push(crate::claude::Incoming::Proxy(false));
+            // Natively there is no proxy to find; the tests start with
+            // one answering, so the Agent tab has a route (a test that
+            // wants none says so with `Incoming::Proxy(false)`).
+            self.inbox.push(crate::claude::Incoming::Proxy(cfg!(test)));
         }
     }
 
@@ -289,6 +292,9 @@ pub struct PlaygroundView {
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
+    /// The program file last open in the editor, with its project: the
+    /// Agent's scope while a test, a map or a settings file is open.
+    last_program: Option<(String, String)>,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -320,9 +326,7 @@ impl PlaygroundView {
     #[must_use]
     pub fn with_stores(projects: Box<dyn Storage>, tweaks: Box<dyn Storage>) -> Self {
         #[cfg(target_arch = "wasm32")]
-        let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::web::LocalKeyStore);
-        #[cfg(not(target_arch = "wasm32"))]
-        let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::claude::NoStore);
+        crate::web::clear_old_key();
         let proj = SimProjects::load(projects);
         let mut v = Self {
             session: Session::new(&proj.build_src()),
@@ -336,7 +340,7 @@ impl PlaygroundView {
             viewer_of: String::new(),
             pending: None,
             last_pick: None,
-            chat: Chat::new(store),
+            chat: Chat::new(),
             link: Link::default(),
             proxy_asked: false,
             free_asked: false,
@@ -389,6 +393,7 @@ impl PlaygroundView {
             watching: crate::watch::Watching::default(),
             noticed: None,
             selection: None,
+            last_program: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -643,8 +648,13 @@ impl PlaygroundView {
                 // Recorded with the instruction that produced it.
                 let apply = self.to_name.take();
                 let what = apply.as_ref().map_or_else(
-                    || format!("took the Agent's answer into {}", self.proj.current),
-                    |a| format!("Agent: {}", a.instruction).chars().take(120).collect(),
+                    || format!("took the described change into {}", self.proj.current),
+                    |a| {
+                        format!("Described: {}", a.instruction)
+                            .chars()
+                            .take(120)
+                            .collect()
+                    },
                 );
                 self.proj
                     .save_as(&what, apply.as_ref().map(|a| a.record.as_str()));
@@ -666,7 +676,7 @@ impl PlaygroundView {
                     format!(" {why}")
                 });
                 self.notice = Some(format!(
-                    "{} opened from the Agent's answer; Deploy runs it.{size}{red}",
+                    "{} opened from the answer; Deploy runs it.{size}{red}",
                     self.proj.current
                 ));
             }
@@ -1029,7 +1039,7 @@ impl PlaygroundView {
             agent: Some(agent),
             quick: false,
         });
-        let req = crate::claude::request_turn(&route, self.chat.model, &[], message, turn);
+        let req = crate::claude::request_turn(&route, &[], message, turn);
         let seq = self.side_answer.start();
         self.side.send(seq, req, ctx);
     }
@@ -1260,7 +1270,7 @@ impl PlaygroundView {
             agent: Some(crate::start_state::AGENT),
             quick: false,
         });
-        let req = crate::claude::request_turn(&route, self.chat.model, &[], &message, turn);
+        let req = crate::claude::request_turn(&route, &[], &message, turn);
         let seq = self.start_answer.start();
         self.start_link.send(seq, req, ctx);
         self.start.asked();
@@ -1340,10 +1350,10 @@ impl PlaygroundView {
         ui.horizontal(|ui| {
             let field_w = (width - glyph - ui.spacing().item_spacing.x - 4.0).max(80.0);
             let tip = if running {
-                "Stop the program first: an Agent never changes the inputs of a running machine."
+                "Stop the program first: start values are never changed on a running machine."
             } else {
                 "Describe the state the machine should start in, in your own words, for example \
-                 part seated, guard open, speed 40. The Agent answers with input values as a \
+                 part seated, guard open, speed 40. The answer is input values, as a \
                  proposal; nothing is set until you accept it. Enter sends."
             };
             let out = ui.add_enabled_ui(!running && !working, |ui| {
@@ -1366,7 +1376,7 @@ impl PlaygroundView {
                 stop = r.clicked();
             } else {
                 let why_not = if running {
-                    Some("Stop the program first: an Agent never changes the inputs of a running machine.")
+                    Some("Stop the program first: start values are never changed on a running machine.")
                 } else if self.start.draft.trim().is_empty() {
                     Some("Write a start state first.")
                 } else {
@@ -1374,7 +1384,7 @@ impl PlaygroundView {
                 };
                 let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true).tip(
                     why_not.unwrap_or(
-                        "Send: asks the Agent for input values that match this description. They are shown as a proposal first.",
+                        "Send: asks for input values that match this description. They are shown as a proposal first.",
                     ),
                 );
                 chrome.hit("start send", r.rect);
@@ -1391,7 +1401,7 @@ impl PlaygroundView {
                     )
                     .wrap(),
                 )
-                .tip("The Agent is reading your description. Stop it with the square beside the field.");
+                .tip("Reading your description. Stop it with the square beside the field.");
             chrome.hit("start working", r.rect);
         }
         if let Some(line) = self.start.line.clone() {
@@ -1413,7 +1423,7 @@ impl PlaygroundView {
                     let r = ui
                         .add(
                             egui::Label::new(
-                                RichText::new("The Agent proposes these start values:")
+                                RichText::new("Proposed start values:")
                                     .strong()
                                     .size(crate::theme::MIN_TEXT),
                             )
@@ -1435,7 +1445,7 @@ impl PlaygroundView {
                                     show(c.ty, c.new)
                                 );
                                 ui.add(egui::Label::new(RichText::new(line).size(crate::theme::MIN_TEXT)).wrap())
-                                    .tip("An input the Agent would change: now → proposed.");
+                                    .tip("An input this would change: now → proposed.");
                             }
                         });
                     ui.horizontal_wrapped(|ui| {
@@ -1445,7 +1455,7 @@ impl PlaygroundView {
                                 egui::Button::new(RichText::new("Set these").size(crate::theme::MIN_TEXT)),
                             )
                             .tip(if running {
-                                "Stop the program first: an Agent never changes the inputs of a running machine."
+                                "Stop the program first: start values are never changed on a running machine."
                             } else {
                                 "Put these values into the inputs. The program then starts with them."
                             });
@@ -1487,7 +1497,7 @@ impl PlaygroundView {
     /// Why a spec run cannot start now, if it cannot (the window's Build).
     fn spec_blocked(&self) -> Option<String> {
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         if self.scope() != crate::scope::Scope::NewProject {
             return Some("A spec makes a new project: open a built-in example first.".into());
@@ -1606,7 +1616,7 @@ impl PlaygroundView {
     /// design entry's own words (those are said beside the entry).
     fn design_blocked(&self) -> Option<String> {
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         self.design
             .busy()
@@ -1677,7 +1687,7 @@ impl PlaygroundView {
     fn design_keep_blocked(&self) -> Option<String> {
         self.instruct
             .busy()
-            .then(|| "The Agent is still working on the last instruction.".to_string())
+            .then(|| "Still working on the last instruction.".to_string())
     }
 
     /// Keep: the design goes into the open project as `design.md`, one
@@ -1729,7 +1739,7 @@ impl PlaygroundView {
         let (d, problems) = self.design_cache.get(text);
         let built = self.design_built.get(&self.proj.open).copied().unwrap_or(0);
         let blocked = if self.instruct.busy() {
-            Some("The Agent is still working on the last instruction.".to_string())
+            Some("Still working on the last instruction.".to_string())
         } else {
             self.chat.route().err().map(str::to_string)
         };
@@ -2112,18 +2122,37 @@ impl PlaygroundView {
         dropped
     }
 
-    /// The ST file the Agent's scope starts from: the open one, or the
-    /// project's first program file when a map or settings file is open.
+    /// A file an instruction may change: ST, and not a requirement test.
+    fn is_program(file: &str) -> bool {
+        crate::sim_projects::is_st(file) && !helmsman_iec::spec::is_test(file)
+    }
+
+    /// The ST file the Agent's scope starts from: the open one, or, when
+    /// a map, a settings file or a requirement test is open, the program
+    /// last open in this project, else its first program file. A test is
+    /// never the scope: it goes with every instruction as the program's
+    /// check, and with one open the Agent was told the program was out of
+    /// its reach (2026-11-22). The first program by name would be the
+    /// wrong one as often as not in a project with several.
     fn scope_file(&self) -> Option<String> {
-        if crate::sim_projects::is_st(&self.proj.current) && self.proj.files.contains_key(&self.proj.current)
-        {
+        let here = |f: &str| Self::is_program(f) && self.proj.files.contains_key(f);
+        if here(&self.proj.current) {
             return Some(self.proj.current.clone());
         }
-        self.proj
-            .files
-            .keys()
-            .find(|f| crate::sim_projects::is_st(f))
-            .cloned()
+        if let Some((project, file)) = &self.last_program
+            && *project == self.proj.open
+            && here(file)
+        {
+            return Some(file.clone());
+        }
+        self.proj.files.keys().find(|f| Self::is_program(f)).cloned()
+    }
+
+    /// Remembers the program in the editor, for [`Self::scope_file`].
+    fn note_program(&mut self) {
+        if Self::is_program(&self.proj.current) && self.proj.files.contains_key(&self.proj.current) {
+            self.last_program = Some((self.proj.open.clone(), self.proj.current.clone()));
+        }
     }
 
     /// Where the paused scan stands, as the files show it: `12` or
@@ -2251,7 +2280,7 @@ impl PlaygroundView {
             .as_ref()
             .is_some_and(|r| r.project != self.proj.open);
         if moved {
-            self.stop_answer_with("the open project changed while the Agent was answering");
+            self.stop_answer_with("the open project changed before the answer came");
             self.log_outcome();
         }
     }
@@ -2269,7 +2298,6 @@ impl PlaygroundView {
                 ..Default::default()
             });
         }
-        let a = self.chat.answer.as_ref();
         let lines = self
             .instruct
             .run
@@ -2280,13 +2308,6 @@ impl PlaygroundView {
         Some(crate::instruct::Progress {
             estimate: Some(crate::instruct::estimate_secs(lines)),
             secs: now - self.asked_at,
-            stage: a.map_or(crate::instruct::Stage::Waiting, |a| {
-                crate::instruct::stage(a.thinking, &a.text)
-            }),
-            why: a.and_then(|a| crate::instruct::why_line(&a.text)),
-            code: a
-                .and_then(|a| crate::instruct::partial_code(&a.text))
-                .map(str::to_string),
             naming: false,
             review: false,
         })
@@ -2519,7 +2540,7 @@ impl PlaygroundView {
             .map(|(n, t)| (n.clone(), t.clone()))
             .collect();
         if self.proj.revisions().last().is_none_or(|r| r.files != saved) {
-            self.proj.save_as("saved before the Agent's change", None);
+            self.proj.save_as("saved before the described change", None);
         }
         let before = self.proj.revisions().last().map(|r| r.n);
         let was = self.proj.files.get(&apply.file).cloned().unwrap_or_default();
@@ -2536,7 +2557,7 @@ impl PlaygroundView {
             self.proj.files.insert(f.clone(), t.clone());
         }
         self.proj.current.clone_from(&apply.file);
-        let what: String = format!("Agent: {}", apply.instruction)
+        let what: String = format!("Described: {}", apply.instruction)
             .chars()
             .take(120)
             .collect();
@@ -2691,7 +2712,7 @@ impl PlaygroundView {
         let mut ok = false;
         let m = crate::theme::near_pointer(ctx, "pg-program-name").show(ctx, |ui| {
             ui.set_max_width(420.0);
-            let why = "The Agent's answers in this conversation land in a project of this name: \
+            let why = "The answers in this conversation land in a project of this name: \
                        the newest as main.st, the earlier ones kept under it.";
             ui.label(RichText::new("Name this program").strong().size(16.0))
                 .tip(why);
@@ -3029,7 +3050,7 @@ impl PlaygroundView {
                         ui.set_width(width - 24.0);
                         ui.add(
                             egui::Label::new(
-                                RichText::new(format!("The Agent noticed: {}", n.what))
+                                RichText::new(format!("Helmsman noticed: {}", n.what))
                                     .color(t.ink(WARN))
                                     .size(size),
                             )
@@ -3040,9 +3061,9 @@ impl PlaygroundView {
                         }
                         ui.add_space(4.0);
                         ui.horizontal_wrapped(|ui| {
-                            let r = ui.button(RichText::new("Fix it").size(size)).tip(
-                                "Asks the Agent to fix this. Its change is checked like any other before it lands.",
-                            );
+                            let r = ui
+                                .button(RichText::new("Fix it").size(size))
+                                .tip("Asks for a fix. Its change is checked like any other before it lands.");
                             chrome.hit("agent fix it", r.rect);
                             fix = r.clicked();
                             let r = ui
@@ -3076,6 +3097,7 @@ impl PlaygroundView {
     }
 
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.note_program();
         self.notice_problems(ctx.input(|i| i.time));
         if !self.proxy_asked {
             self.proxy_asked = true;
@@ -3174,7 +3196,6 @@ impl PlaygroundView {
                 trend.signals.hash(h);
             }),
             asks: self.chat.seq(),
-            keyed: self.chat.route().is_ok(),
             trend_open: chrome.trend && chrome.bottom == editor::Bottom::Trend,
         }
     }
@@ -3426,13 +3447,11 @@ impl Body for PlaygroundView {
         if let Some(draft) = self.agent_draft() {
             let r = ui
                 .label(
-                    RichText::new(
-                        "The Agent's draft, as it is written. It is checked before it goes into the file.",
-                    )
-                    .color(t.muted)
-                    .italics(),
+                    RichText::new("The draft, as it is written. It is checked before it goes into the file.")
+                        .color(t.muted)
+                        .italics(),
                 )
-                .tip("The file itself is unchanged until the checks pass. Stop in the Agent tab ends it.");
+                .tip("The file itself is unchanged until the checks pass. Stop in the Describe tab ends it.");
             chrome.hit("st draft note", r.rect);
             let mut shown: &str = &draft;
             let r = ui
@@ -4027,6 +4046,7 @@ impl PlaygroundView {
     /// The signals to trend (outputs, then inputs) and the chart.
     fn trend_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        chrome.hit("trend tab", ui.max_rect());
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
@@ -4039,29 +4059,41 @@ impl PlaygroundView {
             .collect();
         // The heading shares the signals' row: on a line of its own it
         // and the slider left the plot the smallest part of the panel.
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Signals").strong().color(t.muted))
-                .tip(format!(
-                    "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
-                ));
-            for name in &points {
-                let on = self.session.trend.signals.contains(name);
-                let tip = if on {
-                    "On the trend. Click to take it off."
-                } else {
-                    "Click to pin it to the trend."
-                };
-                if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
-                    .tip(tip)
-                    .clicked()
-                {
-                    self.session.trend.toggle(name);
-                }
-            }
-        });
+        // The rows scroll past a quarter of the panel: an Agent's program
+        // has dozens of points, and unbounded their rows took the whole
+        // panel and left the plot no height (Nick, 2026-11-22).
+        let rows_h = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
+        egui::ScrollArea::vertical()
+            .id_salt("pg-trend-signals")
+            .max_height(rows_h)
+            .show(ui, |ui| {
+                // Room for the scroll bar, or the panel grows to fit it.
+                ui.set_max_width(ui.available_width() - 12.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Signals").strong().color(t.muted))
+                        .tip(format!(
+                            "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
+                        ));
+                    for name in &points {
+                        let on = self.session.trend.signals.contains(name);
+                        let tip = if on {
+                            "On the trend. Click to take it off."
+                        } else {
+                            "Click to pin it to the trend."
+                        };
+                        if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
+                            .tip(tip)
+                            .clicked()
+                        {
+                            self.session.trend.toggle(name);
+                        }
+                    }
+                });
+            });
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
         let plot = self.trend_plot(ui, chrome);
+        chrome.hit("trend plot", plot);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
             self.session.trend.move_signal(from, to);
         }
@@ -4076,10 +4108,16 @@ impl PlaygroundView {
             // Room for the scroll bar: a full-width field plus the bar is
             // wider than the panel, and a resizable panel grows to fit.
             ui.set_max_width(ui.available_width() - 12.0);
-            // The free chat: no key and no model to choose. Closed, it
-            // says so and asks its one question in place of the chat box.
+            // The page never asks for a key or a model. The free chat,
+            // closed, says so and asks its one question in place of the
+            // chat box; with no route at all the tab says so.
             let free = self.chat.free_base().is_some();
             if free && self.free_closed_ui(ui, chrome) {
+                return;
+            }
+            if self.chat.unavailable() {
+                let r = ui.label(RichText::new(crate::claude::UNAVAILABLE_TEXT).color(t.muted));
+                chrome.hit("agent unavailable", r.rect);
                 return;
             }
             match self.chat.proxy {
@@ -4092,10 +4130,7 @@ impl PlaygroundView {
                     ui.label(RichText::new("Checking for a local proxy…").color(t.muted))
                         .tip("With a local proxy the API key stays on this machine.");
                 }
-                Proxy::No => self.key_ui(ui, chrome),
-            }
-            if !free {
-                self.model_ui(ui);
+                Proxy::No => {}
             }
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
@@ -4108,7 +4143,7 @@ impl PlaygroundView {
                             !self.instruct.busy(),
                             egui::Button::new(RichText::new("From a spec…").size(crate::theme::BODY)),
                         )
-                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The Agent drafts the whole project from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
+                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The whole project is drafted from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
                     chrome.hit("spec open", r.rect);
                     if r.clicked() {
                         self.spec.open = true;
@@ -4126,7 +4161,7 @@ impl PlaygroundView {
             }
             let r = ui
                 .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
-                .tip("On: when the Agent's change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
+                .tip("On: when a change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
             chrome.hit("agent resets", r.rect);
             self.after_change = if chrome.agent_resets {
                 AfterChange::Reset
@@ -4147,6 +4182,7 @@ impl PlaygroundView {
                     .as_ref()
                     .filter(|b| b.0 == self.instruct.draft)
                     .map(|b| b.1),
+                io: Some(self.phrasing_io()),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
@@ -4160,6 +4196,25 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });
+    }
+
+    /// The inputs and outputs of the program on screen as its source
+    /// spells them, for the phrasing help in the Describe tab (a built-in
+    /// example's too: a change to it starts from its code); none when no
+    /// program is open.
+    fn phrasing_io(&self) -> Vec<crate::phrasing::Io> {
+        let src = &self.session.src;
+        self.session
+            .inputs()
+            .chain(self.session.outputs())
+            // A bare address (`%QX0.1`) is no name to spell.
+            .filter(|p| !p.name.starts_with('%'))
+            .map(|p| crate::phrasing::Io {
+                name: crate::phrasing::spelled(src, &p.name),
+                input: p.dir == crate::playground::Dir::In,
+                boolean: p.ty == Ty::Bool,
+            })
+            .collect()
     }
 
     /// The free chat while it is closed or cannot be reached: what
@@ -4180,7 +4235,7 @@ impl PlaygroundView {
             ),
             Free::Unreachable => (
                 "The free chat cannot be reached from here. The editor, the diagram and the simulation work without it.",
-                "The page could not reach the relay that answers the Agent. A firewall or an ad blocker can cause this.",
+                "The page could not reach the service that writes the changes. A firewall or an ad blocker can cause this.",
             ),
         };
         let r = ui.label(RichText::new(text).strong()).tip(tip);
@@ -4234,49 +4289,31 @@ impl PlaygroundView {
         true
     }
 
-    /// The model picker of the key and proxy routes.
-    fn model_ui(&mut self, ui: &mut egui::Ui) {
-        let t = theme(ui);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Model").color(t.muted))
-                .tip("The model that answers. A larger one is slower and costs more.");
-            // No wider than the panel: a row that overflows a resizable
-            // panel widens it every frame. `width` is only a floor, so
-            // the selected text is truncated to the room (2026-11-08:
-            // with two tabs the panel is narrower than this row was).
-            egui::ComboBox::from_id_salt("pg-model")
-                .width((ui.available_width() - 40.0).max(60.0))
-                .wrap_mode(egui::TextWrapMode::Truncate)
-                // The name alone: the note in brackets is in the list.
-                .selected_text(self.chat.model.label().split(" (").next().unwrap_or_default())
-                .show_ui(ui, |ui| {
-                    for m in Model::ALL {
-                        ui.selectable_value(&mut self.chat.model, m, m.label())
-                            .tip(format!("Answers with {}.", m.label()));
-                    }
-                })
-                .response
-                .tip("The model that answers. A larger one is slower and costs more.");
-        });
-    }
-
-    /// The Agent tab's scope line (card agent-scoped-edits), only while a
-    /// selection or a pick narrows it: what the next instruction may
-    /// change and which rule gave it, with Whole file.
+    /// The Agent tab's scope line (card agent-scoped-edits): what the next
+    /// instruction may change and which rule gave it. Shown while a
+    /// selection or a pick narrows it, with Whole file, and while the file
+    /// it names is not the one in the editor (a test is open, and the
+    /// instruction changes the program).
     fn scope_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let scope = self.scope();
-        if scope.lines().is_none() {
+        let elsewhere = scope.file().is_some_and(|f| f != self.proj.current);
+        if scope.lines().is_none() && !elsewhere {
             return;
         }
+        let rule = if elsewhere && scope.lines().is_none() {
+            "the program, because the file open in the Code tab is not one an instruction changes"
+        } else {
+            scope.rule()
+        };
         let mut whole = false;
         // Wrapped: a long name in a plain row would widen the panel.
         ui.horizontal_wrapped(|ui| {
-            let r = ui.label(RichText::new(scope.label()).strong()).tip(scope.rule());
+            let r = ui.label(RichText::new(scope.label()).strong()).tip(rule);
             chrome.hit("agent scope", r.rect);
             if scope.lines().is_some() {
                 let b = ui
                     .small_button("Whole file")
-                    .tip("Drops the selection and the pick: the Agent edits the open file.");
+                    .tip("Drops the selection and the pick: the change goes into the whole open file.");
                 chrome.hit("scope whole file", b.rect);
                 whole = b.clicked();
             }
@@ -4285,68 +4322,6 @@ impl PlaygroundView {
             self.whole_file(&ui.ctx().clone());
         }
         ui.add_space(4.0);
-    }
-
-    fn key_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let held = "Held in this page only; sent only to api.anthropic.com, billed to your account.";
-        let key_tip = if self.chat.from_env {
-            format!("{held} Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
-        } else {
-            held.to_string()
-        };
-        ui.label(RichText::new("Anthropic API key").strong())
-            .tip(&key_tip);
-        let r = ui
-            .add(
-                egui::TextEdit::singleline(self.chat.key_mut())
-                    .id_salt("pg-key")
-                    .password(true)
-                    .hint_text("sk-ant-…")
-                    .desired_width(f32::INFINITY),
-            )
-            .tip(&key_tip);
-        chrome.hit("agent key", r.rect);
-        if r.changed() {
-            self.chat.key_changed();
-        }
-        if self.chat.has_key() && !self.chat.key_looks_right() {
-            ui.label(
-                RichText::new("That does not look like an Anthropic key (sk-ant-…).")
-                    .small()
-                    .color(crate::theme::theme(ui).ink(RED)),
-            );
-        }
-        let mut remember = self.chat.remember;
-        if ui
-            .checkbox(&mut remember, "Remember on this device")
-            .tip("Stores the key in this browser's localStorage.")
-            .changed()
-        {
-            self.chat.set_remember(remember);
-        }
-        if remember {
-            ui.label(
-                RichText::new(
-                    "Stored in this browser's localStorage, readable by any script on this site. \
-                     Untick, or Forget, on a shared computer.",
-                )
-                .small()
-                .color(crate::theme::theme(ui).ink(RED)),
-            );
-        }
-        // Wrapped: in a plain row a label extends, and a row wider than a
-        // resizable panel widens it every frame.
-        ui.horizontal_wrapped(|ui| {
-            if self.chat.has_key()
-                && ui
-                    .button("Forget key")
-                    .tip("Clears the key from this page and this browser.")
-                    .clicked()
-            {
-                self.chat.forget_key();
-            }
-        });
-        ui.add_space(6.0);
     }
 
     /// Draws the trend; returns the rect it filled (the lanes' handles go
@@ -4548,6 +4523,12 @@ pub fn window_label(ms: u64) -> String {
 
 /// Width of a lane's label column, which is also its drag handle.
 const LANE_HANDLE_W: f32 = 88.0;
+
+/// The Trend tab's signal buttons take at most this share of its height
+/// before they scroll, so the plot keeps the rest.
+const SIGNAL_ROWS_SHARE: f32 = 0.25;
+/// ... and never less than one row of them.
+const SIGNAL_ROWS_MIN: f32 = 34.0;
 
 /// A place in the trend's palette as it is drawn on this page: the brand
 /// colours, as ink on the light page, where the last (white) is the

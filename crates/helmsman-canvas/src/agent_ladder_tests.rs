@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use helmsman_agent::http::{Request, Timeouts, Url, send};
 use helmsman_iec::spec::{self, Settings};
 
-use crate::claude::{Chat, Free, Incoming, NoStore, Phase};
+use crate::claude::{Chat, Free, Incoming, Phase};
 use crate::instruct::{Env, Instruct, Kind, Step};
 use crate::playground::{EXAMPLES, SIZES};
 use crate::scope::Scope;
@@ -954,7 +954,7 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
         },
         Where::New => Scope::NewProject,
     };
-    let mut chat = Chat::new(Box::new(NoStore));
+    let mut chat = Chat::new();
     chat.receive(Incoming::Proxy(false));
     chat.set_free_base(&setup.url);
     chat.receive(Incoming::Takes(setup.takes.clone()));
@@ -1194,7 +1194,7 @@ fn front_door_recording() {
     let instruction = crate::front::instruction();
     let mut files = Files::default();
     files.insert(helmsman_project::PLANT.into(), crate::front::PLANT.to_string());
-    let mut chat = Chat::new(Box::new(NoStore));
+    let mut chat = Chat::new();
     chat.receive(Incoming::Proxy(false));
     chat.set_free_base(&setup.url);
     chat.receive(Incoming::Free(Free::Open));

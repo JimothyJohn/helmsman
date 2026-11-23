@@ -1510,7 +1510,7 @@ impl App {
                     env!("CARGO_PKG_VERSION"),
                     stamp::CANVAS
                 ));
-                ui.label("Early release. Licensed under the Apache License, Version 2.0.");
+                ui.label("Licensed under the Apache License, Version 2.0.");
                 // The box's HTTPS certificate, to compare with the
                 // browser's and the box's startup line (`box-https`).
                 let policy = self.review.as_ref().and_then(|r| r.state.policy.as_ref());

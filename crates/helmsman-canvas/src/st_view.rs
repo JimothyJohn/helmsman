@@ -359,7 +359,7 @@ pub struct TreeRow {
 
 /// What hovering empty diagram space says.
 const EMPTY_TIP: &str = "Click a block to select it, or drag to select the blocks the box touches; \
-Shift or Ctrl adds. The Agent tab then asks about them. Esc, a click here or a click off the diagram \
+Shift or Ctrl adds. The Describe tab then asks about them. Esc, a click here or a click off the diagram \
 lets them go. Move the view with Space and a drag, the middle button, or the arrow keys.";
 
 /// What a drag on the diagram holds.

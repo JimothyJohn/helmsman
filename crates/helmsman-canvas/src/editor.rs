@@ -41,7 +41,7 @@ impl Tab {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Claude => "Agent",
+            Self::Claude => "Describe",
         }
     }
 
@@ -50,7 +50,7 @@ impl Tab {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Io => "I/O: the program's inputs and outputs with their live values.",
-            Self::Claude => "Agent: ask the agent about the program, or have it propose a change.",
+            Self::Claude => "Describe: say what the program should do, and the change is made and checked.",
         }
     }
 }
@@ -1920,7 +1920,7 @@ fn removed_rules(
             out.response.id.with(("removed", *line)),
             egui::Sense::hover(),
         );
-        let mut tip = format!("The Agent removed {n} line(s) here:");
+        let mut tip = format!("The change removed {n} line(s) here:");
         for g in gone {
             tip.push('\n');
             tip.push_str(g);

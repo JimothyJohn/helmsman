@@ -510,7 +510,7 @@ pub fn refusal(a: &Answer, now: f64) -> Refusal {
         ),
         409 if error.starts_with("stale") => (
             Why::Stale,
-            "The box changed since this was drafted. Ask the agent to draft it again against what runs now.".into(),
+            "The box changed since this was drafted. Ask for it to be drafted again against what runs now.".into(),
         ),
         409 => (
             Why::Other,

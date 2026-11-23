@@ -244,10 +244,10 @@ fn the_box_serves_https_with_a_certificate_it_keeps_and_a_fingerprint_that_holds
     assert!(b.cert.contains("(new,"), "{}", b.cert);
     let fp = printed(&b.cert);
     // The file: private, and the certificate in it is the one printed.
-    let file = state.join(tls::FILE);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let file = state.join(tls::FILE);
         let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }

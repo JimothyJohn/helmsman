@@ -180,6 +180,7 @@ impl SigningKey {
 }
 
 /// Refuses a file group or others can read (Unix).
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))] // the Unix half can fail
 fn private(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {

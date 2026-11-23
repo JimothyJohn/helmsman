@@ -77,9 +77,9 @@ pub const PAGE_BYTES: usize = 20 * 1024;
 /// Longest document name, characters.
 pub const MAX_NAME: usize = 128;
 /// What reading a photo as text answers.
-const PHOTO_HAS_NO_TEXT: &str = "this drop-in is a photo: it has no text to read; the box shows the image to the agent in the chat message it is attached to";
+const PHOTO_HAS_NO_TEXT: &str = "this drop-in is a photo: it has no text to read; the box shows the image to Helmsman in the chat message it is attached to";
 /// What reading a PDF as text answers.
-const PDF_HAS_NO_TEXT: &str = "this drop-in is a PDF: the box does not read it; the agent sees the document itself in the chat message it is attached to";
+const PDF_HAS_NO_TEXT: &str = "this drop-in is a PDF: the box does not read it; Helmsman sees the document itself in the chat message it is attached to";
 /// A browse result is reused for this long.
 pub const BROWSE_FRESH: Duration = Duration::from_secs(30);
 

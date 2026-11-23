@@ -4,6 +4,9 @@
 //! stops at its next start. Run in a temp root (`HELMSMAN_FIRSTBOOT_ROOT`),
 //! the line split on whitespace the way the unit's `$PLC_RELAY_ARGS` is.
 
+// A bash script for the Linux image: Unix hosts only.
+#![cfg(unix)]
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

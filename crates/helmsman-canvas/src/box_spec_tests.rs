@@ -568,7 +568,7 @@ fn a_pdf_answer_for_nothing_in_flight_changes_nothing_and_a_refusal_is_in_words(
     assert_eq!(s.pdf_answer("b.pdf", 201, "{}"), Some(false));
     let why = s.spec.pdfs[1].refused.clone().unwrap();
     assert!(
-        why.contains("did not say where") && why.contains("Nothing was sent to the agent"),
+        why.contains("did not say where") && why.contains("Nothing was sent"),
         "{why}"
     );
     assert_eq!(s.dropins(), [4]);
@@ -593,7 +593,7 @@ fn a_pdf_answer_for_nothing_in_flight_changes_nothing_and_a_refusal_is_in_words(
         assert_eq!(s.pdf_answer("x.pdf", status, body), Some(false), "{status}");
         let why = s.spec.pdfs[0].refused.clone().unwrap();
         assert!(
-            why.contains(says) && why.contains("Nothing was sent to the agent"),
+            why.contains(says) && why.contains("Nothing was sent"),
             "{status}: {why}"
         );
     }

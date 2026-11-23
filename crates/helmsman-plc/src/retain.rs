@@ -175,7 +175,11 @@ pub fn write(dir: &Path, module: &str, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
-    File::open(dir)?.sync_all()
+    // A directory cannot be opened to sync on Windows (access denied), so
+    // the rename there is as durable as the file system makes it.
+    #[cfg(unix)]
+    File::open(dir)?.sync_all()?;
+    Ok(())
 }
 
 /// Removes `module`'s file, if there is one.

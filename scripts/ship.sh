@@ -295,7 +295,10 @@ if [ "$LIVE_ONLY" = 0 ]; then
         rel=$(src_of agent-relay); wt=$rel/.claude/worktrees/ship-main
         git -C "$rel" fetch -q origin main || die "fetching agent-relay failed"
         git -C "$rel" worktree add -q --detach "$wt" origin/main || die "a worktree of agent-relay at main failed"
-        (cd "$wt" && make deploy) >"$OUT/relay-deploy.log" 2>&1; d=$?
+        # The deploy's gate runs the relay's tests, which open more sockets
+        # than a fresh macOS terminal allows (256 files): 17 of them failed
+        # "Too many open files" on 2026-11-22 while CI passed the same commit.
+        (cd "$wt" && { ulimit -n 8192 2>/dev/null || true; } && make deploy) >"$OUT/relay-deploy.log" 2>&1; d=$?
         git -C "$rel" worktree remove --force "$wt"
         [ "$d" = 0 ] || { tail -30 "$OUT/relay-deploy.log" >&2; die "the relay deploy failed ($OUT/relay-deploy.log); helmsman is promoted, the relay is not"; }
         ;;
