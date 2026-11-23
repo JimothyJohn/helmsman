@@ -149,6 +149,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Next to build
 
+- [ ] **The compiler's stack use stops depending on who calls it** — a program nested to the limit needs more stack than a 2 MiB thread has in a debug build with full debug info: 190 chained `+` took 2 to 2.5 MiB, 64 parentheses 1.5 to 2 MiB (macOS arm64, 2026-11-22; `nesting_up_to_the_limit_runs` overflowed in the new macOS CI job). Release fits (under 768 KiB at worst), so what ships is safe on a 2 MiB thread; a debug box compiling on one can be crashed by a hostile program, and the browser build (1 MiB main stack by default) is not measured. Nick, 2026-11-22: give the test 4 MiB now (done), fix it properly here. Ways: compile on a thread of the compiler's own with a set stack (not in the browser), handle long operator chains without recursion, or both.
+  needs: nothing; start by measuring the wasm build at the limit
+  result: the deepest allowed program compiles on a 1 MiB stack in every build, the test goes back to a small stack and says so
+  est: 1d
+  difficulty: high
+  id: compiler-own-stack
+  asked: 2026-11-22
+  by: claude-session 734e70dc
+
 - [ ] **Named start states for the simulation: set a machine up once, pick it again** — Nick, 2026-11-16: "the user should be able to rapidly configure the state of the machine for various scenarios manually and with the agent before starting." Built first (#493): an input set by hand while the program is stopped is what it starts with, the values outlive Stop, and a quiet line says nothing reacts yet. Decided by interview that day: this card follows, simulation only; a stopped box only reminds. Left: a start state gets a name ("part seated, guard open") and is saved in the project as a text file the diff shows, one `input = value` a line; the I/O tab lists them above Inputs and a click sets every input of one while the program is stopped (running: asked first, since it moves the machine); the Agent writes one on request, checked against the program's inputs and their types before it is offered. Open in the design: whether a start state also names kept values (a step number, a latch), which the panel cannot set today. The Agent's first half is built (2026-11-17, PR feat/agent-start-state with agent-relay `start-v1`): a field above the Inputs takes the state in words, the Agent proposes input values, and nothing is set until Set these; it works once the relay is deployed with the `start` agent, and it is not yet a saved, named state.
   needs: #492 and #493 in dev; the Agent's part needs a relay profile with the new block (a new id, Nick's deploy)
   result: a list of named start states in the I/O tab, saved with the project, that the Agent can add to

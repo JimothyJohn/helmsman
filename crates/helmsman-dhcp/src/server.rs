@@ -355,9 +355,13 @@ impl Server {
         if !has_record {
             // No record of this client. A renewal of a free address in
             // the pool is taken back on (the box lost its file); anything
-            // else is for some other server to answer.
+            // else is for some other server to answer. A client with a
+            // reservation is taken back on at its reserved address alone:
+            // anywhere else, its next DISCOVER would move it off the lease
+            // just acknowledged.
             let renewing = server_id.is_none() && !req.ciaddr.is_unspecified();
-            if !(renewing && self.free_for(now, mac, want) && self.config.in_pool(want)) {
+            let its_own = self.config.reserved.get(&mac).is_none_or(|r| *r == want);
+            if !(renewing && its_own && self.free_for(now, mac, want) && self.config.in_pool(want)) {
                 return if server_id.is_some() {
                     Some(self.nak(mac, req))
                 } else {

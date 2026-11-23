@@ -1,24 +1,21 @@
 # The Agent
 
 The Agent is the way you program by describing the machine. The page
-opens on the **Agent** tab, the first in the left pane: type what the open
+opens on the **Describe** tab, the first in the left pane: type what the open
 Structured Text file should do, and press
 **Send**, the yellow paper plane (or <kbd>Enter</kbd>). The file is updated in place and the editor shows it; there is
 no conversation to read through.
 
-<img src="img/agent-tab.png" alt="The Agent tab: the instruction box and Send." width="300">
+<img src="img/agent-tab.png" alt="The Describe tab: the instruction box and Send." width="300">
 
-While it works, the tab shows how long the instruction has been running
-and the range it takes for a file of that size, from the least to the
-usual most (5 to 30 seconds for a short file, a few minutes for a long
-one). The time includes any second try, so it is the whole wait. The tab
-also shows which step it is at: sending, planning the change, writing
-the file, then writing the checks. Once the
-Agent has said what the change does, that sentence shows under the step,
-and the code shows as it is written, under the words "Draft, checked
-before it is written". The Code tab shows the same draft in place
-of the file. The file itself changes only once the draft compiles and its
-checks pass; Stop, or a draft that fails, leaves it as it was.
+The lower half of the tab is the answer. While it works it shows one
+line, how long the instruction has been running and the range it takes
+for a file of that size, from the least to the usual most (5 to 30
+seconds for a short file, a few minutes for a long one). The time
+includes any second try, so it is the whole wait. The Code tab shows the
+draft in place of the file as it is written. The file itself changes
+only once the draft compiles and its checks pass; Stop, or a draft that
+fails, leaves it as it was.
 
 A change too big for one answer goes in steps. A long instruction, one
 in several parts or one on a long file is planned first, and so is any
@@ -32,18 +29,30 @@ leave the file as it was.
 
 An instruction can be a new behaviour ("the lamp latches until stop is
 pressed"), a change ("add a two-second delay before the belt starts") or
-a fix for the errors under the editor. When the Agent is done, the tab
-shows one status line and the Agent's reason for the change, for
-example:
+a fix for the errors under the editor. When it is done, the answer is
+one short line, for example:
 
-> Updated lamp.st: 2 scenarios passed, kept as tests.
-> Why: the lamp now latches until stop is pressed.
+> Done: the lamp now latches until stop is pressed.
+
+When nothing could be changed, the answer says why in red, with the
+first lines of what failed; **Details in the Messages** opens the
+Messages, which keep all of it.
+
+## Help with the words
+
+A request that names the program's inputs and outputs and says when is
+understood first time. With the box empty, the answer area offers a few
+examples written in the open program's own names; click one to put it in
+the box, then change it or send it. When what you type names an input
+or output another way ("green lamp" for `GreenLamp`, or `StratPB` for
+`StartPB`), the area says so with a button that puts the declared name
+in. None of this is sent anywhere.
 
 On a box nothing runs until you deploy it, as with any edit of your own.
 In the simulation the changed program is loaded stopped, with every
 variable, timer and output back at its start, so Run starts it from
 scratch. To have it run at once, clear "Stop and reset after a change"
-in the Agent tab; the choice is remembered in this browser.
+in the Describe tab; the choice is remembered in this browser.
 
 What the change did is marked until your next edit. In the code, lines
 it added are on a green ground and a red rule stands where it removed
@@ -135,7 +144,7 @@ where code should be, is sent back.
 ## From a spec
 
 To start a project from a written scope of work or product documentation,
-open the **Agent** tab with a built-in example open and press
+open the **Describe** tab with a built-in example open and press
 **From a spec…**. A window opens with a box to paste into and
 **Add file…** for `.md` and `.txt` files (up to eight). The window lists
 each file with its size and a × to take it out, and shows the total
@@ -193,7 +202,7 @@ any output start on the box's own channels.
 ## Design a machine
 
 For a whole machine, describe it and ask for a design before any code.
-**Design a machine…** is in the Agent tab, under the spec entry. It is
+**Design a machine…** is in the Describe tab, under the spec entry. It is
 there when the design entry is served: on a box, for an engineer with a
 project open; in the simulation, only when the relay says it serves it
 (during the early release it may not). When it is closed for now, or this
@@ -224,7 +233,7 @@ History. With a built-in example open, the simulation makes a project of
 its own named for the machine. On a box the file route writes only the
 files a project uses, so Keep makes a copy of the open project, as the box
 holds it, with `design.md` in it, in one request; save your edits first.
-The Agent tab then shows this project's design and **Build steps 1 to 6**.
+The Describe tab then shows this project's design and **Build steps 1 to 6**.
 
 Build hands the design's build order to the Agent a few steps at a time.
 Each step is asked for with the design's own text: the step, the signal
@@ -270,12 +279,12 @@ policy.
 
 ## Get help
 
-On a box the Agent tab has a second mode, for someone who did not write
+On a box the Describe tab has a second mode, for someone who did not write
 the program and has a machine that does not do what it should. The
 toggle at the top right of the tab switches it: **< >** is **Change the
 program**, **?** is **Get help**.
 
-<img src="img/get-help.png" alt="Get help in the Agent tab: the question, Ask for help, and the issue with its Copy button." width="326">
+<img src="img/get-help.png" alt="Get help in the Describe tab: the question, Ask for help, and the issue with its Copy button." width="326">
 
 Sign in (any role), say what you saw or what you want to do in your own
 words, and press **Ask for help**, the yellow paper plane (<kbd>Enter</kbd> works too;

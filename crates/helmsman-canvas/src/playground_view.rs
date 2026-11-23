@@ -2270,7 +2270,6 @@ impl PlaygroundView {
                 ..Default::default()
             });
         }
-        let a = self.chat.answer.as_ref();
         let lines = self
             .instruct
             .run
@@ -2281,13 +2280,6 @@ impl PlaygroundView {
         Some(crate::instruct::Progress {
             estimate: Some(crate::instruct::estimate_secs(lines)),
             secs: now - self.asked_at,
-            stage: a.map_or(crate::instruct::Stage::Waiting, |a| {
-                crate::instruct::stage(a.thinking, &a.text)
-            }),
-            why: a.and_then(|a| crate::instruct::why_line(&a.text)),
-            code: a
-                .and_then(|a| crate::instruct::partial_code(&a.text))
-                .map(str::to_string),
             naming: false,
             review: false,
         })
@@ -3432,7 +3424,7 @@ impl Body for PlaygroundView {
                     .color(t.muted)
                     .italics(),
                 )
-                .tip("The file itself is unchanged until the checks pass. Stop in the Agent tab ends it.");
+                .tip("The file itself is unchanged until the checks pass. Stop in the Describe tab ends it.");
             chrome.hit("st draft note", r.rect);
             let mut shown: &str = &draft;
             let r = ui
@@ -4027,6 +4019,7 @@ impl PlaygroundView {
     /// The signals to trend (outputs, then inputs) and the chart.
     fn trend_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        chrome.hit("trend tab", ui.max_rect());
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
@@ -4039,29 +4032,41 @@ impl PlaygroundView {
             .collect();
         // The heading shares the signals' row: on a line of its own it
         // and the slider left the plot the smallest part of the panel.
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Signals").strong().color(t.muted))
-                .tip(format!(
-                    "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
-                ));
-            for name in &points {
-                let on = self.session.trend.signals.contains(name);
-                let tip = if on {
-                    "On the trend. Click to take it off."
-                } else {
-                    "Click to pin it to the trend."
-                };
-                if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
-                    .tip(tip)
-                    .clicked()
-                {
-                    self.session.trend.toggle(name);
-                }
-            }
-        });
+        // The rows scroll past a quarter of the panel: an Agent's program
+        // has dozens of points, and unbounded their rows took the whole
+        // panel and left the plot no height (Nick, 2026-11-22).
+        let rows_h = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
+        egui::ScrollArea::vertical()
+            .id_salt("pg-trend-signals")
+            .max_height(rows_h)
+            .show(ui, |ui| {
+                // Room for the scroll bar, or the panel grows to fit it.
+                ui.set_max_width(ui.available_width() - 12.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Signals").strong().color(t.muted))
+                        .tip(format!(
+                            "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
+                        ));
+                    for name in &points {
+                        let on = self.session.trend.signals.contains(name);
+                        let tip = if on {
+                            "On the trend. Click to take it off."
+                        } else {
+                            "Click to pin it to the trend."
+                        };
+                        if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
+                            .tip(tip)
+                            .clicked()
+                        {
+                            self.session.trend.toggle(name);
+                        }
+                    }
+                });
+            });
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
         let plot = self.trend_plot(ui, chrome);
+        chrome.hit("trend plot", plot);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
             self.session.trend.move_signal(from, to);
         }
@@ -4111,7 +4116,7 @@ impl PlaygroundView {
                             !self.instruct.busy(),
                             egui::Button::new(RichText::new("From a spec…").size(crate::theme::BODY)),
                         )
-                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The Agent drafts the whole project from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
+                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The whole project is drafted from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
                     chrome.hit("spec open", r.rect);
                     if r.clicked() {
                         self.spec.open = true;
@@ -4129,7 +4134,7 @@ impl PlaygroundView {
             }
             let r = ui
                 .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
-                .tip("On: when the Agent's change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
+                .tip("On: when a change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
             chrome.hit("agent resets", r.rect);
             self.after_change = if chrome.agent_resets {
                 AfterChange::Reset
@@ -4150,6 +4155,7 @@ impl PlaygroundView {
                     .as_ref()
                     .filter(|b| b.0 == self.instruct.draft)
                     .map(|b| b.1),
+                io: Some(self.phrasing_io()),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
@@ -4163,6 +4169,25 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });
+    }
+
+    /// The inputs and outputs of the program on screen as its source
+    /// spells them, for the phrasing help in the Describe tab (a built-in
+    /// example's too: a change to it starts from its code); none when no
+    /// program is open.
+    fn phrasing_io(&self) -> Vec<crate::phrasing::Io> {
+        let src = &self.session.src;
+        self.session
+            .inputs()
+            .chain(self.session.outputs())
+            // A bare address (`%QX0.1`) is no name to spell.
+            .filter(|p| !p.name.starts_with('%'))
+            .map(|p| crate::phrasing::Io {
+                name: crate::phrasing::spelled(src, &p.name),
+                input: p.dir == crate::playground::Dir::In,
+                boolean: p.ty == Ty::Bool,
+            })
+            .collect()
     }
 
     /// The free chat while it is closed or cannot be reached: what
@@ -4463,6 +4488,12 @@ pub fn window_label(ms: u64) -> String {
 
 /// Width of a lane's label column, which is also its drag handle.
 const LANE_HANDLE_W: f32 = 88.0;
+
+/// The Trend tab's signal buttons take at most this share of its height
+/// before they scroll, so the plot keeps the rest.
+const SIGNAL_ROWS_SHARE: f32 = 0.25;
+/// ... and never less than one row of them.
+const SIGNAL_ROWS_MIN: f32 = 34.0;
 
 /// A place in the trend's palette as it is drawn on this page: the brand
 /// colours, as ink on the light page, where the last (white) is the

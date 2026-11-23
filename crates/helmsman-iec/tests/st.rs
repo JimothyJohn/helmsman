@@ -575,9 +575,14 @@ fn deep_nesting_is_refused_not_a_stack_overflow() {
     }
 }
 
-/// Just inside the limit, the deepest shape of each kind compiles and runs
-/// on a thread with the default 2 MiB test stack (a debug build uses the
-/// most stack per level); a few levels more is refused.
+/// Just inside the limit, the deepest shape of each kind compiles and
+/// runs; a few levels more is refused. The thread has 4 MiB: a release
+/// build fits the deepest shape in under 768 KiB (64 parentheses), well
+/// inside a 2 MiB thread, but a debug build with full debug info needs
+/// 2 to 2.5 MiB for 190 chained `+` (measured on macOS arm64, 2026-11-22,
+/// where the 2 MiB this test had overflowed in CI). TODO.md
+/// `compiler-own-stack` is the fix that makes the caller's stack not
+/// matter.
 #[test]
 fn nesting_up_to_the_limit_runs() {
     /// What is nested, how deep, and a body nesting it that deep.
@@ -597,7 +602,7 @@ fn nesting_up_to_the_limit_runs() {
     ];
     for (what, k, body) in shapes {
         std::thread::Builder::new()
-            .stack_size(2 << 20)
+            .stack_size(4 << 20)
             .spawn(move || {
                 let vars = "a : BOOL := TRUE; b : BOOL; i : INT;";
                 let (p, _) = run(vars, &body(k));

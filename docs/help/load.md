@@ -57,7 +57,7 @@ values.
   watches and acknowledges.
 - **Errors by file and line.** The program did not compile. Fix them in
   the Structured Text (the editor marks them as you type) and deploy
-  again. The Agent tab can fix them for you from a description.
+  again. The Describe tab can fix them for you from a description.
 - **A file someone else saved since you opened it** is refused alone and
   offers Reload; the other files land.
 - **"stopped: its outputs are at their safe values"** in Messages, right
