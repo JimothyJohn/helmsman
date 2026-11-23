@@ -2269,7 +2269,6 @@ impl PlaygroundView {
                 ..Default::default()
             });
         }
-        let a = self.chat.answer.as_ref();
         let lines = self
             .instruct
             .run
@@ -2280,13 +2279,6 @@ impl PlaygroundView {
         Some(crate::instruct::Progress {
             estimate: Some(crate::instruct::estimate_secs(lines)),
             secs: now - self.asked_at,
-            stage: a.map_or(crate::instruct::Stage::Waiting, |a| {
-                crate::instruct::stage(a.thinking, &a.text)
-            }),
-            why: a.and_then(|a| crate::instruct::why_line(&a.text)),
-            code: a
-                .and_then(|a| crate::instruct::partial_code(&a.text))
-                .map(str::to_string),
             naming: false,
             review: false,
         })
@@ -3431,7 +3423,7 @@ impl Body for PlaygroundView {
                     .color(t.muted)
                     .italics(),
                 )
-                .tip("The file itself is unchanged until the checks pass. Stop in the Agent tab ends it.");
+                .tip("The file itself is unchanged until the checks pass. Stop in the Describe tab ends it.");
             chrome.hit("st draft note", r.rect);
             let mut shown: &str = &draft;
             let r = ui
@@ -4123,7 +4115,7 @@ impl PlaygroundView {
                             !self.instruct.busy(),
                             egui::Button::new(RichText::new("From a spec…").size(crate::theme::BODY)),
                         )
-                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The Agent drafts the whole project from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
+                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The whole project is drafted from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
                     chrome.hit("spec open", r.rect);
                     if r.clicked() {
                         self.spec.open = true;
@@ -4141,7 +4133,7 @@ impl PlaygroundView {
             }
             let r = ui
                 .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
-                .tip("On: when the Agent's change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
+                .tip("On: when a change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
             chrome.hit("agent resets", r.rect);
             self.after_change = if chrome.agent_resets {
                 AfterChange::Reset
@@ -4162,6 +4154,7 @@ impl PlaygroundView {
                     .as_ref()
                     .filter(|b| b.0 == self.instruct.draft)
                     .map(|b| b.1),
+                io: Some(self.phrasing_io()),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
@@ -4175,6 +4168,25 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });
+    }
+
+    /// The inputs and outputs of the program on screen as its source
+    /// spells them, for the phrasing help in the Describe tab (a built-in
+    /// example's too: a change to it starts from its code); none when no
+    /// program is open.
+    fn phrasing_io(&self) -> Vec<crate::phrasing::Io> {
+        let src = &self.session.src;
+        self.session
+            .inputs()
+            .chain(self.session.outputs())
+            // A bare address (`%QX0.1`) is no name to spell.
+            .filter(|p| !p.name.starts_with('%'))
+            .map(|p| crate::phrasing::Io {
+                name: crate::phrasing::spelled(src, &p.name),
+                input: p.dir == crate::playground::Dir::In,
+                boolean: p.ty == Ty::Bool,
+            })
+            .collect()
     }
 
     /// The free chat while it is closed or cannot be reached: what

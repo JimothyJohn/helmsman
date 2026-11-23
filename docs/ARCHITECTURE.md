@@ -925,7 +925,7 @@ test: a project's own CI still fails on one.
 The Requirements tab of the right panel (archived 2026-11-08) showed one row per test, green or
 red with why.
 
-The Agent tab is one path in the page and on a box (`agent-instruct`,
+The Describe tab is one path in the page and on a box (`agent-instruct`,
 crates/helmsman-canvas/src/instruct.rs; Nick 2026-11-05: no chat). The
 engineer types an instruction; the request carries the whole file in its
 scope (`scope::Scope::envelope`), the program and its errors, and the
@@ -967,7 +967,7 @@ box, Send or Stop, Undo, and a status line with the reason.
 makes the diagram something to point at. A right click on a block has the
 item, on the page and on a box; an input's or output's row will call
 `chat_about_signal(name, chrome)` on either view. Choosing it sends
-nothing: it opens the Agent tab and adds a chip to `Instruct::chips`,
+nothing: it opens the Describe tab and adds a chip to `Instruct::chips`,
 drawn above the instruction box (`instruct::chips_ui`: wrapped by hand
 and cut to the column, an x on each, at most eight, none twice). A chip
 holds the name, kind, file:line, the statement (cut at 40 lines or 2000
@@ -1002,7 +1002,7 @@ pick it; a plain click on a block picks it and makes it the whole
 selection, and a plain click on empty space or Esc clears it (Nick,
 2026-11-17). So does a click anywhere off the diagram
 (`app::clicked_off_the_diagram`, after the frame is drawn), except in the
-Agent tab and on its tab button, where the selection is being used: its
+Describe tab and on its tab button, where the selection is being used: its
 chips, and the instruction typed about it. Only a released click changes
 the selection: a press that becomes a drag (a block moved, the view
 moved, a band) leaves it as it was, and while a band is being drawn the
@@ -1266,7 +1266,7 @@ the person between screens.
   changes something, and a box desk that is not a desk at all is not
   fought over: the browser keeps it and the page says so.
 - **The Agent's conversation and the device form** (`desk-agent-and-forms`).
-  The desk also keeps the Agent tab's turns with the box's agent and the
+  The desk also keeps the Describe tab's turns with the box's agent and the
   last instruction's outcome (`desk::Conversation`), and a half-filled New
   device form with its points (`devices::NewDevice`; the EDS by its file
   name in the project, never its bytes). The conversation is capped at
@@ -3289,7 +3289,7 @@ the end of this section.
   button can be drawn twice: both report to `PlaygroundView::hold` and the
   input is on while either is held. A right-click on a card offers "Chat
   about this" (`assign_ui::row_menu`, `chat_about_signal`: a chip for the
-  point on the Agent tab, nothing sent) above the port's assignment
+  point on the Describe tab, nothing sent) above the port's assignment
   items. An input set by hand while the simulation is stopped or paused
   is set all the same (`PlaygroundView::set_by_hand`: the panel's values
   outlive Stop, so that is how a machine is set up before it starts), and
@@ -3483,7 +3483,7 @@ Markdown. `--relay-design-agent V` names the profile (default
 ## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
 
 For someone in trouble who did not write the program (Nick, 2026-11-07,
-interview). The box's Agent tab has two modes, "Change the program" (the
+interview). The box's Describe tab has two modes, "Change the program" (the
 instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`),
 switched by a two-glyph toggle (< > and ?) at the tab's top right; the
 heading names the mode, with a dot for the agent's state beside it (green
@@ -3702,7 +3702,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
   laptop's, a tablet's and a phone's width).
 - **Name the I/O first** (`io_names.rs`; Nick, 2026-11-14): while an
-  instruction makes a new project (`Scope::NewProject`), the Agent tab
+  instruction makes a new project (`Scope::NewProject`), the Describe tab
   carries a fold where the engineer lists the program's points: a name,
   input or output, BOOL / INT / REAL, and what it is in a few words
   (`PlaygroundView::new_io`). `send_instruction` puts the list ahead of
@@ -3712,7 +3712,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   written from such a list. Contracts in `io_names.rs`'s tests and
   `ui_tests/io_names.rs` (the pane keeps its width with long names).
 - **Spec mode** (`spec_mode.rs`; Nick, 2026-11-15): with `Scope::NewProject`
-  the Agent tab offers "From a spec…", a window (`spec_mode::form_ui`)
+  the Describe tab offers "From a spec…", a window (`spec_mode::form_ui`)
   where a specification is pasted or `.md` / `.txt` files are added
   (`Spec::add_file` holds `helmsman_project::check_text`'s rules and
   refuses with the reason; the wasm picker is `web::pick_spec_file`, which
@@ -3747,7 +3747,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   is not built. Contracts in `spec_mode_tests.rs` and
   `ui_tests/spec_mode.rs`.
   - **On a box** (`box_spec.rs`, `box_view.rs`; Nick, 2026-11-15, "in both"):
-    the same window and review with `Spec::on_box`. The Agent tab's "From a
+    the same window and review with `Spec::on_box`. The Describe tab's "From a
     spec…" is for an engineer (`BoxView::spec_entry_blocked`) with the
     agent reachable, a project open or not. `Spec` also takes PDFs
     (`Pdf`): the box's caps (`BOX_PDF` 2 MiB, `BOX_PDFS` 5, `BOX_HISTORY`
@@ -3834,7 +3834,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   with no `NAME_ok`, a red requirement test. Each is one line of what
   went wrong, the better way when a rule knows one, and two buttons. Fix
   it (`PlaygroundView::fix_noticed`) puts an instruction that carries the
-  failure in the Agent's box, shows the Agent tab and sends it through the
+  failure in the Agent's box, shows the Describe tab and sends it through the
   usual checks; Not now hides it until something else is wrong. The words
   come from rules, not the model, so watching spends no model turn; only
   the click does. `watch::Watching` holds it back while an edit is
@@ -3875,7 +3875,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   The ways to an answer, in order: the local proxy (below), the free chat
   (below), and in a native build only the machine's `ANTHROPIC_API_KEY`
   (`Route::Direct`, `x-api-key` to `api.anthropic.com`; `ApiKey`'s and the
-  request's `Debug` redact it). With none of them the Agent tab says it is
+  request's `Debug` redact it). With none of them the Describe tab says it is
   not available in this build. A key an earlier build stored in
   `localStorage` is removed on load. The page's CSP allows
   `connect-src 'self'` and, on a free-chat build, the relay's origin.
@@ -3895,7 +3895,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   (`claude::Route::Free`, the relay's `docs/demo.md`): the body is the
   turns and nothing else, since the relay there pins the prompt, the model
   and the output cap, and earlier turns are dropped oldest first to fit
-  its limits. The Agent tab has no key field and no model picker in any
+  its limits. The Describe tab has no key field and no model picker in any
   state, and one notice under the box saying the text goes to a hosted model. The
   page asks the relay once whether the chat is open
   (`GET /demo/v1/status`); closed or out of reach, the tab says so in
