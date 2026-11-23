@@ -2999,6 +2999,7 @@ impl Body for BoxView {
                 })
                 .unwrap_or_default();
             let listing = Listing {
+                place: projects::Place::Box,
                 projects: &self.projects.projects,
                 open: open.as_ref().map(|o| o.name.as_str()),
                 files,

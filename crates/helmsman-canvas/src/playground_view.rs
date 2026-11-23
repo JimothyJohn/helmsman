@@ -3654,6 +3654,7 @@ impl Body for PlaygroundView {
         let open = self.proj.open.clone();
         let current = self.proj.current.clone();
         let listing = Listing {
+            place: projects::Place::Browser,
             projects: &rows,
             open: Some(&open),
             files,
