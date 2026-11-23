@@ -7,14 +7,15 @@ the simulation; what differs is where the program runs.
 
 One row along the top.
 
-- **HELMSMAN**, on the left, opens this site.
-- **File · Edit · View · Help**: the menus. Every item that has a key
-  shows it. File holds Save, Deploy, Upload and Download. Edit holds Undo
-  and Redo for the Structured Text, Go to definition and Cross references.
-  View switches between the Editor and the Monitor, shows or hides
-  each pane, and has Light mode (dark is the default; the browser
-  remembers your choice). Help opens these pages, the keyboard table, and About
-  Helmsman (the version and build).
+- The **Helmsman mark and name**, on the left, open this site.
+- The **menu** (three lines) holds File, Edit, View and Help, each
+  opening beside it. Every item that has a key shows it. File holds
+  Save, Deploy, Upload and Download. Edit holds Undo and Redo for the
+  Structured Text, Go to definition and Cross references. View switches
+  between the Editor and the Monitor, shows or hides each pane, and has
+  Light mode (dark is the default; the browser remembers your choice).
+  Help opens these pages, the keyboard table, and About Helmsman (the
+  version and build).
 - On a box, **the link**: whether the page is connected to the box. The
   simulation's state and clock sit beside the run glyphs over the
   diagram.
@@ -33,6 +34,13 @@ Reload). Under them is the log of what happened. When an error comes in
 the tab turns red and pulses for a few seconds, and it stays red until
 you have looked at it and the error no longer stands. If the bottom
 panel was shut, an error opens it.
+
+The log lists errors to start. The **info** and **warnings** icons at its
+top list those too, each with its count, and a click on one leaves it out
+again. The answer to an instruction is one short line there; hold the
+pointer over it for the whole text. **Copy all** (two sheets) puts the
+messages shown on the clipboard, in full, and **Clear** (the bin) empties
+the log.
 
 ![The same screen in light mode, View › Light mode.](img/editor-light.png)
 

@@ -83,6 +83,10 @@ pub enum Icon {
     List,
     /// Four squares: the I/O tab's cards as tiles.
     Grid,
+    /// Two sheets, one behind the other: copy (the Messages tab).
+    Copy,
+    /// A bin: empty the Messages.
+    Clear,
     /// An open hand: pan the diagram (the corner controls).
     Hand,
     /// A magnifier with a plus: zoom in.
@@ -705,6 +709,43 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             );
             p.circle_filled(Pos2::new(c.x, t + b.height() * 0.8), w * 0.7, color);
         }
+        Icon::Copy => {
+            let k = b.width() * 0.62;
+            let front = Rect::from_min_size(Pos2::new(r - k, bt - k), Vec2::splat(k));
+            // The sheet behind shows only what the front one leaves.
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(l + k, bt - k),
+                    Pos2::new(l + k, t),
+                    Pos2::new(l, t),
+                    Pos2::new(l, t + k),
+                    Pos2::new(r - k, t + k),
+                ],
+                stroke,
+            ));
+            p.rect_stroke(front, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+        }
+        Icon::Clear => {
+            // A bin: the lid and its handle over a tapering body.
+            let lid = t + b.height() * 0.22;
+            p.line_segment([Pos2::new(l, lid), Pos2::new(r, lid)], stroke);
+            p.line_segment(
+                [
+                    Pos2::new(c.x - b.width() * 0.18, t + w * 0.5),
+                    Pos2::new(c.x + b.width() * 0.18, t + w * 0.5),
+                ],
+                stroke,
+            );
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(l + b.width() * 0.14, lid),
+                    Pos2::new(l + b.width() * 0.22, bt - w * 0.5),
+                    Pos2::new(r - b.width() * 0.22, bt - w * 0.5),
+                    Pos2::new(r - b.width() * 0.14, lid),
+                ],
+                stroke,
+            ));
+        }
         Icon::Error => {
             p.circle_stroke(c, b.width() * 0.5 - w * 0.5, stroke);
             let k = b.width() * 0.2;
@@ -721,5 +762,46 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 color,
             );
         }
+    }
+}
+
+/// The brand's stencil encoder mark (docs/brand, the `se` symbol: a rim cut
+/// by eight bridges, a hub ring cut by four, the dot, eight detached teeth)
+/// drawn in `rect`'s square in `color`. The SVG masks the cuts out; here the
+/// rim and the hub ring are arcs that stop short of them.
+pub fn paint_mark(p: &egui::Painter, rect: Rect, color: Color32) {
+    let u = rect.width().min(rect.height()) / 96.0;
+    let c = rect.center();
+    let at = |deg: f32, radius: f32| {
+        let a = deg.to_radians();
+        c + Vec2::new(a.sin(), -a.cos()) * radius * u
+    };
+    // Arcs of a ring at `radius`, one between each pair of cuts: the cuts
+    // sit at `first` degrees and every `step` after, and an arc stops
+    // `gap` degrees short of each.
+    let ring = |radius: f32, width: f32, first: f32, step: f32, gap: f32| {
+        let mut from = first + gap;
+        while from + step - 2.0 * gap <= 360.0 + first {
+            let to = from + step - 2.0 * gap;
+            let pts: Vec<Pos2> = (0..=6u8)
+                .map(|i| at(from + (to - from) * f32::from(i) / 6.0, radius))
+                .collect();
+            p.add(egui::Shape::line(pts, Stroke::new(width * u, color)));
+            from += step;
+        }
+    };
+    ring(26.5, 9.0, 22.5, 45.0, 4.0);
+    ring(11.0, 4.0, 45.0, 90.0, 7.0);
+    p.circle_filled(c, 4.0 * u, color);
+    for k in 0..8u8 {
+        let a = (45.0 * f32::from(k)).to_radians();
+        let tooth: Vec<Pos2> = [(-5.0, 33.0), (5.0, 33.0), (5.0, 43.0), (-5.0, 43.0)]
+            .iter()
+            .map(|&(x, y): &(f32, f32)| {
+                // (x, -y) turned clockwise by the tooth's angle.
+                c + Vec2::new(x * a.cos() + y * a.sin(), x * a.sin() - y * a.cos()) * u
+            })
+            .collect();
+        p.add(egui::Shape::convex_polygon(tooth, color, Stroke::NONE));
     }
 }

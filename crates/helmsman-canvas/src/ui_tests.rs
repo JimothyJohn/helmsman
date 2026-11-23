@@ -241,6 +241,16 @@ impl Harness {
     }
 
     fn press(&mut self, key: &str) {
+        // File, Edit, View and Help are the submenus of the one menu: with
+        // it shut, the way to one is the menu button first.
+        if key.starts_with("bar ") && key != "bar menu" {
+            // A menu an item just closed is gone a frame later.
+            self.frame(vec![]);
+        }
+        if key.starts_with("bar ") && key != "bar menu" && !self.has(key) {
+            let at = self.rect("bar menu").center();
+            self.click(at);
+        }
         let at = self.rect(key).center();
         self.click(at);
     }
@@ -428,9 +438,14 @@ mod glyphs_and_help {
         for k in ["messages info", "messages warnings", "messages errors"] {
             assert!(h.has(k), "no {k}");
         }
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().log.show,
+            [false, false, true],
+            "errors only, to start"
+        );
         h.press("messages info");
         let log = &h.app.sim.as_ref().unwrap().log;
-        assert_eq!(log.show, [false, true, true], "info filtered out");
+        assert_eq!(log.show, [true, false, true], "info listed too");
         assert_eq!(h.app.chrome.bottom, Bottom::Messages);
         assert!(!h.has("st"), "no Files header row either");
     }
@@ -454,11 +469,12 @@ mod glyphs_and_help {
             assert!(!h.drew(&format!("{word} ")), "the word {word:?} is drawn");
         }
         assert!(h.drew("deploy refused"), "the message itself is");
+        assert!(!h.drew("a deploy ran"), "info is hidden to start");
         let r = h.rect("messages errors");
         assert!(r.width() >= 24.0 && r.height() >= 24.0, "a target: {r:?}");
         h.press("messages errors");
         h.wait(0.1);
-        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [true, true, false]);
+        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [false, false, false]);
         assert!(!h.drew("deploy refused"), "errors left out");
         h.press("messages errors");
         h.wait(0.1);
@@ -507,6 +523,68 @@ mod glyphs_and_help {
             h.app.sim.as_ref().unwrap().log.text(),
             "what is shown, as text"
         );
+    }
+
+    /// Nick, 2026-11-23: an outcome is a short line in the Messages, the
+    /// whole text one hover or one Copy all away, and Clear empties the
+    /// log with its counts.
+    #[test]
+    fn an_outcome_is_a_short_line_clear_empties_and_a_hidden_level_still_counts() {
+        use crate::instruct::{Kind, Outcome};
+        let mut h = Harness::new(App::sim());
+        let long: Vec<String> = (1..=6)
+            .map(|k| format!("scenario test_{k} failed: expected the lamp on at scan 40 and it stayed off"))
+            .collect();
+        let mut refused = Outcome::new(Kind::Refused, "Not changed:");
+        refused.problems = long;
+        let mut said = Outcome::new(Kind::Applied, "Updated main.st.");
+        said.why = Some("The lamp now follows the button.".into());
+        {
+            let log = &mut h.app.sim.as_mut().unwrap().log;
+            log.outcome(1.0, &said);
+            log.outcome(2.0, &refused);
+        }
+        h.press("bottom messages");
+        h.wait(0.2);
+        assert!(h.drew("Not changed:"), "the short line");
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .log
+                .shown()
+                .any(|m| m.text.ends_with("(+5 more)")),
+            "and how many more"
+        );
+        assert!(!h.drew("scenario test_6"), "not every problem line");
+        assert!(!h.drew("Updated main.st"), "info is hidden");
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert!(
+            log.counts()[0] >= 1 && log.counts()[2] == 1,
+            "the hidden level is still counted: {:?}",
+            log.counts()
+        );
+        assert!(
+            log.errors() == 1 && log.alarm(2.5, false).is_some(),
+            "the error still pulses"
+        );
+        h.press("messages copy");
+        let all = h.copied.last().expect("Copy all copied").clone();
+        assert!(
+            all.contains("scenario test_6 failed"),
+            "Copy all has the whole: {all}"
+        );
+        assert!(!all.contains("Updated main.st"), "Copy all copies what is shown");
+        assert!(h.has("messages clear"), "Clear is there");
+        let r = h.rect("messages clear");
+        assert!(r.width() >= 24.0 && r.height() >= 24.0, "a target: {r:?}");
+        h.press("messages clear");
+        h.wait(0.1);
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert!(log.is_empty() && log.counts() == [0; 3] && log.errors() == 0);
+        assert!(log.alarm(2.5, false).is_none(), "nothing pulses or stays red");
+        assert!(!h.has("messages clear"), "nothing to clear now");
     }
 
     #[test]
@@ -1040,29 +1118,31 @@ END_PROGRAM",
         assert!(h.rect("st editor").right() <= pane, "wrapped again");
     }
 
-    /// Nick, 2026-11-01: one tall row, menus left, the project right; the
-    /// bar that held ST, Reset layout and Save as default is gone.
+    /// Nick, 2026-11-01: one tall row, the project right; the bar that held
+    /// ST, Reset layout and Save as default is gone. 2026-11-23: one menu
+    /// (a hamburger) holds File, Edit, View and Help.
     #[test]
-    fn the_header_is_one_tall_row_with_file_edit_and_view_menus() {
+    fn the_header_is_one_tall_row_with_one_menu_holding_file_edit_view_and_help() {
         let mut h = Harness::new(App::sim());
         let header = h.rect("header");
         assert!(header.height() >= HEADER_H, "{header:?}");
-        for k in [
-            "mark", "bar file", "bar edit", "bar view", "bar help", "title", "editor", "monitor", "help",
-        ] {
+        for k in ["mark", "bar menu", "title", "editor", "monitor", "help"] {
             assert!(h.has(k), "no {k}");
+        }
+        for k in ["bar file", "bar edit", "bar view", "bar help"] {
+            assert!(!h.has(k), "{k} is inside the menu, shut now");
         }
         assert!(!h.has("deploy"), "Deploy is the File menu's");
         assert!(!h.has("menu"), "no ⋯ any more");
-        let (file, view, help, toggle) = (
-            h.rect("bar file"),
-            h.rect("bar view"),
+        let (mark, menu, help, toggle) = (
+            h.rect("mark"),
+            h.rect("bar menu"),
             h.rect("help"),
             h.rect("monitor"),
         );
         assert!(
-            file.left() < view.left() && view.right() < help.left(),
-            "menus left, ? right"
+            mark.right() <= menu.left(),
+            "the wordmark, then the menu: {mark:?} {menu:?}"
         );
         assert!(
             help.left() >= toggle.right(),
@@ -1070,12 +1150,141 @@ END_PROGRAM",
         );
         assert!(help.right() <= 1400.0, "on screen");
         assert!(!h.has("st") && !h.has("reset layout"), "no second bar");
+        // The wordmark is the brand's mark and its name, not the old text.
+        assert!(h.drew("Helmsman") && !h.drew("HELMSMAN"), "the wordmark");
+        assert!(h.rect("mark").height() <= HEADER_H, "inside the row");
+        // Open, it lists the four, and each holds its items.
+        h.press("bar menu");
+        for k in ["bar file", "bar edit", "bar view", "bar help"] {
+            assert!(h.has(k), "no {k} in the menu");
+        }
+        assert!(
+            h.rect("bar file").bottom() <= h.rect("bar edit").top()
+                && h.rect("bar edit").bottom() <= h.rect("bar view").top()
+                && h.rect("bar view").bottom() <= h.rect("bar help").top(),
+            "File, Edit, View, Help, top to bottom"
+        );
         // The menus are there on the Monitor too.
+        h.press("bar menu");
         h.press("monitor");
         assert_eq!(h.app.screen, Screen::Monitor);
-        assert!(h.has("bar view"));
+        assert!(h.has("bar menu"));
         h.view_menu("view editor");
         assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    /// Nick, 2026-11-23: the chevron that folds a pane was not intuitive.
+    /// It is a panel now: a window outline with the pane's side filled and
+    /// an arrow pointing the way the pane goes, into its edge to hide it,
+    /// away from it to show it. Same hooks, `left` and `right`.
+    #[test]
+    fn the_fold_glyph_is_a_panel_with_an_arrow_the_way_it_will_move() {
+        /// What the last frame drew in `area`: the filled rects, and the
+        /// line segments (the arrow's two strokes).
+        fn drawn(h: &Harness, area: egui::Rect) -> (Vec<egui::Rect>, Vec<[egui::Pos2; 2]>) {
+            fn walk(s: &egui::Shape, area: egui::Rect, out: &mut (Vec<egui::Rect>, Vec<[egui::Pos2; 2]>)) {
+                match s {
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
+                    egui::Shape::Rect(r)
+                        if r.fill != egui::Color32::TRANSPARENT && area.contains_rect(r.rect) =>
+                    {
+                        out.0.push(r.rect);
+                    }
+                    egui::Shape::LineSegment { points, .. } if points.iter().all(|p| area.contains(*p)) => {
+                        out.1.push(*points);
+                    }
+                    _ => {}
+                }
+            }
+            let mut out = (Vec::new(), Vec::new());
+            for c in &h.shapes {
+                walk(&c.shape, area, &mut out);
+            }
+            out
+        }
+        /// Which way the arrow points: its two strokes meet at the tip.
+        fn points_right(segs: &[[egui::Pos2; 2]]) -> bool {
+            assert_eq!(segs.len(), 2, "an arrow is two strokes: {segs:?}");
+            let tip = segs[0]
+                .iter()
+                .find(|p| segs[1].contains(p))
+                .expect("the strokes meet");
+            let back = segs[0].iter().find(|p| *p != tip).unwrap();
+            tip.x > back.x
+        }
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.dock(Pane::Claude, true);
+        h.wait(0.3);
+        assert!(h.app.chrome.left && h.app.chrome.right, "both panes open");
+        for (hook, pane_left) in [("left", true), ("right", false)] {
+            // Open: the pane's side is filled, the arrow points into its edge.
+            let r = h.rect(hook);
+            assert!(
+                r.width() <= crate::st_view::TAP && r.height() <= crate::st_view::TAP,
+                "{hook}: {r:?}"
+            );
+            let (fills, segs) = drawn(&h, r);
+            let slab = fills
+                .iter()
+                .find(|f| f.width() < r.width() * 0.5 && f.height() > 12.0);
+            let slab = slab.unwrap_or_else(|| panic!("{hook}: no filled side in {fills:?}"));
+            assert_eq!(
+                slab.center().x < r.center().x,
+                pane_left,
+                "{hook}: the filled side is the pane's"
+            );
+            assert_eq!(
+                points_right(&segs),
+                !pane_left,
+                "{hook}: hide moves the pane to its edge"
+            );
+            // Click: the pane shuts, and its strip's button is the same
+            // glyph the other way about.
+            h.press(hook);
+            h.wait(0.3);
+            let shut = if pane_left {
+                h.app.chrome.left
+            } else {
+                h.app.chrome.right
+            };
+            assert!(!shut, "{hook}: the glyph hides its pane");
+            let r = h.rect(hook);
+            let (fills, segs) = drawn(&h, r);
+            let slab = fills.iter().find(|f| f.width() < 12.0 && f.height() > 12.0);
+            let slab = slab.unwrap_or_else(|| panic!("{hook} strip: no filled side in {fills:?}"));
+            assert_eq!(
+                slab.center().x < r.center().x,
+                pane_left,
+                "{hook} strip: the same side"
+            );
+            assert_eq!(
+                points_right(&segs),
+                pane_left,
+                "{hook} strip: show moves the pane in"
+            );
+            h.press(hook);
+            h.wait(0.3);
+            let open = if pane_left {
+                h.app.chrome.left
+            } else {
+                h.app.chrome.right
+            };
+            assert!(open, "{hook}: the strip's glyph shows its pane again");
+        }
+    }
+
+    /// The tab row's tips lead with the key and stay at two lines.
+    #[test]
+    fn the_pane_and_panel_tips_lead_with_the_key_and_fit_two_lines() {
+        for p in [Pane::Files, Pane::Code, Pane::Devices] {
+            let t = p.tip();
+            assert!(t.starts_with("Alt+Shift+"), "{t}");
+            assert!(t.lines().count() <= 2 && t.chars().count() <= 110, "{t}");
+        }
+        for b in [crate::editor::Bottom::Trend, crate::editor::Bottom::Messages] {
+            let t = b.tip();
+            assert!(t.lines().count() <= 2 && t.chars().count() <= 110, "{t}");
+        }
     }
 
     /// Nick, 2026-11-01: the Monitor needs play, start, stop. In the
@@ -1576,7 +1785,7 @@ END_PROGRAM",
             let logged = v
                 .log
                 .iter()
-                .map(|e| e.text.clone())
+                .map(|e| e.full().to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(logged.contains("Why: it says why the lamp is on."), "{logged}");
@@ -2331,7 +2540,7 @@ mod chrome {
         let band = h.rect("hint 3");
         let editor = h.rect("st editor");
         assert!(editor.contains(band.center()), "{band:?} in {editor:?}");
-        let said = |h: &Harness| h.app.sim.as_ref().unwrap().log.text();
+        let said = |h: &Harness| h.app.sim.as_ref().unwrap().log.full_text();
         assert!(!said(&h).contains("hint(s)"), "not while the text is new");
         h.wait(SETTLE + 0.3);
         let log = said(&h);
@@ -2474,6 +2683,17 @@ mod chrome {
             h.key(Modifiers::NONE, Key::Escape);
             h.frame(vec![]);
         };
+        // The one menu: its four submenu buttons fill its width alike.
+        h.press("bar menu");
+        h.frame(vec![]);
+        let four = ["bar file", "bar edit", "bar view", "bar help"].map(|k| h.rect(k));
+        let widest = four.iter().map(Rect::width).fold(0.0, f32::max);
+        assert!(
+            widest <= 220.0 * crate::theme::BODY / 12.5,
+            "the menu is {widest} pt wide"
+        );
+        assert!(four.iter().all(|r| (r.width() - widest).abs() < 1.0), "{four:?}");
+        h.press("bar menu");
         menu(&mut h, "bar file", &["file new", "file save", "file download"]);
         menu(&mut h, "bar edit", &["edit undo", "edit redo"]);
         menu(&mut h, "bar view", &["view st", "view files", "reset layout"]);
@@ -5703,7 +5923,7 @@ mod boxed {
         assert!(
             boxed(&h)
                 .log
-                .text()
+                .full_text()
                 .contains("Help: an issue was written (Conveyor stops when rio drops)."),
             "in Messages"
         );
@@ -6736,6 +6956,9 @@ mod tour {
         let sim = h.app.sim.as_ref().unwrap();
         assert!(sim.proj.files[&sim.proj.current].contains("T#200ms"));
         assert_eq!(step(&h), Step::Deploy);
+        assert_eq!(anchor(&h).as_deref(), Some("bar menu"));
+        card_is_fair(&h, "menu");
+        h.press("bar menu");
         assert_eq!(anchor(&h).as_deref(), Some("bar file"));
         card_is_fair(&h, "file menu");
         h.press("bar file");

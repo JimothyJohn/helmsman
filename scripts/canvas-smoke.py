@@ -126,13 +126,19 @@ TAB_RIGHT_FIRST = (1229, 71)
 FOLD_LINE_2 = (14, 168)
 TAB_TREND = (344, 600)
 TAB_MESSAGES = (385, 600)
-# The View menu, its "Pane layouts…" item, and two of the popup's
-# ready-made layouts.
-VIEW_MENU = (235, 26)
-VIEW_PANE_LAYOUTS = (279, 479)
-# On a box's page the menu has two more rows above it (Proposals, Simulate
-# in this browser).
-VIEW_PANE_LAYOUTS_BOX = (279, 553)
+# The one menu (the three-line glyph, 2026-11-23), its four submenus, the
+# View submenu's "Pane layouts…" item and, on a box's page, its Proposals
+# item (the box's View menu has two more rows above Pane layouts:
+# Proposals and Simulate in this browser). The submenus open to the right
+# of the menu. Measured with the native harness, 1400 x 860 points.
+MENU = (182, 26)
+MENU_FILE = (201, 64)
+MENU_EDIT = (202, 92)
+MENU_VIEW = (207, 120)
+MENU_HELP = (206, 148)
+VIEW_PANE_LAYOUTS = (396, 541)
+VIEW_PANE_LAYOUTS_BOX = (396, 615)
+VIEW_PROPOSALS_BOX = (396, 198)
 LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
 HEADER_RIGHT = (1150, 8, 200, 36)
@@ -246,8 +252,8 @@ def playground(ctx, base, out):
     r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
-    for x, name in ((137, "file-menu"), (190, "edit-menu"), (235, "view-menu"), (283, "help-menu")):
-        r.click(x, 26); r.wait(500); r.shot(name); r.key("Escape")
+    for sub, name in ((MENU_FILE, "file-menu"), (MENU_EDIT, "edit-menu"), (MENU_VIEW, "view-menu"), (MENU_HELP, "help-menu")):
+        r.click(*MENU); r.wait(300); r.click(*sub); r.wait(500); r.shot(name); r.key("Escape"); r.key("Escape")
     # Type a comment into the program, then deploy it.
     def edit():
         # A comment typed where the caret lands (egui's End chord moves
@@ -292,7 +298,8 @@ def playground(ctx, base, out):
     # View › Pane layouts… (2026-11-15): the popup, then the ready-made
     # Programming layout (the code docked on the right), then Default.
     def layouts():
-        r.click(*VIEW_MENU); r.wait(1500)
+        r.click(*MENU); r.wait(500)
+        r.click(*MENU_VIEW); r.wait(1500)
         r.click(*VIEW_PANE_LAYOUTS)
     r.step("pane-layouts", layouts, LEFT, 1500)
     r.step("layout-programming", lambda: r.click(*LAYOUT_PROGRAMMING), RIGHT_TABS, 1000)
@@ -384,7 +391,8 @@ def box(ctx, base, out):
     if kept.status != 200:
         extra.append(f"the pane layout was refused: {kept.status} {kept.text()[:200]}")
     def layouts():
-        r.click(*VIEW_MENU); r.wait(1500)
+        r.click(*MENU); r.wait(500)
+        r.click(*MENU_VIEW); r.wait(1500)
         r.click(*VIEW_PANE_LAYOUTS_BOX)
     r.step("pane-layouts", layouts, LEFT, 2500)
     r.key("Escape"); r.wait(400)
@@ -552,8 +560,9 @@ def market(browser, dist, out):
                     r.page.keyboard.type(PASSWORD)
                     r.key("Enter")
                 sign_in(); r.wait(6000)
-                r.click(*VIEW_MENU); r.wait(1500)
-                r.click(259, 135); r.wait(1500)
+                r.click(*MENU); r.wait(500)
+                r.click(*MENU_VIEW); r.wait(1500)
+                r.click(*VIEW_PROPOSALS_BOX); r.wait(1500)
                 r.shot("proposals-screen")
                 problems += install_steps(r, index, label)
                 problems += r.problems()

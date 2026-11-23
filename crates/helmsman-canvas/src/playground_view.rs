@@ -2492,26 +2492,9 @@ impl PlaygroundView {
 
     /// The outcome of the last instruction, in Messages.
     fn log_outcome(&mut self) {
-        use crate::instruct::Kind;
         let Some(o) = &self.instruct.outcome else { return };
         let at = self.session.now_ms as f64 / 1000.0;
-        let mut line = o.status.clone();
-        if let Some(w) = &o.why {
-            line.push_str(" Why: ");
-            line.push_str(w);
-        }
-        for p in &o.problems {
-            line.push(' ');
-            line.push_str(p);
-        }
-        // A refusal is an error: the Messages count it in red and open
-        // (Nick, 2026-11-13: errors go there, not in the Agent tab).
-        match o.kind {
-            // An update with checks that did not pass is a warning.
-            Kind::Applied if !o.problems.is_empty() => self.log.warning(at, line),
-            Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
-            Kind::Refused | Kind::Failed => self.log.error(at, line),
-        }
+        self.log.outcome(at, o);
     }
 
     /// The Agent's last change, marked while its file is what the Agent

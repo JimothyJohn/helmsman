@@ -692,6 +692,15 @@ impl Harness {
     }
 
     fn press(&mut self, key: &str) {
+        // File, Edit, View and Help are the submenus of the one menu.
+        if key.starts_with("bar ") && key != "bar menu" {
+            // A menu an item just closed is gone a frame later.
+            self.frame(vec![]);
+        }
+        if key.starts_with("bar ") && key != "bar menu" && self.app.chrome.rect(key).is_none() {
+            let at = self.rect("bar menu").center();
+            self.click(at);
+        }
         let at = self.rect(key).center();
         self.click(at);
     }
