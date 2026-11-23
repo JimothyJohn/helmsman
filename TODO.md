@@ -736,7 +736,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 2d
   difficulty: med
   id: fb-code-tab
-- [ ] **IO tab** — keep the grid and icon layouts, the toggles and jump-to-node; loosen what is too collapsed; no effects on the larger tiles (a quick snapshot); "Describe a start state" does nothing today: make it an input to Helmsman that sets up IO, states and labels, with renames going into the code.
+- [x] **IO tab** — keep the grid and icon layouts, the toggles and jump-to-node; loosen what is too collapsed; no effects on the larger tiles (a quick snapshot); "Describe a start state" does nothing today: make it an input to Helmsman that sets up IO, states and labels, with renames going into the code.
   depends: diagram-names-values
   est: 2d
   difficulty: med

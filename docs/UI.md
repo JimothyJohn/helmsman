@@ -430,7 +430,16 @@ only go down.
   frames its blocks, running or not. A tap on an output lights the path
   that sets it, framed as the Q/E jump frames, no closer than the current
   zoom. List or tiles at the top; Inputs and Outputs fold behind their
-  arrows. The diagram stays in source order.
+  arrows. The diagram stays in source order. (Nick, 2026-11-23: a quick
+  snapshot, minimal.) A row gives its long lines the room they need
+  (a name, the wired line and the part in the scheme wrap inside the
+  column instead of ending in an ellipsis; an input's button grows to a
+  second line); a tile is flat (one thin outline, the same fill open or
+  not, no growth under the pointer) and still cuts a name to its width.
+  "Describe a start state" is an input to Helmsman: the values it finds
+  are a proposal, and a rename it offers is a button that renames the
+  point in every file on a click. Where the relay cannot answer it, the
+  field says "Not available here" and its send glyph says why.
 - **Assign to device I/O (2026-11-15, `assign.rs`, `assign_ui.rs`):** a
   program's inputs and outputs start on simulated or on-screen I/O
   (`in start bool box di:0`, `out speed int screen speed safe=0`). A device

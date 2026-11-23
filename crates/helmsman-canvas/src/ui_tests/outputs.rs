@@ -60,6 +60,8 @@ fn fifty_outputs_with_long_names_keep_the_panel_at_its_default_width() {
         outs.left() >= h.size.x - RIGHT_W - 8.0 && outs.right() <= h.size.x,
         "the cards {outs:?} stay in the {RIGHT_W} pt panel"
     );
+    h.press("io head inputs");
+    h.wait(0.2);
     assert!(h.drew("driven by"), "a card says what drives it");
     assert!(
         outs.width() > RIGHT_W * 0.8,
@@ -70,6 +72,9 @@ fn fifty_outputs_with_long_names_keep_the_panel_at_its_default_width() {
 #[test]
 fn a_tap_on_a_card_lights_that_outputs_path() {
     let mut h = sim_with(&many(3));
+    // Folded, the inputs leave the first output card in plain view.
+    h.press("io head inputs");
+    h.wait(0.3);
     let outs = h.rect("io outputs");
     h.click(outs.left_top() + eframe::egui::vec2(60.0, 14.0));
     h.wait(0.6);

@@ -39,7 +39,7 @@ fn double_click(h: &mut Harness, key: &str) {
     h.wait(1.0);
     // Low on the card: under its control and its glyphs.
     let r = h.rect(key);
-    let at = eframe::egui::pos2(r.center().x, r.bottom() - 8.0);
+    let at = eframe::egui::pos2(r.center().x, (r.bottom() - 8.0).min(h.size.y - 4.0));
     h.click(at);
     h.click(at);
     h.wait(0.2);
@@ -63,12 +63,17 @@ fn a_card_says_the_first_link_and_its_details_say_them_all() {
     assert!(!h.has("io more stop"), "stop affects one: no …");
     assert!(!h.drew("named"), "no details until asked");
     assert!(!h.drew("kept"), "the groups are in the details");
+    // The details open below the fold of the inputs unless they are folded.
+    h.press("io head inputs");
+    h.wait(0.2);
     double_click(&mut h, "io card motor");
     assert!(h.drew("kept"), "motor latches on itself");
     assert!(h.drew("times in the code"), "and how often it is named");
     assert!(!h.has("io more motor"), "all of them are shown");
     double_click(&mut h, "io card motor");
     assert!(!h.drew("times in the code"), "a second double-click closes them");
+    h.press("io head inputs");
+    h.wait(0.2);
     h.press("io more start");
     h.wait(0.2);
     assert!(
@@ -266,8 +271,8 @@ fn a_push_button_held_in_the_tab_stays_on_while_its_block_is_on_the_diagram() {
         .map(|(_, r)| *r)
         .expect("the control on the card");
     assert!(
-        control.height() < 50.0,
-        "the button sits beside its glyph: {control:?}"
+        control.height() < 90.0,
+        "the button sits beside its glyph, a name that needs it on a second line: {control:?}"
     );
     let at = eframe::egui::pos2(control.right() - 30.0, control.center().y);
     h.frame(vec![Event::PointerMoved(at)]);
@@ -413,4 +418,81 @@ fn a_push_button_pressed_while_stopped_says_it_is_on_only_while_held() {
     h.frame(vec![Harness::button(at, false)]);
     h.wait(0.2);
     assert_eq!(value(&h, "jog_button"), Some(helmsman_iec::Value::Bool(false)));
+}
+
+/// A card with names that are long but that a row has the room for.
+const LONG: &str = "\
+PROGRAM belt
+VAR_INPUT feeder_belt_run_request : BOOL; END_VAR
+VAR_OUTPUT feeder_belt_motor_contactor_closed : BOOL; END_VAR
+feeder_belt_motor_contactor_closed := feeder_belt_run_request;
+END_PROGRAM
+";
+
+#[test]
+fn a_row_gives_its_long_names_the_room_they_need_inside_the_default_width() {
+    let mut h = sim_with(LONG);
+    let right = h.rect("right");
+    // What was cut to an ellipsis before shows whole, wrapped on the card.
+    for name in ["feeder_belt_run_request", "feeder_belt_motor_contactor_closed"] {
+        assert!(h.drew(name), "{name}");
+        assert!(!h.elided(name), "{name} is not cut");
+        let card = h.rect(&format!("io card {name}"));
+        assert!(
+            card.left() >= h.size.x - RIGHT_W - 8.0 && card.right() <= h.size.x,
+            "{name}: {card:?} stays in the {RIGHT_W} pt panel"
+        );
+    }
+    assert!(
+        !h.elided("driven by") && !h.elided("affects"),
+        "the summary lines too"
+    );
+    assert!(
+        (h.rect("right").left() - right.left()).abs() <= 8.0,
+        "the panel kept its width"
+    );
+    // A tile has no room for it: there the name is still cut to the tile.
+    h.press("io grid");
+    h.wait(0.3);
+    assert!(h.elided("feeder_belt_motor_contactor_closed"));
+    let card = h.rect("io card feeder_belt_motor_contactor_closed");
+    assert!(card.right() <= h.size.x, "{card:?}");
+}
+
+#[test]
+fn a_tile_is_flat_the_same_fill_and_a_thin_outline_whether_open_or_not() {
+    use crate::io_cards::look;
+    use crate::theme::Theme;
+    for t in [Theme::dark(), Theme::light()] {
+        let (fill, rest) = look(true, false, &t);
+        let (fill_on, open) = look(true, true, &t);
+        assert_eq!(fill, fill_on, "no shaded fill on a selected tile");
+        assert!((rest.width - 1.0).abs() < f32::EPSILON && (open.width - 1.0).abs() < f32::EPSILON);
+        assert_ne!(
+            rest.color, open.color,
+            "the open tile is told by its outline colour"
+        );
+        // A row keeps its heavier outline for the output whose path is lit.
+        let (_, lit) = look(false, true, &t);
+        assert!(lit.width > 1.0);
+    }
+}
+
+#[test]
+fn a_tile_paints_nothing_that_moves_while_the_pointer_is_over_it() {
+    let mut h = sim_with(MIXER);
+    h.press("io grid");
+    h.wait(0.3);
+    let card = h.rect("io card stop");
+    h.frame(vec![Event::PointerMoved(
+        card.left_top() + eframe::egui::vec2(4.0, 4.0),
+    )]);
+    let still = h.rect("io card stop");
+    h.wait(0.5);
+    assert_eq!(
+        h.rect("io card stop"),
+        still,
+        "hovering does not grow or move a tile"
+    );
+    assert_eq!(still, card, "and it is where it was");
 }

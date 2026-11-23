@@ -1269,7 +1269,8 @@ impl PlaygroundView {
         }
         let Ok(route) = self.chat.route() else { return };
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
-        let message = crate::start_state::message(&self.start.draft, &inputs);
+        let outputs: Vec<Point> = self.session.outputs().cloned().collect();
+        let message = crate::start_state::message_for(&self.start.draft, &inputs, &outputs);
         let turn = self.chat.takes.allow(crate::claude::Turn {
             agent: Some(crate::start_state::AGENT),
             quick: false,
@@ -1302,9 +1303,15 @@ impl PlaygroundView {
         if let Some(done) = self.start_answer.take() {
             if self.start.phase == Phase::Working {
                 let inputs: Vec<Point> = self.session.inputs().cloned().collect();
+                let outputs: Vec<Point> = self.session.outputs().cloned().collect();
                 let src = self.session.src.clone();
-                self.start
-                    .answered(done.as_deref().map_err(String::as_str), &src, &inputs);
+                self.start.answered(
+                    done.as_deref().map_err(String::as_str),
+                    &src,
+                    &inputs,
+                    &outputs,
+                    &self.proj.files,
+                );
             }
         } else if self.start.phase == Phase::Working {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -1313,6 +1320,50 @@ impl PlaygroundView {
             self.start.stopped();
             self.start.line = Some("The program changed, so the proposal was dropped.".into());
         }
+    }
+
+    /// Why the start-state field cannot ask now, in a line, when it
+    /// cannot: there is nobody to ask, or the relay does not serve it.
+    #[must_use]
+    pub fn start_unavailable(&self) -> Option<&'static str> {
+        if self.chat.serves(crate::start_state::AGENT) {
+            return None;
+        }
+        Some(
+            if matches!(self.chat.route(), Ok(crate::claude::Route::Free(_))) {
+                "This relay does not serve start states, so nothing can be asked. Set the inputs by hand."
+            } else {
+                "Start states are asked of Helmsman's free chat, which is not open here. Set the inputs by hand."
+            },
+        )
+    }
+
+    /// Rename `k` of the proposal, clicked: the whole project is renamed
+    /// ([`Self::rename_everywhere`]) and the proposal follows the new name.
+    fn start_rename(&mut self, k: usize) {
+        use crate::start_state::Phase;
+        let Phase::Proposed(p) = &self.start.phase else {
+            return;
+        };
+        let Some(crate::offers::What::Rename { old, new }) = p.offers.get(k).map(|o| o.what.clone()) else {
+            return;
+        };
+        let before = self.proj.files.clone();
+        let was_running = self.session.running;
+        self.rename_everywhere(&old, &new);
+        // A rename is no reason to start the machine: values are set
+        // before it starts, and never on a running one.
+        if !was_running {
+            self.session.set_running(false);
+        }
+        if self.proj.files == before {
+            self.start.line = Some(format!("{old} was not renamed. Nothing changed."));
+            return;
+        }
+        let src = self.session.src.clone();
+        self.start.renamed(k, &src);
+        let names: Vec<String> = self.session.inputs().map(|p| p.name.clone()).collect();
+        self.start.respell(&names);
     }
 
     /// Sets what the Agent proposed, each value as set by hand, if the
@@ -1340,30 +1391,31 @@ impl PlaygroundView {
     /// capped to the tab's width, with 12 pt left for the scroll bar.
     fn start_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::start_state::Phase;
-        if !self.offers_start() {
-            return;
-        }
         let t = theme(ui);
+        let off = self.start_unavailable();
         let running = self.session.running;
         let working = self.start.phase == Phase::Working;
         let width = (ui.available_width() - 12.0).max(120.0);
         ui.set_max_width(width);
         let mut send = false;
         let mut stop = false;
+        let mut say_off = false;
         let glyph = crate::st_view::TAP * 1.5;
         ui.horizontal(|ui| {
             let field_w = (width - glyph - ui.spacing().item_spacing.x - 4.0).max(80.0);
-            let tip = if running {
+            let tip = if let Some(why) = off {
+                why
+            } else if running {
                 "Stop the program first: start values are never changed on a running machine."
             } else {
                 "Describe the state the machine should start in, in your own words, for example \
                  part seated, guard open, speed 40. The answer is input values, as a \
                  proposal; nothing is set until you accept it. Enter sends."
             };
-            let out = ui.add_enabled_ui(!running && !working, |ui| {
+            let out = ui.add_enabled_ui(!running && !working && off.is_none(), |ui| {
                 egui::TextEdit::singleline(&mut self.start.draft)
                     .id_salt("start-state")
-                    .hint_text("Describe a start state…")
+                    .hint_text(if off.is_some() { "Not available here" } else { "Describe a start state…" })
                     .char_limit(crate::start_state::MAX_DESCRIPTION)
                     .desired_width(field_w)
                     .show(ui)
@@ -1379,22 +1431,30 @@ impl PlaygroundView {
                 chrome.hit("start stop", r.rect);
                 stop = r.clicked();
             } else {
-                let why_not = if running {
+                let why_not = if let Some(why) = off {
+                    Some(why)
+                } else if running {
                     Some("Stop the program first: start values are never changed on a running machine.")
                 } else if self.start.draft.trim().is_empty() {
                     Some("Write a start state first.")
                 } else {
                     None
                 };
-                let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true).tip(
+                // Off, the send glyph stays live to say why in a line.
+                let live = why_not.is_none() || off.is_some();
+                let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, live, true).tip(
                     why_not.unwrap_or(
                         "Send: asks for input values that match this description. They are shown as a proposal first.",
                     ),
                 );
                 chrome.hit("start send", r.rect);
                 send = (r.clicked() || enter) && why_not.is_none();
+                say_off = r.clicked() && off.is_some();
             }
         });
+        if say_off {
+            self.start.line = off.map(str::to_owned);
+        }
         if working {
             let r = ui
                 .add(
@@ -1416,6 +1476,7 @@ impl PlaygroundView {
         }
         let mut accept = false;
         let mut discard = false;
+        let mut pick = None;
         if let Phase::Proposed(p) = &self.start.phase {
             let frame = egui::Frame::new()
                 .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
@@ -1427,7 +1488,11 @@ impl PlaygroundView {
                     let r = ui
                         .add(
                             egui::Label::new(
-                                RichText::new("Proposed start values:")
+                                RichText::new(if p.changes.is_empty() {
+                                    "Proposed names:"
+                                } else {
+                                    "Proposed start values:"
+                                })
                                     .strong()
                                     .size(crate::theme::MIN_TEXT),
                             )
@@ -1435,6 +1500,9 @@ impl PlaygroundView {
                         )
                         .tip("Nothing is set yet. Set these puts every value below into its input, as if you had set it by hand.");
                     chrome.hit("start proposal", r.rect);
+                    if !p.offers.is_empty() {
+                        pick = crate::offers::ui(ui, chrome, &p.offers);
+                    }
                     egui::ScrollArea::vertical()
                         .id_salt("start-proposal")
                         .max_height(160.0)
@@ -1453,18 +1521,20 @@ impl PlaygroundView {
                             }
                         });
                     ui.horizontal_wrapped(|ui| {
-                        let go = ui
-                            .add_enabled(
-                                !running,
-                                egui::Button::new(RichText::new("Set these").size(crate::theme::MIN_TEXT)),
-                            )
-                            .tip(if running {
-                                "Stop the program first: start values are never changed on a running machine."
-                            } else {
-                                "Put these values into the inputs. The program then starts with them."
-                            });
-                        chrome.hit("start set", go.rect);
-                        accept = go.clicked();
+                        if !p.changes.is_empty() {
+                            let go = ui
+                                .add_enabled(
+                                    !running,
+                                    egui::Button::new(RichText::new("Set these").size(crate::theme::MIN_TEXT)),
+                                )
+                                .tip(if running {
+                                    "Stop the program first: start values are never changed on a running machine."
+                                } else {
+                                    "Put these values into the inputs. The program then starts with them."
+                                });
+                            chrome.hit("start set", go.rect);
+                            accept = go.clicked();
+                        }
                         let no = ui
                             .add(egui::Button::new(RichText::new("Discard").size(crate::theme::MIN_TEXT)))
                             .tip("Drop the proposal. Nothing is set.");
@@ -1476,6 +1546,18 @@ impl PlaygroundView {
             chrome.hit("start card", r.rect);
         }
         ui.add_space(4.0);
+        match pick {
+            Some(crate::offers::Pick::Take(k)) => self.start_rename(k),
+            Some(crate::offers::Pick::Leave) => {
+                if let Phase::Proposed(p) = &mut self.start.phase {
+                    p.offers.clear();
+                    if p.changes.is_empty() {
+                        self.start.phase = Phase::Idle;
+                    }
+                }
+            }
+            None => {}
+        }
         if stop || discard {
             self.start_stop();
         } else if accept {
@@ -3995,10 +4077,10 @@ impl PlaygroundView {
                                 let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
                                 let text =
                                     format!("{} = {}", p.name.to_ascii_lowercase(), show(p.ty, p.value));
-                                crate::io_cards::value(ui, Some(glyph), t.fg, &text);
+                                crate::io_cards::value(ui, Some(glyph), t.fg, &text, true);
                                 return None;
                             }
-                            let r = ui.scope(|ui| input_ui(ui, p, &said));
+                            let r = ui.scope(|ui| input_ui(ui, p, &said, form == Form::Tile));
                             Some((r.inner.0, r.inner.1, r.response.rect))
                         });
                         if let Some((value, anchor, rect)) = control {
@@ -5590,7 +5672,7 @@ impl Default for PlaygroundView {
 
 /// One input: its control, and the response a right-click on its row
 /// opens a menu from. `place` is where the point is now, in its tooltip.
-fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::Response) {
+fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Value>, egui::Response) {
     let t = theme(ui);
     let label = match p.address() {
         Some(a) => format!("{}  {a}", p.name.to_ascii_lowercase()),
@@ -5604,7 +5686,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
     // What a button gets beside the glyph: any wider and it wraps under it.
     let beside = (ui.available_width() - crate::glyphs::ROW - ui.spacing().item_spacing.x - 1.0).max(40.0);
     // A button is that wide and no wider: its name is cut, never the row.
-    let size = Vec2::new(beside.min(TAP * 3.0), TAP * 0.8);
+    let size = Vec2::new(if tile { beside.min(TAP * 3.0) } else { beside }, TAP * 0.8);
     // A tile is too narrow for a slider beside the box: the box alone.
     let slider = ui.available_width() >= 150.0;
     let boxed = Vec2::new((ui.available_width() - 2.0).clamp(40.0, 84.0), TAP * 0.6);
@@ -5620,9 +5702,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                             .color(if on { BLACK } else { t.fg }),
                     )
                     .fill(if on { YELLOW } else { t.rule })
-                    .sense(Sense::click_and_drag())
-                    .wrap_mode(egui::TextWrapMode::Truncate);
-                let r = ui.add_sized(size, b).tip(format!(
+                    .sense(Sense::click_and_drag());
+                let r = control_button(ui, b, size, tile).tip(format!(
                     "Push button: on while held. Double-click for its details.\n{place}"
                 ));
                 out = Some(Value::Bool(r.is_pointer_button_down_on()));
@@ -5635,9 +5716,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                         .strong()
                         .color(if on { BLACK } else { t.fg }),
                 )
-                .fill(if on { YELLOW } else { t.rule })
-                .wrap_mode(egui::TextWrapMode::Truncate);
-                let r = ui.add_sized(size, b).tip(format!(
+                .fill(if on { YELLOW } else { t.rule });
+                let r = control_button(ui, b, size, tile).tip(format!(
                     "Switch: click to flip. Double-click for its details.\n{place}"
                 ));
                 if r.clicked() {
@@ -5730,6 +5810,26 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
     (out, anchor)
 }
 
+/// An input's button on its card. A tile's is `size`, its name cut; a
+/// row's is at least that and grows to a second line when the name needs
+/// it, so the name shows whole.
+fn control_button(ui: &mut egui::Ui, b: egui::Button<'_>, size: Vec2, tile: bool) -> egui::Response {
+    if tile {
+        ui.add_sized(size, b.wrap_mode(egui::TextWrapMode::Truncate))
+    } else {
+        let w = size.x;
+        ui.allocate_ui_with_layout(
+            Vec2::new(w, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_max_width(w);
+                ui.add(b.wrap_mode(egui::TextWrapMode::Wrap).min_size(size))
+            },
+        )
+        .inner
+    }
+}
+
 /// A row's name, where a right-click lands, saying where the point is.
 fn row_label(ui: &mut egui::Ui, label: &str, place: &str) -> egui::Response {
     ui.add(egui::Label::new(label).sense(Sense::click()))
@@ -5759,7 +5859,7 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
     };
     // A tile has the lamp and the name; the glyph would take half of it.
     let glyph = (!tile).then(|| crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
-    crate::io_cards::value(ui, glyph, color, &text);
+    crate::io_cards::value(ui, glyph, color, &text, !tile);
 }
 
 /// A value for a readout (TIME in ms).
