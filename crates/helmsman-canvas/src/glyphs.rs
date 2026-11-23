@@ -723,3 +723,44 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
         }
     }
 }
+
+/// The brand's stencil encoder mark (docs/brand, the `se` symbol: a rim cut
+/// by eight bridges, a hub ring cut by four, the dot, eight detached teeth)
+/// drawn in `rect`'s square in `color`. The SVG masks the cuts out; here the
+/// rim and the hub ring are arcs that stop short of them.
+pub fn paint_mark(p: &egui::Painter, rect: Rect, color: Color32) {
+    let u = rect.width().min(rect.height()) / 96.0;
+    let c = rect.center();
+    let at = |deg: f32, radius: f32| {
+        let a = deg.to_radians();
+        c + Vec2::new(a.sin(), -a.cos()) * radius * u
+    };
+    // Arcs of a ring at `radius`, one between each pair of cuts: the cuts
+    // sit at `first` degrees and every `step` after, and an arc stops
+    // `gap` degrees short of each.
+    let ring = |radius: f32, width: f32, first: f32, step: f32, gap: f32| {
+        let mut from = first + gap;
+        while from + step - 2.0 * gap <= 360.0 + first {
+            let to = from + step - 2.0 * gap;
+            let pts: Vec<Pos2> = (0..=6u8)
+                .map(|i| at(from + (to - from) * f32::from(i) / 6.0, radius))
+                .collect();
+            p.add(egui::Shape::line(pts, Stroke::new(width * u, color)));
+            from += step;
+        }
+    };
+    ring(26.5, 9.0, 22.5, 45.0, 4.0);
+    ring(11.0, 4.0, 45.0, 90.0, 7.0);
+    p.circle_filled(c, 4.0 * u, color);
+    for k in 0..8u8 {
+        let a = (45.0 * f32::from(k)).to_radians();
+        let tooth: Vec<Pos2> = [(-5.0, 33.0), (5.0, 33.0), (5.0, 43.0), (-5.0, 43.0)]
+            .iter()
+            .map(|&(x, y): &(f32, f32)| {
+                // (x, -y) turned clockwise by the tooth's angle.
+                c + Vec2::new(x * a.cos() + y * a.sin(), x * a.sin() - y * a.cos()) * u
+            })
+            .collect();
+        p.add(egui::Shape::convex_polygon(tooth, color, Stroke::NONE));
+    }
+}

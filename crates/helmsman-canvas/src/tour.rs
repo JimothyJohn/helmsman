@@ -252,7 +252,7 @@ impl Tour {
                 Step::OpenBlink => &["project blink", "pane files", "left"],
                 Step::Name => &["name"],
                 Step::Edit => &["st editor", "pane code", "left"],
-                Step::Deploy => &["file deploy", "bar file"],
+                Step::Deploy => &["file deploy", "bar file", "bar menu"],
                 Step::Watch => &["io outputs", "tab io"],
                 Step::Trend => &["trend window", "bottom trend"],
                 Step::Agent => &["agent instruction", "tab claude"],
@@ -305,7 +305,7 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
             "Deploy it",
             format!(
                 "The edit compiles but is not running yet, as on a real controller. Deploy runs the \
-                 requirement tests and starts it: File › Deploy, or {deploy}."
+                 requirement tests and starts it: Menu › File › Deploy, or {deploy}."
             ),
         ),
         Step::Watch => (
