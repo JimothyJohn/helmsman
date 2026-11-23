@@ -374,10 +374,15 @@ fn two_boxes_hear_each_other_over_loopback() {
     let stranger = UdpSocket::bind("127.0.0.1:0").unwrap();
     stranger.send_to(b"helmsman-site 1\n", pa).unwrap();
     stranger.send_to(&[b'x'; 2000], pa).unwrap();
-    wait_for("the junk to be counted", || {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
         let c = a.handle().snapshot().1;
-        c.malformed >= 1 && c.oversized >= 1
-    });
+        if c.malformed >= 1 && c.oversized >= 1 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the junk was not counted: {c:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     stranger
         .set_read_timeout(Some(Duration::from_millis(300)))
         .unwrap();
