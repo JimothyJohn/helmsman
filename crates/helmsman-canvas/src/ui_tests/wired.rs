@@ -162,7 +162,10 @@ fn the_playground_io_tab_says_what_is_wired_inside_the_default_width() {
         "the line {line:?} stays in the pane's {} pt default width",
         crate::editor::RIGHT_W
     );
-    assert!(line.height() < 30.0, "one line on the card, cut short: {line:?}");
+    // The card gives the line the room it needs (it is not cut short);
+    // the pane keeps its width.
+    assert!(line.height() > 30.0, "the long line wraps on the card: {line:?}");
+    assert!(!h.elided("ifm"), "and nothing of it is cut");
     // The card's details say it in full.
     let at = line.center();
     h.click(at);

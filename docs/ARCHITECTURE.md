@@ -3346,22 +3346,38 @@ the end of this section.
   details open).
 - **Start state in words** (`start_state.rs`, `PlaygroundView::start_ui`):
   above the Inputs cards, the simulation's I/O tab has one field, "Describe
-  a start state…", and a send glyph. It is there only when the relay's
-  status lists the `start` agent (`Chat::serves`: the free chat, as for
-  `ask`; on a key, a local proxy or a relay without it there is no field,
-  and the cards are as before), and it is off while the program runs (an
-  Agent never moves a running machine). `start_state::message` sends the
-  words in `<start_description>` and the inputs, one `NAME | TYPE | what
-  it takes | now VALUE` line each, in `<program_inputs>` (closing tags of
-  either defanged, `claude::neutralize`; TIME in whole milliseconds), over
-  a link of its own (`start_link`, not the question card's). The answer is
-  `NAME = value` lines and nothing else, in one fence at most, or `NONE`
-  (`start_state::parse`): a name that is not an input (matched in any
+  a start state…", and a send glyph. The field is always there (Nick,
+  2026-11-23: a control that is hidden or does nothing reads as broken).
+  It asks only when the relay's status lists the `start` agent
+  (`Chat::serves`: the free chat, as for `ask`); on a key, a local proxy or
+  a relay without it the field is off, says "Not available here", and the
+  send glyph writes the reason in the line under it
+  (`PlaygroundView::start_unavailable`). It is also off while the program
+  runs (an Agent never moves a running machine). `start_state::message_for`
+  sends the words in `<start_description>`, the inputs, one `NAME | TYPE |
+  what it takes | now VALUE` line each, in `<program_inputs>`, the outputs
+  in `<program_outputs>` and a request for up to two `Offer: rename <old>
+  <new>` lines (closing tags of any defanged, `claude::neutralize`; TIME in
+  whole milliseconds), over a link of its own (`start_link`, not the
+  question card's). The request for names is the page's own sentence
+  because the served `start-v1` prompt knows only value lines and a served
+  profile never changes: a `start-v2` that asks for names itself would make
+  it reliable. The answer is `NAME = value` lines and `Offer:` lines,
+  nothing else, in one fence at most, or `NONE`
+  (`offers::split` takes the offers out; `start_state::parse` reads the
+  rest): a name that is not an input (matched in any
   case, kept as the program spells it), a name twice, a value that
   `Session::try_input` would refuse, prose, more than 64 lines or 8 KiB
   refuse the whole answer, which is one quiet line under the field and
-  sets nothing. What passes is a proposal card, `NAME: old → new` for each
-  input that would change, with Set these and Discard; nothing is set
+  sets nothing, offers included. What passes is a proposal card, `NAME: old
+  → new` for each input that would change, with Set these and Discard, and
+  a button per rename (`offers::ui`, the files it touches under it) for an
+  `Offer: rename` whose old name is an input or output and which
+  `offers::kept` finds the project can carry out (a taken or unknown name
+  is not shown). A click is `rename_everywhere`: every file, one revision,
+  a History entry, Undo; the proposal then follows the new name and the
+  machine stays stopped. Renames are one click, never automatic; "labels"
+  are the variables' names (no separate label store). Nothing is set
   until Set these, which goes through `set_by_hand` (so the "nothing
   reacts yet" line appears) and only while nothing runs and the program
   text is the one the proposal was made for (`Card::accept`; a changed
@@ -3370,8 +3386,10 @@ the end of this section.
   `helmsman/start-v1`, a new id and a deploy). Tests: `start_state_tests.rs`
   (hostile messages and answers), `ui_tests/start_state.rs` (proposal
   before set, set, discard, started and edited between, the refused
-  answer, no field without the agent, and 40 long-named inputs in the
-  list and the grid at the panel's width).
+  answer, the field off with its reason, a rename as an offer and one
+  revision on the click, hostile answers and renames the project cannot
+  carry out, and 40 long-named inputs and long offers in the list and the
+  grid at the panel's width).
 - **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from
