@@ -96,7 +96,7 @@ pub fn row_menu(
         let tip = if chat.full {
             crate::chat_about::FULL
         } else {
-            "Puts this point and where the code declares it in the Agent tab, with what drives it and what it drives. Nothing is sent until you type what to ask and send it."
+            "Puts this point and where the code declares it in the Describe tab, with what drives it and what it drives. Nothing is sent until you type what to ask and send it."
         };
         if crate::devices::menu_item(ui, chrome, "menu chat about", "Chat about this", !chat.full, tip) {
             chat.asked.push(name.to_string());

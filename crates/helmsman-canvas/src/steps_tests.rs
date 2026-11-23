@@ -316,7 +316,7 @@ fn a_step_that_cannot_be_split_pauses_with_a_way_on() {
     assert_eq!(
         problems,
         [
-            "Step 1 is too big for one answer and the Agent could not split it. Try it again, or stop and ask for this part by itself in a few words."
+            "Step 1 is too big for one answer and could not be split. Try it again, or stop and ask for this part by itself in a few words."
         ]
     );
     let sent = v.link.sent.len();

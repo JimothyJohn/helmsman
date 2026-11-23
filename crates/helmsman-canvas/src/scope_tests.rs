@@ -564,7 +564,7 @@ mod in_the_page {
         assert!(crate::claude::SYSTEM.contains("<edit_scope>"));
         let o = v.instruct.outcome.clone().unwrap();
         assert_eq!(o.kind, Kind::Said);
-        assert_eq!(o.status, "main.st is unchanged. The Agent says: No code.");
+        assert_eq!(o.status, "No code.", "the words alone, as the tab shows them");
         // A built-in example: a new project.
         v.open_project("blink");
         assert_eq!(v.scope(), Scope::NewProject);

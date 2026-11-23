@@ -85,7 +85,7 @@ pub fn entry_ui(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut Designer, v: &En
                 egui::Button::new(RichText::new("Design a machine…").size(size)),
             )
             .tip(v.blocked.clone().or_else(|| d.closed_line(v.now)).unwrap_or_else(|| {
-                "Opens a window to describe a whole machine. A strong model writes its control system design: the signals, the parts, the faults, numbered requirements and the order to build it in. It takes a few minutes. You read the design before anything is kept, and the Agent then builds it step by step.".into()
+                "Opens a window to describe a whole machine. A strong model writes its control system design: the signals, the parts, the faults, numbered requirements and the order to build it in. It takes a few minutes. You read the design before anything is kept, and it is then built step by step.".into()
             }));
         chrome.hit("design open", r.rect);
         if r.clicked() {
@@ -95,7 +95,7 @@ pub fn entry_ui(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut Designer, v: &En
     if let Some(line) = d.closed_line(v.now) {
         let r = ui
             .add(egui::Label::new(RichText::new(line).size(size).color(t.muted)).wrap())
-            .tip("The design entry answers on its own: the chat and the Agent carry on while it is closed.");
+            .tip("The design entry answers on its own: the Describe tab carries on while it is closed.");
         chrome.hit("design closed", r.rect);
     }
     if let Some(n) = &d.notice {
@@ -219,7 +219,7 @@ fn read_card(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut Designer, v: &Entry
                 egui::Button::new(RichText::new("Keep").strong().size(size)),
             )
             .tip(v.keep_blocked.clone().or_else(|| read.keep_refusal()).unwrap_or_else(|| {
-                "Keeps the design with the project as design.md, as one revision. On a box a project's files are written as a whole, so it goes into a copy of the project, in one request. The Agent builds from it a few steps at a time.".into()
+                "Keeps the design with the project as design.md, as one revision. On a box a project's files are written as a whole, so it goes into a copy of the project, in one request. It is then built a few steps at a time.".into()
             }));
         chrome.hit("design keep", r.rect);
         if r.clicked() {
@@ -244,7 +244,7 @@ fn problems_ui(ui: &mut egui::Ui, chrome: &mut Chrome, problems: &[String], key:
     for (k, p) in problems.iter().enumerate() {
         let r = ui
             .add(egui::Label::new(RichText::new(p).size(size).color(t.ink(RED))).wrap())
-            .tip("Something in the design the Agent cannot build from. Build is not offered until the design has none: ask again, with the machine described more closely.");
+            .tip("Something in the design that cannot be built from. Build is not offered until the design has none: ask again, with the machine described more closely.");
         chrome.hit(format!("{key} {}", k + 1), r.rect);
     }
 }
@@ -267,7 +267,7 @@ fn kept_card(ui: &mut egui::Ui, chrome: &mut Chrome, k: &Kept, act: &mut Option<
             )
             .wrap(),
         )
-        .tip("The design kept with the project. The Agent builds it a few steps at a time, each checked against the design's requirements.");
+        .tip("The design kept with the project. It is built a few steps at a time, each checked against the design's requirements.");
     chrome.hit("design kept", r.rect);
     problems_ui(ui, chrome, &k.problems, "design kept problem");
     let Some((from, to)) = k.next else {
@@ -291,7 +291,7 @@ fn kept_card(ui: &mut egui::Ui, chrome: &mut Chrome, k: &Kept, act: &mut Option<
             )
             .tip(k.build_blocked.clone().unwrap_or_else(|| {
                 format!(
-                    "Hands the design's build order to the Agent, steps {} to {}: each is checked on a copy, and the file changes once, when they have all passed. The steps after these wait for the next press.",
+                    "Builds the design's steps {} to {}: each is checked on a copy, and the file changes once, when they have all passed. The steps after these wait for the next press.",
                     from + 1,
                     to
                 )
@@ -497,7 +497,7 @@ pub fn read_window(
             }
             let r = ui
                 .button(RichText::new("Close").size(size))
-                .tip("Closes this window; the design stays on the Agent tab until you keep or discard it.");
+                .tip("Closes this window; the design stays on the Describe tab until you keep or discard it.");
             chrome.hit("design window close", r.rect);
             close |= r.clicked();
         });

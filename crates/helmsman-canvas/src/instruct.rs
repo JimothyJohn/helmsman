@@ -398,7 +398,7 @@ impl Instruct {
     pub fn refusal(&self) -> Option<String> {
         let n = self.draft.trim().chars().count();
         if self.busy() {
-            Some("The Agent is still working on the last instruction.".into())
+            Some("Still working on the last instruction.".into())
         } else if n == 0 {
             Some("Type an instruction first.".into())
         } else if n > MAX_INSTRUCTION {
@@ -447,7 +447,7 @@ impl Instruct {
     /// The Agent is busy.
     pub fn start_spec(&mut self, env: &Env<'_>, label: &str, text: &str) -> Result<Ask, String> {
         if self.busy() {
-            return Err("The Agent is still working on the last instruction.".into());
+            return Err("Still working on the last instruction.".into());
         }
         Ok(self.begin(env, &[], label.to_string(), text, false, true))
     }
@@ -551,7 +551,7 @@ impl Instruct {
                 // It ran out of room in one go and the Agent still sees
                 // one step: nothing more to split.
                 self.run = Some(run);
-                self.failed("the change ran out of room in one answer, and the Agent could not split it into steps. Ask for one part first");
+                self.failed("the change ran out of room in one answer, and could not be split into steps. Ask for one part first");
                 return Step::Done;
             }
             let message = env.message(&run.instruction, &run.earlier, self.edits, &self.about);
@@ -600,7 +600,7 @@ impl Instruct {
         (offset, total): (usize, usize),
     ) -> Result<Ask, String> {
         if self.busy() {
-            return Err("The Agent is still working on the last instruction.".into());
+            return Err("Still working on the last instruction.".into());
         }
         if steps.is_empty() || steps.len() != briefs.len() {
             return Err("The design has no steps to build.".into());
@@ -918,8 +918,8 @@ impl Instruct {
         };
         let landed = if !check.code {
             Err(vec![match said(answer) {
-                s if s.is_empty() => "The Agent sent no code for this step.".to_string(),
-                s => format!("The Agent sent no code for this step. It says: {s}"),
+                s if s.is_empty() => "No code came back for this step.".to_string(),
+                s => format!("No code came back for this step: {s}"),
             }])
         } else if check.blocked() {
             Err(check.problems())
@@ -1030,9 +1030,9 @@ impl Instruct {
             self.outcome = Some(Outcome::new(
                 Kind::Said,
                 if said.is_empty() {
-                    format!("{} is unchanged: the Agent sent no code.", capital(&file))
+                    format!("{} is unchanged: no code came back.", capital(&file))
                 } else {
-                    format!("{} is unchanged. The Agent says: {said}", capital(&file))
+                    said
                 },
             ));
             return Step::Done;
@@ -1043,12 +1043,12 @@ impl Instruct {
                 Kind::Refused,
                 if tries == 1 {
                     format!(
-                        "{} is unchanged: the Agent's answer did not pass its checks.",
+                        "{} is unchanged: the answer did not pass its checks.",
                         capital(&file)
                     )
                 } else {
                     format!(
-                        "{} is unchanged: the Agent's answer did not pass its checks in {tries} tries.",
+                        "{} is unchanged: the answer did not pass its checks in {tries} tries.",
                         capital(&file)
                     )
                 },
@@ -1173,7 +1173,7 @@ impl Instruct {
             Some("Wait for the instruction under way.".into())
         } else if current != Some(u.text.as_str()) || dirty {
             Some(format!(
-                "{} was edited since the Agent changed it. Go back through History in the Files tab instead.",
+                "{} was edited since that change. Go back through History in the Files tab instead.",
                 u.file
             ))
         } else {
@@ -1210,7 +1210,7 @@ fn sentence(why: &str) -> String {
 /// be split: what happened and the two ways on.
 fn too_big(k: usize) -> String {
     format!(
-        "Step {} is too big for one answer and the Agent could not split it. Try it again, or stop and ask for this part by itself in a few words.",
+        "Step {} is too big for one answer and could not be split. Try it again, or stop and ask for this part by itself in a few words.",
         k + 1
     )
 }
@@ -1251,7 +1251,7 @@ pub fn status(file: &str, check: &Check) -> String {
         );
     }
     if check.unchanged {
-        s.push_str("; behaviour unchanged (the Agent's claim)");
+        s.push_str("; behaviour unchanged (as the answer says)");
     }
     s.push_str(&not_passed(check.warnings().len()));
     s.push('.');
@@ -1450,6 +1450,9 @@ pub struct View {
     /// A big ask waiting for the engineer's pick, with the time it takes
     /// in one go ([`estimate_secs`]).
     pub big: Option<(u64, u64)>,
+    /// The program's inputs and outputs, for the phrasing help
+    /// ([`crate::phrasing`]); `None`: no help (a box).
+    pub io: Option<Vec<crate::phrasing::Io>>,
 }
 
 /// Where the arrows go: the revision before and after the one shown,
@@ -1460,25 +1463,15 @@ pub struct Steps {
     pub forward: Option<(u32, String)>,
 }
 
-/// The answer under way, as it streams (Nick, 2026-11-13: "I would love
-/// to see progressive changes being made rather than waiting a long time
-/// assuming something is happening"). Most of the wait is the model
-/// thinking before it writes a word (measured on the free chat: 5.3 of
-/// 7.6 s). The tab shows the time and which [`Stage`] the answer is at,
-/// the answer's one-line reason once it is in, then the code as it is
-/// written, marked as a draft until it is checked. The thinking itself is
-/// not shown (Nick, 2026-11-14: "the flickering through the current
-/// thoughts is too glitchy and not helpful ... only show major updates").
+/// The answer under way: how long it has taken and how long it usually
+/// takes. Nick, 2026-11-13, wanted to see the change being made as it
+/// streamed; with answers back in a few seconds he asked on 2026-11-22
+/// for none of it ("you're just waiting for an answer"): the tab shows
+/// one line and the clock, and the Code tab still shows the draft.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Progress {
     /// Since the request went, s.
     pub secs: f64,
-    /// Where the answer is.
-    pub stage: Stage,
-    /// The answer's `Why: ` sentence, once its line is complete.
-    pub why: Option<String>,
-    /// The file's code written so far ([`partial_code`]).
-    pub code: Option<String>,
     /// The answer is in and checked; the program waits for its name (a
     /// change to a built-in example becomes a project of its own).
     pub naming: bool,
@@ -1523,52 +1516,6 @@ pub fn clock(secs: u64, estimate: Option<(u64, u64)>) -> String {
         None => format!("{secs} s"),
     }
 }
-
-/// The major steps of an answer, in the order they come; the status line
-/// changes only when the answer moves from one to the next (and as lines
-/// of code are counted).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Stage {
-    /// Sent; nothing back yet.
-    #[default]
-    Waiting,
-    /// The model is thinking, or giving its reason, before any code.
-    Planning,
-    /// The file's code, this many lines so far.
-    Writing(usize),
-    /// The code is written; the scenarios that check it, this many begun.
-    Checks(usize),
-}
-
-/// The [`Stage`] of an answer whose text so far is `text`, `thinking`
-/// when the model has begun to think. The answer's order is the reason,
-/// the code, then its scenarios (`claude::SYSTEM`, [`BOX_RULES`]), so the
-/// stage only moves forward as the text grows (a property test holds it).
-#[must_use]
-pub fn stage(thinking: bool, text: &str) -> Stage {
-    let checks = text.matches("```st scenario").count();
-    // An answer given as the lines that change (`crate::edits`) has no
-    // whole file to count the lines of.
-    let edits = text.contains("```st edit");
-    match partial_code(text) {
-        Some(_) if checks > 0 => Stage::Checks(checks),
-        Some(code) => Stage::Writing(code.lines().count()),
-        None if edits && checks > 0 => Stage::Checks(checks),
-        None if edits => Stage::Writing(0),
-        None if thinking || !text.trim().is_empty() => Stage::Planning,
-        None => Stage::Waiting,
-    }
-}
-
-/// The sentence of the answer's `Why: ` line, once that line has ended.
-#[must_use]
-pub fn why_line(text: &str) -> Option<String> {
-    let (line, _) = text.trim_start().split_once('\n')?;
-    let why = line.strip_prefix("Why:")?.trim();
-    (!why.is_empty()).then(|| why.to_string())
-}
-/// How many of the code's last lines the tab shows while it is written.
-pub const DRAFT_LINES: usize = 12;
 
 /// The code of the file's block written so far in an answer that is
 /// still streaming: what follows the first ` ```st ` fence that is not a
@@ -1743,14 +1690,16 @@ pub fn continue_list(line: &str) -> (String, usize) {
     }
 }
 
-/// The answer under way: a spinner, what it is doing and for how long,
-/// the try when it is a retry; the answer's reason once it is in; once it
-/// writes, the last [`DRAFT_LINES`] of the code as they arrive, under a
-/// word that they are a draft not yet checked.
-fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run, p: &Progress) {
+/// The answer under way, as one line: a spinner, the words and the clock
+/// (Nick, 2026-11-22: "don't need to share the code of the output ...
+/// you're just waiting for an answer"). A retry says which try it is,
+/// and its tooltip what failed.
+fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run, p: Option<&Progress>) {
     use egui::RichText;
     let t = crate::theme::theme(ui);
-    if p.naming {
+    if let Some(p) = p
+        && p.naming
+    {
         let (text, tip) = if p.review {
             (
                 "Checked. Review the draft to keep it.",
@@ -1769,33 +1718,13 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
     // The clock moves while nothing else does.
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_millis(250));
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let secs = p.secs.max(0.0) as u64;
-    let file = run.target();
-    let clock = clock(secs, p.estimate);
-    let plural = |n: usize| if n == 1 { "" } else { "s" };
-    let doing = match p.stage {
-        Stage::Waiting | Stage::Planning if matches!(run.mode, Mode::Planning { .. }) => {
-            format!("Working out the steps · {clock}")
-        }
-        Stage::Waiting => format!("Sending to the Agent · {clock}"),
-        Stage::Planning => format!("Planning the change · {clock}"),
-        Stage::Writing(0) => format!("Writing {file} · {clock}"),
-        Stage::Writing(n) => format!("Writing {file} · {n} line{} · {clock}", plural(n)),
-        Stage::Checks(n) => format!("Writing {n} check{} · {clock}", plural(n)),
-    };
-    let doing = if run.retries == 0 {
-        doing
-    } else {
-        format!(
-            "Try {} of {}: fixing what failed · {doing}",
-            run.retries + 1,
-            verify::RETRIES + 1
-        )
-    };
+    let clock = p.map(|p| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let secs = p.secs.max(0.0) as u64;
+        clock(secs, p.estimate)
+    });
     let tip = if run.retries == 0 {
-        "The Agent is working on the change. It is checked before anything is written into the file."
-            .to_string()
+        "Nothing in the program changes until the answer passes its checks.".to_string()
     } else {
         run.attempts
             .last()
@@ -1804,47 +1733,29 @@ fn progress_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, run: &Run,
     };
     ui.horizontal_wrapped(|ui| {
         ui.spinner();
-        let r = ui.label(RichText::new(doing).color(t.muted)).tip(tip);
+        let r = ui
+            .label(RichText::new(waiting(run, clock.as_deref())).color(t.muted))
+            .tip(tip);
         chrome.hit("agent working", r.rect);
     });
-    if let Some(why) = &p.why {
-        let r = ui
-            .add(egui::Label::new(RichText::new(why).color(t.muted)).wrap())
-            .tip("What the Agent says the change does. Nothing is written until it is checked.");
-        chrome.hit("agent plan", r.rect);
-    }
-    if let Some(code) = &p.code {
-        let r = ui
-            .label(RichText::new("Draft, checked before it is written:").color(t.muted).italics())
-            .tip("What the Agent is writing, as it arrives. It goes into the file only if it compiles and every check passes; otherwise the file stays as it is.");
-        chrome.hit("agent draft note", r.rect);
-        let all: Vec<&str> = code.lines().collect();
-        let from = all.len().saturating_sub(DRAFT_LINES);
-        // The editor's ground and ink: a draft reads like code.
-        let frame = egui::Frame::new()
-            .fill(ui.visuals().extreme_bg_color)
-            .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
-            .corner_radius(4.0)
-            .inner_margin(6.0);
-        let r = frame
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                for line in &all[from..] {
-                    // Truncated, never wrapped or widened: a long line
-                    // would grow the pane every frame.
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(if line.is_empty() { " " } else { line })
-                                .monospace()
-                                .color(t.fg),
-                        )
-                        .truncate(),
-                    );
-                }
-            })
-            .response;
-        chrome.hit("agent draft", r.rect);
-    }
+}
+
+/// The waiting line's words: what is under way, then the clock when the
+/// owner keeps one.
+#[must_use]
+pub fn waiting(run: &Run, clock: Option<&str>) -> String {
+    let words = if run.retries > 0 {
+        format!(
+            "Fixing what failed, try {} of {}",
+            run.retries + 1,
+            verify::RETRIES + 1
+        )
+    } else if matches!(run.mode, Mode::Planning { .. }) {
+        "Working out the steps".to_string()
+    } else {
+        "Working on it".to_string()
+    };
+    clock.map_or_else(|| format!("{words}…"), |c| format!("{words} · {c}"))
 }
 
 /// A plan in steps: why, the steps (done, this one, later), and while it
@@ -1865,7 +1776,7 @@ fn big_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, (least, most): 
             )
             .wrap(),
         )
-        .tip("Nothing has been sent yet. In steps the Agent plans the change first, then does and checks one step at a time, and the file is written once, at the end.");
+        .tip("Nothing has been sent yet. In steps the change is planned first, then does and checks one step at a time, and the file is written once, at the end.");
     chrome.hit("agent big ask", r.rect);
     ui.horizontal_wrapped(|ui| {
         let r = ui
@@ -1884,6 +1795,70 @@ fn big_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, (least, most): 
         }
     });
     act
+}
+
+/// How the answer area reads: done, done with something to look at, or
+/// nothing changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Done,
+    Warn,
+    Error,
+}
+
+/// What the answer area says of an outcome (Nick, 2026-11-22: "the error
+/// messages are invisible ... keep it very short"): one line, then at
+/// most [`ANSWER_LINES`] of what failed, each cut to [`ANSWER_CHARS`],
+/// and how many more the Messages hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Answer {
+    pub tone: Tone,
+    pub head: String,
+    pub lines: Vec<String>,
+    pub more: usize,
+}
+
+/// At most this many lines of what failed show under the answer's head.
+pub const ANSWER_LINES: usize = 2;
+/// ...each at most this long.
+pub const ANSWER_CHARS: usize = 160;
+
+/// [`Answer`] of `o`.
+#[must_use]
+pub fn answer(o: &Outcome) -> Answer {
+    let (tone, head) = match o.kind {
+        Kind::Applied if o.problems.is_empty() => (
+            Tone::Done,
+            o.why.as_deref().map_or_else(
+                || "Done.".to_string(),
+                |w| format!("Done: {}", sentence(&clean(w, MAX_REASON))),
+            ),
+        ),
+        Kind::Applied => (
+            Tone::Warn,
+            match o.problems.len() {
+                1 => "Done, but 1 check did not pass:".to_string(),
+                n => format!("Done, but {n} checks did not pass:"),
+            },
+        ),
+        Kind::Undone => (Tone::Done, clean(&o.status, MAX_REASON)),
+        Kind::Said => (Tone::Warn, clean(&o.status, MAX_SAID)),
+        Kind::Refused if o.problems.is_empty() => (Tone::Error, clean(&o.status, MAX_REASON)),
+        Kind::Refused => (Tone::Error, "Not changed:".to_string()),
+        Kind::Failed => (Tone::Error, clean(&o.status, MAX_REASON)),
+    };
+    let lines = o
+        .problems
+        .iter()
+        .take(ANSWER_LINES)
+        .map(|p| clean(p, ANSWER_CHARS))
+        .collect();
+    Answer {
+        tone,
+        head,
+        lines,
+        more: o.problems.len().saturating_sub(ANSWER_LINES),
+    }
 }
 
 /// The big-ask notice's words.
@@ -1952,7 +1927,7 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
             }
             (
                 "Try this step again",
-                "Asks the Agent for this step again, from the steps that passed. Stop drops the plan and leaves the file as it is.",
+                "Asks for this step again, from the steps that passed. Stop drops the plan and leaves the file as it is.",
             )
         }
     };
@@ -2074,7 +2049,7 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
             )
             .wrap(),
         )
-        .tip("The Agent is asked about at most eight things at once. Deselect some, or send this instruction and the rest come next.");
+        .tip("At most eight things go with one instruction. Deselect some, or send this instruction and the rest come next.");
     }
     if let Some(k) = gone {
         s.remove_chip(k);
@@ -2084,16 +2059,17 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
     }
 }
 
-/// The instruction box, as tall as the tab leaves it, then one row: Send
-/// or Stop, the arrows through the revisions (or Undo), and what is
-/// happening. A change that
-/// landed shows on the canvas and in the code, marked; one that did not
-/// goes to the Messages as an error, and the box is outlined red with one
-/// line that opens them (Nick, 2026-11-13).
+/// The instruction box, then one row: Send or Stop and the arrows
+/// through the revisions (or Undo), then the answer area, at least half
+/// the tab (Nick, 2026-11-22: "the error messages are invisible, you
+/// should dedicate at least half the page to the response and should
+/// keep it very short"). The area says one short thing: that it is
+/// working, what changed, or why nothing did, in red, with the lines
+/// that failed; the Messages keep the whole of it. Idle, it offers
+/// examples in the program's own names and the fixes for names the
+/// draft spells another way ([`crate::phrasing`]).
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruct, v: &View) -> Option<Act> {
-    use egui::RichText;
-
-    use crate::st_view::brand::{RED, WARN};
+    use crate::st_view::brand::RED;
 
     let t = crate::theme::theme(ui);
     let red = t.ink(RED);
@@ -2106,22 +2082,25 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     // The chips take their rows first (the selection can fill several),
     // so the box is what the tab has left.
     chips_ui(ui, chrome, s);
-    // The box takes the tab's height, less one row of buttons, one of
-    // status and what the owner draws under it.
     let row = ui.spacing().interact_size.y;
-    let height = if s.run.is_some() && v.progress.is_some() {
-        // While an answer streams the box only shows what was sent: a few
-        // rows, and the room under it goes to the thinking and the draft.
-        Some(3.0 * row)
-    } else {
-        v.room_below
-            .map(|below| (ui.available_height() - 2.0 * row - 24.0 - below).max(4.0 * row))
-    };
+    // The answer area takes half of what is left, and the box the rest
+    // less one row of buttons and what the owner draws under it.
+    let area = v.room_below.map(|_| (0.5 * ui.available_height()).max(5.0 * row));
+    // While an answer is under way the box only shows what was sent, in
+    // a few rows: the room goes to the answer area, where a question
+    // card may wait.
+    let height = v.room_below.zip(area).map(|(below, area)| {
+        if s.run.is_some() {
+            3.0 * row
+        } else {
+            // Two rows: the buttons' row is taller than a text row.
+            (ui.available_height() - 2.0 * row - 2.0 * ANSWER_MARGIN - area - below).max(3.0 * row)
+        }
+    });
     let tip = format!(
-        "Tell the Agent what {target} should do. It changes the file, checks the change with \
-         scenarios and the requirement tests, and writes it only if every check passes. \
-         Enter sends; Shift+Enter or Ctrl+Enter starts a new line and goes on with a list \
-         (- , * or 1. ); Tab indents."
+        "Say what {target} should do. The change is checked with scenarios and the requirement \
+         tests, and written only if every check passes. Enter sends; Shift+Enter or Ctrl+Enter \
+         starts a new line and goes on with a list (- , * or 1. ); Tab indents."
     );
     let hint = format!("What should {target} do? e.g. Latch the lamp until stop");
     let (field, enter) = if let Some(run) = &s.run {
@@ -2147,7 +2126,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     ui.horizontal_wrapped(|ui| {
         if s.busy() {
             let r = crate::glyphs::action(ui, crate::glyphs::Icon::Stop, true, false)
-                .tip("Stop: stops the Agent. The file stays as it is.");
+                .tip("Stop: stops waiting. The file stays as it is.");
             chrome.hit("agent stop", r.rect);
             if r.clicked() {
                 act = Some(Act::Stop);
@@ -2207,9 +2186,45 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     {
         act = big_ui(ui, chrome, estimate).or(act);
     }
-    // The question goes right under the box, above the progress and the
-    // draft: it is the one thing here that waits for the engineer, so it
-    // is never what a long draft pushes off the screen.
+    let fill = (ui.available_height() - 2.0 * ANSWER_MARGIN - 2.0 - v.room_below.unwrap_or(0.0)).max(0.0);
+    let frame = egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.4)))
+        .corner_radius(4.0)
+        .inner_margin(ANSWER_MARGIN);
+    let r = frame
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            // Down to the bottom of the tab: what the buttons left.
+            if area.is_some() {
+                ui.set_min_height(fill);
+            }
+            act = answer_area(ui, chrome, s, v).or(act.take());
+        })
+        .response;
+    chrome.hit("agent answer area", r.rect);
+    act
+}
+
+/// The answer area's inner margin, pt.
+const ANSWER_MARGIN: f32 = 8.0;
+
+/// What goes in the answer area, top to bottom: the question that waits
+/// for the engineer (never pushed off by anything), the plan in steps,
+/// then the one line under way, or else why Send is off, the names to
+/// fix, the outcome, and the examples while the box is empty.
+fn answer_area(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    s: &mut Instruct,
+    v: &View,
+) -> Option<Act> {
+    use egui::RichText;
+
+    use crate::st_view::brand::RED;
+
+    let t = crate::theme::theme(ui);
+    let mut act = None;
     if let Some(card) = &v.card
         && let Some(k) = crate::ask::ui(ui, chrome, card)
     {
@@ -2226,84 +2241,179 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     }
     if plan.is_some_and(|p| !matches!(p.state, PlanState::Running | PlanState::Splitting)) {
         // Waiting for the engineer: the plan says what to do.
-    } else if let (Some(run), Some(p)) = (&s.run, &v.progress) {
-        progress_ui(ui, chrome, run, p);
-    } else if let Some(run) = &s.run {
-        ui.horizontal_wrapped(|ui| {
-            ui.spinner();
-            let (words, tip) = if run.retries == 0 {
-                (
-                    format!("Asking the Agent to change {}…", run.target()),
-                    "The Agent is writing the change. It is checked before it is written.".to_string(),
-                )
-            } else {
-                (
-                    format!(
-                        "The answer did not pass its checks: the Agent is fixing it (try {} of {}).",
-                        run.retries + 1,
-                        verify::RETRIES + 1
-                    ),
-                    run.attempts
-                        .last()
-                        .map(|a| a.problems.join(" "))
-                        .unwrap_or_default(),
-                )
-            };
-            let r = ui.label(RichText::new(words).color(t.muted)).tip(tip);
-            chrome.hit("agent working", r.rect);
-        });
-    } else if let Some(o) = &s.outcome {
-        match o.kind {
-            Kind::Refused | Kind::Failed => {
-                let r = ui
-                    .add(
-                        egui::Label::new(
-                            RichText::new("Not written. The Messages say why.")
-                                .strong()
-                                .color(red),
-                        )
-                        .sense(egui::Sense::click()),
-                    )
-                    .tip(format!("{} Click to open the Messages.", o.status));
-                chrome.hit("agent result", r.rect);
-                if r.clicked() {
-                    chrome.trend = true;
-                    chrome.bottom = crate::editor::Bottom::Messages;
-                }
-            }
-            Kind::Said => {
-                // The Agent's own words (a question, or why it could not):
-                // an answer to read, so it stays here.
-                let r = ui
-                    .add(egui::Label::new(RichText::new(&o.status).color(t.ink(WARN))).wrap())
-                    .tip("The Agent answered without changing the file.");
-                chrome.hit("agent result", r.rect);
-            }
-            // A change that landed shows on the canvas and in the code.
-            Kind::Applied | Kind::Undone => {}
+        return act;
+    }
+    if let Some(run) = &s.run {
+        progress_ui(ui, chrome, run, v.progress.as_ref());
+        return act;
+    }
+    // Why Send is off, when it is for a reason the engineer cannot see
+    // from the box (an empty box needs no words).
+    if let Some(why) = &v.blocked {
+        let r = ui
+            .add(egui::Label::new(RichText::new(why).strong().color(t.ink(RED))).wrap())
+            .tip("Send stays off until this is put right.");
+        chrome.hit("agent blocked", r.rect);
+        ui.add_space(6.0);
+    }
+    if let Some(io) = &v.io {
+        fixes_ui(ui, chrome, s, io);
+    }
+    if let Some(o) = &s.outcome {
+        act = outcome_ui(ui, chrome, o, v).or(act);
+    }
+    if s.draft.trim().is_empty()
+        && let Some(io) = &v.io
+    {
+        if s.outcome.is_some() {
+            ui.add_space(12.0);
         }
-        if !o.review.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                for id in &o.review {
-                    if let Some(status) = v.decided.get(id) {
-                        let r = ui
-                            .label(RichText::new(format!("#{id} {status}")).color(t.muted))
-                            .tip(format!(
-                                "Proposal #{id} is decided ({status}): nothing left to review. Proposals has it."
-                            ));
-                        chrome.hit("agent decided", r.rect);
-                        continue;
-                    }
-                    let r = ui
-                        .button(format!("Review #{id}"))
-                        .tip("Opens this proposal under Proposals.");
-                    chrome.hit("agent review", r.rect);
-                    if r.clicked() {
-                        act = Some(Act::Review(*id));
-                    }
-                }
-            });
-        }
+        examples_ui(ui, chrome, s, io);
     }
     act
+}
+
+/// The outcome, short: [`answer`] in its colour; under a failure, where
+/// the rest of it is.
+fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome, v: &View) -> Option<Act> {
+    use egui::RichText;
+
+    use crate::st_view::brand::{GREEN, RED, WARN};
+
+    let t = crate::theme::theme(ui);
+    let mut act = None;
+    let a = answer(o);
+    let ink = match a.tone {
+        Tone::Done => t.ink(GREEN),
+        Tone::Warn => t.ink(WARN),
+        Tone::Error => t.ink(RED),
+    };
+    let r = ui
+        .add(egui::Label::new(RichText::new(&a.head).strong().color(ink)).wrap())
+        .tip(match a.tone {
+            Tone::Done => "The change is in the program, marked in the code and on the diagram.",
+            Tone::Warn if o.kind == Kind::Said => "The file is unchanged.",
+            Tone::Warn => "The change is in the program. The Messages list what did not pass.",
+            Tone::Error => "Nothing in the program changed.",
+        });
+    chrome.hit("agent result", r.rect);
+    for line in &a.lines {
+        ui.add(egui::Label::new(RichText::new(line).color(ink)).wrap());
+    }
+    if a.tone != Tone::Done && !matches!(o.kind, Kind::Said) {
+        let more = match a.more {
+            0 => "Details in the Messages".to_string(),
+            n => format!("{n} more in the Messages"),
+        };
+        let r = ui
+            .add(egui::Label::new(RichText::new(more).color(t.muted).underline()).sense(egui::Sense::click()))
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .tip("Opens the Messages, which keep every line of it.");
+        chrome.hit("agent details", r.rect);
+        if r.clicked() {
+            chrome.trend = true;
+            chrome.bottom = crate::editor::Bottom::Messages;
+        }
+    }
+    if !o.review.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for id in &o.review {
+                if let Some(status) = v.decided.get(id) {
+                    let r = ui
+                        .label(RichText::new(format!("#{id} {status}")).color(t.muted))
+                        .tip(format!(
+                            "Proposal #{id} is decided ({status}): nothing left to review. Proposals has it."
+                        ));
+                    chrome.hit("agent decided", r.rect);
+                    continue;
+                }
+                let r = ui
+                    .button(format!("Review #{id}"))
+                    .tip("Opens this proposal under Proposals.");
+                chrome.hit("agent review", r.rect);
+                if r.clicked() {
+                    act = Some(Act::Review(*id));
+                }
+            }
+        });
+    }
+    act
+}
+
+/// The names the draft spells another way ([`crate::phrasing::fixes`]),
+/// each with the button that puts the declared name in.
+fn fixes_ui(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    s: &mut Instruct,
+    io: &[crate::phrasing::Io],
+) {
+    use egui::RichText;
+
+    use crate::st_view::brand::WARN;
+
+    let t = crate::theme::theme(ui);
+    let fixes = crate::phrasing::fixes(&s.draft, io);
+    for (k, f) in fixes.iter().enumerate() {
+        ui.horizontal_wrapped(|ui| {
+            let r = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(format!("\u{201c}{}\u{201d} is {} in this program.", f.from, f.to))
+                            .color(t.ink(WARN)),
+                    )
+                    .wrap(),
+                )
+                .tip("A name spelled as the program declares it is understood first time.");
+            chrome.hit(format!("phrase fix note {k}"), r.rect);
+            let b = ui.button(format!("Use {}", f.to)).tip(format!(
+                "Puts {} in the box in place of \u{201c}{}\u{201d}.",
+                f.to, f.from
+            ));
+            chrome.hit(format!("phrase fix {k}"), b.rect);
+            if b.clicked() {
+                s.draft = crate::phrasing::apply(&s.draft, f);
+            }
+        });
+    }
+    if !fixes.is_empty() {
+        ui.add_space(6.0);
+    }
+}
+
+/// Example requests in the program's own names
+/// ([`crate::phrasing::examples`]): one click puts one in the box.
+fn examples_ui(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    s: &mut Instruct,
+    io: &[crate::phrasing::Io],
+) {
+    use egui::RichText;
+
+    let t = crate::theme::theme(ui);
+    let r = ui
+        .add(
+            egui::Label::new(
+                RichText::new("Name the inputs and outputs and say when. For example:").color(t.muted),
+            )
+            .wrap(),
+        )
+        .tip("A request that names what it reads, what it drives and when usually passes its checks first time.");
+    chrome.hit("phrase examples", r.rect);
+    for (k, e) in crate::phrasing::examples(io).into_iter().enumerate() {
+        ui.add_space(4.0);
+        let r = ui
+            .add(
+                egui::Label::new(RichText::new(format!("\u{201c}{e}\u{201d}")).color(t.fg))
+                    .wrap()
+                    .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .tip("Puts this in the box, to change or send.");
+        chrome.hit(format!("phrase example {k}"), r.rect);
+        if r.clicked() {
+            s.draft = e;
+        }
+    }
 }

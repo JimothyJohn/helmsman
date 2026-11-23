@@ -1692,6 +1692,7 @@ impl BoxView {
             // `agent-wait-questions`: a box after `agent-progress-box`).
             card: None,
             big: None,
+            io: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),

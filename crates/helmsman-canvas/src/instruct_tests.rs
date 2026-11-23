@@ -462,7 +462,7 @@ fn an_answer_that_does_not_compile_is_never_written() {
     assert_eq!(o.kind, Kind::Refused, "{o:?}");
     assert_eq!(
         o.status,
-        "main.st is unchanged: the Agent's answer did not pass its checks in 3 tries."
+        "main.st is unchanged: the answer did not pass its checks in 3 tries."
     );
     assert!(o.problems.iter().any(|p| p.contains("does not compile")), "{o:?}");
     assert_eq!(v.proj.files, before);
@@ -800,52 +800,6 @@ fn the_code_written_so_far_is_the_files_block_and_never_a_scenario() {
         Some(LAMP),
         "a whole answer: the whole file"
     );
-}
-
-#[test]
-fn the_stage_follows_the_answer_order() {
-    use crate::instruct::{Stage, stage, why_line};
-    assert_eq!(stage(false, ""), Stage::Waiting);
-    assert_eq!(stage(true, ""), Stage::Planning, "thinking");
-    assert_eq!(stage(false, "Why: the lamp latc"), Stage::Planning);
-    assert_eq!(why_line("Why: the lamp latc"), None, "a line still coming");
-    assert_eq!(
-        why_line("Why: the lamp latches.\n").as_deref(),
-        Some("the lamp latches.")
-    );
-    assert_eq!(why_line("The lamp.\n"), None, "no Why line");
-    let code = "Why: x.\n\n```st\nPROGRAM p\nEND_PROGRAM\n";
-    assert_eq!(stage(true, code), Stage::Writing(2));
-    let one = format!("{code}```\n\n```st scenario\nPROGRAM t\n");
-    assert_eq!(stage(true, &one), Stage::Checks(1));
-    assert_eq!(
-        stage(true, &format!("{one}```\n```st scenario\n")),
-        Stage::Checks(2)
-    );
-    assert_eq!(
-        stage(true, "I cannot do that: the program has no lamp."),
-        Stage::Planning,
-        "a refusal never claims to write"
-    );
-}
-
-proptest::proptest! {
-    /// The status line never steps back as an answer streams in, cut
-    /// anywhere: it moves from one stage to the next, never between them.
-    #[test]
-    fn the_stage_only_moves_forward(cuts in proptest::collection::vec(0usize..400, 0..12)) {
-        use crate::instruct::stage;
-        let answer = format!("{}\n\n```st scenario\nPROGRAM test_b\nEND_PROGRAM\n```\n", st(LAMP));
-        let mut at: Vec<usize> = cuts.into_iter().map(|c| c.min(answer.len())).filter(|c| answer.is_char_boundary(*c)).collect();
-        at.push(answer.len());
-        at.sort_unstable();
-        let mut last = stage(true, "");
-        for c in at {
-            let now = stage(true, &answer[..c]);
-            proptest::prop_assert!(now >= last, "{last:?} then {now:?} at {c}");
-            last = now;
-        }
-    }
 }
 
 proptest::proptest! {

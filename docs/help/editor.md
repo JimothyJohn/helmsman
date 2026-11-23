@@ -155,15 +155,15 @@ redrawn.
 
 ## The panes
 
-- **The left pane** holds every tab, the **Agent** first and showing when
+- **The left pane** holds every tab, the **Describe** tab first and showing when
   the page opens, so the diagram keeps the rest of the width. Drag a
   tab's glyph to the right edge of the window to dock it in a pane on the
-  right, beside the one on the left (the Code tab and the Agent side by
+  right, beside the one on the left (the Code tab and the Describe tab side by
   side, say), and drag it back onto the left pane to return it.
   <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>5</kbd> sends the tab the left pane shows to the
   right and shows the next one on the left; <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>
   shows or hides the right pane once a tab is there. The layout is kept
-  in the browser. The tabs: **Agent**, where you type what the open file
+  in the browser. The tabs: **Describe**, where you type what the open file
   should do and it is updated (see [The Agent](agent.html)). **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
   the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
