@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -23,7 +23,6 @@ use std::time::Duration;
 const CODE: &str = "7K3QM-X9R2D";
 const BOX_ID: &str = "plc-7";
 const TOKEN: &str = "hmr1_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-const OTHER_TOKEN: &str = "hmr1_ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_helmsman-plc")
@@ -497,6 +496,9 @@ fn an_unwritable_destination_fails_without_spending_a_second_try() {
 mod firstboot {
     use super::*;
     use std::os::unix::fs::PermissionsExt as _;
+    use std::path::Path;
+
+    const OTHER_TOKEN: &str = "hmr1_ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
 
     fn script() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/helmsman-firstboot.sh")

@@ -37,6 +37,7 @@ fn private(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)] // the signature of the Unix half
 fn private(_: &Path) -> io::Result<()> {
     Ok(())
 }
