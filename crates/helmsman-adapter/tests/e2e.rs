@@ -97,8 +97,12 @@ fn class1_both_directions_then_timeout() {
     assert!(!lock_ref(&dev).scanner_running());
     assert_eq!(lock_ref(&dev).stats.timeouts, 1);
 
-    // And it can be opened again.
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    // And it can be opened again. A slower connection than the one above:
+    // close stops the sender before the Forward_Close goes out, and with
+    // the 80 ms watchdog a slow machine let the adapter time this one out
+    // first, so the close was answered "connection not found" (macOS CI,
+    // 2026-11-23). 100 ms x 2^3 = 800 ms leaves the close its room.
+    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(100));
     let conn = IoConnection::open(&mut s, &scanner_sock, a.io_addr(), cfg).unwrap();
     conn.close(&mut s).unwrap();
     assert_eq!(lock_ref(&dev).connections().len(), 0);
