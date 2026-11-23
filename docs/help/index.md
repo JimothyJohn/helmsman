@@ -3,7 +3,7 @@
 Helmsman is a soft PLC you program by describing the machine. You write a
 specification in plain words, Helmsman writes standard IEC 61131-3
 Structured Text from it, you check what it does on a live diagram, and an
-engineer approves it before it runs. This is an early release: everything
+engineer approves it before it runs. Everything
 on these pages is built and in use on the bench; the pages say so where a
 part is still to come.
 

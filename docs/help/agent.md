@@ -204,8 +204,7 @@ any output start on the box's own channels.
 For a whole machine, describe it and ask for a design before any code.
 **Design a machine…** is in the Describe tab, under the spec entry. It is
 there when the design entry is served: on a box, for an engineer with a
-project open; in the simulation, only when the relay says it serves it
-(during the early release it may not). When it is closed for now, or this
+project open; in the simulation, only when the relay says it serves it. When it is closed for now, or this
 hour's allowance is used up, the tab says so beside the button, with the
 time to wait, and the chat carries on as before.
 

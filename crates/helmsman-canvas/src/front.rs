@@ -466,10 +466,6 @@ fn head(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme) -> bool
     let mut open = false;
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("HELMSMAN").color(t.accent).size(22.0).strong());
-        // A phone has no room for it beside the button.
-        if ui.max_rect().width() > 480.0 {
-            ui.label(RichText::new("early release").color(t.muted).size(SMALL));
-        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let r = ui
                 .add(egui::Button::new(RichText::new("Open the editor").size(BODY)))

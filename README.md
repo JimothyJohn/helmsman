@@ -4,9 +4,9 @@
 
 # Helmsman Factory Automation
 
-The soft PLC you program by describing the machine. The agent writes
+The soft PLC you program by describing the machine. Helmsman writes
 standard IEC 61131-3 Structured Text from your spec, you check it on a live
-diagram, and an engineer approves it before it runs. **Early release.**
+diagram, and an engineer approves it before it runs.
 
 - **Robust:** a minimal set of dependencies; every change passes more than
   1,300 automated tests and interoperability tests in CI.
