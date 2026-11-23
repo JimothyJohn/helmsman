@@ -4442,9 +4442,13 @@ fn the_diagram_of_a_box_offers_assign_on_a_port_block_with_its_code_edits_off() 
         "offered on a box"
     );
     assert!(
-        h.app.chrome.rect("diagram menu rename").is_none()
-            && h.app.chrome.rect("diagram menu delete").is_none(),
-        "the code's own edits stay off on a box"
+        h.app.chrome.rect("diagram menu rename").is_some(),
+        "a name is the diagram's to change on a box too"
+    );
+    assert!(
+        h.app.chrome.rect("diagram menu delete").is_none()
+            && h.app.chrome.rect("diagram menu negate").is_none(),
+        "the logic's edits stay off on a box"
     );
     h.press("diagram menu assign");
     h.wait(0.2);
@@ -4883,4 +4887,70 @@ fn a_rename_offered_on_a_box_is_saved_in_every_file_with_its_history_and_undone(
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
     assert_eq!(on_box("main.st"), LAMP);
     assert_eq!(on_box("test_lamp.st"), FOLLOWS);
+}
+
+/// A value set by hand on a box's diagram is saved on the box in its file
+/// with a History entry, and Undo restores the file (`crate::by_hand`).
+#[test]
+fn a_value_set_by_hand_on_a_box_is_saved_with_its_history_and_undone() {
+    use crate::instruct::Kind;
+
+    const TIMED: &str = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nVAR\n  t : TON;\nEND_VAR\nt(IN := start, PT := T#5s);\nlamp := t.Q;\nEND_PROGRAM\n";
+    fn run(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context) {
+        v.tick(ctx);
+        for _ in 0..20 {
+            pump(b, jar, v, ctx, 1.0);
+            if v.psent.is_empty() {
+                return;
+            }
+        }
+        panic!("the box never went quiet");
+    }
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", TIMED)]);
+    v.projects.open_file("main.st");
+    run(&b, &jar, &mut v, &ctx);
+    let before = v.projects.history.last().map(|r| r.n).expect("revisions");
+
+    let files: crate::scope::Files = [("main.st".to_string(), TIMED.to_string())].into();
+    let lit = crate::by_hand::Literal {
+        text: "T#5s".into(),
+        file: "main.st".into(),
+        line: 11,
+        col: 22,
+    };
+    let text = crate::by_hand::set_value(&files, &lit, "T#2s").expect("a time fits a preset");
+    v.set_value(&lit, "T#2s", text);
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(o.status, "Set T#5s to T#2s in main.st.");
+    assert_eq!(o.undo.as_ref().map(|u| u.revision), Some(before));
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        TIMED.replace("T#5s", "T#2s").as_str()
+    );
+    let saved = v
+        .projects
+        .history
+        .iter()
+        .find(|r| r.page)
+        .cloned()
+        .expect("its History entry");
+    let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
+    assert!(
+        page["page"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("Instruction: Set T#5s to T#2s on line 11\nFile: main.st\n")),
+        "{page}"
+    );
+
+    v.undo_change();
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], TIMED);
 }

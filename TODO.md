@@ -685,7 +685,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 1h
   difficulty: low
   id: relay-offer-profile
-- [ ] **Diagram: rename and set values by hand** — on the diagram a right click has Rename…, a double click edits a name or a set value (a constant, a timer preset) where it stands, and the code follows; never the logic (Nick: "I don't want to manipulate the logic"). Rename… on the I/O rows too. Each edit is saved as one revision with a History entry and Undo, as a described change is. The label is the variable's name for now. Reverses the 2026-11-18 principle in docs/UI.md for names and set values only; docs/decisions/diagram-edits.md has the removed engine (SetConst, Rename at 4a6d37aa). Fix with it: `rename_plan` renames a PROGRAM whose name equals the variable.
+- [x] **Diagram: rename and set values by hand** — on the diagram a right click has Rename…, a double click edits a name or a set value (a constant, a timer preset) where it stands, and the code follows; never the logic (Nick: "I don't want to manipulate the logic"). Rename… on the I/O rows too. Each edit is saved as one revision with a History entry and Undo, as a described change is. The label is the variable's name for now. Reverses the 2026-11-18 principle in docs/UI.md for names and set values only; docs/decisions/diagram-edits.md has the removed engine (SetConst, Rename at 4a6d37aa). Fix with it: `rename_plan` renames a PROGRAM whose name equals the variable.
   result: names and set values change on the diagram and in the code together
   est: 2d
   difficulty: med

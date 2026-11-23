@@ -49,6 +49,7 @@ mod box_spec;
 mod box_tests;
 mod box_trend;
 mod box_view;
+mod by_hand;
 mod chat_about;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod chat_about_tests;
