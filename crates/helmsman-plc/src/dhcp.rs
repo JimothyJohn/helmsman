@@ -106,6 +106,22 @@ pub struct Wire {
     pub client_port: u16,
 }
 
+#[cfg(unix)]
+fn tie_to_interface(s: &UdpSocket, interface: &str) -> io::Result<()> {
+    helmsman_l2::bind_to_interface(s, interface)
+}
+
+/// Windows has no per-interface socket tie (helmsman-l2 is Unix-only), and
+/// a DHCP server that heard every adapter would answer the wrong LAN: the
+/// built-in DHCP server is Unix-only.
+#[cfg(not(unix))]
+fn tie_to_interface(_: &UdpSocket, _: &str) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "the built-in DHCP server is not available on this platform",
+    ))
+}
+
 impl Wire {
     /// UDP 67 and 68 on every address, tied to `interface`, broadcasts
     /// allowed.
@@ -118,7 +134,7 @@ impl Wire {
         let open = |port: u16| -> io::Result<UdpSocket> {
             let s = UdpSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))
                 .map_err(|e| io::Error::new(e.kind(), format!("UDP {port}: {e}")))?;
-            helmsman_l2::bind_to_interface(&s, interface)
+            tie_to_interface(&s, interface)
                 .map_err(|e| io::Error::new(e.kind(), format!("UDP {port} on {interface}: {e}")))?;
             s.set_broadcast(true)?;
             Ok(s)

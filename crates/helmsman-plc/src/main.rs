@@ -1370,8 +1370,21 @@ fn start_site(o: &Opts, name: &str, api_port: u16, token: &str) -> Result<Site, 
     Ok(started)
 }
 
+/// The DHCP server needs a socket tied to one interface (helmsman-l2),
+/// which Windows does not have: `--dhcp` is refused there.
+#[cfg(not(unix))]
+fn start_dhcp(o: &Opts) -> Result<Option<helmsman_plc::dhcp::Dhcp>, String> {
+    match o.dhcp.as_deref() {
+        Some(iface) => Err(format!(
+            "--dhcp {iface}: the built-in DHCP server is not available on this platform"
+        )),
+        None => Ok(None),
+    }
+}
+
 /// The DHCP server on `--dhcp IFACE`, if asked for: the box's address and
 /// mask are the interface's own (helmsman-l2's `ipv4_net`).
+#[cfg(unix)]
 fn start_dhcp(o: &Opts) -> Result<Option<helmsman_plc::dhcp::Dhcp>, String> {
     use helmsman_plc::dhcp::{self, Dhcp, Settings, Wire};
     let Some(iface) = o.dhcp.as_deref() else {
