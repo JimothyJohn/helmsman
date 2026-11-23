@@ -289,10 +289,15 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/pw"
           "$RUNNER_TEMP/pw/bin/pip" install playwright==1.58.0
           "$RUNNER_TEMP/pw/bin/python" -m playwright install --with-deps "$ENGINE"
+      # Firefox finds its software GL (Mesa's llvmpipe) only if Mesa is there.
+      - name: Mesa software GL
+        if: ${{ matrix.engine == 'firefox' }}
+        run: sudo apt-get install -y --no-install-recommends libgl1-mesa-dri libegl1 libgles2 mesa-utils
       - name: Drive the canvas
         env:
           ENGINE: ${{ matrix.engine }}
           GPU: ${{ matrix.gpu }}
+          LIBGL_ALWAYS_SOFTWARE: ${{ matrix.engine == 'firefox' && '1' || '' }}
         run: |
           flags=""
           if [ "$GPU" = software ]; then flags="--no-gpu"; fi

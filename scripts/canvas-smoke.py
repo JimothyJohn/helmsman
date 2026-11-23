@@ -70,6 +70,13 @@ PLC = None  # set in main: target/debug/helmsman-plc
 KEY = "helmsman-canvas/editor"
 W, H = 1400, 860
 S = 2
+# CSS pixels per point of the layout, per engine, set in main. Chromium and
+# Firefox with an emulated device_scale_factor give eframe a canvas buffer of
+# CSS size while it assumes the DPR, so the 1400 x 860 point layout spans
+# 2800 x 1720 CSS px (2 per point). WebKit behaves as a real Retina screen:
+# 1 CSS px per point on a 1400 x 860 viewport. Measured 2026-11-22 (canvas
+# width attribute 1400 vs 2800 at a 1400 CSS px viewport and DPR 2).
+K = 2
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 USER, PASSWORD = "alice", "alice-engineer-pw"
 # Console lines the smoke itself causes.
@@ -147,20 +154,24 @@ class Run:
         self.page.screenshot(path=os.path.join(self.out, f"{self.prefix}-{self.n:02d}-{name}.png"))
 
     def look(self, region):
-        x, y, w, h = (v * S for v in region)
+        x, y, w, h = (v * K for v in region)
         clip = {"x": x, "y": y, "width": w, "height": h}
         return hashlib.sha256(self.page.screenshot(clip=clip)).hexdigest()
 
-    def step(self, name, do, watch, ms=700, optional=False):
+    def step(self, name, do, watch, ms=700, stays=False):
         """`do`, then a screenshot; `watch` (a region) must have changed,
-        unless `optional` (a build without the free chat has no Agent to
-        open a window from: its tab says so)."""
+        or with `stays` must not have: a build without the free chat shows
+        "Describing a change is not available in this build." in the tab,
+        with no spec button or window to open, so a click or typing there
+        leaves the pane as it was."""
         before = self.look(watch)
         do()
         self.wait(ms)
         self.shot(name)
-        if self.look(watch) == before and not optional:
-            self.same.append(f"[smoke] {self.prefix}: '{name}' changed nothing on screen")
+        changed = self.look(watch) != before
+        if changed == stays:
+            what = "changed" if changed else "changed nothing"
+            self.same.append(f"[smoke] {self.prefix}: '{name}' {what} on screen")
 
     def click(self, x, y, button="left"):
         self.page.mouse.click(x, y, button=button)
@@ -216,10 +227,11 @@ def playground(ctx, base, out):
     r.step("folded", lambda: r.click(*FOLD_LINE_2), LEFT)
     r.click(*FOLD_LINE_2); r.wait(300)
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
-    # Spec mode (2026-11-15): "From a spec..." opens its window; text typed
-    # into it shows; Escape shuts it with the text kept.
-    r.step("spec-window", lambda: r.click(*AGENT_SPEC), SPEC_WINDOW, optional=True)
-    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), SPEC_WINDOW, optional=True)
+    # This build has no free chat: the tab says so (UNAVAILABLE_TEXT) and a
+    # click or typing on it changes nothing. (With a chat URL: "From a
+    # spec..." opens its window; text typed into it shows.)
+    r.step("spec-window", lambda: r.click(*AGENT_SPEC), LEFT, stays=True)
+    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), LEFT, stays=True)
     r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
@@ -260,8 +272,11 @@ def playground(ctx, base, out):
     r.key("Alt+Shift+Digit3"); r.wait(400)
     def drag_back():
         m = r.page.mouse
-        m.move(*TAB_RIGHT_FIRST); m.down()
-        m.move(160, 300, steps=12); m.up()
+        # A frame between each phase: egui starts a drag from the press it
+        # saw on a hovered tab, and WebKit delivers the events faster than
+        # the page draws.
+        m.move(*TAB_RIGHT_FIRST); r.wait(150); m.down(); r.wait(150)
+        m.move(160, 300, steps=12); r.wait(150); m.up()
     r.step("docked-back", drag_back, RIGHT_TABS)
     # View › Pane layouts… (2026-11-15): the popup, then the ready-made
     # Programming layout (the code docked on the right), then Default.
@@ -515,7 +530,7 @@ def market(browser, dist, out):
             port = free_port()
             proc = start_market_box(dist, work, trust_key, port, relay_port)
             try:
-                ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+                ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
                 base = f"http://127.0.0.1:{port}"
                 r = Run(open_app(ctx, base, "", layout()), out, f"market-{label}")
                 r.wait(4000)
@@ -576,7 +591,7 @@ def install_steps(r, index, label):
 
 
 def phone(browser, base, query, out, prefix):
-    ctx = browser.new_context(viewport={"width": 390 * S, "height": 844 * S}, device_scale_factor=S, color_scheme="dark")
+    ctx = browser.new_context(viewport={"width": 390 * K, "height": 844 * K}, device_scale_factor=S, color_scheme="dark")
     r = Run(open_app(ctx, base, query, layout()), out, prefix)
     r.wait(3000); r.shot("phone")
     problems = r.problems()
@@ -669,18 +684,38 @@ def launch(p, engine, nogpu):
     return p.webkit.launch()
 
 
+PROBE_APP = """() => {
+    const c = document.getElementById('canvas');
+    const r = c.getBoundingClientRect();
+    return `dpr ${devicePixelRatio} inner ${innerWidth}x${innerHeight} canvas buffer ${c.width}x${c.height} css ${r.width}x${r.height}`;
+}"""
+
+PROBE_GL1 = """() => {
+    const gl = document.createElement('canvas').getContext('webgl');
+    if (!gl) return null;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.VERSION);
+}"""
+
+
 def probe_webgl2(browser, base):
-    """The WebGL2 renderer the engine gives a page, or None."""
+    """One line: the WebGL2 and WebGL1 renderers the engine gives a page, and
+    the size of the app's canvas against its CSS size at this engine's layout."""
     page = browser.new_page()
     page.goto(base + "/__seed", wait_until="load")
-    renderer = page.evaluate(PROBE)
+    gl2, gl1 = page.evaluate(PROBE), page.evaluate(PROBE_GL1)
     page.close()
-    return renderer
+    ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S)
+    page = open_app(ctx, base, "?playground&editor", layout())
+    page.wait_for_timeout(3000)
+    metrics = page.evaluate(PROBE_APP)
+    ctx.close()
+    return f"WebGL2 {gl2!r}, WebGL1 {gl1!r}, {metrics} (viewport {W * K}x{H * K})"
 
 
 def no_webgl2(browser, base, out):
     """With getContext('webgl2') answering null the page shows its notice."""
-    ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+    ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
     ctx.add_init_script(NO_WEBGL2_INIT)
     r = Run(open_app(ctx, base, "?playground&editor", layout()), out, "nowebgl")
     r.wait(4000)
@@ -700,14 +735,14 @@ def run_engine(browser, base, out, a, proc, box_port):
     if a.market_only:
         return market(browser, a.dist, out)
     problems = []
-    ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+    ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
     problems += playground(ctx, base, out)
     ctx.close()
     problems += phone(browser, base, "?playground&editor", out, "pg")
     problems += no_webgl2(browser, base, out)
     if proc:
         bbase = f"http://127.0.0.1:{box_port}"
-        ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+        ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
         problems += box(ctx, bbase, out)
         ctx.close()
         problems += phone(browser, bbase, "", out, "box")
@@ -745,18 +780,11 @@ def main():
                     name = engine + ("-nogpu" if nogpu else "")
                     out = os.path.join(a.out, name) if every or a.no_gpu or engine != "chromium" else a.out
                     os.makedirs(out, exist_ok=True)
+                    global K
+                    K = 1 if engine == "webkit" else 2
                     browser = launch(p, engine, nogpu)
-                    print(f"[smoke] {name}: WebGL2 renderer {probe_webgl2(browser, base)!r}", flush=True)
+                    print(f"[smoke] {name}: {probe_webgl2(browser, base)}", flush=True)
                     found = [f"{name}: {x}" for x in run_engine(browser, base, out, a, proc, box_port if proc else None)]
-                    if engine == "webkit":
-                        # The clicks are aimed at the layout Chromium and Firefox
-                        # draw; headless WebKit draws the app at about half that
-                        # size (same DPR, same viewport), so a click can miss.
-                        # What it still must show: no console error or panic.
-                        quiet = [x for x in found if "changed nothing on screen" in x]
-                        found = [x for x in found if x not in quiet]
-                        for x in quiet:
-                            print(f"[smoke] warning (not a failure on WebKit): {x}")
                     problems += found
                     browser.close()
     finally:
