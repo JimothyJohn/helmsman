@@ -2665,12 +2665,14 @@ impl PlaygroundView {
         }
         self.proj.save_as(what, Some(record));
         self.reload_running();
-        before.zip(shown).map(|(revision, (file, text))| crate::instruct::Undo {
-            project: self.proj.open.clone(),
-            file,
-            revision,
-            text,
-        })
+        before
+            .zip(shown)
+            .map(|(revision, (file, text))| crate::instruct::Undo {
+                project: self.proj.open.clone(),
+                file,
+                revision,
+                text,
+            })
     }
 
     /// What block `n` of the diagram lets the engineer change by hand

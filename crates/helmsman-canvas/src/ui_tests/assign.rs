@@ -104,7 +104,14 @@ fn an_io_row_has_rename_which_opens_the_question_on_its_name() {
     menu(&mut h, "io row spare", "menu rename io");
     assert!(h.has("rename form"), "the question opens");
     assert_eq!(
-        h.app.sim.as_ref().unwrap().devices_ui.renaming.as_ref().map(|r| r.0.as_str()),
+        h.app
+            .sim
+            .as_ref()
+            .unwrap()
+            .devices_ui
+            .renaming
+            .as_ref()
+            .map(|r| r.0.as_str()),
         Some("spare")
     );
     assert!(!dirty(&h), "nothing written until Rename is pressed");

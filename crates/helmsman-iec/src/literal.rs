@@ -78,15 +78,44 @@ mod tests {
             assert_eq!(at(l, c), None, "{l}:{c}");
         }
         assert_eq!(literal_at("x := 'a;b';", 1, 6), None, "a STRING is left out");
-        assert_eq!(literal_at("x := 'never closed", 1, 6), None, "source that does not lex");
+        assert_eq!(
+            literal_at("x := 'never closed", 1, 6),
+            None,
+            "source that does not lex"
+        );
     }
 
     #[test]
     fn one_literal_and_nothing_else_is_a_literal() {
-        for ok in ["5", "-5", "2.5", "-0.1", "T#5s", "TIME#1h30m", "TRUE", "false", "INT#-5", "16#FF", "D#2024-02-29", " 7 "] {
+        for ok in [
+            "5",
+            "-5",
+            "2.5",
+            "-0.1",
+            "T#5s",
+            "TIME#1h30m",
+            "TRUE",
+            "false",
+            "INT#-5",
+            "16#FF",
+            "D#2024-02-29",
+            " 7 ",
+        ] {
             assert!(is_literal(ok), "{ok}");
         }
-        for no in ["", "x", "5 + 1", "5; y := 1", "5 (* c *) 6", "-TRUE", "- -5", "'s'", "T#", "5;", "1 //\n; z := 2"] {
+        for no in [
+            "",
+            "x",
+            "5 + 1",
+            "5; y := 1",
+            "5 (* c *) 6",
+            "-TRUE",
+            "- -5",
+            "'s'",
+            "T#",
+            "5;",
+            "1 //\n; z := 2",
+        ] {
             assert!(!is_literal(no), "{no}");
         }
     }

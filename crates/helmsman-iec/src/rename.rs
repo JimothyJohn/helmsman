@@ -60,7 +60,8 @@ pub fn rename_ident(src: &str, old: &str, new: &str) -> Result<(String, usize), 
             }
         }
         prev_dot = *t == Tok::Dot;
-        prev_pou = matches!(t, Tok::Ident(w) if matches!(w.as_str(), "PROGRAM" | "FUNCTION_BLOCK" | "FUNCTION"));
+        prev_pou =
+            matches!(t, Tok::Ident(w) if matches!(w.as_str(), "PROGRAM" | "FUNCTION_BLOCK" | "FUNCTION"));
     }
     let mut out = String::with_capacity(src.len());
     let mut last = 0;
@@ -94,7 +95,10 @@ mod tests {
         assert_eq!(n, 2, "{out}");
         assert!(out.starts_with("PROGRAM lamp\n"), "{out}");
         assert!(out.contains("FUNCTION_BLOCK Lamp\n"), "{out}");
-        assert!(out.contains("  beacon : BOOL;") && out.contains("beacon := TRUE;"), "{out}");
+        assert!(
+            out.contains("  beacon : BOOL;") && out.contains("beacon := TRUE;"),
+            "{out}"
+        );
     }
 
     #[test]

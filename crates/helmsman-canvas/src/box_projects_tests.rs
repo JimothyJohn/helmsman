@@ -4934,7 +4934,13 @@ fn a_value_set_by_hand_on_a_box_is_saved_with_its_history_and_undone() {
         b.json("/api/projects/line/files/main.st")["text"],
         TIMED.replace("T#5s", "T#2s").as_str()
     );
-    let saved = v.projects.history.iter().find(|r| r.page).cloned().expect("its History entry");
+    let saved = v
+        .projects
+        .history
+        .iter()
+        .find(|r| r.page)
+        .cloned()
+        .expect("its History entry");
     let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
     assert!(
         page["page"]

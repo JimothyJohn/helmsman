@@ -3,6 +3,13 @@
 Written for an engineer who rebuilds this later. The code is gone from dev;
 everything below comes from the PRs, their bodies and the removed code.
 
+Since 2026-11-23 two of these are back in a smaller form, by Nick's
+choice: a name and a set value can be changed on the diagram
+(`crates/helmsman-canvas/src/by_hand.rs`, docs/UI.md, Principles). A rename
+goes through the whole-project rename and a value replaces one literal's
+characters; nothing here was brought back, and the logic still cannot be
+changed on the diagram.
+
 ## Why it was removed
 
 Nick, 2026-11-18: "on the diagram the user edits the layout and toggles

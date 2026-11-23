@@ -214,7 +214,14 @@ impl ValueAsk {
         let m = crate::theme::near_pointer(ctx, "value-set").show(ctx, |ui| {
             ui.set_max_width(360.0);
             let t = crate::theme::theme(ui);
-            ui.add(egui::Label::new(RichText::new(format!("Set {}", self.lit.text)).strong().size(20.0)).wrap());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("Set {}", self.lit.text))
+                        .strong()
+                        .size(20.0),
+                )
+                .wrap(),
+            );
             ui.add_space(8.0);
             let tip = "The new value, written into the code where this one stands. Nothing else changes.";
             let e = ui
@@ -317,7 +324,10 @@ mod tests {
         for n in ["run", "t", "n", "lamp"] {
             assert!(names.iter().any(|x| x == n), "{n} in {names:?}");
         }
-        assert_eq!((value("T#5s").line, value("10").line, value("0").line), (12, 13, 14));
+        assert_eq!(
+            (value("T#5s").line, value("10").line, value("0").line),
+            (12, 13, 14)
+        );
     }
 
     #[test]
@@ -345,7 +355,11 @@ mod tests {
         // The file moved on: the literal is not where the diagram says.
         let lit = value("10");
         let moved: Files = [("main.st".to_string(), SRC.replace(">= 10", ">=  10"))].into();
-        assert!(set_value(&moved, &lit, "12").unwrap_err().contains("changed since"));
+        assert!(
+            set_value(&moved, &lit, "12")
+                .unwrap_err()
+                .contains("changed since")
+        );
         assert!(
             set_value(&Files::new(), &lit, "12")
                 .unwrap_err()

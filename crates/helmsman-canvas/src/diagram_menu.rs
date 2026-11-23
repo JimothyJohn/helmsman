@@ -282,32 +282,28 @@ impl Menu {
                     }
                     // Last, so the rows above stay where they were when
                     // the host's answer adds it.
-                    match &e.edit {
-                        Some(crate::by_hand::Target::Name(name)) => {
-                            if row_on(
-                                ui,
-                                chrome,
-                                "diagram menu rename",
-                                "Rename…",
-                                true,
-                                &format!("Renames {name} everywhere in the project, the wiring and the tests with the program. Double-click the block does the same."),
-                            ) {
-                                edit = e.edit.clone();
-                            }
-                        }
-                        Some(crate::by_hand::Target::Value(l)) => {
-                            if row_on(
-                                ui,
-                                chrome,
-                                "diagram menu set value",
-                                "Set value…",
-                                true,
-                                &format!("Writes a new value in place of {} in the code. Double-click the block does the same.", l.text),
-                            ) {
-                                edit = e.edit.clone();
-                            }
-                        }
-                        None => {}
+                    let row = match &e.edit {
+                        Some(crate::by_hand::Target::Name(name)) => Some((
+                            "diagram menu rename",
+                            "Rename…",
+                            format!(
+                                "Renames {name} everywhere in the project, the wiring and the tests with the program. Double-click the block does the same."
+                            ),
+                        )),
+                        Some(crate::by_hand::Target::Value(l)) => Some((
+                            "diagram menu set value",
+                            "Set value…",
+                            format!(
+                                "Writes a new value in place of {} in the code. Double-click the block does the same.",
+                                l.text
+                            ),
+                        )),
+                        None => None,
+                    };
+                    if let Some((key, text, tip)) = row
+                        && row_on(ui, chrome, key, text, true, &tip)
+                    {
+                        edit.clone_from(&e.edit);
                     }
                 });
             });

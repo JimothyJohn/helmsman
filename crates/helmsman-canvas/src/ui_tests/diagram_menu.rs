@@ -181,7 +181,10 @@ fn rename_in_the_menu_renames_everywhere_as_one_revision_and_undo_takes_it_back(
         v.instruct.outcome.as_ref().map(|o| o.status.as_str()),
         Some("Renamed count to parts in 1 file.")
     );
-    assert!(v.session.src.contains("parts > 10"), "the program running is the renamed one");
+    assert!(
+        v.session.src.contains("parts > 10"),
+        "the program running is the renamed one"
+    );
     h.app.sim.as_mut().unwrap().undo_change();
     assert_eq!(h.file(), SRC);
 }
@@ -265,7 +268,10 @@ fn a_double_click_on_an_inputs_block_still_simulates_it_and_asks_no_name() {
     let at = h.block(|k, _| matches!(k, NodeKind::Read { path } if path == "STOP"));
     h.double_click(at);
     h.frame(vec![]);
-    assert!(h.app.sim.as_ref().unwrap().sim_popup.is_some(), "Simulate this input");
+    assert!(
+        h.app.sim.as_ref().unwrap().sim_popup.is_some(),
+        "Simulate this input"
+    );
     assert!(!h.has("rename form"));
     assert_eq!(h.app.sim.as_ref().unwrap().devices_ui.renaming, None);
 }
