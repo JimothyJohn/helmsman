@@ -3224,7 +3224,7 @@ the end of this section.
   carried across a redeploy; it is not yet in `diagram.layout`.
   The level does not follow the zoom for now (Nick, 2026-11-23: it looked
   glitchy and like another interface): `st_zoom::SEMANTIC_ZOOM` is `false`,
-  `Viewer::semantic_zoom` starts from it, and the view stays at
+  `ZoomFolds::follows` starts from it, and the view stays at
   `Level::Near`, the level a small program has at its fitted zoom, so a zoom
   only scales. The machinery below stays for the later merge of nodes into
   labelled groups, and its tests turn the field on. The corner of the

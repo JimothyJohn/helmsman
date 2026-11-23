@@ -60,7 +60,7 @@ impl Harness {
         };
         // The machinery under test is off by default (SEMANTIC_ZOOM); these
         // tests are of what it does when it is on.
-        h.view.semantic_zoom = true;
+        h.view.zoom.follows = true;
         h.frame(vec![]);
         h.frame(vec![]);
         h
@@ -415,7 +415,7 @@ const TAP: f32 = super::super::TAP;
 /// A view as it ships: the level does not follow the zoom.
 fn shipped(src: &str) -> Harness {
     let mut h = Harness::new(src);
-    h.view.semantic_zoom = super::SEMANTIC_ZOOM;
+    h.view.zoom.follows = super::SEMANTIC_ZOOM;
     h
 }
 

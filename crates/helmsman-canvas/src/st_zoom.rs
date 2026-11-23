@@ -35,6 +35,9 @@ pub(super) const SEMANTIC_ZOOM: bool = false;
 pub(super) struct ZoomFolds {
     /// The level the view is at.
     pub level: Level,
+    /// Whether the level follows the zoom ([`SEMANTIC_ZOOM`] to start
+    /// with): a field so a test can turn the machinery on.
+    pub follows: bool,
     /// Folds the zoom closes that the reader opened, as (POU, fold key).
     kept_open: BTreeSet<(String, String)>,
     /// The keys of the folds the zoom closes now, for each POU.
@@ -44,6 +47,14 @@ pub(super) struct ZoomFolds {
 }
 
 impl ZoomFolds {
+    /// The folds of a view that has not been zoomed.
+    pub fn new() -> Self {
+        Self {
+            follows: SEMANTIC_ZOOM,
+            ..Self::default()
+        }
+    }
+
     /// Whether the zoom closes fold `key` of POU number `pou`.
     pub fn is_shut(&self, pou: usize, key: &str) -> bool {
         self.shut.get(pou).is_some_and(|s| s.contains(key))
@@ -281,7 +292,7 @@ impl Viewer {
     /// over (it ends at the level it began at) or before the first fit.
     pub(super) fn follow_zoom(&mut self, pointer: Option<Pos2>, area: Rect) -> Cam {
         let cam = self.cams[self.scope];
-        if !self.semantic_zoom || self.glide.is_some() || !cam.fitted {
+        if !self.zoom.follows || self.glide.is_some() || !cam.fitted {
             return cam;
         }
         let level = zoom::level(cam.zoom, self.zoom.level);

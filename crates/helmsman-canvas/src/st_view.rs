@@ -235,6 +235,8 @@ pub enum Pick {
 /// One module's diagram on screen, whatever the scans come from (the
 /// in-page demo, or a box over its API): scopes, camera, selection, the
 /// variable "on because" is shown for, and the panels drawing them.
+// Flags of independent view state (chat_ok, menu_open, hand ...), not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Viewer {
     pub src: String,
     pub module: Module,
@@ -336,10 +338,6 @@ pub struct Viewer {
     cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
     /// What the zoom closes ([`zoom_fold`]).
     zoom: zoom_fold::ZoomFolds,
-    /// Whether the level of detail follows the zoom
-    /// ([`zoom_fold::SEMANTIC_ZOOM`], off for now). A field so a test can
-    /// turn the machinery on.
-    semantic_zoom: bool,
     /// The hand toggle of the corner controls: a primary drag on empty
     /// space pans instead of selecting. View state, never saved.
     hand: bool,
@@ -692,8 +690,7 @@ impl Viewer {
             frame_lit: false,
             cards: std::cell::RefCell::new(None),
             jumped: None,
-            zoom: zoom_fold::ZoomFolds::default(),
-            semantic_zoom: zoom_fold::SEMANTIC_ZOOM,
+            zoom: zoom_fold::ZoomFolds::new(),
             hand: false,
         };
         v.reshow();
