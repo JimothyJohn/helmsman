@@ -111,9 +111,12 @@ switch its inputs. What you can do:
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Zoom with the
-  wheel, a two-finger scroll or a pinch, about the pointer. Move the view
-  with a drag on empty space, or with the arrow keys or W A S D while the
-  pointer is over the diagram. The diagram never leaves the view, and a
+  wheel, a two-finger scroll or a pinch, about the pointer, or with the plus
+  and minus buttons in the bottom-right corner. The diagram looks the same at
+  every zoom. A drag on empty space draws a box that selects; move the view
+  with the hand button beside the zoom buttons (a drag on empty space then
+  moves it), with Space and a drag, the middle button, or the arrow keys or
+  W A S D while the pointer is over the diagram. The diagram never leaves the view, and a
   double-click on empty space fits it again.
 - **Jump.** With the pointer over the diagram, <kbd>E</kbd> goes to the
   next function block call, IF, CASE or loop and <kbd>Q</kbd> to the

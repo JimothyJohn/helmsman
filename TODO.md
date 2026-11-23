@@ -738,7 +738,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 3h
   difficulty: low
   id: fb-trend-legend
-- [ ] **Canvas: no semantic zoom, corner controls** — the abstraction layers by zoom (structured text zoomed out, function blocks mid-zoom) off for now: they look glitchy and like another interface. Switched off at the view, the folding kept: later, zooming out merges nodes into labelled groups in the same style with smooth transitions. Background drag stays box select, Space and drag stays pan. Bottom right: a pan (hand) toggle, zoom in, zoom out.
+- [x] **Canvas: no semantic zoom, corner controls** — the abstraction layers by zoom (structured text zoomed out, function blocks mid-zoom) off for now: they look glitchy and like another interface. Switched off at the view, the folding kept: later, zooming out merges nodes into labelled groups in the same style with smooth transitions. Background drag stays box select, Space and drag stays pan. Bottom right: a pan (hand) toggle, zoom in, zoom out.
   est: 1d
   difficulty: med
   id: fb-canvas-zoom

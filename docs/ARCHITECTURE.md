@@ -3222,7 +3222,19 @@ the end of this section.
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
-  The zoom picks the level (`st_zoom.rs`, a child of `st_view`): each frame
+  The level does not follow the zoom for now (Nick, 2026-11-23: it looked
+  glitchy and like another interface): `st_zoom::SEMANTIC_ZOOM` is `false`,
+  `ZoomFolds::follows` starts from it, and the view stays at
+  `Level::Near`, the level a small program has at its fitted zoom, so a zoom
+  only scales. The machinery below stays for the later merge of nodes into
+  labelled groups, and its tests turn the field on. The corner of the
+  diagram (`Viewer::corner_controls`, drawn by `canvas` so the page and a
+  box both have it) holds the hand toggle (`Viewer::hand`, view state: a
+  primary drag on empty space pans instead of boxing), zoom in and zoom out
+  (`ZOOM_STEP` about the middle of the area, the wheel's 0.15 to 3 limits),
+  left of the lamp fixture when there is one.
+  With `SEMANTIC_ZOOM` on, the zoom picks the level (`st_zoom.rs`, a child of
+  `st_view`): each frame
   `follow_zoom` takes the camera's zoom through `zoom::level`, and when the
   level changes the folds are drawn again and the point under the pointer
   (the view's middle without one) keeps its place in the band of its
