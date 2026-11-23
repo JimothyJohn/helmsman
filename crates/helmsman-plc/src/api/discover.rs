@@ -51,7 +51,7 @@ use super::{Ctx, audit, audit_full};
 /// How long a sweep's result answers for, without `?fresh=1`.
 pub const FRESH: Duration = Duration::from_secs(60);
 /// How long the library's index is kept before it is fetched again.
-pub const INDEX_FRESH: Duration = Duration::from_secs(24 * 3600);
+pub const INDEX_FRESH: Duration = Duration::from_hours(24);
 /// Largest map file taken from the library.
 const MAX_MAP: usize = 64 * 1024;
 /// Most entries of each list in a record's brief.

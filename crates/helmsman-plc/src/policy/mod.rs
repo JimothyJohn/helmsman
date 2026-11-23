@@ -145,7 +145,7 @@ pub struct Lockout {
 }
 
 /// The longest a lockout grows to.
-pub const MAX_LOCKOUT: Duration = Duration::from_secs(60 * 60);
+pub const MAX_LOCKOUT: Duration = Duration::from_hours(1);
 
 /// What a box enforces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

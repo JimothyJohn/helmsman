@@ -50,7 +50,7 @@ pub const PROFILE: &str = "helmsman/design-v1";
 /// A design turn thinks for minutes: no byte for this long is a dead relay.
 pub const IDLE: Duration = Duration::from_secs(180);
 /// The longest one design turn may take (the relay's function allows 600 s).
-pub const TOTAL: Duration = Duration::from_secs(660);
+pub const TOTAL: Duration = Duration::from_mins(11);
 /// Designs held at once.
 pub const MAX_SESSIONS: usize = 4;
 /// Largest `<project>` block, bytes.

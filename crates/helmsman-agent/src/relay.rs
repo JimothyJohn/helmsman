@@ -59,7 +59,7 @@ impl Config {
             timeouts: Timeouts {
                 connect: Duration::from_secs(10),
                 idle: Duration::from_secs(120),
-                total: Duration::from_secs(900),
+                total: Duration::from_mins(15),
             },
         }
     }

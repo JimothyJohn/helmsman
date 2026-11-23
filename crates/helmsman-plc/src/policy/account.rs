@@ -71,9 +71,9 @@ pub const PASSWORD_LEN: (usize, usize) = (8, 128);
 /// hashed as given (PBKDF2 rehashes a long key every iteration).
 pub const MAX_PASSWORD_BYTES: usize = 1024;
 /// A session ends this long after its login, however busy.
-pub const SESSION_TTL: Duration = Duration::from_secs(60 * 60);
+pub const SESSION_TTL: Duration = Duration::from_hours(1);
 /// A session ends after this long unused.
-pub const SESSION_IDLE: Duration = Duration::from_secs(15 * 60);
+pub const SESSION_IDLE: Duration = Duration::from_mins(15);
 /// Most sessions the box holds at once.
 pub const MAX_SESSIONS: usize = 256;
 /// Most sessions one account holds; a further login ends its oldest.
@@ -82,7 +82,7 @@ pub const SESSIONS_PER_USER: usize = 8;
 /// allowance, before all logins lock.
 pub const GLOBAL_FACTOR: u32 = 4;
 /// How long a wrong password counts toward the box-wide lockout.
-pub const GLOBAL_WINDOW: Duration = Duration::from_secs(60 * 60);
+pub const GLOBAL_WINDOW: Duration = Duration::from_hours(1);
 
 /// Whether `u` may name an account: 1..=[`USER_LEN`] of `a-z 0-9 . _ -`,
 /// starting with a letter or digit.
