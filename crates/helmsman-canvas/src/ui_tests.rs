@@ -217,6 +217,20 @@ impl Harness {
         self.shapes.iter().any(|c| walk(&c.shape, needle))
     }
 
+    /// Whether the last frame drew a piece of text containing `needle`
+    /// cut short with an ellipsis (`drew` sees the whole text of such a
+    /// label; this one sees what is shown).
+    fn elided(&self, needle: &str) -> bool {
+        fn walk(shape: &egui::Shape, needle: &str) -> bool {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+                egui::Shape::Text(t) => t.galley.job.text.contains(needle) && t.galley.elided,
+                _ => false,
+            }
+        }
+        self.shapes.iter().any(|c| walk(&c.shape, needle))
+    }
+
     /// The simulation's ST editor's widget id for the open file.
     fn editor_id(&self) -> egui::Id {
         self.app.sim.as_ref().unwrap().source_id()

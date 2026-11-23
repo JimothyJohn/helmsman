@@ -3537,6 +3537,7 @@ impl Body for BoxView {
                                     (form != Form::Tile).then_some(glyph),
                                     color,
                                     &text,
+                                    form != Form::Tile,
                                 );
                             });
                             crate::assign_ui::row_menu(&card, chrome, &menus, name, &mut asks, &mut chat);

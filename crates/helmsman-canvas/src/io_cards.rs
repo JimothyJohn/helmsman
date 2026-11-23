@@ -213,13 +213,17 @@ pub struct Asked {
 
 /// An output's first line, or an input's where it has no control: its
 /// glyph (a tile has none), and `text` in `color`, cut to the column.
-pub fn value(ui: &mut egui::Ui, glyph: Option<&'static str>, color: Color32, text: &str) {
+/// `wrap`: a row's line wraps at the column so a long name shows whole;
+/// a tile's is cut to its narrow width.
+pub fn value(ui: &mut egui::Ui, glyph: Option<&'static str>, color: Color32, text: &str, wrap: bool) {
     ui.horizontal(|ui| {
         if let Some(glyph) = glyph {
             crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, color, crate::glyph_lib::tip(glyph));
         }
-        ui.add(egui::Label::new(RichText::new(text).monospace().size(BODY).color(color)).truncate())
-            .tip(text.to_string());
+        let label =
+            egui::Label::new(RichText::new(text).monospace().size(BODY).color(color)).selectable(false);
+        let label = if wrap { label.wrap() } else { label.truncate() };
+        ui.add(label).tip(text.to_string());
     });
 }
 
@@ -349,8 +353,10 @@ fn summary_ui(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, s: &Summary, wi
                 egui::TextFormat::simple(egui::FontId::monospace(BODY), t.fg),
             );
         }
-        ui.allocate_ui_with_layout(Vec2::new(room, 0.0), Layout::left_to_right(Align::Center), |ui| {
-            ui.add(egui::Label::new(job).truncate()).tip(s.all.clone())
+        ui.allocate_ui_with_layout(Vec2::new(room, 0.0), Layout::top_down(Align::Min), |ui| {
+            ui.set_max_width(room);
+            ui.add(egui::Label::new(job).wrap().selectable(false))
+                .tip(s.all.clone())
         });
         if s.more > 0 {
             let r = ui
@@ -389,17 +395,20 @@ pub fn show<R>(
     let resp = ui.interact(was.unwrap_or(Rect::NOTHING), id, Sense::click());
     let mut asked = Asked::default();
     let mut glyphs = Rect::NOTHING;
+    let (fill, stroke) = look(row.tile, row.selected, &t);
     let frame = egui::Frame::new()
-        .fill(if row.selected { t.shade } else { t.panel })
-        .stroke(Stroke::new(
-            if row.selected { 2.0 } else { 1.0 },
-            if row.selected { t.accent } else { t.rule },
-        ))
+        .fill(fill)
+        .stroke(stroke)
         .corner_radius(6)
         .inner_margin(Margin::same(margin));
     let out = frame.show(ui, |ui| {
         ui.set_width(inner);
         if row.tile {
+            // A snapshot: nothing grows under the pointer.
+            let w = &mut ui.visuals_mut().widgets;
+            for v in [&mut w.hovered, &mut w.active, &mut w.inactive] {
+                v.expansion = 0.0;
+            }
             return head(ui);
         }
         let side = crate::glyphs::ROW;
@@ -438,8 +447,7 @@ pub fn show<R>(
             })
             .inner;
         if let Some((text, tip)) = &row.real {
-            let label = egui::Label::new(RichText::new(text).size(BODY).color(t.muted));
-            let label = if row.open { label.wrap() } else { label.truncate() };
+            let label = egui::Label::new(RichText::new(text).size(BODY).color(t.muted)).wrap();
             let l = ui.add(label).tip(tip.clone());
             chrome.hit(format!("wired {}", row.key), l.rect);
         }
@@ -502,6 +510,23 @@ pub fn show<R>(
     let resp = resp.tip(tip.trim_end().to_string());
     ui.add_space(4.0);
     (asked, resp, out.inner)
+}
+
+/// A card's fill and outline. A tile is a flat snapshot (Nick,
+/// 2026-11-23): one thin outline and the same fill selected or not, the
+/// accent colour of the outline alone saying its details are open. A row
+/// keeps its shaded fill and heavier outline for the output whose path
+/// is lit.
+#[must_use]
+pub fn look(tile: bool, selected: bool, t: &crate::theme::Theme) -> (Color32, Stroke) {
+    let colour = if selected { t.accent } else { t.rule };
+    if tile {
+        return (t.panel, Stroke::new(1.0, colour));
+    }
+    (
+        if selected { t.shade } else { t.panel },
+        Stroke::new(if selected { 2.0 } else { 1.0 }, colour),
+    )
 }
 
 /// How a card is drawn.
