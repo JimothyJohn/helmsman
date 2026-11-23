@@ -1696,6 +1696,7 @@ impl BoxView {
             card: None,
             big: None,
             io: None,
+            versions: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),

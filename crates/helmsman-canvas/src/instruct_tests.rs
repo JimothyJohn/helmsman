@@ -1047,7 +1047,9 @@ fn the_arrows_restore_the_prompt_and_output_of_each_step_and_log_nothing() {
     // A version that does not compile, saved by hand, between two changes.
     instruct(&mut v, "comment it", &[&st(&commented())]);
     let first = v.proj.revisions().last().unwrap().n;
-    v.proj.files.insert("main.st".into(), "PROGRAM lamp\nlamp := ;\nEND_PROGRAM\n".into());
+    v.proj
+        .files
+        .insert("main.st".into(), "PROGRAM lamp\nlamp := ;\nEND_PROGRAM\n".into());
     v.proj.save_as("a broken save", None);
     let broken = v.proj.revisions().last().unwrap().n;
     v.proj.files.insert("main.st".into(), commented());
@@ -1059,7 +1061,10 @@ fn the_arrows_restore_the_prompt_and_output_of_each_step_and_log_nothing() {
     v.show_revision(broken);
     v.tick(&ctx);
     v.tick(&ctx);
-    assert!(!v.session.diag_lines().is_empty(), "the broken version is on show");
+    assert!(
+        !v.session.diag_lines().is_empty(),
+        "the broken version is on show"
+    );
     assert_eq!(v.instruct.draft, "", "a plain save had no prompt");
     assert_eq!(
         v.instruct.outcome.as_ref().map(|o| o.status.as_str()),

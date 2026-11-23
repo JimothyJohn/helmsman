@@ -1489,13 +1489,39 @@ END_PROGRAM",
             area.height() >= 0.45 * tab.height(),
             "the answer area: {area:?} in {tab:?}"
         );
-        assert!(field.bottom() < area.top(), "the box above it");
-        assert!(area.bottom() <= h.size.y, "on screen: {area:?}");
+        // Nick, 2026-11-23: the box at the bottom, one row, growing
+        // upward to four as it is typed in; the answer does not move.
+        let send = h.rect("agent send");
+        assert!(area.bottom() < field.top(), "the answer over the box");
         assert!(
-            field.height() >= 3.0 * 18.0,
-            "the box still takes a few lines: {field:?}"
+            field.bottom() <= send.top() + 1.0,
+            "the buttons under the box: {field:?} {send:?} {area:?}"
         );
+        assert!(send.bottom() <= h.size.y, "on screen: {send:?}");
+        assert!(field.height() < 2.0 * 24.0, "one row to start: {field:?}");
         h.click(field.center());
+        h.frame(vec![Event::Text("one\ntwo\nthree\nfour\nfive\nsix".into())]);
+        h.wait(0.5);
+        let (grown, over) = (h.rect("agent instruction"), h.rect("agent answer area"));
+        assert!(
+            grown.height() >= 3.5 * 24.0 && grown.height() <= 5.0 * 24.0,
+            "four rows of six, the rest scrolls inside: {grown:?}"
+        );
+        assert!(
+            (grown.bottom() - field.bottom()).abs() <= 1.0,
+            "its bottom edge stays"
+        );
+        assert!((over.top() - area.top()).abs() <= 1.0, "the answer's top stays");
+        assert!(
+            (h.rect("agent send").top() - send.top()).abs() <= 1.0,
+            "the buttons stay"
+        );
+        h.app.sim.as_mut().unwrap().instruct.draft.clear();
+        h.wait(0.5);
+        assert!(
+            h.rect("agent instruction").height() < 2.0 * 24.0,
+            "empty, one row again"
+        );
         h.frame(vec![Event::Text("comment it".into())]);
         h.press("agent send");
         h.frame(vec![]);
@@ -1515,12 +1541,20 @@ END_PROGRAM",
                 "running before the change"
             );
         }
+        // The View menu's switch, on (and remembered): the change lands
+        // stopped, to run from scratch.
+        assert!(h.app.chrome.saved().contains("reset=0"), "off to start");
+        h.view_menu("view agent resets");
+        h.frame(vec![]);
+        assert!(
+            crate::editor::Chrome::restored(&h.app.chrome.saved()).agent_resets,
+            "remembered"
+        );
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
         {
             let v = h.app.sim.as_ref().unwrap();
             assert_eq!(v.proj.files["main.st"], new);
-            // Nick, 2026-11-14: a change lands stopped, to run from scratch.
             assert!(
                 !v.session.running && v.session.scans == 0 && v.session.now_ms == 0,
                 "the change lands stopped and reset"
@@ -1545,16 +1579,14 @@ END_PROGRAM",
             h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
             "the change is marked"
         );
-        // A second instruction: the arrows walk back over both. With the
-        // switch off (remembered), its change runs at once.
+        // A second instruction: the arrows walk back over both. The tab
+        // has no switch for it: in the simulation a change runs at once
+        // unless the View menu says to stop and reset.
         let newer = new.replace("(* follows start *)", "(* on with start *)");
-        assert!(h.app.chrome.saved().contains("reset=1"));
-        h.press("agent resets");
+        assert!(!h.has("agent resets"), "no checkbox in the tab");
+        h.view_menu("view agent resets");
         h.frame(vec![]);
-        assert!(
-            !crate::editor::Chrome::restored(&h.app.chrome.saved()).agent_resets,
-            "remembered"
-        );
+        assert!(h.app.chrome.saved().contains("reset=0"), "off again");
         h.click(h.rect("agent instruction").center());
         h.frame(vec![Event::Text("reword it".into())]);
         h.press("agent send");
@@ -7264,4 +7296,5 @@ mod sim_popup;
 mod spec_mode;
 mod start_state;
 mod vendor;
+mod versions;
 mod wired;
