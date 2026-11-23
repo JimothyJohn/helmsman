@@ -134,6 +134,48 @@ jobs:
         if: ${{ needs.changes.outputs.help != 'false' }}
         run: ./scripts/build-help.sh --check
 
+  # The box (helmsman-plc and what it needs) on the other platforms it
+  # runs on: Linux aarch64 and macOS on Apple Silicon. `gate` above is
+  # Linux x86_64. Not a required check yet (the required list is `gate` and
+  # `interop`); a skipped job reports success. The whole workspace builds
+  # and tests here, the wasm canvas's native tests included; only its
+  # wasm32 build stays in `gate`.
+  box-os:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    name: box (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test workspace
+        if: ${{ runner.os != 'macOS' }}
+        run: cargo test --workspace --locked
+      # TEMPORARY: macOS skips two tests of crates/helmsman-plc/tests/firstboot.rs.
+      # /bin/bash 3.2 under a UTF-8 locale reads `a-f` by collation, so the
+      # script's token check lets A-E through. The fix is PR #547
+      # (fix/firstboot-locale, `export LC_ALL=C` in deploy/helmsman-firstboot.sh);
+      # when it has merged, delete this step's skips and the step above's `if`.
+      - name: Test workspace (macOS, firstboot-locale skips)
+        if: ${{ runner.os == 'macOS' }}
+        run: >-
+          cargo test --workspace --locked --
+          --skip hostile_values_are_refused_and_never_stop_the_box
+          --skip any_pairing_files_leave_a_line_the_box_accepts
+
   # Interop against the OpENer adapter built from docker/opener/. Separate
   # job so a Docker hiccup is distinguishable from a code failure. Added to
   # the required checks on dev alongside `gate` (see repo-baseline README).
