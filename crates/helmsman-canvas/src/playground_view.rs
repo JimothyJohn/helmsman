@@ -4131,17 +4131,28 @@ impl PlaygroundView {
             .collect();
         // The heading shares the signals' row: on a line of its own it
         // and the slider left the plot the smallest part of the panel.
-        // The rows scroll past a quarter of the panel: an Agent's program
-        // has dozens of points, and unbounded their rows took the whole
-        // panel and left the plot no height (Nick, 2026-11-22).
-        let rows_h = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
-        egui::ScrollArea::vertical()
+        // The rows wrap, and scroll past a third of the tab: an Agent's
+        // program has dozens of points, and unbounded their rows took the
+        // whole panel and left the plot no height (Nick, 2026-11-22; the
+        // third, 2026-11-23).
+        // Whole rows only: a cap that cuts a row in half shows a sliver.
+        let (row, gap) = (
+            (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).ceil(),
+            ui.spacing().item_spacing.y,
+        );
+        let cap = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
+        let rows = ((cap + gap) / (row + gap)).floor().max(1.0);
+        let rows_h = rows * (row + gap) - gap;
+        let legend = egui::ScrollArea::vertical()
             .id_salt("pg-trend-signals")
             .max_height(rows_h)
             .show(ui, |ui| {
                 // Room for the scroll bar, or the panel grows to fit it.
                 ui.set_max_width(ui.available_width() - 12.0);
                 ui.horizontal_wrapped(|ui| {
+                    // A button that does not fit moves to the next row
+                    // whole; left to wrap its text it became a sliver.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     ui.label(RichText::new("Signals").strong().color(t.muted))
                         .tip(format!(
                             "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
@@ -4153,15 +4164,16 @@ impl PlaygroundView {
                         } else {
                             "Click to pin it to the trend."
                         };
-                        if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
-                            .tip(tip)
-                            .clicked()
-                        {
+                        let b =
+                            crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(tip);
+                        chrome.hit(format!("trend signal {}", name.to_ascii_lowercase()), b.rect);
+                        if b.clicked() {
                             self.session.trend.toggle(name);
                         }
                     }
                 });
             });
+        chrome.hit("trend signals", legend.inner_rect);
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
         let plot = self.trend_plot(ui, chrome);
@@ -4597,9 +4609,9 @@ pub fn window_label(ms: u64) -> String {
 /// Width of a lane's label column, which is also its drag handle.
 const LANE_HANDLE_W: f32 = 88.0;
 
-/// The Trend tab's signal buttons take at most this share of its height
-/// before they scroll, so the plot keeps the rest.
-const SIGNAL_ROWS_SHARE: f32 = 0.25;
+/// The Trend tab's signal buttons wrap, and take at most this share of its
+/// height before they scroll, so the plot keeps the rest.
+const SIGNAL_ROWS_SHARE: f32 = 1.0 / 3.0;
 /// ... and never less than one row of them.
 const SIGNAL_ROWS_MIN: f32 = 34.0;
 

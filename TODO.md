@@ -723,7 +723,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 1d
   difficulty: med
   id: fb-messages
-- [ ] **Trend legend wraps** — the signal legend on rows instead of one crowded row, the variables' names kept (red_N). Decided 2026-11-23: wrap up to about a third of the tab's height, then scroll inside the legend, because rows without a cap left the plot no height (#561).
+- [x] **Trend legend wraps** — the signal legend on rows instead of one crowded row, the variables' names kept (red_N). Decided 2026-11-23: wrap up to about a third of the tab's height, then scroll inside the legend, because rows without a cap left the plot no height (#561).
   est: 3h
   difficulty: low
   id: fb-trend-legend
