@@ -81,6 +81,12 @@ pub enum Icon {
     List,
     /// Four squares: the I/O tab's cards as tiles.
     Grid,
+    /// An open hand: pan the diagram (the corner controls).
+    Hand,
+    /// A magnifier with a plus: zoom in.
+    ZoomIn,
+    /// A magnifier with a minus: zoom out.
+    ZoomOut,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -479,6 +485,39 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             for (x, y) in [(l, t), (r - side, t), (l, bt - side), (r - side, bt - side)] {
                 let q = Rect::from_min_size(Pos2::new(x, y), Vec2::splat(side));
                 p.rect_stroke(q, CornerRadius::same(1), stroke, egui::StrokeKind::Inside);
+            }
+        }
+        Icon::Hand => {
+            // A palm with four fingers up and a thumb out to the side.
+            let palm = Rect::from_min_max(
+                Pos2::new(l + b.width() * 0.12, t + b.height() * 0.5),
+                Pos2::new(r - b.width() * 0.12, bt),
+            );
+            p.rect_stroke(palm, CornerRadius::same(3), stroke, egui::StrokeKind::Inside);
+            for k in 0..4_u8 {
+                let x = palm.left() + palm.width() * (0.12 + 0.253 * f32::from(k));
+                let up = t + b.height() * if (1..=2).contains(&k) { 0.0 } else { 0.1 };
+                p.line_segment([Pos2::new(x, palm.top()), Pos2::new(x, up)], stroke);
+            }
+            p.line_segment(
+                [
+                    Pos2::new(palm.left(), palm.top() + palm.height() * 0.3),
+                    Pos2::new(l, c.y),
+                ],
+                stroke,
+            );
+        }
+        Icon::ZoomIn | Icon::ZoomOut => {
+            // A lens up and to the left, its handle down and to the right.
+            let radius = b.width() * 0.34;
+            let lens = Pos2::new(l + radius, t + radius);
+            p.circle_stroke(lens, radius, stroke);
+            let reach = radius * std::f32::consts::FRAC_1_SQRT_2;
+            p.line_segment([lens + Vec2::splat(reach), Pos2::new(r, bt)], stroke);
+            let bar = radius * 0.55;
+            p.line_segment([lens - Vec2::new(bar, 0.0), lens + Vec2::new(bar, 0.0)], stroke);
+            if icon == Icon::ZoomIn {
+                p.line_segment([lens - Vec2::new(0.0, bar), lens + Vec2::new(0.0, bar)], stroke);
             }
         }
         Icon::Back | Icon::Forward => {

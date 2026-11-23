@@ -1,7 +1,7 @@
 //! Semantic zoom on the canvas: the level follows the camera, the folds it
 //! closes are never the reader's, and nothing it does reaches the layout.
 
-use eframe::egui::{self, Event, Pos2, Rect, Vec2};
+use eframe::egui::{self, Event, PointerButton, Pos2, Rect, Vec2};
 use helmsman_diagram::NodeKind;
 use helmsman_diagram::fold::zoom::Level;
 
@@ -42,6 +42,7 @@ struct Harness {
     session: Session,
     view: Viewer,
     time: f64,
+    size: Vec2,
 }
 
 impl Harness {
@@ -55,7 +56,11 @@ impl Harness {
             session,
             view: Viewer::new(src, module),
             time: 0.0,
+            size: Vec2::new(1200.0, 800.0),
         };
+        // The machinery under test is off by default (SEMANTIC_ZOOM); these
+        // tests are of what it does when it is on.
+        h.view.semantic_zoom = true;
         h.frame(vec![]);
         h.frame(vec![]);
         h
@@ -63,7 +68,7 @@ impl Harness {
 
     fn frame(&mut self, events: Vec<Event>) {
         let input = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
             time: Some(self.time),
             events,
             ..Default::default()
@@ -400,4 +405,214 @@ fn the_far_level_magnification_is_left_behind_going_in_and_is_no_edit() {
     h.zoom_to(1.0, Harness::centre());
     assert_eq!(h.view.shown().size, near);
     assert!(!h.view.rearranged());
+}
+// The semantic zoom is off (SEMANTIC_ZOOM) and the corner controls
+// (Nick, 2026-11-23, fb-canvas-zoom). The tests above are of the machinery
+// with it switched on; these are of the view as it ships.
+
+const TAP: f32 = super::super::TAP;
+
+/// A view as it ships: the level does not follow the zoom.
+fn shipped(src: &str) -> Harness {
+    let mut h = Harness::new(src);
+    h.view.semantic_zoom = super::SEMANTIC_ZOOM;
+    h
+}
+
+/// The labels of the blocks drawn, in order.
+fn drawn(h: &Harness) -> Vec<String> {
+    h.view.shown().nodes.iter().map(|n| n.label.clone()).collect()
+}
+
+impl Harness {
+    fn area(&self) -> Rect {
+        Rect::from_min_size(Pos2::ZERO, self.size)
+    }
+
+    fn scan(&self) -> Option<&dyn Scan> {
+        self.session.trace.as_ref().map(|t| t as &dyn Scan)
+    }
+
+    /// The rect of corner control `k` (0 hand, 1 zoom in, 2 zoom out).
+    fn control(&self, k: u8) -> Rect {
+        let row = self.view.corner_rect(self.area(), self.scan());
+        let step = row.width() / 3.0;
+        Rect::from_min_size(
+            row.min + Vec2::new(step * f32::from(k), 0.0),
+            Vec2::new(step, row.height()),
+        )
+    }
+
+    fn press(&mut self, at: Pos2, pressed: bool) {
+        self.frame(vec![Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+    }
+
+    fn click(&mut self, at: Pos2) {
+        self.frame(vec![Event::PointerMoved(at)]);
+        self.press(at, true);
+        self.press(at, false);
+        self.frame(vec![]);
+    }
+
+    fn double_click(&mut self, at: Pos2) {
+        self.frame(vec![Event::PointerMoved(at)]);
+        for _ in 0..2 {
+            self.press(at, true);
+            self.press(at, false);
+        }
+        self.frame(vec![]);
+    }
+
+    /// A primary drag from `from` to `to`, released.
+    fn drag(&mut self, from: Pos2, to: Pos2) {
+        self.frame(vec![Event::PointerMoved(from)]);
+        self.press(from, true);
+        for k in 1..=8_u8 {
+            self.frame(vec![Event::PointerMoved(from.lerp(to, f32::from(k) / 8.0))]);
+        }
+        self.press(to, false);
+        self.frame(vec![]);
+    }
+
+    /// A point on the diagram's empty space, away from every block and the
+    /// corner controls.
+    fn empty(&self) -> Pos2 {
+        let cam = self.cam();
+        let row = self.view.corner_rect(self.area(), None).expand(TAP);
+        (0..40_u8)
+            .flat_map(|y| (0..40_u8).map(move |x| (x, y)))
+            .map(|(x, y)| Pos2::new(8.0 + f32::from(x) * 29.0, 60.0 + f32::from(y) * 17.0))
+            .find(|p| {
+                let (wx, wy) = cam.to_world(*p);
+                !row.contains(*p) && super::super::node_near(self.view.shown(), wx, wy, TAP).is_none()
+            })
+            .expect("an empty point")
+    }
+}
+
+#[test]
+fn zooming_far_in_and_far_out_draws_the_same_blocks() {
+    let mut h = shipped(SRC);
+    let blocks = drawn(&h);
+    assert_eq!(
+        h.view.zoom_level(),
+        Level::Near,
+        "a fitted small program is at the near level"
+    );
+    let at = Harness::centre();
+    for z in [0.15, 0.2, 0.5, 3.0, 1.0] {
+        h.zoom_to(z, at);
+        assert!((h.cam().zoom - z).abs() < 0.02, "zoomed to {z}: {}", h.cam().zoom);
+        assert_eq!(drawn(&h), blocks, "at {z}");
+        assert_eq!(h.view.zoom_level(), Level::Near, "at {z}");
+    }
+}
+
+#[test]
+fn a_double_click_still_folds_a_block_and_opens_it_again() {
+    let mut h = shipped(SRC);
+    let key = h.view.folds[0]
+        .iter()
+        .find(|f| f.title == "Motor")
+        .unwrap()
+        .key
+        .clone();
+    h.view.set_fold(&key, false);
+    h.frame(vec![]);
+    assert!(h.folded().iter().any(|l| l == "Motor"), "{:?}", h.folded());
+    let at = h
+        .view
+        .shown()
+        .nodes
+        .iter()
+        .find(|n| n.label == "Motor")
+        .map(|n| h.cam().rect(&n.rect).center())
+        .unwrap();
+    h.double_click(at);
+    assert!(!h.folded().iter().any(|l| l == "Motor"), "{:?}", h.folded());
+}
+
+#[test]
+fn the_hand_makes_a_drag_on_empty_space_pan_and_off_it_selects() {
+    let mut h = shipped(SRC);
+    assert!(!h.view.hand, "off by default");
+    let from = h.empty();
+    // A block on screen the band can reach from the empty point.
+    let block = h
+        .view
+        .shown()
+        .nodes
+        .iter()
+        .map(|n| h.cam().rect(&n.rect).center())
+        .find(|p| (*p - from).length() > 20.0)
+        .expect("a block");
+    // Off: the band selects what it touches and the view stays.
+    let offset = h.cam().offset;
+    h.drag(from, block);
+    assert!(!h.view.selection().is_empty(), "the band selected");
+    assert_eq!(h.cam().offset, offset);
+    // On: a drag from the same empty point moves the view and selects nothing.
+    h.view.selected.clear();
+    h.click(h.control(0).center());
+    assert!(h.view.hand);
+    let before = h.cam().offset;
+    h.drag(from, from + Vec2::new(0.0, 25.0));
+    assert!(h.view.selection().is_empty(), "no band while the hand is on");
+    let moved = h.cam().offset - before;
+    assert!(moved.length() > 5.0, "the view panned: {moved:?}");
+    // Off again.
+    h.click(h.control(0).center());
+    assert!(!h.view.hand);
+}
+
+#[test]
+fn zoom_in_and_out_step_the_zoom_and_stop_at_the_wheels_limits() {
+    let mut h = shipped(SRC);
+    let z0 = h.cam().zoom;
+    h.click(h.control(1).center());
+    let z1 = h.cam().zoom;
+    assert!((z1 / z0 - super::super::ZOOM_STEP).abs() < 1e-3, "{z0} -> {z1}");
+    h.click(h.control(2).center());
+    assert!((h.cam().zoom - z0).abs() < 1e-3);
+    for _ in 0..30 {
+        h.click(h.control(1).center());
+    }
+    assert!((h.cam().zoom - 3.0).abs() < 1e-3, "{}", h.cam().zoom);
+    for _ in 0..60 {
+        h.click(h.control(2).center());
+    }
+    assert!((h.cam().zoom - 0.15).abs() < 1e-3, "{}", h.cam().zoom);
+    // None of it changed what is drawn or counted as an edit.
+    assert_eq!(h.view.zoom_level(), Level::Near);
+    assert_eq!(h.view.edits, 0);
+}
+
+#[test]
+fn the_corner_controls_are_tap_sized_inside_a_narrow_view_and_clear_of_the_lamps() {
+    let mut h = shipped(SRC);
+    for size in [Vec2::new(1200.0, 800.0), Vec2::new(300.0, 400.0)] {
+        h.size = size;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        for k in 0..3 {
+            let r = h.control(k);
+            assert!(h.area().contains_rect(r), "{size:?} control {k}: {r:?}");
+            assert!(
+                r.width() >= TAP - 0.5 && r.height() >= TAP - 0.5,
+                "{size:?} {k}: {r:?}"
+            );
+        }
+        // The lamp fixture of the program's BOOL outputs keeps its corner.
+        let fixture = h.view.fixture(h.scan()).expect("the program has BOOL outputs");
+        let lamps = crate::lamps::rect(h.area(), &fixture);
+        let row = h.view.corner_rect(h.area(), h.scan());
+        if size.x > 600.0 {
+            assert!(!row.intersects(lamps), "{row:?} over the lamps {lamps:?}");
+        }
+    }
 }

@@ -357,6 +357,18 @@ this; change it here first when a decision changes.
   longer pans the diagram: Space and a drag, or the middle button, do; the
   arrow keys and W A S D too, and the wheel zooms. Hovering empty space
   says so.
+- **Zoom only scales; corner controls (Nick, 2026-11-23).** The diagram is
+  drawn the same way at every zoom: it no longer swaps to lines of text
+  zoomed out or to the sections' blocks mid-zoom (it looked glitchy and like
+  another interface), and stays at the one level a small program has when
+  first fitted. Folds the reader makes (a double click, the tabs, the CASE
+  and interlock tables) work as before; zooming out will later merge nodes
+  into labelled groups in the same style
+  (`st_zoom::SEMANTIC_ZOOM`). In the diagram's bottom-right corner, left of
+  the lamps: a hand (while on, a drag on empty space moves the view instead
+  of drawing a box; off by default, not saved with the project), zoom in
+  and zoom out (one step about the middle, the wheel's limits). Each is a
+  44 pt glyph with a tooltip.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).

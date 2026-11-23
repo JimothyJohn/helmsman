@@ -22,6 +22,14 @@ use helmsman_diagram::fold::{Fold, FoldKind};
 
 use super::{Cam, Viewer, on_request};
 
+/// Whether the level of detail follows the zoom (structured text far out,
+/// function blocks mid-zoom, gates close). Off (Nick, 2026-11-23: it looked
+/// glitchy and like another interface): zooming only scales, and the view
+/// stays at [`Level::Near`], the one a small program has at its fitted zoom.
+/// The folds stay; zooming out is to merge nodes into labelled groups
+/// later, and turning this on brings the old levels back.
+pub(super) const SEMANTIC_ZOOM: bool = false;
+
 /// What the zoom and the reader's hand leave of the folds.
 #[derive(Debug, Default)]
 pub(super) struct ZoomFolds {
@@ -273,7 +281,7 @@ impl Viewer {
     /// over (it ends at the level it began at) or before the first fit.
     pub(super) fn follow_zoom(&mut self, pointer: Option<Pos2>, area: Rect) -> Cam {
         let cam = self.cams[self.scope];
-        if self.glide.is_some() || !cam.fitted {
+        if !self.semantic_zoom || self.glide.is_some() || !cam.fitted {
             return cam;
         }
         let level = zoom::level(cam.zoom, self.zoom.level);
