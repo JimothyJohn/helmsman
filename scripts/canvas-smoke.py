@@ -659,7 +659,12 @@ def launch(p, engine, nogpu):
         args = ["--disable-gpu", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] if nogpu else []
         return p.chromium.launch(args=args)
     if engine == "firefox":
-        prefs = {"layers.acceleration.disabled": True, "gfx.webrender.software": True, "webgl.force-enabled": True, "webgl.disabled": False} if nogpu else {}
+        # Without a GPU (a CI runner) Firefox's blocklist leaves WebGL2 off
+        # and the page shows its notice: force it on in both modes, and in
+        # software mode draw in software as well.
+        prefs = {"webgl.force-enabled": True, "webgl.disabled": False}
+        if nogpu:
+            prefs.update({"layers.acceleration.disabled": True, "gfx.webrender.software": True})
         return p.firefox.launch(firefox_user_prefs=prefs)
     return p.webkit.launch()
 
