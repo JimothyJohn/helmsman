@@ -686,7 +686,7 @@ impl BoxView {
         }
         if self.agent_files().is_none() {
             return Some(
-                "Open a program file first: the Agent changes the file open in the Code tab.".into(),
+                "Open a program file first: the change goes into the file open in the Code tab.".into(),
             );
         }
         None

@@ -4158,13 +4158,11 @@ impl PlaygroundView {
         });
     }
 
-    /// The program's inputs and outputs as its source spells them, for
-    /// the phrasing help in the Describe tab; none for a new project
-    /// (its I/O is still being named).
+    /// The inputs and outputs of the program on screen as its source
+    /// spells them, for the phrasing help in the Describe tab (a built-in
+    /// example's too: a change to it starts from its code); none when no
+    /// program is open.
     fn phrasing_io(&self) -> Vec<crate::phrasing::Io> {
-        if self.scope() == crate::scope::Scope::NewProject {
-            return Vec::new();
-        }
         let src = &self.session.src;
         self.session
             .inputs()

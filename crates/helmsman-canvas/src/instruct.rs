@@ -2250,8 +2250,14 @@ fn answer_area(
     // Why Send is off, when it is for a reason the engineer cannot see
     // from the box (an empty box needs no words).
     if let Some(why) = &v.blocked {
+        // "Checking…" passes by itself: no alarm for it.
+        let text = if why.ends_with('\u{2026}') {
+            RichText::new(why).color(t.muted)
+        } else {
+            RichText::new(why).strong().color(t.ink(RED))
+        };
         let r = ui
-            .add(egui::Label::new(RichText::new(why).strong().color(t.ink(RED))).wrap())
+            .add(egui::Label::new(text).wrap())
             .tip("Send stays off until this is put right.");
         chrome.hit("agent blocked", r.rect);
         ui.add_space(6.0);
