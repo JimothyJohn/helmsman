@@ -361,6 +361,13 @@ impl Outcome {
 pub struct Instruct {
     /// The instruction box.
     pub draft: String,
+    /// The prompt the arrows last put in the box ([`Self::show_step`]):
+    /// while the box still holds it, the next step may replace it.
+    pub stepped: Option<String>,
+    /// The answer area shows the versions' index (the clock).
+    pub versions_open: bool,
+    /// What the index is searched for.
+    pub versions_find: String,
     pub run: Option<Run>,
     pub outcome: Option<Outcome>,
     /// The Agent asked answers with the lines that change
@@ -1200,6 +1207,36 @@ impl Instruct {
         self.outcome = Some(o);
     }
 
+    /// The tab as it stood for a revision the arrows (or History) show
+    /// (Nick, 2026-11-23: the arrows restore both the prompt and its
+    /// output): the instruction of its History `page` in the box and what
+    /// came of it under it; a revision that was a plain save says `what`.
+    /// A draft the engineer typed since is theirs and stays.
+    pub fn show_step(&mut self, page: Option<&str>, what: &str) {
+        let field = |key: &str| {
+            page.and_then(|p| p.lines().find_map(|l| l.strip_prefix(key)))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        let prompt = field(INSTRUCTION).unwrap_or_default();
+        if self.draft.trim().is_empty() || self.stepped.as_deref() == Some(self.draft.as_str()) {
+            self.draft.clone_from(&prompt);
+            self.stepped = Some(prompt);
+        }
+        let mut o = Outcome::new(
+            Kind::Applied,
+            field("Result: ").unwrap_or_else(|| {
+                let w = sentence(&clean(what, MAX_REASON));
+                let mut c = w.chars();
+                c.next()
+                    .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+            }),
+        );
+        o.why = field("Why: ");
+        self.outcome = Some(o);
+    }
+
     /// A value was set by hand on the diagram and saved
     /// ([`crate::by_hand`]); `undo` the revision before it.
     pub fn value_set(&mut self, old: &str, new: &str, file: &str, undo: Option<Undo>) {
@@ -1537,6 +1574,35 @@ pub struct View {
     /// The program's inputs and outputs, for the phrasing help
     /// ([`crate::phrasing`]); `None`: no help (a box).
     pub io: Option<Vec<crate::phrasing::Io>>,
+    /// The open project's versions, for the clock's index; `None`: no
+    /// clock (a box, whose versions are in its History tab).
+    pub versions: Option<Versions>,
+}
+
+/// The open project's versions as the clock's index shows them.
+#[derive(Debug, Clone, Default)]
+pub struct Versions {
+    /// Oldest first, as History has them.
+    pub rows: Vec<crate::history_ui::RevisionRow>,
+    /// The one on show; `None`: the newest.
+    pub at: Option<u32>,
+}
+
+impl Versions {
+    /// The versions whose description holds every word of `find`, in any
+    /// letter case; all of them for an empty search.
+    #[must_use]
+    pub fn matching(&self, find: &str) -> Vec<crate::history_ui::RevisionRow> {
+        let words: Vec<String> = find.split_whitespace().map(str::to_lowercase).collect();
+        self.rows
+            .iter()
+            .filter(|r| {
+                let text = format!("{} {}", r.what, r.about.as_deref().unwrap_or_default()).to_lowercase();
+                words.iter().all(|w| text.contains(w))
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 /// Where the arrows go: the revision before and after the one shown,
@@ -1672,7 +1738,11 @@ pub(crate) fn chat_box_sized(
             .desired_width(f32::INFINITY)
             .return_key(None);
         match height {
-            Some(h) => e.lock_focus(true).min_size(egui::vec2(0.0, h)).show(ui),
+            Some(h) => e
+                .lock_focus(true)
+                .desired_rows(1)
+                .min_size(egui::vec2(0.0, h))
+                .show(ui),
             None => e.desired_rows(3).show(ui),
         }
     };
@@ -1681,6 +1751,8 @@ pub(crate) fn chat_box_sized(
             egui::ScrollArea::vertical()
                 .id_salt((id_salt, "scroll"))
                 .max_height(h)
+                // egui's own floor is 64 pt: a one-row box must be one row.
+                .min_scrolled_height(h.min(64.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| edit(draft, ui))
                 .inner
@@ -1688,6 +1760,7 @@ pub(crate) fn chat_box_sized(
         None => edit(draft, ui),
     }
     .tip(tip);
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique("agent-instruction-rows"), out.galley.rows.len()));
     let mut send = false;
     if out.response.has_focus() {
         // The modifiers of the key event itself, as TextEdit reads them.
@@ -2146,50 +2219,105 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
     }
 }
 
-/// The instruction box, then one row: Send or Stop and the arrows
-/// through the revisions (or Undo), then the answer area, at least half
-/// the tab (Nick, 2026-11-22: "the error messages are invisible, you
-/// should dedicate at least half the page to the response and should
-/// keep it very short"). The area says one short thing: that it is
-/// working, what changed, or why nothing did, in red, with the lines
-/// that failed; the Messages keep the whole of it. Idle, it offers
-/// examples in the program's own names and the fixes for names the
-/// draft spells another way ([`crate::phrasing`]).
+/// The most rows the instruction box grows to before it scrolls inside.
+pub const BOX_ROWS: usize = 4;
+/// How long the box takes to change its height, s.
+const BOX_EASE: f32 = 0.1;
+
+/// The box's height for the rows its text took last frame (one to
+/// [`BOX_ROWS`]), eased so nothing jumps.
+fn box_height(ui: &egui::Ui, text_empty: bool) -> f32 {
+    let id = egui::Id::unique("agent-instruction-rows");
+    let rows = if text_empty {
+        1
+    } else {
+        ui.data(|d| d.get_temp::<usize>(id))
+            .unwrap_or(1)
+            .clamp(1, BOX_ROWS)
+    };
+    let line = ui.text_style_height(&egui::TextStyle::Body);
+    #[allow(clippy::cast_precision_loss)]
+    let want = rows as f32 * line + 2.0 * ui.spacing().button_padding.y + 4.0;
+    ui.ctx()
+        .animate_value_with_time(id.with("height"), want, BOX_EASE)
+}
+
+/// The Describe tab. On the page (the owner gives the room under it):
+/// the answer area on top, down to the instruction box, which sits at
+/// the tab's bottom edge over one row of buttons and grows upward as it
+/// is typed in, one row to [`BOX_ROWS`], then scrolls inside (Nick,
+/// 2026-11-23: the output must not move). On a box, whose tab scrolls:
+/// the box, the buttons, the answer. The buttons: Send or Stop, the
+/// arrows through the revisions (or Undo), and the clock that turns the
+/// answer area into the index of the project's versions. The area says
+/// one short thing: that it is working, what changed, or why nothing
+/// did, in red, with the lines that failed; the Messages keep the whole
+/// of it. Idle, it offers examples in the program's own names and the
+/// fixes for names the draft spells another way ([`crate::phrasing`]).
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruct, v: &View) -> Option<Act> {
+    // The chips take their rows first (the selection can fill several).
+    chips_ui(ui, chrome, s);
+    let Some(below) = v.room_below else {
+        let row = ui.spacing().interact_size.y;
+        let enter = box_ui(ui, chrome, s, v, Some(3.0 * row));
+        let mut act = buttons_ui(ui, chrome, s, v, enter);
+        if let Some(estimate) = v.big
+            && !s.busy()
+        {
+            act = big_ui(ui, chrome, estimate).or(act);
+        }
+        return area_ui(ui, chrome, s, v, None).or(act);
+    };
+    // Top down, with the heights worked out first: the answer area takes
+    // what the box, the buttons' row (as tall as it was drawn last
+    // frame) and the owner's room under the tab leave, so the box's
+    // bottom edge stays where it is while its top moves.
+    let mut act = None;
+    if let Some(estimate) = v.big
+        && !s.busy()
+    {
+        act = big_ui(ui, chrome, estimate);
+    }
+    let row = ui.spacing().interact_size.y;
+    let gap = ui.spacing().item_spacing.y;
+    let buttons_id = egui::Id::unique("agent-buttons-height");
+    let buttons = ui.data(|d| d.get_temp::<f32>(buttons_id)).unwrap_or(2.0 * row);
+    let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
+    let height = box_height(ui, empty);
+    let fill = (ui.available_height() - height - buttons - 2.0 * ANSWER_MARGIN - 2.0 - 3.0 * gap - below)
+        .max(3.0 * row);
+    act = area_ui(ui, chrome, s, v, Some(fill)).or(act);
+    let enter = box_ui(ui, chrome, s, v, Some(height));
+    let top = ui.cursor().top();
+    act = buttons_ui(ui, chrome, s, v, enter).or(act);
+    let drawn = ui.cursor().top() - top - gap;
+    ui.data_mut(|d| d.insert_temp(buttons_id, drawn));
+    act
+}
+
+/// The instruction box, `height` tall. Returns whether Enter was pressed
+/// in it.
+fn box_ui(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    s: &mut Instruct,
+    v: &View,
+    height: Option<f32>,
+) -> bool {
     use crate::st_view::brand::RED;
 
     let t = crate::theme::theme(ui);
-    let red = t.ink(RED);
-    let mut act = None;
     let target = &v.target;
     let failed = s
         .outcome
         .as_ref()
         .is_some_and(|o| matches!(o.kind, Kind::Refused | Kind::Failed));
-    // The chips take their rows first (the selection can fill several),
-    // so the box is what the tab has left.
-    chips_ui(ui, chrome, s);
-    let row = ui.spacing().interact_size.y;
-    // The answer area takes half of what is left, and the box the rest
-    // less one row of buttons and what the owner draws under it.
-    let area = v.room_below.map(|_| (0.5 * ui.available_height()).max(5.0 * row));
-    // While an answer is under way the box only shows what was sent, in
-    // a few rows: the room goes to the answer area, where a question
-    // card may wait.
-    let height = v.room_below.zip(area).map(|(below, area)| {
-        if s.run.is_some() {
-            3.0 * row
-        } else {
-            // Two rows: the buttons' row is taller than a text row.
-            (ui.available_height() - 2.0 * row - 2.0 * ANSWER_MARGIN - area - below).max(3.0 * row)
-        }
-    });
     let tip = format!(
-        "Say what {target} should do. The change is checked with scenarios and the requirement \
-         tests, and written only if every check passes. Enter sends; Shift+Enter or Ctrl+Enter \
-         starts a new line and goes on with a list (- , * or 1. ); Tab indents."
+        "Enter sends; Shift+Enter starts a new line and goes on with a list (- , * or 1. ); Tab indents.\n\
+         Say what {target} should do: it is checked before anything is written."
     );
-    let hint = format!("What should {target} do? e.g. Latch the lamp until stop");
+    // One row of it: the box starts one row tall.
+    let hint = "What should it do?".to_string();
     let (field, enter) = if let Some(run) = &s.run {
         // While it works the box shows what was sent, and takes no typing.
         let mut sent = run.instruction.clone();
@@ -2204,11 +2332,32 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
         ui.painter().rect_stroke(
             field.rect.expand(1.0),
             4.0,
-            egui::Stroke::new(2.0, red),
+            egui::Stroke::new(2.0, t.ink(RED)),
             egui::StrokeKind::Outside,
         );
     }
-    chrome.hit("agent instruction", field.rect);
+    // What shows of it: past its height the box scrolls inside.
+    let shown = height.map_or(field.rect, |h| {
+        egui::Rect::from_min_size(
+            field.rect.min,
+            egui::vec2(field.rect.width(), field.rect.height().min(h)),
+        )
+    });
+    chrome.hit("agent instruction", shown);
+    enter
+}
+
+/// One row: Send or Stop, the arrows through the revisions (or Undo),
+/// the clock of the versions' index.
+fn buttons_ui(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    s: &mut Instruct,
+    v: &View,
+    enter: bool,
+) -> Option<Act> {
+    let mut act = None;
+    let target = &v.target;
     let why_not = v.blocked.clone().or_else(|| s.refusal());
     ui.horizontal_wrapped(|ui| {
         if s.busy() {
@@ -2222,7 +2371,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true)
                 .tip(why_not.clone().unwrap_or_else(|| {
                 format!(
-                    "Send: sends the instruction with the whole of {target}. A checked answer is written into it."
+                    "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
                 )
             }));
             chrome.hit("agent send", r.rect);
@@ -2267,13 +2416,33 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
                 act = Some(Act::Undo);
             }
         }
+        if v.versions.is_some() {
+            let on = s.versions_open;
+            let r = crate::glyphs::action(ui, crate::glyphs::Icon::History, true, on).tip(if on {
+                "Versions: back to the answer."
+            } else {
+                "Versions: every saved version of this project, to search and step to."
+            });
+            chrome.hit("agent versions", r.rect);
+            if r.clicked() {
+                s.versions_open = !on;
+            }
+        }
     });
-    if let Some(estimate) = v.big
-        && !s.busy()
-    {
-        act = big_ui(ui, chrome, estimate).or(act);
-    }
-    let fill = (ui.available_height() - 2.0 * ANSWER_MARGIN - 2.0 - v.room_below.unwrap_or(0.0)).max(0.0);
+    act
+}
+
+/// The answer area in its frame, `fill` points tall when given (what
+/// does not fit scrolls inside it).
+fn area_ui(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    s: &mut Instruct,
+    v: &View,
+    fill: Option<f32>,
+) -> Option<Act> {
+    let t = crate::theme::theme(ui);
+    let mut act = None;
     let frame = egui::Frame::new()
         .fill(ui.visuals().faint_bg_color)
         .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.4)))
@@ -2282,15 +2451,69 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     let r = frame
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            // Down to the bottom of the tab: what the buttons left.
-            if area.is_some() {
-                ui.set_min_height(fill);
+            let mut inside = |ui: &mut egui::Ui| match v.versions.as_ref().filter(|_| s.versions_open) {
+                Some(versions) => versions_ui(ui, chrome, s, versions),
+                None => answer_area(ui, chrome, s, v),
+            };
+            match fill {
+                Some(fill) => {
+                    ui.set_min_height(fill);
+                    ui.set_max_height(fill);
+                    act = egui::ScrollArea::vertical()
+                        .id_salt("agent-answer-scroll")
+                        .max_height(fill)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            // Room for the scroll bar.
+                            ui.set_max_width(ui.available_width() - 12.0);
+                            inside(ui)
+                        })
+                        .inner;
+                }
+                None => act = inside(ui),
             }
-            act = answer_area(ui, chrome, s, v).or(act.take());
         })
         .response;
     chrome.hit("agent answer area", r.rect);
     act
+}
+
+/// The project's versions in the answer area (Nick, 2026-11-23: the
+/// history clock belongs here): a box to search what each one says, then
+/// the versions that match, newest first; a click runs one, as the
+/// arrows do.
+fn versions_ui(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    s: &mut Instruct,
+    versions: &Versions,
+) -> Option<Act> {
+    let e = ui
+        .add(
+            egui::TextEdit::singleline(&mut s.versions_find)
+                .hint_text("Search the versions")
+                .desired_width(f32::INFINITY),
+        )
+        .tip("Shows the versions whose description holds these words.");
+    chrome.hit("agent versions find", e.rect);
+    ui.add_space(4.0);
+    let rows = versions.matching(&s.versions_find);
+    if rows.is_empty() && !versions.rows.is_empty() {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new("No version says that.").color(crate::theme::theme(ui).muted),
+            )
+            .wrap(),
+        )
+        .tip("Clear the search to see every version.");
+        return None;
+    }
+    match crate::history_ui::tab_ui(ui, chrome, &rows, versions.at) {
+        Some(crate::history_ui::Pick::Show(n) | crate::history_ui::Pick::Details(n)) => {
+            Some(Act::Revision(n))
+        }
+        None => None,
+    }
 }
 
 /// The answer area's inner margin, pt.
@@ -2391,7 +2614,11 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
     };
     if !a.head.is_empty() {
         let r = ui
-            .add(egui::Label::new(RichText::new(&a.head).strong().color(ink)).wrap())
+            .add(
+                egui::Label::new(RichText::new(&a.head).strong().color(ink))
+                    .wrap()
+                    .selectable(true),
+            )
             .tip(match a.tone {
                 Tone::Done => "The change is in the program, marked in the code and on the diagram.",
                 Tone::Note => "The file is unchanged.",
@@ -2401,7 +2628,11 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
         chrome.hit("agent result", r.rect);
     }
     for line in &a.lines {
-        ui.add(egui::Label::new(RichText::new(line).color(ink)).wrap());
+        ui.add(
+            egui::Label::new(RichText::new(line).color(ink))
+                .wrap()
+                .selectable(true),
+        );
     }
     if a.tone != Tone::Done && !matches!(o.kind, Kind::Said) {
         let more = match a.more {
