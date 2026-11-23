@@ -48,7 +48,10 @@ fn root(path: &str) -> Option<String> {
 
 /// `name` as the program spells it (the diagram holds names upper-cased):
 /// its first whole-word use in an ST file, else as given.
-fn spelled(files: &Files, name: &str) -> String {
+pub fn spelled(files: &Files, name: &str) -> String {
+    if name.is_empty() {
+        return String::new();
+    }
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     files
         .iter()
@@ -64,6 +67,27 @@ fn spelled(files: &Files, name: &str) -> String {
             })
         })
         .unwrap_or_else(|| name.to_string())
+}
+
+/// The literal block `node` stands for: itself, or for an operator with
+/// one literal among its inputs (`count > 10`, which the diagram draws as
+/// one block with the 10 in it) that literal.
+#[must_use]
+pub fn literal_node(d: &Diagram, node: NodeId) -> Option<NodeId> {
+    let kind = |n: NodeId| d.nodes.get(n.0 as usize).map(|n| &n.kind);
+    match kind(node)? {
+        NodeKind::Const { .. } => Some(node),
+        NodeKind::Op { .. } => {
+            let mut lits = d
+                .wires
+                .iter()
+                .filter(|w| w.to == node && matches!(kind(w.from), Some(NodeKind::Const { .. })))
+                .map(|w| w.from);
+            let one = lits.next()?;
+            lits.next().is_none().then_some(one)
+        }
+        _ => None,
+    }
 }
 
 /// What block `node` of `d` offers: `locate` takes a line of the built
@@ -83,7 +107,8 @@ pub fn target(
         NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => name(path),
         NodeKind::Fb { instance, .. } => name(instance),
         NodeKind::For { var } => name(var),
-        NodeKind::Const { .. } => {
+        NodeKind::Const { .. } | NodeKind::Op { .. } => {
+            let n = d.nodes.get(literal_node(d, node)?.0 as usize)?;
             let (file, line) = locate(n.pos.line)?;
             let src = files.get(&file)?;
             let at = helmsman_iec::literal_at(src, line, n.pos.col)?;
@@ -94,7 +119,7 @@ pub fn target(
                 col: n.pos.col,
             }))
         }
-        _ => None,
+        NodeKind::Func { .. } | NodeKind::Jump | NodeKind::Fold { .. } => None,
     }
 }
 

@@ -244,7 +244,7 @@ impl DevicesUi {
                         ready,
                         egui::Button::new(RichText::new("Rename").strong()).min_size(tall),
                     )
-                    .tip("Renames it in every file listed. Save keeps it; Deploy runs it.");
+                    .tip("Renames it in every file listed and saves that as one revision.");
                 chrome.hit("rename ok", ok.rect);
                 let no = ui
                     .add(egui::Button::new("Cancel").min_size(tall))

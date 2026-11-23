@@ -99,6 +99,18 @@ fn says(h: &mut Harness, key: &str, text: &str) -> bool {
 }
 
 #[test]
+fn an_io_row_has_rename_which_opens_the_question_on_its_name() {
+    let mut h = project(MAP);
+    menu(&mut h, "io row spare", "menu rename io");
+    assert!(h.has("rename form"), "the question opens");
+    assert_eq!(
+        h.app.sim.as_ref().unwrap().devices_ui.renaming.as_ref().map(|r| r.0.as_str()),
+        Some("spare")
+    );
+    assert!(!dirty(&h), "nothing written until Rename is pressed");
+}
+
+#[test]
 fn an_input_row_assigns_to_a_free_channel_of_its_direction_and_type() {
     let mut h = project(MAP);
     // The program reads the others on the diagram; this one only the tab lists.
