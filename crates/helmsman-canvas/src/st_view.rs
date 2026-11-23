@@ -2792,6 +2792,13 @@ impl Viewer {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         row.spacing_mut().item_spacing.x = CORNER_GAP;
+        // A ground of their own: zoomed in, blocks reach the corner, and
+        // a glyph drawn over a block's text reads as neither.
+        ui.painter().rect_filled(
+            at.expand(4.0),
+            CornerRadius::same(6),
+            ui.visuals().panel_fill.gamma_multiply(0.92),
+        );
         let hand = button_sized(
             &mut row,
             Icon::Hand,
