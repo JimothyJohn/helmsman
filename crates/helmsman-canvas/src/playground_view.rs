@@ -335,6 +335,7 @@ impl PlaygroundView {
             viewer: None,
             agent_change: None,
             history_at: None,
+
             layers: Layers::load(tweaks),
             fresh: false,
             dmenu: crate::diagram_menu::Menu::default(),
@@ -2764,6 +2765,10 @@ impl PlaygroundView {
             crate::agent_marks::AgentChange::new(&self.proj.open, &file, &before, after, baseline)
         });
         self.history_at = (!newest).then_some(n);
+        // The tab as it stood for this step, and nothing of it in the
+        // Messages: what an old version's compile or run says is not news.
+        self.instruct.show_step(rev.page.as_deref(), &rev.what);
+        self.seen.quiet = true;
     }
 
     /// Undo: the project back to the revision before the Agent's change,
@@ -3319,6 +3324,8 @@ impl PlaygroundView {
 /// What [`PlaygroundView::watch`] compares against.
 #[derive(Default)]
 struct Seen {
+    /// A revision was just put on show: the next watch logs nothing.
+    quiet: bool,
     fault: Option<String>,
     diags: Vec<String>,
     warned: Option<String>,
@@ -3333,6 +3340,14 @@ impl PlaygroundView {
     /// errors (as they appear), a fault, a notice, a storage problem,
     /// the program starting or stopping.
     fn watch(&mut self, t: f64) {
+        // Stepping through History changes what compiles and runs: the
+        // watch takes note of it and says nothing.
+        self.log.muted = std::mem::take(&mut self.seen.quiet) || self.history_at.is_some();
+        self.watch_changes(t);
+        self.log.muted = false;
+    }
+
+    fn watch_changes(&mut self, t: f64) {
         let fault = self.session.fault.as_ref().map(ToString::to_string);
         let ended = (self.seen.running == Some(true) && !self.session.running)
             || (fault.is_some() && fault != self.seen.fault)
@@ -4310,10 +4325,9 @@ impl PlaygroundView {
             if let Some(act) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
                 self.design_act(act, &ctx);
             }
-            let r = ui
-                .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
-                .tip("On: when a change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
-            chrome.hit("agent resets", r.rect);
+            // In the simulation a change runs at once unless the View
+            // menu's switch says to stop and reset (Nick, 2026-11-23: no
+            // checkbox in the tab).
             self.after_change = if chrome.agent_resets {
                 AfterChange::Reset
             } else {
@@ -4334,6 +4348,14 @@ impl PlaygroundView {
                     .filter(|b| b.0 == self.instruct.draft)
                     .map(|b| b.1),
                 io: Some(self.phrasing_io()),
+                versions: Some(crate::instruct::Versions {
+                    rows: self.proj.revisions().iter().map(SimRevision::row).collect(),
+                    // By number, so a searched list knows which is on show.
+                    at: self
+                        .history_at
+                        .filter(|n| self.shows_revision(*n))
+                        .or_else(|| self.proj.revisions().last().map(|r| r.n)),
+                }),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),

@@ -352,7 +352,7 @@ impl Default for Chrome {
             hints: crate::st_hints::Hints::default(),
             folds: crate::st_fold::Folds::default(),
             advanced: false,
-            agent_resets: true,
+            agent_resets: false,
             io_grid: false,
             io_fold_in: false,
             io_fold_out: false,

@@ -266,8 +266,16 @@ this; change it here first when a decision changes.
   the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
-  and the Agent's one-sentence reason. In the simulation (Nick,
-  2026-11-13) the box takes the tab's height and scrolls past it; Shift
+  and the Agent's one-sentence reason. In the simulation the answer area
+  is on top and the box under it at the tab's bottom edge, one row
+  growing upward to four and scrolling inside past that, eased over
+  0.1 s, so the output does not move (Nick, 2026-11-23; from 2026-11-13
+  to then the box was on top and took the tab's height). The output can
+  be selected. The arrows restore the prompt and the output of the step
+  shown and log nothing; the clock beside them turns the answer area into
+  the searchable list of versions. No "Stop and reset" checkbox: a
+  described change runs at once in the simulation unless View › Reset
+  after a described change is on. Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
   instruction sent, greyed. On a new project (a built-in example
