@@ -1446,7 +1446,7 @@ pub fn st_editor(
 ) -> egui::Response {
     let font = FontId::monospace(crate::theme::MONO);
     let row = ui.fonts_mut(|f| f.row_height(&font));
-    let found = crate::find::row(ui, &mut chrome.find, id, text.as_str());
+    let found = crate::find::row(ui, &mut chrome.find, id, text);
     let wrap_on = chrome.wrap;
     let mut scroll = if wrap_on {
         egui::ScrollArea::vertical()
@@ -1664,11 +1664,87 @@ pub fn wrap_toggle(ui: &mut egui::Ui, chrome: &mut Chrome) {
     }
 }
 
+/// The Code header's magnifier, drawn as "code find" for the tests: it
+/// opens the find row over the code (Find, Replace, Replace all), and
+/// shuts it again.
+pub fn find_toggle(ui: &mut egui::Ui, chrome: &mut Chrome) {
+    let open = chrome.find.is_some();
+    let r = crate::glyphs::button_sized(
+        ui,
+        crate::glyphs::Icon::Find,
+        crate::glyphs::ROW,
+        true,
+        open,
+        "Ctrl F: find in this file, and replace.\nCtrl G next, Ctrl Shift G previous, Esc closes.",
+    );
+    chrome.hit("code find", r.rect);
+    if r.clicked() {
+        if open {
+            chrome.find = None;
+        } else {
+            crate::find::Find::open(&mut chrome.find);
+        }
+    }
+}
+
+/// What the Code header's right end shows: Deploy, and before it the
+/// errors when the code does not compile (nothing while it does: Nick,
+/// 2026-11-23).
+pub struct Status<'a> {
+    /// How many errors, and the first one's words for the popup.
+    pub errors: usize,
+    pub first: Option<&'a str>,
+    /// Whether Deploy may be pressed, or why not.
+    pub deploy: &'a Result<(), String>,
+    pub deploy_tip: &'a str,
+}
+
+/// What was pressed at the header's right end.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pressed {
+    pub deploy: bool,
+    /// The red ✖: go to the first error.
+    pub errors: bool,
+}
+
+/// The header's right end, right to left: Deploy as a filled green
+/// button with a black arrow ("code deploy"), then a red ✖ with the count
+/// when the code has errors ("code errors"), its popup the first error.
+pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> Pressed {
+    let mut out = Pressed::default();
+    // What is left of the row, up to the pane's right edge.
+    chrome.hit("code header rest", ui.available_rect_before_wrap());
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let tip = s.deploy.as_ref().err().map_or(s.deploy_tip, String::as_str);
+        let r = crate::glyphs::deploy(ui, s.deploy.is_ok()).tip(tip);
+        chrome.hit("code deploy", r.rect);
+        out.deploy = r.clicked();
+        if s.errors > 0 {
+            let red = crate::theme::theme(ui).ink(crate::st_view::brand::RED);
+            let r = ui
+                .add(
+                    egui::Label::new(RichText::new(format!("✖ {}", s.errors)).strong().color(red))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .tip(format!(
+                    "{}\nClick to go to its line; the list under the code has each one.",
+                    s.first.unwrap_or("The code does not compile.")
+                ));
+            chrome.hit("code errors", r.rect);
+            out.errors = r.clicked();
+        }
+    });
+    out
+}
+
 /// The Code header's name: the open file, truncated to leave the row's
 /// glyphs and notes their room, drawn as "code file" for the tests.
 pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str) {
-    // Two glyphs, their spacing and a short note stay on the row.
-    let room = (ui.available_width() - 2.0 * (crate::glyphs::ROW + 6.0) - 120.0).max(60.0);
+    // Two glyphs, their spacing, the errors' count and Deploy stay on
+    // the row.
+    let room =
+        (ui.available_width() - 2.0 * (crate::glyphs::ROW + 6.0) - crate::glyphs::DEPLOY_W - 80.0).max(60.0);
     let r = ui
         .scope(|ui| {
             ui.set_max_width(room);

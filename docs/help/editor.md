@@ -225,7 +225,14 @@ redrawn.
   signal into the map. When that signal is one of the program's inputs,
   in the same unit, the simulation runs the model from it: set it in
   the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>): the
-  Structured Text editor, headed by the open file's name. The code is
+  Structured Text editor, headed by the open file's name. Beside the
+  name, the magnifier (<kbd>Ctrl</kbd> <kbd>F</kbd>, wherever the
+  keyboard is) opens Find over the code; its ⇄ button opens a second row
+  to Replace the selected match or Replace all. At the header's right
+  end is Deploy, the green button with the arrow. While the code
+  compiles the header says nothing about it; when it does not, a red ✖
+  with the number of errors stands before Deploy, the first error in its
+  tooltip, and a click goes to that line. The code is
   coloured by what each word is: keywords, types, numbers and times,
   comments, the program's inputs and outputs, and addresses. Errors are
   marked on the line as you type; the program running does not change

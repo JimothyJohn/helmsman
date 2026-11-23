@@ -3522,8 +3522,10 @@ impl Body for PlaygroundView {
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
         let mut go = false;
-        // The header is the open file's name (Nick, 2026-11-08), then word
-        // wrap, then the → that deploys this version.
+        let mut to_error: Option<(String, u32)> = None;
+        // The header is the open file's name (Nick, 2026-11-08), the
+        // magnifier and word wrap; at its right end Deploy, and before it
+        // the errors when there are any.
         let name = self.proj.current.clone();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -3533,26 +3535,8 @@ impl Body for PlaygroundView {
                 &name,
                 "The open file. It is checked as you type; Deploy runs it.",
             );
+            editor::find_toggle(ui, chrome);
             editor::wrap_toggle(ui, chrome);
-            go = crate::projects::deploy_arrow(
-                ui,
-                chrome,
-                "code deploy",
-                &Ok(()),
-                "Deploys this version: compiles the open project and runs it in the page (Ctrl Shift Enter, File › Deploy).",
-            );
-            if self.pending.is_some() {
-                ui.add(crate::theme::whole(RichText::new("…").color(t.muted)))
-                    .tip("Checking the edit.");
-            } else if errors > 0 {
-                ui.add(crate::theme::whole(
-                    RichText::new(format!("✖ {errors} error(s)")).color(crate::theme::theme(ui).ink(RED)),
-                ))
-                .tip("The list under the code has each one. Click an error to go to its line.");
-            } else {
-                ui.add(crate::theme::whole(RichText::new("✔ compiles").color(t.muted)))
-                    .tip("The program has no errors.");
-            }
             if undeployed {
                 let note = if errors > 0 {
                     "The program running is unchanged. Fix the errors, then Deploy."
@@ -3562,9 +3546,37 @@ impl Body for PlaygroundView {
                 ui.add(crate::theme::whole(RichText::new("· not deployed").color(t.muted)))
                     .tip(note);
             }
+            // Nothing while the code compiles (Nick, 2026-11-23); a red ✖
+            // with the first error in its popup while it does not.
+            let first = self
+                .diags()
+                .into_iter()
+                .find(|d| d.severity == projects::Severity::Error);
+            let said = first
+                .as_ref()
+                .map(|d| format!("{} line {}: {}", d.file, d.line, d.message));
+            let pressed = editor::header_right(
+                ui,
+                chrome,
+                &editor::Status {
+                    errors: if self.pending.is_some() { 0 } else { errors },
+                    first: said.as_deref(),
+                    deploy: &Ok(()),
+                    deploy_tip: "Ctrl Shift Enter: deploy this version.\nCompiles the open project and runs it in the page.",
+                },
+            );
+            go = pressed.deploy;
+            if pressed.errors
+                && let Some(d) = first
+            {
+                to_error = Some((d.file, d.line));
+            }
         });
         if go {
             self.deploy();
+        }
+        if let Some((file, line)) = to_error {
+            self.goto(&file, line, chrome);
         }
         let all = self.diags();
         let current = self.proj.current.clone();

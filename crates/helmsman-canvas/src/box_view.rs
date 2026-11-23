@@ -3263,14 +3263,8 @@ impl Body for BoxView {
                     &name,
                     "The open file of the project. Save keeps it on the box; Deploy runs it.",
                 );
+                editor::find_toggle(ui, chrome);
                 editor::wrap_toggle(ui, chrome);
-                go = projects::deploy_arrow(
-                    ui,
-                    chrome,
-                    "code deploy",
-                    &deploy,
-                    "Deploys this version: saves, checks and runs the project on the box (Ctrl Shift Enter, File › Deploy).",
-                );
                 match &write {
                     Ok(()) => {}
                     Err(why) => {
@@ -3280,6 +3274,17 @@ impl Body for BoxView {
                         chrome.hit("read-only", r.rect);
                     }
                 }
+                go = editor::header_right(
+                    ui,
+                    chrome,
+                    &editor::Status {
+                        errors: 0,
+                        first: None,
+                        deploy: &deploy,
+                        deploy_tip: "Ctrl Shift Enter: deploy this version.\nSaves, checks and runs the project on the box.",
+                    },
+                )
+                .deploy;
             });
             if go {
                 self.deploy();
