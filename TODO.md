@@ -675,6 +675,68 @@ Nick, 2026-11-22, after four rounds of a 3D view in the playground (#549 in dev 
   asked: 2026-11-21
   by: session canvas-overhaul interview
 
+## UI feedback (Nick, 2026-11-23)
+
+Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pull context from everywhere (logs, errors, warnings, map, code) before acting. Decided in the interview that day: the in-flight work first (relay profile, then the diagram edits), then this list one PR per tab in sequence, Agent tab first; the Trend legend wraps up to a cap and then scrolls. Earlier the same day (edit_error.png): Describe offers the nearest thing instead of refusing (#576, draft).
+
+- [ ] **Relay: playground-v9 with the offer rule** — the public playground keeps answering "I can't do this one" until the relay serves a profile whose refusal rule is the offer rule of #576 (`Offer: rename a b`, `Offer: instead ...`), same words as `claude::SYSTEM`. Ship the page before the relay: an older page shows the raw Offer lines.
+  needs: Nick's relay promote and deploy
+  result: a draft PR in agent-relay with playground-v9 and its pins
+  est: 1h
+  difficulty: low
+  id: relay-offer-profile
+- [ ] **Diagram: rename and set values by hand** — on the diagram a right click has Rename…, a double click edits a name or a set value (a constant, a timer preset) where it stands, and the code follows; never the logic (Nick: "I don't want to manipulate the logic"). Rename… on the I/O rows too. Each edit is saved as one revision with a History entry and Undo, as a described change is. The label is the variable's name for now. Reverses the 2026-11-18 principle in docs/UI.md for names and set values only; docs/decisions/diagram-edits.md has the removed engine (SetConst, Rename at 4a6d37aa). Fix with it: `rename_plan` renames a PROGRAM whose name equals the variable.
+  result: names and set values change on the diagram and in the code together
+  est: 2d
+  difficulty: med
+  id: diagram-names-values
+- [ ] **Labels above the names** — Nick, 2026-11-23: a label apart from the variable's name, "at a higher, abstracted layer eventually". Not now: the label is the name until this is designed.
+  depends: diagram-names-values
+  difficulty: med
+  id: label-layer
+- [ ] **Agent tab** — (1) no "Stop and reset after a change" checkbox: a real device always stops and resets, the simulation takes live changes by default, the choice lives in the user settings. (2) The input grows as typed to about 4 lines then scrolls inside, anchored at the bottom and growing upward so the output does not move, height eased over about 100 ms, back to one prompt's height on Enter. (3) Output stays green and red, and can be selected and copied. (4) The history arrows restore both the prompt and its output for that step (today the prompt stays blank and the output stays on the latest step). (5) Bug: stepping through history writes to the message log and raises the error count; it must write nothing. (6) The history clock moves here: a click turns the lower area into a searchable index of the commit messages, beside back and forward.
+  depends: diagram-names-values
+  result: one PR for the Agent tab
+  est: 2d
+  difficulty: med
+  id: fb-agent-tab
+- [ ] **Global chrome** — the brand wordmark top left (encoder mark and Helmsman in the agreed font) in place of the text; one hamburger menu in place of File / Edit / View / Help; glyphs over text labels throughout; tooltips with the hotkey first and two lines at most, longer explanations in Help (a test holds the limit); a clearer glyph for folding a tab.
+  depends: fb-agent-tab
+  est: 2d
+  difficulty: med
+  id: fb-global-chrome
+- [ ] **Code tab** — Cmd/Ctrl+F opens the app's own find, not the browser's; a magnifier beside the file name with Find, Replace, Replace All; compile status hidden while the code compiles, a red X popup and a marker on the failing line when it does not, the grey indicator gone; Deploy at the panel's top right, bigger, filled green with a black arrow; word wrap stays.
+  depends: fb-global-chrome
+  est: 2d
+  difficulty: med
+  id: fb-code-tab
+- [ ] **IO tab** — keep the grid and icon layouts, the toggles and jump-to-node; loosen what is too collapsed; no effects on the larger tiles (a quick snapshot); "Describe a start state" does nothing today: make it an input to Helmsman that sets up IO, states and labels, with renames going into the code.
+  depends: diagram-names-values
+  est: 2d
+  difficulty: med
+  id: fb-io-tab
+- [ ] **Files tab** — a header naming the file system; under programs, Examples and My Files as sections that fold.
+  est: 4h
+  difficulty: low
+  id: fb-files-tab
+- [ ] **Messages** — a summary of Helmsman's output in the log for the operator (the full context still goes to the model); errors shown by default, info and warnings hidden; keep Copy All, add Clear.
+  est: 1d
+  difficulty: med
+  id: fb-messages
+- [ ] **Trend legend wraps** — the signal legend on rows instead of one crowded row, the variables' names kept (red_N). Decided 2026-11-23: wrap up to about a third of the tab's height, then scroll inside the legend, because rows without a cap left the plot no height (#561).
+  est: 3h
+  difficulty: low
+  id: fb-trend-legend
+- [ ] **Canvas: no semantic zoom, corner controls** — the abstraction layers by zoom (structured text zoomed out, function blocks mid-zoom) off for now: they look glitchy and like another interface. Switched off at the view, the folding kept: later, zooming out merges nodes into labelled groups in the same style with smooth transitions. Background drag stays box select, Space and drag stays pan. Bottom right: a pan (hand) toggle, zoom in, zoom out.
+  est: 1d
+  difficulty: med
+  id: fb-canvas-zoom
+- [ ] **Local user settings and sign-in on a Skipper: the design** — a Skipper runs on the device, so preferences must be kept on the device, which implies a light local user and sign-in model. Nick: propose a design before building. Start from what a box has (accounts, roles, sessions) and say where the playground keeps its own.
+  result: a design document for Nick to read, nothing built
+  est: 4h
+  difficulty: high
+  id: local-user-settings
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).

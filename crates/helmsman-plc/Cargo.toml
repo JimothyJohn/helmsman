@@ -26,7 +26,7 @@ helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"], optional = true }
+rusqlite = { version = "0.43.0", default-features = false, features = ["bundled"], optional = true }
 sha2 = { version = "0.11.1", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
 webpki-roots = { version = "1.0.11", optional = true }
