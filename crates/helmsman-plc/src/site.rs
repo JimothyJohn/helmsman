@@ -548,22 +548,6 @@ impl Drop for Site {
     }
 }
 
-/// One datagram into `buf`, or none (a timeout or an error).
-///
-/// Windows fails a receive into a buffer the datagram does not fit
-/// (WSAEMSGSIZE, 10040) where Unix truncates it, and the failure does not
-/// name the sender. The datagram is too long all the same: it is counted as
-/// such, from no address.
-fn receive(socket: &UdpSocket, buf: &mut [u8]) -> Option<(usize, SocketAddr)> {
-    match socket.recv_from(buf) {
-        Ok(got) => Some(got),
-        Err(e) if cfg!(windows) && e.raw_os_error() == Some(10040) => {
-            Some((buf.len(), SocketAddr::from(([0, 0, 0, 0], 0))))
-        }
-        Err(_) => None,
-    }
-}
-
 fn run(
     socket: &UdpSocket,
     state: &State,
@@ -575,8 +559,11 @@ fn run(
     let beacon = state.me.encode();
     let mut next = Duration::ZERO;
     let mut send_failed = false;
-    // One byte more than a beacon may be: a datagram that fills it is too long.
-    let mut buf = [0u8; MAX_BEACON + 1];
+    // The largest a UDP datagram can be, so any datagram is read whole and
+    // `Beacon::parse` calls a long one too long. Windows fails a receive
+    // into a buffer the datagram does not fit (WSAEMSGSIZE) without naming
+    // the sender, where Unix truncates it.
+    let mut buf = vec![0u8; 65_535];
     while !stop.load(Ordering::Acquire) {
         let now = state.t0.elapsed();
         if now >= next {
@@ -593,14 +580,13 @@ fn run(
             }
             next = now + every;
         }
-        let Some((n, from)) = receive(socket, &mut buf) else {
-            continue;
-        };
-        let now = state.t0.elapsed();
-        state
-            .peers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .datagram(&buf[..n], from, now);
+        if let Ok((n, from)) = socket.recv_from(&mut buf) {
+            let now = state.t0.elapsed();
+            state
+                .peers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .datagram(&buf[..n], from, now);
+        }
     }
 }

@@ -34,5 +34,10 @@ case "$(uname -s)" in
   Darwin) cargo clippy -q -p helmsman-l2 --target aarch64-unknown-linux-gnu -- -D warnings ;;
   *) ;;
 esac
+# The Windows half (code behind `cfg(not(unix))` / `cfg(windows)`) is not
+# linted here: ring and rusqlite build C, which needs MSVC's cl on the
+# target, so `cargo clippy --target x86_64-pc-windows-msvc` stops in their
+# build scripts on any Mac or Linux. CI's `box (windows-latest)` job is its
+# lint (2026-11-23).
 cargo clippy -q -p helmsman-proto --no-default-features --target thumbv7em-none-eabihf -- -D warnings
 cargo clippy -q -p helmsman-nodecore --target thumbv7em-none-eabihf -- -D warnings
