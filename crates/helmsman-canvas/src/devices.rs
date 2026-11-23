@@ -1608,7 +1608,7 @@ impl DevicesUi {
                     }
                 }
                 None => hover.push_str(
-                    "\nnot in the device library yet: the button under it hands the agent the vendor's file (an EDS, an IODD or a manual) to build its profile from, or add it under Advanced",
+                    "\nnot in the device library yet: the button under it hands Helmsman the vendor's file (an EDS, an IODD or a manual) to build its profile from, or add it under Advanced",
                 ),
             }
             if let Some(n) = &self.library_note {

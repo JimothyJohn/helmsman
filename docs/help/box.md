@@ -77,7 +77,7 @@ Devices), so the handling can be tested before it reaches the box.
 
 This browser keeps what you had in front of you: the project and file
 you had open, every edit you had not saved yet, what you had typed into
-the Agent and Requirements boxes, whether you were on the Monitor, and
+the Describe and Requirements boxes, whether you were on the Monitor, and
 the name in the sign-in form (never a password or PIN). Reload the page,
 or come back after the box restarts, and it is all where you left it; a
 note says when unsaved edits came back. If someone saved the same file

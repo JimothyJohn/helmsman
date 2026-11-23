@@ -869,7 +869,7 @@ impl BoxView {
             #[cfg(target_arch = "wasm32")]
             self.chat.abort();
             self.instruct
-                .failed("the open project changed while the Agent was answering");
+                .failed("the open project changed before the answer came");
             return self.log_agent();
         }
         if self.agent.seq() == self.answered_seq {
@@ -887,7 +887,7 @@ impl BoxView {
                 // is may be half an answer, and half a file is never written.
                 let said = match stop.as_str() {
                     "budget" | "max_tokens" => format!("the answer was cut off ({stop})"),
-                    _ => format!("the agent stopped ({stop})"),
+                    _ => format!("the answer stopped ({stop})"),
                 };
                 self.instruct.failed(&why.unwrap_or(said));
                 self.instruct.proposed(&proposals);
@@ -1017,7 +1017,7 @@ impl BoxView {
             return Some(self.agent.status.line());
         }
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         None
     }
@@ -1184,7 +1184,7 @@ impl BoxView {
             return Some(self.agent.status.line());
         }
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         self.design
             .busy()
@@ -1253,7 +1253,7 @@ impl BoxView {
             .or_else(|| {
                 self.instruct
                     .busy()
-                    .then(|| "The Agent is still working on the last instruction.".into())
+                    .then(|| "Still working on the last instruction.".into())
             })
             .or_else(|| {
                 self.projects.dirty().then(|| {
@@ -1328,7 +1328,7 @@ impl BoxView {
         let blocked = self.agent_blocked().or_else(|| {
             self.instruct
                 .busy()
-                .then(|| "The Agent is still working on the last instruction.".to_string())
+                .then(|| "Still working on the last instruction.".to_string())
         });
         let (d, problems) = self.design_cache.get(&text);
         Some(crate::design_step::kept_view(d, problems, built, blocked))
@@ -1724,7 +1724,7 @@ impl BoxView {
                                     egui::Button::new(RichText::new("From a spec…").size(crate::theme::BODY)),
                                 )
                                 .tip(spec_off.clone().unwrap_or_else(|| {
-                                    "Opens a window to paste a scope of work or product documentation, or add .md, .txt and .pdf files. The Agent drafts a new project on this box from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.".into()
+                                    "Opens a window to paste a scope of work or product documentation, or add .md, .txt and .pdf files. A new project is drafted on this box from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.".into()
                                 }));
                             chrome.hit("spec open", r.rect);
                             if r.clicked() {

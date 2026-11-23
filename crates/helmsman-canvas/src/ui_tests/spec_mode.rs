@@ -216,7 +216,7 @@ fn the_review_shows_the_io_the_requirements_and_what_is_not_tested_yet() {
     assert!(h.drew("conveyor_jam_photo_eye_upstream") && h.drew("on while a carton blocks the eye"));
     assert!(h.drew("passed") && h.drew("not tested yet") && h.drew("untested"));
     assert!(h.drew("Why: the belt motor latches"));
-    assert!(h.drew("2 line(s) of the Agent's list were left out"));
+    assert!(h.drew("2 line(s) of the list were left out"));
     // A click on the page behind leaves the draft where it is.
     h.click(Pos2::new(3.0, 3.0));
     h.wait(0.2);
@@ -395,7 +395,7 @@ fn the_box_window_lists_pdfs_with_sizes_and_totals_and_stays_inside_a_narrow_pag
         b.spec.spec.add_file("plant.md", b"# Plant").unwrap();
         b.spec.spec.add_file("second.pdf", &pdf(2000)).unwrap();
         b.spec.spec.pdfs[1].refused =
-            Some("The box could not read second.pdf: not a PDF. Nothing was sent to the agent.".into());
+            Some("The box could not read second.pdf: not a PDF. Nothing was sent.".into());
         h.wait(0.4);
         inside(
             &h,

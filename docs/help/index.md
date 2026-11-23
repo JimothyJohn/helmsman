@@ -1,7 +1,7 @@
 # Getting started
 
 Helmsman is a soft PLC you program by describing the machine. You write a
-specification in plain words, the agent writes standard IEC 61131-3
+specification in plain words, Helmsman writes standard IEC 61131-3
 Structured Text from it, you check what it does on a live diagram, and an
 engineer approves it before it runs. This is an early release: everything
 on these pages is built and in use on the bench; the pages say so where a
@@ -65,7 +65,7 @@ simulation by itself and says so.
   the examples.
 - [On a box](box.html): signing in, deploying through the approval policy,
   forcing, the Monitor.
-- [The Agent](agent.html): writing and changing programs from a
+- [Describing a change](agent.html): writing and changing programs from a
   description.
 - [Keyboard](keyboard.html) and [Examples](starters.html),
   generated from the program itself.

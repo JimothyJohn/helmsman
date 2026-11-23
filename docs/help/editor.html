@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">Describing a change</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="the-editor">The Editor</h1>
 <p>The Editor is the screen you program in. It is the same on a box and
@@ -116,8 +116,8 @@ these pages. Hover one for its name and key.</p>
 <h2 id="the-diagram">The diagram</h2>
 <p>The diagram is the program, drawn from its Structured Text and lit
 from the controller as it runs. The code is written in the editor or
-asked of the Agent; on the diagram you read the program, move its blocks
-and switch its inputs. What you can do:</p>
+described in the Describe tab; on the diagram you read the program, move
+its blocks and switch its inputs. What you can do:</p>
 <ul>
 <li><strong>Read it.</strong> Each block is a variable, a block
 instance, an operator or a function; wires carry values left to right
@@ -228,58 +228,59 @@ it back onto the left pane to return it. <kbd>Alt</kbd> <kbd>Shift</kbd>
 the next one on the left; <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>
 shows or hides the right pane once a tab is there. The layout is kept in
 the browser. The tabs: <strong>Describe</strong>, where you type what
-the open file should do and it is updated (see <a href="agent.html">The
-Agent</a>). <strong>Files</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd>
-<kbd>0</kbd>): the project's files, the examples, and the program tree
-under them; a right-click on a file offers Copy, Paste, Duplicate,
-Rename and Delete, and what you copy pastes into any project you open
-next. <strong>Devices</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd>
-<kbd>4</kbd>): at the top, <strong>I/O wiring</strong> links to the
-project's <code>io.map</code>, the file that says which program variable
-is wired to which device point; then the devices it names, each with its
-points under it, their live values, and whether the link is up; a
-right-click on the blank space adds a device (name, protocol, address,
-settings) as a line of the map; Import device… takes the vendor's EDS
-file, keeps it in the project and fills the form in from it. Under the
-map's devices, <strong>On the network</strong>: Scan lists every
-EtherNet/IP device that answers on the LAN, says whether the map already
-has it, and shows what the public device library knows of it (in the
-simulation, one simulated E1213). <strong>Use this device</strong> under
-one opens the form filled in, the device named by its identity so a
-changed address never loses it; on a read-only example it copies the
-project first. The form has a field for each of the protocol's settings,
-filled in with the usual values and checked against the driver's ranges,
-with the device's io.map line under them. Adding a device adds the
-device alone. Every channel it has is available from then on, and the
-project lists a channel only once you add it. <strong>+ Add I/O</strong>
-under the device opens the list of channels the project does not use
-yet; type part of a name (<code>DI-0</code>, <code>out</code>,
-<code>int</code>) to narrow it, and click a channel to add it. The
-channel gets a signal named after the device and the channel
-(<code>rio_di_04</code>) and a variable of that name in the program's
-<code>VAR_INPUT</code> or <code>VAR_OUTPUT</code>. To wire a variable
-the program already has, pick it under <strong>For</strong> first; the
-list then shows the channels of its direction and type. A device whose
-channels are not known takes a point by its address in the same window.
-Right-click a point and choose <strong>Remove…</strong> to take it out
-of the project; the program's variable stays and the channel returns to
-the list. A device that holds points the program has no variable for
-offers <strong>Remove unused</strong>, which asks before it removes
-them. <strong>Edit</strong> beside a device opens its name, and with
-Advanced on its protocol, address and timing; Save keeps its points as
-they are. <strong>Delete</strong> asks, then takes the device and its
-inputs and outputs out (the program's variables stay). Double-click or
-right-click a wired signal to rename it: the io.map line and every use
-in the program change together, listed before you confirm. One map may
-mix Modbus TCP and EtherNet/IP devices. The agent reads the same
-listing, network included. Under that, <strong>Plant states</strong>:
-the quantities a project's plant model keeps for the machine it stands
-in for (mark a variable with <code>{state unit=m}</code> on its line),
-each with the simulation's value and the sensor that measures it on the
-real machine, or the kind of sensor that would; right-click one and Add
-a sensor… writes that signal into the map. When that signal is one of
-the program's inputs, in the same unit, the simulation runs the model
-from it: set it in the I/O tab and the plant follows the sensor.
+the open file should do and it is updated (see <a
+href="agent.html">Describing a change</a>). <strong>Files</strong>
+(<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>): the project's files, the
+examples, and the program tree under them; a right-click on a file
+offers Copy, Paste, Duplicate, Rename and Delete, and what you copy
+pastes into any project you open next. <strong>Devices</strong>
+(<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): at the top, <strong>I/O
+wiring</strong> links to the project's <code>io.map</code>, the file
+that says which program variable is wired to which device point; then
+the devices it names, each with its points under it, their live values,
+and whether the link is up; a right-click on the blank space adds a
+device (name, protocol, address, settings) as a line of the map; Import
+device… takes the vendor's EDS file, keeps it in the project and fills
+the form in from it. Under the map's devices, <strong>On the
+network</strong>: Scan lists every EtherNet/IP device that answers on
+the LAN, says whether the map already has it, and shows what the public
+device library knows of it (in the simulation, one simulated E1213).
+<strong>Use this device</strong> under one opens the form filled in, the
+device named by its identity so a changed address never loses it; on a
+read-only example it copies the project first. The form has a field for
+each of the protocol's settings, filled in with the usual values and
+checked against the driver's ranges, with the device's io.map line under
+them. Adding a device adds the device alone. Every channel it has is
+available from then on, and the project lists a channel only once you
+add it. <strong>+ Add I/O</strong> under the device opens the list of
+channels the project does not use yet; type part of a name
+(<code>DI-0</code>, <code>out</code>, <code>int</code>) to narrow it,
+and click a channel to add it. The channel gets a signal named after the
+device and the channel (<code>rio_di_04</code>) and a variable of that
+name in the program's <code>VAR_INPUT</code> or <code>VAR_OUTPUT</code>.
+To wire a variable the program already has, pick it under
+<strong>For</strong> first; the list then shows the channels of its
+direction and type. A device whose channels are not known takes a point
+by its address in the same window. Right-click a point and choose
+<strong>Remove…</strong> to take it out of the project; the program's
+variable stays and the channel returns to the list. A device that holds
+points the program has no variable for offers <strong>Remove
+unused</strong>, which asks before it removes them.
+<strong>Edit</strong> beside a device opens its name, and with Advanced
+on its protocol, address and timing; Save keeps its points as they are.
+<strong>Delete</strong> asks, then takes the device and its inputs and
+outputs out (the program's variables stay). Double-click or right-click
+a wired signal to rename it: the io.map line and every use in the
+program change together, listed before you confirm. One map may mix
+Modbus TCP and EtherNet/IP devices. Helmsman reads the same listing,
+network included. Under that, <strong>Plant states</strong>: the
+quantities a project's plant model keeps for the machine it stands in
+for (mark a variable with <code>{state unit=m}</code> on its line), each
+with the simulation's value and the sensor that measures it on the real
+machine, or the kind of sensor that would; right-click one and Add a
+sensor… writes that signal into the map. When that signal is one of the
+program's inputs, in the same unit, the simulation runs the model from
+it: set it in the I/O tab and the plant follows the sensor.
 <strong>Code</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>):
 the Structured Text editor, headed by the open file's name. The code is
 coloured by what each word is: keywords, types, numbers and times,

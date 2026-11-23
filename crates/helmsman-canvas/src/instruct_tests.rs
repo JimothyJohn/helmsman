@@ -322,7 +322,7 @@ fn an_instruction_updates_the_open_file_keeps_a_revision_and_says_so() {
     let all = v.proj.revisions();
     assert_eq!(all.len(), revs + 1);
     let r = all.last().unwrap();
-    assert_eq!(r.what, "Agent: say why the lamp is on");
+    assert_eq!(r.what, "Described: say why the lamp is on");
     let p = r.page.as_deref().unwrap();
     assert!(
         p.starts_with("Instruction: say why the lamp is on\nFile: main.st\nWhy: it says so.\n"),
@@ -578,7 +578,7 @@ fn undo_restores_the_version_before_the_change_and_keeps_it_in_history() {
         format!("restored revision {}", u.revision)
     );
     assert!(
-        all.iter().any(|r| r.what == "Agent: comment it"),
+        all.iter().any(|r| r.what == "Described: comment it"),
         "the change stays in History"
     );
     let o = v.instruct.outcome.clone().unwrap();

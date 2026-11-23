@@ -292,6 +292,9 @@ pub struct PlaygroundView {
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
+    /// The program file last open in the editor, with its project: the
+    /// Agent's scope while a test, a map or a settings file is open.
+    last_program: Option<(String, String)>,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -390,6 +393,7 @@ impl PlaygroundView {
             watching: crate::watch::Watching::default(),
             noticed: None,
             selection: None,
+            last_program: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -644,8 +648,13 @@ impl PlaygroundView {
                 // Recorded with the instruction that produced it.
                 let apply = self.to_name.take();
                 let what = apply.as_ref().map_or_else(
-                    || format!("took the Agent's answer into {}", self.proj.current),
-                    |a| format!("Agent: {}", a.instruction).chars().take(120).collect(),
+                    || format!("took the described change into {}", self.proj.current),
+                    |a| {
+                        format!("Described: {}", a.instruction)
+                            .chars()
+                            .take(120)
+                            .collect()
+                    },
                 );
                 self.proj
                     .save_as(&what, apply.as_ref().map(|a| a.record.as_str()));
@@ -667,7 +676,7 @@ impl PlaygroundView {
                     format!(" {why}")
                 });
                 self.notice = Some(format!(
-                    "{} opened from the Agent's answer; Deploy runs it.{size}{red}",
+                    "{} opened from the answer; Deploy runs it.{size}{red}",
                     self.proj.current
                 ));
             }
@@ -1341,10 +1350,10 @@ impl PlaygroundView {
         ui.horizontal(|ui| {
             let field_w = (width - glyph - ui.spacing().item_spacing.x - 4.0).max(80.0);
             let tip = if running {
-                "Stop the program first: an Agent never changes the inputs of a running machine."
+                "Stop the program first: start values are never changed on a running machine."
             } else {
                 "Describe the state the machine should start in, in your own words, for example \
-                 part seated, guard open, speed 40. The Agent answers with input values as a \
+                 part seated, guard open, speed 40. The answer is input values, as a \
                  proposal; nothing is set until you accept it. Enter sends."
             };
             let out = ui.add_enabled_ui(!running && !working, |ui| {
@@ -1367,7 +1376,7 @@ impl PlaygroundView {
                 stop = r.clicked();
             } else {
                 let why_not = if running {
-                    Some("Stop the program first: an Agent never changes the inputs of a running machine.")
+                    Some("Stop the program first: start values are never changed on a running machine.")
                 } else if self.start.draft.trim().is_empty() {
                     Some("Write a start state first.")
                 } else {
@@ -1375,7 +1384,7 @@ impl PlaygroundView {
                 };
                 let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true).tip(
                     why_not.unwrap_or(
-                        "Send: asks the Agent for input values that match this description. They are shown as a proposal first.",
+                        "Send: asks for input values that match this description. They are shown as a proposal first.",
                     ),
                 );
                 chrome.hit("start send", r.rect);
@@ -1392,7 +1401,7 @@ impl PlaygroundView {
                     )
                     .wrap(),
                 )
-                .tip("The Agent is reading your description. Stop it with the square beside the field.");
+                .tip("Reading your description. Stop it with the square beside the field.");
             chrome.hit("start working", r.rect);
         }
         if let Some(line) = self.start.line.clone() {
@@ -1414,7 +1423,7 @@ impl PlaygroundView {
                     let r = ui
                         .add(
                             egui::Label::new(
-                                RichText::new("The Agent proposes these start values:")
+                                RichText::new("Proposed start values:")
                                     .strong()
                                     .size(crate::theme::MIN_TEXT),
                             )
@@ -1436,7 +1445,7 @@ impl PlaygroundView {
                                     show(c.ty, c.new)
                                 );
                                 ui.add(egui::Label::new(RichText::new(line).size(crate::theme::MIN_TEXT)).wrap())
-                                    .tip("An input the Agent would change: now → proposed.");
+                                    .tip("An input this would change: now → proposed.");
                             }
                         });
                     ui.horizontal_wrapped(|ui| {
@@ -1446,7 +1455,7 @@ impl PlaygroundView {
                                 egui::Button::new(RichText::new("Set these").size(crate::theme::MIN_TEXT)),
                             )
                             .tip(if running {
-                                "Stop the program first: an Agent never changes the inputs of a running machine."
+                                "Stop the program first: start values are never changed on a running machine."
                             } else {
                                 "Put these values into the inputs. The program then starts with them."
                             });
@@ -1488,7 +1497,7 @@ impl PlaygroundView {
     /// Why a spec run cannot start now, if it cannot (the window's Build).
     fn spec_blocked(&self) -> Option<String> {
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         if self.scope() != crate::scope::Scope::NewProject {
             return Some("A spec makes a new project: open a built-in example first.".into());
@@ -1607,7 +1616,7 @@ impl PlaygroundView {
     /// design entry's own words (those are said beside the entry).
     fn design_blocked(&self) -> Option<String> {
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         self.design
             .busy()
@@ -1678,7 +1687,7 @@ impl PlaygroundView {
     fn design_keep_blocked(&self) -> Option<String> {
         self.instruct
             .busy()
-            .then(|| "The Agent is still working on the last instruction.".to_string())
+            .then(|| "Still working on the last instruction.".to_string())
     }
 
     /// Keep: the design goes into the open project as `design.md`, one
@@ -1730,7 +1739,7 @@ impl PlaygroundView {
         let (d, problems) = self.design_cache.get(text);
         let built = self.design_built.get(&self.proj.open).copied().unwrap_or(0);
         let blocked = if self.instruct.busy() {
-            Some("The Agent is still working on the last instruction.".to_string())
+            Some("Still working on the last instruction.".to_string())
         } else {
             self.chat.route().err().map(str::to_string)
         };
@@ -2113,17 +2122,37 @@ impl PlaygroundView {
         dropped
     }
 
-    /// The ST file the Agent's scope starts from: the open one, or the
-    /// project's first program file when a map, a settings file or a
-    /// requirement test is open. A test is never the scope: it goes with
-    /// every instruction as the program's check, and with one open the
-    /// Agent was told the program was out of its reach (2026-11-22).
+    /// A file an instruction may change: ST, and not a requirement test.
+    fn is_program(file: &str) -> bool {
+        crate::sim_projects::is_st(file) && !helmsman_iec::spec::is_test(file)
+    }
+
+    /// The ST file the Agent's scope starts from: the open one, or, when
+    /// a map, a settings file or a requirement test is open, the program
+    /// last open in this project, else its first program file. A test is
+    /// never the scope: it goes with every instruction as the program's
+    /// check, and with one open the Agent was told the program was out of
+    /// its reach (2026-11-22). The first program by name would be the
+    /// wrong one as often as not in a project with several.
     fn scope_file(&self) -> Option<String> {
-        let program = |f: &String| crate::sim_projects::is_st(f) && !helmsman_iec::spec::is_test(f);
-        if program(&self.proj.current) && self.proj.files.contains_key(&self.proj.current) {
+        let here = |f: &str| Self::is_program(f) && self.proj.files.contains_key(f);
+        if here(&self.proj.current) {
             return Some(self.proj.current.clone());
         }
-        self.proj.files.keys().find(|f| program(f)).cloned()
+        if let Some((project, file)) = &self.last_program
+            && *project == self.proj.open
+            && here(file)
+        {
+            return Some(file.clone());
+        }
+        self.proj.files.keys().find(|f| Self::is_program(f)).cloned()
+    }
+
+    /// Remembers the program in the editor, for [`Self::scope_file`].
+    fn note_program(&mut self) {
+        if Self::is_program(&self.proj.current) && self.proj.files.contains_key(&self.proj.current) {
+            self.last_program = Some((self.proj.open.clone(), self.proj.current.clone()));
+        }
     }
 
     /// Where the paused scan stands, as the files show it: `12` or
@@ -2251,7 +2280,7 @@ impl PlaygroundView {
             .as_ref()
             .is_some_and(|r| r.project != self.proj.open);
         if moved {
-            self.stop_answer_with("the open project changed while the Agent was answering");
+            self.stop_answer_with("the open project changed before the answer came");
             self.log_outcome();
         }
     }
@@ -2511,7 +2540,7 @@ impl PlaygroundView {
             .map(|(n, t)| (n.clone(), t.clone()))
             .collect();
         if self.proj.revisions().last().is_none_or(|r| r.files != saved) {
-            self.proj.save_as("saved before the Agent's change", None);
+            self.proj.save_as("saved before the described change", None);
         }
         let before = self.proj.revisions().last().map(|r| r.n);
         let was = self.proj.files.get(&apply.file).cloned().unwrap_or_default();
@@ -2528,7 +2557,7 @@ impl PlaygroundView {
             self.proj.files.insert(f.clone(), t.clone());
         }
         self.proj.current.clone_from(&apply.file);
-        let what: String = format!("Agent: {}", apply.instruction)
+        let what: String = format!("Described: {}", apply.instruction)
             .chars()
             .take(120)
             .collect();
@@ -2683,7 +2712,7 @@ impl PlaygroundView {
         let mut ok = false;
         let m = crate::theme::near_pointer(ctx, "pg-program-name").show(ctx, |ui| {
             ui.set_max_width(420.0);
-            let why = "The Agent's answers in this conversation land in a project of this name: \
+            let why = "The answers in this conversation land in a project of this name: \
                        the newest as main.st, the earlier ones kept under it.";
             ui.label(RichText::new("Name this program").strong().size(16.0))
                 .tip(why);
@@ -3021,7 +3050,7 @@ impl PlaygroundView {
                         ui.set_width(width - 24.0);
                         ui.add(
                             egui::Label::new(
-                                RichText::new(format!("The Agent noticed: {}", n.what))
+                                RichText::new(format!("Helmsman noticed: {}", n.what))
                                     .color(t.ink(WARN))
                                     .size(size),
                             )
@@ -3032,9 +3061,9 @@ impl PlaygroundView {
                         }
                         ui.add_space(4.0);
                         ui.horizontal_wrapped(|ui| {
-                            let r = ui.button(RichText::new("Fix it").size(size)).tip(
-                                "Asks the Agent to fix this. Its change is checked like any other before it lands.",
-                            );
+                            let r = ui
+                                .button(RichText::new("Fix it").size(size))
+                                .tip("Asks for a fix. Its change is checked like any other before it lands.");
                             chrome.hit("agent fix it", r.rect);
                             fix = r.clicked();
                             let r = ui
@@ -3068,6 +3097,7 @@ impl PlaygroundView {
     }
 
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.note_program();
         self.notice_problems(ctx.input(|i| i.time));
         if !self.proxy_asked {
             self.proxy_asked = true;
@@ -3417,11 +3447,9 @@ impl Body for PlaygroundView {
         if let Some(draft) = self.agent_draft() {
             let r = ui
                 .label(
-                    RichText::new(
-                        "The Agent's draft, as it is written. It is checked before it goes into the file.",
-                    )
-                    .color(t.muted)
-                    .italics(),
+                    RichText::new("The draft, as it is written. It is checked before it goes into the file.")
+                        .color(t.muted)
+                        .italics(),
                 )
                 .tip("The file itself is unchanged until the checks pass. Stop in the Describe tab ends it.");
             chrome.hit("st draft note", r.rect);
@@ -4207,7 +4235,7 @@ impl PlaygroundView {
             ),
             Free::Unreachable => (
                 "The free chat cannot be reached from here. The editor, the diagram and the simulation work without it.",
-                "The page could not reach the relay that answers the Agent. A firewall or an ad blocker can cause this.",
+                "The page could not reach the service that writes the changes. A firewall or an ad blocker can cause this.",
             ),
         };
         let r = ui.label(RichText::new(text).strong()).tip(tip);
@@ -4261,23 +4289,31 @@ impl PlaygroundView {
         true
     }
 
-    /// The Agent tab's scope line (card agent-scoped-edits), only while a
-    /// selection or a pick narrows it: what the next instruction may
-    /// change and which rule gave it, with Whole file.
+    /// The Agent tab's scope line (card agent-scoped-edits): what the next
+    /// instruction may change and which rule gave it. Shown while a
+    /// selection or a pick narrows it, with Whole file, and while the file
+    /// it names is not the one in the editor (a test is open, and the
+    /// instruction changes the program).
     fn scope_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let scope = self.scope();
-        if scope.lines().is_none() {
+        let elsewhere = scope.file().is_some_and(|f| f != self.proj.current);
+        if scope.lines().is_none() && !elsewhere {
             return;
         }
+        let rule = if elsewhere && scope.lines().is_none() {
+            "the program, because the file open in the Code tab is not one an instruction changes"
+        } else {
+            scope.rule()
+        };
         let mut whole = false;
         // Wrapped: a long name in a plain row would widen the panel.
         ui.horizontal_wrapped(|ui| {
-            let r = ui.label(RichText::new(scope.label()).strong()).tip(scope.rule());
+            let r = ui.label(RichText::new(scope.label()).strong()).tip(rule);
             chrome.hit("agent scope", r.rect);
             if scope.lines().is_some() {
                 let b = ui
                     .small_button("Whole file")
-                    .tip("Drops the selection and the pick: the Agent edits the open file.");
+                    .tip("Drops the selection and the pick: the change goes into the whole open file.");
                 chrome.hit("scope whole file", b.rect);
                 whole = b.clicked();
             }

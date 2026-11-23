@@ -21,7 +21,8 @@ pub const MAX_PAGES: usize = 200;
 const PAGE: &str = "<!-- page -->";
 const ASKED: &str = "<!-- asked -->";
 const ANSWER: &str = "<!-- answer -->";
-const HEAD: &str = "# Agent conversation\n\nThe Agent tab's pages, newest last; kept with the project.\n";
+const HEAD: &str =
+    "# Describe conversation\n\nThe Describe tab's pages, newest last; kept with the project.\n";
 const ZWSP: char = '\u{200B}';
 
 /// One exchange of the conversation.

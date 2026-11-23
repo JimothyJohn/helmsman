@@ -267,7 +267,9 @@ impl Conversation {
         if let Some(target) = self.interrupted {
             let mut o = Outcome::new(
                 Kind::Failed,
-                format!("The page was reloaded while the Agent worked on {target}: nothing was written."),
+                format!(
+                    "The page was reloaded while a change to {target} was under way: nothing was written."
+                ),
             );
             o.review = agent.turns.last().map(Turn::proposals).unwrap_or_default();
             instruct.outcome = Some(o);
@@ -421,7 +423,7 @@ impl Desk {
                 return (t, dropped);
             }
             if d.conversation.take().is_some() {
-                dropped.push("the Agent conversation".into());
+                dropped.push("the Describe conversation".into());
                 continue;
             }
             if d.device.take().is_some() {
@@ -1220,7 +1222,7 @@ mod tests {
             .or_default()
             .insert("main.st".into(), draft(&"x".repeat(600)));
         let (t, dropped) = d.text_within(900);
-        assert_eq!(dropped, ["the Agent conversation", "the New device form"]);
+        assert_eq!(dropped, ["the Describe conversation", "the New device form"]);
         assert_eq!(Desk::parse(&t).drafts["p"]["main.st"].text.len(), 600);
     }
 
@@ -1353,7 +1355,7 @@ mod tests {
             ..d
         }
         .text_within(1000);
-        assert_eq!(dropped, ["the Agent conversation", "the New device form"]);
+        assert_eq!(dropped, ["the Describe conversation", "the New device form"]);
         assert_eq!(Desk::parse(&t).agent, "half typed");
     }
 

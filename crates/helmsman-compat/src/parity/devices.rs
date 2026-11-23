@@ -157,7 +157,7 @@ fn device_profile(c: &Ctx) -> Result<String, String> {
     if !file.to_string().contains("model Probe") {
         return Err(format!("the saved profile is not the proposed text: {file}"));
     }
-    // Publishing goes through the agent service. A box with none refuses;
+    // Publishing goes through the answer service. A box with none refuses;
     // a file that is not in the project is refused on any box, so a box
     // that has a relay is never asked to open a pull request here.
     let (st, why) = crate::client::call(

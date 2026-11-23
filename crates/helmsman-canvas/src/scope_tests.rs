@@ -565,6 +565,45 @@ mod in_the_page {
         assert_eq!(v.scope(), Scope::NewProject);
     }
 
+    /// With several programs in the project and a test open, the scope is
+    /// the program last open in the editor, not the first by name: asked
+    /// about the lights from `test_axis_cycle.st`, the Agent would
+    /// otherwise be handed `axis.st` and say the lights are out of reach
+    /// again. The scope follows the editor from program to program, and a
+    /// program that is gone or another project's falls back to the first.
+    #[test]
+    fn with_a_test_open_the_scope_is_the_program_last_open() {
+        let ctx = egui::Context::default();
+        let mut v = mine();
+        let text = v.proj.files.remove("main.st").unwrap();
+        v.proj.files.insert("traffic.st".into(), text.clone());
+        v.proj.add_file("axis.st", text);
+        v.proj.add_file("test_axis_cycle.st", FOLLOWS.into());
+        v.proj.open_file("traffic.st");
+        v.tick(&ctx);
+        v.proj.open_file("test_axis_cycle.st");
+        v.tick(&ctx);
+        assert_eq!(v.scope(), Scope::File("traffic.st".into()));
+        v.proj.open_file("axis.st");
+        v.tick(&ctx);
+        v.proj.open_file("test_axis_cycle.st");
+        v.tick(&ctx);
+        assert_eq!(v.scope(), Scope::File("axis.st".into()));
+        // The program last open is deleted: the first one left.
+        v.proj.files.remove("axis.st");
+        assert_eq!(v.scope(), Scope::File("traffic.st".into()));
+        // Another project: its own program, whatever was open in the last.
+        v.proj.open_file("traffic.st");
+        v.tick(&ctx);
+        v.proj.create("other", None);
+        v.open_project("other");
+        v.proj.add_file("traffic.st", FOLLOWS.into());
+        v.proj.add_file("test_x.st", FOLLOWS.into());
+        v.proj.open_file("test_x.st");
+        v.tick(&ctx);
+        assert_eq!(v.scope(), Scope::File("main.st".into()));
+    }
+
     #[test]
     fn the_instruction_goes_with_its_scope_in_an_envelope() {
         let mut v = mine();
@@ -685,7 +724,7 @@ mod in_the_page {
         assert!(!v.proj.dirty(), "saved");
         let r = v.proj.revisions().last().unwrap();
         assert_eq!(v.proj.revisions().len(), revs + 1, "one revision");
-        assert_eq!(r.what, "Agent: comment it");
+        assert_eq!(r.what, "Described: comment it");
         assert!(
             r.page
                 .as_deref()
@@ -718,7 +757,7 @@ mod in_the_page {
         assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
         assert_eq!(v.proj.files["main.st"], said);
         let r = v.proj.revisions().last().unwrap();
-        assert_eq!(r.what, "Agent: say why");
+        assert_eq!(r.what, "Described: say why");
         assert_eq!(v.proj.revisions().len(), revs + 2);
         // Unsaved edits are saved first, as their own revision.
         v.proj.current_text_mut().unwrap().push_str("(* mine *)\n");

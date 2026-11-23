@@ -156,7 +156,7 @@ impl fmt::Display for Error {
         match self {
             Self::Unreachable(why) => write!(
                 f,
-                "the relay cannot be reached ({why}); the agent is offline, installed modules keep running"
+                "the relay cannot be reached ({why}); the answer service is offline, installed modules keep running"
             ),
             Self::Timeout => f.write_str("the relay stopped answering (timed out)"),
             Self::Status { status, message, .. } => {
@@ -252,7 +252,7 @@ pub fn lookup(cfg: &Config) -> Result<Profile, Error> {
                 Error::Status { status: 404, .. } => Error::Status {
                     status: 404,
                     kind: "unknown_agent_version".into(),
-                    message: format!("the relay serves no agent {:?}", cfg.version),
+                    message: format!("the relay does not serve version {:?}", cfg.version),
                     retryable: false,
                 },
                 e => e,

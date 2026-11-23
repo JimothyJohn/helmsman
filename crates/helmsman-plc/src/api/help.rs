@@ -1,7 +1,7 @@
 //! `POST /api/help`: the Agent tab's Help mode, for a person in trouble
 //! who did not write the program (Nick, 2026-11-07, interview). They say
 //! in their own words what went wrong; the answer is a plain-language
-//! diagnosis and a Markdown issue to paste to GitHub or to another agent.
+//! diagnosis and a Markdown issue to paste to GitHub or to an AI assistant.
 //! Nothing is filed: the box only writes the issue's text.
 //!
 //! The request is `{"question": "...", "messages": "..."?}`: the person's
@@ -1119,7 +1119,7 @@ impl Local for Tools {
 /// Words for a help request the agent could not answer.
 fn no_agent(why: &str) -> String {
     format!(
-        "{why}. The issue below carries what you wrote and the box's context: add what you saw and paste it to GitHub or to another agent."
+        "{why}. The issue below carries what you wrote and the box's context: add what you saw and paste it to GitHub or to an AI assistant."
     )
 }
 
@@ -1128,10 +1128,7 @@ fn no_agent(why: &str) -> String {
 pub(super) fn serve(ctx: &Ctx, stream: &mut Conn, job: &Job) {
     let slot = ctx.chat.as_ref().map(super::chat::Chat::slot);
     if let Some(None) = slot {
-        let _ = http::respond(
-            stream,
-            &Response::error(503, "the agent is busy with other chats; try again"),
-        );
+        let _ = http::respond(stream, &Response::error(503, "busy with other chats; try again"));
         return;
     }
     let mut alive = http::start_stream(stream).is_ok();
@@ -1149,9 +1146,9 @@ pub(super) fn serve(ctx: &Ctx, stream: &mut Conn, job: &Job) {
     let last = match online {
         None => {
             let why = if ctx.chat.is_some() {
-                no_agent("The agent is offline, so there is no diagnosis")
+                no_agent("The answer service is offline, so there is no diagnosis")
             } else {
-                no_agent("This box has no relay configured, so there is no agent to diagnose it")
+                no_agent("This box has no relay configured, so there is no diagnosis")
             };
             done("offline", Some(&why), 0, 0)
         }
@@ -1249,24 +1246,22 @@ fn last_event(outcome: &helmsman_agent::Outcome, wrote: bool) -> (&'static str, 
         Stop::Done if wrote => d("end_turn", None),
         Stop::Done => d(
             "end_turn",
-            Some(no_agent(
-                "The agent answered without writing an issue or an answer",
-            )),
+            Some(no_agent("The answer came back without an issue or an answer")),
         ),
         Stop::Budget(what) => d(
             "budget",
-            Some(no_agent(&format!("The agent stopped at the {what} budget"))),
+            Some(no_agent(&format!("The answer stopped at the {what} budget"))),
         ),
         Stop::Refusal => d("refusal", Some(no_agent("The model declined this request"))),
         Stop::Relay(e) if e.kind() == "unknown_agent_version" => d(
             "unavailable",
             Some(no_agent(&format!(
-                "Help is not available from the agent service yet (it does not serve {PROFILE})"
+                "Help is not available from the answer service yet (it does not serve {PROFILE})"
             ))),
         ),
         Stop::Relay(e) if e.offline() => d(
             "offline",
-            Some(no_agent(&format!("The agent went offline ({e})"))),
+            Some(no_agent(&format!("The answer service went offline ({e})"))),
         ),
         Stop::Relay(e) => error(e.kind(), e.to_string(), e.retryable()),
         Stop::TooLong => error(

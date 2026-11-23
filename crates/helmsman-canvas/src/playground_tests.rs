@@ -1005,7 +1005,7 @@ fn revisions_are_kept_with_the_project_restored_and_bounded() {
     v.take_code("PROGRAM p\nEND_PROGRAM\n".into());
     let revs = v.proj.revisions();
     assert_eq!(revs.len(), 2);
-    assert_eq!(revs[1].what, "took the Agent's answer into main.st");
+    assert_eq!(revs[1].what, "took the described change into main.st");
     assert!(revs[1].files.contains_key("v1.st"));
     assert!(
         !revs[1].files.contains_key("agent.md"),
@@ -2253,7 +2253,7 @@ fn an_instruction_on_an_example_lands_its_program_named_and_never_runs_it() {
     );
     assert!(o.undo.is_none(), "a new project has no version before it");
     let rev = s.view.proj.revisions().last().cloned().unwrap();
-    assert_eq!(rev.what, "Agent: a latch please");
+    assert_eq!(rev.what, "Described: a latch please");
     assert!(
         rev.page
             .as_deref()
