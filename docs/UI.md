@@ -36,17 +36,28 @@ this; change it here first when a decision changes.
   Editor | Monitor, Save, Deploy, login, and a ⋯ menu (Proposals with a
   badge when one waits, Upload, Download).
 
+## Tooltips (Nick, 2026-11-23)
+
+The key first, then what it does; two lines at most. A longer
+explanation belongs in Help. `tips_tests` counts the tips over the limit
+(110 characters, or more than one line break) and holds the count: it may
+only go down.
+
 ## Editor (desktop and tablet; a phone opens the Monitor)
 
-- **One header row (48 pt):** on the left the HELMSMAN wordmark (a link
-  to the site) and a menu bar: File (New project, Copy project, Save,
-  Deploy, Upload, Download),
+- **One header row (48 pt):** on the left the brand wordmark (the
+  stencil encoder mark and "Helmsman", a link to the site; the name is in
+  the canvas's own text face until the brand's face is bundled) and one
+  menu, a three-line glyph (Nick, 2026-11-23): File (New project, Copy
+  project, Save, Deploy, Upload, Download),
   Edit (Undo, Redo, Go to definition, Cross references), View (Editor /
   Monitor, Structured Text, Files, Devices, the right pane, Tab to the right, the Agent's tabs, Trend,
   Zoom to fit, the layout items, Scan detail for an engineer, and Light
   mode: dark by default, the choice kept per browser with the layout) and Help
   (Help and Keyboard shortcuts on the site, About Helmsman: version,
-  build, licence, and on a box its certificate fingerprint). After them
+  build, licence, and on a box its certificate fingerprint) are its
+  submenus, on a desk as on a phone (hooks `bar menu`, then `bar file`,
+  `bar edit`, `bar view`, `bar help` once it is open).. After them
   the program's state, green running, red stopped or faulted (a box: its
   link). On the right the project's name, its edited mark, a "n waiting"
   badge when proposals wait, the Editor | Monitor toggle (a glyph a
@@ -56,8 +67,7 @@ this; change it here first when a decision changes.
   box" are View items. A fault, a deploy under way or a stale file shows
   on a line under the header only while it lasts. Below the narrow width
   (a phone) the wordmark, the state and the "simulation" tag are hidden,
-  the four menus fold into one Menu button with File, Edit, View and Help
-  as submenus, and the project's name is truncated, so the two groups
+  the project's name is truncated, so the two groups
   never overlap (2026-11-08).
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
   restart (the simulation), then save, upload, download. Strokes in the

@@ -7,14 +7,15 @@ the simulation; what differs is where the program runs.
 
 One row along the top.
 
-- **HELMSMAN**, on the left, opens this site.
-- **File · Edit · View · Help**: the menus. Every item that has a key
-  shows it. File holds Save, Deploy, Upload and Download. Edit holds Undo
-  and Redo for the Structured Text, Go to definition and Cross references.
-  View switches between the Editor and the Monitor, shows or hides
-  each pane, and has Light mode (dark is the default; the browser
-  remembers your choice). Help opens these pages, the keyboard table, and About
-  Helmsman (the version and build).
+- The **Helmsman mark and name**, on the left, open this site.
+- The **menu** (three lines) holds File, Edit, View and Help, each
+  opening beside it. Every item that has a key shows it. File holds
+  Save, Deploy, Upload and Download. Edit holds Undo and Redo for the
+  Structured Text, Go to definition and Cross references. View switches
+  between the Editor and the Monitor, shows or hides each pane, and has
+  Light mode (dark is the default; the browser remembers your choice).
+  Help opens these pages, the keyboard table, and About Helmsman (the
+  version and build).
 - On a box, **the link**: whether the page is connected to the box. The
   simulation's state and clock sit beside the run glyphs over the
   diagram.

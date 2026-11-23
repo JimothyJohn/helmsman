@@ -379,7 +379,7 @@ fn a_click_off_the_diagram_lets_the_selection_go_but_not_one_in_the_agent_tab() 
     h.wait(1.0);
     assert_eq!(h.selected(), sel, "a click in the Agent tab keeps it");
     // The menu bar, off the diagram and off the Agent tab: gone.
-    let bar = h.rect("bar help").center();
+    let bar = h.rect("bar menu").center();
     assert!(!h.area().contains(bar));
     h.click(bar);
     h.wait(0.3);
@@ -388,7 +388,7 @@ fn a_click_off_the_diagram_lets_the_selection_go_but_not_one_in_the_agent_tab() 
     h.wait(1.0);
     h.select_all();
     let sel = h.selected();
-    let from = h.rect("bar file").center();
+    let from = h.rect("bar menu").center();
     h.pull(
         from,
         from + Vec2::new(80.0, 0.0),

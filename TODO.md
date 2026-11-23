@@ -14,7 +14,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: box-reset-after-change
   asked: 2026-11-23
   by: session 85e550b0
-
+- [ ] **Where are the brand's face and its wordmark file?** — the header now draws the stencil encoder mark (docs/brand, the `se` symbol) with the painter, and "Helmsman" in Inter, the canvas's own face. The brand page names Saira Stencil One for the wordmark, but no font file is in the repo and the canvas bundles only Inter and Plex Mono. Bundle Saira Stencil One (OFL, one more font in assets/fonts) and set the name in it, or keep Inter?
+  options: bundle Saira Stencil One | keep Inter | a different face
+  id: brand-wordmark-font
+  asked: 2026-11-23
+  by: worker
 
 ## Needs your hands
 
@@ -711,8 +715,9 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 2d
   difficulty: med
   id: fb-agent-tab
-- [ ] **Global chrome** — the brand wordmark top left (encoder mark and Helmsman in the agreed font) in place of the text; one hamburger menu in place of File / Edit / View / Help; glyphs over text labels throughout; tooltips with the hotkey first and two lines at most, longer explanations in Help (a test holds the limit); a clearer glyph for folding a tab.
+- [x] **Global chrome** — the brand wordmark top left (encoder mark and Helmsman in the agreed font) in place of the text; one hamburger menu in place of File / Edit / View / Help; glyphs over text labels throughout; tooltips with the hotkey first and two lines at most, longer explanations in Help (a test holds the limit); a clearer glyph for folding a tab.
   depends: fb-agent-tab
+  result: the hamburger menu, the fold glyph and the tooltip ratchet are in; the wordmark draws the brand's mark in the canvas's own face, and the brand face is the open question brand-wordmark-font
   est: 2d
   difficulty: med
   id: fb-global-chrome

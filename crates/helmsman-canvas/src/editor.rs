@@ -79,9 +79,9 @@ impl Bottom {
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Trend => "Trend: pinned signals over time (Alt+Shift+2).",
+            Self::Trend => "Alt+Shift+2  Trend: pinned signals over time.",
             Self::Messages => {
-                "Messages: what needs saying now and what happened (connections, deploys, faults and errors), newest last. Red while an error stands or one has come in since you last looked."
+                "Messages: what happened, newest last.\nRed while an error stands or a new one came in."
             }
         }
     }
@@ -150,13 +150,13 @@ impl Pane {
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Files => "Files: the projects and the open one's files (Alt+Shift+0 opens or shuts it).",
+            Self::Files => "Alt+Shift+0  Files: the projects and their files.",
             Self::Devices => {
-                "Devices: the I/O map, the remote modules and their points (Alt+Shift+4 opens or shuts it)."
+                "Alt+Shift+4  Devices: the I/O map and its modules."
             }
-            Self::Code => "Code: the Structured Text of the open file (Alt+Shift+1 opens or shuts it).",
+            Self::Code => "Alt+Shift+1  Code: the open file's Structured Text.",
             Self::History => {
-                "History: every saved version of the open project, newest at the top. Click one, or step with the arrows, to run it."
+                "History: every saved version, newest at the top.\nClick one to run it."
             }
             Self::Claude | Self::Io => match self.tab() {
                 Some(t) => t.tip(),
@@ -800,7 +800,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Right pane",
         right && docked,
         &k(Action::Panel),
-        "Shows or hides the pane on the right, once a tab is docked there (drag a tab to the right edge, or Alt+Shift+5).",
+        "Shows or hides the right pane, once a tab is docked there.",
     ) && docked
     {
         chrome.right = !right;
@@ -812,7 +812,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Tab to the right",
         false,
         &k(Action::DockRight),
-        "Docks the left pane's tab in a pane on the right and shows the next one on the left. Drag a tab back to the left pane to return it.",
+        "Docks the left pane's tab on the right.\nDrag it back to return it.",
     ) {
         chrome.send_right();
     }
@@ -973,7 +973,7 @@ fn strip(
     let side = ui.available_width().clamp(STRIP - 16.0, TAB);
     for (k, t) in tabs.iter().enumerate() {
         let r =
-            crate::glyphs::tab(ui, t.icon, side, t.on, None).tip(format!("{} Opens the pane on it.", t.tip));
+            crate::glyphs::tab(ui, t.icon, side, t.on, None).tip(format!("{}\nOpens the pane on it.", t.tip));
         hits.push((t.key.clone(), r.rect));
         if r.clicked() {
             picked = Some(k);
@@ -982,45 +982,64 @@ fn strip(
     (picked, strip_toggle(ui, left, hover))
 }
 
-/// The rest of a collapsed sidebar's strip as one button: a chevron
-/// pointing `left` or right, tinted under the pointer.
+/// The rest of a collapsed sidebar's strip as one button: the fold glyph
+/// for showing the pane, tinted under the pointer. `left`: the pane is the
+/// right one, so showing it moves it left (the strip is on the right).
 fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
     let size = Vec2::new(
         ui.available_width().max(STRIP - 8.0),
         ui.available_height().max(TAP),
     );
     let (rect, r) = ui.allocate_exact_size(size, Sense::click());
-    let r = r.on_hover_text(hover);
+    let r = r.tip(hover);
     if r.hovered() {
         let tint = ui.style().interact(&r).bg_fill;
         ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
     }
-    chevron(ui, rect.center(), left, r.hovered());
+    fold_glyph(ui, rect.center(), !left, false, r.hovered());
     r
 }
 
-/// An open sidebar's hide button, the same chevron in the header row.
+/// An open sidebar's hide button in the header row. `left`: the pane is
+/// the left one.
 fn header_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(Vec2::splat(TAP * 0.75), Sense::click());
-    let r = r.on_hover_text(hover);
+    let r = r.tip(hover);
     if r.hovered() {
         let tint = ui.style().interact(&r).bg_fill;
         ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
     }
-    chevron(ui, rect.center(), left, r.hovered());
+    fold_glyph(ui, rect.center(), left, true, r.hovered());
     r
 }
 
-/// A 16 pt stroked chevron at `c`.
-fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
-    let s = 8.0;
-    let dir = if left { -1.0 } else { 1.0 };
-    let tip = Pos2::new(c.x + dir * s * 0.5, c.y);
-    let back = c.x - dir * s * 0.5;
+/// The fold glyph (Nick, 2026-11-23: the chevron was not intuitive): a
+/// window outline with the pane's side filled, and an arrow in the rest
+/// of it pointing the way the pane will move, into its edge to hide it,
+/// out of it to show it. `pane_left`: the pane is on the left.
+fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool) {
     let t = theme(ui);
-    let stroke = Stroke::new(2.5, if hot { t.accent } else { t.muted });
-    ui.painter().line_segment([Pos2::new(back, c.y - s), tip], stroke);
-    ui.painter().line_segment([Pos2::new(back, c.y + s), tip], stroke);
+    let ink = if hot { t.accent } else { t.muted };
+    let (w, h, slab) = (22.0, 18.0, 7.0);
+    let frame = Rect::from_center_size(c, Vec2::new(w, h));
+    let p = ui.painter();
+    p.rect_stroke(frame, CornerRadius::same(2), Stroke::new(2.0, ink), egui::StrokeKind::Inside);
+    let side = if pane_left { -1.0 } else { 1.0 };
+    let edge = if pane_left { frame.left() } else { frame.right() };
+    let slab_rect = Rect::from_x_y_ranges(
+        if pane_left { edge..=edge + slab } else { edge - slab..=edge },
+        frame.top()..=frame.bottom(),
+    );
+    p.rect_filled(slab_rect, CornerRadius::same(1), ink);
+    // The arrow's head points toward the pane's edge to hide, away to show.
+    let dir = if hiding { side } else { -side };
+    let mid = Pos2::new(edge - side * (slab + (w - slab) / 2.0), c.y);
+    let reach = 3.0;
+    let tip = Pos2::new(mid.x + dir * reach, c.y);
+    let back = mid.x - dir * reach;
+    let stroke = Stroke::new(2.0, ink);
+    p.line_segment([Pos2::new(back, c.y - 4.0), tip], stroke);
+    p.line_segment([Pos2::new(back, c.y + 4.0), tip], stroke);
 }
 
 /// How far from the window's right edge a tab dragged out of the left
@@ -1092,9 +1111,9 @@ fn side_pane(
         )
     };
     let (other, chevron_tip) = if right {
-        ("the left pane", "Hides the pane (Alt+Shift+3).")
+        ("the left pane", format!("{}  Hide the pane.", crate::hotkeys::label(ui.ctx(), crate::hotkeys::Action::Panel)))
     } else {
-        ("the window's right edge", "Hides the pane.")
+        ("the window's right edge", "Hide the pane.".to_string())
     };
     let shown = egui::Panel::show_switched(ui, &mut open, strip_panel, panel, |ui, is_open| {
         let toggle = if is_open {
@@ -1112,13 +1131,13 @@ fn side_pane(
             let fill = row - n * (size + gap_x) - TAP * 0.75 - gap_x;
             ui.horizontal_wrapped(|ui| {
                 if right {
-                    t = Some(header_toggle(ui, false, chevron_tip));
+                    t = Some(header_toggle(ui, false, &chevron_tip));
                 }
                 for &p in tabs {
                     let r =
                         crate::glyphs::tab_sensed(ui, p.icon(), size, on == p, None, Sense::click_and_drag())
                             .tip(format!(
-                                "{} Drag it along the row to reorder, or to {other} to dock it there; right-click to hide the tab; double-click hides the pane.",
+                                "{}\nDrag to reorder or to {other}; right-click hides the tab.",
                                 p.tip()
                             ));
                     r.dnd_set_drag_payload(p);
@@ -1156,7 +1175,7 @@ fn side_pane(
                     if fill > 0.0 {
                         ui.add_space(fill);
                     }
-                    t = Some(header_toggle(ui, true, chevron_tip));
+                    t = Some(header_toggle(ui, true, &chevron_tip));
                 }
             });
             ui.separator();
@@ -1173,11 +1192,14 @@ fn side_pane(
                 })
                 .collect();
             let hover = if right {
-                "Shows the pane (Alt+Shift+3)."
+                format!(
+                    "{}  Show the pane.",
+                    crate::hotkeys::label(ui.ctx(), crate::hotkeys::Action::Panel)
+                )
             } else {
-                "Shows the pane."
+                "Show the pane.".to_string()
             };
-            let (picked, t) = strip(ui, &strip_tabs, right, hover, hits);
+            let (picked, t) = strip(ui, &strip_tabs, right, &hover, hits);
             if let Some(k) = picked {
                 on = tabs[k];
                 hide = true;

@@ -1020,7 +1020,26 @@ impl App {
         }
     }
 
-    /// The header, one row as tall as two: the mark and the File / Edit /
+    /// The brand's wordmark: the encoder mark and the name, a link to the site.
+/// The name is set in the canvas's own text face; the brand's stencil face
+/// is not bundled (the board's `brand-wordmark-font` question).
+fn wordmark(ui: &mut egui::Ui, color: egui::Color32) -> egui::Response {
+    let side = 30.0;
+    let gap = 8.0;
+    let galley = ui
+        .painter()
+        .layout_no_wrap("Helmsman".to_string(), egui::FontId::proportional(22.0), color);
+    let size = Vec2::new(side + gap + galley.size().x, side);
+    let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click());
+    let color = if r.hovered() { theme(ui).fg } else { color };
+    let p = ui.painter();
+    glyphs::paint_mark(p, Rect::from_min_size(rect.min, Vec2::splat(side)), color);
+    let at = egui::pos2(rect.min.x + side + gap, rect.center().y - galley.size().y / 2.0);
+    p.galley(at, galley, color);
+    r
+}
+
+/// The header, one row as tall as two: the mark and the File / Edit /
     /// View menus on the left, the open view's actions after them, and on
     /// the right what is open (its name, Save, Deploy), the screens, the
     /// ⋯ menu and Sign in. Returns what it drew where.
@@ -1040,12 +1059,7 @@ impl App {
                 // The wordmark is the way to the site (the About window links
                 // it, on a phone).
                 if !narrow {
-                    let mark = ui
-                        .add(
-                            egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent))
-                                .frame(false),
-                        )
-                        .tip(format!("Opens {SITE_URL} in a new tab."));
+                    let mark = Self::wordmark(ui, t.accent).tip(format!("Opens {SITE_URL} in a new tab."));
                     hits.push(("mark".to_string(), mark.rect));
                     if mark.clicked() {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
@@ -1145,8 +1159,7 @@ impl App {
                     .color(BLACK),
                 )
                 .tip(format!(
-                    "This page is build {}; the controller is build {theirs}. A page left open \
-                     over an update keeps the old editor until it reloads.",
+                    "Page build {}, controller build {theirs}.\nReload to get the new editor.",
                     stamp::CANVAS
                 ));
                 let r = ui
@@ -1547,7 +1560,10 @@ impl App {
         }
     }
 
-    /// File, Edit and View: what exists today, nothing greyed for later.
+    /// The one menu (Nick, 2026-11-23: a hamburger in place of File / Edit /
+    /// View / Help): a three-line glyph button that opens File, Edit, View
+    /// and Help as its four submenus, on a phone as on a desk. What exists
+    /// today, nothing greyed for later.
     fn menus(
         &mut self,
         ui: &mut egui::Ui,
@@ -1555,21 +1571,31 @@ impl App {
         waiting: Option<usize>,
         hits: &mut Vec<(String, Rect)>,
     ) {
-        if ui.ctx().content_rect().width() >= NARROW {
-            self.menu_buttons(ui, engineer, waiting, hits);
-            return;
-        }
-        // A phone's width has no room for four menus beside the mark and
-        // the screens: one button holds them as submenus.
+        let mut button = None;
         ui.scope(|ui| {
             egui::containers::menu::menu_style(ui.style_mut());
-            let m = ui.menu_button("Menu", |ui| self.menu_buttons(ui, engineer, waiting, hits));
-            hits.push(("bar menu".to_string(), m.response.rect));
+            let side = glyphs::SIZE;
+            let b = egui::Button::new("").min_size(Vec2::splat(side)).frame(false);
+            let r = egui::containers::menu::MenuButton::from_button(b)
+                .ui(ui, |ui| self.menu_buttons(ui, engineer, waiting, hits))
+                .0
+                .tip("Menu: File, Edit, View and Help.");
+            let t = theme(ui);
+            let hot = r.hovered() || r.is_pointer_button_down_on();
+            if hot {
+                ui.painter()
+                    .rect_filled(r.rect, CornerRadius::same(5), ui.style().interact(&r).bg_fill);
+            }
+            let ink = if hot { t.accent } else { t.fg };
+            glyphs::paint(ui.painter(), r.rect.shrink(side * 0.26), glyphs::Icon::List, ink);
+            button = Some(r);
         });
+        if let Some(r) = button {
+            hits.push(("bar menu".to_string(), r.rect));
+        }
     }
 
-    /// File, Edit, View and Help, as buttons of the row (or, on a phone,
-    /// the submenus of its one Menu button).
+    /// File, Edit, View and Help, the submenus of the one menu.
     fn menu_buttons(
         &mut self,
         ui: &mut egui::Ui,
@@ -1749,8 +1775,7 @@ impl App {
                     "Force input",
                     false,
                     &k(Action::Force),
-                    "Forces the input the picked block reads: a switch flips, a number's field opens. \
-                     On a box only an engineer forces, and every force is recorded.",
+                    "Forces the input the picked block reads.\nOn a box only an engineer forces; each force is recorded.",
                 ) && let Some(w) = self.workspace()
                 {
                     w.force_picked(&ctx);
@@ -1855,7 +1880,7 @@ impl App {
                     "view layouts",
                     "Pane layouts…",
                     false,
-                    "Ready-made arrangements of the side tabs and panes, and your own: save the panes as they are by name, export them to a file, import them in another browser.",
+                    "Ready-made pane arrangements and your own:\nsave, export and import them.",
                 ) {
                     self.screen = Screen::Editor;
                     self.layouts.open = true;
@@ -1912,7 +1937,7 @@ impl App {
                         "view agent resets",
                         "Reset after a described change",
                         resets,
-                        "On: the simulation stops with every value back at its start when a described change lands. Off: the changed program runs at once. Kept in this browser.",
+                        "On: a described change resets the simulation.\nOff: the changed program runs at once.",
                     ) {
                         chrome.agent_resets = !resets;
                     }
