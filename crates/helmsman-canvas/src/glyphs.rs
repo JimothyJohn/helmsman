@@ -83,6 +83,10 @@ pub enum Icon {
     List,
     /// Four squares: the I/O tab's cards as tiles.
     Grid,
+    /// Two sheets, one behind the other: copy (the Messages tab).
+    Copy,
+    /// A bin: empty the Messages.
+    Clear,
     /// An open hand: pan the diagram (the corner controls).
     Hand,
     /// A magnifier with a plus: zoom in.
@@ -704,6 +708,43 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             );
             p.circle_filled(Pos2::new(c.x, t + b.height() * 0.8), w * 0.7, color);
+        }
+        Icon::Copy => {
+            let k = b.width() * 0.62;
+            let front = Rect::from_min_size(Pos2::new(r - k, bt - k), Vec2::splat(k));
+            // The sheet behind shows only what the front one leaves.
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(l + k, bt - k),
+                    Pos2::new(l + k, t),
+                    Pos2::new(l, t),
+                    Pos2::new(l, t + k),
+                    Pos2::new(r - k, t + k),
+                ],
+                stroke,
+            ));
+            p.rect_stroke(front, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+        }
+        Icon::Clear => {
+            // A bin: the lid and its handle over a tapering body.
+            let lid = t + b.height() * 0.22;
+            p.line_segment([Pos2::new(l, lid), Pos2::new(r, lid)], stroke);
+            p.line_segment(
+                [
+                    Pos2::new(c.x - b.width() * 0.18, t + w * 0.5),
+                    Pos2::new(c.x + b.width() * 0.18, t + w * 0.5),
+                ],
+                stroke,
+            );
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(l + b.width() * 0.14, lid),
+                    Pos2::new(l + b.width() * 0.22, bt - w * 0.5),
+                    Pos2::new(r - b.width() * 0.22, bt - w * 0.5),
+                    Pos2::new(r - b.width() * 0.14, lid),
+                ],
+                stroke,
+            ));
         }
         Icon::Error => {
             p.circle_stroke(c, b.width() * 0.5 - w * 0.5, stroke);

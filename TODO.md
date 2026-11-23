@@ -745,7 +745,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 4h
   difficulty: low
   id: fb-files-tab
-- [ ] **Messages** — a summary of Helmsman's output in the log for the operator (the full context still goes to the model); errors shown by default, info and warnings hidden; keep Copy All, add Clear.
+- [x] **Messages** — a summary of Helmsman's output in the log for the operator (the full context still goes to the model); errors shown by default, info and warnings hidden; keep Copy All, add Clear.
   est: 1d
   difficulty: med
   id: fb-messages
