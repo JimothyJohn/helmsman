@@ -4,8 +4,9 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **Local user settings and sign-in: read the proposal and answer its four questions** — docs/decisions/local-user-settings.md. Short version: a box already has local accounts, sessions and a per-person store on the device, so no new sign-in is needed; what is missing is preferences kept on the device (they are per browser today), one Settings window, and a way to make the first account without a shell. The four questions: a setup code or an open first-run page for the first account; whether signed-out screens may change settings; a longer session for an operator's floor screen; settings first and accounts in the UI second, or together.
+- [x] **Local user settings and sign-in: read the proposal and answer its four questions** — docs/decisions/local-user-settings.md. Short version: a box already has local accounts, sessions and a per-person store on the device, so no new sign-in is needed; what is missing is preferences kept on the device (they are per browser today), one Settings window, and a way to make the first account without a shell. The four questions: a setup code or an open first-run page for the first account; whether signed-out screens may change settings; a longer session for an operator's floor screen; settings first and accounts in the UI second, or together.
   result: the settings card can be written and sized
+  decided: Nick, interview 2026-11-23: a setup code for the first account; signed-out screens show the device defaults only; a longer session for operators; settings first, then accounts, back to back (cards settings-on-device, first-run-and-accounts)
   id: local-user-settings-answers
   asked: 2026-11-23
   by: session 85e550b0
@@ -14,18 +15,21 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-23
   by: session 85e550b0
 
-- [ ] **Take the History tab out, now that Describe has the clock?** — the Agent tab card said "move the history clock here". The clock and its searchable list of versions are in the Describe tab (simulation); the History tab is still in the tab row, because taking a tab out changes saved layouts, the View menu and the tab shortcuts. On a box the versions are still only in its History tab.
+- [x] **Take the History tab out, now that Describe has the clock?** — the Agent tab card said "move the history clock here". The clock and its searchable list of versions are in the Describe tab (simulation); the History tab is still in the tab row, because taking a tab out changes saved layouts, the View menu and the tab shortcuts. On a box the versions are still only in its History tab.
   options: remove it in the simulation | remove it everywhere and give a box the clock too | keep both
+  decided: Nick, interview 2026-11-23: keep the History tab for now, in both places
   id: history-tab-after-clock
   asked: 2026-11-23
   by: session 85e550b0
-- [ ] **"Real device: always stop and reset after a change": is a deploy enough?** — on a box a described change is saved into the project and nothing runs until Deploy, which starts the program from scratch. So nothing was changed for a box in the Agent tab card. If you meant the box should deploy (stop, reset, run) by itself when a described change lands, that is a different and bigger thing.
+- [x] **"Real device: always stop and reset after a change": is a deploy enough?** — on a box a described change is saved into the project and nothing runs until Deploy, which starts the program from scratch. So nothing was changed for a box in the Agent tab card. If you meant the box should deploy (stop, reset, run) by itself when a described change lands, that is a different and bigger thing.
   options: a deploy is enough | deploy by itself after a described change
+  decided: Nick, 2026-11-23: the box does not deploy by itself; a deploy is enough
   id: box-reset-after-change
   asked: 2026-11-23
   by: session 85e550b0
-- [ ] **Where are the brand's face and its wordmark file?** — the header now draws the stencil encoder mark (docs/brand, the `se` symbol) with the painter, and "Helmsman" in Inter, the canvas's own face. The brand page names Saira Stencil One for the wordmark, but no font file is in the repo and the canvas bundles only Inter and Plex Mono. Bundle Saira Stencil One (OFL, one more font in assets/fonts) and set the name in it, or keep Inter?
+- [x] **Where are the brand's face and its wordmark file?** — the header now draws the stencil encoder mark (docs/brand, the `se` symbol) with the painter, and "Helmsman" in Inter, the canvas's own face. The brand page names Saira Stencil One for the wordmark, but no font file is in the repo and the canvas bundles only Inter and Plex Mono. Bundle Saira Stencil One (OFL, one more font in assets/fonts) and set the name in it, or keep Inter?
   options: bundle Saira Stencil One | keep Inter | a different face
+  decided: Nick, 2026-11-23: Inter is fine if it is more portable, a graphic alone is fine too; the painted mark with the name in Inter stays
   id: brand-wordmark-font
   asked: 2026-11-23
   by: worker
@@ -762,6 +766,23 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 4h
   difficulty: high
   id: local-user-settings
+
+- [ ] **Settings kept on the Skipper, and a Settings window** — step A of docs/decisions/local-user-settings.md, decided 2026-11-23. A typed settings record per signed-in person on the device (beside the desk), `GET`/`PUT /api/settings`, the device's defaults for a signed-out screen (an integrator sets them; a change made signed out stays in that browser), the browser as the copy when the box does not answer and in the simulation. One Settings window in the menu; "Reset after a described change" moves there from the View menu. The pane arrangement stays per browser.
+  result: preferences follow a person from one screen to another on a Skipper
+  est: 1w
+  difficulty: med
+  id: settings-on-device
+- [ ] **First account from the device with a setup code, and accounts in the UI** — step B of docs/decisions/local-user-settings.md, decided 2026-11-23. A box with no accounts and no PINs serves a first-run page that asks for a one-time setup code shipped with the device, then makes the first account (integrator). An integrator adds, disables and resets people in the UI; a person changes their own password. An operator's session lasts a shift (about 12 h, no idle end); engineers and integrators keep 1 h and 15 min idle. Draft PR: it touches sign-in.
+  needs: where the setup code comes from on a preloaded Skipper (a label, or a file beside the pairing files)
+  depends: settings-on-device
+  est: 2w
+  difficulty: high
+  id: first-run-and-accounts
+- [ ] **The project download carries its history** — Nick, 2026-11-23: a Skipper's revisions (the newest 200 per project, `project/history.rs`) exist only on that device, and the .zip holds the files alone. The download gains the revisions (who, when, what, the recorded instruction), and an upload of such a .zip brings them back, so a backup made by hand is whole. Bounded and checked like any upload; an older .zip without history still loads.
+  result: one file is a complete backup of a project
+  est: 3d
+  difficulty: med
+  id: history-in-download
 
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
