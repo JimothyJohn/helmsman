@@ -151,6 +151,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-23
   by: claude-session 734e70dc
 
+- [ ] **Windows job: find the remaining intermittent failures** — `box (windows-latest)` still fails now and then for reasons other than the reset #571 fixed (2026-11-23). (1) In run 45194902994 two tests that start the binary timed out and passed in the next run: `a_killed_box_resumes_its_retain_counter_and_says_what_changed` (tests/retain.rs, 20 s waiting for the first save) and `a_module_output_is_published_by_the_core` (tests/sink_bin.rs, 10 s waiting for an event). The cause is unknown and the failures do not print the box's stderr, so start by making both say what the box wrote when they time out, then read the next failure. (2) The 503 a full box sends from the accept loop (api/mod.rs) closes with the request unread, the same reset hazard the 408 had; it cannot read on there without holding up accepts, so it needs another way (hand the refusal to a short-lived thread, or read what has already arrived before closing) and a test like `a_client_cut_off_at_the_deadline_reads_the_408_however_late_it_stops_sending`.
+  needs: nothing; (1) waits on a failure with the box's stderr in it
+  result: both timeouts have a named cause and a fix or a bound that says why, and a busy box's 503 reaches a Windows client
+  est: 4h
+  difficulty: high
+  id: windows-intermittent-failures
+  asked: 2026-11-23
+  by: claude-session 734e70dc
+
 - [ ] **The compiler's stack use stops depending on who calls it** — a program nested to the limit needs more stack than a 2 MiB thread has in a debug build with full debug info: 190 chained `+` took 2 to 2.5 MiB, 64 parentheses 1.5 to 2 MiB (macOS arm64, 2026-11-22; `nesting_up_to_the_limit_runs` overflowed in the new macOS CI job). Release fits (under 768 KiB at worst), so what ships is safe on a 2 MiB thread; a debug box compiling on one can be crashed by a hostile program, and the browser build (1 MiB main stack by default) is not measured. Nick, 2026-11-22: give the test 4 MiB now (done), fix it properly here. Ways: compile on a thread of the compiler's own with a set stack (not in the browser), handle long operator chains without recursion, or both.
   needs: nothing; start by measuring the wasm build at the limit
   result: the deepest allowed program compiles on a 1 MiB stack in every build, the test goes back to a small stack and says so
