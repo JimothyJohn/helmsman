@@ -3651,7 +3651,7 @@ mod chrome {
         assert_eq!(sim.proj.files.len(), before + 1, "{:?}", sim.proj.files.keys());
         let notice = sim.notice.clone().unwrap_or_default();
         assert!(
-            notice.contains("opened from the Agent's answer")
+            notice.contains("opened from the answer")
                 && notice.contains("test_lamp")
                 && notice.ends_with("is red."),
             "{notice}"

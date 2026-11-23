@@ -27,7 +27,7 @@ fn a_first_visit_sees_the_request_the_machine_and_the_proofs_and_no_editor() {
     assert!(h.has("front machine"));
     assert!(h.drew("The proofs run once the program is written."));
     h.wait(2.5);
-    assert!(h.drew("The Agent is writing the program"));
+    assert!(h.drew("Writing the program"));
     h.wait(7.0);
     for k in 1..=ASKED.len() {
         assert!(h.has(&format!("front asked {k}")));

@@ -894,10 +894,7 @@ fn an_agent_that_writes_no_issue_leaves_the_box_issue_and_says_why() {
     assert_eq!(last(&evs, "issue")["by"], "box");
     let d = last(&evs, "done");
     assert_eq!(d["stop"], "end_turn");
-    assert!(
-        d["why"].as_str().unwrap().contains("without writing an issue"),
-        "{d}"
-    );
+    assert!(d["why"].as_str().unwrap().contains("without an issue"), "{d}");
 }
 
 #[test]

@@ -640,12 +640,12 @@ fn a_requirement_becomes_a_written_passing_test() {
     let h = b.history();
     let rev = h.last().unwrap();
     assert_eq!(rev["by"], "alice (engineer)", "{rev}");
-    assert_eq!(rev["what"], "the agent wrote test_lamp_on.st");
+    assert_eq!(rev["what"], "Helmsman wrote test_lamp_on.st");
     assert!(
         b.audit().iter().any(|e| e["detail"]
             .as_str()
             .unwrap()
-            .contains("requirement the agent wrote test_lamp_on.st")
+            .contains("requirement Helmsman wrote test_lamp_on.st")
             && e["user"] == "alice"),
         "audited"
     );

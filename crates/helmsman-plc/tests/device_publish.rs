@@ -606,7 +606,7 @@ fn without_an_agent_service_or_projects_there_is_nothing_to_publish_through() {
     b.project(&alice, "line3");
     let r = b.publish(Some(&alice), &file());
     assert_eq!(r.status, 404, "{r:?}");
-    assert!(r.error().contains("agent service"), "{}", r.error());
+    assert!(r.error().contains("answer service"), "{}", r.error());
 }
 
 // ---- hostile requests: refused before the relay hears of them -----------------------

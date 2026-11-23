@@ -128,7 +128,7 @@ fn an_eds_goes_to_the_box_then_the_agent_is_asked_with_its_id() {
         })
     );
     let t = all_text(&mut h);
-    assert!(t.contains("The agent is reading Acme_Rio.eds."), "{t}");
+    assert!(t.contains("Reading Acme_Rio.eds."), "{t}");
 }
 
 #[test]
@@ -427,10 +427,7 @@ fn the_agent_ending_its_turn_is_told_beside_the_button() {
     }
     h.frame(vec![]);
     let t = all_text(&mut h);
-    assert!(
-        t.contains("The agent could not answer: the relay refused (429)."),
-        "{t}"
-    );
+    assert!(t.contains("No answer: the relay refused (429)."), "{t}");
     assert!(ui(&h).offer().is_ok(), "the turn is over: the button is back");
     assert_eq!(seq, h.app.boxv.as_ref().unwrap().agent.seq());
     // A turn that ends with a question for the person.
@@ -451,7 +448,7 @@ fn the_agent_ending_its_turn_is_told_beside_the_button() {
     h.frame(vec![]);
     let t = all_text(&mut h);
     assert!(
-        t.contains("The agent finished. It said: Which of the two byte orders does the unit use?"),
+        t.contains("Finished. Helmsman said: Which of the two byte orders does the unit use?"),
         "{t}"
     );
 }

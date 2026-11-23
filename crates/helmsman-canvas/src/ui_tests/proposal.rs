@@ -362,7 +362,7 @@ fn a_newer_proposal_replaces_it_and_keeps_the_names_typed_where_the_channel_rema
     let newer = proposal(9, "acme-rio-2", "new summary").replace("DO-00", "DO-01");
     answer(&mut h, PCall::Proposal, 200, &newer);
     let t = all_text(&mut h);
-    assert!(t.contains("The agent proposed a newer version"), "{t}");
+    assert!(t.contains("Helmsman proposed a newer version"), "{t}");
     assert!(t.contains("new summary"), "{t}");
     let ui = proposal_ui(&h);
     assert_eq!(
