@@ -76,9 +76,24 @@ answer, up to two more tries. An answer that still fails is never
 written: the file stays as it was and the tab says why, one line per
 failure. A change that comes without a scenario is asked for one once;
 if none comes, it is written and the status line says no scenario checks
-it. When Helmsman answers without code (it cannot do what was asked, or
-it needs one fact from you), the tab shows its words and the file is not
-touched.
+it. When Helmsman answers without code (it needs one fact from you, or
+what was asked cannot be done as written), the tab shows its words and
+the file is not touched.
+
+**The nearest thing, on a button.** An instruction that cannot be done
+as written comes back with one line on what stands in the way and, under
+it, up to two buttons for the closest things that can be done:
+
+- **Rename a to b** renames an input, an output or a variable in every
+  file of the project, the wiring and the requirement tests with the
+  program. The files it changes are listed under the button. It is saved
+  as one revision with its own History entry, and Undo takes it back.
+  Asking for a rename in words ("call lamp beacon") gives the same
+  button.
+- **Another instruction** in the program's own names. One click sends it
+  as yours, and it is checked like any other.
+
+**Leave it** takes the buttons away and changes nothing.
 
 The scenarios of a change that is written are kept as requirement tests
 and appear in the Requirements tab, each under its own words.

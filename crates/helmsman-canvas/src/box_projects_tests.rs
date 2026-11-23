@@ -4784,3 +4784,103 @@ fn a_boxs_pane_layouts_answer_is_read_as_hostile() {
         "{note}"
     );
 }
+
+/// What a box's agent cannot do as written comes back as an offer; the
+/// rename, clicked, is saved on the box in the program and its test with
+/// a History entry, and Undo restores both (`crate::offers`).
+#[test]
+fn a_rename_offered_on_a_box_is_saved_in_every_file_with_its_history_and_undone() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::{FOLLOWS, LAMP};
+    use serde_json::json;
+
+    fn answer(v: &mut BoxView, text: &str) {
+        let seq = v.chat_sent.last().expect("a message").seq;
+        let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+        let body = [
+            ev("session", json!({"id": "s1"})),
+            ev("text", json!({ "delta": text })),
+            ev("done", json!({"stop": "end_turn", "why": null})),
+        ]
+        .concat();
+        v.agent.apply(Incoming::Chunk { seq, text: body });
+        v.agent.apply(Incoming::End { seq });
+    }
+    fn run(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context) {
+        v.tick(ctx);
+        for _ in 0..20 {
+            pump(b, jar, v, ctx, 1.0);
+            if v.psent.is_empty() {
+                return;
+            }
+        }
+        panic!("the box never went quiet");
+    }
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", LAMP), ("test_lamp.st", FOLLOWS)],
+    );
+    v.projects.open_file("main.st");
+    run(&b, &jar, &mut v, &ctx);
+    let before = v.projects.history.last().map(|r| r.n).expect("revisions");
+
+    v.instruct.draft = "make the lamp orange".into();
+    v.send_instruction(&ctx);
+    answer(
+        &mut v,
+        "The lamp is an on/off output, so its colour comes from its name.\nOffer: rename lamp orange_lamp\n",
+    );
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Said, "{o:?}");
+    assert_eq!(o.offers.len(), 1, "{o:?}");
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "nothing yet"
+    );
+
+    v.take_offer(0, &ctx);
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(o.status, "Renamed lamp to orange_lamp in 2 files.");
+    assert_eq!(o.undo.as_ref().map(|u| u.revision), Some(before));
+    let on_box = |f: &str| {
+        b.json(&format!("/api/projects/line/files/{f}"))["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(on_box("main.st").contains("orange_lamp := start;"));
+    assert!(on_box("test_lamp.st").contains("lamp_follows(COND := orange_lamp);"));
+    let saved = v
+        .projects
+        .history
+        .iter()
+        .find(|r| r.page)
+        .cloned()
+        .expect("the rename's History entry");
+    let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
+    assert!(
+        page["page"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("Instruction: Rename lamp to orange_lamp\nFile: main.st\n")),
+        "{page}"
+    );
+
+    v.undo_change();
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+    assert_eq!(on_box("main.st"), LAMP);
+    assert_eq!(on_box("test_lamp.st"), FOLLOWS);
+}

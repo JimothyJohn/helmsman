@@ -1767,8 +1767,75 @@ impl BoxView {
             Some(Act::Review(id)) => self.wants_review = Some(id),
             // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
+            Some(Act::Offer(k)) => self.take_offer(k, &ctx),
             Some(Act::Revision(_) | Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
+    }
+
+    /// Offer `k` under the last answer, clicked ([`crate::offers`]): an
+    /// instruction is sent as the engineer's own; a rename is saved into
+    /// every file it touches with its History entry, as a described
+    /// change is.
+    pub fn take_offer(&mut self, k: usize, ctx: &egui::Context) {
+        use crate::offers::What;
+        match self.instruct.offer(k).cloned() {
+            Some(What::Instead { text }) => {
+                self.instruct.draft = text;
+                self.send_instruction(ctx);
+            }
+            Some(What::Rename { old, new }) => self.rename_everywhere(&old, &new),
+            None => {}
+        }
+    }
+
+    fn rename_everywhere(&mut self, old: &str, new: &str) {
+        let files: crate::scope::Files = self.loaded_files().into_iter().collect();
+        let plan = match crate::offers::plan(&files, old, new) {
+            Ok(p) => p,
+            Err(why) => {
+                self.instruct.offer_refused(&why);
+                return self.log_agent();
+            }
+        };
+        let Some(project) = self.projects.open.as_ref().map(|o| o.name.clone()) else {
+            return;
+        };
+        let before = self.projects.history.last().map(|r| r.n);
+        let record = crate::instruct::Instruct::rename_record(old, new, &plan.lines());
+        let count = plan.files.len();
+        // The program file carries the History entry; the others go with it.
+        let lead = plan
+            .files
+            .iter()
+            .position(|(f, ..)| {
+                helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                    && !helmsman_iec::spec::is_test(f)
+            })
+            .or_else(|| {
+                plan.files.iter().position(|(f, ..)| {
+                    helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                })
+            })
+            .unwrap_or(0);
+        let mut rest: Vec<(String, String)> = Vec::new();
+        let mut first = None;
+        for (k, (f, t, _)) in plan.files.into_iter().enumerate() {
+            if k == lead {
+                first = Some((f, t));
+            } else {
+                rest.push((f, t));
+            }
+        }
+        let Some((file, text)) = first else { return };
+        self.projects.save_agent(&file, &text, &record, &rest);
+        let undo = before.map(|revision| crate::instruct::Undo {
+            project,
+            file,
+            revision,
+            text,
+        });
+        self.instruct.renamed(old, new, count, undo);
+        self.log_agent();
     }
 
     /// Reports to the log what changed: the link, a deploy's outcome, a

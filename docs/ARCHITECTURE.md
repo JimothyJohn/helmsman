@@ -974,6 +974,23 @@ failed attempts, the Agent's words), the scenarios kept as test files;
 Undo restores the revision before it. The tab shows only the instruction
 box, Send or Stop, Undo, and a status line with the reason.
 
+An answer without code is one reason and the nearest things to click
+(`describe-offers`, Nick 2026-11-23, `offers.rs`: "I can't do this one"
+is no answer where the program is edited by describing). The prose may
+end in at most two `Offer:` lines. `Offer: rename <old> <new>` is the
+page's to carry out, since an answer may change one file and a name is in
+io.map, every `.st` and the tests: it is planned when the answer comes in
+(`offers::kept`, over `device_form::rename_plan`; one that cannot be done
+is not shown), planned again on the click, written into every file and
+saved as one revision with its Agent page (`Instruct::rename_record`),
+so Undo and History treat it as a described change (`take_offer` in
+both views; on a box through `save_agent`). `Offer: instead <instruction>`
+is sent as the engineer's own. The reason shows in the tab's ink
+(`Tone::Note`), not as a warning. The rule is in each prompt that can
+reach the tab: `claude::SYSTEM`, `instruct::BOX_RULES`, and the relay's
+playground profile from `playground-v9`; an older profile sends none
+and the tab shows its words as before.
+
 "Chat about this" (`chat-about-this`, Nick 2026-11-16, `chat_about.rs`)
 makes the diagram something to point at. A right click on a block has the
 item, on the page and on a box; an input's or output's row will call
