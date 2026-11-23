@@ -3464,14 +3464,14 @@ mod chrome {
     #[test]
     fn a_versions_description_shows_on_two_lines() {
         let mut h = Harness::new(App::sim());
-        let long = "Agent: the lamp now latches when start is pressed and stays on until stop is pressed, \
+        let long = "Described: the lamp now latches when start is pressed and stays on until stop is pressed, \
                     with a two second run-on timer before the belt stops and a horn while it runs on";
         {
             let sim = h.app.sim.as_mut().unwrap();
             sim.proj.create("mine", None);
             sim.open_project("mine");
             sim.proj.current_text_mut().unwrap().push_str("\n(* short *)");
-            sim.proj.save_as("Agent: a comment", None);
+            sim.proj.save_as("Described: a comment", None);
             sim.proj.current_text_mut().unwrap().push_str("\n(* long *)");
             sim.proj.save_as(long, None);
         }
@@ -3651,7 +3651,7 @@ mod chrome {
         assert_eq!(sim.proj.files.len(), before + 1, "{:?}", sim.proj.files.keys());
         let notice = sim.notice.clone().unwrap_or_default();
         assert!(
-            notice.contains("opened from the Agent's answer")
+            notice.contains("opened from the answer")
                 && notice.contains("test_lamp")
                 && notice.ends_with("is red."),
             "{notice}"

@@ -441,7 +441,7 @@ impl Submitter<'_> {
             }
             _ => {}
         }
-        if let Err(why) = self.write(&text, "the agent wrote") {
+        if let Err(why) = self.write(&text, "Helmsman wrote") {
             return fail(format!("the test was not saved: {why}"), json!({}));
         }
         let summary = if v.passed() {
@@ -492,10 +492,7 @@ pub(super) fn serve(ctx: &Ctx, stream: &mut Conn, job: &Job) {
     };
     let slot = ctx.chat.as_ref().map(super::chat::Chat::slot);
     if let Some(None) = slot {
-        let _ = http::respond(
-            stream,
-            &Response::error(503, "the agent is busy with other chats; try again"),
-        );
+        let _ = http::respond(stream, &Response::error(503, "busy with other chats; try again"));
         return;
     }
     let mut alive = http::start_stream(stream).is_ok();
@@ -517,7 +514,7 @@ pub(super) fn serve(ctx: &Ctx, stream: &mut Conn, job: &Job) {
     let last = match online {
         None => {
             let why = if ctx.chat.is_some() {
-                "the agent is offline; the requirement is written down with no test yet"
+                "the answer service is offline; the requirement is written down with no test yet"
             } else {
                 "no relay configured on this box (--relay); the requirement is written down with no test yet"
             };
@@ -594,7 +591,7 @@ fn last_event(outcome: &helmsman_agent::Outcome) -> (&'static str, Json) {
         Stop::Relay(e) if e.offline() => done(
             "offline",
             Some(format!(
-                "the agent went offline ({e}); the requirement is written down"
+                "the answer service went offline ({e}); the requirement is written down"
             )),
         ),
         Stop::Relay(e) => error(e.kind(), e.to_string(), e.retryable()),

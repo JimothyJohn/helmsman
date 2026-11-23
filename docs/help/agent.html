@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Helmsman Help · The Agent</title>
+<title>Helmsman Help · Describing a change</title>
 <link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
 <script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -63,12 +63,12 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">Describing a change</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
-<h1 id="the-agent">The Agent</h1>
-<p>The Agent is the way you program by describing the machine. The page
-opens on the <strong>Describe</strong> tab, the first in the left pane:
-type what the open Structured Text file should do, and press
+<h1 id="describing-a-change">Describing a change</h1>
+<p>Describing is the way you program: say what the machine should do.
+The page opens on the <strong>Describe</strong> tab, the first in the
+left pane: type what the open Structured Text file should do, and press
 <strong>Send</strong>, the yellow paper plane (or <kbd>Enter</kbd>). The
 file is updated in place and the editor shows it; there is no
 conversation to read through.</p>
@@ -123,25 +123,25 @@ faint red ghosts where they were. In the simulation the diagram shows
 the change at once; on a box the diagram is what runs, so its marks
 appear when you deploy.</p>
 <h2 id="checked-before-it-is-written">Checked before it is written</h2>
-<p>With every change the Agent writes one or more scenarios: short
+<p>With every change Helmsman writes one or more scenarios: short
 requirement tests, each stating in plain words what it checks, such as
 "the lamp stays off while start is not pressed". Before anything is
 written, the change is taken into a copy of the project, compiled, and
 the scenarios run together with the project's own requirement tests.</p>
 <p>If anything fails (a scenario, a requirement test, the compile, or
-the whole-file rule below), the Agent is sent what failed and fixes the
+the whole-file rule below), Helmsman is sent what failed and fixes the
 answer, up to two more tries. An answer that still fails is never
 written: the file stays as it was and the tab says why, one line per
 failure. A change that comes without a scenario is asked for one once;
 if none comes, it is written and the status line says no scenario checks
-it. When the Agent answers without code (it cannot do what was asked, or
+it. When Helmsman answers without code (it cannot do what was asked, or
 it needs one fact from you), the tab shows its words and the file is not
 touched.</p>
 <p>The scenarios of a change that is written are kept as requirement
 tests and appear in the Requirements tab, each under its own words.</p>
 <p>When an instruction changes behaviour that an existing requirement
 test checks ("the motor runs only while start is held" against a test
-that says it latches), the Agent replaces that test with one stating the
+that says it latches), Helmsman replaces that test with one stating the
 new requirement. The replacement has to pass like any scenario, every
 other test still has to, and the status line names it:</p>
 <blockquote>
@@ -150,15 +150,15 @@ requirement test_latch: the motor runs while start is held.</p>
 </blockquote>
 <p>The test as it was stays in History, and Undo puts both back.</p>
 <h2 id="history-and-undo">History and Undo</h2>
-<p>Every change the Agent writes is saved as one revision in the
+<p>Every change Helmsman writes is saved as one revision in the
 project's History (the Files tab), named after the instruction. Its
-entry holds the instruction, the Agent's reason, the scenarios that
-passed, the answers that failed and were sent back, and the Agent's
+entry holds the instruction, Helmsman's reason, the scenarios that
+passed, the answers that failed and were sent back, and Helmsman's
 words. Edits of your own you had not saved are saved first, as their own
 revision, so the version before the change is always there.</p>
 <p><strong>Undo</strong>, the arrow hooked back beside Send, puts the
 file back as it was before the last change (a new revision; the change
-stays in History). It is offered while the file is still as the Agent
+stays in History). It is offered while the file is still as Helmsman
 left it; after an edit of your own, go back through History instead.</p>
 <p>In the simulation the arrows beside Send take Undo's place: the left
 arrow steps back one revision, the right arrow forward one, as far as
@@ -167,15 +167,15 @@ marked green and red with what it changed, and its tooltip names the
 instruction behind it. Saving keeps the version shown; an edit of your
 own puts the arrows away.</p>
 <h2 id="follow-ups">Follow-ups</h2>
-<p>Each instruction goes to the Agent with the whole file and the last
+<p>Each instruction goes to Helmsman with the whole file and the last
 five instructions carried out on that file, read from History. So "now
-make it blink faster" works: the Agent knows what "it" is, even after a
+make it blink faster" works: Helmsman knows what "it" is, even after a
 reload. To start over, describe the whole behaviour in the
 instruction.</p>
-<h2 id="what-the-agent-may-change">What the Agent may change</h2>
-<p>The Agent edits what you have in focus and nothing else: the file
-open in the Code tab, by default. When you select lines in the Code tab
-or pick a block in the diagram, a line above the instruction box says
+<h2 id="what-a-change-may-touch">What a change may touch</h2>
+<p>Helmsman edits what you have in focus and nothing else: the file open
+in the Code tab, by default. When you select lines in the Code tab or
+pick a block in the diagram, a line above the instruction box says
 so:</p>
 <ul>
 <li><strong>Editing: lines 12–30 of main.st</strong>: the lines you
@@ -198,20 +198,19 @@ example open and press <strong>From a spec…</strong>. A window opens
 with a box to paste into and <strong>Add file…</strong> for
 <code>.md</code> and <code>.txt</code> files (up to eight). The window
 lists each file with its size and a × to take it out, and shows the
-total against the most one request takes (120 KiB), because the Agent's
-answer and a second try travel in the same request. A file that is
-empty, is not UTF-8 text, or holds control characters is refused with
-the reason and nothing of it is changed. Press
-<strong>Build</strong>.</p>
-<p>The Agent reads the specification, finds the inputs and outputs,
-names them, writes the program and one check for each requirement it can
-test. Each check runs against the program on a copy, with the same
-second tries as any instruction. What it comes back with is a draft on a
-review screen: the project's name, one row for each input and output
-(its type and what it is, from the comment on its declaration), one row
-for each requirement with <strong>passed</strong> or <strong>not tested
+total against the most one request takes (120 KiB), because the answer
+and a second try travel in the same request. A file that is empty, is
+not UTF-8 text, or holds control characters is refused with the reason
+and nothing of it is changed. Press <strong>Build</strong>.</p>
+<p>Helmsman reads the specification, finds the inputs and outputs, names
+them, writes the program and one check for each requirement it can test.
+Each check runs against the program on a copy, with the same second
+tries as any instruction. What it comes back with is a draft on a review
+screen: the project's name, one row for each input and output (its type
+and what it is, from the comment on its declaration), one row for each
+requirement with <strong>passed</strong> or <strong>not tested
 yet</strong>, then the requirements the specification states that have
-no check, the Agent's reason and anything that did not pass. Nothing is
+no check, Helmsman's reason and anything that did not pass. Nothing is
 made until <strong>Accept</strong>; <strong>Discard</strong> drops the
 draft.</p>
 <p>Accept makes the project as one version in History, called "From a
@@ -225,15 +224,15 @@ tested yet</strong> with the empty test, and the reason it failed is in
 its tooltip. Deploy runs it as for any project.</p>
 <h3 id="from-a-spec-on-a-box">From a spec on a box</h3>
 <p>On a box, sign in as an engineer and press <strong>From a
-spec…</strong> in the Agent tab, with a project open or not; a spec
+spec…</strong> in the Describe tab, with a project open or not; a spec
 always makes a new project. The window also takes <code>.pdf</code>
-files. A PDF is kept on the box and the Agent reads it there, so a
+files. A PDF is kept on the box and Helmsman reads it there, so a
 scanned manual or a datasheet can be part of the specification. A box
 takes a PDF of at most 2 MiB, five PDFs in a conversation, and about 3.5
 MiB in all (a PDF counts a third more than its size), with room kept for
-the Agent's answer and a second try. The window shows each document with
-its size and the totals against these. The box says so beside a PDF it
-does not keep, and then nothing is sent to the Agent.</p>
+the answer and a second try. The window shows each document with its
+size and the totals against these. The box says so beside a PDF it does
+not keep, and then nothing is sent to Helmsman.</p>
 <p>The review is the same. Accept sends the whole project to the box in
 one request. A name the box already has is refused beside the name field
 and nothing is written. A PDF is not kept in the project, because a
@@ -269,7 +268,7 @@ is too large for the playground, and a smaller machine, or one part of
 it, fits.</p>
 <p>The design comes back with a card: how many parts, requirements and
 build steps it holds, its one-sentence summary, and anything that stops
-the Agent building from it (a step that names a requirement the design
+Helmsman building from it (a step that names a requirement the design
 does not have, a requirement no step covers, a section missing).
 <strong>Read the design</strong> opens it one section at a time:
 Machine, Signals, Parts, Faults, Requirements, Build order and Open
@@ -283,7 +282,7 @@ so Keep makes a copy of the open project, as the box holds it, with
 <code>design.md</code> in it, in one request; save your edits first. The
 Describe tab then shows this project's design and <strong>Build steps 1
 to 6</strong>.</p>
-<p>Build hands the design's build order to the Agent a few steps at a
+<p>Build hands the design's build order to Helmsman a few steps at a
 time. Each step is asked for with the design's own text: the step, the
 signal table, the parts it names and the requirements it must pass.
 Anything collected with <strong>Chat about this</strong> goes with every
@@ -294,21 +293,21 @@ split, because a smaller step would lose the parts and requirements it
 names. The next press builds the next batch, until every step is built.
 A design of 19 steps is built in four batches.</p>
 <h2 id="in-the-simulation">In the simulation</h2>
-<p>In the playground the Agent is free to try during the early release,
-with no key and no account. What you type is sent to a hosted model
-through our relay, so leave out anything confidential. The relay keeps
-no instruction and no answer; it counts requests so that misuse can be
-stopped. The free chat runs on a small daily allowance shared by
-everyone who tries the playground. When that is used up the tab says so,
-and it opens again by itself, usually within a day. The editor, the
-diagram and the simulation work without it.</p>
-<p>With a built-in example open (they are read-only), the program the
-Agent writes becomes a project of its own: the first time, it asks what
-the program is called, and later new programs land in the same project
-as <code>main.st</code>, the one before kept beside it as
+<p>In the playground describing a change is free to try, with no key and
+no account. What you type is sent to a hosted model through our relay,
+so leave out anything confidential. The relay keeps no instruction and
+no answer; it counts requests so that misuse can be stopped. The free
+chat runs on a small daily allowance shared by everyone who tries the
+playground. When that is used up the tab says so, and it opens again by
+itself, usually within a day. The editor, the diagram and the simulation
+work without it.</p>
+<p>With a built-in example open (they are read-only), the program
+Helmsman writes becomes a project of its own: the first time, it asks
+what the program is called, and later new programs land in the same
+project as <code>main.st</code>, the one before kept beside it as
 <code>v1.st</code>, <code>v2.st</code> and so on.</p>
 <h2 id="on-a-box">On a box</h2>
-<p>On a box the Agent goes through the box's relay, which holds the key,
+<p>On a box Helmsman goes through the box's relay, which holds the key,
 so no box and no browser holds it. The tab works the same way: sign in
 as an engineer, open a program file, type the instruction and press
 <strong>Send</strong> or <kbd>Enter</kbd> (<kbd>Shift</kbd>
@@ -316,8 +315,9 @@ as an engineer, open a program file, type the instruction and press
 The checked change is saved on the box as a revision with its History
 entry, by you, and <strong>Undo</strong> asks the box to restore the
 revision before it. The dot beside the tab's heading says whether the
-agent is online (green), offline (red) or not heard from yet (grey).</p>
-<p>If the agent stores a <strong>proposal</strong> for review instead of
+answer service is online (green), offline (red) or not heard from yet
+(grey).</p>
+<p>If Helmsman stores a <strong>proposal</strong> for review instead of
 sending the file back, the file is not touched and the tab offers
 <strong>Review</strong> to open it on the Proposals screen, where an
 approver signs it off under the box's policy.</p>
@@ -340,26 +340,27 @@ filed anywhere.</p>
 <p>What comes back depends on what you asked:</p>
 <ul>
 <li>A report of trouble ("the conveyor stopped, the lamp is red") gets
-<strong>What is likely wrong</strong>, the Agent's diagnosis from the
+<strong>What is likely wrong</strong>, Helmsman's diagnosis from the
 box's messages and devices, and <strong>Issue to report it</strong>, a
 Markdown issue that carries your words and the box's details.
 <strong>Copy</strong> takes the whole issue, to paste into a new GitHub
-issue or to give to another agent.</li>
+issue or to give to an AI assistant.</li>
 <li>A question about how things work ("how do I load a program?") gets
 <strong>How to do it</strong>, an answer written from these help pages,
 with the pages it came from linked under <strong>Read more</strong>. No
 issue is written.</li>
 </ul>
-<p>When the agent cannot be reached (the box has no relay, the relay is
-offline, or the agent service does not offer help yet), the box writes
-the issue by itself from your words and its details, and a line above it
-says why there is no diagnosis. For a question it also lists the help
-sections whose headings match it, under <strong>These help pages may
-answer it</strong>. The picture above shows this case.</p>
-<p><strong>Stop</strong>, the red square shown while the Agent is
+<p>When the answer service cannot be reached (the box has no relay, the
+relay is offline, or the answer service does not offer help yet), the
+box writes the issue by itself from your words and its details, and a
+line above it says why there is no diagnosis. For a question it also
+lists the help sections whose headings match it, under <strong>These
+help pages may answer it</strong>. The picture above shows this
+case.</p>
+<p><strong>Stop</strong>, the red square shown while Helmsman is
 working, stops waiting for the answer.</p>
 <h2 id="what-it-will-not-do">What it will not do</h2>
-<p>The Agent changes the open file; it never deploys. It cannot force an
+<p>Helmsman changes the open file; it never deploys. It cannot force an
 input, change the I/O map on a box, or approve anything. Its code is
 checked like yours: an error is marked, a deploy that does not compile
 is refused.</p>

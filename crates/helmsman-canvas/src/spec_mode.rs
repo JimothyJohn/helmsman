@@ -543,7 +543,7 @@ impl Spec {
         let size = self.size();
         (size > MAX_SPEC).then(|| {
             format!(
-                "The specification is {} KiB and one request takes at most {} KiB: the Agent's answer and a retry go in the same request. Remove a file or shorten it.",
+                "The specification is {} KiB and one request takes at most {} KiB: the answer and a retry go in the same request. Remove a file or shorten it.",
                 size.div_ceil(1024),
                 MAX_SPEC / 1024
             )
@@ -565,7 +565,7 @@ impl Spec {
         let chars = self.body().chars().count();
         if chars + BOX_FIXED > BOX_MESSAGE {
             return Some(format!(
-                "The text is {} characters and one message to the agent on this box takes at most {} with the rules beside it. Remove a file or shorten it.",
+                "The text is {} characters and one message on this box takes at most {} with the rules beside it. Remove a file or shorten it.",
                 chars,
                 BOX_MESSAGE - BOX_FIXED
             ));
@@ -583,7 +583,7 @@ impl Spec {
                 key: "spec total",
                 text: format!("{} of {} used", kib(used), kib(MAX_SPEC)),
                 over: used > MAX_SPEC,
-                tip: "The specification as the request carries it, against what one request takes with the Agent's answer and a retry beside it.".into(),
+                tip: "The specification as the request carries it, against what one request takes with the answer and a retry beside it.".into(),
             }];
         }
         let chars = self.body().chars().count();
@@ -592,7 +592,7 @@ impl Spec {
             key: "spec total",
             text: format!("Text {chars} of {room} characters"),
             over: chars > room,
-            tip: "The text of the specification as one message to the agent on this box takes it: at most 200 000 characters with the rules beside it.".into(),
+            tip: "The text of the specification as one message on this box takes it: at most 200 000 characters with the rules beside it.".into(),
         }];
         if !self.pdfs.is_empty() {
             let used = self.history();
@@ -605,7 +605,7 @@ impl Spec {
                     mib(BOX_HISTORY)
                 ),
                 over: used > BOX_HISTORY || self.pdfs.len() > BOX_PDFS,
-                tip: "A conversation on a box carries at most 5 PDFs and 3.5 MiB. A PDF counts as base64, a third more than its size, and room is kept for the Agent's answer and a retry.".into(),
+                tip: "A conversation on a box carries at most 5 PDFs and 3.5 MiB. A PDF counts as base64, a third more than its size, and room is kept for the answer and a retry.".into(),
             });
         }
         out
@@ -930,7 +930,7 @@ pub fn spec_md_with(docs: &[Doc], pdfs: &[PdfRecord]) -> String {
     for p in pdfs {
         let _ = write!(
             s,
-            "# {}\n\nA PDF of {} bytes, SHA-256 {}. The Agent read it while the project was made; the file itself is not kept in the project.\n\n",
+            "# {}\n\nA PDF of {} bytes, SHA-256 {}. It was read while the project was made; the file itself is not kept in the project.\n\n",
             p.name, p.size, p.sha256
         );
     }
@@ -1005,7 +1005,7 @@ pub fn form_ui(
         let t = crate::theme::theme(ui);
         ui.set_width(width);
         ui.label(RichText::new("From a spec").strong().size(size))
-            .tip("Paste a scope of work or product documentation, or add .md and .txt files (and PDFs, on a box). The Agent finds the inputs and outputs, names them, writes the program and a test for each requirement it can check.");
+            .tip("Paste a scope of work or product documentation, or add .md and .txt files (and PDFs, on a box). Helmsman finds the inputs and outputs, names them, writes the program and a test for each requirement it can check.");
         ui.add_space(6.0);
         egui::ScrollArea::vertical()
             .id_salt("spec-scroll")
@@ -1019,7 +1019,7 @@ pub fn form_ui(
                             .desired_rows(8)
                             .desired_width(f32::INFINITY),
                     )
-                    .tip("The specification, as text. Everything here and in the added files goes to the Agent as data to read.");
+                    .tip("The specification, as text. Everything here and in the added files goes to Helmsman as data to read.");
                 chrome.hit("spec text", r.rect.intersect(ui.clip_rect()));
             });
         // The files in a scroll area of their own: a page that is short
@@ -1061,7 +1061,7 @@ pub fn form_ui(
                     .tip(format!("{}: {state}.", p.name));
                 chrome.hit(format!("spec pdf {}", k + 1), r.rect);
                 ui.label(RichText::new(format!("PDF {}", kib(p.bytes.len()))).color(t.muted).size(size))
-                    .tip("The file's size. The Agent reads the PDF itself; its pages count against the conversation as base64.");
+                    .tip("The file's size. Helmsman reads the PDF itself; its pages count against the conversation as base64.");
                 let r = ui
                     .add_enabled(!p.sending, egui::Button::new(RichText::new("×").size(size)))
                     .tip("Takes this PDF out of the specification.");
@@ -1073,7 +1073,7 @@ pub fn form_ui(
             if let Some(e) = &p.refused {
                 let r = ui
                     .add(egui::Label::new(RichText::new(e).size(size).color(t.ink(RED))).wrap())
-                    .tip("Why the box did not keep this PDF. Nothing was sent to the Agent.");
+                    .tip("Why the box did not keep this PDF. Nothing was sent.");
                 chrome.hit(format!("spec pdf error {}", k + 1), r.rect);
             }
         }
@@ -1096,7 +1096,7 @@ pub fn form_ui(
             let r = ui
                 .button(RichText::new("Add file…").size(size))
                 .tip(if spec.on_box {
-                    "Adds a .md, .txt or .pdf file to the specification. Up to 8 files and 5 PDFs; a text file with control characters or that is not UTF-8 text is refused. A PDF goes to the box and the Agent reads it there: at most 2 MiB each."
+                    "Adds a .md, .txt or .pdf file to the specification. Up to 8 files and 5 PDFs; a text file with control characters or that is not UTF-8 text is refused. A PDF goes to the box and is read there: at most 2 MiB each."
                 } else {
                     "Adds a .md or .txt file to the specification. Up to 8 files; a file with control characters or that is not UTF-8 text is refused."
                 });
@@ -1117,7 +1117,7 @@ pub fn form_ui(
             let go = ui
                 .add_enabled(why.is_none(), egui::Button::new(RichText::new("Build").strong().size(size)))
                 .tip(why.clone().unwrap_or_else(|| {
-                    "Sends the specification to the Agent. It answers with a draft you review before anything is made.".into()
+                    "Sends the specification. The answer is a draft you review before anything is made.".into()
                 }));
             chrome.hit("spec build", go.rect);
             if go.clicked() {
@@ -1195,7 +1195,7 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
         let green = t.ink(GREEN);
         ui.set_width(width);
         ui.label(RichText::new("Review the draft").strong().size(size))
-            .tip("What the Agent made from the specification. Nothing is made until Accept.");
+            .tip("What Helmsman made from the specification. Nothing is made until Accept.");
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Project").size(size).color(t.muted))
@@ -1224,7 +1224,7 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
                 if let Some(w) = &r.draft.why {
                     let l = ui
                         .add(egui::Label::new(RichText::new(format!("Why: {w}")).size(size)).wrap())
-                        .tip("The Agent's reason for the program, in its words.");
+                        .tip("The reason for the program, as Helmsman gave it.");
                     chrome.hit("spec why", l.rect);
                 }
                 ui.add_space(4.0);
@@ -1280,7 +1280,7 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
                 ui.add_space(4.0);
                 let n = r.draft.tested.len() + r.draft.untested.len();
                 ui.label(RichText::new(format!("Requirements ({n})")).strong().size(size))
-                    .tip("Each requirement the Agent found. A passed one is kept as a requirement test; one whose scenario did not pass, or that has no scenario, is kept as a test with nothing in it yet.");
+                    .tip("Each requirement Helmsman found. A passed one is kept as a requirement test; one whose scenario did not pass, or that has no scenario, is kept as a test with nothing in it yet.");
                 for (k, s) in r.draft.tested.iter().enumerate() {
                     ui.horizontal_wrapped(|ui| {
                         let (word, colour, tip) = if s.passed {
@@ -1294,7 +1294,7 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
                                 "not tested yet",
                                 t.muted,
                                 format!(
-                                    "The Agent's scenario for this requirement did not pass, so the scenario is not kept. The requirement is kept as a test with nothing in it yet, shown as untested and never red. Why the scenario failed: {}",
+                                    "The scenario for this requirement did not pass, so the scenario is not kept. The requirement is kept as a test with nothing in it yet, shown as untested and never red. Why the scenario failed: {}",
                                     s.why
                                 ),
                             )
@@ -1306,7 +1306,7 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
                 }
                 for (k, u) in r.draft.untested.iter().enumerate() {
                     ui.horizontal_wrapped(|ui| {
-                        let tip = "The specification states this but the Agent wrote no scenario for it. It is kept as a test with nothing in it yet, shown as untested and never red.";
+                        let tip = "The specification states this but no scenario was written for it. It is kept as a test with nothing in it yet, shown as untested and never red.";
                         let l = ui.label(RichText::new("untested").size(size).color(t.muted)).tip(tip);
                         chrome.hit(format!("spec untested {}", k + 1), l.rect);
                         ui.label(RichText::new(u).size(size)).tip(tip);
@@ -1317,7 +1317,7 @@ pub fn review_ui(ctx: &egui::Context, chrome: &mut Chrome, r: &mut Review) -> Op
                         .add(
                             egui::Label::new(
                                 RichText::new(format!(
-                                    "{} line(s) of the Agent's list were left out",
+                                    "{} line(s) of the list were left out",
                                     r.draft.left_out
                                 ))
                                 .size(size)

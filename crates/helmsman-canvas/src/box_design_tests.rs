@@ -358,7 +358,7 @@ fn an_operator_a_missing_project_and_a_busy_agent_each_say_why_and_ask_nothing()
     v.instruct.draft = "make the lamp blink".into();
     v.send_instruction(&ctx);
     assert!(v.instruct.busy());
-    assert!(v.design_blocked().unwrap().contains("still working"));
+    assert!(v.design_blocked().unwrap().contains("Still working"));
     v.design.description = "A lamp.".into();
     v.send_design(&ctx);
     assert_eq!(v.design_sent.len(), 0);

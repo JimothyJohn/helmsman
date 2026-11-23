@@ -283,7 +283,7 @@ impl DevicesUi {
             ui.add_space(6.0);
             ui.add(
                 egui::Label::new(
-                    "Type the order number on its label, or its vendor and model, and pick it from the device library. The library says what it is and what its signal means; the program and the agent read that.",
+                    "Type the order number on its label, or its vendor and model, and pick it from the device library. The library says what it is and what its signal means; the program and Helmsman read that.",
                 )
                 .wrap(),
             );

@@ -6,7 +6,7 @@
 //! errors), leaving out every password, PIN and token
 //! (`helmsman-plc`'s `api::help`). The answer is a plain diagnosis and a
 //! Markdown issue with a Copy button ([`crate::messages::copyable`]), to
-//! paste to GitHub or to another agent. Nothing is filed.
+//! paste to GitHub or to an AI assistant. Nothing is filed.
 //!
 //! Free of I/O like [`crate::box_agent`]: the request goes out through
 //! the same transport as a chat turn (`web::ChatHttp`), and the event
@@ -363,7 +363,7 @@ pub fn heading(
         ui.scope(|ui| {
             ui.set_max_width(room.max(40.0));
             ui.add(egui::Label::new(RichText::new(mode.title()).strong().color(t.fg)).truncate())
-                .tip("What the Agent does here. The toggle at the right switches it.");
+                .tip("What Helmsman does here. The toggle at the right switches it.");
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -372,13 +372,13 @@ pub fn heading(
                     Mode::Help,
                     Icon::Help,
                     "agent mode help",
-                    "Get help: say what went wrong, or ask how to do something. The Agent looks at this box's messages and devices, tells you what is likely wrong and writes an issue you can copy to report it, or answers your question from the help pages.",
+                    "Get help: say what went wrong, or ask how to do something. Helmsman looks at this box's messages and devices, tells you what is likely wrong and writes an issue you can copy to report it, or answers your question from the help pages.",
                 ),
                 (
                     Mode::Code,
                     Icon::Code,
                     "agent mode code",
-                    "Change the program: tell the Agent what it should do. It changes the open file and checks the change before it is written.",
+                    "Change the program: say what it should do. Helmsman changes the open file and checks the change before it is written.",
                 ),
             ] {
                 let r = glyphs::button_sized(ui, icon, glyphs::ROW, true, *mode == m, tip);
@@ -423,7 +423,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
         } else {
             let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true).tip(
                 why_not.clone().unwrap_or_else(|| {
-                    "Ask for help: sends what you wrote and the box's details to the Agent. Nothing is changed and nothing is filed."
+                    "Ask for help: sends what you wrote and the box's details for a diagnosis. Nothing is changed and nothing is filed."
                         .to_string()
                 }),
             );
@@ -440,7 +440,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
             ui.horizontal_wrapped(|ui| {
                 ui.spinner();
                 let r = ui
-                    .label(RichText::new("The Agent is looking at the box…").color(t.muted))
+                    .label(RichText::new("Looking at the box…").color(t.muted))
                     .tip("It reads the box's messages and devices. Nothing on the box changes.");
                 chrome.hit("help working", r.rect);
             });
@@ -457,7 +457,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
             if let Some(a) = answer {
                 let r = ui
                     .label(RichText::new("How to do it").strong().color(t.fg))
-                    .tip("The Agent's answer, from the help pages. Nothing on the box changed.");
+                    .tip("The answer, from the help pages. Nothing on the box changed.");
                 chrome.hit("help answer title", r.rect);
                 crate::messages::copyable(ui, chrome, "help answer", &a.text, t.fg);
                 page_links(ui, chrome, "Read more", &a.pages);
@@ -476,11 +476,11 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                 } else {
                     let r = ui
                         .label(RichText::new("What is likely wrong").strong().color(t.fg))
-                        .tip("The Agent's diagnosis, from the box's messages and devices.");
+                        .tip("The diagnosis, from the box's messages and devices.");
                     chrome.hit("help diagnosis title", r.rect);
                     let r = ui
                         .add(egui::Label::new(RichText::new(&issue.diagnosis).color(t.fg)).wrap())
-                        .tip("The Agent's diagnosis, from the box's messages and devices.");
+                        .tip("The diagnosis, from the box's messages and devices.");
                     chrome.hit("help diagnosis", r.rect);
                 }
                 page_links(ui, chrome, "These help pages may answer it", pages);
@@ -490,11 +490,11 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                 ui.horizontal_wrapped(|ui| {
                     let r = ui
                         .label(RichText::new("Issue to report it").strong().color(t.fg))
-                        .tip("Copy it and paste it into a new GitHub issue, or give it to another agent. Nothing was filed.");
+                        .tip("Copy it and paste it into a new GitHub issue, or give it to an AI assistant. Nothing was filed.");
                     chrome.hit("help issue title", r.rect);
                     let b = ui
                         .button("Copy")
-                        .tip("Copies the whole issue as Markdown, to paste into a new GitHub issue or to another agent.");
+                        .tip("Copies the whole issue as Markdown, to paste into a new GitHub issue or to an AI assistant.");
                     chrome.hit("help issue copy", b.rect);
                     if b.clicked() {
                         ui.ctx().copy_text(issue.markdown.clone());
@@ -706,7 +706,7 @@ mod tests {
             text: stream(
                 "box",
                 "",
-                Some("Help is not available from the agent service yet"),
+                Some("Help is not available from the answer service yet"),
             ),
         });
         h.apply(Incoming::End { seq: 1 });
@@ -721,7 +721,7 @@ mod tests {
         assert!(!issue.by_agent && issue.diagnosis.is_empty());
         assert_eq!(
             why.as_deref(),
-            Some("Help is not available from the agent service yet")
+            Some("Help is not available from the answer service yet")
         );
     }
 

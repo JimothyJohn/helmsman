@@ -1357,7 +1357,7 @@ pub fn record(run: &Run, file: &str, why: Option<&str>, status: &str, check: &Ch
     }
     let words = prose(answer);
     if !words.trim().is_empty() {
-        r.push_str("\nThe Agent's answer, without its code:\n");
+        r.push_str("\nThe answer, without its code:\n");
         r.push_str(words.trim());
         r.push('\n');
     }
