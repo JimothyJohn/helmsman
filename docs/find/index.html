@@ -72,12 +72,14 @@ h1{font:clamp(34px,6.4vw,64px)/.95 var(--stencil);letter-spacing:.03em;text-tran
 main .wrap{padding-top:26px;padding-bottom:72px}
 .bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:0 0 22px}
 .count{font:13px var(--mono);color:var(--muted);margin-right:auto}
-.vendors{display:flex;flex-wrap:wrap;gap:6px}
-.vendors button{font:600 12px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;padding:8px 10px;background:transparent;color:var(--muted);border:1px solid var(--rule);cursor:pointer;border-radius:0}
-.vendors button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
-.vendors button:hover{color:var(--fg);border-color:var(--fg)}
-.vendors button[aria-pressed="true"]:hover{color:var(--bg)}
-.vendors button span{font-weight:400;opacity:.7;margin-left:4px}
+.vendors,.cats{display:flex;flex-wrap:wrap;gap:6px}
+.cats{margin:0 0 8px}
+.what{font:13px/1.5 var(--mono);color:var(--muted);margin:0 0 18px;min-height:1.5em}
+.vendors button,.cats button{font:600 12px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;padding:8px 10px;background:transparent;color:var(--muted);border:1px solid var(--rule);cursor:pointer;border-radius:0}
+.vendors button[aria-pressed="true"],.cats button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.vendors button:hover,.cats button:hover{color:var(--fg);border-color:var(--fg)}
+.vendors button[aria-pressed="true"]:hover,.cats button[aria-pressed="true"]:hover{color:var(--bg)}
+.vendors button span,.cats button span{font-weight:400;opacity:.7;margin-left:4px}
 h2.shelf{display:flex;align-items:baseline;gap:12px;font:700 15px/1 var(--cond);letter-spacing:.3em;text-transform:uppercase;margin:34px 0 14px;padding-top:12px;border-top:4px solid var(--rule-strong)}
 h2.shelf:first-child{margin-top:0}
 h2.shelf span{font:12px var(--mono);letter-spacing:0;text-transform:none;color:var(--muted)}
@@ -133,6 +135,8 @@ h2.shelf span{font:12px var(--mono);letter-spacing:0;text-transform:none;color:v
 </div></section>
 
 <main><div class="wrap">
+  <div class="cats" id="cats" role="group" aria-label="Show one kind of device" hidden></div>
+  <p class="what" id="what" hidden></p>
   <div class="bar">
     <span class="count" id="count" aria-live="polite">Loading the library…</span>
     <div class="vendors" id="vendors" role="group" aria-label="Show one vendor"></div>
@@ -173,7 +177,7 @@ function clean(d){
   const protos=d.protocols&&typeof d.protocols==='object'?Object.keys(d.protocols).filter(k=>PROTO[k]):[];
   if(iol&&iol.v!==null)protos.push('iolink');
   const products=Array.isArray(d.products)?d.products.slice(0,128).map(p=>str(p,120)).filter(Boolean):[];
-  const o={folder:d.folder,vendor:d.vendor,model:d.model,kind:str(d.kind,40)||'other',channels:str(d.channels,120),
+  const o={folder:d.folder,vendor:d.vendor,model:d.model,kind:str(d.kind,40)||'other',cat:str(d.category,40),channels:str(d.channels,120),
     checked:/^\d{4}-\d{2}-\d{2}$/.test(d.checked_on)?d.checked_on:'',enip,iol,photo:ph,protos,products};
   // What a label says, squeezed: "ioLogik E1213" and "IOLOGIK-E1213" are one key.
   o.keys=[o.model,...products,...o.model.split(/[,/()]+/)].map(norm).filter(k=>k.length>=3);
@@ -210,7 +214,7 @@ function score(o,q,qn,words,id){
 }
 
 /* ---- the page ---- */
-let all=[],vendor='',photosShown=0;
+let all=[],vendor='',cat='',cats=[],photosShown=0;
 const q=$('#q');
 function art(kind){
   // Drawn when a card has no picture: a remote-I/O block or a sensor barrel.
@@ -254,18 +258,22 @@ function draw(){
   const best=asking?Math.max(0,...all.map(o=>o.s)):0;
   // A match shows the matches; no match keeps the whole shelf, to look for it by eye.
   const floor=best>=2?2:1;
-  const visible=all.filter(o=>(!vendor||o.vendor===vendor)&&(best===0||o.s>=floor));
+  let visible=all.filter(o=>(!cat||o.cat===cat)&&(!vendor||o.vendor===vendor)&&(best===0||o.s>=floor));
+  // A question is asked of the whole library: when the shelf in view hides every match, show all of it.
+  if(best>0&&!visible.length&&(cat||vendor)){cat='';vendor='';categories();vendors();visible=all.filter(o=>o.s>=floor)}
+  const kind=cats.find(c=>c.id===cat);
   const shelves=$('#shelves');shelves.textContent='';
   const groups=new Map();visible.forEach(o=>{if(!groups.has(o.vendor))groups.set(o.vendor,[]);groups.get(o.vendor).push(o)});
   groups.forEach((items,name)=>{
     const h=el('h2','shelf',name);h.appendChild(el('span',null,items.length===1?'1 device':items.length+' devices'));shelves.appendChild(h);
     const g=el('div','grid');items.forEach(o=>{o.card.classList.toggle('hit',asking&&o.s===3);o.card.classList.toggle('near',asking&&o.s>0&&o.s<3);g.appendChild(o.card)});shelves.appendChild(g);
   });
-  if(!visible.length)shelves.appendChild(el('p','none','No '+vendor+' device matches that.'));
+  if(!visible.length)shelves.appendChild(el('p','none','No '+[vendor,kind?'device under '+kind.label:'device'].filter(Boolean).join(' ')+' matches that.'));
   const proven=all.filter(o=>o.checked).length;
-  $('#count').textContent=asking&&best>0?visible.length+' of '+all.length+' devices':all.length+' devices from '+new Set(all.map(o=>o.vendor)).size+' vendors · '+proven+' checked on a unit';
+  $('#count').textContent=(asking&&best>0)||cat||vendor?visible.length+' of '+all.length+' devices':all.length+' devices from '+new Set(all.map(o=>o.vendor)).size+' vendors · '+proven+' checked on a unit';
+  const what=$('#what');what.hidden=!cats.length;what.textContent=kind?kind.what:cats.length?'Pick a kind of device, or type the model on yours.':'';
   answer(asking,best,raw,id,all.filter(o=>best>0&&o.s===best));
-  try{const h=raw?'#q='+encodeURIComponent(raw):'';if(location.hash!==h)history.replaceState(null,'',h||location.pathname)}catch(e){}
+  try{const h=[cat&&'cat='+cat,raw&&'q='+encodeURIComponent(raw)].filter(Boolean).join('&');if(location.hash!==(h&&'#'+h))history.replaceState(null,'',h?'#'+h:location.pathname)}catch(e){}
 }
 function answer(asking,best,raw,id,top){
   const box=$('#answer'),say=$('#say'),acts=$('#acts');
@@ -300,8 +308,20 @@ function answer(asking,best,raw,id,top){
   btn('Name it',issue('New device: '+raw.slice(0,80),'Vendor:\nModel: '+raw.slice(0,80)+'\nProduct page:\nProtocols (EtherNet/IP, Modbus TCP, other):\nI have a unit and can run a read-only test: yes / no\nI could send a unit to the bench: yes / no\n'),best===0);
   btn('Send one, get paid',issue('Unit offer: '+raw.slice(0,80),'Device (vendor and model): '+raw.slice(0,80)+'\nFirmware, if known:\nShips from (country):\nPowers up and worked when last used: yes / no\nWant it back after testing: yes / no\n\nNotes:\n\n(No address or payment details here. Those are arranged in private after a yes.)\n'));
 }
+function chip(box,label,n,on,pick){
+  const x=el('button',null,label);x.type='button';if(n)x.appendChild(el('span',null,String(n)));x.setAttribute('aria-pressed',String(on));
+  x.addEventListener('click',pick);box.appendChild(x);
+}
+function categories(){
+  const box=$('#cats'),counts=new Map();all.forEach(o=>counts.set(o.cat,(counts.get(o.cat)||0)+1));
+  box.textContent='';box.hidden=!cats.length;if(!cats.length)return;
+  const pick=id=>()=>{cat=id;categories();vendors();draw()};
+  chip(box,'All',0,cat==='',pick(''));
+  cats.forEach(c=>{if(counts.get(c.id))chip(box,c.label,counts.get(c.id),cat===c.id,pick(c.id))});
+}
 function vendors(){
-  const box=$('#vendors'),counts=new Map();all.forEach(o=>counts.set(o.vendor,(counts.get(o.vendor)||0)+1));
+  const box=$('#vendors'),counts=new Map();all.forEach(o=>{if(!cat||o.cat===cat)counts.set(o.vendor,(counts.get(o.vendor)||0)+1)});
+  box.textContent='';if(vendor&&!counts.has(vendor))vendor='';
   const b=(name,label,n)=>{const x=el('button',null,label);x.type='button';if(n)x.appendChild(el('span',null,String(n)));x.setAttribute('aria-pressed',String(vendor===name));
     x.addEventListener('click',()=>{vendor=name;box.querySelectorAll('button').forEach(y=>y.setAttribute('aria-pressed',String(y===x)));draw()});box.appendChild(x)};
   b('','All',0);[...counts.keys()].forEach(v=>b(v,v,counts.get(v)));
@@ -314,12 +334,16 @@ load('main').catch(()=>load('dev')).then(ix=>{
   // Vendors spell themselves two ways (TURCK, Turck): one shelf each, by the folder.
   const shelf=new Map();
   all=ix.devices.slice(0,2000).map(clean).filter(Boolean);
+  // The kinds of device the library sorts itself into; an older index has none and the row stays away.
+  cats=(Array.isArray(ix.categories)?ix.categories.slice(0,40):[]).map(c=>c&&typeof c==='object'&&/^[a-z0-9-]{1,40}$/.test(c.id)&&str(c.label,80)?{id:c.id,label:c.label,what:str(c.what,200)}:null).filter(Boolean);
+  all.forEach(o=>{if(!cats.some(c=>c.id===o.cat))o.cat=''});
   all.forEach(o=>{const k=o.folder.split('/')[1];if(!shelf.has(k))shelf.set(k,o.vendor);o.vendor=shelf.get(k)});
   all.sort((a,b)=>(a.vendor+' '+a.model).localeCompare(b.vendor+' '+b.model,undefined,{numeric:true,sensitivity:'base'}));
   all.forEach(card);
-  vendors();
-  let h='';try{h=decodeURIComponent((location.hash.match(/^#q=(.*)$/)||[])[1]||'')}catch(e){}
+  let h='';try{const hp=new Map(location.hash.slice(1).split('&').map(kv=>{const i=kv.indexOf('=');return i<0?[kv,'']:[kv.slice(0,i),kv.slice(i+1)]}));
+    h=decodeURIComponent(hp.get('q')||'');const hc=hp.get('cat')||'';if(cats.some(c=>c.id===hc)&&all.some(o=>o.cat===hc))cat=hc}catch(e){}
   if(h)q.value=h.slice(0,400);
+  categories();vendors();
   $('#try').hidden=false;
   q.addEventListener('input',draw);
   draw();
