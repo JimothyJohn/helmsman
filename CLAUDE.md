@@ -101,7 +101,7 @@ what it should do. See it work." (Nick, 2026-11-21): describe, visualize,
 approve. **Never "agent" or "agentic" on the marketing pages** (home,
 programming/, skipper/, security/, find/, library/, the datasheet): say
 Helmsman, the machine, or what happens. /help/ follows the UI, whose panel
-is still labelled Agent. **No status, roadmap, forecasts or "early
+is labelled Describe, with no "Agent" in it (Nick, 2026-11-22). **No status, roadmap, forecasts or "early
 release"** anywhere a visitor reads, and no dollar amount on the device
 bounty ("get connected, get paid"). Don't feature the relay. The edge
 node is the **Skipper**. The site is a hub (docs/index.html) with spokes,

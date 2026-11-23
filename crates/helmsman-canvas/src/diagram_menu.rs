@@ -241,7 +241,7 @@ impl Menu {
                             if chat_full {
                                 crate::chat_about::FULL
                             } else {
-                                "Puts this block and its statement in the Agent tab, with what drives it and what it drives. Nothing is sent until you type what to ask and send it."
+                                "Puts this block and its statement in the Describe tab, with what drives it and what it drives. Nothing is sent until you type what to ask and send it."
                             },
                         )
                     {

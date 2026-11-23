@@ -686,7 +686,7 @@ impl BoxView {
         }
         if self.agent_files().is_none() {
             return Some(
-                "Open a program file first: the Agent changes the file open in the Code tab.".into(),
+                "Open a program file first: the change goes into the file open in the Code tab.".into(),
             );
         }
         None
@@ -1692,6 +1692,7 @@ impl BoxView {
             // `agent-wait-questions`: a box after `agent-progress-box`).
             card: None,
             big: None,
+            io: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
