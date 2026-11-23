@@ -292,6 +292,9 @@ pub struct PlaygroundView {
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
+    /// The program file last open in the editor, with its project: the
+    /// Agent's scope while a test, a map or a settings file is open.
+    last_program: Option<(String, String)>,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -390,6 +393,7 @@ impl PlaygroundView {
             watching: crate::watch::Watching::default(),
             noticed: None,
             selection: None,
+            last_program: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -2113,17 +2117,37 @@ impl PlaygroundView {
         dropped
     }
 
-    /// The ST file the Agent's scope starts from: the open one, or the
-    /// project's first program file when a map, a settings file or a
-    /// requirement test is open. A test is never the scope: it goes with
-    /// every instruction as the program's check, and with one open the
-    /// Agent was told the program was out of its reach (2026-11-22).
+    /// A file an instruction may change: ST, and not a requirement test.
+    fn is_program(file: &str) -> bool {
+        crate::sim_projects::is_st(file) && !helmsman_iec::spec::is_test(file)
+    }
+
+    /// The ST file the Agent's scope starts from: the open one, or, when
+    /// a map, a settings file or a requirement test is open, the program
+    /// last open in this project, else its first program file. A test is
+    /// never the scope: it goes with every instruction as the program's
+    /// check, and with one open the Agent was told the program was out of
+    /// its reach (2026-11-22). The first program by name would be the
+    /// wrong one as often as not in a project with several.
     fn scope_file(&self) -> Option<String> {
-        let program = |f: &String| crate::sim_projects::is_st(f) && !helmsman_iec::spec::is_test(f);
-        if program(&self.proj.current) && self.proj.files.contains_key(&self.proj.current) {
+        let here = |f: &str| Self::is_program(f) && self.proj.files.contains_key(f);
+        if here(&self.proj.current) {
             return Some(self.proj.current.clone());
         }
-        self.proj.files.keys().find(|f| program(f)).cloned()
+        if let Some((project, file)) = &self.last_program
+            && *project == self.proj.open
+            && here(file)
+        {
+            return Some(file.clone());
+        }
+        self.proj.files.keys().find(|f| Self::is_program(f)).cloned()
+    }
+
+    /// Remembers the program in the editor, for [`Self::scope_file`].
+    fn note_program(&mut self) {
+        if Self::is_program(&self.proj.current) && self.proj.files.contains_key(&self.proj.current) {
+            self.last_program = Some((self.proj.open.clone(), self.proj.current.clone()));
+        }
     }
 
     /// Where the paused scan stands, as the files show it: `12` or
@@ -3068,6 +3092,7 @@ impl PlaygroundView {
     }
 
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.note_program();
         self.notice_problems(ctx.input(|i| i.time));
         if !self.proxy_asked {
             self.proxy_asked = true;
@@ -4261,18 +4286,26 @@ impl PlaygroundView {
         true
     }
 
-    /// The Agent tab's scope line (card agent-scoped-edits), only while a
-    /// selection or a pick narrows it: what the next instruction may
-    /// change and which rule gave it, with Whole file.
+    /// The Agent tab's scope line (card agent-scoped-edits): what the next
+    /// instruction may change and which rule gave it. Shown while a
+    /// selection or a pick narrows it, with Whole file, and while the file
+    /// it names is not the one in the editor (a test is open, and the
+    /// instruction changes the program).
     fn scope_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let scope = self.scope();
-        if scope.lines().is_none() {
+        let elsewhere = scope.file().is_some_and(|f| f != self.proj.current);
+        if scope.lines().is_none() && !elsewhere {
             return;
         }
+        let rule = if elsewhere && scope.lines().is_none() {
+            "the program, because the file open in the Code tab is not one an instruction changes"
+        } else {
+            scope.rule()
+        };
         let mut whole = false;
         // Wrapped: a long name in a plain row would widen the panel.
         ui.horizontal_wrapped(|ui| {
-            let r = ui.label(RichText::new(scope.label()).strong()).tip(scope.rule());
+            let r = ui.label(RichText::new(scope.label()).strong()).tip(rule);
             chrome.hit("agent scope", r.rect);
             if scope.lines().is_some() {
                 let b = ui
