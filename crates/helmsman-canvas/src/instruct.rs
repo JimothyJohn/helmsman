@@ -361,6 +361,9 @@ impl Outcome {
 pub struct Instruct {
     /// The instruction box.
     pub draft: String,
+    /// The prompt the arrows last put in the box ([`Self::show_step`]):
+    /// while the box still holds it, the next step may replace it.
+    pub stepped: Option<String>,
     pub run: Option<Run>,
     pub outcome: Option<Outcome>,
     /// The Agent asked answers with the lines that change
@@ -1197,6 +1200,36 @@ impl Instruct {
         );
         o.why = Some(format!("{old} is {new} everywhere in the project"));
         o.undo = undo;
+        self.outcome = Some(o);
+    }
+
+    /// The tab as it stood for a revision the arrows (or History) show
+    /// (Nick, 2026-11-23: the arrows restore both the prompt and its
+    /// output): the instruction of its History `page` in the box and what
+    /// came of it under it; a revision that was a plain save says `what`.
+    /// A draft the engineer typed since is theirs and stays.
+    pub fn show_step(&mut self, page: Option<&str>, what: &str) {
+        let field = |key: &str| {
+            page.and_then(|p| p.lines().find_map(|l| l.strip_prefix(key)))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        let prompt = field(INSTRUCTION).unwrap_or_default();
+        if self.draft.trim().is_empty() || self.stepped.as_deref() == Some(self.draft.as_str()) {
+            self.draft.clone_from(&prompt);
+            self.stepped = Some(prompt);
+        }
+        let mut o = Outcome::new(
+            Kind::Applied,
+            field("Result: ").unwrap_or_else(|| {
+                let w = sentence(&clean(what, MAX_REASON));
+                let mut c = w.chars();
+                c.next()
+                    .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+            }),
+        );
+        o.why = field("Why: ");
         self.outcome = Some(o);
     }
 

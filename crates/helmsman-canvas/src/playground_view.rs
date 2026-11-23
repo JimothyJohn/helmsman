@@ -162,6 +162,8 @@ pub struct PlaygroundView {
     pub agent_change: Option<crate::agent_marks::AgentChange>,
     /// The revision the History tab runs, when it is not the newest.
     pub history_at: Option<u32>,
+    /// A revision was just put on show: the next watch logs nothing.
+    quiet_watch: bool,
     /// Its shared default layout (the project's) and this browser's
     /// tweaks (`arrange.rs`).
     pub layers: Layers,
@@ -335,6 +337,7 @@ impl PlaygroundView {
             viewer: None,
             agent_change: None,
             history_at: None,
+            quiet_watch: false,
             layers: Layers::load(tweaks),
             fresh: false,
             dmenu: crate::diagram_menu::Menu::default(),
@@ -2764,6 +2767,10 @@ impl PlaygroundView {
             crate::agent_marks::AgentChange::new(&self.proj.open, &file, &before, after, baseline)
         });
         self.history_at = (!newest).then_some(n);
+        // The tab as it stood for this step, and nothing of it in the
+        // Messages: what an old version's compile or run says is not news.
+        self.instruct.show_step(rev.page.as_deref(), &rev.what);
+        self.quiet_watch = true;
     }
 
     /// Undo: the project back to the revision before the Agent's change,
@@ -3333,6 +3340,14 @@ impl PlaygroundView {
     /// errors (as they appear), a fault, a notice, a storage problem,
     /// the program starting or stopping.
     fn watch(&mut self, t: f64) {
+        // Stepping through History changes what compiles and runs: the
+        // watch takes note of it and says nothing.
+        self.log.muted = std::mem::take(&mut self.quiet_watch) || self.history_at.is_some();
+        self.watch_changes(t);
+        self.log.muted = false;
+    }
+
+    fn watch_changes(&mut self, t: f64) {
         let fault = self.session.fault.as_ref().map(ToString::to_string);
         let ended = (self.seen.running == Some(true) && !self.session.running)
             || (fault.is_some() && fault != self.seen.fault)

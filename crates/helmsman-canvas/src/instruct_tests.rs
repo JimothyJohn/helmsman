@@ -1034,3 +1034,52 @@ fn the_canvas_prompts_ask_for_the_nearest_thing_and_never_for_a_bare_refusal() {
         assert!(!p.contains("sentences that say why"), "{p}");
     }
 }
+
+// ---- the arrows through the revisions (Nick, 2026-11-23) ----
+
+/// Stepping back and forward restores the prompt and the output of the
+/// step shown, and writes nothing to the Messages: an old version's
+/// compile errors are not news, and the error count stays.
+#[test]
+fn the_arrows_restore_the_prompt_and_output_of_each_step_and_log_nothing() {
+    let ctx = egui::Context::default();
+    let mut v = mine();
+    // A version that does not compile, saved by hand, between two changes.
+    instruct(&mut v, "comment it", &[&st(&commented())]);
+    let first = v.proj.revisions().last().unwrap().n;
+    v.proj.files.insert("main.st".into(), "PROGRAM lamp\nlamp := ;\nEND_PROGRAM\n".into());
+    v.proj.save_as("a broken save", None);
+    let broken = v.proj.revisions().last().unwrap().n;
+    v.proj.files.insert("main.st".into(), commented());
+    v.proj.save();
+    v.open_project("mine");
+    v.tick(&ctx);
+    let (messages, errors) = (v.log.iter().count(), v.log.errors());
+
+    v.show_revision(broken);
+    v.tick(&ctx);
+    v.tick(&ctx);
+    assert!(!v.session.diag_lines().is_empty(), "the broken version is on show");
+    assert_eq!(v.instruct.draft, "", "a plain save had no prompt");
+    assert_eq!(
+        v.instruct.outcome.as_ref().map(|o| o.status.as_str()),
+        Some("A broken save.")
+    );
+    v.show_revision(first);
+    v.tick(&ctx);
+    assert_eq!(v.instruct.draft, "comment it", "the prompt of that step");
+    let o = v.instruct.outcome.clone().unwrap();
+    assert!(o.status.starts_with("Updated main.st"), "{o:?}");
+    assert_eq!(o.why.as_deref(), Some("it says so."));
+    assert_eq!(
+        (v.log.iter().count(), v.log.errors()),
+        (messages, errors),
+        "stepping wrote nothing: {:?}",
+        v.log.iter().map(|m| m.text.clone()).collect::<Vec<_>>()
+    );
+
+    // What the engineer typed since is theirs: a step leaves it.
+    v.instruct.draft = "now invert it".into();
+    v.show_revision(broken);
+    assert_eq!(v.instruct.draft, "now invert it");
+}
