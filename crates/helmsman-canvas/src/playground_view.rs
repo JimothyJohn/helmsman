@@ -4027,6 +4027,7 @@ impl PlaygroundView {
     /// The signals to trend (outputs, then inputs) and the chart.
     fn trend_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        chrome.hit("trend tab", ui.max_rect());
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
@@ -4039,29 +4040,41 @@ impl PlaygroundView {
             .collect();
         // The heading shares the signals' row: on a line of its own it
         // and the slider left the plot the smallest part of the panel.
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Signals").strong().color(t.muted))
-                .tip(format!(
-                    "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
-                ));
-            for name in &points {
-                let on = self.session.trend.signals.contains(name);
-                let tip = if on {
-                    "On the trend. Click to take it off."
-                } else {
-                    "Click to pin it to the trend."
-                };
-                if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
-                    .tip(tip)
-                    .clicked()
-                {
-                    self.session.trend.toggle(name);
-                }
-            }
-        });
+        // The rows scroll past a quarter of the panel: an Agent's program
+        // has dozens of points, and unbounded their rows took the whole
+        // panel and left the plot no height (Nick, 2026-11-22).
+        let rows_h = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
+        egui::ScrollArea::vertical()
+            .id_salt("pg-trend-signals")
+            .max_height(rows_h)
+            .show(ui, |ui| {
+                // Room for the scroll bar, or the panel grows to fit it.
+                ui.set_max_width(ui.available_width() - 12.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Signals").strong().color(t.muted))
+                        .tip(format!(
+                            "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
+                        ));
+                    for name in &points {
+                        let on = self.session.trend.signals.contains(name);
+                        let tip = if on {
+                            "On the trend. Click to take it off."
+                        } else {
+                            "Click to pin it to the trend."
+                        };
+                        if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
+                            .tip(tip)
+                            .clicked()
+                        {
+                            self.session.trend.toggle(name);
+                        }
+                    }
+                });
+            });
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
         let plot = self.trend_plot(ui, chrome);
+        chrome.hit("trend plot", plot);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
             self.session.trend.move_signal(from, to);
         }
@@ -4463,6 +4476,12 @@ pub fn window_label(ms: u64) -> String {
 
 /// Width of a lane's label column, which is also its drag handle.
 const LANE_HANDLE_W: f32 = 88.0;
+
+/// The Trend tab's signal buttons take at most this share of its height
+/// before they scroll, so the plot keeps the rest.
+const SIGNAL_ROWS_SHARE: f32 = 0.25;
+/// ... and never less than one row of them.
+const SIGNAL_ROWS_MIN: f32 = 34.0;
 
 /// A place in the trend's palette as it is drawn on this page: the brand
 /// colours, as ink on the light page, where the last (white) is the

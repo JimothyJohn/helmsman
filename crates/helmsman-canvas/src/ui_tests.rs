@@ -4236,6 +4236,66 @@ mod simulated {
         assert_eq!(order(&h), [a, b, c]);
     }
 
+    /// Nick, 2026-11-22: after a few Agent changes the trend drew nothing
+    /// but its window slider, running, and a signal clicked on never
+    /// showed. The Agent's programs have far more points than the
+    /// examples, and their buttons wrapped over the whole panel, leaving
+    /// the plot no height. With many points the plot keeps most of the
+    /// panel at its default height and every pinned lane is drawn.
+    #[test]
+    fn a_program_with_many_points_still_leaves_the_trend_room_for_its_lanes() {
+        use std::fmt::Write as _;
+        let mut src = String::from("PROGRAM cell\nVAR_INPUT\n");
+        for k in 0..24 {
+            let _ = writeln!(src, "  station_{k}_part_present : BOOL;");
+        }
+        src.push_str("END_VAR\nVAR_OUTPUT\n");
+        for k in 0..16 {
+            let _ = writeln!(src, "  station_{k}_clamp_valve : BOOL;");
+        }
+        src.push_str("END_VAR\n");
+        for k in 0..16 {
+            let _ = writeln!(src, "station_{k}_clamp_valve := station_{k}_part_present;");
+        }
+        src.push_str("END_PROGRAM\n");
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        {
+            let s = &mut h.app.sim.as_mut().unwrap().session;
+            assert!(s.load(&src), "{:?}", s.diag_lines());
+            s.set_running(true);
+        }
+        h.wait(0.5);
+        let signals = h.app.sim.as_ref().unwrap().session.trend.signals.clone();
+        assert_eq!(signals.len(), 4, "the first four are pinned");
+        let plot = h.rect("trend plot");
+        let panel = h.rect("trend tab");
+        // Unbounded, the rows also grew the panel to twice its height.
+        assert!(
+            panel.height() <= crate::editor::BOTTOM_H,
+            "the panel grew to {} pt",
+            panel.height()
+        );
+        assert!(
+            plot.height() >= panel.height() * 0.4,
+            "the plot has {} pt of the panel's {}",
+            plot.height(),
+            panel.height()
+        );
+        for name in &signals {
+            let lane = h.rect(&format!("trend lane {}", name.to_ascii_lowercase()));
+            assert!(lane.height() >= 20.0, "{name}'s lane is {} pt", lane.height());
+            assert!(
+                lane.bottom() <= panel.bottom() + 0.5,
+                "{name}'s lane is inside the panel"
+            );
+        }
+        let v = h.app.sim.as_ref().unwrap();
+        for name in &signals {
+            assert!(v.session.trend.history.changes(name) >= 1, "{name} records");
+        }
+    }
+
     /// Nick, 2026-11-11: a trend signal's colour is the user's to pick. A
     /// click on a lane's label opens the palette; the swatch clicked is
     /// that signal's colour whichever lane it is in, and the browser
