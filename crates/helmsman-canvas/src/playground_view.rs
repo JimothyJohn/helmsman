@@ -2114,17 +2114,16 @@ impl PlaygroundView {
     }
 
     /// The ST file the Agent's scope starts from: the open one, or the
-    /// project's first program file when a map or settings file is open.
+    /// project's first program file when a map, a settings file or a
+    /// requirement test is open. A test is never the scope: it goes with
+    /// every instruction as the program's check, and with one open the
+    /// Agent was told the program was out of its reach (2026-11-22).
     fn scope_file(&self) -> Option<String> {
-        if crate::sim_projects::is_st(&self.proj.current) && self.proj.files.contains_key(&self.proj.current)
-        {
+        let program = |f: &String| crate::sim_projects::is_st(f) && !helmsman_iec::spec::is_test(f);
+        if program(&self.proj.current) && self.proj.files.contains_key(&self.proj.current) {
             return Some(self.proj.current.clone());
         }
-        self.proj
-            .files
-            .keys()
-            .find(|f| crate::sim_projects::is_st(f))
-            .cloned()
+        self.proj.files.keys().find(|f| program(f)).cloned()
     }
 
     /// Where the paused scan stands, as the files show it: `12` or
