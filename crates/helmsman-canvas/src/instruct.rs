@@ -364,14 +364,16 @@ impl Outcome {
         let mut short = clean(&self.status, LOG_SUMMARY);
         // A refusal's status can be only "Not changed:": say the first
         // reason beside it, and how many more the full text holds.
-        if matches!(self.kind, Kind::Refused | Kind::Failed) {
-            if let Some(first) = self.problems.first() {
-                short = format!("{short} {}", clean(first, LOG_SUMMARY));
-                if self.problems.len() > 1 {
-                    let _ = write!(short, " (+{} more)", self.problems.len() - 1);
-                }
-                short = clean(&short, LOG_SUMMARY);
+        if let Some(first) = self
+            .problems
+            .first()
+            .filter(|_| matches!(self.kind, Kind::Refused | Kind::Failed))
+        {
+            short = format!("{short} {}", clean(first, LOG_SUMMARY));
+            if self.problems.len() > 1 {
+                let _ = write!(short, " (+{} more)", self.problems.len() - 1);
             }
+            short = clean(&short, LOG_SUMMARY);
         }
         (short, full)
     }

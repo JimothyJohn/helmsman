@@ -505,7 +505,7 @@ mod tests {
         assert!(l.is_empty() && l.counts() == [0; 3] && l.errors() == 0);
         assert!(!l.flashing(2.5) && l.alarm(2.5, false).is_none());
         assert!(!l.take_fresh());
-        assert!(l.text().is_empty());
+        assert_eq!(l.text(), "");
         l.error(3.0, "b");
         assert_eq!(l.errors(), 1, "an error after a clear counts again");
         assert!(l.alarm(3.1, false).is_some());
