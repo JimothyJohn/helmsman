@@ -826,7 +826,7 @@ fn turn(setup: &Setup, chat: &mut Chat, ask: &crate::instruct::Ask) -> Result<(S
     let timeouts = Timeouts {
         connect: Duration::from_secs(10),
         idle: Duration::from_secs(300),
-        total: Duration::from_secs(900),
+        total: Duration::from_mins(15),
     };
     let mut cost = 0.0;
     match send(&url, &http, timeouts) {

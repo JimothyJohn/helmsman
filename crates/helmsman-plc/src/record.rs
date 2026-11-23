@@ -54,7 +54,7 @@ impl Default for RecordConfig {
     /// Ten minutes, 4 MiB: about 100 000 changes.
     fn default() -> Self {
         Self {
-            window: Duration::from_secs(10 * 60),
+            window: Duration::from_mins(10),
             max_bytes: 4 << 20,
         }
     }
