@@ -4,6 +4,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
+- [ ] **Local user settings and sign-in: read the proposal and answer its four questions** — docs/decisions/local-user-settings.md. Short version: a box already has local accounts, sessions and a per-person store on the device, so no new sign-in is needed; what is missing is preferences kept on the device (they are per browser today), one Settings window, and a way to make the first account without a shell. The four questions: a setup code or an open first-run page for the first account; whether signed-out screens may change settings; a longer session for an operator's floor screen; settings first and accounts in the UI second, or together.
+  result: the settings card can be written and sized
+  id: local-user-settings-answers
+  asked: 2026-11-23
+  by: session 85e550b0
+- [ ] **Relay: review and deploy agent-relay #67 (playground-v9)** — the public playground keeps answering "I can't do this one" until this profile is served. Ship the helmsman page first (`make ship` + dev to master): an older page shows the raw `Offer:` lines. Not run there: the integration tests, the live evals, the agent ladder.
+  id: relay-67-deploy
+  asked: 2026-11-23
+  by: session 85e550b0
+
 - [ ] **Take the History tab out, now that Describe has the clock?** — the Agent tab card said "move the history clock here". The clock and its searchable list of versions are in the Describe tab (simulation); the History tab is still in the tab row, because taking a tab out changes saved layouts, the View menu and the tab shortcuts. On a box the versions are still only in its History tab.
   options: remove it in the simulation | remove it everywhere and give a box the clock too | keep both
   id: history-tab-after-clock
@@ -690,7 +700,7 @@ Nick, 2026-11-22, after four rounds of a 3D view in the playground (#549 in dev 
 
 Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pull context from everywhere (logs, errors, warnings, map, code) before acting. Decided in the interview that day: the in-flight work first (relay profile, then the diagram edits), then this list one PR per tab in sequence, Agent tab first; the Trend legend wraps up to a cap and then scrolls. Earlier the same day (edit_error.png): Describe offers the nearest thing instead of refusing (#576, draft).
 
-- [ ] **Relay: playground-v9 with the offer rule** — the public playground keeps answering "I can't do this one" until the relay serves a profile whose refusal rule is the offer rule of #576 (`Offer: rename a b`, `Offer: instead ...`), same words as `claude::SYSTEM`. Ship the page before the relay: an older page shows the raw Offer lines.
+- [x] **Relay: playground-v9 with the offer rule** — the public playground keeps answering "I can't do this one" until the relay serves a profile whose refusal rule is the offer rule of #576 (`Offer: rename a b`, `Offer: instead ...`), same words as `claude::SYSTEM`. Ship the page before the relay: an older page shows the raw Offer lines.
   needs: Nick's relay promote and deploy
   result: a draft PR in agent-relay with playground-v9 and its pins
   est: 1h
@@ -742,7 +752,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 1d
   difficulty: med
   id: fb-canvas-zoom
-- [ ] **Local user settings and sign-in on a Skipper: the design** — a Skipper runs on the device, so preferences must be kept on the device, which implies a light local user and sign-in model. Nick: propose a design before building. Start from what a box has (accounts, roles, sessions) and say where the playground keeps its own.
+- [x] **Local user settings and sign-in on a Skipper: the design** — a Skipper runs on the device, so preferences must be kept on the device, which implies a light local user and sign-in model. Nick: propose a design before building. Start from what a box has (accounts, roles, sessions) and say where the playground keeps its own.
   result: a design document for Nick to read, nothing built
   est: 4h
   difficulty: high
