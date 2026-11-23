@@ -4843,7 +4843,11 @@ fn a_rename_offered_on_a_box_is_saved_in_every_file_with_its_history_and_undone(
     let o = v.instruct.outcome.clone().unwrap();
     assert_eq!(o.kind, Kind::Said, "{o:?}");
     assert_eq!(o.offers.len(), 1, "{o:?}");
-    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], LAMP, "nothing yet");
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "nothing yet"
+    );
 
     v.take_offer(0, &ctx);
     run(&b, &jar, &mut v, &ctx);

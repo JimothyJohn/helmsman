@@ -1807,8 +1807,15 @@ impl BoxView {
         let lead = plan
             .files
             .iter()
-            .position(|(f, ..)| f.ends_with(".st") && !f.starts_with("test_"))
-            .or_else(|| plan.files.iter().position(|(f, ..)| f.ends_with(".st")))
+            .position(|(f, ..)| {
+                helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                    && !helmsman_iec::spec::is_test(f)
+            })
+            .or_else(|| {
+                plan.files.iter().position(|(f, ..)| {
+                    helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                })
+            })
             .unwrap_or(0);
         let mut rest: Vec<(String, String)> = Vec::new();
         let mut first = None;

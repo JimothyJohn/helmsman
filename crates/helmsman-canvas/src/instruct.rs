@@ -1190,7 +1190,10 @@ impl Instruct {
     pub fn renamed(&mut self, old: &str, new: &str, files: usize, undo: Option<Undo>) {
         let mut o = Outcome::new(
             Kind::Applied,
-            format!("Renamed {old} to {new} in {files} file{}.", if files == 1 { "" } else { "s" }),
+            format!(
+                "Renamed {old} to {new} in {files} file{}.",
+                if files == 1 { "" } else { "s" }
+            ),
         );
         o.why = Some(format!("{old} is {new} everywhere in the project"));
         o.undo = undo;
@@ -1210,7 +1213,10 @@ impl Instruct {
     pub fn rename_record(old: &str, new: &str, touches: &[String]) -> String {
         let mut r = format!(
             "{INSTRUCTION}Rename {old} to {new}\n{FILE}{}\nResult: renamed everywhere in the project.\n",
-            touches.first().and_then(|t| t.split(':').next()).unwrap_or_default()
+            touches
+                .first()
+                .and_then(|t| t.split(':').next())
+                .unwrap_or_default()
         );
         for t in touches {
             let _ = writeln!(r, "- {t}");

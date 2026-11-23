@@ -2627,7 +2627,11 @@ impl PlaygroundView {
             .files
             .iter()
             .find(|(f, ..)| *f == self.proj.current)
-            .or_else(|| plan.files.iter().find(|(f, ..)| f.ends_with(".st")))
+            .or_else(|| {
+                plan.files
+                    .iter()
+                    .find(|(f, ..)| helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St))
+            })
             .or(plan.files.first())
             .map(|(f, t, _)| (f.clone(), t.clone()));
         for (f, text, _) in plan.files {
@@ -2636,12 +2640,14 @@ impl PlaygroundView {
         self.proj
             .save_as(&format!("Renamed {old} to {new}"), Some(&record));
         self.reload_running();
-        let undo = before.zip(shown).map(|(revision, (file, text))| crate::instruct::Undo {
-            project: self.proj.open.clone(),
-            file,
-            revision,
-            text,
-        });
+        let undo = before
+            .zip(shown)
+            .map(|(revision, (file, text))| crate::instruct::Undo {
+                project: self.proj.open.clone(),
+                file,
+                revision,
+                text,
+            });
         self.instruct.renamed(old, new, count, undo);
         self.log_outcome();
     }

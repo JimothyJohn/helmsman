@@ -354,6 +354,6 @@ mod tests {
         );
         assert_eq!(o.len(), 1);
         assert_eq!(o[0].label(), "Blink red_n");
-        assert!(o[0].touches.is_empty());
+        assert_eq!(o[0].touches, Vec::<String>::new());
     }
 }

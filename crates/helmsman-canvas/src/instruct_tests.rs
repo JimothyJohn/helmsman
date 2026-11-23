@@ -928,7 +928,9 @@ fn a_rename_offered_is_one_click_one_revision_and_one_undo() {
     instruct(
         &mut v,
         "make the lamp orange",
-        &["Why: The lamp is an on/off output, so its colour comes from its name.\nOffer: rename lamp orange_lamp\nOffer: rename nowhere somewhere\n"],
+        &[
+            "Why: The lamp is an on/off output, so its colour comes from its name.\nOffer: rename lamp orange_lamp\nOffer: rename nowhere somewhere\n",
+        ],
     );
     let o = v.instruct.outcome.clone().unwrap();
     assert_eq!(o.kind, Kind::Said);
@@ -939,7 +941,11 @@ fn a_rename_offered_is_one_click_one_revision_and_one_undo() {
     assert_eq!(instruct::answer(&o).tone, instruct::Tone::Note, "no alarm");
     assert_eq!(o.offers.len(), 1, "what cannot be done is not offered: {o:?}");
     assert_eq!(o.offers[0].label(), "Rename lamp to orange_lamp");
-    let touched: Vec<&str> = o.offers[0].touches.iter().filter_map(|t| t.split(':').next()).collect();
+    let touched: Vec<&str> = o.offers[0]
+        .touches
+        .iter()
+        .filter_map(|t| t.split(':').next())
+        .collect();
     assert_eq!(touched, ["main.st", "test_lamp.st"]);
     assert_eq!(v.proj.files, before, "an offer writes nothing");
     let revs = v.proj.revisions().len();
@@ -947,11 +953,14 @@ fn a_rename_offered_is_one_click_one_revision_and_one_undo() {
     v.take_offer(0, &egui::Context::default());
     assert!(v.proj.files["main.st"].contains("orange_lamp := start;"));
     assert!(v.proj.files["test_lamp.st"].contains("lamp_follows(COND := orange_lamp);"));
-    assert!(v.session.src.contains("orange_lamp := start;"), "the editor shows it");
+    assert!(
+        v.session.src.contains("orange_lamp := start;"),
+        "the editor shows it"
+    );
     let o = v.instruct.outcome.clone().unwrap();
     assert_eq!(o.kind, Kind::Applied);
     assert_eq!(o.status, "Renamed lamp to orange_lamp in 2 files.");
-    assert!(o.offers.is_empty());
+    assert_eq!(o.offers, Vec::new());
     let all = v.proj.revisions();
     assert_eq!(all.len(), revs + 1, "one revision");
     let last = all.last().unwrap();
@@ -1004,7 +1013,10 @@ fn leave_it_keeps_the_reason_and_an_instruction_offered_is_sent() {
     let mut left = v.instruct.clone();
     left.leave_offers();
     let o = left.outcome.unwrap();
-    assert_eq!((o.status.as_str(), o.offers.len()), ("The lamp has no colour.", 0));
+    assert_eq!(
+        (o.status.as_str(), o.offers.len()),
+        ("The lamp has no colour.", 0)
+    );
 
     v.take_offer(0, &egui::Context::default());
     let run = v.instruct.run.as_ref().expect("sent");
