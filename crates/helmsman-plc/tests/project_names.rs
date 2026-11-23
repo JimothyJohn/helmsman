@@ -50,7 +50,14 @@ fn run(name: &str) -> Outcome {
 
     // A folder as an older or newer box left it. The file system cannot
     // hold a name with a separator or a NUL: those never reach this reader.
-    let folder = if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\0']) {
+    // Windows also refuses `\ : * ? " < > |`, control characters, and a
+    // trailing dot or space.
+    let unwritable = cfg!(windows)
+        && (name.contains(['\\', ':', '*', '?', '"', '<', '>', '|'])
+            || name.chars().any(char::is_control)
+            || name.ends_with(['.', ' ']));
+    let folder = if unwritable || name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\0'])
+    {
         None
     } else {
         let dir = tmp.join("folder");

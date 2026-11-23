@@ -3,7 +3,7 @@
 //! journal under systemd); later starts read it and say only where it is.
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// The token file's name in the state directory.
@@ -14,7 +14,7 @@ pub const LEN: usize = 64;
 
 fn random() -> io::Result<String> {
     let mut b = [0u8; LEN / 2];
-    fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+    crate::os_random::fill(&mut b)?;
     Ok(b.iter().fold(String::with_capacity(LEN), |mut s, b| {
         use std::fmt::Write as _;
         let _ = write!(s, "{b:02x}");
