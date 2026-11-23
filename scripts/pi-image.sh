@@ -91,11 +91,21 @@ dist="$repo/target/canvas-dist"
 echo "==> pi-gen at $ref"
 mkdir -p "$work"
 pigen="$work/pi-gen"
+pigen_checkout() {
+    git -C "$pigen" fetch -q origin \
+        && { git -C "$pigen" checkout -q "$ref" || git -C "$pigen" checkout -q "origin/$ref"; }
+}
 if [ ! -d "$pigen/.git" ]; then
     git clone -q https://github.com/RPi-Distro/pi-gen "$pigen"
 fi
-git -C "$pigen" fetch -q origin
-git -C "$pigen" checkout -q "$ref" || git -C "$pigen" checkout -q "origin/$ref"
+# A clone kept from an earlier run can be missing objects (CI's cache of
+# target/ trims files inside it: "unable to read tree"): clone it afresh.
+if ! pigen_checkout; then
+    echo "pi-gen clone in $pigen is unusable, cloning it again"
+    rm -rf "$pigen"
+    git clone -q https://github.com/RPi-Distro/pi-gen "$pigen"
+    pigen_checkout || die "pi-gen has no $ref"
+fi
 commit="$(git -C "$pigen" rev-parse HEAD)"
 echo "pi-gen commit $commit"
 release="$(sed -n 's/^RELEASE=\(.*\)$/\1/p' "$pigen/config" 2>/dev/null || true)"
