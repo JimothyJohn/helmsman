@@ -14,7 +14,7 @@
 //!   worker for at most that long.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::time::{Duration, Instant};
 
 /// Bounds on what one connection may cost.
@@ -43,6 +43,11 @@ pub struct Limits {
     /// browser's `EventSource` reconnects. Bounds what a client that never
     /// reads can hold however large the socket buffers are.
     pub stream_life: Duration,
+    /// How long a client refused before its request was read to the end
+    /// (too large, too slow) is still read from after the reply, so the
+    /// reply reaches it ([`Conn::linger`]). It holds its worker that much
+    /// longer than the deadline at most.
+    pub linger: Duration,
 }
 
 impl Default for Limits {
@@ -57,6 +62,7 @@ impl Default for Limits {
             streams: 8,
             write_timeout: Duration::from_secs(2),
             stream_life: Duration::from_secs(600),
+            linger: Duration::from_millis(500),
         }
     }
 }
@@ -148,6 +154,50 @@ impl Conn {
     /// The socket's.
     pub fn set_write_timeout(&self, d: Option<Duration>) -> io::Result<()> {
         self.tcp().set_write_timeout(d)
+    }
+
+    /// Ends the sending side, then reads and drops what the client still
+    /// sends until it closes or `limit` is up. For a reply sent before the
+    /// request was read to its end: a socket closed with bytes unread, or
+    /// sent bytes after it closed, answers with a reset, and a reset
+    /// discards what the client had not read yet (always on Windows), the
+    /// reply included.
+    pub fn linger(&mut self, limit: Duration) {
+        #[cfg(feature = "https")]
+        if let Self::Tls(s) = self
+            && !s.conn.is_handshaking()
+        {
+            s.conn.send_close_notify();
+            while s.conn.wants_write() {
+                if !matches!(s.conn.write_tls(&mut s.sock), Ok(n) if n > 0) {
+                    break;
+                }
+            }
+        }
+        let mut sock = self.tcp();
+        if sock.shutdown(Shutdown::Write).is_err() {
+            return;
+        }
+        let end = Instant::now() + limit;
+        let mut dropped = [0u8; 4096];
+        while let Some(left) = end
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+        {
+            if sock.set_read_timeout(Some(left)).is_err() {
+                return;
+            }
+            match sock.read(&mut dropped) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => return,
+            }
+        }
     }
 }
 
