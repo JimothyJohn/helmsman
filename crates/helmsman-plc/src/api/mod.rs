@@ -115,7 +115,9 @@
 //! **Bounded.** Thread per connection, at most [`Limits::workers`] at
 //! once (503 beyond), event streams at most [`Limits::streams`] of those.
 //! One request per connection. The whole request must arrive within
-//! [`Limits::deadline`]; a stalled writer is dropped after
+//! [`Limits::deadline`] (one refused for that or for its size is read
+//! from for [`Limits::linger`] more, so the refusal reaches a client
+//! that is still sending); a stalled writer is dropped after
 //! [`Limits::write_timeout`], and an event stream ends after
 //! [`Limits::stream_life`] (the browser reconnects). Sizes are capped
 //! ([`Limits`]).
@@ -970,7 +972,13 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
         }
         // A TLS client that never finished its handshake gets nothing.
         Err(_) if stream.handshaking() => return,
-        Err(http::ReadError::Status(code, why)) => Reply::Once(Response::error(code, why)),
+        // The client may still be sending what was refused: see `linger`.
+        Err(http::ReadError::Status(code, why)) => {
+            if http::respond(&mut stream, &Response::error(code, why)).is_ok() {
+                stream.linger(limits.linger);
+            }
+            return;
+        }
         Err(http::ReadError::Closed) => return,
     };
     let _ = stream.set_read_timeout(None);

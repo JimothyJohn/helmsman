@@ -4,13 +4,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **With 3D dropped, do device graphics and a drawing's placement come to the 2D canvas, or go too?** — The overhaul had four parts: the 3D canvas (dropped 2026-11-22), navigation, device-library graphics on connections, and drawings. Two cards were built on the 3D device level and now have nowhere to land: `device-glyphs` (a line-art glyph per device family where a device or a wired part shows) and `drawing-place-wire` (a drawing's devices placed as in the cabinet, its wires as connections). In 2D the glyphs could go where a device already shows today (the Devices and I/O tabs, a point's read and write blocks in the diagram), and placement would need a new 2D panel view of its own. The drawing cards that do not need a map (`drawing-review`: a drawing's parts into devices and a draft io.map) are not affected and go on.
-  options: glyphs in the tabs and diagram, no placement view | both, with a 2D panel view | drop both
-  result: `device-glyphs` and `drawing-place-wire` are rewritten for 2D or removed
-  id: overhaul-after-3d
-  asked: 2026-11-22
-  by: session canvas-overhaul interview
-
 
 ## Needs your hands
 
@@ -633,12 +626,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, dive into blocks, bloom, fast snap navigation, device-library graphics on connections, and convert technical drawings (panel layouts, CAD, DXF, schematics) into matched components, "starting now". Decided in the interview that day: (1) one 3D stack for every level: plant and devices on top, programs and POUs in the middle, the ST diagram's blocks at the bottom; a dive goes down a level; (2) rendered by egui on glow with our own GL pass through a paint callback (camera, picking, two-pass bloom), no engine crate and no backend change; (3) for engineers and demos first: 3D on a desktop GPU, the 2D view kept reachable and tested; (4) two tracks at once: drawings now, and the 3D canvas, then navigation, then device graphics; (5) dive: a fly-through by default and a free orbit over the whole stack as a second mode, both offered; (6) drawings start with ASCII DXF panel layouts, read by a small reader of our own (no new crate, wasm-safe), built against DXFs vendors publish for parts already in the library; (7) a drawing gives devices matched to the library with a draft io.map, their placement in the 3D map and its wiring as connections; (8) a part not in the library or matching more than one record is shown and the engineer decides: never a guessed model; (9) device graphics are line art per device family in the canvas's own style (the library has no images, and vendor photos are not ours to publish); (10) first milestone: the playground's example in 3D behind a toggle, 2D still the default.
 
-Nick, 2026-11-22, after four rounds of a 3D view in the playground (#549 in dev and reverted, draft #552 closed; the last whole state is the branch `feat/canvas-3d-mvp`): "just stick with the 2D and eliminate 3D", "let's go minimalistic", and why: "3D really was supposed to be more immersive and helpful, not just a pretty version of 2D". Decisions 1, 2, 3, 5 and 10 above are withdrawn and their cards (`canvas-3d-mvp`, `canvas-3d-nav`, `canvas-3d-devices`) removed: the canvas stays the 2D diagram. What the rounds showed, for whoever tries again: one program on one board has nothing for height to mean, so a 3D view of it is the 2D layout tilted; the idea needs the levels (plant, devices, programs, blocks) to exist first. The drawings track (decisions 6, 7, 8) stands. Whether device graphics and a drawing's placement come to the 2D canvas is a question above (`overhaul-after-3d`).
+Nick, 2026-11-22, after four rounds of a 3D view in the playground (#549 in dev and reverted, draft #552 closed; the last whole state is the branch `feat/canvas-3d-mvp`): "just stick with the 2D and eliminate 3D", "let's go minimalistic", and why: "3D really was supposed to be more immersive and helpful, not just a pretty version of 2D". Decisions 1, 2, 3, 5 and 10 above are withdrawn and their cards (`canvas-3d-mvp`, `canvas-3d-nav`, `canvas-3d-devices`) removed: the canvas stays the 2D diagram. What the rounds showed, for whoever tries again: one program on one board has nothing for height to mean, so a 3D view of it is the 2D layout tilted; the idea needs the levels (plant, devices, programs, blocks) to exist first. The drawings track (decisions 6, 7, 8) stands. Nick, 2026-11-23, on what the 3D device level was to carry: device glyphs come to the 2D canvas where a device already shows (the Devices and I/O tabs, a point's read and write blocks in the diagram), and there is no placement view: decision 7's placement and wiring half is dropped with its card (`drawing-place-wire`), and a drawing gives devices and a draft io.map only.
 
-- [ ] **Device graphics: line art per device family on the map's connections** — Decision 9. The library (helmsman-devices) has no images and vendor photos cannot go in a public repository, so a glyph per family (remote I/O block, drive, proximity sensor, photoelectric sensor, valve, switch, ...) drawn in the canvas's style, picked from a record's kind, with a generic one for an unknown part. Vector, so it takes the bloom. The canvas already has `glyphs.rs` and `assets/glyphs`: start from what is there.
-  needs: Nick's answer to `overhaul-after-3d` (the 3D device level it was to sit on is dropped); a `kind` on each library record that lacks one
-  result: every device and wired part on the map shows what it is at a glance, with no image fetched from a vendor
-  depends: overhaul-after-3d
+- [ ] **Device graphics: line art per device family in the tabs and the diagram** — Decision 9, in 2D (Nick, 2026-11-23). The library (helmsman-devices) has no images and vendor photos cannot go in a public repository, so a glyph per family (remote I/O block, drive, proximity sensor, photoelectric sensor, valve, switch, ...) drawn in the canvas's style, picked from a record's kind, with a generic one for an unknown part. It shows where a device already shows: each device's row in the Devices tab, each point in the I/O tab, and a point's read and write blocks in the diagram. No new view. The canvas already has `glyphs.rs` and `assets/glyphs`: start from what is there. A glyph in a tab row must not widen the side panel (a test at the panel's default width, and `every_tab_leaves_the_panels_their_width` green).
+  needs: a `kind` on each library record that lacks one
+  result: every device and wired point shows what it is at a glance in the tabs and the diagram, with no image fetched from a vendor
   est: 4d
   difficulty: med
   id: device-glyphs
@@ -661,16 +653,6 @@ Nick, 2026-11-22, after four rounds of a 3D view in the playground (#549 in dev 
   est: 1w
   difficulty: med
   id: drawing-review
-  asked: 2026-11-21
-  by: session canvas-overhaul interview
-
-- [ ] **A drawing's placement and wiring on the 3D map** — Decision 7: devices sit on the device level where the panel has them, and the drawing's wires (terminal to channel, where the layout carries them) become the map's connections. A panel layout often has no wiring: then placement only, and the wiring waits for schematics (`drawing-schematics`).
-  needs: drawing-review; Nick's answer to `overhaul-after-3d` (there is no 3D map to place devices on)
-  result: the device level of a project made from a drawing looks like its cabinet
-  depends: drawing-review, overhaul-after-3d
-  est: 1w
-  difficulty: high
-  id: drawing-place-wire
   asked: 2026-11-21
   by: session canvas-overhaul interview
 
