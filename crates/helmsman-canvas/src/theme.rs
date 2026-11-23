@@ -333,17 +333,17 @@ pub fn tab(ui: &mut egui::Ui, on: bool, text: &str, min: egui::Vec2) -> egui::Re
     let t = theme(ui);
     let label = egui::RichText::new(text).color(if on { t.fg } else { t.muted });
     let pad = TAB_PAD;
-    let r = ui
-        .scope(|ui| {
-            ui.spacing_mut().button_padding.x = pad;
-            ui.add(
-                egui::Button::new(label) // tip: exempt (the caller tips the tab)
-                    .selected(on)
-                    .frame_when_inactive(false)
-                    .min_size(min),
-            )
-        })
-        .inner;
+    // Not in a `scope`: its child ui starts a fresh row, so a tab in a
+    // wrapping layout never moved to the next one.
+    let was = ui.spacing().button_padding.x;
+    ui.spacing_mut().button_padding.x = pad;
+    let r = ui.add(
+        egui::Button::new(label) // tip: exempt (the caller tips the tab)
+            .selected(on)
+            .frame_when_inactive(false)
+            .min_size(min),
+    );
+    ui.spacing_mut().button_padding.x = was;
     if on {
         ui.painter().hline(
             (r.rect.left() + pad)..=(r.rect.right() - pad),

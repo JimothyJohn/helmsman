@@ -4408,6 +4408,107 @@ mod simulated {
         }
     }
 
+    /// A program of `n` BOOL inputs with long names, loaded and running.
+    fn trend_program(n: usize) -> Harness {
+        use std::fmt::Write as _;
+        let mut src = String::from("PROGRAM cell\nVAR_INPUT\n");
+        for k in 0..n {
+            let _ = writeln!(src, "  station_{k}_part_present_sensor : BOOL;");
+        }
+        src.push_str("END_VAR\nEND_PROGRAM\n");
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        {
+            let s = &mut h.app.sim.as_mut().unwrap().session;
+            assert!(s.load(&src), "{:?}", s.diag_lines());
+            s.set_running(true);
+        }
+        h.wait(0.5);
+        h
+    }
+
+    /// Nick, 2026-11-23: the signal legend is rows, not one crowded row.
+    /// A handful of signals wraps onto more than one row, every button is
+    /// on screen and whole, and nothing scrolls sideways.
+    #[test]
+    fn a_handful_of_trend_signals_wrap_onto_rows_and_all_show() {
+        let h = trend_program(6);
+        let legend = h.rect("trend signals");
+        let tab = h.rect("trend tab");
+        let mut tops = Vec::new();
+        for k in 0..6 {
+            let b = h.rect(&format!("trend signal station_{k}_part_present_sensor"));
+            assert!(b.height() >= 16.0, "button {k} is {} pt high", b.height());
+            assert!(
+                legend.contains_rect(b),
+                "button {k} {b:?} is clipped by the legend {legend:?}"
+            );
+            if !tops.iter().any(|t: &f32| (t - b.top()).abs() < 1.0) {
+                tops.push(b.top());
+            }
+        }
+        assert!(tops.len() > 1, "one row only: {tops:?}");
+        assert!(legend.height() <= tab.height() / 3.0 + 0.5, "within a third");
+        assert!(legend.right() <= tab.right() + 0.5, "no wider than the tab");
+    }
+
+    /// With 40 signals the legend stops at a third of the tab and scrolls
+    /// inside itself: the panel keeps its height, the plot its room, and
+    /// the first button is still where it was. No row widens the panel.
+    #[test]
+    fn many_trend_signals_scroll_in_a_legend_capped_at_a_third() {
+        let mut h = trend_program(40);
+        let legend = h.rect("trend signals");
+        let tab = h.rect("trend tab");
+        let plot = h.rect("trend plot");
+        let panel = tab;
+        assert!(
+            legend.height() <= tab.height() / 3.0 + 0.5,
+            "the legend is {} pt of the tab's {}",
+            legend.height(),
+            tab.height()
+        );
+        assert!(legend.height() > 34.0, "more than one row is shown");
+        assert!(
+            panel.height() <= crate::editor::BOTTOM_H,
+            "the panel grew to {}",
+            panel.height()
+        );
+        assert!(
+            plot.height() >= tab.height() * 0.4,
+            "the plot has {} pt",
+            plot.height()
+        );
+        // Later buttons are scrolled out of the legend's window, not
+        // squeezed in: the last one starts below its bottom.
+        let last = h.rect("trend signal station_39_part_present_sensor");
+        assert!(
+            last.top() >= legend.bottom() - 0.5,
+            "the last button is out of view"
+        );
+        // Wheel over the legend scrolls it, and the panel stays put.
+        h.frame(vec![Event::PointerMoved(legend.center())]);
+        for _ in 0..4 {
+            h.frame(vec![Event::MouseWheel {
+                unit: MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -400.0),
+                modifiers: Modifiers::NONE,
+                phase: eframe::egui::TouchPhase::Move,
+                source: eframe::egui::MouseWheelSource::Wheel,
+            }]);
+            h.wait(0.3);
+        }
+        let last = h.rect("trend signal station_39_part_present_sensor");
+        let legend = h.rect("trend signals");
+        assert!(
+            last.top() < legend.bottom(),
+            "scrolled into view {last:?} {legend:?}"
+        );
+        assert_eq!(h.rect("trend tab").height(), panel.height(), "the panel held");
+        assert_eq!(h.rect("trend tab").width(), panel.width(), "and its width");
+        assert_eq!(h.rect("trend plot").height(), plot.height(), "so did the plot");
+    }
+
     /// Nick, 2026-11-11: a trend signal's colour is the user's to pick. A
     /// click on a lane's label opens the palette; the swatch clicked is
     /// that signal's colour whichever lane it is in, and the browser
