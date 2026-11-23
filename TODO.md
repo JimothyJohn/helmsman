@@ -149,6 +149,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Next to build
 
+- [ ] **Windows: what the green CI job does not prove yet** — the box builds, lints and passes its tests on windows-latest since #565 (2026-11-23), with these left open. (1) Names Windows treats as devices (`con`, `nul`, `aux`, `com1`, `lpt1`, with or without `.st`) as project and file names: not tested; a write to `nul.st` may vanish without an error. (2) Shutdown: no test sends Ctrl-C or a terminate on Windows, so RETAIN on exit is unproven there (the SIGTERM test is Unix-only). (3) `--time-zone` and the zone tests are Unix-only (no tz database on Windows). (4) The Windows job checks out with LF; a project with CRLF files is not tested on any platform. (5) EtherNet/IP and Modbus TCP pass on loopback there, never against a device. (6) `hammering_the_api_does_not_hold_up_the_scan` allows an 8x fall on Windows against 4x elsewhere (154 ticks against 680 on the runner): measure on a real Windows machine before calling the scan timing good there. (7) `box (windows-latest)`, `box (macos-latest)` and `box (ubuntu-24.04-arm)` are not required checks.
+  needs: a Windows machine for (5) and (6); the rest runs in CI
+  result: each point has a test or a line in docs/ARCHITECTURE.md "Platforms" saying it is not supported
+  est: 1d
+  difficulty: med
+  id: windows-open-points
+  asked: 2026-11-23
+  by: claude-session 734e70dc
+
 - [ ] **The compiler's stack use stops depending on who calls it** — a program nested to the limit needs more stack than a 2 MiB thread has in a debug build with full debug info: 190 chained `+` took 2 to 2.5 MiB, 64 parentheses 1.5 to 2 MiB (macOS arm64, 2026-11-22; `nesting_up_to_the_limit_runs` overflowed in the new macOS CI job). Release fits (under 768 KiB at worst), so what ships is safe on a 2 MiB thread; a debug box compiling on one can be crashed by a hostile program, and the browser build (1 MiB main stack by default) is not measured. Nick, 2026-11-22: give the test 4 MiB now (done), fix it properly here. Ways: compile on a thread of the compiler's own with a set stack (not in the browser), handle long operator chains without recursion, or both.
   needs: nothing; start by measuring the wasm build at the limit
   result: the deepest allowed program compiles on a 1 MiB stack in every build, the test goes back to a small stack and says so
