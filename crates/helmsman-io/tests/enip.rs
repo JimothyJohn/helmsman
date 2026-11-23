@@ -1225,7 +1225,9 @@ fn a_device_that_keeps_refusing_is_not_asked_every_read() {
         reads += 1;
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert!(reads > 50, "the loop itself ran: {reads} reads");
+    // 39 reads in 700 ms on a loaded macos-latest runner (2026-11-22): the
+    // 2 ms sleep is coarse there. 20 is still several reads per open.
+    assert!(reads >= 20, "the loop itself ran: {reads} reads");
     assert!(
         (2..=5).contains(&d.opens),
         "{} Forward_Opens for {reads} reads in 700 ms",
