@@ -13,7 +13,6 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -252,8 +251,13 @@ fn a_code_is_traded_for_a_token_in_a_private_file() {
     let p = pair(&relay);
     assert_eq!(p.code(), 0, "{}", p.said());
     assert_eq!(fs::read_to_string(p.token_file()).unwrap(), format!("{TOKEN}\n"));
-    let mode = fs::metadata(p.token_file()).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
+    // Windows has no mode bits: the file takes its directory's ACL.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(p.token_file()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
     assert_quiet(&p);
     assert!(p.said().contains("paired as plc-7"), "{}", p.said());
 
@@ -487,222 +491,230 @@ fn an_unwritable_destination_fails_without_spending_a_second_try() {
 
 // ------------------------------------------------------ helmsman-firstboot
 
-fn script() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/helmsman-firstboot.sh")
-}
+// deploy/helmsman-firstboot.sh is a bash script for the Linux image: its
+// tests run on Unix hosts only.
+#[cfg(unix)]
+mod firstboot {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
 
-/// A fresh root: an installed box's env file, an empty (root-only) token
-/// file as the image ships it, and an empty pairing folder.
-fn root() -> PathBuf {
-    let dir = tmp("root");
-    fs::create_dir_all(dir.join("boot/firmware/helmsman")).unwrap();
-    fs::create_dir_all(dir.join("etc/helmsman-plc")).unwrap();
-    fs::write(
-        dir.join("etc/helmsman-plc/env"),
-        "PLC_SOURCE=--projects\nPLC_RELAY_ARGS=\n",
-    )
-    .unwrap();
-    fs::write(dir.join("etc/helmsman-plc/relay-token"), "").unwrap();
-    dir
-}
-
-fn put(root: &Path, name: &str, text: &str) {
-    fs::write(root.join("boot/firmware/helmsman").join(name), text).unwrap();
-}
-
-fn on_card(root: &Path, name: &str) -> bool {
-    root.join("boot/firmware/helmsman").join(name).exists()
-}
-
-struct Boot {
-    said: String,
-    ok: bool,
-}
-
-fn boot(root: &Path) -> Boot {
-    let out = Command::new("bash")
-        .arg(script())
-        .env("HELMSMAN_FIRSTBOOT_ROOT", root)
-        .env("HELMSMAN_PLC_BIN", bin())
-        .output()
-        .unwrap();
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        !said.contains(CODE) && !said.contains("7K3QM"),
-        "the code was printed: {said}"
-    );
-    assert!(
-        !said.contains(TOKEN) && !said.contains(OTHER_TOKEN),
-        "a token was printed: {said}"
-    );
-    Boot {
-        said,
-        ok: out.status.success(),
+    fn script() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../deploy/helmsman-firstboot.sh")
     }
-}
 
-fn installed_token(root: &Path) -> String {
-    fs::read_to_string(root.join("etc/helmsman-plc/relay-token")).unwrap()
-}
-
-fn relay_args(root: &Path) -> String {
-    fs::read_to_string(root.join("etc/helmsman-plc/env"))
-        .unwrap()
-        .lines()
-        .find_map(|l| l.strip_prefix("PLC_RELAY_ARGS=").map(str::to_owned))
-        .unwrap()
-}
-
-/// A card as the operator prepares it for pairing by code.
-fn card(root: &Path, url: &str) {
-    put(root, "relay-url", &format!("{url}\n"));
-    put(root, "relay-allow-http", "");
-    put(root, "relay-box-id", &format!("{BOX_ID}\n"));
-    put(root, "pairing-code", &format!("{CODE}\n"));
-}
-
-#[test]
-fn first_boot_pairs_by_code_and_sets_the_relay() {
-    let relay = Relay::start(vec![token_reply(TOKEN, BOX_ID)]);
-    let root = root();
-    card(&root, &relay.url());
-    let b = boot(&root);
-    assert!(b.ok, "{}", b.said);
-    assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
-    let mode = fs::metadata(root.join("etc/helmsman-plc/relay-token"))
-        .unwrap()
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600);
-    assert!(!on_card(&root, "pairing-code"), "the code leaves the card");
-    assert_eq!(
-        relay_args(&root),
-        format!(
-            "--relay {} --relay-token /run/credentials/helmsman-plc.service/relay-token",
-            relay.url()
+    /// A fresh root: an installed box's env file, an empty (root-only) token
+    /// file as the image ships it, and an empty pairing folder.
+    fn root() -> PathBuf {
+        let dir = tmp("root");
+        fs::create_dir_all(dir.join("boot/firmware/helmsman")).unwrap();
+        fs::create_dir_all(dir.join("etc/helmsman-plc")).unwrap();
+        fs::write(
+            dir.join("etc/helmsman-plc/env"),
+            "PLC_SOURCE=--projects\nPLC_RELAY_ARGS=\n",
         )
-    );
-    let body: serde_json::Value = serde_json::from_str(&relay.seen()[0].body).unwrap();
-    assert_eq!(
-        (body["code"].as_str(), body["box_id"].as_str()),
-        (Some(CODE), Some(BOX_ID))
-    );
-
-    // The next boot has nothing to trade and changes nothing.
-    let again = boot(&root);
-    assert!(again.ok, "{}", again.said);
-    assert_eq!(relay.seen().len(), 1);
-    assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
-}
-
-#[test]
-fn a_refused_code_is_dropped_and_the_box_starts_without_a_relay() {
-    let relay = Relay::start(vec![refusal()]);
-    let root = root();
-    card(&root, &relay.url());
-    let b = boot(&root);
-    assert!(b.ok, "a refusal must not stop the PLC service: {}", b.said);
-    assert!(
-        !on_card(&root, "pairing-code"),
-        "a refused code is not tried at every boot"
-    );
-    assert_eq!(installed_token(&root), "");
-    assert_eq!(relay_args(&root), "");
-    assert!(b.said.contains("refused"), "{}", b.said);
-    boot(&root);
-    assert_eq!(relay.seen().len(), 1);
-}
-
-#[test]
-fn a_code_that_could_not_be_tried_stays_for_the_next_boot() {
-    let root = root();
-    card(&root, &dead_url());
-    let b = boot(&root);
-    assert!(b.ok, "{}", b.said);
-    assert!(on_card(&root, "pairing-code"));
-    assert_eq!(installed_token(&root), "");
-    assert_eq!(relay_args(&root), "");
-    // The relay comes up; the next start pairs.
-    let relay = Relay::start(vec![token_reply(TOKEN, BOX_ID)]);
-    put(&root, "relay-url", &format!("{}\n", relay.url()));
-    let b = boot(&root);
-    assert!(b.ok, "{}", b.said);
-    assert!(!on_card(&root, "pairing-code"));
-    assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
-}
-
-#[test]
-fn a_token_file_wins_over_a_code_and_the_relay_is_not_asked() {
-    let relay = Relay::start(vec![token_reply(OTHER_TOKEN, BOX_ID)]);
-    let root = root();
-    card(&root, &relay.url());
-    put(&root, "relay-token", &format!("{TOKEN}\n"));
-    let b = boot(&root);
-    assert!(b.ok, "{}", b.said);
-    assert!(relay.seen().is_empty());
-    assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
-    assert!(!on_card(&root, "pairing-code") && !on_card(&root, "relay-token"));
-    assert!(relay_args(&root).starts_with("--relay "));
-    // An installed token also keeps a later code out.
-    put(&root, "pairing-code", &format!("{CODE}\n"));
-    let b = boot(&root);
-    assert!(b.ok, "{}", b.said);
-    assert!(relay.seen().is_empty());
-    assert!(!on_card(&root, "pairing-code"));
-    assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
-}
-
-#[test]
-fn a_code_is_not_tried_without_what_it_needs() {
-    for (drop_file, why) in [
-        ("relay-url", "no relay-url"),
-        ("relay-box-id", "no relay-box-id"),
-        ("relay-allow-http", "an http:// relay without the say-so"),
-    ] {
-        let relay = Relay::start(vec![token_reply(TOKEN, BOX_ID)]);
-        let root = root();
-        card(&root, &relay.url());
-        fs::remove_file(root.join("boot/firmware/helmsman").join(drop_file)).unwrap();
-        let b = boot(&root);
-        assert!(b.ok, "{why}: {}", b.said);
-        assert!(relay.seen().is_empty(), "{why}: the relay was asked");
-        assert!(
-            on_card(&root, "pairing-code"),
-            "{why}: the code is kept for when the card is fixed"
-        );
-        assert_eq!(installed_token(&root), "", "{why}");
-        assert_eq!(relay_args(&root), "", "{why}");
+        .unwrap();
+        fs::write(dir.join("etc/helmsman-plc/relay-token"), "").unwrap();
+        dir
     }
-}
 
-#[test]
-fn a_bad_box_id_on_the_card_is_not_sent() {
-    for id in [
-        "Plc-7",
-        "-plc",
-        "plc 7",
-        "plc/7",
-        "a".repeat(65).as_str(),
-        "",
-        "plc-7\nplc-8",
-    ] {
+    fn put(root: &Path, name: &str, text: &str) {
+        fs::write(root.join("boot/firmware/helmsman").join(name), text).unwrap();
+    }
+
+    fn on_card(root: &Path, name: &str) -> bool {
+        root.join("boot/firmware/helmsman").join(name).exists()
+    }
+
+    struct Boot {
+        said: String,
+        ok: bool,
+    }
+
+    fn boot(root: &Path) -> Boot {
+        let out = Command::new("bash")
+            .arg(script())
+            .env("HELMSMAN_FIRSTBOOT_ROOT", root)
+            .env("HELMSMAN_PLC_BIN", bin())
+            .output()
+            .unwrap();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !said.contains(CODE) && !said.contains("7K3QM"),
+            "the code was printed: {said}"
+        );
+        assert!(
+            !said.contains(TOKEN) && !said.contains(OTHER_TOKEN),
+            "a token was printed: {said}"
+        );
+        Boot {
+            said,
+            ok: out.status.success(),
+        }
+    }
+
+    fn installed_token(root: &Path) -> String {
+        fs::read_to_string(root.join("etc/helmsman-plc/relay-token")).unwrap()
+    }
+
+    fn relay_args(root: &Path) -> String {
+        fs::read_to_string(root.join("etc/helmsman-plc/env"))
+            .unwrap()
+            .lines()
+            .find_map(|l| l.strip_prefix("PLC_RELAY_ARGS=").map(str::to_owned))
+            .unwrap()
+    }
+
+    /// A card as the operator prepares it for pairing by code.
+    fn card(root: &Path, url: &str) {
+        put(root, "relay-url", &format!("{url}\n"));
+        put(root, "relay-allow-http", "");
+        put(root, "relay-box-id", &format!("{BOX_ID}\n"));
+        put(root, "pairing-code", &format!("{CODE}\n"));
+    }
+
+    #[test]
+    fn first_boot_pairs_by_code_and_sets_the_relay() {
         let relay = Relay::start(vec![token_reply(TOKEN, BOX_ID)]);
         let root = root();
         card(&root, &relay.url());
-        put(&root, "relay-box-id", &format!("{id}\n"));
         let b = boot(&root);
-        assert!(b.ok, "{id:?}: {}", b.said);
-        if id == "plc-7\nplc-8" {
-            // Only the first line counts, as for every pairing file.
-            assert_eq!(relay.seen().len(), 1);
-            continue;
+        assert!(b.ok, "{}", b.said);
+        assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
+        let mode = fs::metadata(root.join("etc/helmsman-plc/relay-token"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(!on_card(&root, "pairing-code"), "the code leaves the card");
+        assert_eq!(
+            relay_args(&root),
+            format!(
+                "--relay {} --relay-token /run/credentials/helmsman-plc.service/relay-token",
+                relay.url()
+            )
+        );
+        let body: serde_json::Value = serde_json::from_str(&relay.seen()[0].body).unwrap();
+        assert_eq!(
+            (body["code"].as_str(), body["box_id"].as_str()),
+            (Some(CODE), Some(BOX_ID))
+        );
+
+        // The next boot has nothing to trade and changes nothing.
+        let again = boot(&root);
+        assert!(again.ok, "{}", again.said);
+        assert_eq!(relay.seen().len(), 1);
+        assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
+    }
+
+    #[test]
+    fn a_refused_code_is_dropped_and_the_box_starts_without_a_relay() {
+        let relay = Relay::start(vec![refusal()]);
+        let root = root();
+        card(&root, &relay.url());
+        let b = boot(&root);
+        assert!(b.ok, "a refusal must not stop the PLC service: {}", b.said);
+        assert!(
+            !on_card(&root, "pairing-code"),
+            "a refused code is not tried at every boot"
+        );
+        assert_eq!(installed_token(&root), "");
+        assert_eq!(relay_args(&root), "");
+        assert!(b.said.contains("refused"), "{}", b.said);
+        boot(&root);
+        assert_eq!(relay.seen().len(), 1);
+    }
+
+    #[test]
+    fn a_code_that_could_not_be_tried_stays_for_the_next_boot() {
+        let root = root();
+        card(&root, &dead_url());
+        let b = boot(&root);
+        assert!(b.ok, "{}", b.said);
+        assert!(on_card(&root, "pairing-code"));
+        assert_eq!(installed_token(&root), "");
+        assert_eq!(relay_args(&root), "");
+        // The relay comes up; the next start pairs.
+        let relay = Relay::start(vec![token_reply(TOKEN, BOX_ID)]);
+        put(&root, "relay-url", &format!("{}\n", relay.url()));
+        let b = boot(&root);
+        assert!(b.ok, "{}", b.said);
+        assert!(!on_card(&root, "pairing-code"));
+        assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
+    }
+
+    #[test]
+    fn a_token_file_wins_over_a_code_and_the_relay_is_not_asked() {
+        let relay = Relay::start(vec![token_reply(OTHER_TOKEN, BOX_ID)]);
+        let root = root();
+        card(&root, &relay.url());
+        put(&root, "relay-token", &format!("{TOKEN}\n"));
+        let b = boot(&root);
+        assert!(b.ok, "{}", b.said);
+        assert!(relay.seen().is_empty());
+        assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
+        assert!(!on_card(&root, "pairing-code") && !on_card(&root, "relay-token"));
+        assert!(relay_args(&root).starts_with("--relay "));
+        // An installed token also keeps a later code out.
+        put(&root, "pairing-code", &format!("{CODE}\n"));
+        let b = boot(&root);
+        assert!(b.ok, "{}", b.said);
+        assert!(relay.seen().is_empty());
+        assert!(!on_card(&root, "pairing-code"));
+        assert_eq!(installed_token(&root), format!("{TOKEN}\n"));
+    }
+
+    #[test]
+    fn a_code_is_not_tried_without_what_it_needs() {
+        for (drop_file, why) in [
+            ("relay-url", "no relay-url"),
+            ("relay-box-id", "no relay-box-id"),
+            ("relay-allow-http", "an http:// relay without the say-so"),
+        ] {
+            let relay = Relay::start(vec![token_reply(TOKEN, BOX_ID)]);
+            let root = root();
+            card(&root, &relay.url());
+            fs::remove_file(root.join("boot/firmware/helmsman").join(drop_file)).unwrap();
+            let b = boot(&root);
+            assert!(b.ok, "{why}: {}", b.said);
+            assert!(relay.seen().is_empty(), "{why}: the relay was asked");
+            assert!(
+                on_card(&root, "pairing-code"),
+                "{why}: the code is kept for when the card is fixed"
+            );
+            assert_eq!(installed_token(&root), "", "{why}");
+            assert_eq!(relay_args(&root), "", "{why}");
         }
-        assert!(relay.seen().is_empty(), "{id:?}: sent");
-        assert!(on_card(&root, "pairing-code"), "{id:?}");
+    }
+
+    #[test]
+    fn a_bad_box_id_on_the_card_is_not_sent() {
+        for id in [
+            "Plc-7",
+            "-plc",
+            "plc 7",
+            "plc/7",
+            "a".repeat(65).as_str(),
+            "",
+            "plc-7\nplc-8",
+        ] {
+            let relay = Relay::start(vec![token_reply(TOKEN, BOX_ID)]);
+            let root = root();
+            card(&root, &relay.url());
+            put(&root, "relay-box-id", &format!("{id}\n"));
+            let b = boot(&root);
+            assert!(b.ok, "{id:?}: {}", b.said);
+            if id == "plc-7\nplc-8" {
+                // Only the first line counts, as for every pairing file.
+                assert_eq!(relay.seen().len(), 1);
+                continue;
+            }
+            assert!(relay.seen().is_empty(), "{id:?}: sent");
+            assert!(on_card(&root, "pairing-code"), "{id:?}");
+        }
     }
 }

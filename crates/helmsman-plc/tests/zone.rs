@@ -357,6 +357,8 @@ fn a_named_zone_is_read_from_the_database_and_checked() {
     assert!(Zone::named_in(&d.0, "../Passwd").is_err());
 }
 
+// /etc/localtime is a Unix symlink; Windows keeps its zone elsewhere.
+#[cfg(unix)]
 #[test]
 fn the_system_zone_is_the_file_localtime_points_at() {
     let d = Dir::new("system");
