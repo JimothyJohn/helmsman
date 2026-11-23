@@ -17,6 +17,12 @@ this; change it here first when a decision changes.
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the
   page. Same screens, same buttons; the source is a setting, not a mode.
+- **Runs in every engine, with or without a GPU.** Chromium (Chrome, Edge),
+  Firefox and WebKit (Safari on a Mac or iPad) each need WebGL2. `make
+  canvas-smoke BROWSER=all` and `NOGPU=1` drive all three headless, with
+  hardware drawing and in software, on every PR (the `canvas-browsers` job).
+  A browser with no WebGL2 shows a notice (loading/loading.js) in place of
+  the app.
 - **Two screens: Editor and Monitor.** No Lab, Live, Site, Demo, Andon or
   Playground modes.
 - **Navigation is never lost.** The header is always there: project name,
