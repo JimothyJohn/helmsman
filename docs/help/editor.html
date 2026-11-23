@@ -162,6 +162,18 @@ that keep each row from holding turn red: that row is waiting for
 exactly those signals. Hover a cell to see what its row needs and what
 the signal is now. A double-click opens the block into its gates, and
 the tab over it draws them as one block again.</li>
+<li><strong>Rename and set values.</strong> Right-click a block that
+reads or writes a variable and choose <strong>Rename…</strong> to give
+it a new name: the program, the wiring and the requirement tests all
+take it, and the files it changes are listed before you confirm.
+Right-click a constant or a timer's preset (the <code>10</code> in
+<code>count &gt; 10</code>, the <code>T#5s</code> of a timer) and choose
+<strong>Set value…</strong> to write a new one in its place. A
+double-click on the block asks the same question; on an input's block it
+opens Simulate this input, so an input is renamed from its menu. The I/O
+rows have <strong>Rename…</strong> too. Each change is saved as one
+revision, shows in the Describe tab with Undo, and is in History. The
+logic itself is changed in the code or by describing it.</li>
 <li><strong>Arrange.</strong> Drag a block, or an IF by its label, to
 move it. View › Reset layout goes back; View › Save layout as default
 keeps your arrangement with the project so everyone opens it that way.

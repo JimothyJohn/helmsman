@@ -97,6 +97,17 @@ switch its inputs. What you can do:
   for exactly those signals. Hover a cell to see what its row needs and
   what the signal is now. A double-click opens the block into its gates,
   and the tab over it draws them as one block again.
+- **Rename and set values.** Right-click a block that reads or writes a
+  variable and choose **Rename…** to give it a new name: the program, the
+  wiring and the requirement tests all take it, and the files it changes
+  are listed before you confirm. Right-click a constant or a timer's
+  preset (the `10` in `count > 10`, the `T#5s` of a timer) and choose
+  **Set value…** to write a new one in its place. A double-click on the
+  block asks the same question; on an input's block it opens Simulate this
+  input, so an input is renamed from its menu. The I/O rows have
+  **Rename…** too. Each change is saved as one revision, shows in the
+  Describe tab with Undo, and is in History. The logic itself is changed
+  in the code or by describing it.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Zoom with the

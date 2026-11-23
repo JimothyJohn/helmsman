@@ -1200,6 +1200,15 @@ impl Instruct {
         self.outcome = Some(o);
     }
 
+    /// A value was set by hand on the diagram and saved
+    /// ([`crate::by_hand`]); `undo` the revision before it.
+    pub fn value_set(&mut self, old: &str, new: &str, file: &str, undo: Option<Undo>) {
+        let mut o = Outcome::new(Kind::Applied, format!("Set {old} to {new} in {file}."));
+        o.why = Some(format!("{old} is now {new} in {file}"));
+        o.undo = undo;
+        self.outcome = Some(o);
+    }
+
     /// An offer could not be carried out any more (the files changed
     /// since it was made), and why.
     pub fn offer_refused(&mut self, why: &str) {
