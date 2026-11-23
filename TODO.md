@@ -721,7 +721,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 2d
   difficulty: med
   id: fb-global-chrome
-- [ ] **Code tab** — Cmd/Ctrl+F opens the app's own find, not the browser's; a magnifier beside the file name with Find, Replace, Replace All; compile status hidden while the code compiles, a red X popup and a marker on the failing line when it does not, the grey indicator gone; Deploy at the panel's top right, bigger, filled green with a black arrow; word wrap stays.
+- [x] **Code tab** — Cmd/Ctrl+F opens the app's own find, not the browser's; a magnifier beside the file name with Find, Replace, Replace All; compile status hidden while the code compiles, a red X popup and a marker on the failing line when it does not, the grey indicator gone; Deploy at the panel's top right, bigger, filled green with a black arrow; word wrap stays.
   depends: fb-global-chrome
   est: 2d
   difficulty: med

@@ -232,6 +232,14 @@ def playground(ctx, base, out):
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.
     r.step("code", lambda: r.click(*TAB_CODE), LEFT)
+    # Ctrl F with the keyboard off the canvas (as after a click on the
+    # browser's own chrome) opens the program's find row over the code,
+    # not the browser's find (loading/loading.js); Esc shuts it again.
+    def find_off_canvas():
+        r.page.evaluate("document.activeElement && document.activeElement.blur()")
+        r.key(f"{MOD}+f")
+    r.step("find-off-canvas", find_off_canvas, LEFT)
+    r.step("find-closed", lambda: r.key("Escape"), LEFT, 400)
     # Fold the VAR_OUTPUT section by its gutter arrow (line 2), then open it.
     r.step("folded", lambda: r.click(*FOLD_LINE_2), LEFT)
     r.click(*FOLD_LINE_2); r.wait(300)

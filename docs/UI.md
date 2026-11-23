@@ -131,8 +131,14 @@ only go down.
   tab, every delete is confirmed in a modal at the screen's centre, and
   the earlier iterations of the program, `vN.st`, fold under one
   "earlier (n)" row with `main.st` marked as the one running; the running
-  program, open, carries a → that deploys it again with the latest edits,
-  as does the Code tab's Structured Text header, Nick 2026-11-08),
+  program, open, carries a → that deploys it again with the latest edits
+  (Nick 2026-11-08); the Code tab's header has Deploy at its right end as
+  a filled green button with a black arrow, bigger than the glyphs, a
+  magnifier beside the file's name for Find, Replace and Replace all, and
+  no compile status while the code compiles: a red ✖ with the count when
+  it does not, which goes to the first error's line (Nick 2026-11-23).
+  Ctrl F is the program's find even with the keyboard off the canvas
+  (loading/loading.js hands the key over),
   Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
   system's, each with its points under it, live values and the link's
   state, which on a box says the protocol a device by its profile is
