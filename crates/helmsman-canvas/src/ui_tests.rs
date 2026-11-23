@@ -7252,6 +7252,7 @@ mod chat_about;
 mod design;
 mod device_io;
 mod diagram_menu;
+mod files_tab;
 mod front;
 mod io_cards;
 mod io_names;

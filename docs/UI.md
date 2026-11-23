@@ -99,7 +99,10 @@ this; change it here first when a decision changes.
   say why.
 - **Panes collapse** from their chevron, their Alt key, or a double click
   on any of their tabs (Nick, 2026-11-07), on either side.
-- **The tabs (left pane 320 pt):** Files (the projects, the
+- **The tabs (left pane 320 pt):** Files (a heading naming where the
+  projects are kept, "Files in this browser" or "Files on the box", then
+  the projects in two sections that fold with a click and are
+  remembered, My Files and Examples, none on a box; the
   open one expanded with its files under it, Nick 2026-11-13: no
   separate files section and no program tree, the diagram's crumbs
   reach the POUs; a right-click on a project offers Copy, Rename,

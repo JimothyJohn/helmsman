@@ -715,7 +715,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 2d
   difficulty: med
   id: fb-io-tab
-- [ ] **Files tab** — a header naming the file system; under programs, Examples and My Files as sections that fold.
+- [x] **Files tab** — a header naming the file system; under programs, Examples and My Files as sections that fold.
   est: 4h
   difficulty: low
   id: fb-files-tab

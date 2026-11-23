@@ -595,6 +595,7 @@ struct Harness {
     ctx: egui::Context,
     app: App,
     time: f64,
+    shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl Harness {
@@ -608,6 +609,7 @@ impl Harness {
             ctx: egui::Context::default(),
             app,
             time: 0.0,
+            shapes: Vec::new(),
         };
         h.frame(vec![]);
         h.frame(vec![]);
@@ -625,6 +627,19 @@ impl Harness {
         let Self { ctx, app, .. } = self;
         let mut out = ctx.run_ui(input, |ui| app.show(ui));
         out.textures_delta.clear();
+        self.shapes = out.shapes;
+    }
+
+    /// Whether the last frame drew a piece of text containing `needle`.
+    fn drew(&self, needle: &str) -> bool {
+        fn walk(shape: &egui::Shape, needle: &str) -> bool {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+                egui::Shape::Text(t) => t.galley.job.text.contains(needle),
+                _ => false,
+            }
+        }
+        self.shapes.iter().any(|c| walk(&c.shape, needle))
     }
 
     fn click(&mut self, at: Pos2) {
@@ -2325,7 +2340,7 @@ fn monitor(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> Harness {
 /// One frame, then every request the page queued answered by the box.
 fn monitor_pump(b: &Bench, jar: &Jar, h: &mut Harness) {
     h.frame(vec![]);
-    let Harness { ctx, app, time } = h;
+    let Harness { ctx, app, time, .. } = h;
     pump(b, jar, app.boxv.as_mut().unwrap(), ctx, *time);
     values(b, app.boxv.as_mut().unwrap(), *time);
     h.frame(vec![]);
@@ -3987,7 +4002,7 @@ fn pump_until(b: &Bench, jar: &Jar, h: &mut Harness, what: &str, mut done: impl 
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         h.frame(vec![]);
-        let Harness { ctx, app, time } = h;
+        let Harness { ctx, app, time, .. } = h;
         pump(b, jar, app.boxv.as_mut().unwrap(), ctx, *time);
         h.frame(vec![]);
         if done(h) {
@@ -4883,4 +4898,40 @@ fn a_rename_offered_on_a_box_is_saved_in_every_file_with_its_history_and_undone(
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
     assert_eq!(on_box("main.st"), LAMP);
     assert_eq!(on_box("test_lamp.st"), FOLLOWS);
+}
+
+#[test]
+fn the_files_tab_names_the_box_and_has_only_my_files() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let long = "a-very-long-project-name-that-keeps-going-on-n";
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", MAIN)]);
+    make(&b, &jar, &mut v.projects, long, &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.app.chrome.show_files();
+    h.wait(0.3);
+    let left = h.rect("left");
+    assert!(h.drew("Files on the box"), "the header names the device");
+    assert!(!h.drew("in this browser"));
+    assert!(h.app.chrome.rect("files head mine").is_some());
+    assert!(
+        h.app.chrome.rect("files head examples").is_none(),
+        "a box has no examples: no empty section"
+    );
+    assert!(h.app.chrome.rect("project line").is_some());
+    assert!(h.app.chrome.rect(&format!("project {long}")).is_some());
+    // The long name leaves the pane its width.
+    let grew = left.right() - h.rect("left").right();
+    assert!(grew.abs() <= 8.0, "{grew}");
+    // Folding My Files hides the rows and is kept.
+    h.press("files head mine");
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("project line").is_none(), "folded away");
+    assert!(h.app.chrome.rect("files head mine").is_some());
+    assert!(crate::editor::Chrome::restored(&h.app.chrome.saved()).files_fold_mine);
+    h.press("files head mine");
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("project line").is_some(), "unfolded");
 }
