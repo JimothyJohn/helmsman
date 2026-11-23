@@ -151,13 +151,9 @@ impl Pane {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Files => "Alt+Shift+0  Files: the projects and their files.",
-            Self::Devices => {
-                "Alt+Shift+4  Devices: the I/O map and its modules."
-            }
+            Self::Devices => "Alt+Shift+4  Devices: the I/O map and its modules.",
             Self::Code => "Alt+Shift+1  Code: the open file's Structured Text.",
-            Self::History => {
-                "History: every saved version, newest at the top.\nClick one to run it."
-            }
+            Self::History => "History: every saved version, newest at the top.\nClick one to run it.",
             Self::Claude | Self::Io => match self.tab() {
                 Some(t) => t.tip(),
                 None => "",
@@ -1023,11 +1019,20 @@ fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool) 
     let (w, h, slab) = (22.0, 18.0, 7.0);
     let frame = Rect::from_center_size(c, Vec2::new(w, h));
     let p = ui.painter();
-    p.rect_stroke(frame, CornerRadius::same(2), Stroke::new(2.0, ink), egui::StrokeKind::Inside);
+    p.rect_stroke(
+        frame,
+        CornerRadius::same(2),
+        Stroke::new(2.0, ink),
+        egui::StrokeKind::Inside,
+    );
     let side = if pane_left { -1.0 } else { 1.0 };
     let edge = if pane_left { frame.left() } else { frame.right() };
     let slab_rect = Rect::from_x_y_ranges(
-        if pane_left { edge..=edge + slab } else { edge - slab..=edge },
+        if pane_left {
+            edge..=edge + slab
+        } else {
+            edge - slab..=edge
+        },
         frame.top()..=frame.bottom(),
     );
     p.rect_filled(slab_rect, CornerRadius::same(1), ink);
@@ -1111,7 +1116,13 @@ fn side_pane(
         )
     };
     let (other, chevron_tip) = if right {
-        ("the left pane", format!("{}  Hide the pane.", crate::hotkeys::label(ui.ctx(), crate::hotkeys::Action::Panel)))
+        (
+            "the left pane",
+            format!(
+                "{}  Hide the pane.",
+                crate::hotkeys::label(ui.ctx(), crate::hotkeys::Action::Panel)
+            ),
+        )
     } else {
         ("the window's right edge", "Hide the pane.".to_string())
     };

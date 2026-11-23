@@ -1021,25 +1021,25 @@ impl App {
     }
 
     /// The brand's wordmark: the encoder mark and the name, a link to the site.
-/// The name is set in the canvas's own text face; the brand's stencil face
-/// is not bundled (the board's `brand-wordmark-font` question).
-fn wordmark(ui: &mut egui::Ui, color: egui::Color32) -> egui::Response {
-    let side = 30.0;
-    let gap = 8.0;
-    let galley = ui
-        .painter()
-        .layout_no_wrap("Helmsman".to_string(), egui::FontId::proportional(22.0), color);
-    let size = Vec2::new(side + gap + galley.size().x, side);
-    let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click());
-    let color = if r.hovered() { theme(ui).fg } else { color };
-    let p = ui.painter();
-    glyphs::paint_mark(p, Rect::from_min_size(rect.min, Vec2::splat(side)), color);
-    let at = egui::pos2(rect.min.x + side + gap, rect.center().y - galley.size().y / 2.0);
-    p.galley(at, galley, color);
-    r
-}
+    /// The name is set in the canvas's own text face; the brand's stencil face
+    /// is not bundled (the board's `brand-wordmark-font` question).
+    fn wordmark(ui: &mut egui::Ui, color: egui::Color32) -> egui::Response {
+        let side = 30.0;
+        let gap = 8.0;
+        let galley =
+            ui.painter()
+                .layout_no_wrap("Helmsman".to_string(), egui::FontId::proportional(22.0), color);
+        let size = Vec2::new(side + gap + galley.size().x, side);
+        let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click());
+        let color = if r.hovered() { theme(ui).fg } else { color };
+        let p = ui.painter();
+        glyphs::paint_mark(p, Rect::from_min_size(rect.min, Vec2::splat(side)), color);
+        let at = egui::pos2(rect.min.x + side + gap, rect.center().y - galley.size().y / 2.0);
+        p.galley(at, galley, color);
+        r
+    }
 
-/// The header, one row as tall as two: the mark and the File / Edit /
+    /// The header, one row as tall as two: the mark and the File / Edit /
     /// View menus on the left, the open view's actions after them, and on
     /// the right what is open (its name, Save, Deploy), the screens, the
     /// ⋯ menu and Sign in. Returns what it drew where.

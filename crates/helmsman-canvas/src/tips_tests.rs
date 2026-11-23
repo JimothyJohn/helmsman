@@ -392,5 +392,8 @@ fn the_tooltip_reader_counts_what_a_user_would_read() {
     );
     assert_eq!(tip_texts("fn menu_item(ui: &mut Ui) { f(\"x\"); }"), []);
     assert_eq!(tip_texts("x.tip(why);"), []);
-    assert_eq!(tip_texts("x.tip(format!(\"{} two\", p.tip()));"), [(1, "{} two".to_string())]);
+    assert_eq!(
+        tip_texts("x.tip(format!(\"{} two\", p.tip()));"),
+        [(1, "{} two".to_string())]
+    );
 }

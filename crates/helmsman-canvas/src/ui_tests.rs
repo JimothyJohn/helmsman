@@ -1052,8 +1052,16 @@ END_PROGRAM",
         }
         assert!(!h.has("deploy"), "Deploy is the File menu's");
         assert!(!h.has("menu"), "no ⋯ any more");
-        let (mark, menu, help, toggle) = (h.rect("mark"), h.rect("bar menu"), h.rect("help"), h.rect("monitor"));
-        assert!(mark.right() <= menu.left(), "the wordmark, then the menu: {mark:?} {menu:?}");
+        let (mark, menu, help, toggle) = (
+            h.rect("mark"),
+            h.rect("bar menu"),
+            h.rect("help"),
+            h.rect("monitor"),
+        );
+        assert!(
+            mark.right() <= menu.left(),
+            "the wordmark, then the menu: {mark:?} {menu:?}"
+        );
         assert!(
             help.left() >= toggle.right(),
             "? right of the Editor | Monitor toggle: {help:?} {toggle:?}"
@@ -1095,7 +1103,9 @@ END_PROGRAM",
             fn walk(s: &egui::Shape, area: egui::Rect, out: &mut (Vec<egui::Rect>, Vec<[egui::Pos2; 2]>)) {
                 match s {
                     egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
-                    egui::Shape::Rect(r) if r.fill != egui::Color32::TRANSPARENT && area.contains_rect(r.rect) => {
+                    egui::Shape::Rect(r)
+                        if r.fill != egui::Color32::TRANSPARENT && area.contains_rect(r.rect) =>
+                    {
                         out.0.push(r.rect);
                     }
                     egui::Shape::LineSegment { points, .. } if points.iter().all(|p| area.contains(*p)) => {
@@ -1113,7 +1123,10 @@ END_PROGRAM",
         /// Which way the arrow points: its two strokes meet at the tip.
         fn points_right(segs: &[[egui::Pos2; 2]]) -> bool {
             assert_eq!(segs.len(), 2, "an arrow is two strokes: {segs:?}");
-            let tip = segs[0].iter().find(|p| segs[1].contains(p)).expect("the strokes meet");
+            let tip = segs[0]
+                .iter()
+                .find(|p| segs[1].contains(p))
+                .expect("the strokes meet");
             let back = segs[0].iter().find(|p| *p != tip).unwrap();
             tip.x > back.x
         }
@@ -1124,27 +1137,56 @@ END_PROGRAM",
         for (hook, pane_left) in [("left", true), ("right", false)] {
             // Open: the pane's side is filled, the arrow points into its edge.
             let r = h.rect(hook);
-            assert!(r.width() <= crate::st_view::TAP && r.height() <= crate::st_view::TAP, "{hook}: {r:?}");
+            assert!(
+                r.width() <= crate::st_view::TAP && r.height() <= crate::st_view::TAP,
+                "{hook}: {r:?}"
+            );
             let (fills, segs) = drawn(&h, r);
-            let slab = fills.iter().find(|f| f.width() < r.width() * 0.5 && f.height() > 12.0);
+            let slab = fills
+                .iter()
+                .find(|f| f.width() < r.width() * 0.5 && f.height() > 12.0);
             let slab = slab.unwrap_or_else(|| panic!("{hook}: no filled side in {fills:?}"));
-            assert_eq!(slab.center().x < r.center().x, pane_left, "{hook}: the filled side is the pane's");
-            assert_eq!(points_right(&segs), !pane_left, "{hook}: hide moves the pane to its edge");
+            assert_eq!(
+                slab.center().x < r.center().x,
+                pane_left,
+                "{hook}: the filled side is the pane's"
+            );
+            assert_eq!(
+                points_right(&segs),
+                !pane_left,
+                "{hook}: hide moves the pane to its edge"
+            );
             // Click: the pane shuts, and its strip's button is the same
             // glyph the other way about.
             h.press(hook);
             h.wait(0.3);
-            let shut = if pane_left { h.app.chrome.left } else { h.app.chrome.right };
+            let shut = if pane_left {
+                h.app.chrome.left
+            } else {
+                h.app.chrome.right
+            };
             assert!(!shut, "{hook}: the glyph hides its pane");
             let r = h.rect(hook);
             let (fills, segs) = drawn(&h, r);
             let slab = fills.iter().find(|f| f.width() < 12.0 && f.height() > 12.0);
             let slab = slab.unwrap_or_else(|| panic!("{hook} strip: no filled side in {fills:?}"));
-            assert_eq!(slab.center().x < r.center().x, pane_left, "{hook} strip: the same side");
-            assert_eq!(points_right(&segs), pane_left, "{hook} strip: show moves the pane in");
+            assert_eq!(
+                slab.center().x < r.center().x,
+                pane_left,
+                "{hook} strip: the same side"
+            );
+            assert_eq!(
+                points_right(&segs),
+                pane_left,
+                "{hook} strip: show moves the pane in"
+            );
             h.press(hook);
             h.wait(0.3);
-            let open = if pane_left { h.app.chrome.left } else { h.app.chrome.right };
+            let open = if pane_left {
+                h.app.chrome.left
+            } else {
+                h.app.chrome.right
+            };
             assert!(open, "{hook}: the strip's glyph shows its pane again");
         }
     }
@@ -2564,7 +2606,10 @@ mod chrome {
         h.frame(vec![]);
         let four = ["bar file", "bar edit", "bar view", "bar help"].map(|k| h.rect(k));
         let widest = four.iter().map(Rect::width).fold(0.0, f32::max);
-        assert!(widest <= 220.0 * crate::theme::BODY / 12.5, "the menu is {widest} pt wide");
+        assert!(
+            widest <= 220.0 * crate::theme::BODY / 12.5,
+            "the menu is {widest} pt wide"
+        );
         assert!(four.iter().all(|r| (r.width() - widest).abs() < 1.0), "{four:?}");
         h.press("bar menu");
         menu(&mut h, "bar file", &["file new", "file save", "file download"]);
