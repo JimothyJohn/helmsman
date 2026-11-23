@@ -521,7 +521,14 @@ fn tree(dir: &Path) -> Vec<String> {
             if e.file_type().unwrap().is_dir() {
                 stack.push(p.clone());
             }
-            out.push(p.strip_prefix(dir).unwrap().display().to_string());
+            // Slash-separated whatever the host's separator.
+            out.push(
+                p.strip_prefix(dir)
+                    .unwrap()
+                    .display()
+                    .to_string()
+                    .replace('\\', "/"),
+            );
         }
     }
     out.sort();

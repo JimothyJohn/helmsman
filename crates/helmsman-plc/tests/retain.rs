@@ -299,6 +299,7 @@ impl Running {
     }
 }
 
+#[cfg(unix)]
 impl Running {
     /// SIGTERM, then waits (with a deadline) for the box to exit on its
     /// own: its exit status and what it printed.
@@ -422,6 +423,8 @@ fn a_killed_box_resumes_its_retain_counter_and_says_what_changed() {
 /// the saved count is past the periodic write the test saw, and a restart
 /// resumes from exactly it. (The SIGKILL test above is the negative path:
 /// that one keeps only what the periodic write got to.)
+// SIGTERM and `kill` are Unix; the box catches Ctrl-C on Windows, untested.
+#[cfg(unix)]
 #[test]
 fn a_terminated_box_writes_its_retain_values_before_exiting() {
     let dir = tmp("term");

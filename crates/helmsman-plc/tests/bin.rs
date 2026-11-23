@@ -616,6 +616,8 @@ fn bad_arguments_exit_2_with_usage() {
     assert_eq!(out.status.code(), Some(1));
 }
 
+// The zone database is /usr/share/zoneinfo: Unix hosts only.
+#[cfg(unix)]
 #[test]
 fn the_box_says_which_zone_its_wall_clock_reads() {
     let prog = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
@@ -1541,7 +1543,11 @@ fn the_default_state_directory_is_in_the_working_directory_never_the_crate() {
         said.push_str(&line);
     }
     drop(running);
-    assert!(said.contains("helmsman-state/api-token"), "{said}");
+    // Windows prints its own separator.
+    assert!(
+        said.replace('\\', "/").contains("helmsman-state/api-token"),
+        "{said}"
+    );
     assert!(cwd.join("helmsman-state/api-token").is_file(), "{said}");
     assert!(!in_crate.exists(), "{}", leaked());
 }

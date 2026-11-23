@@ -548,6 +548,22 @@ impl Drop for Site {
     }
 }
 
+/// One datagram into `buf`, or none (a timeout or an error).
+///
+/// Windows fails a receive into a buffer the datagram does not fit
+/// (WSAEMSGSIZE, 10040) where Unix truncates it, and the failure does not
+/// name the sender. The datagram is too long all the same: it is counted as
+/// such, from no address.
+fn receive(socket: &UdpSocket, buf: &mut [u8]) -> Option<(usize, SocketAddr)> {
+    match socket.recv_from(buf) {
+        Ok(got) => Some(got),
+        Err(e) if cfg!(windows) && e.raw_os_error() == Some(10040) => {
+            Some((buf.len(), SocketAddr::from(([0, 0, 0, 0], 0))))
+        }
+        Err(_) => None,
+    }
+}
+
 fn run(
     socket: &UdpSocket,
     state: &State,
@@ -577,13 +593,14 @@ fn run(
             }
             next = now + every;
         }
-        if let Ok((n, from)) = socket.recv_from(&mut buf) {
-            let now = state.t0.elapsed();
-            state
-                .peers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .datagram(&buf[..n], from, now);
-        }
+        let Some((n, from)) = receive(socket, &mut buf) else {
+            continue;
+        };
+        let now = state.t0.elapsed();
+        state
+            .peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .datagram(&buf[..n], from, now);
     }
 }
