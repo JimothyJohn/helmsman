@@ -197,7 +197,8 @@ fn the_gutter_has_a_row_for_every_row_the_editor_wraps_to() {
 
 /// The Code tab's header: "main.st ↵ → ✔ compiles" broke inside the
 /// status label once the deploy arrow took its room, "compiles" alone on
-/// a line. A label wraps as a whole or not at all.
+/// a line. A label wraps as a whole or not at all. Since 2026-11-23 the
+/// header says nothing while the code compiles (Nick): no "compiles".
 #[test]
 fn the_code_headers_status_labels_are_not_broken_across_lines() {
     let mut h = Harness::code();
@@ -210,7 +211,11 @@ fn the_code_headers_status_labels_are_not_broken_across_lines() {
     h.wait(1.0);
     let before = h.rect("pane code").width();
     let file = h.app.sim.as_ref().unwrap().proj.current.clone();
-    for needle in [file.as_str(), "compiles", "not deployed"] {
+    assert!(
+        galleys(&h, |t| t.contains("compiles")).is_empty() && !h.has("code errors"),
+        "code that compiles has no status"
+    );
+    for needle in [file.as_str(), "not deployed"] {
         let found = galleys(&h, |t| t.contains(needle));
         assert!(
             needle == "not deployed" || !found.is_empty(),
@@ -325,4 +330,107 @@ fn a_file_the_picker_cannot_take_is_told_in_messages() {
     h.press("bottom messages");
     h.wait(0.3);
     assert!(h.drew("big.zip was not read"), "Messages lists it");
+}
+
+/// The Code header since 2026-11-23 (Nick): a magnifier that opens Find
+/// and Replace, Deploy as a bigger filled button at the right end, and
+/// the compile status only when it fails, as a red ✖ that goes to the
+/// line.
+#[test]
+fn the_code_header_has_find_a_big_deploy_at_the_right_and_errors_only_when_there_are() {
+    let mut h = Harness::code();
+    h.wait(0.5);
+    let pane = h.rect("code header rest");
+    let (find, wrap, deploy) = (h.rect("code find"), h.rect("code wrap"), h.rect("code deploy"));
+    assert!(!h.has("code errors"), "nothing while it compiles");
+    assert!(
+        (deploy.right() - pane.right()).abs() <= 1.0,
+        "Deploy at the right end: {deploy:?} in {pane:?}"
+    );
+    assert!(deploy.left() > wrap.right() && find.right() <= wrap.left() + 1.0);
+    assert!(
+        deploy.width() > 1.5 * wrap.width() && deploy.height() > wrap.height(),
+        "bigger than the glyphs: {deploy:?} beside {wrap:?}"
+    );
+    assert!(
+        deploy.left() >= pane.left() - 1.0,
+        "inside the row: {deploy:?} in {pane:?}"
+    );
+
+    // The magnifier opens the find row, and shuts it.
+    assert!(h.app.chrome.find.is_none());
+    h.press("code find");
+    h.frame(vec![]);
+    assert!(h.app.chrome.find.is_some());
+    h.press("code find");
+    h.frame(vec![]);
+    assert!(h.app.chrome.find.is_none());
+
+    // Code that does not compile: the ✖ with the count, and a click goes
+    // to the line of the first error.
+    {
+        let v = h.app.sim.as_mut().unwrap();
+        v.proj.create("broken", None);
+        v.proj.files.insert(
+            "main.st".into(),
+            "PROGRAM p\nVAR\n  x : BOOL;\nEND_VAR\nx := ;\nEND_PROGRAM\n".into(),
+        );
+        v.proj.save();
+        v.open_project("broken");
+    }
+    h.wait(1.5);
+    assert!(h.has("code errors"), "the ✖ shows");
+    assert!(
+        (h.rect("code header rest").right() - pane.right()).abs() < 1.0,
+        "the pane keeps its width"
+    );
+    assert!(h.rect("code errors").right() <= h.rect("code deploy").left());
+    h.app.chrome.line = None;
+    h.press("code errors");
+    h.frame(vec![]);
+    assert!(h.app.chrome.line.is_some(), "the click goes to the error's line");
+}
+
+/// Replace and Replace all in the find row: the file changes where the
+/// matches are and nowhere else, and a read-only file offers no replace.
+#[test]
+fn replace_writes_one_match_then_all_of_them() {
+    let mut h = Harness::code();
+    h.wait(0.5);
+    let cur = h.app.sim.as_ref().unwrap().proj.current.clone();
+    let src = "PROGRAM p\nVAR\n  lamp : BOOL;\n  lamp_ok : BOOL;\nEND_VAR\nlamp := lamp_ok; (* lamp *)\nEND_PROGRAM\n";
+    h.app
+        .sim
+        .as_mut()
+        .unwrap()
+        .proj
+        .files
+        .insert(cur.clone(), src.into());
+    let mut find = crate::find::Find::default();
+    find.query = "lamp".into();
+    find.replace = Some("beacon".into());
+    h.app.chrome.find = Some(find);
+    h.wait(0.3);
+    let file = |h: &Harness| h.app.sim.as_ref().unwrap().proj.files[&cur].clone();
+    let button = |h: &Harness, text: &str| {
+        text_at(h, text)
+            .into_iter()
+            .find(|(_, _, g)| g.job.text == text)
+            .map_or_else(
+                || panic!("no {text:?} button"),
+                |(_, pos, g)| pos + g.size() / 2.0,
+            )
+    };
+    let at = button(&h, "Replace");
+    h.click(at);
+    h.wait(0.3);
+    assert_eq!(
+        file(&h),
+        src.replacen("lamp", "beacon", 1),
+        "the first match alone"
+    );
+    let at = button(&h, "Replace all");
+    h.click(at);
+    h.wait(0.3);
+    assert_eq!(file(&h), src.replace("lamp", "beacon"));
 }

@@ -168,6 +168,32 @@
         }
     };
 
+    // Ctrl or Cmd F is the program's own find wherever the keyboard is.
+    // With the focus on the page and not on the canvas (after a click on
+    // the browser's own chrome, or before the first click) the key never
+    // reached the program and the browser opened its find instead. Here
+    // the key is kept from the browser, the canvas takes the focus, and
+    // the same key is handed to it.
+    window.addEventListener('keydown', function (e) {
+        if (!started || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) { return; }
+        if (e.key !== 'f' && e.key !== 'F') { return; }
+        var canvas = document.getElementById('canvas');
+        var at = document.activeElement;
+        // On the canvas, or in the text field the program types through:
+        // the program hears it already.
+        if (!canvas || at === canvas || (at && at.tagName === 'INPUT')) { return; }
+        e.preventDefault();
+        try {
+            canvas.focus();
+            var init = { key: e.key, code: 'KeyF', ctrlKey: e.ctrlKey, metaKey: e.metaKey, bubbles: true, cancelable: true };
+            canvas.dispatchEvent(new KeyboardEvent('keydown', init));
+            canvas.dispatchEvent(new KeyboardEvent('keyup', init));
+        } catch (ignore) {
+            // An old browser without KeyboardEvent: its own find stays shut,
+            // and the next Ctrl F reaches the canvas, which has the focus now.
+        }
+    }, true);
+
     if (typeof WebAssembly !== 'object' || typeof WebAssembly.instantiate !== 'function') {
         fail('unsupported', '');
     } else {

@@ -28,6 +28,31 @@ pub struct Find {
     /// `start_button`): the query came from a signal's card, not from
     /// typing. Typing in the box ends it.
     pub word: bool,
+    /// The replace row under the find box, while it is open: what a
+    /// match is replaced with.
+    pub replace: Option<String>,
+}
+
+/// `text` with each of `ranges` (in order, none overlapping, as
+/// [`matches`] gives them) written `with`.
+#[must_use]
+pub fn replaced(text: &str, ranges: &[Range<usize>], with: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for r in ranges {
+        if r.start < last
+            || r.end > text.len()
+            || !text.is_char_boundary(r.start)
+            || !text.is_char_boundary(r.end)
+        {
+            continue;
+        }
+        out.push_str(&text[last..r.start]);
+        out.push_str(with);
+        last = r.end;
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 impl Find {
@@ -176,13 +201,26 @@ pub struct Found {
 
 /// The find row over the ST pane, for `text`; `None` once closed (Esc
 /// or ✕). `id` is the ST editor's.
-pub fn row(ui: &mut egui::Ui, find: &mut Option<Find>, id: egui::Id, text: &str) -> Option<Found> {
+pub fn row(
+    ui: &mut egui::Ui,
+    find: &mut Option<Find>,
+    id: egui::Id,
+    buf: &mut dyn egui::TextBuffer,
+) -> Option<Found> {
     let f = find.as_mut()?;
     let box_id = id.with("find");
     let mut close = false;
     let mut changed = false;
+    // A file that cannot be edited (a box's, read-only) is only searched.
+    let editable = buf.is_mutable();
+    // Replace this match (false) or every match (true), asked this frame.
+    let mut replace: Option<bool> = None;
+    let owned = buf.as_str().to_owned();
+    let text = owned.as_str();
     ui.horizontal_wrapped(|ui| {
-        let width = (ui.available_width() - 190.0).clamp(80.0, 260.0);
+        // The whole row: the count and the buttons wrap under it, so a
+        // narrow pane never crowds the field.
+        let width = (ui.available_width() - 2.0 * ui.spacing().button_padding.x - 8.0).max(60.0);
         let r = ui
             .add(
                 egui::TextEdit::singleline(&mut f.query)
@@ -246,10 +284,76 @@ pub fn row(ui: &mut egui::Ui, find: &mut Option<Find>, id: egui::Id, text: &str)
             f.step = 1;
             f.reveal = true;
         }
+        if editable
+            && ui
+                .add(egui::Button::new("⇄").selected(f.replace.is_some()))
+                .tip("Replace: opens the row that writes something else in place of a match.")
+                .clicked()
+        {
+            f.replace = match f.replace.take() {
+                Some(_) => None,
+                None => Some(String::new()),
+            };
+        }
         if ui.button("✕").tip("Closes the find box (Esc).").clicked() {
             close = true;
         }
     });
+    let n = f.all(text).len();
+    if editable && let Some(with) = f.replace.as_mut() {
+        ui.horizontal_wrapped(|ui| {
+            // The whole row: the count and the buttons wrap under it, so a
+            // narrow pane never crowds the field.
+            let width = (ui.available_width() - 2.0 * ui.spacing().button_padding.x - 8.0).max(60.0);
+            ui.add(
+                egui::TextEdit::singleline(with)
+                    .id(id.with("replace"))
+                    .hint_text("replace with")
+                    .desired_width(width),
+            )
+            .tip("What a match is replaced with. Empty takes the match out.");
+            if ui
+                .add_enabled(n > 0, egui::Button::new("Replace"))
+                .tip("Writes this in place of the selected match and goes to the next.")
+                .clicked()
+            {
+                replace = Some(false);
+            }
+            if ui
+                .add_enabled(n > 0, egui::Button::new("Replace all"))
+                .tip("Writes this in place of every match in this file.")
+                .clicked()
+            {
+                replace = Some(true);
+            }
+        });
+    }
+    let after;
+    let text = if let Some(all) = replace {
+        let ranges = f.all(text);
+        let k = f.current.min(ranges.len().saturating_sub(1));
+        let picked: Vec<Range<usize>> = if all {
+            ranges
+        } else {
+            ranges.get(k).cloned().into_iter().collect()
+        };
+        // Where the search goes on: past what was just written, so a
+        // replacement that holds the query is not found again at once.
+        let with = f.replace.clone().unwrap_or_default();
+        let resume = picked.first().map_or(0, |r| r.start + with.len());
+        after = replaced(text, &picked, &with);
+        buf.replace_with(&after);
+        f.current = if all {
+            0
+        } else {
+            f.all(&after).iter().position(|r| r.start >= resume).unwrap_or(0)
+        };
+        f.step = 0;
+        f.reveal = true;
+        after.as_str()
+    } else {
+        text
+    };
     if close {
         // The editor takes the keyboard with the current match selected,
         // so typing replaces it (an unfocused editor keeps only a caret).
@@ -286,7 +390,28 @@ mod tests {
     use eframe::egui::{Color32, FontId, TextFormat, text::LayoutJob};
     use proptest::prelude::*;
 
-    use super::{Find, mark, matches, names};
+    use super::{Find, mark, matches, names, replaced};
+
+    #[test]
+    fn replacing_writes_each_match_and_leaves_the_rest() {
+        let t = "Motor := MOTOR AND motor_ok;";
+        let m = matches(t, "motor");
+        assert_eq!(replaced(t, &m, "pump"), "pump := pump AND pump_ok;");
+        assert_eq!(replaced(t, &m[1..2], "x"), "Motor := x AND motor_ok;");
+        assert_eq!(replaced(t, &m, ""), " :=  AND _ok;");
+        assert_eq!(replaced(t, &[], "x"), t);
+        // Ranges that overlap, run off the end or split a character are
+        // left alone, never a panic.
+        let odd = "é := é;";
+        assert_eq!(replaced(odd, &[1..2, 5..400], "x"), odd);
+        assert_eq!(
+            replaced(odd, &[0..2, 1..3], "x"),
+            "x := é;",
+            "the second overlaps the first"
+        );
+        // A replacement that holds the query does not grow without end.
+        assert_eq!(replaced("aa", &matches("aa", "a"), "aa"), "aaaa");
+    }
 
     #[test]
     fn matches_ignore_ascii_case_and_never_overlap() {

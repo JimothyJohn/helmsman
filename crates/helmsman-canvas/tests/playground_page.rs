@@ -156,6 +156,8 @@ fn the_screen_knows_every_failure_and_says_it_plainly() {
         "addEventListener('unhandledrejection'",
         "addEventListener('helmsman-started'",
         "addEventListener('helmsman-start-failed'",
+        // Ctrl or Cmd F stays the program's find with the focus off the canvas.
+        "addEventListener('keydown'",
         "typeof WebAssembly",
         "load:",
         "start:",

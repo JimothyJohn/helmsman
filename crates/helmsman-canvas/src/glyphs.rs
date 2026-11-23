@@ -40,6 +40,8 @@ pub enum Icon {
     /// → : deploy the open project, its latest edits (Nick, 2026-11-08).
     /// Beside the running project in Files and the Code header.
     Deploy,
+    /// A magnifier: find (and replace) in the open file.
+    Find,
     /// A line turning back under itself: word wrap in the Code tab
     /// (Nick, 2026-11-08), lit while on.
     Wrap,
@@ -127,6 +129,38 @@ pub fn action(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool) -> Re
         painter,
         Rect::from_center_size(rect.center(), Vec2::splat(side)),
         icon,
+        ink,
+    );
+    r
+}
+
+/// How wide the Deploy button is, points.
+pub const DEPLOY_W: f32 = TAP * 1.6;
+
+/// Deploy as a button that reads as one (Nick, 2026-11-23): filled
+/// green, a black arrow, bigger than the glyphs beside it. The caller
+/// tips it.
+pub fn deploy(ui: &mut egui::Ui, enabled: bool) -> Response {
+    let size = Vec2::new(DEPLOY_W, TAP * 0.85);
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, r) = ui.allocate_exact_size(size, sense);
+    let t = theme(ui);
+    let hot = enabled && r.hovered();
+    let (fill, ink) = if enabled {
+        (
+            if hot { GREEN.gamma_multiply(0.85) } else { GREEN },
+            crate::st_view::brand::BLACK,
+        )
+    } else {
+        (t.rule.gamma_multiply(0.5), t.muted.gamma_multiply(0.5))
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(5), fill);
+    let side = rect.height() * 0.5;
+    draw(
+        painter,
+        Rect::from_center_size(rect.center(), Vec2::new(side * 1.4, side)),
+        Icon::Deploy,
         ink,
     );
     r
@@ -533,6 +567,17 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             p.line_segment(
                 [Pos2::new(to, c.y), Pos2::new(to + dir * head, c.y + head)],
                 stroke,
+            );
+        }
+        Icon::Find => {
+            // A lens and its handle, down to the right.
+            let rad = b.width() * 0.32;
+            let at = Pos2::new(l + rad + w * 0.5, t + rad + w * 0.5);
+            p.circle_stroke(at, rad, stroke);
+            let d = rad * std::f32::consts::FRAC_1_SQRT_2;
+            p.line_segment(
+                [Pos2::new(at.x + d, at.y + d), Pos2::new(r, bt)],
+                Stroke::new(w * 1.3, color),
             );
         }
         Icon::Deploy => {
