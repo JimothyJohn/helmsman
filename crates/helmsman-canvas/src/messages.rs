@@ -221,7 +221,7 @@ impl Log {
             if !self.items.is_empty() {
                 let r = ui
                     .button("Copy all")
-                    .tip("Copies the messages shown, as text, to paste into a bug report or to the Agent.");
+                    .tip("Copies the messages shown, as text, to paste into a bug report or into the Describe tab.");
                 chrome.hit("messages copy", r.rect);
                 if r.clicked() {
                     ui.ctx().copy_text(self.text());
@@ -280,7 +280,7 @@ pub fn copyable(
         chrome.hit(key, r.rect);
         let b = ui
             .button("Copy")
-            .tip("Copies this message, to paste into a bug report or to the Agent.");
+            .tip("Copies this message, to paste into a bug report or into the Describe tab.");
         chrome.hit(format!("{key} copy"), b.rect);
         if b.clicked() {
             ui.ctx().copy_text(text.to_string());

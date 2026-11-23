@@ -134,12 +134,12 @@ pub fn presets() -> Vec<Preset> {
     vec![
         Preset {
             name: "Default",
-            tip: "Every tab in the left pane with the Agent showing, the trend along the bottom.",
+            tip: "Every tab in the left pane with the Describe tab showing, the trend along the bottom.",
             layout: base.clone(),
         },
         Preset {
             name: "Programming",
-            tip: "The Agent on the left and the code on the right, with the messages along the bottom.",
+            tip: "The Describe tab on the left and the code on the right, with the messages along the bottom.",
             layout: PaneLayout {
                 lefts: vec![Claude, Files, History],
                 rights: vec![Code, Io, Devices],

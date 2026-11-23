@@ -47,7 +47,11 @@ impl RevisionRow {
     #[must_use]
     pub fn short(&self) -> String {
         let text = self.about.as_deref().unwrap_or(&self.what);
-        let text = text.strip_prefix("Agent: ").unwrap_or(text);
+        // "Agent: " is how revisions before 2026-11-23 were marked.
+        let text = text
+            .strip_prefix("Described: ")
+            .or_else(|| text.strip_prefix("Agent: "))
+            .unwrap_or(text);
         let line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let mut c = line.chars();
         c.next()
@@ -75,7 +79,7 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
     let t = theme(ui);
     if rows.is_empty() {
         ui.label(RichText::new("No versions yet.").color(t.muted))
-            .tip("Every save and every change the Agent makes is kept here, newest at the top.");
+            .tip("Every save and every described change is kept here, newest at the top.");
         return None;
     }
     let newest: Vec<&RevisionRow> = rows.iter().rev().collect();
@@ -140,7 +144,7 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
             row.by,
             when(row.at_ms),
             row.n,
-            if row.page { " · from the Agent" } else { "" }
+            if row.page { " · described" } else { "" }
         ));
         if r.double_clicked() {
             pick = Some(Pick::Details(row.n));
@@ -359,7 +363,7 @@ pub fn modal(
             .max_height((screen.height() - 220.0).max(120.0))
             .show(ui, |ui| {
                 if let Some(page) = &view.page {
-                    ui.label(RichText::new("The Agent page").strong());
+                    ui.label(RichText::new("The Describe page").strong());
                     let shown: String = page.chars().take(MAX_PAGE_SHOWN).collect();
                     let cut = shown.len() < page.len();
                     ui.label(RichText::new(shown).monospace().small());

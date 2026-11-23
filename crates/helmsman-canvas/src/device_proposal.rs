@@ -472,7 +472,7 @@ impl ProposalUi {
                 self.adopt(p);
                 if had {
                     self.notice = Some(
-                        "The agent proposed a newer version. It is shown here, and the names you typed are kept where the channel is still there."
+                        "Helmsman proposed a newer version. It is shown here, and the names you typed are kept where the channel is still there."
                             .into(),
                     );
                 }
@@ -622,7 +622,7 @@ impl ProposalUi {
         let can = self.ctx.engineer.is_ok();
         let r = ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Proposed device profile").strong().color(t.muted))
-                .tip("The agent read the vendor's file and proposed this profile. Check the names, then save it into the project.");
+                .tip("Helmsman read the vendor's file and proposed this profile. Check the names, then save it into the project.");
         });
         chrome.hit("proposal", r.response.rect);
         if let Some(n) = &self.notice {

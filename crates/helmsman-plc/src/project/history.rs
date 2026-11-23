@@ -342,7 +342,7 @@ mod tests {
                 "line3",
                 &files("PROGRAM b END_PROGRAM"),
                 "alice (engineer)",
-                "took the Agent's answer\ninto main.st",
+                "took the described change\ninto main.st",
                 Some(page)
             )
             .unwrap(),
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].n, 1);
         assert!(!list[0].page && list[1].page);
-        assert_eq!(list[1].what, "took the Agent's answer into main.st", "one line");
+        assert_eq!(list[1].what, "took the described change into main.st", "one line");
         assert_eq!(list[1].files, ["io.map", "main.st"]);
         assert!(list[1].at_ms >= list[0].at_ms);
         let r = h.read("line3", 1).unwrap();

@@ -2060,7 +2060,7 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
         .projects
         .history
         .iter()
-        .find(|r| r.what == "took the Agent's answer into main.st")
+        .find(|r| r.what == "took the described change into main.st")
         .cloned()
         .expect("the change's revision");
     assert!(saved.page);
@@ -4205,7 +4205,7 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
     let note = h.bv().devices_ui.vendor.note.clone().unwrap().text;
     assert_eq!(
         note,
-        "The box could not read latin1.eds: the document is not UTF-8 text. Nothing was sent to the agent."
+        "The box could not read latin1.eds: the document is not UTF-8 text. Nothing was sent."
     );
     // Control characters inside: 422 as well.
     h.press("vendor file 192.168.3.77");

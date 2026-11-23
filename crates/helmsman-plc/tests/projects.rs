@@ -2580,7 +2580,7 @@ fn every_save_is_a_revision_an_engineer_can_read_and_restore() {
     assert_eq!(revs[1]["by"], "alice (engineer)");
     assert_eq!(revs[1]["what"], "saved main.st");
     assert_eq!(revs[1]["page"], false);
-    assert_eq!(revs[2]["what"], "took the Agent's answer into main.st");
+    assert_eq!(revs[2]["what"], "took the described change into main.st");
     assert_eq!(revs[2]["page"], true);
     assert!(revs[2]["at_ms"].as_u64().unwrap() >= revs[1]["at_ms"].as_u64().unwrap());
     assert_eq!(revs[2]["files"], json!(["main.st"]));

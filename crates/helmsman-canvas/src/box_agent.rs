@@ -75,7 +75,7 @@ impl Status {
             Some("unconfigured") => Self::Unconfigured(message),
             Some("online") => Self::Online,
             Some("offline") => Self::Offline(if message.is_empty() {
-                "the agent is offline".into()
+                "the answer service is offline".into()
             } else {
                 message
             }),
@@ -87,17 +87,17 @@ impl Status {
     #[must_use]
     pub fn line(&self) -> String {
         match self {
-            Self::Unread | Self::Unknown => "The agent runs on this box, through its relay.".into(),
+            Self::Unread | Self::Unknown => "Answers come to this box through its relay.".into(),
             Self::Unconfigured(m) => {
                 if m.is_empty() {
-                    "This box has no relay configured, so there is no agent to ask.".into()
+                    "This box has no relay configured, so there is nothing to ask.".into()
                 } else {
-                    format!("No agent on this box: {m}.")
+                    format!("No answers on this box: {m}.")
                 }
             }
-            Self::Online => "The agent is online.".into(),
+            Self::Online => "The answer service is online.".into(),
             Self::Offline(m) => format!(
-                "The agent is offline ({m}). A message is read by rule: a param edit becomes a proposal, nothing else runs."
+                "The answer service is offline ({m}). A message is read by rule: a param edit becomes a proposal, nothing else runs."
             ),
         }
     }
@@ -322,14 +322,14 @@ impl BoxAgent {
     pub fn refusal(&self, message: &str) -> Option<String> {
         let n = message.trim().chars().count();
         if self.busy() {
-            Some("The agent is still answering.".into())
+            Some("Still answering.".into())
         } else if !self.status.can_send() {
             Some(self.status.line())
         } else if n == 0 {
             Some("Type a message first.".into())
         } else if n > MAX_MESSAGE {
             Some(format!(
-                "The message to the agent on this box would be {n} characters; the box takes at most {MAX_MESSAGE}."
+                "The message would be {n} characters; the box takes at most {MAX_MESSAGE}."
             ))
         } else {
             None
@@ -542,7 +542,7 @@ fn error_text(status: u16, body: &str) -> String {
         .ok()
         .and_then(|j| j["error"].as_str().map(|s| clip(s, MAX_LINE)));
     match (status, said) {
-        (401, _) => "Sign in (top right) to talk to the agent: the session ended or was never opened.".into(),
+        (401, _) => "Sign in (top right) to send a message: the session ended or was never opened.".into(),
         (403, Some(s)) => format!("The box refused: {s}"),
         (_, Some(s)) => s,
         (0, None) => "the box did not answer".into(),

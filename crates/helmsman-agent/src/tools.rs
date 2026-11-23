@@ -1451,16 +1451,12 @@ pub fn manifest_text(name: &str, m: &Map<String, Json>) -> Result<String, String
         return Err("manifest name differs from the draft's name".into());
     }
     let mut out = format!("name     {name}\n");
-    let author = m.get("author").and_then(Json::as_str).unwrap_or("Helmsman agent");
+    let author = m.get("author").and_then(Json::as_str).unwrap_or("Helmsman");
     let author = free("author", author)?;
     let _ = writeln!(
         out,
         "author   {}",
-        if author.is_empty() {
-            "Helmsman agent"
-        } else {
-            &author
-        }
+        if author.is_empty() { "Helmsman" } else { &author }
     );
     match m.get("prompt") {
         None | Some(Json::Null) => {}
