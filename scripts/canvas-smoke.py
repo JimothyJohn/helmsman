@@ -77,6 +77,9 @@ S = 2
 # 1 CSS px per point on a 1400 x 860 viewport. Measured 2026-11-22 (canvas
 # width attribute 1400 vs 2800 at a 1400 CSS px viewport and DPR 2).
 K = 2
+# --headed: show the browser (under xvfb-run on a runner). Headless Firefox on
+# Linux may have no GL context at all; a headed one under a virtual display does.
+HEADED = False
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 USER, PASSWORD = "alice", "alice-engineer-pw"
 # Console lines the smoke itself causes.
@@ -680,7 +683,7 @@ def launch(p, engine, nogpu):
         prefs = {"webgl.force-enabled": True, "webgl.disabled": False}
         if nogpu:
             prefs.update({"layers.acceleration.disabled": True, "gfx.webrender.software": True})
-        return p.firefox.launch(firefox_user_prefs=prefs)
+        return p.firefox.launch(firefox_user_prefs=prefs, headless=not HEADED)
     return p.webkit.launch()
 
 
@@ -758,8 +761,10 @@ def main():
     ap.add_argument("--market-only", action="store_true", help="only the marketplace install scenario (starts its own boxes)")
     ap.add_argument("--browser", default="chromium", choices=("chromium", "firefox", "webkit", "all"))
     ap.add_argument("--no-gpu", action="store_true", help="force software drawing (with --browser all both modes run regardless)")
+    ap.add_argument("--headed", action="store_true", help="Firefox with a window (xvfb-run on a runner), for a GL context headless lacks")
     a = ap.parse_args()
-    global PLC
+    global PLC, HEADED
+    HEADED = a.headed
     PLC = os.path.join(ROOT, "target", "debug", "helmsman-plc")
     if not os.path.exists(os.path.join(a.dist, "index.html")):
         sys.exit(f"no canvas build in {a.dist}: make canvas-web")

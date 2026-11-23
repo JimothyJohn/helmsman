@@ -301,7 +301,11 @@ jobs:
         run: |
           flags=""
           if [ "$GPU" = software ]; then flags="--no-gpu"; fi
-          "$RUNNER_TEMP/pw/bin/python" -I scripts/canvas-smoke.py --browser "$ENGINE" $flags
+          if [ "$ENGINE" = firefox ]; then
+            xvfb-run -a "$RUNNER_TEMP/pw/bin/python" -I scripts/canvas-smoke.py --browser "$ENGINE" --headed $flags
+          else
+            "$RUNNER_TEMP/pw/bin/python" -I scripts/canvas-smoke.py --browser "$ENGINE" $flags
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ always() }}
         with:
