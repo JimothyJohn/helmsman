@@ -224,6 +224,12 @@ fn main() {
             .and_then(|d| d.get_element_by_id("canvas"))
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
             .expect("index.html has a <canvas id=\"canvas\">");
+        // No WebGL2 (a browser or a machine without it): the page says so
+        // in plain words (loading/loading.js) instead of a blank canvas.
+        if !has_webgl2(&canvas) {
+            announce("helmsman-no-webgl2", None);
+            return;
+        }
         // The browser keeps its keys, except the shortcuts of ours.
         let mut options = eframe::WebOptions::default();
         let base = std::mem::replace(&mut options.should_prevent_default, Box::new(|_| false));
@@ -240,6 +246,14 @@ fn main() {
             }
         }
     });
+}
+
+/// Whether the browser hands the canvas a WebGL2 context, the one eframe's
+/// `glow` backend draws with. Asking creates it, and eframe's own request
+/// for the same canvas then gets that context back.
+#[cfg(target_arch = "wasm32")]
+fn has_webgl2(canvas: &web_sys::HtmlCanvasElement) -> bool {
+    matches!(canvas.get_context("webgl2"), Ok(Some(_)))
 }
 
 /// Tells the page, which has no other way to know, how starting went.

@@ -3,6 +3,7 @@ what the native tests cannot see: console errors and panics, and a
 screenshot of each step to look at.
 
 usage: python3 -I scripts/canvas-smoke.py [--dist DIR] [--out DIR] [--box]
+                                          [--browser chromium|firefox|webkit|all] [--no-gpu]
        make canvas-smoke            (after make canvas-web; --box also
                                      needs cargo build -p helmsman-plc)
 
@@ -16,8 +17,19 @@ directory with an engineer account (alice / alice-engineer-pw), and drives
 the box-served page signed out, then signed in. Everything is stopped at
 the end.
 
-Needs Playwright's Chromium for python3 (pip install playwright;
-python3 -m playwright install chromium). The app draws at 2 CSS px a point
+--browser picks the engine (default chromium; all runs the three, WebKit
+standing in for Safari). With all, each engine runs twice: as the engine
+picks its drawing, and with software drawing forced (SwiftShader flags for
+Chromium, software WebRender and WebGL prefs for Firefox; WebKit headless
+has no switch, so its two runs differ only in name). --no-gpu forces
+software drawing for a single --browser. Screenshots of a run go to
+OUT/<engine>[-nogpu]/ (OUT itself for plain Chromium), and the run logs
+the WebGL2 renderer the engine gave the page. A last scenario makes
+getContext('webgl2') return null and asserts the page's plain notice and
+no console error (the app must not start, let alone panic).
+
+Needs Playwright's browsers for python3 (pip install playwright;
+python3 -m playwright install chromium firefox webkit). The app draws at 2 CSS px a point
 on a doubled viewport at DPR 2 but maps the pointer one to one, so clicks
 are given in points of the 1400x860 layout (docs/UI.md). The remembered
 layout is seeded into localStorage from a same-origin URL that is not the
@@ -139,13 +151,15 @@ class Run:
         clip = {"x": x, "y": y, "width": w, "height": h}
         return hashlib.sha256(self.page.screenshot(clip=clip)).hexdigest()
 
-    def step(self, name, do, watch, ms=700):
-        """`do`, then a screenshot; `watch` (a region) must have changed."""
+    def step(self, name, do, watch, ms=700, optional=False):
+        """`do`, then a screenshot; `watch` (a region) must have changed,
+        unless `optional` (a build without the free chat has no Agent to
+        open a window from: its tab says so)."""
         before = self.look(watch)
         do()
         self.wait(ms)
         self.shot(name)
-        if self.look(watch) == before:
+        if self.look(watch) == before and not optional:
             self.same.append(f"[smoke] {self.prefix}: '{name}' changed nothing on screen")
 
     def click(self, x, y, button="left"):
@@ -204,8 +218,8 @@ def playground(ctx, base, out):
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
     # Spec mode (2026-11-15): "From a spec..." opens its window; text typed
     # into it shows; Escape shuts it with the text kept.
-    r.step("spec-window", lambda: r.click(*AGENT_SPEC), SPEC_WINDOW)
-    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), SPEC_WINDOW)
+    r.step("spec-window", lambda: r.click(*AGENT_SPEC), SPEC_WINDOW, optional=True)
+    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), SPEC_WINDOW, optional=True)
     r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
@@ -621,12 +635,89 @@ def start_box(dist, state, port):
     return proc
 
 
+# What the loading screen says without WebGL2 (loading/loading.js, "nowebgl").
+NO_WEBGL2_NOTICE = "This browser cannot draw Helmsman"
+
+NO_WEBGL2_INIT = """
+const get = HTMLCanvasElement.prototype.getContext;
+HTMLCanvasElement.prototype.getContext = function (kind, ...rest) {
+    return kind === 'webgl2' ? null : get.call(this, kind, ...rest);
+};
+"""
+
+PROBE = """() => {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    if (!gl) return null;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.VERSION);
+}"""
+
+
+def launch(p, engine, nogpu):
+    """The engine's browser, with software drawing forced when `nogpu`."""
+    if engine == "chromium":
+        args = ["--disable-gpu", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] if nogpu else []
+        return p.chromium.launch(args=args)
+    if engine == "firefox":
+        prefs = {"layers.acceleration.disabled": True, "gfx.webrender.software": True, "webgl.force-enabled": True, "webgl.disabled": False} if nogpu else {}
+        return p.firefox.launch(firefox_user_prefs=prefs)
+    return p.webkit.launch()
+
+
+def probe_webgl2(browser, base):
+    """The WebGL2 renderer the engine gives a page, or None."""
+    page = browser.new_page()
+    page.goto(base + "/__seed", wait_until="load")
+    renderer = page.evaluate(PROBE)
+    page.close()
+    return renderer
+
+
+def no_webgl2(browser, base, out):
+    """With getContext('webgl2') answering null the page shows its notice."""
+    ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+    ctx.add_init_script(NO_WEBGL2_INIT)
+    r = Run(open_app(ctx, base, "?playground&editor", layout()), out, "nowebgl")
+    r.wait(4000)
+    r.shot("notice")
+    problems = r.problems()
+    shown = r.page.locator("#loading-why").inner_text() if r.page.locator("#loading-why").count() else ""
+    if not r.page.locator("#loading-failed").is_visible() or NO_WEBGL2_NOTICE not in shown:
+        problems.append(f"[smoke] no WebGL2: the notice did not show (page said {shown!r})")
+    else:
+        print(f"[smoke] no WebGL2 notice: {shown}")
+    ctx.close()
+    return problems
+
+
+def run_engine(browser, base, out, a, proc, box_port):
+    """Every scenario in one launched browser: its problems."""
+    if a.market_only:
+        return market(browser, a.dist, out)
+    problems = []
+    ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+    problems += playground(ctx, base, out)
+    ctx.close()
+    problems += phone(browser, base, "?playground&editor", out, "pg")
+    problems += no_webgl2(browser, base, out)
+    if proc:
+        bbase = f"http://127.0.0.1:{box_port}"
+        ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+        problems += box(ctx, bbase, out)
+        ctx.close()
+        problems += phone(browser, bbase, "", out, "box")
+        problems += market(browser, a.dist, out)
+    return problems
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dist", default=os.path.join(ROOT, "target", "canvas-dist"))
     ap.add_argument("--out", default=os.path.join(ROOT, "target", "canvas-smoke"))
     ap.add_argument("--box", action="store_true", help="also start a loopback box and drive its page")
     ap.add_argument("--market-only", action="store_true", help="only the marketplace install scenario (starts its own boxes)")
+    ap.add_argument("--browser", default="chromium", choices=("chromium", "firefox", "webkit", "all"))
+    ap.add_argument("--no-gpu", action="store_true", help="force software drawing (with --browser all both modes run regardless)")
     a = ap.parse_args()
     global PLC
     PLC = os.path.join(ROOT, "target", "debug", "helmsman-plc")
@@ -643,22 +734,16 @@ def main():
             box_port = free_port()
             proc = start_box(a.dist, state, box_port)
         with sync_playwright() as p:
-            browser = p.chromium.launch()
-            if a.market_only:
-                problems += market(browser, a.dist, a.out)
-            else:
-                ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
-                problems += playground(ctx, base, a.out)
-                ctx.close()
-                problems += phone(browser, base, "?playground&editor", a.out, "pg")
-                if proc:
-                    bbase = f"http://127.0.0.1:{box_port}"
-                    ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
-                    problems += box(ctx, bbase, a.out)
-                    ctx.close()
-                    problems += phone(browser, bbase, "", a.out, "box")
-                    problems += market(browser, a.dist, a.out)
-            browser.close()
+            every = a.browser == "all"
+            for engine in (("chromium", "firefox", "webkit") if every else (a.browser,)):
+                for nogpu in ((False, True) if every else (a.no_gpu,)):
+                    name = engine + ("-nogpu" if nogpu else "")
+                    out = os.path.join(a.out, name) if every or a.no_gpu or engine != "chromium" else a.out
+                    os.makedirs(out, exist_ok=True)
+                    browser = launch(p, engine, nogpu)
+                    print(f"[smoke] {name}: WebGL2 renderer {probe_webgl2(browser, base)!r}", flush=True)
+                    problems += [f"{name}: {x}" for x in run_engine(browser, base, out, a, proc, box_port if proc else None)]
+                    browser.close()
     finally:
         srv.shutdown()
         if proc:

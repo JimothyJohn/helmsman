@@ -4,7 +4,8 @@
 // old browser reaches the message instead of a blank page.
 //
 // Told by: helmsman-canvas-initializer.js (download progress, init failure)
-// and the app itself (helmsman-started, helmsman-start-failed, src/main.rs).
+// and the app itself (helmsman-started, helmsman-start-failed,
+// helmsman-no-webgl2, src/main.rs).
 // Must never contain a script tag's text: the box scans the page for them.
 (function () {
     'use strict';
@@ -17,6 +18,7 @@
         load: 'A file this page needs did not load. Reload the page. If it happens again, the connection or the server may be down.',
         start: 'The page loaded, but the program could not start in this browser. Reload the page. If it happens again, try a current version of your browser.',
         unsupported: 'This browser cannot run the program: it needs WebAssembly, which is missing or turned off. Use a current version of Chrome, Edge, Firefox or Safari.',
+        nowebgl: 'This browser cannot draw Helmsman: WebGL, the browser feature that draws graphics, is missing or turned off. Turn on hardware acceleration in the browser settings, or use a current version of Chrome, Edge, Firefox or Safari.',
         stalled: 'This is taking longer than it should. The connection may be slow or down. You can keep waiting, or reload the page.'
     };
 
@@ -120,6 +122,10 @@
 
     window.addEventListener('helmsman-start-failed', function (e) {
         fail('start', messageOf(e.detail));
+    });
+
+    window.addEventListener('helmsman-no-webgl2', function () {
+        fail('nowebgl', '');
     });
 
     window.addEventListener('helmsman-started', function () {

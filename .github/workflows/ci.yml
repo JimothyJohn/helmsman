@@ -232,3 +232,74 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
       - name: Differential test against ruSTy
         run: ./scripts/test-oracle.sh
+
+  # The canvas is built once (trunk, as the box image does) and driven
+  # headless by scripts/canvas-smoke.py in every browser engine below.
+  # Not a required check; runs with the gate (scripts/ci-changes.sh `rust`).
+  canvas-build:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
+      - name: Install trunk
+        run: command -v trunk || cargo install trunk --locked
+      - name: Build the canvas for the browser
+        run: ./scripts/canvas-web.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: canvas-dist
+          path: target/canvas-dist
+          retention-days: 1
+          if-no-files-found: error
+
+  # The browser build in Chromium, Firefox and WebKit (Safari's engine),
+  # each as the engine picks its drawing and with software drawing forced.
+  # A hosted runner has no GPU, so the first column is the engine's own
+  # choice and the second is the forced software path; WebKit headless has
+  # no switch, so its two runs are one path (scripts/canvas-smoke.py).
+  canvas-browsers:
+    needs: canvas-build
+    if: ${{ !cancelled() && needs.canvas-build.result == 'success' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [chromium, firefox, webkit]
+        gpu: [default, software]
+    name: canvas-browsers (${{ matrix.engine }}, ${{ matrix.gpu }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: canvas-dist
+          path: target/canvas-dist
+      - name: Install Playwright and the engine
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/pw"
+          "$RUNNER_TEMP/pw/bin/pip" install playwright==1.58.0
+          "$RUNNER_TEMP/pw/bin/python" -m playwright install --with-deps "$ENGINE"
+      - name: Drive the canvas
+        env:
+          ENGINE: ${{ matrix.engine }}
+          GPU: ${{ matrix.gpu }}
+        run: |
+          flags=""
+          if [ "$GPU" = software ]; then flags="--no-gpu"; fi
+          "$RUNNER_TEMP/pw/bin/python" -I scripts/canvas-smoke.py --browser "$ENGINE" $flags
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: canvas-smoke-${{ matrix.engine }}-${{ matrix.gpu }}
+          path: target/canvas-smoke
+          retention-days: 7
+          if-no-files-found: ignore

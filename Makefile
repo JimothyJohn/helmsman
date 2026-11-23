@@ -86,8 +86,8 @@ canvas:  ## Run the canvas (the simulation) as a native window.
 canvas-web:  ## Build the canvas for the browser into target/canvas-dist (the box serves it: helmsman-plc --ui).
 	./scripts/canvas-web.sh
 
-canvas-smoke:  ## Drive target/canvas-dist in headless Chromium: console errors, panics, a screenshot per step (make canvas-web first; BOX=1 also starts a loopback box).
-	python3 -I scripts/canvas-smoke.py $(if $(BOX),--box,)
+canvas-smoke:  ## Drive target/canvas-dist headless: console errors, panics, a screenshot per step (make canvas-web first; BOX=1 also starts a loopback box; BROWSER=chromium|firefox|webkit|all, NOGPU=1 forces software drawing).
+	python3 -I scripts/canvas-smoke.py $(if $(BOX),--box,) $(if $(BROWSER),--browser $(BROWSER),) $(if $(NOGPU),--no-gpu,)
 
 playground:  ## Build the public ST playground into docs/playground (commit it; Pages serves master's docs/).
 	./scripts/build-playground.sh
