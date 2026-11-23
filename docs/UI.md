@@ -68,8 +68,12 @@ this; change it here first when a decision changes.
   as it moves; Nick, 2026-11-02) and
   Messages (the last 200 things the page had to say, filtered by level
   with the counts on the filters: info, warnings,
-  errors, with the error count on the tab), so a fault or a refused
-  deploy is still there to read after the line under the header has gone.
+  errors, with the error count on the tab; errors are listed to start and
+  a click on info or warnings lists them too, Nick, 2026-11-23), so a
+  fault or a refused deploy is still there to read after the line under
+  the header has gone. An Agent outcome is one short line there, its
+  whole text on hover and in Copy all; Copy all and Clear are icons
+  beside the filters, Clear emptying the log and its counts.
 - **One pane of tabs, on the left, the Agent first** (Nick, 2026-11-13:
   two side panels by default was too many; one keeps the diagram wide and
   the focus where it is most of the time). All six tabs start there:

@@ -36,7 +36,8 @@ one short line, for example:
 
 When nothing could be changed, the answer says why in red, with the
 first lines of what failed; **Details in the Messages** opens the
-Messages, which keep all of it.
+Messages, which keep all of it: hold the pointer over a line there for
+the whole text.
 
 ## Help with the words
 

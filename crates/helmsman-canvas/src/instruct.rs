@@ -342,7 +342,40 @@ pub struct Outcome {
     pub offers: Vec<crate::offers::Offer>,
 }
 
+/// Longest summary line the Messages log shows of an outcome, in characters.
+pub const LOG_SUMMARY: usize = 160;
+
 impl Outcome {
+    /// What the Messages log keeps of this outcome: a short line for the
+    /// operator (what changed, or that nothing did and the first reason),
+    /// and the full text (status, the Agent's reason, every problem) that
+    /// Copy all, the tooltip and the Help request carry.
+    #[must_use]
+    pub fn log_entry(&self) -> (String, String) {
+        let mut full = self.status.clone();
+        if let Some(w) = &self.why {
+            full.push_str(" Why: ");
+            full.push_str(w);
+        }
+        for p in &self.problems {
+            full.push(' ');
+            full.push_str(p);
+        }
+        let mut short = clean(&self.status, LOG_SUMMARY);
+        // A refusal's status can be only "Not changed:": say the first
+        // reason beside it, and how many more the full text holds.
+        if matches!(self.kind, Kind::Refused | Kind::Failed) {
+            if let Some(first) = self.problems.first() {
+                short = format!("{short} {}", clean(first, LOG_SUMMARY));
+                if self.problems.len() > 1 {
+                    let _ = write!(short, " (+{} more)", self.problems.len() - 1);
+                }
+                short = clean(&short, LOG_SUMMARY);
+            }
+        }
+        (short, full)
+    }
+
     pub(crate) fn new(kind: Kind, status: impl Into<String>) -> Self {
         Self {
             kind,

@@ -34,6 +34,13 @@ the tab turns red and pulses for a few seconds, and it stays red until
 you have looked at it and the error no longer stands. If the bottom
 panel was shut, an error opens it.
 
+The log lists errors to start. The **info** and **warnings** icons at its
+top list those too, each with its count, and a click on one leaves it out
+again. The answer to an instruction is one short line there; hold the
+pointer over it for the whole text. **Copy all** (two sheets) puts the
+messages shown on the clipboard, in full, and **Clear** (the bin) empties
+the log.
+
 ![The same screen in light mode, View › Light mode.](img/editor-light.png)
 
 ## The glyphs

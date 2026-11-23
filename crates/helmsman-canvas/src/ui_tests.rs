@@ -414,9 +414,14 @@ mod glyphs_and_help {
         for k in ["messages info", "messages warnings", "messages errors"] {
             assert!(h.has(k), "no {k}");
         }
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().log.show,
+            [false, false, true],
+            "errors only, to start"
+        );
         h.press("messages info");
         let log = &h.app.sim.as_ref().unwrap().log;
-        assert_eq!(log.show, [false, true, true], "info filtered out");
+        assert_eq!(log.show, [true, false, true], "info listed too");
         assert_eq!(h.app.chrome.bottom, Bottom::Messages);
         assert!(!h.has("st"), "no Files header row either");
     }
@@ -440,11 +445,12 @@ mod glyphs_and_help {
             assert!(!h.drew(&format!("{word} ")), "the word {word:?} is drawn");
         }
         assert!(h.drew("deploy refused"), "the message itself is");
+        assert!(!h.drew("a deploy ran"), "info is hidden to start");
         let r = h.rect("messages errors");
         assert!(r.width() >= 24.0 && r.height() >= 24.0, "a target: {r:?}");
         h.press("messages errors");
         h.wait(0.1);
-        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [true, true, false]);
+        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [false, false, false]);
         assert!(!h.drew("deploy refused"), "errors left out");
         h.press("messages errors");
         h.wait(0.1);
@@ -493,6 +499,68 @@ mod glyphs_and_help {
             h.app.sim.as_ref().unwrap().log.text(),
             "what is shown, as text"
         );
+    }
+
+    /// Nick, 2026-11-23: an outcome is a short line in the Messages, the
+    /// whole text one hover or one Copy all away, and Clear empties the
+    /// log with its counts.
+    #[test]
+    fn an_outcome_is_a_short_line_clear_empties_and_a_hidden_level_still_counts() {
+        use crate::instruct::{Kind, Outcome};
+        let mut h = Harness::new(App::sim());
+        let long: Vec<String> = (1..=6)
+            .map(|k| format!("scenario test_{k} failed: expected the lamp on at scan 40 and it stayed off"))
+            .collect();
+        let mut refused = Outcome::new(Kind::Refused, "Not changed:");
+        refused.problems = long;
+        let mut said = Outcome::new(Kind::Applied, "Updated main.st.");
+        said.why = Some("The lamp now follows the button.".into());
+        {
+            let log = &mut h.app.sim.as_mut().unwrap().log;
+            log.outcome(1.0, &said);
+            log.outcome(2.0, &refused);
+        }
+        h.press("bottom messages");
+        h.wait(0.2);
+        assert!(h.drew("Not changed:"), "the short line");
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .log
+                .shown()
+                .any(|m| m.text.ends_with("(+5 more)")),
+            "and how many more"
+        );
+        assert!(!h.drew("scenario test_6"), "not every problem line");
+        assert!(!h.drew("Updated main.st"), "info is hidden");
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert!(
+            log.counts()[0] >= 1 && log.counts()[2] == 1,
+            "the hidden level is still counted: {:?}",
+            log.counts()
+        );
+        assert!(
+            log.errors() == 1 && log.alarm(2.5, false).is_some(),
+            "the error still pulses"
+        );
+        h.press("messages copy");
+        let all = h.copied.last().expect("Copy all copied").clone();
+        assert!(
+            all.contains("scenario test_6 failed"),
+            "Copy all has the whole: {all}"
+        );
+        assert!(!all.contains("Updated main.st"), "Copy all copies what is shown");
+        assert!(h.has("messages clear"), "Clear is there");
+        let r = h.rect("messages clear");
+        assert!(r.width() >= 24.0 && r.height() >= 24.0, "a target: {r:?}");
+        h.press("messages clear");
+        h.wait(0.1);
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert!(log.is_empty() && log.counts() == [0; 3] && log.errors() == 0);
+        assert!(log.alarm(2.5, false).is_none(), "nothing pulses or stays red");
+        assert!(!h.has("messages clear"), "nothing to clear now");
     }
 
     #[test]
@@ -1528,7 +1596,7 @@ END_PROGRAM",
             let logged = v
                 .log
                 .iter()
-                .map(|e| e.text.clone())
+                .map(|e| e.full().to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(logged.contains("Why: it says why the lamp is on."), "{logged}");
@@ -2285,7 +2353,7 @@ mod chrome {
         let band = h.rect("hint 3");
         let editor = h.rect("st editor");
         assert!(editor.contains(band.center()), "{band:?} in {editor:?}");
-        let said = |h: &Harness| h.app.sim.as_ref().unwrap().log.text();
+        let said = |h: &Harness| h.app.sim.as_ref().unwrap().log.full_text();
         assert!(!said(&h).contains("hint(s)"), "not while the text is new");
         h.wait(SETTLE + 0.3);
         let log = said(&h);
@@ -5657,7 +5725,7 @@ mod boxed {
         assert!(
             boxed(&h)
                 .log
-                .text()
+                .full_text()
                 .contains("Help: an issue was written (Conveyor stops when rio drops)."),
             "in Messages"
         );

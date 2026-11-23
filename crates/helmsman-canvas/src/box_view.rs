@@ -1499,20 +1499,8 @@ impl BoxView {
 
     /// The outcome of the last instruction, in Messages.
     fn log_agent(&mut self) {
-        use crate::instruct::Kind;
         let Some(o) = &self.instruct.outcome else { return };
-        let mut line = o.status.clone();
-        for p in &o.problems {
-            line.push(' ');
-            line.push_str(p);
-        }
-        let at = self.agent_at;
-        match o.kind {
-            // An update with checks that did not pass is a warning.
-            Kind::Applied if !o.problems.is_empty() => self.log.warning(at, line),
-            Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
-            Kind::Refused | Kind::Failed => self.log.error(at, line),
-        }
+        self.log.outcome(self.agent_at, o);
     }
 
     /// Why Undo is off now, if it is.
@@ -1573,7 +1561,7 @@ impl BoxView {
             return;
         }
         self.help_seq += 1;
-        let req = crate::help::request(&self.help.draft, &self.log.text(), self.help_seq);
+        let req = crate::help::request(&self.help.draft, &self.log.full_text(), self.help_seq);
         self.help.helping = Some(crate::help::Helping::new(self.help_seq));
         #[cfg(target_arch = "wasm32")]
         self.help_http.send(req, ctx);
