@@ -484,6 +484,7 @@ impl BoxView {
         }
         if std::mem::take(&mut self.projects.deployed) {
             self.state.relist();
+            self.state.reread_source();
         }
         if let Some(j) = self.state.take_agent() {
             self.agent.status = crate::box_agent::Status::parse(&j);

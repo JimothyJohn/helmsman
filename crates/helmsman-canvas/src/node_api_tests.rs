@@ -637,3 +637,40 @@ fn a_replay_that_did_not_run_sends_nothing_to_the_skipper() {
     };
     assert!(why.contains("replay"), "{why}");
 }
+
+/// Nick 2026-11-24: "I'm also still not seeing the output visual diagram
+/// of the program anywhere". A node serves no traced scans (its trace
+/// stream answers 404): once that is known the program is drawn from its
+/// source, compiled here for the statement table; a box that traces is
+/// still waited for.
+#[test]
+fn a_node_without_traces_still_draws_its_program() {
+    use crate::remote::Stream;
+    let v = view();
+    let mut s = BoxState::new();
+    s.apply(Msg::Got(Fetch::Modules, Ok(api::modules(&v).to_string())), 1.0);
+    let detail = api::module_detail(v.module.as_ref().unwrap());
+    s.apply(
+        Msg::Got(Fetch::Module("chase".into()), Ok(detail.to_string())),
+        1.1,
+    );
+    assert!(s.lowered.is_none(), "a box may still trace: wait for it");
+    s.apply(Msg::Failed(Stream::Trace), 1.2);
+    let l = s.lowered.as_ref().expect("drawn from the source");
+    assert_eq!(l.src, v.module.as_ref().unwrap().source);
+    assert!(s.problem.is_none(), "{:?}", s.problem);
+    // A source that does not compile says why and draws nothing.
+    let mut s = BoxState::new();
+    s.apply(Msg::Got(Fetch::Modules, Ok(api::modules(&v).to_string())), 1.0);
+    let bad = serde_json::json!({ "name": "chase", "source": "PROGRAM chase\nx := ;\nEND_PROGRAM\n" });
+    s.apply(Msg::Got(Fetch::Module("chase".into()), Ok(bad.to_string())), 1.1);
+    s.apply(Msg::Failed(Stream::Trace), 1.2);
+    assert!(s.lowered.is_none());
+    assert!(
+        s.problem
+            .as_deref()
+            .is_some_and(|p| p.starts_with("cannot draw chase")),
+        "{:?}",
+        s.problem
+    );
+}
