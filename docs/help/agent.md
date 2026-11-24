@@ -48,10 +48,7 @@ or output another way ("green lamp" for `GreenLamp`, or `StratPB` for
 in. None of this is sent anywhere.
 
 On a box nothing runs until you deploy it, as with any edit of your own.
-In the simulation the changed program runs at once. To have it load
-stopped instead, with every variable, timer and output back at its
-start, turn on **View › Reset after a described change**; the choice is
-remembered in this browser.
+In the simulation the changed program runs at once.
 
 The instruction box is at the top of the tab, one row tall. It grows as
 you type, to four rows, and scrolls inside after that. Under it are the

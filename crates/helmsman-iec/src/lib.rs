@@ -161,7 +161,7 @@ pub use lexer::Pos;
 pub use literal::{is_literal, literal_at};
 pub use rename::rename_ident;
 pub use state::{Carry, DecodeError, MAX_DEPTH, State};
-pub use types::{Ty, Value};
+pub use types::{Ty, Value, shown_real};
 
 use check::{AggKind, Checked, Type};
 use interp::{Halt, Machine};

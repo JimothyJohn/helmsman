@@ -3,6 +3,9 @@
 
 use core::fmt;
 
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Ty {
     Bool,
@@ -261,6 +264,48 @@ impl Value {
     }
 }
 
+impl Value {
+    /// The value as a read-out: a REAL at three significant figures
+    /// ([`shown_real`]), everything else as `Display` prints it. Display
+    /// only: what is written, sent or compared uses `Display`, which
+    /// round-trips.
+    #[must_use]
+    pub fn shown(&self) -> String {
+        match self {
+            Self::Real(r) => shown_real(*r),
+            v => v.to_string(),
+        }
+    }
+}
+
+/// A REAL or LREAL for a person to read: three significant figures with
+/// the trailing zeros kept, so the text keeps its width as the value moves
+/// (49.873512 reads 49.9, 50 reads 50.0, 5 reads 5.00). Whole digits are
+/// never cut (12420.4 reads 12420) and a rounding that carries stays at
+/// three figures (9.996 reads 10.0). Below 1e-4 and from 1e9 up it is
+/// e-notation with three figures; NaN and the infinities are words.
+#[must_use]
+pub fn shown_real(x: f64) -> String {
+    if x.is_nan() {
+        return "NaN".into();
+    }
+    if x.is_infinite() {
+        return if x < 0.0 { "-inf" } else { "inf" }.into();
+    }
+    let a = x.abs();
+    if a == 0.0 {
+        return "0.00".into();
+    }
+    if !(1e-4..1e9).contains(&a) {
+        return format!("{x:.2e}");
+    }
+    // The exponent after rounding, so a carry (9.996) counts as 10.0.
+    let sci = format!("{a:.2e}");
+    let exp: i32 = sci.rsplit('e').next().and_then(|e| e.parse().ok()).unwrap_or(0);
+    let decimals = usize::try_from((2 - exp).max(0)).unwrap_or(0);
+    format!("{x:.decimals$}")
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -294,6 +339,68 @@ pub fn round_real(ty: Ty, x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_real_is_shown_at_three_figures() {
+        let t = [
+            (49.873_512, "49.9"),
+            (50.0, "50.0"),
+            (5.0, "5.00"),
+            (0.0, "0.00"),
+            (0.012_345, "0.0123"),
+            (-3.1449, "-3.14"),
+            (12420.4, "12420"),
+            (123.4, "123"),
+            (9.996, "10.0"),
+            (99.96, "100"),
+            (999.6, "1000"),
+            (-9.996, "-10.0"),
+            (0.000_123_45, "0.000123"),
+            (0.000_099_96, "1.00e-4"),
+            (1.5e-7, "1.50e-7"),
+            (1.234e9, "1.23e9"),
+            (-2.5e12, "-2.50e12"),
+            (f64::NAN, "NaN"),
+            (f64::INFINITY, "inf"),
+            (f64::NEG_INFINITY, "-inf"),
+            (f64::from(23.7f32), "23.7"),
+        ];
+        for (x, want) in t {
+            assert_eq!(shown_real(x), want, "{x}");
+        }
+        assert_eq!(Value::Real(49.873_512).shown(), "49.9");
+        assert_eq!(Value::Int(12345).shown(), "12345");
+        assert_eq!(Value::Bool(true).shown(), "TRUE");
+        assert_eq!(
+            Value::Real(f64::from(49.873_512_f32)).to_string(),
+            "49.873512",
+            "Display still round-trips"
+        );
+    }
+
+    #[test]
+    fn a_shown_real_is_within_half_a_unit_of_its_last_place() {
+        let mut x = 1.1e-4_f64;
+        while x < 1e9 {
+            for v in [x, -x] {
+                let s = shown_real(v);
+                let back: f64 = s.parse().unwrap();
+                let dec = s.split_once('.').map_or(0, |(_, f)| f.len());
+                let half = 0.5 * 10f64.powi(-i32::try_from(dec).unwrap());
+                assert!((back - v).abs() <= half * 1.000_001, "{v} shown {s}");
+            }
+            x *= 1.173;
+        }
+    }
+
+    #[test]
+    fn a_shown_real_keeps_its_width_across_a_sweep() {
+        let mut x = 49.5;
+        while x < 50.5 {
+            assert_eq!(shown_real(x).len(), 4, "{x}");
+            x += 0.0137;
+        }
+    }
 
     #[test]
     fn ranges_and_wrap() {

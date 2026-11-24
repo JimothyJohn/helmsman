@@ -48,6 +48,33 @@ pub fn time(ns: i128) -> String {
     format!("T#{}{u}", ns / k)
 }
 
+/// A TIME for a read-out: the largest unit the value reaches, at three
+/// significant figures (`T#1.23s`), so a running timer keeps its width.
+/// [`time`] is the exact literal, for source.
+#[must_use]
+pub fn time_shown(ns: i128) -> String {
+    const UNITS: [(i128, &str); 6] = [
+        (3_600_000_000_000, "h"),
+        (60_000_000_000, "m"),
+        (1_000_000_000, "s"),
+        (1_000_000, "ms"),
+        (1_000, "us"),
+        (1, "ns"),
+    ];
+    let a = ns.unsigned_abs();
+    if a < 1000 {
+        return time(ns);
+    }
+    let (k, u) = UNITS
+        .iter()
+        .find(|(k, _)| a >= k.unsigned_abs())
+        .copied()
+        .unwrap_or((1, "ns"));
+    #[allow(clippy::cast_precision_loss)]
+    let n = ns as f64 / k as f64;
+    format!("T#{}{u}", helmsman_iec::shown_real(n))
+}
+
 /// A STRING literal as source: printable ASCII as it is, `$` and `'`
 /// escaped, every other byte as `$HH`, so the text lexes back to the
 /// same bytes.
