@@ -629,11 +629,13 @@ mod glyphs_and_help {
         assert!(!h.has("messages clear"), "nothing to clear now");
     }
 
-    /// Nick, 2026-11-23: the trend is the whole bottom strip, from the far
-    /// left, under both side panes and with no tabs; the Messages are in
-    /// the left pane under its tabs' content, with a fold that is kept.
+    /// Nick, 2026-11-24: the left pane has the page's whole height and
+    /// the trend starts at its right edge, running under the right pane;
+    /// with the left pane shut the trend is the whole bottom. The Messages
+    /// are in the left pane under its tabs' content (2026-11-23), with a
+    /// fold that is kept.
     #[test]
-    fn the_trend_is_the_whole_bottom_and_the_messages_sit_in_the_left_pane() {
+    fn the_trend_starts_beside_the_full_height_left_pane_which_holds_the_messages() {
         let mut h = Harness::new(App::sim());
         h.messages();
         h.wait(0.3);
@@ -643,14 +645,27 @@ mod glyphs_and_help {
         }
         let trend = h.rect("trend tab");
         let left = h.rect("left");
-        assert!(trend.left() < 12.0, "from the far left: {trend:?}");
+        assert!(
+            // The chevron is the last thing in the pane's tab row.
+            trend.left() >= left.right() - 1.0 && trend.left() < left.right() + 40.0,
+            "from the left pane's edge: {trend:?} {left:?}"
+        );
         assert!(trend.right() > h.size.x - 12.0, "to the far right: {trend:?}");
         assert!(trend.height() >= 200.0, "taller than it was: {trend:?}");
         let fold = h.rect("messages fold");
         assert!(
-            fold.bottom() <= trend.top(),
-            "above the trend: {fold:?} {trend:?}"
+            fold.top() > trend.top(),
+            "the Messages have the height beside the trend: {fold:?} {trend:?}"
         );
+        // The left pane shut: the trend has the whole bottom.
+        h.app.chrome.left = false;
+        h.wait(0.3);
+        let wide = h.rect("trend tab");
+        assert!(wide.left() < 60.0, "from the strip at the far left: {wide:?}");
+        h.app.chrome.left = true;
+        h.wait(0.3);
+        let left = h.rect("left");
+        let fold = h.rect("messages fold");
         assert!(
             fold.right() <= left.right() + 1.0,
             "in the left pane: {fold:?} {left:?}"
@@ -663,6 +678,11 @@ mod glyphs_and_help {
         assert!(!h.app.chrome.msgs);
         assert!(!h.has("messages errors"), "the filters went with the list");
         assert!(h.has("messages fold"), "the header stays");
+        let (fold, trend) = (h.rect("messages fold"), h.rect("trend tab"));
+        assert!(
+            fold.bottom() > trend.bottom() - 12.0,
+            "folded, the header is at the page's bottom, beside the trend: {fold:?} {trend:?}"
+        );
         let back = crate::editor::Chrome::restored(&h.app.chrome.saved());
         assert!(!back.msgs, "kept per browser");
         h.press("messages fold");
@@ -2093,6 +2113,29 @@ END_PROGRAM",
             format!("flash the {long} while StopPB is held")
         );
         assert!(!h.has("phrase fix 0"), "nothing left to fix");
+        // A word of one's own (Nick, 2026-11-24): the names it could be,
+        // each a click, and the pane still its width with the long one.
+        h.app.sim.as_mut().unwrap().instruct.draft = "turn the lamp on while start is held".into();
+        h.wait(0.2);
+        assert!(h.drew("\u{201c}lamp\u{201d}: use the program's name?"));
+        assert!(
+            h.has("phrase loose 0 0") && h.has("phrase loose 0 1"),
+            "two lamps"
+        );
+        assert!(
+            h.has("phrase loose 1 0") && !h.has("phrase loose 1 1"),
+            "one start"
+        );
+        kept(&h, "loose words");
+        h.press("phrase loose 1 0");
+        h.wait(0.2);
+        h.press("phrase loose 0 0");
+        h.wait(0.2);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().instruct.draft,
+            "turn the GreenLamp on while StartPB is held"
+        );
+        assert!(!h.has("phrase loose 0 0"), "nothing loose left");
         assert_eq!(
             h.app.sim.as_ref().unwrap().proj.files["main.st"],
             src,
