@@ -993,7 +993,7 @@ impl PlaygroundView {
         self.big = None;
         self.instruct.draft = asked;
         let file = crate::instruct::target(&scope);
-        let earlier = crate::instruct::recent(
+        let earlier = crate::instruct::history(
             self.proj.revisions().iter().filter_map(|r| r.page.as_deref()),
             &file,
         );

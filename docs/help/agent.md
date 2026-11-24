@@ -148,9 +148,12 @@ the answer back.
 
 ## Follow-ups
 
-Each instruction goes to Helmsman with the whole file and the last five
-instructions carried out on that file, read from History. So "now make it
-blink faster" works: Helmsman knows what "it" is, even after a reload.
+Each instruction goes to Helmsman with the whole file and the history of
+that file, read from History: every change made to it, oldest first, each
+with what was asked, why, and how it came out. So "now make it blink
+faster" works, Helmsman knows what "it" is even after a reload, and a
+decision made weeks ago is still known. A very long history is cut at the
+old end, and the request then says how many older changes it leaves out.
 To start over, describe the whole behaviour in the instruction.
 
 ## What a change may touch

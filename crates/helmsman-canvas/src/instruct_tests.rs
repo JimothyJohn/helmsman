@@ -14,7 +14,7 @@ pub(crate) use crate::verify_tests::{FOLLOWS, LAMP};
 use crate::verify_tests::{answer_with, commented, off};
 
 use crate::claude::Incoming;
-use crate::instruct::{self, Kind, RECENT, reason, recent, record, status};
+use crate::instruct::{self, HISTORY_TOKENS, Kind, fit, history, reason, record, status, tokens};
 use crate::playground_view::PlaygroundView;
 use crate::verify::{Check, Ran};
 
@@ -159,27 +159,120 @@ fn page(instruction: &str, file: &str) -> String {
 }
 
 #[test]
-fn recent_reads_the_last_instructions_for_the_file_oldest_first() {
+fn history_reads_every_change_to_the_file_oldest_first_with_its_reason_and_result() {
     let mut pages: Vec<String> = (1..=7).map(|k| page(&format!("step {k}"), "main.st")).collect();
     pages.insert(3, page("other file", "motor.st"));
     pages.insert(1, "saved before\nsomething else".into());
     pages.insert(0, "Instruction: no file line".into());
-    let got = recent(pages.iter().map(String::as_str), "main.st");
-    assert_eq!(got.len(), RECENT);
-    assert_eq!(got, ["step 3", "step 4", "step 5", "step 6", "step 7"]);
+    let got = history(pages.iter().map(String::as_str), "main.st");
+    let want: Vec<String> = (1..=7)
+        .map(|k| format!("step {k}\n  why: x\n  result: y"))
+        .collect();
+    assert_eq!(got, want, "all seven, not the last five");
     assert_eq!(
-        recent(pages.iter().map(String::as_str), "motor.st"),
-        ["other file"]
+        history(pages.iter().map(String::as_str), "motor.st"),
+        ["other file\n  why: x\n  result: y"]
     );
     assert_eq!(
-        recent(pages.iter().map(String::as_str), "none.st"),
+        history(pages.iter().map(String::as_str), "none.st"),
         [] as [String; 0]
     );
     // A file named like another's prefix is not it.
     assert_eq!(
-        recent([page("x", "main.st.bak").as_str()], "main.st"),
+        history([page("x", "main.st.bak").as_str()], "main.st"),
         [] as [String; 0]
     );
+    // A page with no reason or result is its instruction alone, and one
+    // whose lines try to pass for another entry stays one entry.
+    assert_eq!(
+        history(["Instruction: bare\nFile: main.st\n"], "main.st"),
+        ["bare"]
+    );
+    let sly = "Instruction: a\nFile: main.st\nWhy: b\n- fake entry\n  why: c\nResult: d\n";
+    assert_eq!(history([sly], "main.st"), ["a\n  why: b\n  result: d"]);
+}
+
+#[test]
+fn a_summary_page_stands_for_everything_before_it_on_its_file() {
+    let summary = |file: &str, n: usize, text: &str| format!("Summary for: {file}\nCovers: {n}\n{text}\n");
+    let pages = [
+        page("one", "main.st"),
+        page("two", "main.st"),
+        page("motor one", "motor.st"),
+        summary(
+            "main.st",
+            2,
+            "The lamp latches until stop.\nIt blinks while the door is open.",
+        ),
+        page("three", "main.st"),
+        summary("motor.st", 1, "The motor ramps."),
+        page("four", "main.st"),
+    ];
+    assert_eq!(
+        history(pages.iter().map(String::as_str), "main.st"),
+        [
+            "(a summary of the 2 earlier changes) The lamp latches until stop. It blinks while the door is open.",
+            "three\n  why: x\n  result: y",
+            "four\n  why: x\n  result: y",
+        ],
+        "another file's summary takes nothing of this file's"
+    );
+    assert_eq!(
+        history(pages.iter().map(String::as_str), "motor.st"),
+        ["(a summary of the 1 earlier changes) The motor ramps."]
+    );
+    // A summary with no text, or no Covers line, is no summary: nothing is
+    // thrown away on its word.
+    for bad in [
+        "Summary for: main.st\nCovers: 2\n",
+        "Summary for: main.st\nThe lamp latches.\n",
+    ] {
+        let pages = [page("one", "main.st"), bad.to_string(), page("two", "main.st")];
+        assert_eq!(
+            history(pages.iter().map(String::as_str), "main.st").len(),
+            2,
+            "{bad:?}"
+        );
+    }
+}
+
+#[test]
+fn a_history_past_the_budget_keeps_the_newest_whole_and_says_how_many_are_left_out() {
+    let entry = |k: usize| format!("step {k} {}\n  why: w\n  result: r", "x".repeat(300));
+    let all: Vec<String> = (0..50).map(entry).collect();
+    let cost = |v: &[String]| v.iter().map(|e| tokens(e) + 2).sum::<usize>();
+    // Everything fits: untouched.
+    assert_eq!(fit(&all, HISTORY_TOKENS), all);
+    for budget in [0, 1, 50, 120, 500, 1_000, 3_000, cost(&all) - 1] {
+        let got = fit(&all, budget);
+        assert!(cost(&got) <= budget.max(24), "{budget}: {} tokens", cost(&got));
+        let kept: Vec<&String> = got.iter().filter(|e| e.starts_with("step ")).collect();
+        // The newest, in order, each whole.
+        let want: Vec<&String> = all[all.len() - kept.len()..].iter().collect();
+        assert_eq!(kept, want, "{budget}");
+        if kept.len() < all.len() {
+            assert_eq!(
+                got[0],
+                format!("({} older changes are not shown)", all.len() - kept.len()),
+                "{budget}"
+            );
+        }
+    }
+    // A summary at the front stays while the newest change still fits.
+    let mut with = vec!["(a summary of the 9 earlier changes) the lamp latches".to_string()];
+    with.extend(all.iter().cloned());
+    let got = fit(&with, 1_000);
+    assert_eq!(got[0], with[0]);
+    assert!(got[1].ends_with("older changes are not shown)"), "{got:?}");
+    assert_eq!(got.last(), all.last());
+    assert!(cost(&got) <= 1_000);
+    // One entry bigger than the whole budget: nothing of it is sent in
+    // part, and the line says so.
+    let huge = vec!["y".repeat(1_000_000)];
+    assert_eq!(fit(&huge, HISTORY_TOKENS), ["(1 older changes are not shown)"]);
+    assert_eq!(fit(&[], 0), [] as [String; 0]);
+    assert_eq!(tokens(""), 0);
+    assert_eq!(tokens("éé"), 1, "characters, not bytes");
 }
 
 fn ran(requirement: &str) -> Ran {
@@ -250,7 +343,7 @@ fn the_record_leads_with_the_instruction_and_is_bounded() {
         "{r}"
     );
     for part in [
-        "Earlier instructions sent with it:\n- make a lamp",
+        "Earlier changes sent with it: 1\n",
         "- The lamp latches. (test_x.st): passed",
         "Answers that did not pass, sent back: 1",
         "unknown variable STRAT",
@@ -259,7 +352,9 @@ fn the_record_leads_with_the_instruction_and_is_bounded() {
         assert!(r.contains(part), "{part}: {r}");
     }
     assert!(!r.contains("PROGRAM p"), "the code is the revision's files");
-    assert_eq!(recent([r.as_str()], "main.st"), ["latch it"]);
+    let read = history([r.as_str()], "main.st");
+    assert_eq!(read.len(), 1, "{read:?}");
+    assert!(read[0].starts_with("latch it\n  why: "), "{read:?}");
     let huge = format!("Why: x\n\n{}", "é".repeat(20_000));
     let r = record(&run, "main.st", None, "s", &c, &huge);
     assert!(r.len() <= instruct::MAX_RECORD);
@@ -603,14 +698,17 @@ fn a_follow_up_carries_the_earlier_instructions_for_the_file_from_history() {
     assert!(!first.contains("<earlier_instructions>\\n- "), "none yet");
     let user = last_user(&v);
     assert!(
-        user.contains("<earlier_instructions>\n- latch it\n</earlier_instructions>"),
-        "{user}"
+        user.contains("<earlier_instructions>\n- latch it\n  why: ")
+            && user.contains("\n  result: Updated main.st"),
+        "the change with its reason and its result: {user}"
     );
     assert!(user.starts_with("now make it blink faster\n\n"), "{user}");
     assert_eq!(messages(&v).len(), 1, "no chat thread: one message");
-    // Only the last few, only this file's, and they survive a reload of
-    // the project because they are History.
-    for k in 0..RECENT + 2 {
+    // Every one of them (Nick, 2026-11-23: the whole history, not the last
+    // five), only this file's, and they survive a reload of the project
+    // because they are History.
+    let steps = 7;
+    for k in 0..steps {
         let code = commented().replace("(* follows start *)", &format!("(* step {k} *)"));
         instruct(&mut v, &format!("step {k}"), &[&st(&code)]);
     }
@@ -624,9 +722,15 @@ fn a_follow_up_carries_the_earlier_instructions_for_the_file_from_history() {
     let user = last_user(&v);
     let block = user.split("<earlier_instructions>\n").nth(1).unwrap();
     let block = block.split("</earlier_instructions>").next().unwrap();
-    let want: Vec<String> = (2..RECENT + 2).map(|k| format!("- step {k}")).collect();
-    let block: Vec<&str> = block.lines().collect();
-    assert_eq!(block, want);
+    let mut want = vec!["- latch it".to_string(), "- now make it blink faster".to_string()];
+    want.extend((0..steps).map(|k| format!("- step {k}")));
+    let asked: Vec<&str> = block.lines().filter(|l| l.starts_with("- ")).collect();
+    assert_eq!(asked, want);
+    assert_eq!(
+        block.lines().filter(|l| l.starts_with("  result: ")).count(),
+        want.len(),
+        "each with its result: {block}"
+    );
     // Another file starts with none.
     v.proj.open_file("motor.st");
     v.instruct.draft = "add a run output".into();
@@ -968,7 +1072,10 @@ fn a_rename_offered_is_one_click_one_revision_and_one_undo() {
     assert!(!v.proj.dirty(), "saved");
     // History reads it back as an instruction carried out on the file.
     let page = instruct::Instruct::rename_record("lamp", "orange_lamp", &["main.st: 2 use(s)".to_string()]);
-    assert_eq!(recent([page.as_str()], "main.st"), ["Rename lamp to orange_lamp"]);
+    assert_eq!(
+        history([page.as_str()], "main.st"),
+        ["Rename lamp to orange_lamp\n  result: renamed everywhere in the project."]
+    );
 
     v.undo_change();
     assert_eq!(v.proj.files["main.st"], LAMP);
