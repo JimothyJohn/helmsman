@@ -3773,7 +3773,23 @@ mod chrome {
         assert!(text.contains("  in plant_model (plant_model.st:"), "{text}");
         assert!(text.contains("not measured; level transmitter would"), "{text}");
         // Add a sensor: the form, filled in for the state, writes one in line.
-        h.right_click(h.rect("state level_m").center());
+        h.wait(0.3);
+        // The Ask row pushed this row down to the messages strip's edge:
+        // scroll the pane so the row is in the clear.
+        let at = h.rect("devices scan").center();
+        h.frame(vec![
+            eframe::egui::Event::PointerMoved(at),
+            eframe::egui::Event::MouseWheel {
+                unit: eframe::egui::MouseWheelUnit::Point,
+                delta: eframe::egui::Vec2::new(0.0, -120.0),
+                modifiers: eframe::egui::Modifiers::NONE,
+                phase: eframe::egui::TouchPhase::Move,
+                source: eframe::egui::MouseWheelSource::Wheel,
+            },
+        ]);
+        h.wait(0.3);
+        let row = h.rect("state level_m");
+        h.right_click(row.center());
         assert!(h.has("menu add sensor"));
         h.press("menu add sensor");
         h.wait(0.2);
