@@ -233,8 +233,13 @@ echo "== CI on the candidate commits"
 CI=""
 for pair in "helmsman $H_DEV" "agent-relay $R_DEV" "helmsman-devices $D_DEV" "helmsman-hardware $W_DEV"; do
   set -- $pair
-  # Each workflow's newest run on that exact commit (an older run a
-  # re-run or a reopen cancelled does not count). A merge that auto-merge
+  # Each workflow's newest run on that exact commit that came to a
+  # verdict: a cancelled run is none, wherever it falls in time. The ship
+  # of 2026-11-22 opened its promote PR on hardware's dev tip, the PR's CI
+  # run was cancelled when it merged, and as the newest run on that commit
+  # it hid the green push run and refused the ship of 2026-11-24. A
+  # workflow whose every run was cancelled still reads cancelled. A merge
+  # that auto-merge
   # made (GITHUB_TOKEN) fires no push run on dev (automerge.yml says so),
   # so a merge commit with none is judged by its PR's head, its second
   # parent, and says so: the merged tree itself was not re-run there (the
@@ -242,7 +247,7 @@ for pair in "helmsman $H_DEV" "agent-relay $R_DEV" "helmsman-devices $D_DEV" "he
   runs() {
     ghr "$1" run list -R "$(slug "$(src_of "$1")")" --commit "$2" --limit 20 \
       --json workflowName,conclusion,status,createdAt \
-      --jq 'group_by(.workflowName) | map(max_by(.createdAt)) | map(.workflowName + "=" + (if .status == "completed" then .conclusion else .status end)) | join(" ")' \
+      --jq 'group_by(.workflowName) | map((map(select(.conclusion != "cancelled")) | max_by(.createdAt)) // max_by(.createdAt)) | map(.workflowName + "=" + (if .status == "completed" then .conclusion else .status end)) | join(" ")' \
       2>/dev/null
   }
   # A run still going is waited for (COMPAT_CI_WAIT seconds, default 30 min)
