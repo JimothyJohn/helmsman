@@ -179,12 +179,12 @@ impl<'a> Session<'a> {
                 Ok(())
             }
             Ok(Err(_)) => {
-                self.socket.abort();
+                crate::dial::give_up(&mut self.socket);
                 self.failures = self.failures.saturating_add(1);
                 Err(Error::Link("connect refused"))
             }
             Err(_) => {
-                self.socket.abort();
+                crate::dial::give_up(&mut self.socket);
                 self.failures = self.failures.saturating_add(1);
                 Err(Error::Link("connect timed out"))
             }

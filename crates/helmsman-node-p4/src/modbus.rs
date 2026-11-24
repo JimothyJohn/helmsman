@@ -129,7 +129,7 @@ impl<'a> Client<'a> {
     /// after 250 ms, 500 ms, 1 s, and from there every
     /// [`CONNECT_BACKOFF`], which is what a unit that is not there gets.
     fn connect_failed(&mut self) {
-        self.socket.abort();
+        crate::dial::give_up(&mut self.socket);
         self.failures = self.failures.saturating_add(1);
         let wait = match self.failures {
             1 => return,
