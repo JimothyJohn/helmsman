@@ -21,6 +21,8 @@ struct Harness {
     size: Vec2,
     /// What the last frame drew.
     shapes: Vec<egui::epaint::ClippedShape>,
+    /// How long the last frame said it could wait for the next.
+    repaint_in: std::time::Duration,
     /// The pointer the last frame asked for.
     cursor: egui::CursorIcon,
     /// Text the app put on the clipboard, newest last.
@@ -35,6 +37,7 @@ impl Harness {
             time: 0.0,
             size: Vec2::new(1400.0, TALL_H),
             shapes: Vec::new(),
+            repaint_in: std::time::Duration::MAX,
             cursor: egui::CursorIcon::Default,
             copied: Vec::new(),
         };
@@ -88,6 +91,10 @@ impl Harness {
         // No renderer here to upload textures to.
         out.textures_delta.clear();
         self.shapes = out.shapes;
+        self.repaint_in = out
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map_or(std::time::Duration::MAX, |v| v.repaint_delay);
         self.cursor = out.platform_output.cursor_icon;
         for c in out.platform_output.commands {
             if let egui::OutputCommand::CopyText(t) = c {
@@ -190,6 +197,23 @@ impl Harness {
             let keys: Vec<&String> = self.app.chrome.hits.iter().map(|(k, _)| k).collect();
             panic!("no {key} on screen: {keys:?}")
         })
+    }
+
+    /// The centres of the trend's bright head points (one a lane) in the
+    /// last frame.
+    fn heads(&self) -> Vec<Pos2> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<Pos2>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                egui::Shape::Circle(c) if (c.radius - 3.5).abs() < 1e-3 => out.push(c.center),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for c in &self.shapes {
+            walk(&c.shape, &mut out);
+        }
+        out
     }
 
     /// The text the last frame drew in the code face left of `x` and above
@@ -639,6 +663,36 @@ mod glyphs_and_help {
         h.press("messages fold");
         h.wait(0.2);
         assert!(h.app.chrome.msgs && h.has("messages errors"));
+    }
+
+    /// Nick, 2026-11-23: the trend is drawn as an EKG. A running program
+    /// moves each lane's head across; a stopped one leaves the heads where
+    /// they are and asks the page for no more frames.
+    #[test]
+    fn the_trend_heads_sweep_while_running_and_stand_still_with_no_redraws_when_stopped() {
+        let mut h = Harness::new(App::sim());
+        h.wait(1.0);
+        let lanes = h.app.sim.as_ref().unwrap().session.trend.signals.len();
+        assert!(lanes > 0);
+        let a = h.heads();
+        assert_eq!(a.len(), lanes, "a bright point on every lane");
+        h.wait(1.0);
+        let b = h.heads();
+        assert_ne!(a, b, "a running program moves the heads");
+        h.press("stop");
+        h.wait(0.5);
+        let still = h.heads();
+        h.wait(1.0);
+        assert_eq!(h.heads(), still, "stopped, the heads stand still");
+        assert!(
+            h.repaint_in > std::time::Duration::from_millis(500),
+            "and nothing asks for another frame: {:?}",
+            h.repaint_in
+        );
+        // Run again: the heads are back on every lane.
+        h.press("run");
+        h.wait(0.5);
+        assert_eq!(h.heads().len(), lanes);
     }
 
     /// A browser that saved its layout when the bottom panel had tabs
