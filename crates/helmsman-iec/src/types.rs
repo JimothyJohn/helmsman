@@ -3,6 +3,9 @@
 
 use core::fmt;
 
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Ty {
     Bool,
