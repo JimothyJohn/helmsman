@@ -103,6 +103,9 @@ pub enum PCall {
     /// `PUT /api/modules/{name}`: the edited source of a module, on a box
     /// or Skipper without projects.
     DeployModule(String),
+    /// A step of sending a project's I/O list to the watched Skipper
+    /// before its program: check the devices, read the result, save.
+    NodeMapSend(MapStep),
     Import {
         project: String,
         file: String,
@@ -215,7 +218,10 @@ impl PCall {
     /// box's.
     #[must_use]
     pub const fn on_node(&self) -> bool {
-        matches!(self, Self::DeployModule(_) | Self::NodeMap(_) | Self::Control(..))
+        matches!(
+            self,
+            Self::DeployModule(_) | Self::NodeMap(_) | Self::Control(..) | Self::NodeMapSend(_)
+        )
     }
 }
 
@@ -432,6 +438,11 @@ pub struct BoxProjects {
     /// The running module being edited, on a box or Skipper without
     /// projects (`PUT /api/modules/{name}`).
     pub module: Option<ModuleEdit>,
+    /// The watched Skipper's I/O list as the page last read it.
+    pub node_map: Option<String>,
+    map_send: Option<MapSend>,
+    /// Page time as of the last [`Self::tick`].
+    now: f64,
     /// Deploy sends the checked project to the watched node (a page a box
     /// served, watching a Skipper with `?box=`) instead of running it on
     /// the box.
@@ -563,6 +574,36 @@ fn short(s: &str) -> &str {
     s.get(..8).unwrap_or(s)
 }
 
+/// The steps of sending an I/O list to a Skipper ([`PCall::NodeMapSend`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapStep {
+    /// `POST /api/io_map/check`: the Skipper asks every device.
+    Check,
+    /// `GET /api/io_map/check`: how the check went.
+    Poll,
+    /// `PUT /api/io_map`: saved; the Skipper restarts on it.
+    Save,
+}
+
+/// A project's I/O list on its way to the Skipper, its program after it.
+#[derive(Debug, Clone, PartialEq)]
+struct MapSend {
+    text: String,
+    /// When to read the check's result again (page time, s).
+    poll_at: Option<f64>,
+    /// When to send the program, once the Skipper restarted on the map.
+    program_at: Option<f64>,
+    /// Reads of the check so far, and sends of the program after a save.
+    polls: u32,
+    program_tries: u32,
+}
+
+/// Seconds a Skipper takes to restart on a saved map before its program
+/// is sent (it answered again within 8 s on the bench, 2026-11-24).
+const MAP_RESTART_S: f64 = 8.0;
+/// Reads of a check's result before giving up (one a second).
+const MAP_POLLS: u32 = 60;
+
 /// What a node is sent for a project: every ST file but the requirement
 /// tests (`test_*.st`), in name order, one after another.
 #[must_use]
@@ -681,9 +722,126 @@ impl BoxProjects {
             seen: String::new(),
             sent: None,
         });
+        // The project's I/O list first, when the Skipper runs another one
+        // (Nick, 2026-11-24: an I/O change the Agent made never reached
+        // the Skipper): its devices are checked from the Skipper, it is
+        // saved, the Skipper restarts on it, then the program goes.
+        let map = self
+            .open
+            .as_ref()
+            .and_then(|o| o.bufs.get(helmsman_project::IO_MAP))
+            .map(|b| b.text.clone())
+            .filter(|m| !m.trim().is_empty());
+        if let Some(map) = map.filter(|m| self.node_map.as_deref().is_none_or(|n| n.trim() != m.trim())) {
+            self.deploy = Deploy::Deploying;
+            self.queue.push(PReq::json(
+                PCall::NodeMapSend(MapStep::Check),
+                "POST",
+                "/api/io_map/check".into(),
+                &json!({ "text": map }),
+            ));
+            self.map_send = Some(MapSend {
+                text: map,
+                poll_at: None,
+                program_at: None,
+                polls: 0,
+                program_tries: 0,
+            });
+            return;
+        }
         // The check (and replay) are over; the send is the deploy's last step.
         self.deploy = Deploy::Idle;
         self.deploy_module();
+    }
+
+    /// Page time `now`: reads a check's result and sends the program
+    /// after a map save when they are due.
+    pub fn tick(&mut self, now: f64) {
+        self.now = now;
+        let Some(m) = &mut self.map_send else { return };
+        if m.poll_at.is_some_and(|t| now >= t) {
+            m.poll_at = None;
+            m.polls += 1;
+            self.queue.push(PReq::get(
+                PCall::NodeMapSend(MapStep::Poll),
+                "/api/io_map/check".into(),
+            ));
+        }
+        if m.program_at.is_some_and(|t| now >= t) {
+            m.program_at = None;
+            m.program_tries += 1;
+            self.deploy = Deploy::Idle;
+            self.deploy_module();
+        }
+    }
+
+    fn map_failed(&mut self, why: String) {
+        self.map_send = None;
+        if let Some(m) = &mut self.module {
+            m.sent = None;
+        }
+        self.deploy = Deploy::Failed(why);
+    }
+
+    fn map_answer(&mut self, step: MapStep, a: &Answer, j: &Json) {
+        let ok = (200..300).contains(&a.status);
+        let now = self.now;
+        let Some(m) = self.map_send.as_mut() else { return };
+        match step {
+            MapStep::Check if ok || a.status == 409 => m.poll_at = Some(now + 1.0),
+            MapStep::Check => {
+                self.map_failed(format!(
+                    "The Skipper would not check the I/O list: {}",
+                    error_of(a)
+                ));
+            }
+            MapStep::Poll if !ok || j["state"].as_str() != Some("done") => {
+                if m.polls >= MAP_POLLS {
+                    self.map_failed("The Skipper's check of the devices did not finish.".into());
+                } else {
+                    m.poll_at = Some(now + 1.0);
+                }
+            }
+            MapStep::Poll => {
+                let same = j["text"].as_str().is_some_and(|t| t.trim() == m.text.trim());
+                if !same {
+                    self.map_failed(
+                        "Another I/O list was being checked on the Skipper: deploy again.".into(),
+                    );
+                } else if j["may_save"].as_bool() == Some(true) {
+                    let text = m.text.clone();
+                    self.queue.push(PReq::json(
+                        PCall::NodeMapSend(MapStep::Save),
+                        "PUT",
+                        "/api/io_map".into(),
+                        &json!({ "text": text }),
+                    ));
+                } else {
+                    let silent: Vec<String> = j["devices"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|d| d["state"].as_str() != Some("answered"))
+                        .map(|d| {
+                            format!(
+                                "{} ({}): {}",
+                                d["name"].as_str().unwrap_or("?"),
+                                d["address"].as_str().unwrap_or("?"),
+                                d["error"].as_str().unwrap_or("did not answer")
+                            )
+                        })
+                        .collect();
+                    self.map_failed(format!(
+                        "Not deployed: the Skipper could not reach {}. Its I/O list and program are unchanged.",
+                        if silent.is_empty() { "every device".to_string() } else { silent.join("; ") }
+                    ));
+                }
+            }
+            MapStep::Save if ok => m.program_at = Some(now + MAP_RESTART_S),
+            MapStep::Save => {
+                self.map_failed(format!("The Skipper did not save the I/O list: {}", error_of(a)));
+            }
+        }
     }
 
     /// Sends the edited module to the box, which compiles it and runs it
@@ -1598,6 +1756,7 @@ impl BoxProjects {
             if let Some(m) = &mut self.module {
                 m.sent = None;
             }
+            self.map_send = None;
             if self.deploy.busy() {
                 self.deploy = Deploy::Failed(
                     "The Skipper refused the token: enter its token under Sign in (top right).".into(),
@@ -2098,7 +2257,17 @@ impl BoxProjects {
                     )));
                 }
             }
+            PCall::DeployModule(_)
+                if a.status == 0 && self.map_send.as_ref().is_some_and(|m| m.program_tries < 5) =>
+            {
+                // Still restarting on the new map: try again shortly.
+                if let Some(m) = &mut self.map_send {
+                    m.program_at = Some(self.now + 2.0);
+                }
+                self.deploy = Deploy::Deploying;
+            }
             PCall::DeployModule(name) => {
+                self.map_send = None;
                 let sent = self
                     .module
                     .as_mut()
@@ -2131,6 +2300,7 @@ impl BoxProjects {
                     )));
                 }
             }
+            PCall::NodeMapSend(step) => self.map_answer(step, a, &j),
             PCall::Upload(project) => {
                 if ok {
                     self.note(format!("Uploaded {project}."), false);

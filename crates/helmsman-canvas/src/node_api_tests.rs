@@ -328,7 +328,12 @@ fn routed(q: &crate::box_projects::PReq, token: &str) -> helmsman_nodecore::rout
     .into_bytes();
     raw.extend_from_slice(&body);
     match parse(&raw).expect("a whole request") {
-        Read::Done(r, _) => helmsman_nodecore::router::handle(&r, &view(), &settings),
+        Read::Done(r, _) => {
+            // A P4 Skipper: it checks a map's devices before saving it.
+            let mut v = view();
+            v.check = Some(helmsman_nodecore::check::Check::default());
+            helmsman_nodecore::router::handle(&r, &v, &settings)
+        }
         Read::Incomplete => panic!("incomplete"),
     }
 }
@@ -500,6 +505,8 @@ fn a_checked_project_goes_to_the_watched_skipper_as_one_program() {
         ("io.map", "device drive enip-io 192.168.33.1\n"),
     ]));
     p.to_node = true;
+    // The Skipper runs this I/O list already: only the program goes.
+    p.node_map = Some("device drive enip-io 192.168.33.1\n".into());
     p.deploy = Deploy::Checking;
     p.answer(
         PCall::Check("skipper_drive".into()),
@@ -672,5 +679,172 @@ fn a_node_without_traces_still_draws_its_program() {
             .is_some_and(|p| p.starts_with("cannot draw chase")),
         "{:?}",
         s.problem
+    );
+}
+
+const MAP_NOW: &str = "device drive enip-io 192.168.33.1 config=1 o2t=112:36 t2o=100:16 rpi_ms=20\nin moving bool drive in:0.1\n";
+const MAP_NEW: &str = "device drive enip-io 192.168.33.1 config=1 o2t=112:36 t2o=100:16 rpi_ms=20\nin moving bool drive in:0.1\ndevice moxa modbus-tcp 192.168.33.60 unit=1\nin di0 bool moxa di:0\n";
+
+fn answer(status: u16, body: &serde_json::Value) -> crate::box_projects::Answer {
+    crate::box_projects::Answer {
+        status,
+        retry_after: None,
+        body: body.to_string(),
+    }
+}
+
+/// A project whose I/O list differs from the Skipper's, checked on the box.
+fn checked_with_new_map() -> crate::box_projects::BoxProjects {
+    use crate::box_projects::{BoxProjects, Deploy, PCall};
+    let mut p = BoxProjects::default();
+    p.available = Some(true);
+    p.open = Some(opened(&[("main.st", NEW), ("io.map", MAP_NEW)]));
+    p.to_node = true;
+    p.node_map = Some(MAP_NOW.into());
+    p.tick(10.0);
+    p.deploy = Deploy::Checking;
+    p.answer(
+        PCall::Check("skipper_drive".into()),
+        &check_answer(&serde_json::json!({"ok": true, "held": [],
+            "modules": [{"name": "drive"}], "approval": {"needs": {}}})),
+    );
+    p
+}
+
+/// Nick 2026-11-24: the Agent's change to the I/O list never reached the
+/// Skipper. Deploy now sends it first: the Skipper checks every device of
+/// it, the page saves it once the check passed, waits for the Skipper to
+/// restart on it, then sends the program (again, if the Skipper is still
+/// restarting).
+#[test]
+fn a_changed_io_list_is_checked_and_saved_on_the_skipper_before_the_program() {
+    use crate::box_projects::{Deploy, MapStep, PCall};
+    use helmsman_nodecore::router::{Effect, Outcome};
+    let mut p = checked_with_new_map();
+    let reqs = p.poll();
+    assert_eq!(reqs.len(), 1, "the map first, no program yet: {reqs:?}");
+    assert_eq!(
+        (reqs[0].method, reqs[0].url.as_str()),
+        ("POST", "/api/io_map/check")
+    );
+    assert!(reqs[0].call.on_node());
+    match routed(&reqs[0], "bench-token-2026") {
+        Outcome::Effect(Effect::CheckIoMap { text, .. }) => assert_eq!(text, MAP_NEW),
+        other => panic!("the Skipper's router did not take the check: {other:?}"),
+    }
+    assert!(p.deploy.busy());
+    p.answer(
+        PCall::NodeMapSend(MapStep::Check),
+        &answer(202, &serde_json::json!({"checking": true})),
+    );
+    p.tick(10.5);
+    assert!(p.poll().is_empty(), "read a second later, not at once");
+    p.tick(11.1);
+    let reqs = p.poll();
+    assert_eq!(
+        (reqs[0].method, reqs[0].url.as_str()),
+        ("GET", "/api/io_map/check")
+    );
+    p.answer(
+        PCall::NodeMapSend(MapStep::Poll),
+        &answer(200, &serde_json::json!({"state": "running", "text": MAP_NEW})),
+    );
+    p.tick(12.2);
+    let _ = p.poll();
+    p.answer(
+        PCall::NodeMapSend(MapStep::Poll),
+        &answer(200, &serde_json::json!({"state": "done", "may_save": true, "passed": true, "text": MAP_NEW,
+            "devices": [{"name": "moxa", "address": "192.168.33.60:502", "state": "answered", "error": null}]})),
+    );
+    let reqs = p.poll();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!((reqs[0].method, reqs[0].url.as_str()), ("PUT", "/api/io_map"));
+    let body: serde_json::Value = serde_json::from_slice(reqs[0].body.as_deref().unwrap()).unwrap();
+    assert_eq!(body["text"], MAP_NEW);
+    p.answer(
+        PCall::NodeMapSend(MapStep::Save),
+        &answer(200, &serde_json::json!({"saved": true, "restarting": true})),
+    );
+    p.tick(15.0);
+    assert!(p.poll().is_empty(), "the Skipper is restarting");
+    p.tick(20.3);
+    let reqs = p.poll();
+    assert_eq!(
+        (reqs[0].method, reqs[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
+    );
+    // Not up yet: tried again shortly.
+    p.answer(
+        PCall::DeployModule("drive".into()),
+        &answer(0, &serde_json::json!(null)),
+    );
+    assert!(p.deploy.busy());
+    p.tick(22.4);
+    let reqs = p.poll();
+    assert_eq!(
+        (reqs[0].method, reqs[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
+    );
+    let ok = helmsman_nodecore::router::deployed("drive", NEW.len());
+    p.answer(
+        PCall::DeployModule("drive".into()),
+        &answer(ok.status, &serde_json::from_slice(&ok.body).unwrap()),
+    );
+    assert!(matches!(p.deploy, Deploy::Done(_)), "{:?}", p.deploy);
+}
+
+/// A device the Skipper cannot reach stops the deploy: the I/O list is not
+/// saved, no program is sent, and the page names the device and why.
+#[test]
+fn a_device_that_does_not_answer_stops_the_deploy_and_is_named() {
+    use crate::box_projects::{Deploy, MapStep, PCall};
+    let mut p = checked_with_new_map();
+    let _ = p.poll();
+    p.answer(
+        PCall::NodeMapSend(MapStep::Check),
+        &answer(202, &serde_json::json!({})),
+    );
+    p.tick(11.1);
+    let _ = p.poll();
+    p.answer(
+        PCall::NodeMapSend(MapStep::Poll),
+        &answer(200, &serde_json::json!({"state": "done", "may_save": false, "passed": false, "text": MAP_NEW,
+            "devices": [
+                {"name": "drive", "address": "192.168.33.1:44818", "state": "answered", "error": null},
+                {"name": "moxa", "address": "192.168.33.60:502", "state": "error", "error": "connect timed out"}]})),
+    );
+    let Deploy::Failed(why) = &p.deploy else {
+        panic!("{:?}", p.deploy)
+    };
+    assert!(
+        why.contains("moxa (192.168.33.60:502): connect timed out"),
+        "{why}"
+    );
+    assert!(!why.contains("drive ("), "{why}");
+    for t in [12.0, 20.0, 40.0] {
+        p.tick(t);
+        assert!(p.poll().is_empty(), "nothing more is sent");
+    }
+}
+
+/// The Skipper already runs the project's I/O list: only the program goes.
+#[test]
+fn an_unchanged_io_list_is_not_sent_again() {
+    let mut p = crate::box_projects::BoxProjects::default();
+    p.available = Some(true);
+    p.open = Some(opened(&[("main.st", NEW), ("io.map", MAP_NOW)]));
+    p.to_node = true;
+    p.node_map = Some(format!("{MAP_NOW}\n"));
+    p.deploy = crate::box_projects::Deploy::Checking;
+    p.answer(
+        crate::box_projects::PCall::Check("skipper_drive".into()),
+        &check_answer(&serde_json::json!({"ok": true, "held": [],
+            "modules": [{"name": "drive"}], "approval": {"needs": {}}})),
+    );
+    let reqs = p.poll();
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert_eq!(
+        (reqs[0].method, reqs[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
     );
 }

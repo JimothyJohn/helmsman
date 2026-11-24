@@ -442,6 +442,8 @@ impl BoxView {
         // told from one for this person.
         self.follow_owner();
         self.trend.local_pins = self.watches_node;
+        self.projects.node_map = self.state.io_map.clone().filter(|_| self.state.io_map_node);
+        self.projects.tick(now);
         self.on_box.step(self.session.as_ref());
         for m in msgs {
             self.state.apply(m, now);
