@@ -13,6 +13,10 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   `cfg(target_os = "linux")` is never compiled here and three casts in it
   failed CI after a green local gate (2026-11-11). New `cfg(target_os)`
   code gets its other half linted the same way in `lint.sh`.
+  It lints the two node firmwares too (crates/helmsman-node-p4, and
+  crates/helmsman-node where the esp toolchain is installed): they are
+  not workspace members and no CI job builds them, and the ESP32 one
+  stopped compiling unnoticed when helmsman-nodecore changed (2026-11-24).
 - `cargo test --workspace --locked`. A new API route, canvas tab or relay
   profile fails it until docs/FEATURES.md has it under a feature with a
   journey (docs/PARITY.md, "Adding a feature").
