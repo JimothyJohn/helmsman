@@ -422,7 +422,7 @@ impl Outcome {
 pub struct Said {
     pub project: String,
     pub asked: String,
-    pub said: String,
+    pub reply: String,
 }
 
 impl Said {
@@ -432,7 +432,7 @@ impl Said {
         format!(
             "(not carried out) {}\n  result: nothing was changed. You answered: {}",
             clean(&self.asked, MAX_INSTRUCTION),
-            self.said
+            self.reply
         )
     }
 }
@@ -1199,7 +1199,7 @@ impl Instruct {
                 self.talk.push(Said {
                     project: run.project.clone(),
                     asked: run.instruction.clone(),
-                    said: said.clone(),
+                    reply: said.clone(),
                 });
                 let extra = self.talk.len().saturating_sub(MAX_TALK);
                 self.talk.drain(..extra);
