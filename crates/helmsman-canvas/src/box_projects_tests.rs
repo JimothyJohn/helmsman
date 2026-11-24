@@ -5231,10 +5231,32 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
     h.bv().projects.module.as_mut().unwrap().text = SRC.replace("slew := 0;", "slew := 500;");
     h.wait(0.1);
     assert!(
-        h.app.chrome.rect("agent deploy pending").is_some(),
-        "an edit waits: it says so"
+        h.app.chrome.rect("agent deploy pending").is_none(),
+        "an edit by hand does not pulse (Nick: only a successful Agent output)"
     );
-    assert!(h.drew("Not running yet"));
+    // A refusal does not either.
+    let outcome = |kind| crate::instruct::Outcome {
+        kind,
+        status: String::new(),
+        why: None,
+        problems: Vec::new(),
+        undo: None,
+        review: Vec::new(),
+        offers: Vec::new(),
+    };
+    h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Refused));
+    h.bv().log_agent();
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploy pending").is_none());
+    // The Agent's answer was written: it pulses and says so.
+    h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Applied));
+    h.bv().log_agent();
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploy pending").is_some());
+    // Deploy sits at the tab's right edge.
+    let tab = h.rect("agent tab");
+    let deploy = h.rect("agent deploy");
+    assert!(tab.right() - deploy.right() < 24.0, "{deploy:?} in {tab:?}");
     h.press("agent deploy");
     let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
     assert_eq!(sent.len(), 1, "{sent:?}");
@@ -5242,4 +5264,9 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
         (sent[0].method, sent[0].url.as_str()),
         ("PUT", "/api/modules/drive")
     );
+    // The deploy ran: the pulse stops.
+    h.bv().projects.deploy = crate::box_projects::Deploy::Done("drive is running".into());
+    h.wait(0.1);
+    assert!(!h.bv().agent_pending);
+    assert!(h.app.chrome.rect("agent deploy pending").is_none());
 }

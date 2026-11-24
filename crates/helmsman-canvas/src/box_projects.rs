@@ -432,9 +432,6 @@ pub struct BoxProjects {
     /// The running module being edited, on a box or Skipper without
     /// projects (`PUT /api/modules/{name}`).
     pub module: Option<ModuleEdit>,
-    /// Saved changes that are not running yet: a save since the last
-    /// deploy that ran (the Agent tab's Deploy pulses while this holds).
-    pub undeployed: bool,
     /// Deploy sends the checked project to the watched node (a page a box
     /// served, watching a Skipper with `?box=`) instead of running it on
     /// the box.
@@ -911,7 +908,6 @@ impl BoxProjects {
             name: name.into(),
             ..OpenProject::default()
         });
-        self.undeployed = false;
         self.diags.clear();
         self.conflict = None;
         self.pending = None;
@@ -1861,7 +1857,6 @@ impl BoxProjects {
             PCall::Save { project, file } => {
                 self.saved(&project, &file, a, &j);
                 if ok {
-                    self.undeployed = true;
                     self.read_history(&project);
                 }
             }
@@ -2082,7 +2077,6 @@ impl BoxProjects {
                         1 => format!(". Requirement test {} is red", red[0]),
                         n => format!(". {n} requirement tests are red: {}", red.join("; ")),
                     };
-                    self.undeployed = false;
                     self.deploy = Deploy::Done(format!(
                         "{project} is running: {mods} (snapshot {}){red}",
                         short(snap)
@@ -2114,7 +2108,6 @@ impl BoxProjects {
                     if let Some((m, t)) = sent {
                         m.base = t;
                     }
-                    self.undeployed = false;
                     self.deploy = Deploy::Done(format!("{name} is running the version deployed from here."));
                     self.deployed = true;
                 } else {
