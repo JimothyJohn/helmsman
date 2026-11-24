@@ -174,6 +174,9 @@ pub enum PCall {
     KeepPaneLayout(String),
     /// `DELETE /api/pane-layouts/{name}`.
     DropPaneLayout(String),
+    /// A Skipper's map: its check, the reading of it and the download
+    /// (answered by the Devices tab, `node_map.rs`).
+    NodeMap(crate::node_map::NodeOp),
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -1992,6 +1995,7 @@ impl BoxProjects {
             | PCall::PaneLayouts
             | PCall::KeepPaneLayout(_)
             | PCall::DropPaneLayout(_)
+            | PCall::NodeMap(_)
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {

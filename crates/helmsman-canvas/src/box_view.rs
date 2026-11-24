@@ -454,6 +454,7 @@ impl BoxView {
                     self.devices_ui.proposal.answer(&call, a.status, &a.body);
                 }
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
+                PCall::NodeMap(op) => self.devices_ui.node_map.answer(op, a.status, &a.body),
                 PCall::SpecPdf(name) => self.spec_pdf_answer(ctx, &name, &a),
                 PCall::SpecProject(name) => self.spec_project_answer(&name, &a),
                 PCall::DesignProject(name) => self.design_project_answer(&name, &a),
@@ -1949,6 +1950,11 @@ impl BoxView {
             crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
         }
         self.devices_ui.config.modal_ui(&ui.ctx().clone(), chrome);
+        self.devices_ui.node_map.window(&ui.ctx().clone(), chrome);
+        for r in self.devices_ui.node_map.take_requests() {
+            self.projects.enqueue(r);
+            ui.ctx().request_repaint();
+        }
         for r in self.devices_ui.config.take_requests() {
             self.projects.enqueue(r);
             ui.ctx().request_repaint();
@@ -3209,6 +3215,12 @@ impl Body for BoxView {
                 project: open.map(|o| o.name.clone()),
                 saved_text,
             });
+        self.devices_ui.node_map.set_context(
+            self.state.io_map_node,
+            self.session.is_some(),
+            self.state.io_map.as_deref(),
+        );
+        self.devices_ui.node_map.row(ui, chrome);
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.scan = crate::devices::Scan::Running;

@@ -1102,6 +1102,26 @@ node asks, from its own port.
   again before it is saved. The ESP32 nodes (`crates/helmsman-node`) have
   no check and save a map as they did.
 
+- **The canvas sends the map** (card `node-comms-check`, part 2). A page
+  that watches a Skipper by address knows it by `"snapshot":"node"` in the
+  `GET /api/io_map` reply (`BoxState::io_map_node`; a box's reply carries
+  a snapshot id). Its Devices tab then has a "Skipper map" row whose
+  button opens a window (`crates/helmsman-canvas/src/node_map.rs`), not the
+  236 pt panel: the map text in a monospace editor, **Check devices**
+  (`POST /api/io_map/check`, then `GET` once a second for two minutes, a
+  line per device with its time or the node's own reason, cut to 240
+  printable characters), **Download** (`PUT /api/io_map`), and **Discard
+  edits**. Download is drawn only when the check's `may_save` is true and
+  its `text` equals the window's text character for character; one more
+  character withdraws it. A 200 says the Skipper is restarting and the
+  page's map read shows the new text when it is back; a 409 shows the
+  node's reason and the device list of its reply; a 422 shows the line.
+  Without a token the buttons say what is needed and nothing is sent. A
+  node that answers 404 to the check route (the ESP32 boards) is told so
+  in the window, and no Check or Download is offered: such a board saves a
+  map from its own page as before. Calls go through the transport Deploy
+  uses, so they carry the `?box=` origin and the bearer token.
+
 **On the board, 2026-11-24** (the P4, a four-device map): the E1213 on
 `enip-io` answered in 47 ms and the Studio's Modbus server in 45 ms while
 both were being driven by the running map; 192.168.3.99 was `link: connect
