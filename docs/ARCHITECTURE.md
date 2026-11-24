@@ -947,11 +947,28 @@ its instruction with its reason and its result on lines under it (Nick,
 2026-11-23, `history-in-context`; until then the last five instructions
 alone). It is cut to `HISTORY_TOKENS` (64 000, estimated at a third of
 the characters, `instruct::tokens`) by `instruct::fit`: the newest whole,
-and one line saying how many older ones are not shown. A History page
-that opens `Summary for: FILE` / `Covers: N` stands for everything before
-it on that file, so a summary is made once and what it covers is never
-sent again; nothing writes one yet (the relay's summarising step is the
-other half of the card). A change's own History record says how many
+and one line saying how many older ones are not shown. On the page the history is read from the project's **history log**, not
+from its revisions (`SimProjects::log`): the browser keeps twenty
+revisions, and what was asked of a file must outlive the version that
+did it. The log is the project's `agent.md` (`helmsman_project::agent`,
+which was the old conversation file: saved and zipped with the project,
+in no revision, never an edit), one page per change holding its
+instruction, file, reason and result (`instruct::log_entry`), written by
+`save_as` whenever a revision carries an Agent page; a project from
+before the log reads the pages of the revisions it still has. A log
+page that opens `Summary for: FILE` / `Covers: N` stands for everything
+before it on that file. It is written by the relay's `summary` agent
+(`helmsman/summary-v1`): when a file's history is past `HISTORY_TOKENS`,
+or the log is three quarters of `agent::MAX_PAGES` full, the page asks
+it beside the instruction, on a third link (`ask_summary`,
+`instruct::compaction`: the oldest changes, as many as leave the rest at
+half the budget, with the summary that already stands), and the answer
+takes the place of the entries it covers (`instruct::summarised`,
+`SimProjects::log_summarise`). The instruction under way went with what
+fits; the summary is for the next one, and a relay that does not serve
+the agent is not asked. A box still reads its revisions' pages (it keeps
+200) and asks for no summary.
+A change's own History record says how many
 earlier changes went with it, not which. A box keeps every Agent page of
 the open project it has read (`box_projects::PAGES`, as many as the box
 keeps revisions), where it kept the newest ten. The answer is a `Why:` line, the whole file in

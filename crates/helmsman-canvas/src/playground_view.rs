@@ -244,6 +244,13 @@ pub struct PlaygroundView {
     pub start: crate::start_state::Card,
     pub start_link: Link,
     start_answer: crate::claude::Side,
+    /// A third way to the relay, for the summary of a file's oldest
+    /// changes (`instruct::compaction`): asked beside an instruction once
+    /// the file's history is past what goes with one, never in its way.
+    pub summary_link: Link,
+    summary_answer: crate::claude::Side,
+    /// The summary asked for and not yet answered, with its project.
+    summarising: Option<(String, crate::instruct::Compact)>,
     /// A change that passed its checks and waits to be compared with the
     /// engineer's answer, and when that was asked (page time, s).
     held: Option<(crate::instruct::Apply, f64)>,
@@ -377,6 +384,9 @@ impl PlaygroundView {
             start: crate::start_state::Card::default(),
             start_link: Link::default(),
             start_answer: crate::claude::Side::default(),
+            summary_link: Link::default(),
+            summary_answer: crate::claude::Side::default(),
+            summarising: None,
             held: None,
             big: None,
             fallback: None,
@@ -993,10 +1003,9 @@ impl PlaygroundView {
         self.big = None;
         self.instruct.draft = asked;
         let file = crate::instruct::target(&scope);
-        let earlier = crate::instruct::history(
-            self.proj.revisions().iter().filter_map(|r| r.page.as_deref()),
-            &file,
-        );
+        // From the project's history log, which outlives its revisions.
+        let log = self.proj.log();
+        let earlier = crate::instruct::history(log.iter().map(String::as_str), &file);
         let (diags, devices, settings) = self.agent_env();
         let env = crate::instruct::Env {
             project: &self.proj.open,
@@ -1012,8 +1021,61 @@ impl PlaygroundView {
                 self.asked_at = ctx.input(|i| i.time);
                 self.send_ask(&ask, ctx);
                 self.ask_question(plan, ctx);
+                self.ask_summary(&earlier, &file, log.len(), ctx);
             }
             Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// Beside the instruction just sent, when `file`'s history (`earlier`)
+    /// is past what goes with one, or the log (`logged` entries) is near
+    /// what the project keeps: asks the relay's `summary` agent to write
+    /// up the file's oldest changes, once (`instruct::compaction`). The
+    /// instruction itself went with what fits; the summary is for the
+    /// next one.
+    fn ask_summary(&mut self, earlier: &[String], file: &str, logged: usize, ctx: &egui::Context) {
+        use crate::instruct::{HISTORY_TOKENS, SUMMARY_AGENT};
+        if self.summarising.is_some() || self.proj.is_example() || !self.chat.serves(SUMMARY_AGENT) {
+            return;
+        }
+        // The log holds so many pages (`agent::MAX_PAGES`); the oldest
+        // would fall off its front unsummarised. Three quarters full,
+        // half of this file's history is written up.
+        let size: usize = earlier.iter().map(|e| crate::instruct::tokens(e) + 2).sum();
+        let budget = if logged * 4 >= helmsman_project::agent::MAX_PAGES * 3 {
+            HISTORY_TOKENS.min(size / 2)
+        } else {
+            HISTORY_TOKENS
+        };
+        let Some(ask) = crate::instruct::compaction(earlier, file, budget) else {
+            return;
+        };
+        let Ok(route) = self.chat.route() else { return };
+        let turn = self.chat.takes.allow(crate::claude::Turn {
+            agent: Some(SUMMARY_AGENT),
+            quick: false,
+        });
+        let req = crate::claude::request_turn(&route, &[], &ask.message, turn);
+        let seq = self.summary_answer.start();
+        self.summary_link.send(seq, req, ctx);
+        self.summarising = Some((self.proj.open.clone(), ask));
+    }
+
+    /// The summary's answer, once it is whole, takes the place of the
+    /// changes it covers in its project's history log. One for a project
+    /// no longer open, or an answer that is no summary, is dropped: it is
+    /// asked for again with the next instruction there.
+    fn summary_settle(&mut self) {
+        for m in self.summary_link.drain() {
+            self.summary_answer.receive(m);
+        }
+        if let Some(done) = self.summary_answer.take()
+            && let Some((project, ask)) = self.summarising.take()
+            && project == self.proj.open
+            && let Ok(text) = done
+            && let Some(page) = crate::instruct::summary_page(&ask, &text)
+        {
+            self.proj.log_summarise(&ask, &page);
         }
     }
 
@@ -3318,6 +3380,7 @@ impl PlaygroundView {
         self.drop_run_of_another_project();
         self.side_settle(ctx);
         self.start_settle(ctx);
+        self.summary_settle();
         self.settle(ctx);
         self.design_count();
         self.tidy_question();
