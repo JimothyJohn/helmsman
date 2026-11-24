@@ -752,7 +752,7 @@ impl BoxView {
             .collect();
         let started = self.with_env(None, |i, env| {
             let file = crate::instruct::target(&env.scope);
-            let earlier = crate::instruct::recent(pages.iter().map(String::as_str), &file);
+            let earlier = crate::instruct::history(pages.iter().map(String::as_str), &file);
             i.start(env, &earlier)
         });
         match started {
@@ -983,6 +983,15 @@ impl BoxView {
         ));
         self.projects
             .save_agent(&apply.file, &apply.text, &apply.record, &apply.tests);
+        // What the change added to the program joins the trend once the
+        // box reports it (a change is saved first and deployed after).
+        let known = crate::device_form::ports_of(&was);
+        let added: Vec<String> = crate::device_form::ports_of(&apply.text)
+            .into_iter()
+            .map(|p| p.name)
+            .filter(|n| !known.iter().any(|k| k.name == *n))
+            .collect();
+        self.trend.expect(&added);
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),
@@ -2860,9 +2869,12 @@ impl Body for BoxView {
         if let Some(s) = &self.state.scan {
             ui.separator();
             ui.label(
-                RichText::new(format!("t={:.1}s", s.now_ms as f64 / 1000.0))
-                    .monospace()
-                    .color(t.muted),
+                RichText::new(format!(
+                    "t={}s",
+                    helmsman_iec::shown_real(s.now_ms as f64 / 1000.0)
+                ))
+                .monospace()
+                .color(t.muted),
             )
             .tip(format!("The box's clock since start, at scan {}.", s.scan));
         }

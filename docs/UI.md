@@ -72,14 +72,28 @@ only go down.
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
   restart (the simulation), then save, upload, download. Strokes in the
   brand colours; each tells its key on hover.
-- **Bottom panel**, under the diagram, collapsible and resizable (View ›
-  Trend, Alt 2), two tabs: Trend (its time axis is the long side; one
-  Window slider, logarithmic from 100 ms to 10 min, the plot following
-  as it moves; Nick, 2026-11-02) and
-  Messages (the last 200 things the page had to say, filtered by level
+- **Bottom panel**, the whole bottom strip from the far left, under both
+  side panes, collapsible and resizable (View › Trend, Alt 2), always the
+  Trend (Nick, 2026-11-23: no tabs). Each lane is drawn as an EKG: a
+  write head sweeps left to right, the newest sample a bright point at
+  the head with its number beside it, the trace behind fading with age,
+  and at the right edge the head wraps to the left over the oldest trace
+  with a small blank ahead of it. One Window slider, logarithmic from
+  100 ms to 10 min, sets how long a sweep takes (Nick, 2026-11-02); a
+  stopped program leaves the head still and asks for no redraws. The
+  inputs and outputs a described change adds are pinned at the bottom
+  and their lanes pop for a second and a half; at the cap of six the
+  oldest pin nobody chose makes room, and the engineer's own stay. It
+  opens 320 pt tall (the diagram keeps about 430 pt at 1280x800).
+- **Messages**, under the left pane's tabs and above the trend, with a
+  fold on their header that is kept per browser (Nick, 2026-11-23: they
+  are part of the user feedback). They hold the last 200 things the page
+  had to say, filtered by level
   with the counts on the filters: info, warnings,
-  errors, with the error count on the tab; errors are listed to start and
-  a click on info or warnings lists them too, Nick, 2026-11-23), so a
+  errors, with the error count on the header; errors are listed to start and
+  a click on info or warnings lists them too (Nick, 2026-11-23). The
+  header goes red while an error stands or one came in unread, folded or
+  not, and a shut left pane opens on them when an error arrives; so a
   fault or a refused deploy is still there to read after the line under
   the header has gone. An Agent outcome is one short line there, its
   whole text on hover and in Copy all; Copy all and Clear are icons
@@ -286,12 +300,16 @@ only go down.
   the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
-  and the Agent's one-sentence reason. In the simulation the answer area
-  is on top and the box under it at the tab's bottom edge, one row
-  growing upward to four and scrolling inside past that, eased over
-  0.1 s, so the output does not move (Nick, 2026-11-23; from 2026-11-13
-  to then the box was on top and took the tab's height). The output can
-  be selected. The arrows restore the prompt and the output of the step
+  and the Agent's one-sentence reason. In the simulation the box is on
+  top, one row growing to four and scrolling inside past that, eased over
+  0.1 s; its buttons under it; then the answer area down to the bottom of
+  the tab (Nick, 2026-11-23 evening. That morning he asked for the box at
+  the bottom growing upward; tried, the answer area sat where the box had
+  been and took no click, and he could not find where to type). A click on
+  the answer area puts the keyboard in the box. A question is a card in
+  the accent colour between the buttons and the answer area, never a row
+  inside the answer. No example prompts in the empty tab (he found them
+  confusing). The output can be selected. The arrows restore the prompt and the output of the step
   shown and log nothing; the clock beside them turns the answer area into
   the searchable list of versions. No "Stop and reset" checkbox: a
   described change runs at once in the simulation unless View › Reset

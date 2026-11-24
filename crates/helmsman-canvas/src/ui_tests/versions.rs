@@ -123,3 +123,41 @@ fn words_match_a_version_by_what_it_says_and_why() {
     assert_eq!(ns("lamp"), [2, 3]);
     assert_eq!(ns("lamp nowhere"), Vec::<u32>::new());
 }
+
+/// Nick, 2026-11-23: "I can't even type". A click on the answer area,
+/// the biggest thing in the tab, puts the keyboard in the instruction box,
+/// and what is typed lands there.
+#[test]
+fn a_click_on_the_answer_area_puts_the_keyboard_in_the_box() {
+    use eframe::egui::Event;
+    let mut h = Harness::new(App::sim());
+    h.app.chrome.dock(crate::editor::Pane::Claude, true);
+    h.press("tab claude");
+    h.wait(0.3);
+    {
+        let v = h.app.sim.as_mut().unwrap();
+        v.chat.receive(crate::claude::Incoming::Proxy(true));
+        v.instruct.outcome = None;
+        v.instruct.draft.clear();
+    }
+    h.wait(0.3);
+    let area = h.rect("agent answer area");
+    let field = h.rect("agent instruction");
+    assert!(
+        area.height() > 4.0 * field.height(),
+        "the area is the big one: {area:?} under {field:?}"
+    );
+    h.click(area.center());
+    h.frame(vec![]);
+    h.frame(vec![Event::Text("turn the lamp on".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "turn the lamp on");
+
+    // The versions' list keeps its own clicks: its search box is typed in.
+    h.press("agent versions");
+    h.wait(0.2);
+    h.click(h.rect("agent versions find").center());
+    h.frame(vec![Event::Text("zz".into())]);
+    h.frame(vec![]);
+    assert_eq!(h.app.sim.as_ref().unwrap().instruct.versions_find, "zz");
+}

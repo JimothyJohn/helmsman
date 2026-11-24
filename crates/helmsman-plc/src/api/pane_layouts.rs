@@ -13,7 +13,7 @@
 //!   "layouts": [...]}`, the file the page's Export writes, so the page
 //!   reads both with one reader. A layout is its `name`, the tabs of the
 //!   `left` and `right` panes and the `hidden` ones in order, which tab
-//!   each side shows, which panes are open, the bottom panel's tab, and
+//!   each side shows, which panes are open, whether the Messages are open, and
 //!   the three sizes in points.
 //! - **What is kept.** Only those fields: the body is read into that
 //!   shape and written back from it. A layout that breaks a rule is
@@ -66,6 +66,11 @@ pub struct Layout {
     pub right_open: bool,
     pub bottom_open: bool,
     pub bottom_shows: String,
+    /// The Messages under the left pane's tabs are open (2026-11-23; the
+    /// bottom panel has no tabs now, and `bottom_shows` is a legacy field
+    /// the page writes as `trend`). Absent: open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub messages_open: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub left_width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

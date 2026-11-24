@@ -138,17 +138,6 @@ impl Link {
     }
 }
 
-/// What the simulation does once a change of the Agent's lands.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AfterChange {
-    /// Stopped, every variable at its initial value: Run starts it from
-    /// scratch (Nick, 2026-11-14).
-    #[default]
-    Reset,
-    /// Running at once.
-    Run,
-}
-
 pub struct PlaygroundView {
     pub session: Session,
     /// The Messages tab's log.
@@ -244,6 +233,13 @@ pub struct PlaygroundView {
     pub start: crate::start_state::Card,
     pub start_link: Link,
     start_answer: crate::claude::Side,
+    /// A third way to the relay, for the summary of a file's oldest
+    /// changes (`instruct::compaction`): asked beside an instruction once
+    /// the file's history is past what goes with one, never in its way.
+    pub summary_link: Link,
+    summary_answer: crate::claude::Side,
+    /// The summary asked for and not yet answered, with its project.
+    summarising: Option<(String, crate::instruct::Compact)>,
     /// A change that passed its checks and waits to be compared with the
     /// engineer's answer, and when that was asked (page time, s).
     held: Option<(crate::instruct::Apply, f64)>,
@@ -255,9 +251,6 @@ pub struct PlaygroundView {
     fallback: Option<crate::instruct::Apply>,
     /// When the request in flight went (page time, s): the Agent tab's clock.
     asked_at: f64,
-    /// What the program does once a change of the Agent's lands
-    /// (`Chrome::agent_resets`, followed each frame the Agent tab draws).
-    pub after_change: AfterChange,
     /// A checked new program waiting for its project's name.
     to_name: Option<crate::instruct::Apply>,
     /// The revision on view (the History modal).
@@ -377,11 +370,13 @@ impl PlaygroundView {
             start: crate::start_state::Card::default(),
             start_link: Link::default(),
             start_answer: crate::claude::Side::default(),
+            summary_link: Link::default(),
+            summary_answer: crate::claude::Side::default(),
+            summarising: None,
             held: None,
             big: None,
             fallback: None,
             asked_at: 0.0,
-            after_change: AfterChange::default(),
             to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
@@ -993,10 +988,9 @@ impl PlaygroundView {
         self.big = None;
         self.instruct.draft = asked;
         let file = crate::instruct::target(&scope);
-        let earlier = crate::instruct::recent(
-            self.proj.revisions().iter().filter_map(|r| r.page.as_deref()),
-            &file,
-        );
+        // From the project's history log, which outlives its revisions.
+        let log = self.proj.log();
+        let earlier = crate::instruct::history(log.iter().map(String::as_str), &file);
         let (diags, devices, settings) = self.agent_env();
         let env = crate::instruct::Env {
             project: &self.proj.open,
@@ -1012,8 +1006,61 @@ impl PlaygroundView {
                 self.asked_at = ctx.input(|i| i.time);
                 self.send_ask(&ask, ctx);
                 self.ask_question(plan, ctx);
+                self.ask_summary(&earlier, &file, log.len(), ctx);
             }
             Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// Beside the instruction just sent, when `file`'s history (`earlier`)
+    /// is past what goes with one, or the log (`logged` entries) is near
+    /// what the project keeps: asks the relay's `summary` agent to write
+    /// up the file's oldest changes, once (`instruct::compaction`). The
+    /// instruction itself went with what fits; the summary is for the
+    /// next one.
+    fn ask_summary(&mut self, earlier: &[String], file: &str, logged: usize, ctx: &egui::Context) {
+        use crate::instruct::{HISTORY_TOKENS, SUMMARY_AGENT};
+        if self.summarising.is_some() || self.proj.is_example() || !self.chat.serves(SUMMARY_AGENT) {
+            return;
+        }
+        // The log holds so many pages (`agent::MAX_PAGES`); the oldest
+        // would fall off its front unsummarised. Three quarters full,
+        // half of this file's history is written up.
+        let size: usize = earlier.iter().map(|e| crate::instruct::tokens(e) + 2).sum();
+        let budget = if logged * 4 >= helmsman_project::agent::MAX_PAGES * 3 {
+            HISTORY_TOKENS.min(size / 2)
+        } else {
+            HISTORY_TOKENS
+        };
+        let Some(ask) = crate::instruct::compaction(earlier, file, budget) else {
+            return;
+        };
+        let Ok(route) = self.chat.route() else { return };
+        let turn = self.chat.takes.allow(crate::claude::Turn {
+            agent: Some(SUMMARY_AGENT),
+            quick: false,
+        });
+        let req = crate::claude::request_turn(&route, &[], &ask.message, turn);
+        let seq = self.summary_answer.start();
+        self.summary_link.send(seq, req, ctx);
+        self.summarising = Some((self.proj.open.clone(), ask));
+    }
+
+    /// The summary's answer, once it is whole, takes the place of the
+    /// changes it covers in its project's history log. One for a project
+    /// no longer open, or an answer that is no summary, is dropped: it is
+    /// asked for again with the next instruction there.
+    fn summary_settle(&mut self) {
+        for m in self.summary_link.drain() {
+            self.summary_answer.receive(m);
+        }
+        if let Some(done) = self.summary_answer.take()
+            && let Some((project, ask)) = self.summarising.take()
+            && project == self.proj.open
+            && let Ok(text) = done
+            && let Some(page) = crate::instruct::summary_page(&ask, &text)
+        {
+            self.proj.log_summarise(&ask, &page);
         }
     }
 
@@ -1118,6 +1165,12 @@ impl PlaygroundView {
                 }
             }
         }
+    }
+
+    /// A checked change written into the open project, for the tests.
+    #[cfg(test)]
+    pub fn write_for_test(&mut self, apply: crate::instruct::Apply) {
+        self.write(apply);
     }
 
     /// A click on answer `k`, for the tests.
@@ -2631,14 +2684,24 @@ impl PlaygroundView {
             .take(120)
             .collect();
         self.proj.save_as(&what, Some(&apply.record));
-        if self.after_change == AfterChange::Reset {
-            // Stopped, as the Stop button leaves it: nothing of the old
-            // program's run is carried into the new one.
-            self.reload();
-            self.session.stop();
-        } else {
-            self.reload_running();
-        }
+        let known: Vec<String> = self
+            .session
+            .inputs()
+            .chain(self.session.outputs())
+            .map(|p| p.name.clone())
+            .collect();
+        // A described change runs at once (Nick, 2026-11-23: no stop and
+        // reset, not as a switch either).
+        self.reload_running();
+        // What the change added to the program joins the trend.
+        let added: Vec<String> = self
+            .session
+            .inputs()
+            .chain(self.session.outputs())
+            .map(|p| p.name.clone())
+            .filter(|n| !known.contains(n))
+            .collect();
+        self.session.trend.pin_added(&added);
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),
@@ -3318,6 +3381,7 @@ impl PlaygroundView {
         self.drop_run_of_another_project();
         self.side_settle(ctx);
         self.start_settle(ctx);
+        self.summary_settle();
         self.settle(ctx);
         self.design_count();
         self.tidy_question();
@@ -3344,7 +3408,7 @@ impl PlaygroundView {
         let secs = s.now_ms as f64 / 1000.0;
         let state = s.state();
         (
-            format!("{} · {secs:.1}s", state.word()),
+            format!("{} · {}s", state.word(), helmsman_iec::shown_real(secs)),
             state == crate::playground::RunState::Running,
         )
     }
@@ -3381,7 +3445,7 @@ impl PlaygroundView {
                 trend.signals.hash(h);
             }),
             asks: self.chat.seq(),
-            trend_open: chrome.trend && chrome.bottom == editor::Bottom::Trend,
+            trend_open: chrome.trend,
         }
     }
 }
@@ -4335,6 +4399,9 @@ impl PlaygroundView {
         chrome.hit("trend signals", legend.inner_rect);
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
+        if self.session.trend.flashes.tick(ui.input(|i| i.time)) {
+            ui.ctx().request_repaint();
+        }
         let plot = self.trend_plot(ui, chrome);
         chrome.hit("trend plot", plot);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
@@ -4402,14 +4469,6 @@ impl PlaygroundView {
             if let Some(act) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
                 self.design_act(act, &ctx);
             }
-            // In the simulation a change runs at once unless the View
-            // menu's switch says to stop and reset (Nick, 2026-11-23: no
-            // checkbox in the tab).
-            self.after_change = if chrome.agent_resets {
-                AfterChange::Reset
-            } else {
-                AfterChange::Run
-            };
             let view = crate::instruct::View {
                 target: self.scope().label().replacen("Editing: ", "", 1),
                 blocked: self.chat.route().err().map(str::to_string),
@@ -4609,60 +4668,40 @@ impl PlaygroundView {
         let n = trend.signals.len();
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / n as f32;
-        let end = trend.history.last_t().unwrap_or(0);
-        let window = trend.window_ms.max(1);
-        let start = end.saturating_sub(window);
-        // Samples older than the window are kept for a wider one: not drawn.
-        #[allow(clippy::cast_precision_loss)]
-        let x_of = |t: u64| {
-            rect.left() + 90.0 + (rect.width() - 90.0 - SCALE_W) * ((t - start) as f32 / window as f32)
-        };
+        // The head sits at the newest scan; stopped, it stands still.
+        let sweep = crate::ekg::Sweep::new(trend.window_ms, trend.history.last_t().unwrap_or(0));
+        let now = ui.input(|i| i.time);
         for (k, name) in trend.signals.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = lane_color(&t, chrome, name, k);
-            let (lo, hi) = trend
-                .history
-                .lane(name, start)
-                .map(|(_, v)| v)
-                .filter(|v| v.is_finite())
+            let runs = sweep.runs(trend.history.lane(name, sweep.oldest_ms()));
+            let (lo, hi) = runs
+                .iter()
+                .flatten()
+                .map(|p| p.1)
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let last = trend.history.last_value(name);
-            painter.text(
-                Pos2::new(rect.left() + 6.0, top + lane / 2.0),
-                egui::Align2::LEFT_CENTER,
-                format!(
-                    "{}\n{}",
-                    name.to_ascii_lowercase(),
-                    last.filter(|v| v.is_finite())
-                        .map_or("–".into(), |v| Value::Real(v).to_string())
-                ),
-                FontId::monospace(crate::theme::MIN_TEXT),
-                color,
+            let number = trend
+                .history
+                .last_value(name)
+                .filter(|v| v.is_finite())
+                .map(helmsman_iec::shown_real);
+            crate::ekg::paint_lane(
+                &painter,
+                &t,
+                rect,
+                (top, lane),
+                &crate::ekg::Lane {
+                    name,
+                    color: lane_color(&t, chrome, name, k),
+                    number,
+                    pop: trend.flashes.strength(name, now),
+                },
+                &sweep,
+                &runs,
+                nice_range(lo, hi),
             );
-            painter.line_segment(
-                [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
-                Stroke::new(1.0, t.rule),
-            );
-            let (lo, hi, step) = nice_range(lo, hi);
-            scale_labels(&painter, &t, rect, top, lane, (lo, hi, step));
-            let y_of = |v: f64| {
-                #[allow(clippy::cast_possible_truncation)]
-                let f = ((v - lo) / (hi - lo)) as f32;
-                top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
-            };
-            let pts = lane_points(
-                trend
-                    .history
-                    .lane(name, start)
-                    .filter(|(_, v)| v.is_finite())
-                    .map(|(t, v)| (x_of(t), y_of(v))),
-            );
-            if pts.len() > 1 {
-                painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
-            }
         }
         rect
     }
@@ -4773,7 +4812,7 @@ pub fn window_label(ms: u64) -> String {
 }
 
 /// Width of a lane's label column, which is also its drag handle.
-const LANE_HANDLE_W: f32 = 88.0;
+pub const LANE_HANDLE_W: f32 = 88.0;
 
 /// The Trend tab's signal buttons wrap, and take at most this share of its
 /// height before they scroll, so the plot keeps the rest.
@@ -5867,6 +5906,6 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
 pub fn show(ty: Ty, v: Value) -> String {
     match (ty, v) {
         (Ty::Time, Value::Int(ns)) => format!("{} ms", ns / 1_000_000),
-        _ => v.to_string(),
+        _ => v.shown(),
     }
 }

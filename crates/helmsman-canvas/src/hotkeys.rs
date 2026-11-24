@@ -424,7 +424,7 @@ const fn does(action: Action) -> &'static str {
         Action::Files => "The Files tab",
         Action::Devices => "The Devices tab (the I/O map's devices and points)",
         Action::St => "The Code tab (the Structured Text)",
-        Action::Trend => "The bottom panel (Trend, Messages)",
+        Action::Trend => "The trend along the bottom",
         Action::Panel => "The right pane, once a tab is docked there",
         Action::DockRight => "The left pane's tab to a pane on the right, the next one shown on the left",
         Action::GoToDefinition => "Go to definition: the picked block's variable, at its VAR line",

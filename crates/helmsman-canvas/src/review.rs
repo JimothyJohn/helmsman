@@ -417,8 +417,8 @@ impl Chart {
                 a.iter()
                     .map(|f| {
                         format!(
-                            "t={:.1}s {}: {}",
-                            n(&f["at_ms"]) as f64 / 1000.0,
+                            "t={}s {}: {}",
+                            helmsman_iec::shown_real(n(&f["at_ms"]) as f64 / 1000.0),
                             f["module"].as_str().unwrap_or("?"),
                             f["fault"]["text"].as_str().unwrap_or("fault")
                         )

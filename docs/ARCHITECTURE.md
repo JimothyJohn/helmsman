@@ -940,9 +940,38 @@ The Describe tab is one path in the page and on a box (`agent-instruct`,
 crates/helmsman-canvas/src/instruct.rs; Nick 2026-11-05: no chat). The
 engineer types an instruction; the request carries the whole file in its
 scope (`scope::Scope::envelope`), the program and its errors, and the
-last five instructions carried out on that file, read back from the
-project's History (`instruct::recent` over the revisions' Agent pages,
-`<earlier_instructions>`). The answer is a `Why:` line, the whole file in
+history of that file, read back from the project's History
+(`instruct::history` over the revisions' Agent pages,
+`<earlier_instructions>`): every change to the file, oldest first, each
+its instruction with its reason and its result on lines under it (Nick,
+2026-11-23, `history-in-context`; until then the last five instructions
+alone). It is cut to `HISTORY_TOKENS` (64 000, estimated at a third of
+the characters, `instruct::tokens`) by `instruct::fit`: the newest whole,
+and one line saying how many older ones are not shown. On the page the history is read from the project's **history log**, not
+from its revisions (`SimProjects::log`): the browser keeps twenty
+revisions, and what was asked of a file must outlive the version that
+did it. The log is the project's `agent.md` (`helmsman_project::agent`,
+which was the old conversation file: saved and zipped with the project,
+in no revision, never an edit), one page per change holding its
+instruction, file, reason and result (`instruct::log_entry`), written by
+`save_as` whenever a revision carries an Agent page; a project from
+before the log reads the pages of the revisions it still has. A log
+page that opens `Summary for: FILE` / `Covers: N` stands for everything
+before it on that file. It is written by the relay's `summary` agent
+(`helmsman/summary-v1`): when a file's history is past `HISTORY_TOKENS`,
+or the log is three quarters of `agent::MAX_PAGES` full, the page asks
+it beside the instruction, on a third link (`ask_summary`,
+`instruct::compaction`: the oldest changes, as many as leave the rest at
+half the budget, with the summary that already stands), and the answer
+takes the place of the entries it covers (`instruct::summarised`,
+`SimProjects::log_summarise`). The instruction under way went with what
+fits; the summary is for the next one, and a relay that does not serve
+the agent is not asked. A box still reads its revisions' pages (it keeps
+200) and asks for no summary.
+A change's own History record says how many
+earlier changes went with it, not which. A box keeps every Agent page of
+the open project it has read (`box_projects::PAGES`, as many as the box
+keeps revisions), where it kept the newest ten. The answer is a `Why:` line, the whole file in
 one ```` ```st ```` block and ```` ```st scenario ```` blocks
 (requirement tests in the same format). It is checked before anything is
 written (`verify::check`): the code taken into a copy through
@@ -1218,7 +1247,7 @@ one did. `record.rs` and `replay.rs` in `helmsman-plc`; contract in
 
 ## Trends on the box (`box-trend-source`, built)
 
-The Editor's Trend tab on a box opens with the last minutes of each pinned
+The Editor's trend on a box opens with the last minutes of each pinned
 signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
 `api.rs` and canvas `box_projects_tests.rs` tests; the canvas side is
 `box_trend.rs`).
@@ -2156,7 +2185,7 @@ on the box; contract in `pane_layout_tests.rs`, `ui_tests/layouts.rs`,
 `box_projects_tests.rs`, and the box's `tests/pane_layouts.rs` and
 `tests/accounts.rs`). A layout is where the editor's side tabs sit (left,
 right or hidden, in order), which tab each side shows, which panes are
-open, the bottom panel's tab and the three pane sizes. One text holds a
+open, whether the Messages are open and the three pane sizes. One text holds a
 list of them, `{"format": "helmsman-pane-layouts 1", "layouts": [...]}`:
 it is what the browser stores (`helmsman-canvas/pane-layouts`, at most
 32), what Export downloads and Import reads, and what the box answers.

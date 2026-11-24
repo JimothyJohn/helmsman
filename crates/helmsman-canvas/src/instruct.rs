@@ -5,9 +5,11 @@
 //!
 //! - **One request per instruction**: the whole file in its scope
 //!   ([`crate::scope::Scope::envelope`]), the program and its errors, and
-//!   the last [`RECENT`] instructions already carried out on this file,
-//!   read from the project's History ([`recent`]), so "now make it blink
-//!   faster" works without a visible conversation.
+//!   every change already carried out on this file, each with its reason
+//!   and result, read from the project's History ([`history`]) and cut to
+//!   [`HISTORY_TOKENS`] ([`fit`]), so "now make it blink faster" works
+//!   without a visible conversation and a decision made weeks ago is
+//!   still known.
 //! - **Checked before it is written** ([`crate::verify::check`]): the code
 //!   is applied to a copy, compiled, and the Agent's scenarios and the
 //!   project's requirement tests run on it. A red answer goes back with
@@ -34,8 +36,29 @@ use crate::scope::{Files, Scope};
 use crate::tips::Tip;
 use crate::verify::{self, Check, Next};
 
-/// How many earlier instructions for the file go with a new one.
-pub const RECENT: usize = 5;
+/// How much of a file's history goes with a new instruction, in tokens
+/// (Nick, 2026-11-23: "the entire commit history is slowly fed into
+/// context but compacted every 64k tokens"). Past it the oldest changes
+/// are left out ([`fit`]) until a summary stands in for them
+/// ([`SUMMARY`]).
+pub const HISTORY_TOKENS: usize = 64_000;
+
+/// About how many tokens `text` is: a third of its characters, rounded
+/// up. On the high side for prose and for code, so the estimate ends the
+/// history before the model's own count would.
+#[must_use]
+pub fn tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(3)
+}
+
+/// The first line of a History page that is a summary of a file's older
+/// changes, with the file's name after it. Its second line is
+/// [`COVERS`] and how many changes it stands for; the rest is the
+/// summary. [`history`] starts again from the newest one for a file, so a
+/// summary is made once and what it covers is never sent again.
+pub const SUMMARY: &str = "Summary for: ";
+/// The second line of a [`SUMMARY`] page.
+pub const COVERS: &str = "Covers: ";
 /// Longest instruction, in characters.
 pub const MAX_INSTRUCTION: usize = 2000;
 /// Longest reason shown, in characters.
@@ -457,8 +480,9 @@ impl Instruct {
         }
     }
 
-    /// Starts the typed instruction on `env`, after the `earlier` ones
-    /// for its file (oldest first, at most [`RECENT`] go). The draft is
+    /// Starts the typed instruction on `env`, after the `earlier` changes
+    /// to its file (oldest first, as [`history`] reads them; what fits
+    /// [`HISTORY_TOKENS`] goes). The draft is
     /// emptied.
     ///
     /// # Errors
@@ -519,7 +543,7 @@ impl Instruct {
         plan: bool,
         spec: bool,
     ) -> Ask {
-        let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
+        let earlier: Vec<String> = fit(earlier, HISTORY_TOKENS);
         // The collected chips go with an instruction (a run from a
         // specification keeps them for the next one).
         self.about = if spec { String::new() } else { self.take_about() };
@@ -1484,11 +1508,10 @@ pub fn record(run: &Run, file: &str, why: Option<&str>, status: &str, check: &Ch
         let _ = writeln!(r, "Why: {w}");
     }
     let _ = writeln!(r, "Result: {status}");
+    // How many, not which: each is in History under its own entry, and a
+    // list here would be read back as part of this change's own words.
     if !run.earlier.is_empty() {
-        r.push_str("\nEarlier instructions sent with it:\n");
-        for e in &run.earlier {
-            let _ = writeln!(r, "- {}", clean(e, MAX_INSTRUCTION));
-        }
+        let _ = writeln!(r, "\nEarlier changes sent with it: {}", run.earlier.len());
     }
     if !check.scenarios.is_empty() {
         r.push_str("\nScenarios:\n");
@@ -1525,22 +1548,299 @@ pub fn record(run: &Run, file: &str, why: Option<&str>, status: &str, check: &Ch
     r
 }
 
-/// The last [`RECENT`] instructions carried out on `file`, oldest first,
-/// read from History entries (`pages`, oldest first) that [`record`]
-/// wrote; other entries are skipped.
+/// One line of a History page that starts with `key`, trimmed; `None`
+/// when there is none or it is empty.
+fn field(page: &str, key: &str) -> Option<String> {
+    page.lines()
+        .find_map(|l| l.strip_prefix(key))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Every change carried out on `file`, oldest first, read from History
+/// entries (`pages`, oldest first) that [`record`] and the by-hand
+/// changes wrote; other entries are skipped. Each is the instruction,
+/// then its reason and its result on lines of their own under it, as the
+/// `<earlier_instructions>` envelope carries them. A [`SUMMARY`] page for
+/// the file takes the place of everything before it.
 #[must_use]
-pub fn recent<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<String> {
-    let mut out: Vec<String> = pages
-        .into_iter()
-        .filter_map(|p| {
-            let mut lines = p.lines();
-            let i = lines.next()?.strip_prefix(INSTRUCTION)?;
-            let f = lines.next()?.strip_prefix(FILE)?;
-            (f == file && !i.trim().is_empty()).then(|| i.trim().to_string())
-        })
-        .collect();
-    let extra = out.len().saturating_sub(RECENT);
-    out.drain(..extra);
+pub fn history<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in pages {
+        let mut lines = p.lines();
+        let Some(first) = lines.next() else { continue };
+        if let Some(of) = first.strip_prefix(SUMMARY) {
+            if of.trim() != file {
+                continue;
+            }
+            let Some(covers) = lines.next().and_then(|l| l.strip_prefix(COVERS)) else {
+                continue;
+            };
+            let text = clean(&lines.collect::<Vec<_>>().join(" "), MAX_SUMMARY);
+            if text.is_empty() {
+                continue;
+            }
+            out.clear();
+            out.push(format!(
+                "{SUMMARISED}{} earlier changes) {text}",
+                clean(covers, 12)
+            ));
+            continue;
+        }
+        let Some(i) = first.strip_prefix(INSTRUCTION) else {
+            continue;
+        };
+        let Some(f) = lines.next().and_then(|l| l.strip_prefix(FILE)) else {
+            continue;
+        };
+        if f != file || i.trim().is_empty() {
+            continue;
+        }
+        let mut entry = clean(i, MAX_INSTRUCTION);
+        if let Some(w) = field(p, "Why: ") {
+            let _ = write!(entry, "\n  why: {}", clean(&w, MAX_REASON));
+        }
+        if let Some(r) = field(p, "Result: ") {
+            let _ = write!(entry, "\n  result: {}", clean(&r, MAX_REASON));
+        }
+        out.push(entry);
+    }
+    out
+}
+
+/// How the entry that is a summary opens, before the count it covers.
+const SUMMARISED: &str = "(a summary of the ";
+
+/// A History page as the project's history log keeps it
+/// (`sim_projects::SimProjects::log`): a change's instruction, file,
+/// reason and result and nothing else of its record, or a summary page
+/// whole. `None` for a page that is neither. The log outlives the
+/// revisions (a browser keeps twenty), so what was asked and decided is
+/// still known when the version that did it is gone.
+#[must_use]
+pub fn log_entry(page: &str) -> Option<String> {
+    let mut lines = page.lines();
+    let first = lines.next()?;
+    if first.starts_with(SUMMARY) {
+        let covers = lines.next().filter(|l| l.starts_with(COVERS))?;
+        let text = clean(&lines.collect::<Vec<_>>().join(" "), MAX_SUMMARY);
+        return (!text.is_empty()).then(|| format!("{first}\n{covers}\n{text}\n"));
+    }
+    let i = first.strip_prefix(INSTRUCTION).filter(|i| !i.trim().is_empty())?;
+    let f = lines.next()?.strip_prefix(FILE)?;
+    let mut out = format!("{INSTRUCTION}{}\n{FILE}{f}\n", clean(i, MAX_INSTRUCTION));
+    if let Some(w) = field(page, "Why: ") {
+        let _ = writeln!(out, "Why: {}", clean(&w, MAX_REASON));
+    }
+    if let Some(r) = field(page, "Result: ") {
+        let _ = writeln!(out, "Result: {}", clean(&r, MAX_REASON));
+    }
+    Some(out)
+}
+
+/// `text` between `<tag>` and `</tag>`, for the summary agent's message.
+/// Every closing tag inside it is defanged (`<\/`), white space after
+/// the `<` included, so nothing an engineer typed or a model wrote ends
+/// an envelope early or opens another.
+fn tagged(tag: &str, text: &str) -> String {
+    let mut safe = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(k) = rest.find('<') {
+        safe.push_str(&rest[..k]);
+        let after = &rest[k + 1..];
+        safe.push('<');
+        if after.trim_start().starts_with('/') {
+            safe.push('\\');
+        }
+        rest = after;
+    }
+    safe.push_str(rest);
+    format!("<{tag}>\n{safe}\n</{tag}>\n")
+}
+
+/// The relay agent that writes a summary.
+pub const SUMMARY_AGENT: &str = "summary";
+/// The most of a history one request to it carries, in tokens: the
+/// oldest changes beyond that wait for the next summary.
+const SUMMARY_INPUT: usize = 48_000;
+
+/// A summary to ask for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compact {
+    pub file: String,
+    /// How many of the changes in front of the request the summary takes
+    /// over (the summary that already stands aside).
+    pub take: usize,
+    /// How many changes it will stand for in all, with those the earlier
+    /// summary covered.
+    pub covers: usize,
+    /// What goes to [`SUMMARY_AGENT`].
+    pub message: String,
+}
+
+/// The summary to ask for when `earlier` (the file's [`history`]) is past
+/// `budget` tokens: its oldest changes, as many as leave the rest at half
+/// the budget (and no more than one request carries), with the summary
+/// that already stands in front of them. `None` while everything fits,
+/// or when there is nothing but the newest change to give.
+#[must_use]
+pub fn compaction(earlier: &[String], file: &str, budget: usize) -> Option<Compact> {
+    let cost = |e: &String| tokens(e) + 2;
+    let total: usize = earlier.iter().map(cost).sum();
+    if total <= budget {
+        return None;
+    }
+    let (before, was) = match earlier.first().and_then(|e| e.strip_prefix(SUMMARISED)) {
+        Some(rest) => {
+            let (n, text) = rest.split_once(" earlier changes) ")?;
+            (n.trim().parse::<usize>().unwrap_or(0), Some(text))
+        }
+        None => (0, None),
+    };
+    let changes = &earlier[usize::from(was.is_some())..];
+    let mut over = total.saturating_sub(budget / 2);
+    let mut given = 0;
+    let mut take = 0;
+    for e in changes.iter().take(changes.len().saturating_sub(1)) {
+        if over == 0 || given + cost(e) > SUMMARY_INPUT {
+            break;
+        }
+        over = over.saturating_sub(cost(e));
+        given += cost(e);
+        take += 1;
+    }
+    if take == 0 {
+        return None;
+    }
+    let mut message = tagged("file", file);
+    if let Some(text) = was {
+        message.push_str(&tagged("earlier_summary", text));
+    }
+    let mut list = String::new();
+    for e in &changes[..take] {
+        for (k, line) in e.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let _ = writeln!(list, "{}{}", if k == 0 { "- " } else { "  " }, line.trim());
+        }
+    }
+    message.push_str(&tagged("changes", list.trim_end()));
+    Some(Compact {
+        file: file.to_string(),
+        take,
+        covers: before + take,
+        message,
+    })
+}
+
+/// The page that keeps `answer`, the agent's summary, for `ask`; `None`
+/// when the answer is no summary (empty, or far too long to be one). An
+/// answer of `NONE` is kept as a summary that says so: the changes it
+/// covers held nothing to carry on.
+#[must_use]
+pub fn summary_page(ask: &Compact, answer: &str) -> Option<String> {
+    let text = clean(&prose(answer), MAX_SUMMARY);
+    if text.is_empty() || tokens(&text) > 4_000 {
+        return None;
+    }
+    let text = if text.eq_ignore_ascii_case("none") {
+        "Nothing in these changes needs carrying on.".to_string()
+    } else {
+        text
+    };
+    Some(format!("{SUMMARY}{}\n{COVERS}{}\n{text}\n", ask.file, ask.covers))
+}
+
+/// `log` (the project's history log, [`log_entry`] pages, oldest first)
+/// with `page`, the summary asked for with `ask`, in the place of what it
+/// covers: the summary of that file that stood before it, and the
+/// `ask.take` changes to the file after that. Other files' pages and the
+/// file's later changes stay where they are.
+#[must_use]
+pub fn summarised(log: &[String], ask: &Compact, page: &str) -> Vec<String> {
+    let of = |e: &String, key: &str| {
+        let mut l = e.lines();
+        match key {
+            SUMMARY => {
+                l.next().and_then(|f| f.strip_prefix(SUMMARY)).map(str::trim) == Some(ask.file.as_str())
+            }
+            _ => {
+                l.next().is_some_and(|f| f.starts_with(INSTRUCTION))
+                    && l.next().and_then(|f| f.strip_prefix(FILE)) == Some(ask.file.as_str())
+            }
+        }
+    };
+    // What history() reads for the file starts after its last summary.
+    let from = log.iter().rposition(|e| of(e, SUMMARY));
+    let mut out = Vec::with_capacity(log.len() + 1);
+    let mut taken = 0;
+    let mut placed = false;
+    for (k, e) in log.iter().enumerate() {
+        let dead = from.is_some_and(|f| k <= f) && (of(e, SUMMARY) || of(e, INSTRUCTION));
+        let covered = !dead && from.is_none_or(|f| k > f) && of(e, INSTRUCTION) && taken < ask.take;
+        if covered {
+            taken += 1;
+        }
+        if dead || covered {
+            if !placed {
+                out.push(page.to_string());
+                placed = true;
+            }
+            continue;
+        }
+        out.push(e.clone());
+    }
+    if !placed {
+        out.push(page.to_string());
+    }
+    out
+}
+
+/// Longest summary taken from a [`SUMMARY`] page, in characters.
+const MAX_SUMMARY: usize = 24_000;
+
+/// `earlier` cut to `budget` tokens ([`tokens`]): the newest changes word
+/// for word, as many as fit, and in front of them one line that says how
+/// many older ones are left out. A summary at the front ([`history`])
+/// stays as long as it fits with at least the newest change.
+#[must_use]
+pub fn fit(earlier: &[String], budget: usize) -> Vec<String> {
+    let cost = |e: &String| tokens(e) + 2;
+    let total: usize = earlier.iter().map(cost).sum();
+    if total <= budget {
+        return earlier.to_vec();
+    }
+    // Room for the line that says what is missing.
+    let budget = budget.saturating_sub(24);
+    let summary = earlier.first().filter(|e| e.starts_with(SUMMARISED));
+    let rest = &earlier[usize::from(summary.is_some())..];
+    let mut room = budget.saturating_sub(summary.map_or(0, cost));
+    let mut kept = 0;
+    for e in rest.iter().rev() {
+        if cost(e) > room {
+            break;
+        }
+        room -= cost(e);
+        kept += 1;
+    }
+    // A summary that leaves no room for even the newest change goes.
+    let summary = summary.filter(|_| kept > 0 || rest.is_empty());
+    if summary.is_none() && kept == 0 {
+        room = budget;
+        for e in rest.iter().rev() {
+            if cost(e) > room {
+                break;
+            }
+            room -= cost(e);
+            kept += 1;
+        }
+    }
+    let left_out = rest.len() - kept;
+    let mut out = Vec::with_capacity(kept + 2);
+    out.extend(summary.cloned());
+    if left_out > 0 {
+        out.push(format!("({left_out} older changes are not shown)"));
+    }
+    out.extend(rest[rest.len() - kept..].iter().cloned());
     out
 }
 
@@ -2301,33 +2601,34 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
         {
             act = big_ui(ui, chrome, estimate).or(act);
         }
+        act = question_ui(ui, chrome, v).or(act);
         return area_ui(ui, chrome, s, v, None).or(act);
     };
-    // Top down, with the heights worked out first: the answer area takes
-    // what the box, the buttons' row (as tall as it was drawn last
-    // frame) and the owner's room under the tab leave, so the box's
-    // bottom edge stays where it is while its top moves.
-    let mut act = None;
+    // Top down: the box, its buttons, a question when there is one, and
+    // the answer area in what is left.
+    let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
+    let height = box_height(ui, empty);
+    let enter = box_ui(ui, chrome, s, v, Some(height));
+    let mut act = buttons_ui(ui, chrome, s, v, enter);
     if let Some(estimate) = v.big
         && !s.busy()
     {
-        act = big_ui(ui, chrome, estimate);
+        act = big_ui(ui, chrome, estimate).or(act);
     }
-    let row = ui.spacing().interact_size.y;
-    let gap = ui.spacing().item_spacing.y;
-    let buttons_id = egui::Id::unique("agent-buttons-height");
-    let buttons = ui.data(|d| d.get_temp::<f32>(buttons_id)).unwrap_or(2.0 * row);
-    let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
-    let height = box_height(ui, empty);
-    let fill = (ui.available_height() - height - buttons - 2.0 * ANSWER_MARGIN - 2.0 - 3.0 * gap - below)
-        .max(3.0 * row);
-    act = area_ui(ui, chrome, s, v, Some(fill)).or(act);
-    let enter = box_ui(ui, chrome, s, v, Some(height));
-    let top = ui.cursor().top();
-    act = buttons_ui(ui, chrome, s, v, enter).or(act);
-    let drawn = ui.cursor().top() - top - gap;
-    ui.data_mut(|d| d.insert_temp(buttons_id, drawn));
-    act
+    act = question_ui(ui, chrome, v).or(act);
+    let fill = (ui.available_height() - 2.0 * ANSWER_MARGIN - 2.0 - below).max(0.0);
+    area_ui(ui, chrome, s, v, Some(fill)).or(act)
+}
+
+/// The question that waits for the engineer, on its own between the
+/// buttons and the answer area (Nick, 2026-11-23: "the questions should
+/// pop up distinctly"): [`crate::ask::ui`] draws it as a card in the
+/// accent colour.
+fn question_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, v: &View) -> Option<Act> {
+    let card = v.card.as_ref()?;
+    let k = crate::ask::ui(ui, chrome, card);
+    ui.add_space(4.0);
+    k.map(Act::Answer)
 }
 
 /// The instruction box, `height` tall. Returns whether Enter was pressed
@@ -2379,11 +2680,31 @@ fn box_ui(
         )
     });
     chrome.hit("agent instruction", shown);
+    // An outline while it waits, so the one row reads as the place to
+    // type and not as a status line (egui outlines it once it has focus).
+    if !failed && !field.has_focus() && s.run.is_none() {
+        ui.painter().rect_stroke(
+            shown.expand(1.0),
+            4.0,
+            egui::Stroke::new(1.0, t.muted),
+            egui::StrokeKind::Outside,
+        );
+    }
+    // A click on the answer area a frame ago: the keyboard comes here.
+    let asked = egui::Id::unique("agent-instruction-focus");
+    let now = ui.ctx().cumulative_pass_nr();
+    if ui.data(|d| d.get_temp::<u64>(asked)).is_some_and(|at| at < now) {
+        ui.data_mut(|d| d.remove::<u64>(asked));
+        if s.run.is_none() {
+            field.request_focus();
+        }
+    }
     enter
 }
 
-/// One row: Send or Stop, the arrows through the revisions (or Undo),
-/// the clock of the versions' index.
+/// One row, left to right (Nick, 2026-11-23): the clock of the
+/// versions' index, the arrows through the revisions (or Undo), and at
+/// the row's right end Send, or Stop while an answer is under way.
 fn buttons_ui(
     ui: &mut egui::Ui,
     chrome: &mut crate::editor::Chrome,
@@ -2394,24 +2715,30 @@ fn buttons_ui(
     let mut act = None;
     let target = &v.target;
     let why_not = v.blocked.clone().or_else(|| s.refusal());
-    ui.horizontal_wrapped(|ui| {
-        if s.busy() {
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Stop, true, false)
-                .tip("Stop: stops waiting. The file stays as it is.");
-            chrome.hit("agent stop", r.rect);
-            if r.clicked() {
-                act = Some(Act::Stop);
-            }
+    // As many buttons as the row holds share its width, none wider than
+    // an action button is: four of those do not fit the pane's default.
+    let count = 1
+        + usize::from(v.versions.is_some())
+        + if v.steps.is_some() {
+            2
         } else {
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true)
-                .tip(why_not.clone().unwrap_or_else(|| {
-                format!(
-                    "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
-                )
-            }));
-            chrome.hit("agent send", r.rect);
-            if r.clicked() || (enter && why_not.is_none()) {
-                act = Some(Act::Send);
+            usize::from(s.undo().is_some())
+        };
+    let gap = ui.spacing().item_spacing.x;
+    #[allow(clippy::cast_precision_loss)]
+    let wide = ((ui.available_width() - gap * (count as f32 - 1.0)) / count as f32)
+        .clamp(crate::st_view::TAP, crate::glyphs::ACTION_W);
+    ui.horizontal(|ui| {
+        if v.versions.is_some() {
+            let on = s.versions_open;
+            let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::History, true, on, wide).tip(if on {
+                "Versions: back to the answer."
+            } else {
+                "Versions: every saved version of this project, to search and step to."
+            });
+            chrome.hit("agent versions", r.rect);
+            if r.clicked() {
+                s.versions_open = !on;
             }
         }
         if let Some(steps) = &v.steps {
@@ -2429,7 +2756,7 @@ fn buttons_ui(
                     "Forward: this is the newest revision.",
                 ),
             ] {
-                let r = crate::glyphs::action(ui, icon, to.is_some(), false)
+                let r = crate::glyphs::action_wide(ui, icon, to.is_some(), false, wide)
                     .tip(to.as_ref().map_or(end, |(_, tip)| tip.as_str()));
                 chrome.hit(key, r.rect);
                 if r.clicked()
@@ -2440,29 +2767,39 @@ fn buttons_ui(
             }
         } else if let Some(u) = s.undo() {
             let r = match &v.undo_blocked {
-                None => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, true, false).tip(format!(
+                None => crate::glyphs::action_wide(ui, crate::glyphs::Icon::Undo, true, false, wide).tip(format!(
                     "Undo: puts {} back as it was in revision {}. The change stays in History.",
                     u.file, u.revision
                 )),
-                Some(why) => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, false, false).tip(why),
+                Some(why) => crate::glyphs::action_wide(ui, crate::glyphs::Icon::Undo, false, false, wide).tip(why),
             };
             chrome.hit("agent undo", r.rect);
             if r.clicked() {
                 act = Some(Act::Undo);
             }
         }
-        if v.versions.is_some() {
-            let on = s.versions_open;
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::History, true, on).tip(if on {
-                "Versions: back to the answer."
+        // Send has the right end of the row, under the box's right edge.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if s.busy() {
+                let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Stop, true, false, wide)
+                    .tip("Stop: stops waiting. The file stays as it is.");
+                chrome.hit("agent stop", r.rect);
+                if r.clicked() {
+                    act = Some(Act::Stop);
+                }
             } else {
-                "Versions: every saved version of this project, to search and step to."
-            });
-            chrome.hit("agent versions", r.rect);
-            if r.clicked() {
-                s.versions_open = !on;
+                let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Send, why_not.is_none(), true, wide)
+                    .tip(why_not.clone().unwrap_or_else(|| {
+                    format!(
+                        "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
+                    )
+                }));
+                chrome.hit("agent send", r.rect);
+                if r.clicked() || (enter && why_not.is_none()) {
+                    act = Some(Act::Send);
+                }
             }
-        }
+        });
     });
     act
 }
@@ -2478,6 +2815,8 @@ fn area_ui(
 ) -> Option<Act> {
     let t = crate::theme::theme(ui);
     let mut act = None;
+    // The versions' index has a search box of its own to click into.
+    let versions = v.versions.is_some() && s.versions_open;
     let frame = egui::Frame::new()
         .fill(ui.visuals().faint_bg_color)
         .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.4)))
@@ -2510,6 +2849,24 @@ fn area_ui(
         })
         .response;
     chrome.hit("agent answer area", r.rect);
+    // The area is where the box used to be, and it is the biggest thing
+    // in the tab: a click anywhere in it puts the keyboard in the box
+    // under it (Nick, 2026-11-23: "I can't even type"). Read from the
+    // pointer, since what the area holds takes the click itself: an
+    // example still lands in the box, a button still acts.
+    if !versions
+        && fill.is_some()
+        && ui.input(|i| i.pointer.primary_clicked())
+        && ui
+            .input(|i| i.pointer.interact_pos())
+            .is_some_and(|p| r.rect.contains(p))
+    {
+        // Handed over on the next frame: asked for now, the box (drawn
+        // after this) would see the same click as one made elsewhere and
+        // give the keyboard straight back.
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(egui::Id::unique("agent-instruction-focus"), pass));
+    }
     act
 }
 
@@ -2570,11 +2927,6 @@ fn answer_area(
 
     let t = crate::theme::theme(ui);
     let mut act = None;
-    if let Some(card) = &v.card
-        && let Some(k) = crate::ask::ui(ui, chrome, card)
-    {
-        act = Some(Act::Answer(k));
-    }
     let plan = s.run.as_ref().and_then(|r| match &r.mode {
         Mode::Steps(p) => Some(p),
         _ => None,
@@ -2619,14 +2971,6 @@ fn answer_area(
                 None => {}
             }
         }
-    }
-    if s.draft.trim().is_empty()
-        && let Some(io) = &v.io
-    {
-        if s.outcome.is_some() {
-            ui.add_space(12.0);
-        }
-        examples_ui(ui, chrome, s, io);
     }
     act
 }
@@ -2680,8 +3024,7 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
             .tip("Opens the Messages, which keep every line of it.");
         chrome.hit("agent details", r.rect);
         if r.clicked() {
-            chrome.trend = true;
-            chrome.bottom = crate::editor::Bottom::Messages;
+            chrome.show_messages();
         }
     }
     if !o.review.is_empty() {
@@ -2747,42 +3090,5 @@ fn fixes_ui(
     }
     if !fixes.is_empty() {
         ui.add_space(6.0);
-    }
-}
-
-/// Example requests in the program's own names
-/// ([`crate::phrasing::examples`]): one click puts one in the box.
-fn examples_ui(
-    ui: &mut egui::Ui,
-    chrome: &mut crate::editor::Chrome,
-    s: &mut Instruct,
-    io: &[crate::phrasing::Io],
-) {
-    use egui::RichText;
-
-    let t = crate::theme::theme(ui);
-    let r = ui
-        .add(
-            egui::Label::new(
-                RichText::new("Name the inputs and outputs and say when. For example:").color(t.muted),
-            )
-            .wrap(),
-        )
-        .tip("A request that names what it reads, what it drives and when usually passes its checks first time.");
-    chrome.hit("phrase examples", r.rect);
-    for (k, e) in crate::phrasing::examples(io).into_iter().enumerate() {
-        ui.add_space(4.0);
-        let r = ui
-            .add(
-                egui::Label::new(RichText::new(format!("\u{201c}{e}\u{201d}")).color(t.fg))
-                    .wrap()
-                    .sense(egui::Sense::click()),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .tip("Puts this in the box, to change or send.");
-        chrome.hit(format!("phrase example {k}"), r.rect);
-        if r.clicked() {
-            s.draft = e;
-        }
     }
 }

@@ -104,22 +104,21 @@ opens the Messages, which keep all of it: hold the pointer over a line
 there for the whole text.</p>
 <h2 id="help-with-the-words">Help with the words</h2>
 <p>A request that names the program's inputs and outputs and says when
-is understood first time. With the box empty, the answer area offers a
-few examples written in the open program's own names; click one to put
-it in the box, then change it or send it. When what you type names an
-input or output another way ("green lamp" for <code>GreenLamp</code>, or
+is understood first time. When what you type names an input or output
+another way ("green lamp" for <code>GreenLamp</code>, or
 <code>StratPB</code> for <code>StartPB</code>), the area says so with a
 button that puts the declared name in. None of this is sent
 anywhere.</p>
 <p>On a box nothing runs until you deploy it, as with any edit of your
-own. In the simulation the changed program runs at once. To have it load
-stopped instead, with every variable, timer and output back at its
-start, turn on <strong>View › Reset after a described change</strong>;
-the choice is remembered in this browser.</p>
-<p>The instruction box sits at the bottom of the tab, one row tall. It
-grows upward as you type, to four rows, and scrolls inside after that,
-so the answer above it stays where it is. The answer's text can be
-selected and copied.</p>
+own. In the simulation the changed program runs at once.</p>
+<p>The instruction box is at the top of the tab, one row tall. It grows
+as you type, to four rows, and scrolls inside after that. Under it are
+the buttons, and under those the answer, down to the bottom of the tab.
+A click anywhere on the answer puts the cursor back in the box. The
+answer's text can be selected and copied.</p>
+<p>When Helmsman has a question about what you asked, it appears as a
+card in the accent colour between the buttons and the answer, with a
+button for each reply.</p>
 <p>What the change did is marked until your next edit. In the code,
 lines it added are on a green ground and a red rule stands where it
 removed lines (point at the rule to read them). On the diagram, blocks
@@ -194,11 +193,17 @@ the project's versions, newest first, with a box to search what each one
 says. A click runs a version, as the arrows do; the clock again brings
 the answer back.</p>
 <h2 id="follow-ups">Follow-ups</h2>
-<p>Each instruction goes to Helmsman with the whole file and the last
-five instructions carried out on that file, read from History. So "now
-make it blink faster" works: Helmsman knows what "it" is, even after a
-reload. To start over, describe the whole behaviour in the
-instruction.</p>
+<p>Each instruction goes to Helmsman with the whole file and the history
+of that file, read from History: every change made to it, oldest first,
+each with what was asked, why, and how it came out. So "now make it
+blink faster" works, Helmsman knows what "it" is even after a reload,
+and a decision made weeks ago is still known. In the browser this
+history is kept with the project, apart from its versions, so it is
+still there after old versions have gone, and it is in the project's
+download. When it grows very long, Helmsman writes up the oldest changes
+once as a short summary, which takes their place; the newest changes
+always go word for word. To start over, describe the whole behaviour in
+the instruction.</p>
 <h2 id="what-a-change-may-touch">What a change may touch</h2>
 <p>Helmsman edits what you have in focus and nothing else: the file open
 in the Code tab, by default. When you select lines in the Code tab or

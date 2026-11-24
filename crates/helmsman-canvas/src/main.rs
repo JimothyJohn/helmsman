@@ -76,6 +76,7 @@ mod editor;
 mod edits;
 #[cfg(test)]
 mod edits_tests;
+mod ekg;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod features_tests;
 mod find;

@@ -54,7 +54,6 @@ each other. First fields, all of which exist as preferences today:
 |---|---|---|---|
 | Light mode | bool | off | `light=` |
 | Word wrap in the code | bool | on | `wrap=` |
-| Reset after a described change (simulation) | bool | off | `reset=`, View menu |
 | Trend colours per signal | map | none | `colors=` |
 | I/O tab as tiles or rows | enum | rows | `iogrid=` |
 | Advanced fields in forms | bool | off | `advanced=` |
@@ -91,9 +90,8 @@ a control, a one-line tooltip. It says at the top where they are kept
 ("On this Skipper, for alice" / "In this browser"). The View menu keeps
 only what changes the screen in front of you (panes, layout, fit).
 
-This is where "Reset after a described change" goes, as the Agent tab
-card asked ("buried in the user settings"); it is in the View menu until
-this is built.
+"Reset after a described change" does not move here: the switch is gone
+(Nick, 2026-11-23), and a described change runs at once in the simulation.
 
 ### 3. The first account, from the device itself
 

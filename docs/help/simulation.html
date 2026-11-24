@@ -89,8 +89,8 @@ the program runs again.</p>
 program takes another path through its statements, and shows that scan.
 A timer's elapsed time counting up does not count as a change, so a step
 lands on the scan where the timer's output turns on. If nothing changes
-in 60 seconds of program time, the step stops there and the Messages tab
-says so.</p>
+in 60 seconds of program time, the step stops there and the Messages say
+so.</p>
 <img src="img/monitor-stopped.png" alt="The Monitor's header with the program paused: run, stop, step and restart beside the crumbs." width="700">
 
 <p>One program runs in the page at a time. Opening or deploying another
@@ -100,8 +100,8 @@ stops the one before.</p>
 (or <strong>Edit › Breakpoint</strong>): a red dot marks it. The next
 scan that reaches the block stops just before it runs, the simulation
 stops with it, and the diagram and every value show the scan as it stood
-at that moment. The block is framed in orange and the Messages tab names
-its line. <kbd>F8</kbd> runs the rest of that scan. <kbd>Ctrl</kbd>
+at that moment. The block is framed in orange and the Messages name its
+line. <kbd>F8</kbd> runs the rest of that scan. <kbd>Ctrl</kbd>
 <kbd>Enter</kbd> goes on to the next stop: the same block's next pass in
 a loop, another breakpoint, or the next scan. An input you change while
 stopped shows at once in what the diagram shows. A breakpoint inside a
@@ -233,30 +233,37 @@ while it is absent. The box does the same for a program with
 Noise, chatter and the random walk come from <code>seed N</code> (1
 unless the file says), so a run is the same run every time.</p>
 <h2 id="the-trend">The trend</h2>
-<p>The Trend tab along the bottom plots the signals you pin, up to six,
-each in its own lane with its last value. The Window slider sets how
-much of the past the pane shows, from 100 ms to 10 minutes on a
-logarithmic scale (it opens on 30 s), and the plot follows as you drag;
-history is kept for the widest, so widening shows what already ran. The
-lane's scale is at its right edge: it rounds out to an even step and
-moves only when the values cross one. Pin from the tab's list. Every
-input and output is recorded from the first scan, pinned or not, so a
-signal you pin later arrives with its past and the lanes already there
-carry on. Deploying again keeps the history; a cold restart starts it
-over. To put the lanes in another order, drag a lane's name up or down
-and drop it on the lane it should take. Click a lane's name to pick that
-signal's colour from the palette; the browser keeps your choice. Until
-you pick one, a signal named after a colour (<code>red</code>,
-<code>lamp_green</code>) is drawn in that colour, the same as its
-lamp.</p>
+<p>The trend along the whole bottom of the window plots the signals you
+pin, up to six, each in its own lane: the name at the left, the trace
+and, beside the newest point, the value. A lane is drawn like a heart
+monitor. A bright point sweeps from left to right with the newest value,
+the trace behind it fades with age, and at the right edge the point
+returns to the left and draws over the oldest trace. While the program
+is stopped the point stands still. The Window slider sets how much time
+one sweep covers, from 100 ms to 10 minutes on a logarithmic scale (it
+opens on 30 s), and the plot follows as you drag; history is kept for
+the widest, so widening shows what already ran. When a described change
+adds inputs or outputs, they are pinned at the bottom and their lanes
+flash briefly; when six are pinned already, the oldest one you did not
+pin yourself makes room. The lane's scale is at its right edge: it
+rounds out to an even step and moves only when the values cross one. Pin
+from the list above the lanes. Every input and output is recorded from
+the first scan, pinned or not, so a signal you pin later arrives with
+its past and the lanes already there carry on. Deploying again keeps the
+history; a cold restart starts it over. To put the lanes in another
+order, drag a lane's name up or down and drop it on the lane it should
+take. Click a lane's name to pick that signal's colour from the palette;
+the browser keeps your choice. Until you pick one, a signal named after
+a colour (<code>red</code>, <code>lamp_green</code>) is drawn in that
+colour, the same as its lamp.</p>
 <p><img src="img/trend.png"
-alt="The Trend tab: three pinned signals, the Window slider, a lane each with its scale at the right edge." /></p>
+alt="The trend: three pinned signals, the Window slider, a lane each with its scale at the right edge." /></p>
 <h2 id="faults">Faults</h2>
 <p>A program that divides by zero, runs past its watchdog, or writes an
 output out of range <strong>faults</strong>: it stops at the statement
 that did it, outputs go to their safe values, the state reads
-<code>faulted</code> in red and the Messages tab records what happened.
-Run or Step restarts it.</p>
+<code>faulted</code> in red and the Messages record what happened. Run
+or Step restarts it.</p>
 </main>
 </div>
 <footer><div class="wrap">Helmsman Factory Automation · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>

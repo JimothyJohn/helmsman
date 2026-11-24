@@ -272,10 +272,9 @@ fn text_at(
 #[test]
 fn a_long_message_wraps_inside_the_messages_panel() {
     let mut h = Harness::new(App::sim());
-    h.wait(0.3);
+    h.messages();
     let long = "Deploy of blink refused. ".to_string() + &"the divisor read zero ".repeat(20);
     h.app.sim.as_mut().unwrap().log.error(1.0, long.clone());
-    h.press("bottom messages");
     h.wait(0.5);
     let found = text_at(&h, "the divisor read zero");
     assert_eq!(found.len(), 1, "the message is drawn once");
@@ -320,14 +319,13 @@ fn a_file_the_picker_cannot_take_is_told_in_messages() {
     assert!(why.contains("big.zip") && why.contains("MB"), "{why}");
 
     let mut h = Harness::new(App::sim());
-    h.wait(0.3);
+    h.messages();
     let before = crate::editor::Body::messages(h.app.sim.as_mut().unwrap()).errors();
     h.app.pick_failed(vec![why.clone()], 1.0);
     assert_eq!(
         crate::editor::Body::messages(h.app.sim.as_mut().unwrap()).errors(),
         before + 1
     );
-    h.press("bottom messages");
     h.wait(0.3);
     assert!(h.drew("big.zip was not read"), "Messages lists it");
 }
@@ -421,6 +419,28 @@ fn replace_writes_one_match_then_all_of_them() {
                 |(_, pos, g)| pos + g.size() / 2.0,
             )
     };
+    // The find field has its row and the replace field its own: the count
+    // and the buttons start under each, never laid over it (Nick,
+    // 2026-11-23: "the buttons are showing up on top of the find field").
+    {
+        let id = h.editor_id();
+        let rect = |id: eframe::egui::Id| h.ctx.read_response(id).expect("drawn").rect;
+        let (find, replace) = (rect(id.with("find")), rect(id.with("replace")));
+        let arrow = text_at(&h, "▲")
+            .first()
+            .map(|(_, pos, _)| *pos)
+            .expect("the previous-match button");
+        let all = button(&h, "Replace all");
+        assert!(
+            arrow.y >= find.bottom() - 1.0,
+            "▲ at {arrow:?} is under the find field {find:?}"
+        );
+        assert!(arrow.y < replace.top(), "and over the replace field {replace:?}");
+        assert!(
+            all.y >= replace.bottom() - 1.0,
+            "Replace all at {all:?} is under the replace field {replace:?}"
+        );
+    }
     let at = button(&h, "Replace");
     h.click(at);
     h.wait(0.3);
