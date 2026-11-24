@@ -761,7 +761,7 @@ fn only_a_description_is_a_description() {
     let mut d = designer();
     assert_eq!(
         d.start_page("f".into(), "   ", 0.0),
-        Err("Describe the machine first.".into())
+        Err("Describe the machine, or add a document, first.".into())
     );
     assert!(
         d.start_page("f".into(), "a\u{7}b", 0.0)
