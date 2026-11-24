@@ -24,8 +24,9 @@ const PAD: f32 = 8.0;
 const SOLID: f32 = 0.5;
 /// The size a card's title is drawn at, screen points, whatever the zoom.
 const TITLE_PT: f32 = crate::theme::MIN_TEXT;
-/// The largest a statement's text is drawn, diagram units.
-const CODE_MAX: f32 = 14.0;
+/// The largest a statement's text is drawn, screen points: it is read,
+/// not magnified with the blocks it stands for.
+const CODE_PT: f32 = 20.0;
 /// A monospace character's advance, in ems (a little over).
 const CHAR_EM: f32 = 0.62;
 /// How wide the rung's name is in the corner controls, points.
@@ -197,7 +198,13 @@ impl Viewer {
 
     /// Eases the view to `rung`, framing `on` (the middle of the view
     /// without one) as large as the rung allows.
-    pub(super) fn ladder_fly(&mut self, rung: Rung, on: Option<&helmsman_diagram::Rect>, area: Rect, now: f64) {
+    pub(super) fn ladder_fly(
+        &mut self,
+        rung: Rung,
+        on: Option<&helmsman_diagram::Rect>,
+        area: Rect,
+        now: f64,
+    ) {
         let cam = self.cams[self.scope];
         let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
         let (lo, hi) = rung.span();
@@ -282,21 +289,30 @@ impl Viewer {
 
     /// A statement's text in its card, as large as fits.
     fn paint_code(&self, painter: &egui::Painter, t: &Theme, c: &Card, z: f32) {
-        let Some(code) = self.ladder_group(c).map(|g| g.code.as_str()).filter(|s| !s.is_empty()) else {
+        let Some(code) = self
+            .ladder_group(c)
+            .map(|g| g.code.as_str())
+            .filter(|s| !s.is_empty())
+        else {
             return;
         };
         let lines: Vec<&str> = code.lines().collect();
         let cols = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
         #[allow(clippy::cast_precision_loss)]
         let (rows, cols) = (lines.len().max(1) as f32, cols as f32);
-        let room = c.rect.shrink(PAD * z);
-        let size = (room.height() / (rows * 1.3))
-            .min(room.width() / (cols * CHAR_EM))
-            .min(CODE_MAX * z);
-        if size < 6.0 {
+        // The part of the card in view: a card larger than the view
+        // still shows its text.
+        let room = c.rect.intersect(painter.clip_rect()).shrink(PAD * z.min(2.0));
+        if !room.is_positive() {
             return;
         }
-        painter.text(
+        let size = (room.height() / (rows * 1.3))
+            .min(room.width() / (cols * CHAR_EM))
+            .min(CODE_PT);
+        if size < 9.0 {
+            return;
+        }
+        painter.with_clip_rect(room).text(
             room.left_center(),
             Align2::LEFT_CENTER,
             code,
@@ -317,7 +333,13 @@ fn paint_title(painter: &egui::Painter, t: &Theme, c: &Card, value: Option<Value
     let mut width = room.width();
     if let Some(v) = value {
         let (color, _) = wire_color(t, Some(v));
-        let g = fitted(painter, &show(Some(v)), font.clone(), color.gamma_multiply(c.card), width / 2.0);
+        let g = fitted(
+            painter,
+            &show(Some(v)),
+            font.clone(),
+            color.gamma_multiply(c.card),
+            width / 2.0,
+        );
         width -= g.size().x + 8.0;
         painter.galley(
             Pos2::new(room.right() - g.size().x, room.center().y - g.size().y / 2.0),

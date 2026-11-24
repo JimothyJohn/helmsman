@@ -147,7 +147,11 @@ fn zooming_out_closes_statements_then_sections_then_the_program_where_they_are()
     let size = h.view.shown().size;
     let mut seen = vec![h.view.rung()];
     for (zoom, rung, titles) in [
-        (Rung::Statements.rest(), Rung::Statements, vec!["motor", "level_pct"]),
+        (
+            Rung::Statements.rest(),
+            Rung::Statements,
+            vec!["motor", "level_pct"],
+        ),
         (Rung::Sections.rest(), Rung::Sections, vec!["Motor", "Level"]),
         (Rung::Program.rest(), Rung::Program, vec!["plant"]),
     ] {
@@ -168,7 +172,10 @@ fn zooming_out_closes_statements_then_sections_then_the_program_where_they_are()
         assert_eq!(h.rects(), before, "nothing is laid out again at {rung:?}");
         assert_eq!(h.view.shown().size, size);
     }
-    assert_eq!(seen, [Rung::Wiring, Rung::Statements, Rung::Sections, Rung::Program]);
+    assert_eq!(
+        seen,
+        [Rung::Wiring, Rung::Statements, Rung::Sections, Rung::Program]
+    );
     // And back in: the same blocks, in the same places, and no edit.
     h.zoom_to(1.0, Harness::centre());
     assert_eq!(h.view.rung(), Rung::Wiring);
@@ -212,15 +219,24 @@ fn all_the_way_in_a_statement_is_its_text() {
     h.zoom_to(Rung::Code.rest(), Harness::centre());
     assert_eq!(h.view.rung(), Rung::Code);
     let cards = h.cards();
-    assert!(cards.iter().all(|c| c.rung == Rung::Code && c.solid()), "{cards:?}");
+    assert!(
+        cards.iter().all(|c| c.rung == Rung::Code && c.solid()),
+        "{cards:?}"
+    );
     let pou = h.view.scopes[h.view.scope].pou;
     let code: Vec<&str> = h.view.ladder[pou]
         .at(Rung::Code)
         .iter()
         .map(|g| g.code.as_str())
         .collect();
-    assert!(code.contains(&"level_pct := LIMIT(0.0, level / 2.0 * 100.0, 100.0);"), "{code:?}");
-    assert!(code.contains(&"motor := (start OR motor) AND NOT stop;"), "{code:?}");
+    assert!(
+        code.contains(&"level_pct := LIMIT(0.0, level / 2.0 * 100.0, 100.0);"),
+        "{code:?}"
+    );
+    assert!(
+        code.contains(&"motor := (start OR motor) AND NOT stop;"),
+        "{code:?}"
+    );
 }
 
 #[test]
@@ -235,7 +251,10 @@ fn a_click_on_a_card_flies_in_one_rung_and_never_reaches_the_blocks_under_it() {
     h.click(card.rect.center());
     h.settle();
     assert_eq!(h.view.rung(), Rung::Statements, "one rung in, not to the wiring");
-    assert!(h.view.selection().is_empty(), "the blocks under a card are not picked");
+    assert!(
+        h.view.selection().is_empty(),
+        "the blocks under a card are not picked"
+    );
     assert!(h.view.pick.is_none());
     // What the card held is in the middle of the view.
     let now = h.cam().rect(&card.world);
@@ -244,9 +263,42 @@ fn a_click_on_a_card_flies_in_one_rung_and_never_reaches_the_blocks_under_it() {
     // On the wiring a click is the blocks' again.
     h.zoom_to(1.0, now.center());
     let cam = h.cam();
-    let block = h.view.shown().nodes.iter().find(|n| n.label.contains("LIMIT")).or_else(|| h.view.shown().nodes.first()).unwrap().rect;
+    let block = h
+        .view
+        .shown()
+        .nodes
+        .iter()
+        .find(|n| n.label.contains("LIMIT"))
+        .or_else(|| h.view.shown().nodes.first())
+        .unwrap()
+        .rect;
     h.click(cam.rect(&block).center());
     assert!(!h.view.selection().is_empty(), "a block is picked on the wiring");
+}
+
+#[test]
+fn no_input_control_is_put_over_a_formed_card() {
+    let mut h = Harness::new(SRC);
+    let on_wiring = h.view.reads_on_screen();
+    assert!(
+        on_wiring.iter().any(|(_, r)| r.is_positive()),
+        "the wiring has its controls"
+    );
+    for rung in [Rung::Statements, Rung::Sections, Rung::Program, Rung::Code] {
+        h.zoom_to(rung.rest(), Harness::centre());
+        let cards: Vec<Rect> = h
+            .cards()
+            .into_iter()
+            .filter(Card::solid)
+            .map(|c| c.rect)
+            .collect();
+        for (name, r) in h.view.reads_on_screen() {
+            assert!(
+                !r.is_positive() || !cards.iter().any(|c| c.contains(r.center())),
+                "{name} has a control over a card at {rung:?}"
+            );
+        }
+    }
 }
 
 #[test]

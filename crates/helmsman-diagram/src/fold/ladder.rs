@@ -45,7 +45,7 @@ pub const STEP: f32 = 2.2;
 /// The smallest zoom the camera goes to: [`Rung::Program`] with room.
 pub const MIN_ZOOM: f32 = 0.05;
 /// The largest zoom the camera goes to: [`Rung::Code`] with room.
-pub const MAX_ZOOM: f32 = 6.0;
+pub const MAX_ZOOM: f32 = 4.0;
 /// How strongly a group is outlined one rung before it starts to close.
 pub const HINT: f32 = 0.22;
 
@@ -90,7 +90,7 @@ impl Rung {
     #[must_use]
     pub const fn rest(self) -> f32 {
         match self {
-            Self::Code => 4.0,
+            Self::Code => 3.4,
             Self::Wiring => 1.0,
             Self::Statements => 0.36,
             Self::Sections => 0.16,
@@ -229,22 +229,39 @@ fn says(d: &Diagram, f: &Fold) -> String {
     }
 }
 
-/// The statements of `d` that hold no other statement, as groups.
+/// The statements of `d` that hold no other statement, as groups. A
+/// block two of them share (a loop's variable read before the loop and in
+/// it) stays with the first, so no two groups share one.
 fn leaves(d: &Diagram, src: &str) -> Vec<Group> {
     let all = structure::statements(d, src);
     let code = structure::sources(d, src);
-    all.iter()
-        .filter(|f| {
-            !all.iter()
-                .any(|g| g.key != f.key && g.nodes.is_subset(&f.nodes) && g.nodes.len() < f.nodes.len())
-        })
-        .map(|f| Group {
+    let mut taken: BTreeSet<NodeId> = BTreeSet::new();
+    let mut out = Vec::new();
+    for f in &all {
+        let holds_another = all
+            .iter()
+            .any(|g| g.key != f.key && g.nodes.is_subset(&f.nodes) && g.nodes.len() < f.nodes.len());
+        if holds_another {
+            continue;
+        }
+        let nodes: BTreeSet<NodeId> = f.nodes.difference(&taken).copied().collect();
+        if nodes.is_empty() {
+            continue;
+        }
+        taken.extend(nodes.iter().copied());
+        out.push(Group {
             key: f.key.clone(),
             title: says(d, f),
-            nodes: f.nodes.clone(),
-            code: f.stmts.first().and_then(|s| code.get(s)).cloned().unwrap_or_default(),
-        })
-        .collect()
+            nodes,
+            code: f
+                .stmts
+                .first()
+                .and_then(|s| code.get(s))
+                .cloned()
+                .unwrap_or_default(),
+        });
+    }
+    out
 }
 
 /// The groups of `rung` for `d`, a POU of the module whose source is
@@ -264,8 +281,11 @@ pub fn groups(d: &Diagram, src: &str, rung: Rung) -> Vec<Group> {
                 .collect();
             // The author's sections first, then the arms outside them,
             // then what is left of the top level, statement by statement.
+            // A section that is the whole body names nothing the
+            // program's own card does not.
             let folds = structure::sections(d, src)
                 .into_iter()
+                .filter(|f| f.stmts.len() < d.top.len())
                 .chain(structure::arms(d))
                 .chain(whole);
             for f in folds {

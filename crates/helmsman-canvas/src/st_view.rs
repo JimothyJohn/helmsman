@@ -2111,6 +2111,14 @@ impl Viewer {
         }
         let cam = self.cams[self.scope];
         let shown = self.shown();
+        // A card of the zoom ladder that has formed stands for the blocks
+        // under it: no control is put over it.
+        let cards: Vec<Rect> = self
+            .ladder_cards(cam)
+            .into_iter()
+            .filter(ladder_view::Card::solid)
+            .map(|c| c.rect)
+            .collect();
         self.diagram()
             .nodes
             .iter()
@@ -2123,6 +2131,9 @@ impl Viewer {
                         |s| {
                             let mut r = cam.rect(&shown.node(s).rect);
                             r.min.y += HEADER * cam.zoom;
+                            if cards.iter().any(|c| c.contains(r.center())) {
+                                return Rect::NOTHING;
+                            }
                             r
                         },
                     );
@@ -2685,7 +2696,10 @@ impl Viewer {
         let tabs = self.opened_tabs(cam);
         let rows = self.state_rows(live.as_ref());
         let tables = self.table_rows(live.as_ref());
-        if let Some(card) = carded.as_ref().filter(|c| c.rung != helmsman_diagram::fold::ladder::Rung::Code) {
+        if let Some(card) = carded
+            .as_ref()
+            .filter(|c| c.rung != helmsman_diagram::fold::ladder::Rung::Code)
+        {
             response
                 .clone()
                 .on_hover_text_at_pointer(format!("{}\nClick to look inside.", card.title));

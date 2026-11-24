@@ -133,7 +133,10 @@ fn a_group_is_outlined_faintly_before_its_card_starts() {
         let (start, whole) = r.band().unwrap();
         assert!(card(r, start) <= 0.0);
         let before = outline(r, start);
-        assert!(before > HINT && before < 1.0, "{r:?} firmer by its band: {before}");
+        assert!(
+            before > HINT && before < 1.0,
+            "{r:?} firmer by its band: {before}"
+        );
         assert!(outline(r, start * 1.2) < before, "{r:?} firms up on the way");
         assert!((outline(r, whole) - 1.0).abs() < 1e-6);
     }
@@ -167,11 +170,12 @@ fn a_statement_is_named_by_what_it_sets_and_keeps_its_text() {
         ["motor", "count", "lamp", "lamp", "count", "level_pct", "count"]
     );
     let level = g.iter().find(|g| g.title == "level_pct").unwrap();
+    assert_eq!(level.code, "level_pct := LIMIT(0.0, level / 2.0 * 100.0, 100.0);");
     assert_eq!(
-        level.code,
-        "level_pct := LIMIT(0.0, level / 2.0 * 100.0, 100.0);"
+        groups(&d, &src, Rung::Code),
+        g,
+        "the code is the statements, closer"
     );
-    assert_eq!(groups(&d, &src, Rung::Code), g, "the code is the statements, closer");
     assert!(groups(&d, &src, Rung::Wiring).is_empty());
 }
 
@@ -189,6 +193,11 @@ IF other THEN count := 1; lamp := TRUE; ELSE lamp := FALSE; count := 0; END_IF;"
     let g = groups(&d, &src, Rung::Sections);
     let titles: Vec<&str> = g.iter().map(|g| g.title.as_str()).collect();
     assert_eq!(titles, ["IF OTHER", "ELSE", "motor"]);
+    // One comment over the whole body is the program, not a section.
+    let (d, src) = diagram("(* Everything *)\nmotor := start;\nlamp := other;");
+    let g = groups(&d, &src, Rung::Sections);
+    let titles: Vec<&str> = g.iter().map(|g| g.title.as_str()).collect();
+    assert_eq!(titles, ["motor", "lamp"]);
 }
 
 #[test]
