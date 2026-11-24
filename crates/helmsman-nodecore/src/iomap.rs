@@ -1062,7 +1062,6 @@ pub fn parse(text: &str) -> Result<IoMap, Bad> {
     })
 }
 
-
 /// Points a direction the one-block boards move: indexes `0..16`, two
 /// image bytes.
 pub const ONE_BLOCK_POINTS: u16 = 16;

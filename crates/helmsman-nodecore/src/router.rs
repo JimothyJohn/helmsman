@@ -616,7 +616,13 @@ mod tests {
                 handle(&put(more), &sample_view(), &s),
                 Outcome::Effect(Effect::SaveIoMap { .. })
             ));
-            let form = format!("map={}&auth=tok", more.replace(' ', "+").replace('\n', "%0A").replace(':', "%3A").replace('=', "%3D"));
+            let form = format!(
+                "map={}&auth=tok",
+                more.replace(' ', "+")
+                    .replace('\n', "%0A")
+                    .replace(':', "%3A")
+                    .replace('=', "%3D")
+            );
             let posted = req(&format!(
                 "POST /io_map HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{form}",
                 form.len()
