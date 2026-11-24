@@ -2051,6 +2051,25 @@ END_PROGRAM",
         assert!(v.log.errors() >= 1, "an error, so the Messages count it red");
         assert!(h.has("agent result") && h.drew("Not changed:"));
         assert!(h.drew("The code does not compile"), "what failed is in the tab");
+        // Nick, 2026-11-24: the answer copies, whole.
+        h.press("agent copy");
+        let copied = h.copied.last().expect("Copy copied").clone();
+        assert!(
+            copied.starts_with("main.st is unchanged") && copied.contains("\nThe code does not compile"),
+            "{copied}"
+        );
+        assert_eq!(
+            copied,
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .instruct
+                .outcome
+                .as_ref()
+                .unwrap()
+                .copy_text()
+        );
         let area = h.rect("agent answer area");
         assert!(
             h.rect("agent result").top() >= area.top() && h.rect("agent details").bottom() <= area.bottom()
