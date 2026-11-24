@@ -1267,7 +1267,13 @@ fn account(dir: &Path, args: &[&str], stdin: &str) -> (Option<i32>, String) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    // A command that refuses its arguments exits without reading stdin;
+    // the write then meets a closed pipe, which is that command's answer,
+    // not a failure of the test (BrokenPipe on the ARM runner, 2026-11-24).
+    match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        r => r.unwrap(),
+    }
     let out = child.wait_with_output().unwrap();
     (
         out.status.code(),
