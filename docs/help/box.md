@@ -73,6 +73,23 @@ Every input the program reads from that device needs its own `_ok` for
 the program to run on. The simulation does the same (see Simulation,
 Devices), so the handling can be tested before it reaches the box.
 
+## A Skipper's map
+
+On a page opened with a Skipper's address (`?box=http://192.168.3.55:8080`),
+the Devices tab has a **Skipper map** row.
+**Edit map…** opens the map in a window. Change it there, then press
+**Check devices**: the Skipper asks every device in the map from its own
+network port and the window lists each one as answered, with how long it
+took, or not answered, with the reason. Nothing is written to a device.
+
+**Download** appears only when every device answered a check of exactly the
+text in the window. Change a single character and it goes until you check
+again. Pressing it sends the map to the Skipper, which saves it and
+restarts; this page reads the new map when the Skipper is back. Checking
+and downloading need the Skipper's token in the sign-in panel. A Skipper
+that does not ask its devices says so in the window and takes its map from
+its own page.
+
 ## Your work survives a reload
 
 This browser keeps what you had in front of you: the project and file

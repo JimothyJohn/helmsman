@@ -314,6 +314,7 @@ impl App {
             if let Some(token) = crate::web::remembered_token(&origin) {
                 crate::web::set_token(Some(&token));
                 review.state.session = Some(crate::node_token::session());
+                review.token_held = true;
             }
             review.remote = Some(origin);
             app
@@ -611,8 +612,12 @@ impl App {
         }
         let session = self.session();
         let engineer = is_engineer(session.as_ref()).is_ok();
+        let token = self.review.as_ref().is_some_and(|r| r.token_held);
+        let watches = self.review.as_ref().is_some_and(|r| r.remote.is_some());
         if let Some(b) = &mut self.boxv {
             b.session = session;
+            b.node_token = token;
+            b.watches_node = watches;
         }
         self.desk();
         // No box ever answered this page: it is the simulation then, by
@@ -674,8 +679,12 @@ impl App {
             }
             (Screen::Editor, Source::Box) => {
                 let session = self.review.as_ref().and_then(|r| r.state.session.clone());
+                let token = self.review.as_ref().is_some_and(|r| r.token_held);
+                let watches = self.review.as_ref().is_some_and(|r| r.remote.is_some());
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.session = session;
+                b.node_token = token;
+                b.watches_node = watches;
                 b.show(ui, &mut self.chrome);
                 if clicked_off_the_diagram(&ctx, &self.chrome)
                     && let Some(v) = &mut b.view
@@ -2141,6 +2150,8 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::take_copies(ui.ctx());
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

@@ -7,7 +7,8 @@
 # its `enip-io` feature (the EtherNet/IP scanner, in the default build since
 # the E1213 bench passed) so that the enip-less box keeps compiling, and
 # helmsman-iec, helmsman-modbus, helmsman-profinet, helmsman-iolink,
-# helmsman-proto's codecs and helmsman-nodecore without std for thumbv7em (the edge node, docs/EDGE.md).
+# helmsman-proto's codecs and helmsman-nodecore without std for thumbv7em (the edge node, docs/EDGE.md),
+# and the two node firmwares themselves (crates/helmsman-node-p4, crates/helmsman-node).
 # Needs: `scripts/install-dev.sh`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -41,3 +42,16 @@ esac
 # lint (2026-11-23).
 cargo clippy -q -p helmsman-proto --no-default-features --target thumbv7em-none-eabihf -- -D warnings
 cargo clippy -q -p helmsman-nodecore --target thumbv7em-none-eabihf -- -D warnings
+# The node firmwares are not workspace members (each has its own target
+# and lock) and no CI job compiles them, so nothing else notices when the
+# crates they share with the workspace change under them: on 2026-11-24
+# crates/helmsman-node stopped building when helmsman-nodecore's map types
+# changed, and only a build by hand found it. The P4's is plain RISC-V on
+# stable; the ESP32's needs the esp toolchain (`espup install`) and is
+# skipped, out loud, where that is not installed.
+NODE_BOARD=p4-eth scripts/node-build.sh clippy
+if rustup toolchain list | grep -q '^esp'; then
+  scripts/node-build.sh clippy
+else
+  echo "lint: no esp toolchain here; crates/helmsman-node (the ESP32 node) was NOT linted" >&2
+fi

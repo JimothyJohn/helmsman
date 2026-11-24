@@ -302,6 +302,22 @@ impl<'a> Session<'a> {
         }
         self.drop_link();
     }
+
+    /// `UnregisterSession`, then the connection closed as the target
+    /// expects before the session is dropped (the comms check): a FIN, a
+    /// moment for it to go, and a reset of whatever is left.
+    pub async fn hang_up(&mut self) {
+        if self.connected {
+            if self.is_registered() {
+                let ctx = self.context();
+                let _ = self.write(&explicit::unregister_session(self.handle, ctx)).await;
+            }
+            self.socket.close();
+            let _ = with_timeout(Duration::from_millis(500), self.socket.flush()).await;
+        }
+        self.drop_link();
+        embassy_time::Timer::after(Duration::from_millis(20)).await;
+    }
 }
 
 /// An open Class 1 connection: what to send ([`Self::producer`]), what to

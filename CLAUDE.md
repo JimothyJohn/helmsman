@@ -13,6 +13,10 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   `cfg(target_os = "linux")` is never compiled here and three casts in it
   failed CI after a green local gate (2026-11-11). New `cfg(target_os)`
   code gets its other half linted the same way in `lint.sh`.
+  It lints the two node firmwares too (crates/helmsman-node-p4, and
+  crates/helmsman-node where the esp toolchain is installed): they are
+  not workspace members and no CI job builds them, and the ESP32 one
+  stopped compiling unnoticed when helmsman-nodecore changed (2026-11-24).
 - `cargo test --workspace --locked`. A new API route, canvas tab or relay
   profile fails it until docs/FEATURES.md has it under a feature with a
   journey (docs/PARITY.md, "Adding a feature").
@@ -183,7 +187,7 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   unless Nick asks for the Pi by name in that session; the Pi cards on
   the board are parked until then. (SSH to it needs Nick's key in the
   agent: `ssh-add --apple-use-keychain ~/.ssh/id_ed25519`.)
-- **One EtherNet/IP owner per E1213.** The unit (192.168.3.60) takes one
+- **One EtherNet/IP owner per E1213.** The unit (192.168.33.60) takes one
   exclusive-owner connection; a second box's `Forward_Open` is refused,
   0x0106 ownership conflict or 0x0100 connection in use. With the Pi
   out, the owner is a Studio box; a second Studio box reads the unit
@@ -205,7 +209,7 @@ unmanaged switch has no table to read.
 | Device | Address | MAC |
 |---|---|---|
 | P4 node | 192.168.3.56 (:8080) | e8:f6:0a:e8:16:e1 |
-| Moxa E1213 | 192.168.3.60 | 00:90:e8:7e:af:be |
+| Moxa E1213 | 192.168.33.60 since 2026-11-24 (was 192.168.3.60; on the Skipper's subnet, Nick) | 00:90:e8:7e:af:be |
 | Novanta MDrive | 192.168.33.1, its default (reach it with the en0 alias above) | 8c:1f:64:ad:89:20 |
 | Bench Pi (parked) | 192.168.3.20, and 10.0.0.56 on the same port | 98:fe:54:51:5c:7d |
 | Murrelektronik 55089, Balluff | not seen on 2026-11-20 (no frame in 25 s) | |

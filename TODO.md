@@ -252,6 +252,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-16
   by: claude-session
 
+- [ ] **helmsman-adapter: `output_comes_back_as_input` read zeros where it had waited for the pattern** — Why it matters: the test waits until the adapter echoes the 32 output bytes back as input and then asserts on what it got, so a failure there is either a wait that returns before the data matches or an adapter that answers a match and hands back another packet; one of the two is wrong, and a scanner relying on that wait would act on stale input. Seen once, on CI's `box (macos-latest)` for #614 (2026-11-24, run 45465568201, crates/helmsman-adapter/tests/bin.rs:60): `left` was 32 zeros, `right` the pattern 1..=32, in 3.06 s. #614 does not touch the adapter or helmsman-proto, the job is not a required check, and the PR merged. Not reproduced locally (the full gate passed on the same commit, twice).
+  needs: nothing
+  result: the cause named (the wait in `IoConnection::wait_for_input_eq` or the adapter's echo), a test that fails on it every time, and the fix
+  est: 2h
+  difficulty: med
+  id: adapter-echo-flake
+  asked: 2026-11-24
+  by: claude-session
+
 - [ ] **helmsman-dhcp: a client moves off its running lease (found by its own property test)** — Why it matters: the DHCP server's promise is that an address handed out in an ACK stays that client's while the lease runs; a block that is moved to another address mid-lease drops its fieldbus connection. On 2026-11-15 `cargo test --workspace` failed once in `crates/helmsman-dhcp/tests/hostile.rs`, `no_request_sequence_breaks_the_invariants`: "00-07-46-00-00-03 moved off its running lease", left 192.168.3.102, right 192.168.3.101. It is rare (the next three runs of that test passed), so CI can fail on it at random on any PR. To reproduce every time, add this line to `crates/helmsman-dhcp/tests/hostile.proptest-regressions`: `cc 32024c1c7cf224596c6941b14f9b5192e7b4dba694ca7a7b2831f9d34cc24c4b`. The shrunk case begins with a DHCPREQUEST from that client with ciaddr 192.168.3.100 and ends with its DHCPDISCOVER. Not fixed here: it was found while gating an unrelated change (the Devices tab's wired line), the crate is another task's, and the seed was left out of that branch so dev stays green until the fix lands with it, regression first.
   needs: nothing
   result: the seed is in the regressions file, the test passes with it, and the lease rule holds
@@ -541,6 +550,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-24
   by: worker (feat/node-multi-device)
 
+- [ ] **A Skipper saves a map only after its devices answered it** — Why it matters: the machine that scans and writes the map reaching a device does not mean the Skipper can (the MDrive answers the Studio and is on a subnet the Skipper is not on), and a map with a silent device used to be found out only after the download (Nick, 2026-11-24: "verify that there's not a comms issue before downloading the map"; blocked until all answer). Built on `feat/node-comms-check` (docs/EDGE.md, "A map is saved once its devices answered the node"): `POST /api/io_map/check` and its `GET`, `PUT /api/io_map` and the page's form saving only the text whose check passed in the last ten minutes, the P4's check task (a Modbus read or an EtherNet/IP session, nothing written, no I/O connection), a device on another subnet failed with the address it needs. On the board 2026-11-24: two devices answered, an absent one timed out, the MDrive was named off-subnet, and the save was refused before and after. Left: (1) a passing check followed by the save, on the board (the P4 went off USB mid-run); (2) the programming side: the canvas page that watches a Skipper (`?box=`) now edits its map in a window opened from the Devices tab, checks the devices (`POST` then `GET /api/io_map/check`, a line per device) and offers Download (`PUT /api/io_map`) only for the exact text a check passed (`feat/canvas-skipper-map`, stacked on this branch; not yet seen against a real board, and a Skipper that answers 404 to the check route gets neither button). Still open under (2): a box project's map flattened for a Skipper, a design to agree with Nick first.
+  needs: the P4 back on USB or PoE for (1); an interview with Nick for (2)
+  result: from the Devices tab, a map is checked from the Skipper, the answers are shown per device, and Download is offered once all answered
+  est: 1d
+  difficulty: med
+  id: node-comms-check
+  asked: 2026-11-24
+  by: claude-session
+
 - [ ] **The P4's `enip` image after #333: the two runs that were skipped** — Why it matters: #333 moved the node's EtherNet/IP session onto its own task so a slow device cannot make the scan late, and that was checked only for the first connection. The two runs here are the ones a plant sees: the device goes away and comes back, and the node holds the connection as its only owner. #333 moved the EtherNet/IP session into a task of its own and was checked on the board for the first open only (1.1 s after link-up, 0 late scans, was 199). Two runs were left out and are on no card: (1) the close after a lost link, through the task: pull the cable or power the E1213 off mid-run, see the outputs go to their safe state, the session close, and the reopen once the unit is back, with no late scans meanwhile; (2) Exclusive Owner with this change (the 640 of 640 packet run of 2026-11-10 was on the image before it). Write both into docs/EDGE.md Phase 3 "On the board".
   needs: the E1213's one Class 1 connection free: the try box off the unit (`studio-box-no-io`, or `launchctl bootout gui/501/io.advin.helmsman-try` from your terminal until that lands); no other session flashing the P4
   result: the enip task is proven for loss and for ownership, not only for the first open
@@ -815,6 +833,17 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   est: 1w
   difficulty: high
   id: history-in-context
+
+- [ ] **Zoom ladder: the Process and Machine levels** — Nick asked for seven levels (interview 2026-11-23): Code, Wiring, Statements, Sections, Programs, Process, Machine. Five are built (`fold::ladder`, `st_ladder.rs`): each is a card painted over its own blocks, so a level needs something on the canvas to stand over. Past the one program's card there is nothing yet: Programs needs every program and function block of the project placed in one world with the calls between them, Process needs the sequences (a CASE on a state variable, `fold::states`) drawn as steps with the live one lit, and Machine needs the devices and their points placed around the programs. Start with the world of several programs; the other two sit on it.
+  result: zooming out past one program shows the project, then what the machine does, then the machine
+  est: 4d
+  difficulty: hard
+  id: zoom-ladder-upper
+- [ ] **Take out the old three-level zoom** — `fold::zoom`, `st_zoom.rs` and their tests (`st_zoom_tests.rs`, `tests/fold_zoom.rs`) close folds and lay the diagram out again at each level. It has been off since 2026-11-23 (`SEMANTIC_ZOOM`), the zoom ladder replaces it, and only its own tests turn it on. The corner-control tests in `st_zoom_tests.rs` are of what ships and move to the ladder's tests.
+  depends: zoom-ladder-upper
+  est: 0.5d
+  difficulty: easy
+  id: zoom-old-levels-out
 
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 

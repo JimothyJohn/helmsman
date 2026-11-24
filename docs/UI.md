@@ -406,18 +406,29 @@ only go down.
   longer pans the diagram: Space and a drag, or the middle button, do; the
   arrow keys and W A S D too, and the wheel zooms. Hovering empty space
   says so.
-- **Zoom only scales; corner controls (Nick, 2026-11-23).** The diagram is
-  drawn the same way at every zoom: it no longer swaps to lines of text
-  zoomed out or to the sections' blocks mid-zoom (it looked glitchy and like
-  another interface), and stays at the one level a small program has when
-  first fitted. Folds the reader makes (a double click, the tabs, the CASE
-  and interlock tables) work as before; zooming out will later merge nodes
-  into labelled groups in the same style
-  (`st_zoom::SEMANTIC_ZOOM`). In the diagram's bottom-right corner, left of
-  the lamps: a hand (while on, a drag on empty space moves the view instead
-  of drawing a box; off by default, not saved with the project), zoom in
-  and zoom out (one step about the middle, the wheel's limits). Each is a
-  44 pt glyph with a tooltip.
+- **The zoom ladder (Nick, 2026-11-23).** The closer the camera, the more
+  concrete the diagram, and each step out says less about how and more
+  about what. Five levels, closest first: **Code** (each statement is the
+  Structured Text that wrote it), **Wiring** (the blocks and wires, where
+  a fitted view lands), **Statements** (one card per statement, named by
+  what it sets, with its value), **Sections** (one card per commented
+  section, IF or CASE arm, or leftover statement) and **Program** (the
+  whole program as one card). The first try swapped the drawing at a
+  threshold, text far out and blocks close, which looked glitchy, like
+  another interface, and upside down. So: nothing is laid out again (a
+  card is painted over its own blocks, where they are); how strongly is a
+  continuous function of the zoom, with no state to flip; the groups that
+  will close together are outlined faintly one level before they do, and
+  the outline firms up on the way; and the levels are a factor of 2.2
+  apart, so a turn of the wheel never crosses two. A formed card takes
+  the pointer: a click flies in one level to what it holds. Folds the
+  reader makes (a double click, the tabs, the CASE and interlock tables)
+  work as before. In the diagram's bottom-right corner, left of the lamps:
+  a hand (while on, a drag on empty space moves the view instead of
+  drawing a box; off by default, not saved with the project), zoom in and
+  zoom out (one step about the middle, the wheel's limits), each a 44 pt
+  glyph with a tooltip, and the level's name, which opens the list of
+  levels to step to.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).
