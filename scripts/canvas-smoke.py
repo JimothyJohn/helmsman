@@ -104,14 +104,14 @@ def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
 # Parts of the 1400x860 layout that hold still while a program runs, in
 # points (x, y, width, height): a step that must change one is checked
 # against it. The clock, the diagram's values and the trend never hold.
-LEFT = (0, 120, 300, 500)
+LEFT = (0, 100, 300, 200)
 # Where a right pane's tabs show once one is docked there.
 RIGHT_TABS = (1180, 56, 210, 30)
 # The trend is the whole bottom strip since 2026-11-23, from the far left.
-BOTTOM_TABS = (0, 540, 1400, 320)
+BOTTOM_TABS = (0, 545, 1400, 315)
 # The Messages, under the left pane's tab content and above the trend since
 # 2026-11-23 (what a deploy says is there, not in a line under the header).
-MESSAGES = (0, 400, 320, 140)
+MESSAGES = (0, 330, 320, 200)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
@@ -257,7 +257,7 @@ def playground(ctx, base, out):
         # A comment typed where the caret lands (egui's End chord moves
         # within the row): any comment compiles. A click aimed at a line
         # depends on how the lines wrap at the pane's width.
-        r.click(130, 400); r.wait(200)
+        r.click(130, 250); r.wait(200)
         r.key(f"{MOD}+End"); r.wait(100)
         r.page.keyboard.type("\n(* smoke *)")
     r.step("edited", edit, LEFT, 1200)

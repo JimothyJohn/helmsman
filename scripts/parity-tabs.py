@@ -44,8 +44,8 @@ PANES = ("claude", "code", "io", "devices", "files", "history")
 BOTTOM = ("trend", "messages")
 # Where a tab's content is, in points: the left pane under its tab row, the
 # trend under the diagram, the Messages above it.
-PANE_BODY = (0, 66, 300, 330)
-BOTTOM_BODY = {"trend": (0, 560, 1400, 300), "messages": (0, 420, 300, 120)}
+PANE_BODY = (0, 90, 300, 225)
+BOTTOM_BODY = {"trend": (0, 545, 1400, 315), "messages": (0, 330, 300, 200)}
 # Console lines the seeding itself causes (the seed URL is not the app).
 EXPECTED = ["/__seed", "status of 404", "favicon"]
 # Served from loopback (--dist) only: the page asks the deployed demo relay
