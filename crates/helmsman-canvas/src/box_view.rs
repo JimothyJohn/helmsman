@@ -2308,6 +2308,18 @@ impl BoxView {
         match a.run(&b.text, &ports, &|d| self.devices_ui.channels_of(d)) {
             Ok(c) => {
                 b.text = c.text;
+                // A port that went to a device has its `plant.sim` line
+                // switched off (kept), and back on with the way back.
+                let (port, off) = match a {
+                    crate::assign::AssignAct::Assign { port, .. } => (port, true),
+                    crate::assign::AssignAct::Back { port } => (port, false),
+                };
+                if let Some(p) = o.bufs.get_mut(helmsman_project::PLANT)
+                    && p.loaded
+                    && let Some(new) = helmsman_sim::set_off(&p.text, port, off)
+                {
+                    p.text = new;
+                }
                 self.projects.note(c.summary, false);
             }
             Err(why) => self.projects.note(why, true),
@@ -3732,6 +3744,7 @@ impl Body for BoxView {
                                 tile: form == Form::Tile,
                                 uses: src.as_ref().map(|c| crate::find::names(c, name).len()),
                                 simulate: false,
+                                designation: crate::assign::designate(&map, name, is_port),
                             };
                             let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
                                 crate::io_cards::value(

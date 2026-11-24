@@ -28,7 +28,7 @@ pub mod plant;
 pub mod text;
 
 pub use plant::{Feed, Plant, Val};
-pub use text::{Device, Key, Kind, Mode, ModeLine, Problem, Role, Spec, parse, set_device, set_mode};
+pub use text::{Device, Key, Kind, Mode, ModeLine, Problem, Role, Spec, parse, set_device, set_mode, set_off};
 
 /// The file's name in a project.
 pub const FILE: &str = "plant.sim";

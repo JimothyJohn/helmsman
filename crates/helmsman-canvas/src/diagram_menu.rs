@@ -86,6 +86,31 @@ impl Viewer {
             .find(|m| m.dir == dir && m.port.eq_ignore_ascii_case(path.trim()))
     }
 
+    /// Each I/O block of the program's own diagram as drawn, with whether
+    /// its port is simulated or on a device.
+    pub(crate) fn io_marks(&self) -> Vec<(NodeId, crate::assign::Designation)> {
+        use crate::device_form::Dir;
+        if !self.scopes[self.scope].prefix.is_empty() {
+            return Vec::new();
+        }
+        self.shown()
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let (path, dir) = match &n.kind {
+                    NodeKind::Read { path } => (path, Dir::In),
+                    NodeKind::Write { path } => (path, Dir::Out),
+                    _ => return None,
+                };
+                let m = self
+                    .assign
+                    .iter()
+                    .find(|m| m.dir == dir && m.port.eq_ignore_ascii_case(path.trim()))?;
+                Some((n.id, crate::assign::Designation::of(&m.place)?))
+            })
+            .collect()
+    }
+
     /// A right-click on an on-diagram control (an input's switch or force
     /// button sits over its Read block, so the diagram never sees the
     /// click) is a right click on that block all the same.

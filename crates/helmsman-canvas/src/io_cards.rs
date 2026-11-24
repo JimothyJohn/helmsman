@@ -27,6 +27,7 @@
 use eframe::egui::{self, Align, Color32, Layout, Margin, Rect, RichText, Sense, Stroke, Vec2};
 use helmsman_diagram::{Source, SourceKind};
 
+use crate::assign::Designation;
 use crate::editor::Chrome;
 use crate::glyphs::Icon;
 use crate::theme::{BODY, theme};
@@ -193,6 +194,9 @@ pub struct Row<'a> {
     pub uses: Option<usize>,
     /// The details offer to simulate the input as a device.
     pub simulate: bool,
+    /// Still simulated (a SIM badge and a dashed outline) or on a device
+    /// (solid, naming it); `None` when the point is neither.
+    pub designation: Option<Designation>,
 }
 
 /// What was asked of a card this frame.
@@ -396,9 +400,11 @@ pub fn show<R>(
     let mut asked = Asked::default();
     let mut glyphs = Rect::NOTHING;
     let (fill, stroke) = look(row.tile, row.selected, &t);
+    let sim = row.designation.as_ref().is_some_and(Designation::is_simulated);
+    // A simulated card's outline is dashed, drawn over the frame below.
     let frame = egui::Frame::new()
         .fill(fill)
-        .stroke(stroke)
+        .stroke(if sim { Stroke::NONE } else { stroke })
         .corner_radius(6)
         .inner_margin(Margin::same(margin));
     let out = frame.show(ui, |ui| {
@@ -409,7 +415,9 @@ pub fn show<R>(
             for v in [&mut w.hovered, &mut w.active, &mut w.inactive] {
                 v.expansion = 0.0;
             }
-            return head(ui);
+            let r = head(ui);
+            designation_line(ui, chrome, row, true);
+            return r;
         }
         let side = crate::glyphs::ROW;
         let gap = ui.spacing().item_spacing.x;
@@ -446,6 +454,7 @@ pub fn show<R>(
                 r
             })
             .inner;
+        designation_line(ui, chrome, row, false);
         if let Some((text, tip)) = &row.real {
             let label = egui::Label::new(RichText::new(text).size(BODY).color(t.muted)).wrap();
             let l = ui.add(label).tip(tip.clone());
@@ -485,6 +494,12 @@ pub fn show<R>(
     let rect = out.response.rect;
     ui.data_mut(|d| d.insert_temp(id, rect));
     chrome.hit(format!("io card {name}"), rect);
+    if sim {
+        dashed_outline(ui.painter(), rect, stroke);
+        chrome.hit(format!("io dashed {name}"), rect);
+    } else if row.designation.is_some() {
+        chrome.hit(format!("io solid {name}"), rect);
+    }
     // A double-click anywhere on the card but its two glyphs, its control
     // included (a switch flipped twice is where it was).
     let double = ui.rect_contains_pointer(rect)
@@ -510,6 +525,45 @@ pub fn show<R>(
     let resp = resp.tip(tip.trim_end().to_string());
     ui.add_space(4.0);
     (asked, resp, out.inner)
+}
+
+/// `rect`'s outline as dashes, rounded corners cut square.
+pub fn dashed_outline(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let corners = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+        rect.left_top(),
+    ];
+    painter.extend(egui::Shape::dashed_line(&corners, stroke, 5.0, 3.0));
+}
+
+/// The line that says a point is simulated (the word SIM) or where it is
+/// (a tile's one line: its device and channel; a row says that in its
+/// line of the real world). `tile` is the one-line form.
+fn designation_line(ui: &mut egui::Ui, chrome: &mut Chrome, row: &Row, tile: bool) {
+    let t = theme(ui);
+    let name = row.key.to_ascii_lowercase();
+    match &row.designation {
+        Some(Designation::Simulated) => {
+            let badge = RichText::new(Designation::BADGE).strong().size(BODY).color(t.muted);
+            let r = ui
+                .add(egui::Label::new(badge).selectable(false))
+                .tip(format!(
+                    "{name} is simulated: the simulation drives it and no device is wired to it. Right-click to assign it to a device channel."
+                ));
+            chrome.hit(format!("io sim {name}"), r.rect);
+        }
+        Some(d @ Designation::Physical { .. }) if tile => {
+            let text = RichText::new(d.label()).size(BODY).color(t.muted);
+            let r = ui
+                .add(egui::Label::new(text).truncate().selectable(false))
+                .tip(format!("{name} is on {}.", d.label()));
+            chrome.hit(format!("io phys {name}"), r.rect);
+        }
+        _ => {}
+    }
 }
 
 /// A card's fill and outline. A tile is a flat snapshot (Nick,
