@@ -43,7 +43,7 @@ use crate::signals::{BindError, PortBinding, SignalTable, bind, from_st, to_st};
 use crate::tap::{Sample, TraceTap};
 
 /// Longest scan period a module may ask for.
-pub const MAX_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
+pub const MAX_PERIOD: Duration = Duration::from_hours(24);
 
 /// A byte range of a process image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

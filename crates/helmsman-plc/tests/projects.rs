@@ -498,9 +498,16 @@ fn file(addr: SocketAddr, p: &str, f: &str) -> Resp {
     get(addr, &format!("/api/projects/{p}/files/{f}"))
 }
 
+#[cfg(unix)]
 fn is_executable(m: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
     m.permissions().mode() & 0o111 != 0
+}
+
+/// Windows has no execute bit.
+#[cfg(not(unix))]
+fn is_executable(_: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// Every file under `dir`, recursively, as relative paths.
@@ -514,7 +521,14 @@ fn tree(dir: &Path) -> Vec<String> {
             if e.file_type().unwrap().is_dir() {
                 stack.push(p.clone());
             }
-            out.push(p.strip_prefix(dir).unwrap().display().to_string());
+            // Slash-separated whatever the host's separator.
+            out.push(
+                p.strip_prefix(dir)
+                    .unwrap()
+                    .display()
+                    .to_string()
+                    .replace('\\', "/"),
+            );
         }
     }
     out.sort();
@@ -2580,7 +2594,7 @@ fn every_save_is_a_revision_an_engineer_can_read_and_restore() {
     assert_eq!(revs[1]["by"], "alice (engineer)");
     assert_eq!(revs[1]["what"], "saved main.st");
     assert_eq!(revs[1]["page"], false);
-    assert_eq!(revs[2]["what"], "took the Agent's answer into main.st");
+    assert_eq!(revs[2]["what"], "took the described change into main.st");
     assert_eq!(revs[2]["page"], true);
     assert!(revs[2]["at_ms"].as_u64().unwrap() >= revs[1]["at_ms"].as_u64().unwrap());
     assert_eq!(revs[2]["files"], json!(["main.st"]));

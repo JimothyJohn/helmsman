@@ -91,3 +91,8 @@ jobs:
             target/pi-image/*.sha256
           if-no-files-found: ignore
           retention-days: 14
+      # rust-cache saves target/ after the last step; pi-gen's clone and build
+      # in it came back with objects missing ("unable to read tree", 2026-11-22).
+      - name: Keep pi-gen out of the cache
+        if: ${{ always() }}
+        run: sudo rm -rf target/pi-image

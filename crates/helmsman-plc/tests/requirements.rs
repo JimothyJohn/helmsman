@@ -597,7 +597,7 @@ fn data(text: &str) -> Json {
 fn agent_writes(b: &Bench) -> usize {
     b.history()
         .iter()
-        .filter(|r| r["what"].as_str().unwrap_or("").starts_with("the agent wrote"))
+        .filter(|r| r["what"].as_str().unwrap_or("").starts_with("Helmsman wrote"))
         .count()
 }
 
@@ -640,12 +640,12 @@ fn a_requirement_becomes_a_written_passing_test() {
     let h = b.history();
     let rev = h.last().unwrap();
     assert_eq!(rev["by"], "alice (engineer)", "{rev}");
-    assert_eq!(rev["what"], "the agent wrote test_lamp_on.st");
+    assert_eq!(rev["what"], "Helmsman wrote test_lamp_on.st");
     assert!(
         b.audit().iter().any(|e| e["detail"]
             .as_str()
             .unwrap()
-            .contains("requirement the agent wrote test_lamp_on.st")
+            .contains("requirement Helmsman wrote test_lamp_on.st")
             && e["user"] == "alice"),
         "audited"
     );
@@ -865,7 +865,7 @@ fn an_unreachable_relay_is_offline_and_the_requirement_is_written_down() {
     assert_eq!(d["stop"], "offline");
     assert_eq!(
         d["why"],
-        "the agent is offline; the requirement is written down with no test yet"
+        "the answer service is offline; the requirement is written down with no test yet"
     );
 }
 

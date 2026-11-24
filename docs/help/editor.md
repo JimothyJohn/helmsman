@@ -7,14 +7,15 @@ the simulation; what differs is where the program runs.
 
 One row along the top.
 
-- **HELMSMAN**, on the left, opens this site.
-- **File · Edit · View · Help**: the menus. Every item that has a key
-  shows it. File holds Save, Deploy, Upload and Download. Edit holds Undo
-  and Redo for the Structured Text, Go to definition and Cross references.
-  View switches between the Editor and the Monitor, shows or hides
-  each pane, and has Light mode (dark is the default; the browser
-  remembers your choice). Help opens these pages, the keyboard table, and About
-  Helmsman (the version and build).
+- The **Helmsman mark and name**, on the left, open this site.
+- The **menu** (three lines) holds File, Edit, View and Help, each
+  opening beside it. Every item that has a key shows it. File holds
+  Save, Deploy, Upload and Download. Edit holds Undo and Redo for the
+  Structured Text, Go to definition and Cross references. View switches
+  between the Editor and the Monitor, shows or hides each pane, and has
+  Light mode (dark is the default; the browser remembers your choice).
+  Help opens these pages, the keyboard table, and About Helmsman (the
+  version and build).
 - On a box, **the link**: whether the page is connected to the box. The
   simulation's state and clock sit beside the run glyphs over the
   diagram.
@@ -33,6 +34,13 @@ Reload). Under them is the log of what happened. When an error comes in
 the tab turns red and pulses for a few seconds, and it stays red until
 you have looked at it and the error no longer stands. If the bottom
 panel was shut, an error opens it.
+
+The log lists errors to start. The **info** and **warnings** icons at its
+top list those too, each with its count, and a click on one leaves it out
+again. The answer to an instruction is one short line there; hold the
+pointer over it for the whole text. **Copy all** (two sheets) puts the
+messages shown on the clipboard, in full, and **Clear** (the bin) empties
+the log.
 
 ![The same screen in light mode, View › Light mode.](img/editor-light.png)
 
@@ -54,8 +62,8 @@ for its name and key.
 ## The diagram
 
 The diagram is the program, drawn from its Structured Text and lit from
-the controller as it runs. The code is written in the editor or asked of
-the Agent; on the diagram you read the program, move its blocks and
+the controller as it runs. The code is written in the editor or described in
+the Describe tab; on the diagram you read the program, move its blocks and
 switch its inputs. What you can do:
 
 - **Read it.** Each block is a variable, a block instance, an operator or
@@ -97,12 +105,26 @@ switch its inputs. What you can do:
   for exactly those signals. Hover a cell to see what its row needs and
   what the signal is now. A double-click opens the block into its gates,
   and the tab over it draws them as one block again.
+- **Rename and set values.** Right-click a block that reads or writes a
+  variable and choose **Rename…** to give it a new name: the program, the
+  wiring and the requirement tests all take it, and the files it changes
+  are listed before you confirm. Right-click a constant or a timer's
+  preset (the `10` in `count > 10`, the `T#5s` of a timer) and choose
+  **Set value…** to write a new one in its place. A double-click on the
+  block asks the same question; on an input's block it opens Simulate this
+  input, so an input is renamed from its menu. The I/O rows have
+  **Rename…** too. Each change is saved as one revision, shows in the
+  Describe tab with Undo, and is in History. The logic itself is changed
+  in the code or by describing it.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Zoom with the
-  wheel, a two-finger scroll or a pinch, about the pointer. Move the view
-  with a drag on empty space, or with the arrow keys or W A S D while the
-  pointer is over the diagram. The diagram never leaves the view, and a
+  wheel, a two-finger scroll or a pinch, about the pointer, or with the plus
+  and minus buttons in the bottom-right corner. The diagram looks the same at
+  every zoom. A drag on empty space draws a box that selects; move the view
+  with the hand button beside the zoom buttons (a drag on empty space then
+  moves it), with Space and a drag, the middle button, or the arrow keys or
+  W A S D while the pointer is over the diagram. The diagram never leaves the view, and a
   double-click on empty space fits it again.
 - **Jump.** With the pointer over the diagram, <kbd>E</kbd> goes to the
   next function block call, IF, CASE or loop and <kbd>Q</kbd> to the
@@ -155,16 +177,16 @@ redrawn.
 
 ## The panes
 
-- **The left pane** holds every tab, the **Agent** first and showing when
+- **The left pane** holds every tab, the **Describe** tab first and showing when
   the page opens, so the diagram keeps the rest of the width. Drag a
   tab's glyph to the right edge of the window to dock it in a pane on the
-  right, beside the one on the left (the Code tab and the Agent side by
+  right, beside the one on the left (the Code tab and the Describe tab side by
   side, say), and drag it back onto the left pane to return it.
   <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>5</kbd> sends the tab the left pane shows to the
   right and shows the next one on the left; <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>
   shows or hides the right pane once a tab is there. The layout is kept
-  in the browser. The tabs: **Agent**, where you type what the open file
-  should do and it is updated (see [The Agent](agent.html)). **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
+  in the browser. The tabs: **Describe**, where you type what the open file
+  should do and it is updated (see [Describing a change](agent.html)). **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
   the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
@@ -205,7 +227,7 @@ redrawn.
   right-click a wired signal to rename it:
   the io.map line and every use in the program change together, listed
   before you confirm. One map may mix Modbus
-  TCP and EtherNet/IP devices. The agent reads the same listing, network
+  TCP and EtherNet/IP devices. Helmsman reads the same listing, network
   included. Under that, **Plant states**: the quantities a project's
   plant model keeps for the machine it stands in for (mark a variable
   with `{state unit=m}` on its line), each with the simulation's value
@@ -214,7 +236,14 @@ redrawn.
   signal into the map. When that signal is one of the program's inputs,
   in the same unit, the simulation runs the model from it: set it in
   the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>): the
-  Structured Text editor, headed by the open file's name. The code is
+  Structured Text editor, headed by the open file's name. Beside the
+  name, the magnifier (<kbd>Ctrl</kbd> <kbd>F</kbd>, wherever the
+  keyboard is) opens Find over the code; its ⇄ button opens a second row
+  to Replace the selected match or Replace all. At the header's right
+  end is Deploy, the green button with the arrow. While the code
+  compiles the header says nothing about it; when it does not, a red ✖
+  with the number of errors stands before Deploy, the first error in its
+  tooltip, and a click goes to that line. The code is
   coloured by what each word is: keywords, types, numbers and times,
   comments, the program's inputs and outputs, and addresses. Errors are
   marked on the line as you type; the program running does not change

@@ -322,7 +322,7 @@ fn an_instruction_updates_the_open_file_keeps_a_revision_and_says_so() {
     let all = v.proj.revisions();
     assert_eq!(all.len(), revs + 1);
     let r = all.last().unwrap();
-    assert_eq!(r.what, "Agent: say why the lamp is on");
+    assert_eq!(r.what, "Described: say why the lamp is on");
     let p = r.page.as_deref().unwrap();
     assert!(
         p.starts_with("Instruction: say why the lamp is on\nFile: main.st\nWhy: it says so.\n"),
@@ -462,7 +462,7 @@ fn an_answer_that_does_not_compile_is_never_written() {
     assert_eq!(o.kind, Kind::Refused, "{o:?}");
     assert_eq!(
         o.status,
-        "main.st is unchanged: the Agent's answer did not pass its checks in 3 tries."
+        "main.st is unchanged: the answer did not pass its checks in 3 tries."
     );
     assert!(o.problems.iter().any(|p| p.contains("does not compile")), "{o:?}");
     assert_eq!(v.proj.files, before);
@@ -578,7 +578,7 @@ fn undo_restores_the_version_before_the_change_and_keeps_it_in_history() {
         format!("restored revision {}", u.revision)
     );
     assert!(
-        all.iter().any(|r| r.what == "Agent: comment it"),
+        all.iter().any(|r| r.what == "Described: comment it"),
         "the change stays in History"
     );
     let o = v.instruct.outcome.clone().unwrap();
@@ -802,52 +802,6 @@ fn the_code_written_so_far_is_the_files_block_and_never_a_scenario() {
     );
 }
 
-#[test]
-fn the_stage_follows_the_answer_order() {
-    use crate::instruct::{Stage, stage, why_line};
-    assert_eq!(stage(false, ""), Stage::Waiting);
-    assert_eq!(stage(true, ""), Stage::Planning, "thinking");
-    assert_eq!(stage(false, "Why: the lamp latc"), Stage::Planning);
-    assert_eq!(why_line("Why: the lamp latc"), None, "a line still coming");
-    assert_eq!(
-        why_line("Why: the lamp latches.\n").as_deref(),
-        Some("the lamp latches.")
-    );
-    assert_eq!(why_line("The lamp.\n"), None, "no Why line");
-    let code = "Why: x.\n\n```st\nPROGRAM p\nEND_PROGRAM\n";
-    assert_eq!(stage(true, code), Stage::Writing(2));
-    let one = format!("{code}```\n\n```st scenario\nPROGRAM t\n");
-    assert_eq!(stage(true, &one), Stage::Checks(1));
-    assert_eq!(
-        stage(true, &format!("{one}```\n```st scenario\n")),
-        Stage::Checks(2)
-    );
-    assert_eq!(
-        stage(true, "I cannot do that: the program has no lamp."),
-        Stage::Planning,
-        "a refusal never claims to write"
-    );
-}
-
-proptest::proptest! {
-    /// The status line never steps back as an answer streams in, cut
-    /// anywhere: it moves from one stage to the next, never between them.
-    #[test]
-    fn the_stage_only_moves_forward(cuts in proptest::collection::vec(0usize..400, 0..12)) {
-        use crate::instruct::stage;
-        let answer = format!("{}\n\n```st scenario\nPROGRAM test_b\nEND_PROGRAM\n```\n", st(LAMP));
-        let mut at: Vec<usize> = cuts.into_iter().map(|c| c.min(answer.len())).filter(|c| answer.is_char_boundary(*c)).collect();
-        at.push(answer.len());
-        at.sort_unstable();
-        let mut last = stage(true, "");
-        for c in at {
-            let now = stage(true, &answer[..c]);
-            proptest::prop_assert!(now >= last, "{last:?} then {now:?} at {c}");
-            last = now;
-        }
-    }
-}
-
 proptest::proptest! {
     /// What the tab shows only ever grows as the answer streams in, and
     /// ends as the whole file: a draft never jumps back or flickers.
@@ -917,13 +871,13 @@ fn the_estimate_is_a_range_that_grows_with_the_file_and_the_clock_says_when_it_i
 /// relay refuses a body with any field but the messages.
 #[test]
 fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
-    use crate::claude::{Free, NoStore, Takes, Turn};
+    use crate::claude::{Free, Takes, Turn};
     let turn = Turn {
         agent: Some("edits"),
         quick: true,
     };
     let body_with = |status: &str| {
-        let mut chat = crate::claude::Chat::new(Box::new(NoStore));
+        let mut chat = crate::claude::Chat::new();
         chat.receive(Incoming::Proxy(false));
         chat.set_free_base("https://relay.example");
         chat.receive(Incoming::Takes(Takes::from_status(status)));
@@ -955,14 +909,182 @@ fn a_turn_asks_the_free_chat_only_for_what_it_takes() {
         json!({"messages": msgs, "agent": "edits", "thinking": "off"})
     );
     // A key or the proxy answers every turn the same way: nothing added.
-    let direct = crate::claude::request_turn(
-        &crate::claude::Route::Proxy,
-        crate::claude::Model::default(),
-        &[],
-        "q",
-        turn,
-    );
+    let direct = crate::claude::request_turn(&crate::claude::Route::Proxy, &[], "q", turn);
     let body: serde_json::Value = serde_json::from_str(&direct.body).unwrap();
     assert_eq!(body.get("agent"), None);
     assert_eq!(body.get("thinking"), None);
+}
+
+// ---- offers (`crate::offers`, Nick 2026-11-23) ----
+
+/// What cannot be done as written comes back as one reason and the
+/// nearest things to click, nothing written; the rename, clicked, is in
+/// every file, saved as one revision with its History entry, and Undo
+/// takes it back.
+#[test]
+fn a_rename_offered_is_one_click_one_revision_and_one_undo() {
+    let mut v = mine();
+    let before = v.proj.files.clone();
+    instruct(
+        &mut v,
+        "make the lamp orange",
+        &[
+            "Why: The lamp is an on/off output, so its colour comes from its name.\nOffer: rename lamp orange_lamp\nOffer: rename nowhere somewhere\n",
+        ],
+    );
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Said);
+    assert_eq!(
+        o.status,
+        "The lamp is an on/off output, so its colour comes from its name."
+    );
+    assert_eq!(instruct::answer(&o).tone, instruct::Tone::Note, "no alarm");
+    assert_eq!(o.offers.len(), 1, "what cannot be done is not offered: {o:?}");
+    assert_eq!(o.offers[0].label(), "Rename lamp to orange_lamp");
+    let touched: Vec<&str> = o.offers[0]
+        .touches
+        .iter()
+        .filter_map(|t| t.split(':').next())
+        .collect();
+    assert_eq!(touched, ["main.st", "test_lamp.st"]);
+    assert_eq!(v.proj.files, before, "an offer writes nothing");
+    let revs = v.proj.revisions().len();
+
+    v.take_offer(0, &egui::Context::default());
+    assert!(v.proj.files["main.st"].contains("orange_lamp := start;"));
+    assert!(v.proj.files["test_lamp.st"].contains("lamp_follows(COND := orange_lamp);"));
+    assert!(
+        v.session.src.contains("orange_lamp := start;"),
+        "the editor shows it"
+    );
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied);
+    assert_eq!(o.status, "Renamed lamp to orange_lamp in 2 files.");
+    assert_eq!(o.offers, Vec::new());
+    let all = v.proj.revisions();
+    assert_eq!(all.len(), revs + 1, "one revision");
+    let last = all.last().unwrap();
+    assert_eq!(last.what, "Renamed lamp to orange_lamp");
+    assert!(!v.proj.dirty(), "saved");
+    // History reads it back as an instruction carried out on the file.
+    let page = instruct::Instruct::rename_record("lamp", "orange_lamp", &["main.st: 2 use(s)".to_string()]);
+    assert_eq!(recent([page.as_str()], "main.st"), ["Rename lamp to orange_lamp"]);
+
+    v.undo_change();
+    assert_eq!(v.proj.files["main.st"], LAMP);
+    assert_eq!(v.proj.files["test_lamp.st"], FOLLOWS);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+}
+
+/// The files moved on since the offer was made: the click changes
+/// nothing and says why.
+#[test]
+fn a_rename_that_no_longer_fits_the_files_changes_nothing_and_says_why() {
+    let mut v = mine();
+    instruct(&mut v, "call the lamp light", &["Offer: rename lamp light\n"]);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!((o.kind, o.status.as_str(), o.offers.len()), (Kind::Said, "", 1));
+    // A variable of that name meanwhile.
+    let taken = LAMP.replace("  lamp : BOOL;", "  lamp : BOOL;\n  light : BOOL;");
+    v.proj.files.insert("main.st".into(), taken.clone());
+    v.take_offer(0, &egui::Context::default());
+    assert_eq!(v.proj.files["main.st"], taken);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Refused);
+    assert_eq!(o.problems, ["The program already has a variable light."]);
+}
+
+/// "Leave it" takes the buttons away and keeps the reason; an instruction
+/// offered is sent as the engineer's own.
+#[test]
+fn leave_it_keeps_the_reason_and_an_instruction_offered_is_sent() {
+    let mut v = mine();
+    instruct(
+        &mut v,
+        "make the lamp orange",
+        &["The lamp has no colour.\nOffer: instead Comment what lamp does\n"],
+    );
+    assert_eq!(
+        v.instruct.offer(0),
+        Some(&crate::offers::What::Instead {
+            text: "Comment what lamp does".into()
+        })
+    );
+    let mut left = v.instruct.clone();
+    left.leave_offers();
+    let o = left.outcome.unwrap();
+    assert_eq!(
+        (o.status.as_str(), o.offers.len()),
+        ("The lamp has no colour.", 0)
+    );
+
+    v.take_offer(0, &egui::Context::default());
+    let run = v.instruct.run.as_ref().expect("sent");
+    assert_eq!(run.instruction, "Comment what lamp does");
+    assert!(v.instruct.draft.is_empty(), "the box is empty again");
+}
+
+/// Both prompts the canvas itself sends ask for offers, never for a bare
+/// refusal.
+#[test]
+fn the_canvas_prompts_ask_for_the_nearest_thing_and_never_for_a_bare_refusal() {
+    for p in [crate::claude::SYSTEM, instruct::BOX_RULES] {
+        assert!(p.contains("Offer: rename <old> <new>"), "{p}");
+        assert!(p.contains("Offer: instead "), "{p}");
+        assert!(!p.contains("sentences that say why"), "{p}");
+    }
+}
+
+// ---- the arrows through the revisions (Nick, 2026-11-23) ----
+
+/// Stepping back and forward restores the prompt and the output of the
+/// step shown, and writes nothing to the Messages: an old version's
+/// compile errors are not news, and the error count stays.
+#[test]
+fn the_arrows_restore_the_prompt_and_output_of_each_step_and_log_nothing() {
+    let ctx = egui::Context::default();
+    let mut v = mine();
+    // A version that does not compile, saved by hand, between two changes.
+    instruct(&mut v, "comment it", &[&st(&commented())]);
+    let first = v.proj.revisions().last().unwrap().n;
+    v.proj
+        .files
+        .insert("main.st".into(), "PROGRAM lamp\nlamp := ;\nEND_PROGRAM\n".into());
+    v.proj.save_as("a broken save", None);
+    let broken = v.proj.revisions().last().unwrap().n;
+    v.proj.files.insert("main.st".into(), commented());
+    v.proj.save();
+    v.open_project("mine");
+    v.tick(&ctx);
+    let (messages, errors) = (v.log.iter().count(), v.log.errors());
+
+    v.show_revision(broken);
+    v.tick(&ctx);
+    v.tick(&ctx);
+    assert!(
+        !v.session.diag_lines().is_empty(),
+        "the broken version is on show"
+    );
+    assert_eq!(v.instruct.draft, "", "a plain save had no prompt");
+    assert_eq!(
+        v.instruct.outcome.as_ref().map(|o| o.status.as_str()),
+        Some("A broken save.")
+    );
+    v.show_revision(first);
+    v.tick(&ctx);
+    assert_eq!(v.instruct.draft, "comment it", "the prompt of that step");
+    let o = v.instruct.outcome.clone().unwrap();
+    assert!(o.status.starts_with("Updated main.st"), "{o:?}");
+    assert_eq!(o.why.as_deref(), Some("it says so."));
+    assert_eq!(
+        (v.log.iter().count(), v.log.errors()),
+        (messages, errors),
+        "stepping wrote nothing: {:?}",
+        v.log.iter().map(|m| m.text.clone()).collect::<Vec<_>>()
+    );
+
+    // What the engineer typed since is theirs: a step leaves it.
+    v.instruct.draft = "now invert it".into();
+    v.show_revision(broken);
+    assert_eq!(v.instruct.draft, "now invert it");
 }

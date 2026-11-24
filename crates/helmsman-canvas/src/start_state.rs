@@ -21,6 +21,7 @@ use std::fmt::Write as _;
 use helmsman_iec::{Ty, Value};
 
 use crate::playground::{Place, Point};
+use crate::scope::Files;
 
 /// The relay's agent that proposes a start state.
 pub const AGENT: &str = "start";
@@ -35,6 +36,14 @@ pub const MAX_ANSWER: usize = 8 * 1024;
 /// so a closing tag inside either is defanged).
 const DESCRIPTION_TAG: &str = "start_description";
 const INPUTS_TAG: &str = "program_inputs";
+const OUTPUTS_TAG: &str = "program_outputs";
+
+/// What the page asks beside the words (the relay's `start-v1` prompt
+/// knows only `NAME = value` lines, and a served profile never changes:
+/// a `start-v2` that asks for names itself would make this reliable).
+const NAMES_RULE: &str = "If the description calls an input or output by another name than the \
+program's, you may end the answer with at most two lines `Offer: rename <old> <new>`, <old> a name \
+listed above and <new> letters, digits and underscores. Everything else stays `NAME = value` lines.\n";
 
 /// What one input accepts, as the message says it and [`parse`] holds it.
 fn accepts(ty: Ty) -> String {
@@ -79,6 +88,21 @@ pub fn message(description: &str, inputs: &[Point]) -> String {
     format!(
         "<{DESCRIPTION_TAG}>\n{}\n</{DESCRIPTION_TAG}>\n<{INPUTS_TAG}>\n{}</{INPUTS_TAG}>\n",
         crate::claude::neutralize(&words),
+        crate::claude::neutralize(&list),
+    )
+}
+
+/// [`message`] for the I/O tab: also the program's outputs (so a name
+/// can be proposed for them) and the request for `Offer: rename` lines.
+#[must_use]
+pub fn message_for(description: &str, inputs: &[Point], outputs: &[Point]) -> String {
+    let mut list = String::new();
+    for p in outputs {
+        let _ = writeln!(list, "{} | {}", p.name, p.ty);
+    }
+    format!(
+        "{}<{OUTPUTS_TAG}>\n{}</{OUTPUTS_TAG}>\n{NAMES_RULE}",
+        message(description, inputs),
         crate::claude::neutralize(&list),
     )
 }
@@ -226,6 +250,9 @@ pub struct Proposal {
     pub program: String,
     /// Only the inputs whose value differs from what they have.
     pub changes: Vec<Change>,
+    /// Renames the answer proposed that the page can carry out, each
+    /// done on a click ([`crate::offers`]).
+    pub offers: Vec<crate::offers::Offer>,
 }
 
 /// Where a request for a start state stands.
@@ -262,26 +289,47 @@ impl Card {
     }
 
     /// The Agent's answer (or why there was none) for the program text
-    /// `program`, whose inputs are `inputs` as they are now.
-    pub fn answered(&mut self, answer: Result<&str, &str>, program: &str, inputs: &[Point]) {
+    /// `program`, whose inputs and outputs are as they are now, in the
+    /// project `files`. The answer may also end in `Offer: rename`
+    /// lines, kept when the name is an input or output and the project
+    /// can carry the rename out. An answer that is refused proposes
+    /// neither values nor names.
+    pub fn answered(
+        &mut self,
+        answer: Result<&str, &str>,
+        program: &str,
+        inputs: &[Point],
+        outputs: &[Point],
+        files: &Files,
+    ) {
         self.phase = Phase::Idle;
         let text = match answer {
             Ok(text) => text,
             Err(why) => {
-                self.line = Some(format!("The Agent did not answer: {}.", quoted_plain(why, 80)));
+                self.line = Some(format!("No answer: {}.", quoted_plain(why, 80)));
                 return;
             }
         };
-        match parse(text, inputs) {
+        let (values, whats) = crate::offers::split(text);
+        let is_point = |n: &str| {
+            inputs
+                .iter()
+                .chain(outputs)
+                .any(|p| p.name.eq_ignore_ascii_case(n))
+        };
+        let whats: Vec<crate::offers::What> = whats
+            .into_iter()
+            .filter(|w| matches!(w, crate::offers::What::Rename { old, .. } if is_point(old)))
+            .collect();
+        match parse(&values, inputs) {
             Err(why) => {
                 self.line = Some(format!(
-                    "The Agent's answer cannot be used, so nothing is proposed. {why}"
+                    "The answer cannot be used, so nothing is proposed. {why}"
                 ));
             }
-            Ok(set) if set.is_empty() => {
-                self.line = Some("Nothing in that description names an input of this program.".into());
-            }
             Ok(set) => {
+                let offers = crate::offers::kept(whats, files);
+                let said_none = set.is_empty();
                 let changes: Vec<Change> = set
                     .into_iter()
                     .filter_map(|(name, new)| {
@@ -294,15 +342,59 @@ impl Card {
                         })
                     })
                     .collect();
-                if changes.is_empty() {
-                    self.line = Some("The inputs already have the values it describes.".into());
+                if changes.is_empty() && offers.is_empty() {
+                    self.line = Some(if said_none {
+                        "Nothing in that description names an input of this program.".into()
+                    } else {
+                        "The inputs already have the values it describes.".into()
+                    });
                 } else {
                     self.line = None;
                     self.phase = Phase::Proposed(Proposal {
                         program: program.to_owned(),
                         changes,
+                        offers,
                     });
                 }
+            }
+        }
+    }
+
+    /// Rename `k` of the proposal was carried out: `program` is the text
+    /// after it. The proposal follows the new name (a value proposed for
+    /// the old one is now for the new one) and the offer goes.
+    pub fn renamed(&mut self, k: usize, program: &str) {
+        let Phase::Proposed(p) = &mut self.phase else {
+            return;
+        };
+        let Some(crate::offers::What::Rename { old, new }) = p.offers.get(k).map(|o| o.what.clone()) else {
+            return;
+        };
+        p.offers.remove(k);
+        p.offers.retain(
+            |o| !matches!(&o.what, crate::offers::What::Rename { old: o2, .. } if o2.eq_ignore_ascii_case(&old)),
+        );
+        for c in &mut p.changes {
+            if c.name.eq_ignore_ascii_case(&old) {
+                c.name.clone_from(&new);
+            }
+        }
+        program.clone_into(&mut p.program);
+        if p.changes.is_empty() && p.offers.is_empty() {
+            self.phase = Phase::Idle;
+        }
+        self.line = Some(format!("Renamed {old} to {new}."));
+    }
+
+    /// The proposal's input names spelled as the program now spells them
+    /// (`names`), after a rename.
+    pub fn respell(&mut self, names: &[String]) {
+        let Phase::Proposed(p) = &mut self.phase else {
+            return;
+        };
+        for c in &mut p.changes {
+            if let Some(n) = names.iter().find(|n| n.eq_ignore_ascii_case(&c.name)) {
+                c.name.clone_from(n);
             }
         }
     }

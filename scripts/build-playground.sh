@@ -8,8 +8,10 @@
 #   default PUBLIC_URL /playground/ (the site is at the root of helmsman.advin.io)
 #   HELMSMAN_FREE_CHAT_URL=https://...  the free chat's address (the relay's
 #     demo function, its DemoUrl output, no trailing slash): the Agent tab
-#     then sends there and has no key field. Unset: visitors paste their
-#     own model API key, as before. The script says which it built.
+#     sends there. Defaults to the relay's demo function that
+#     scripts/canvas-serve.sh uses; set it empty for a page with no free
+#     chat, whose Agent tab then says it is not available (no page asks for
+#     a key). The script says which it built.
 #   HELMSMAN_DESIGN_URL=https://...  the design entry's address (the relay's
 #     DemoDesignUrl, no trailing slash): the Agent tab then offers "Design a
 #     machine" while that entry says it is open. Unset: no design entry.
@@ -23,7 +25,7 @@ public_url="${2:-/playground/}"
 command -v trunk >/dev/null || { echo "needs trunk: cargo install trunk --locked" >&2; exit 1; }
 # The free chat's address goes into the page's code and into its
 # Content-Security-Policy, so it must be an origin and nothing more.
-free="${HELMSMAN_FREE_CHAT_URL:-}"
+free="${HELMSMAN_FREE_CHAT_URL-https://iup63z6bv5rz2fwtwexyw3pvoi0spenq.lambda-url.us-east-1.on.aws}"
 free="${free%/}"
 if [ -n "$free" ]; then
     if ! printf '%s' "$free" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
@@ -59,14 +61,13 @@ fi
 test -f "$dist/index.html" || { echo "trunk produced no page in $dist" >&2; exit 1; }
 ls "$dist"/*.wasm >/dev/null 2>&1 || { echo "trunk produced no .wasm in $dist" >&2; exit 1; }
 ./scripts/patch-wasm-size.sh "$dist"
-# The page may connect to itself and to one other origin: the model API for
-# a visitor's own key, or the free chat instead of it. A page on the free
-# chat has no key, so it gets no way to the model API at all.
-key_csp="connect-src 'self' https://api.anthropic.com;"
+# The page may connect to itself and to the free chat's origin (and the
+# design entry's). It holds no key, so it gets no way to the model API.
+key_csp="connect-src 'self';"
 grep -qF "$key_csp" "$dist/index.html" \
     || { echo "the page's connect-src is not the one this script knows; update both" >&2; exit 1; }
-connect="'self' https://api.anthropic.com"
-[ -z "$free" ] || connect="'self' $free"
+connect="'self'"
+[ -z "$free" ] || connect="$connect $free"
 [ -z "$design" ] || connect="$connect $design"
 if [ "connect-src $connect;" != "$key_csp" ]; then
     sed -i.bak "s|$key_csp|connect-src $connect;|" "$dist/index.html"
@@ -81,9 +82,9 @@ for url in "$free" "$design"; do
     esac
 done
 if [ -n "$free" ]; then
-    echo "Agent tab: the free chat at $free (no key field; the page may connect only there and to itself)"
+    echo "Agent tab: the free chat at $free (the page may connect only there and to itself)"
 else
-    echo "Agent tab: the visitor's own key (HELMSMAN_FREE_CHAT_URL is not set)"
+    echo "Agent tab: no free chat (HELMSMAN_FREE_CHAT_URL is empty), so no agent unless a local proxy answers"
 fi
 if [ -n "$design" ]; then
     echo "Design entry: at $design (the page may also connect there)"

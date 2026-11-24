@@ -128,7 +128,7 @@ fn an_eds_goes_to_the_box_then_the_agent_is_asked_with_its_id() {
         })
     );
     let t = all_text(&mut h);
-    assert!(t.contains("The agent is reading Acme_Rio.eds."), "{t}");
+    assert!(t.contains("Reading Acme_Rio.eds."), "{t}");
 }
 
 #[test]
@@ -164,42 +164,42 @@ fn every_refusal_is_said_beside_the_button_and_nothing_goes_to_the_agent() {
         (
             0,
             "connection refused",
-            "The box did not answer (connection refused). Nothing was sent to the agent.",
+            "The box did not answer (connection refused). Nothing was sent.",
         ),
         (
             401,
             r#"{"error":"x"}"#,
-            "The box no longer knows this page's session. Sign in again. Nothing was sent to the agent.",
+            "The box no longer knows this page's session. Sign in again. Nothing was sent.",
         ),
         (
             403,
             r#"{"error":"forbidden origin"}"#,
-            "The box refused the file (403): forbidden origin. Nothing was sent to the agent.",
+            "The box refused the file (403): forbidden origin. Nothing was sent.",
         ),
         (
             413,
             r#"{"error":"a drop-in is at most 1048576 bytes"}"#,
-            "a.eds is too large for the box (a drop-in is at most 1048576 bytes). Nothing was sent to the agent. Send the pages that matter, or the EDS.",
+            "a.eds is too large for the box (a drop-in is at most 1048576 bytes). Nothing was sent. Send the pages that matter, or the EDS.",
         ),
         (
             415,
             r#"{"error":"a drop-in is text"}"#,
-            "The box does not take a.eds as that kind of file (a drop-in is text). Nothing was sent to the agent.",
+            "The box does not take a.eds as that kind of file (a drop-in is text). Nothing was sent.",
         ),
         (
             422,
             r#"{"error":"the document is not UTF-8 text"}"#,
-            "The box could not read a.eds: the document is not UTF-8 text. Nothing was sent to the agent.",
+            "The box could not read a.eds: the document is not UTF-8 text. Nothing was sent.",
         ),
         (
             507,
             r#"{"error":"audit log full; nothing was done"}"#,
-            "The box refused a.eds (507): audit log full; nothing was done. Nothing was sent to the agent.",
+            "The box refused a.eds (507): audit log full; nothing was done. Nothing was sent.",
         ),
         (
             201,
             r#"{"name":"a.eds"}"#,
-            "The box kept a.eds but did not say where, so the agent was not asked. Nothing was sent to the agent.",
+            "The box kept a.eds but did not say where, so nothing was asked. Nothing was sent.",
         ),
     ] {
         let mut h = with_found("engineer");
@@ -225,7 +225,7 @@ fn a_file_too_big_or_of_the_wrong_kind_never_leaves_the_page() {
     assert!(uploads(&mut h).is_empty(), "nothing was uploaded");
     let t = all_text(&mut h);
     assert!(
-        t.contains("big.eds is 1.0 MB: a text file is at most 1 MB. Nothing was sent to the agent."),
+        t.contains("big.eds is 1.0 MB: a text file is at most 1 MB. Nothing was sent."),
         "{t}"
     );
     pick(&mut h, "huge.pdf", &vec![b'a'; crate::device_vendor::MAX_PDF + 1]);
@@ -234,13 +234,13 @@ fn a_file_too_big_or_of_the_wrong_kind_never_leaves_the_page() {
     pick(&mut h, "firmware.bin", b"abc");
     assert!(uploads(&mut h).is_empty(), "nothing was uploaded");
     assert!(
-        all_text(&mut h).contains("firmware.bin is not a file the agent can read here"),
+        all_text(&mut h).contains("firmware.bin is not a file Helmsman can read here"),
         "{}",
         all_text(&mut h)
     );
     pick(&mut h, "empty.eds", b"");
     assert!(uploads(&mut h).is_empty(), "nothing was uploaded");
-    assert!(all_text(&mut h).contains("empty.eds is empty. Nothing was sent to the agent."));
+    assert!(all_text(&mut h).contains("empty.eds is empty. Nothing was sent."));
     assert!(chats(&mut h).is_empty(), "the agent was not asked");
     // The picker's own refusal (the browser read it before the page did).
     press_button(&mut h);
@@ -316,7 +316,7 @@ fn the_simulation_has_no_agent_to_hand_a_file_to() {
     s.devices_ui.scan = Scan::Done;
     h.wait(0.3);
     assert!(h.has(&format!("vendor file {ADDR}")));
-    assert!(all_text(&mut h).contains("The agent runs on a box. This page has none to ask."));
+    assert!(all_text(&mut h).contains("Reading a vendor's file needs a box. This page has none to ask."));
     press_button(&mut h);
     assert!(!h.app.sim.as_ref().unwrap().devices_ui.vendor.is_picking());
 }
@@ -427,10 +427,7 @@ fn the_agent_ending_its_turn_is_told_beside_the_button() {
     }
     h.frame(vec![]);
     let t = all_text(&mut h);
-    assert!(
-        t.contains("The agent could not answer: the relay refused (429)."),
-        "{t}"
-    );
+    assert!(t.contains("No answer: the relay refused (429)."), "{t}");
     assert!(ui(&h).offer().is_ok(), "the turn is over: the button is back");
     assert_eq!(seq, h.app.boxv.as_ref().unwrap().agent.seq());
     // A turn that ends with a question for the person.
@@ -451,7 +448,7 @@ fn the_agent_ending_its_turn_is_told_beside_the_button() {
     h.frame(vec![]);
     let t = all_text(&mut h);
     assert!(
-        t.contains("The agent finished. It said: Which of the two byte orders does the unit use?"),
+        t.contains("Finished. Helmsman said: Which of the two byte orders does the unit use?"),
         "{t}"
     );
 }

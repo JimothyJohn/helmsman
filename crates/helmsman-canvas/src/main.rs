@@ -14,8 +14,6 @@
 
 // Screen geometry is f32 throughout; counts and sim values convert into it.
 // Drawing code reads best with short geometry names (r, z, p, x, y).
-// The one module with `unsafe` is gl3d.rs (the GL pass, docs/ARCHITECTURE.md).
-#![deny(unsafe_code)]
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -37,9 +35,6 @@ mod ask;
 mod ask_tests;
 mod assign;
 mod assign_ui;
-mod batch3d;
-#[cfg(test)]
-mod batch3d_tests;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;
@@ -54,9 +49,7 @@ mod box_spec;
 mod box_tests;
 mod box_trend;
 mod box_view;
-mod cam3d;
-#[cfg(test)]
-mod cam3d_tests;
+mod by_hand;
 mod chat_about;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod chat_about_tests;
@@ -89,7 +82,6 @@ mod find;
 mod front;
 #[cfg(test)]
 mod front_tests;
-mod gl3d;
 mod glyph_lib;
 mod glyphs;
 mod help;
@@ -118,9 +110,11 @@ mod monitor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod node_api_tests;
 mod node_token;
+mod offers;
 mod pane_layout;
 #[cfg(test)]
 mod pane_layout_tests;
+mod phrasing;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -133,9 +127,6 @@ mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod review_tests;
 mod review_view;
-mod scene3d;
-#[cfg(test)]
-mod scene3d_tests;
 mod scope;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod scope_tests;
@@ -175,9 +166,6 @@ mod ui_tests;
 mod verify;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod verify_tests;
-mod view3d;
-#[cfg(test)]
-mod view3d_tests;
 mod watch;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -239,6 +227,12 @@ fn main() {
             .and_then(|d| d.get_element_by_id("canvas"))
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
             .expect("index.html has a <canvas id=\"canvas\">");
+        // No WebGL2 (a browser or a machine without it): the page says so
+        // in plain words (loading/loading.js) instead of a blank canvas.
+        if !has_webgl2(&canvas) {
+            announce("helmsman-no-webgl2", None);
+            return;
+        }
         // The browser keeps its keys, except the shortcuts of ours.
         let mut options = eframe::WebOptions::default();
         let base = std::mem::replace(&mut options.should_prevent_default, Box::new(|_| false));
@@ -255,6 +249,14 @@ fn main() {
             }
         }
     });
+}
+
+/// Whether the browser hands the canvas a WebGL2 context, the one eframe's
+/// `glow` backend draws with. Asking creates it, and eframe's own request
+/// for the same canvas then gets that context back.
+#[cfg(target_arch = "wasm32")]
+fn has_webgl2(canvas: &web_sys::HtmlCanvasElement) -> bool {
+    matches!(canvas.get_context("webgl2"), Ok(Some(_)))
 }
 
 /// Tells the page, which has no other way to know, how starting went.

@@ -4,6 +4,35 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
+- [x] **Local user settings and sign-in: read the proposal and answer its four questions** — docs/decisions/local-user-settings.md. Short version: a box already has local accounts, sessions and a per-person store on the device, so no new sign-in is needed; what is missing is preferences kept on the device (they are per browser today), one Settings window, and a way to make the first account without a shell. The four questions: a setup code or an open first-run page for the first account; whether signed-out screens may change settings; a longer session for an operator's floor screen; settings first and accounts in the UI second, or together.
+  result: the settings card can be written and sized
+  decided: Nick, interview 2026-11-23: a setup code for the first account; signed-out screens show the device defaults only; a longer session for operators; settings first, then accounts, back to back (cards settings-on-device, first-run-and-accounts)
+  id: local-user-settings-answers
+  asked: 2026-11-23
+  by: session 85e550b0
+- [ ] **Relay: review and deploy agent-relay #67 (playground-v9)** — the public playground keeps answering "I can't do this one" until this profile is served. Ship the helmsman page first (`make ship` + dev to master): an older page shows the raw `Offer:` lines. Not run there: the integration tests, the live evals, the agent ladder.
+  id: relay-67-deploy
+  asked: 2026-11-23
+  by: session 85e550b0
+
+- [x] **Take the History tab out, now that Describe has the clock?** — the Agent tab card said "move the history clock here". The clock and its searchable list of versions are in the Describe tab (simulation); the History tab is still in the tab row, because taking a tab out changes saved layouts, the View menu and the tab shortcuts. On a box the versions are still only in its History tab.
+  options: remove it in the simulation | remove it everywhere and give a box the clock too | keep both
+  decided: Nick, interview 2026-11-23: keep the History tab for now, in both places
+  id: history-tab-after-clock
+  asked: 2026-11-23
+  by: session 85e550b0
+- [x] **"Real device: always stop and reset after a change": is a deploy enough?** — on a box a described change is saved into the project and nothing runs until Deploy, which starts the program from scratch. So nothing was changed for a box in the Agent tab card. If you meant the box should deploy (stop, reset, run) by itself when a described change lands, that is a different and bigger thing.
+  options: a deploy is enough | deploy by itself after a described change
+  decided: Nick, 2026-11-23: the box does not deploy by itself; a deploy is enough
+  id: box-reset-after-change
+  asked: 2026-11-23
+  by: session 85e550b0
+- [x] **Where are the brand's face and its wordmark file?** — the header now draws the stencil encoder mark (docs/brand, the `se` symbol) with the painter, and "Helmsman" in Inter, the canvas's own face. The brand page names Saira Stencil One for the wordmark, but no font file is in the repo and the canvas bundles only Inter and Plex Mono. Bundle Saira Stencil One (OFL, one more font in assets/fonts) and set the name in it, or keep Inter?
+  options: bundle Saira Stencil One | keep Inter | a different face
+  decided: Nick, 2026-11-23: Inter is fine if it is more portable, a graphic alone is fine too; the painted mark with the name in Inter stays
+  id: brand-wordmark-font
+  asked: 2026-11-23
+  by: worker
 
 ## Needs your hands
 
@@ -141,6 +170,33 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 ## Next to build
+
+- [ ] **Windows: what the green CI job does not prove yet** — the box builds, lints and passes its tests on windows-latest since #565 (2026-11-23), with these left open. (1) Names Windows treats as devices (`con`, `nul`, `aux`, `com1`, `lpt1`, with or without `.st`) as project and file names: not tested; a write to `nul.st` may vanish without an error. (2) Shutdown: no test sends Ctrl-C or a terminate on Windows, so RETAIN on exit is unproven there (the SIGTERM test is Unix-only). (3) `--time-zone` and the zone tests are Unix-only (no tz database on Windows). (4) The Windows job checks out with LF; a project with CRLF files is not tested on any platform. (5) EtherNet/IP and Modbus TCP pass on loopback there, never against a device. (6) `hammering_the_api_does_not_hold_up_the_scan` allows an 8x fall on Windows against 4x elsewhere (154 ticks against 680 on the runner): measure on a real Windows machine before calling the scan timing good there. (7) `box (windows-latest)`, `box (macos-latest)` and `box (ubuntu-24.04-arm)` are not required checks.
+  needs: a Windows machine for (5) and (6); the rest runs in CI
+  result: each point has a test or a line in docs/ARCHITECTURE.md "Platforms" saying it is not supported
+  est: 1d
+  difficulty: med
+  id: windows-open-points
+  asked: 2026-11-23
+  by: claude-session 734e70dc
+
+- [ ] **Windows job: find the remaining intermittent failures** — `box (windows-latest)` still fails now and then for reasons other than the reset #571 fixed (2026-11-23). (1) In run 45194902994 two tests that start the binary timed out and passed in the next run: `a_killed_box_resumes_its_retain_counter_and_says_what_changed` (tests/retain.rs, 20 s waiting for the first save) and `a_module_output_is_published_by_the_core` (tests/sink_bin.rs, 10 s waiting for an event). The cause is unknown and the failures do not print the box's stderr, so start by making both say what the box wrote when they time out, then read the next failure. (2) The 503 a full box sends from the accept loop (api/mod.rs) closes with the request unread, the same reset hazard the 408 had; it cannot read on there without holding up accepts, so it needs another way (hand the refusal to a short-lived thread, or read what has already arrived before closing) and a test like `a_client_cut_off_at_the_deadline_reads_the_408_however_late_it_stops_sending`. (3) 2026-11-23: Windows sometimes refuses the box a socket (`os error 10013`), in different tests each time, while the same commit passes on a parallel run (runs 45288348848, 45289778227); look at the runner's excluded port ranges first.
+  needs: nothing; (1) waits on a failure with the box's stderr in it
+  result: both timeouts have a named cause and a fix or a bound that says why, and a busy box's 503 reaches a Windows client
+  est: 4h
+  difficulty: high
+  id: windows-intermittent-failures
+  asked: 2026-11-23
+  by: claude-session 734e70dc
+
+- [ ] **The compiler's stack use stops depending on who calls it** — a program nested to the limit needs more stack than a 2 MiB thread has in a debug build with full debug info: 190 chained `+` took 2 to 2.5 MiB, 64 parentheses 1.5 to 2 MiB (macOS arm64, 2026-11-22; `nesting_up_to_the_limit_runs` overflowed in the new macOS CI job). Release fits (under 768 KiB at worst), so what ships is safe on a 2 MiB thread; a debug box compiling on one can be crashed by a hostile program, and the browser build (1 MiB main stack by default) is not measured. Nick, 2026-11-22: give the test 4 MiB now (done), fix it properly here. Ways: compile on a thread of the compiler's own with a set stack (not in the browser), handle long operator chains without recursion, or both.
+  needs: nothing; start by measuring the wasm build at the limit
+  result: the deepest allowed program compiles on a 1 MiB stack in every build, the test goes back to a small stack and says so
+  est: 1d
+  difficulty: high
+  id: compiler-own-stack
+  asked: 2026-11-22
+  by: claude-session 734e70dc
 
 - [ ] **Named start states for the simulation: set a machine up once, pick it again** — Nick, 2026-11-16: "the user should be able to rapidly configure the state of the machine for various scenarios manually and with the agent before starting." Built first (#493): an input set by hand while the program is stopped is what it starts with, the values outlive Stop, and a quiet line says nothing reacts yet. Decided by interview that day: this card follows, simulation only; a stopped box only reminds. Left: a start state gets a name ("part seated, guard open") and is saved in the project as a text file the diff shows, one `input = value` a line; the I/O tab lists them above Inputs and a click sets every input of one while the program is stopped (running: asked first, since it moves the machine); the Agent writes one on request, checked against the program's inputs and their types before it is offered. Open in the design: whether a start state also names kept values (a step number, a latch), which the panel cannot set today. The Agent's first half is built (2026-11-17, PR feat/agent-start-state with agent-relay `start-v1`): a field above the Inputs takes the state in words, the Agent proposes input values, and nothing is set until Set these; it works once the relay is deployed with the `start` agent, and it is not yet a saved, named state.
   needs: #492 and #493 in dev; the Agent's part needs a relay profile with the new block (a new id, Nick's deploy)
@@ -608,46 +664,18 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, dive into blocks, bloom, fast snap navigation, device-library graphics on connections, and convert technical drawings (panel layouts, CAD, DXF, schematics) into matched components, "starting now". Decided in the interview that day: (1) one 3D stack for every level: plant and devices on top, programs and POUs in the middle, the ST diagram's blocks at the bottom; a dive goes down a level; (2) rendered by egui on glow with our own GL pass through a paint callback (camera, picking, two-pass bloom), no engine crate and no backend change; (3) for engineers and demos first: 3D on a desktop GPU, the 2D view kept reachable and tested; (4) two tracks at once: drawings now, and the 3D canvas, then navigation, then device graphics; (5) dive: a fly-through by default and a free orbit over the whole stack as a second mode, both offered; (6) drawings start with ASCII DXF panel layouts, read by a small reader of our own (no new crate, wasm-safe), built against DXFs vendors publish for parts already in the library; (7) a drawing gives devices matched to the library with a draft io.map, their placement in the 3D map and its wiring as connections; (8) a part not in the library or matching more than one record is shown and the engineer decides: never a guessed model; (9) device graphics are line art per device family in the canvas's own style (the library has no images, and vendor photos are not ours to publish); (10) first milestone: the playground's example in 3D behind a toggle, 2D still the default.
 
-- [ ] **The 3D canvas: the playground's example in three levels, behind a toggle** — The first milestone of the overhaul (decisions 1, 2, 3, 10 above). A GL pass inside egui's paint callback on the glow backend the canvas already uses: a scene of nodes and wires from `helmsman-diagram` (POUs as the middle level, a POU's blocks below it, folds and regions as depth within a level), a perspective camera, picking by ray, and a bloom of two passes on what a traced scan lights (`live::annotate`). The egui panes stay as they are. The top level (plant and devices) is `canvas-3d-devices`. A toggle shows it; 2D stays the default until Nick says otherwise.
-  needs: nothing; WebGL2 in the browser build (what glow targets there) is the floor
-  result: the playground's example program in 3D: three levels, live wires glow during a simulated scan, a dive and a way back, `make canvas-smoke` leaves a screenshot of it, the 2D view untouched
-  est: 2w
-  difficulty: high
-  id: canvas-3d-mvp
-  asked: 2026-11-21
-  by: session canvas-overhaul interview
+Nick, 2026-11-22, after four rounds of a 3D view in the playground (#549 in dev and reverted, draft #552 closed; the last whole state is the branch `feat/canvas-3d-mvp`): "just stick with the 2D and eliminate 3D", "let's go minimalistic", and why: "3D really was supposed to be more immersive and helpful, not just a pretty version of 2D". Decisions 1, 2, 3, 5 and 10 above are withdrawn and their cards (`canvas-3d-mvp`, `canvas-3d-nav`, `canvas-3d-devices`) removed: the canvas stays the 2D diagram. What the rounds showed, for whoever tries again: one program on one board has nothing for height to mean, so a 3D view of it is the 2D layout tilted; the idea needs the levels (plant, devices, programs, blocks) to exist first. The drawings track (decisions 6, 7, 8) stands. Nick, 2026-11-23, on what the 3D device level was to carry: device glyphs come to the 2D canvas where a device already shows (the Devices and I/O tabs, a point's read and write blocks in the diagram), and there is no placement view: decision 7's placement and wiring half is dropped with its card (`drawing-place-wire`), and a drawing gives devices and a draft io.map only.
 
-- [ ] **Navigation in the 3D canvas: fly-through, free orbit, snap keys** — Decision 5: both dive styles as options. Fly-through: an eased move of about 300 ms down into a block, the parent left as a ghost above, back flies up. Free orbit: pan, orbit and zoom over the whole stack. Snap: a key per level, bookmarks for places, and `jump.rs` / `find.rs` move the camera to what they find.
-  needs: canvas-3d-mvp
-  result: any block is reached in one or two keys from anywhere; the mode is a setting the desk keeps; `?` lists the controls
-  depends: canvas-3d-mvp
-  est: 1w
-  difficulty: med
-  id: canvas-3d-nav
-  asked: 2026-11-21
-  by: session canvas-overhaul interview
-
-- [ ] **The device level of the 3D canvas: the plant on top, wired down to the program** — The top of the stack (decision 1): a box, its nodes, each device of the io.map and what is wired to its points (`wired=`), with a connection from a point to the blocks that read or write its signal. A drawing's placement and wiring land here (`drawing-place-wire`).
-  needs: canvas-3d-mvp
-  result: from a device on top, a dive follows its point into the program that uses it, on a box and in the playground
-  depends: canvas-3d-mvp
-  est: 1w
-  difficulty: med
-  id: canvas-3d-devices
-  asked: 2026-11-21
-  by: session canvas-overhaul interview
-
-- [ ] **Device graphics: line art per device family on the map's connections** — Decision 9. The library (helmsman-devices) has no images and vendor photos cannot go in a public repository, so a glyph per family (remote I/O block, drive, proximity sensor, photoelectric sensor, valve, switch, ...) drawn in the canvas's style, picked from a record's kind, with a generic one for an unknown part. Vector, so it takes the bloom. The canvas already has `glyphs.rs` and `assets/glyphs`: start from what is there.
-  needs: canvas-3d-devices; a `kind` on each library record that lacks one
-  result: every device and wired part on the map shows what it is at a glance, with no image fetched from a vendor
-  depends: canvas-3d-devices
+- [ ] **Device graphics: line art per device family in the tabs and the diagram** — Decision 9, in 2D (Nick, 2026-11-23). The library (helmsman-devices) has no images and vendor photos cannot go in a public repository, so a glyph per family (remote I/O block, drive, proximity sensor, photoelectric sensor, valve, switch, ...) drawn in the canvas's style, picked from a record's kind, with a generic one for an unknown part. It shows where a device already shows: each device's row in the Devices tab, each point in the I/O tab, and a point's read and write blocks in the diagram. No new view. The canvas already has `glyphs.rs` and `assets/glyphs`: start from what is there. A glyph in a tab row must not widen the side panel (a test at the panel's default width, and `every_tab_leaves_the_panels_their_width` green).
+  needs: a `kind` on each library record that lacks one
+  result: every device and wired point shows what it is at a glance in the tabs and the diagram, with no image fetched from a vendor
   est: 4d
   difficulty: med
   id: device-glyphs
   asked: 2026-11-21
   by: session canvas-overhaul interview
 
-- [ ] **Read a DXF panel layout: a reader of our own, and its parts matched to the library** — Decisions 6 and 8; starts now, beside `canvas-3d-mvp`. A new crate `helmsman-drawing` with no dependencies (it must build for wasm32): ASCII DXF's group-code pairs, BLOCKS and INSERT with ATTRIB, TEXT and MTEXT, LINE and LWPOLYLINE; binary DXF and anything else is refused by name, not skipped silently. Each inserted part's tag, part number and position come out; a part is matched to a library record by order number or model text (`devrecord`, the index the box and the playground already read) as matched, ambiguous or unknown. Fixtures: the DXFs vendors publish for parts in the library (Moxa E1213, Murrelektronik IMPACT67, ifm sensors), fetched with the library's `docs-fetch.py` and kept with their source and licence; a file whose licence forbids keeping is fetched in the test's cache, not committed. Hostile input by default: truncated files, a block that inserts itself, huge counts.
+- [ ] **Read a DXF panel layout: a reader of our own, and its parts matched to the library** — Decisions 6 and 8; A new crate `helmsman-drawing` with no dependencies (it must build for wasm32): ASCII DXF's group-code pairs, BLOCKS and INSERT with ATTRIB, TEXT and MTEXT, LINE and LWPOLYLINE; binary DXF and anything else is refused by name, not skipped silently. Each inserted part's tag, part number and position come out; a part is matched to a library record by order number or model text (`devrecord`, the index the box and the playground already read) as matched, ambiguous or unknown. Fixtures: the DXFs vendors publish for parts in the library (Moxa E1213, Murrelektronik IMPACT67, ifm sensors), fetched with the library's `docs-fetch.py` and kept with their source and licence; a file whose licence forbids keeping is fetched in the test's cache, not committed. Hostile input by default: truncated files, a block that inserts itself, huge counts.
   needs: nothing
   result: a DXF in, a list of parts out with a position and a matched / ambiguous / unknown status each, as a library call and a test over real vendor files
   est: 1w
@@ -666,16 +694,6 @@ Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, 
   asked: 2026-11-21
   by: session canvas-overhaul interview
 
-- [ ] **A drawing's placement and wiring on the 3D map** — Decision 7: devices sit on the device level where the panel has them, and the drawing's wires (terminal to channel, where the layout carries them) become the map's connections. A panel layout often has no wiring: then placement only, and the wiring waits for schematics (`drawing-schematics`).
-  needs: drawing-review, canvas-3d-devices
-  result: the device level of a project made from a drawing looks like its cabinet
-  depends: drawing-review, canvas-3d-devices
-  est: 1w
-  difficulty: high
-  id: drawing-place-wire
-  asked: 2026-11-21
-  by: session canvas-overhaul interview
-
 - [ ] **Later inputs: schematics as PDF, then native CAD** — Not first (decision 6). A schematic as PDF or a scan needs a model reading the page, a confirm step for every wire, and a relay profile (Nick's deploy). DWG, EPLAN and STEP need a vendor's library or a converter: a dependency and licence decision to bring to Nick before any code.
   needs: drawing-review in use on real files; a real customer schematic
   result: a decision per format, with what it costs
@@ -685,6 +703,93 @@ Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, 
   id: drawing-schematics
   asked: 2026-11-21
   by: session canvas-overhaul interview
+
+## UI feedback (Nick, 2026-11-23)
+
+Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pull context from everywhere (logs, errors, warnings, map, code) before acting. Decided in the interview that day: the in-flight work first (relay profile, then the diagram edits), then this list one PR per tab in sequence, Agent tab first; the Trend legend wraps up to a cap and then scrolls. Earlier the same day (edit_error.png): Describe offers the nearest thing instead of refusing (#576, draft).
+
+- [x] **Relay: playground-v9 with the offer rule** — the public playground keeps answering "I can't do this one" until the relay serves a profile whose refusal rule is the offer rule of #576 (`Offer: rename a b`, `Offer: instead ...`), same words as `claude::SYSTEM`. Ship the page before the relay: an older page shows the raw Offer lines.
+  needs: Nick's relay promote and deploy
+  result: a draft PR in agent-relay with playground-v9 and its pins
+  est: 1h
+  difficulty: low
+  id: relay-offer-profile
+- [x] **Diagram: rename and set values by hand** — on the diagram a right click has Rename…, a double click edits a name or a set value (a constant, a timer preset) where it stands, and the code follows; never the logic (Nick: "I don't want to manipulate the logic"). Rename… on the I/O rows too. Each edit is saved as one revision with a History entry and Undo, as a described change is. The label is the variable's name for now. Reverses the 2026-11-18 principle in docs/UI.md for names and set values only; docs/decisions/diagram-edits.md has the removed engine (SetConst, Rename at 4a6d37aa). Fix with it: `rename_plan` renames a PROGRAM whose name equals the variable.
+  result: names and set values change on the diagram and in the code together
+  est: 2d
+  difficulty: med
+  id: diagram-names-values
+- [ ] **Labels above the names** — Nick, 2026-11-23: a label apart from the variable's name, "at a higher, abstracted layer eventually". Not now: the label is the name until this is designed.
+  depends: diagram-names-values
+  difficulty: med
+  id: label-layer
+- [x] **Agent tab** — (1) no "Stop and reset after a change" checkbox: a real device always stops and resets, the simulation takes live changes by default, the choice lives in the user settings. (2) The input grows as typed to about 4 lines then scrolls inside, anchored at the bottom and growing upward so the output does not move, height eased over about 100 ms, back to one prompt's height on Enter. (3) Output stays green and red, and can be selected and copied. (4) The history arrows restore both the prompt and its output for that step (today the prompt stays blank and the output stays on the latest step). (5) Bug: stepping through history writes to the message log and raises the error count; it must write nothing. (6) The history clock moves here: a click turns the lower area into a searchable index of the commit messages, beside back and forward.
+  depends: diagram-names-values
+  result: one PR for the Agent tab
+  est: 2d
+  difficulty: med
+  id: fb-agent-tab
+- [x] **Global chrome** — the brand wordmark top left (encoder mark and Helmsman in the agreed font) in place of the text; one hamburger menu in place of File / Edit / View / Help; glyphs over text labels throughout; tooltips with the hotkey first and two lines at most, longer explanations in Help (a test holds the limit); a clearer glyph for folding a tab.
+  depends: fb-agent-tab
+  result: the hamburger menu, the fold glyph and the tooltip ratchet are in; the wordmark draws the brand's mark in the canvas's own face, and the brand face is the open question brand-wordmark-font
+  est: 2d
+  difficulty: med
+  id: fb-global-chrome
+- [x] **Code tab** — Cmd/Ctrl+F opens the app's own find, not the browser's; a magnifier beside the file name with Find, Replace, Replace All; compile status hidden while the code compiles, a red X popup and a marker on the failing line when it does not, the grey indicator gone; Deploy at the panel's top right, bigger, filled green with a black arrow; word wrap stays.
+  depends: fb-global-chrome
+  est: 2d
+  difficulty: med
+  id: fb-code-tab
+- [x] **IO tab** — keep the grid and icon layouts, the toggles and jump-to-node; loosen what is too collapsed; no effects on the larger tiles (a quick snapshot); "Describe a start state" does nothing today: make it an input to Helmsman that sets up IO, states and labels, with renames going into the code.
+  depends: diagram-names-values
+  est: 2d
+  difficulty: med
+  id: fb-io-tab
+- [x] **Files tab** — a header naming the file system; under programs, Examples and My Files as sections that fold.
+  est: 4h
+  difficulty: low
+  id: fb-files-tab
+- [x] **Messages** — a summary of Helmsman's output in the log for the operator (the full context still goes to the model); errors shown by default, info and warnings hidden; keep Copy All, add Clear.
+  est: 1d
+  difficulty: med
+  id: fb-messages
+- [x] **Trend legend wraps** — the signal legend on rows instead of one crowded row, the variables' names kept (red_N). Decided 2026-11-23: wrap up to about a third of the tab's height, then scroll inside the legend, because rows without a cap left the plot no height (#561).
+  est: 3h
+  difficulty: low
+  id: fb-trend-legend
+- [x] **Canvas: no semantic zoom, corner controls** — the abstraction layers by zoom (structured text zoomed out, function blocks mid-zoom) off for now: they look glitchy and like another interface. Switched off at the view, the folding kept: later, zooming out merges nodes into labelled groups in the same style with smooth transitions. Background drag stays box select, Space and drag stays pan. Bottom right: a pan (hand) toggle, zoom in, zoom out.
+  est: 1d
+  difficulty: med
+  id: fb-canvas-zoom
+- [x] **Local user settings and sign-in on a Skipper: the design** — a Skipper runs on the device, so preferences must be kept on the device, which implies a light local user and sign-in model. Nick: propose a design before building. Start from what a box has (accounts, roles, sessions) and say where the playground keeps its own.
+  result: a design document for Nick to read, nothing built
+  est: 4h
+  difficulty: high
+  id: local-user-settings
+
+- [ ] **Settings kept on the Skipper, and a Settings window** — step A of docs/decisions/local-user-settings.md, decided 2026-11-23. A typed settings record per signed-in person on the device (beside the desk), `GET`/`PUT /api/settings`, the device's defaults for a signed-out screen (an integrator sets them; a change made signed out stays in that browser), the browser as the copy when the box does not answer and in the simulation. One Settings window in the menu; "Reset after a described change" moves there from the View menu. The pane arrangement stays per browser.
+  result: preferences follow a person from one screen to another on a Skipper
+  est: 1w
+  difficulty: med
+  id: settings-on-device
+- [ ] **First account from the device with a setup code, and accounts in the UI** — step B of docs/decisions/local-user-settings.md, decided 2026-11-23. A box with no accounts and no PINs serves a first-run page that asks for a one-time setup code shipped with the device, then makes the first account (integrator). An integrator adds, disables and resets people in the UI; a person changes their own password. An operator's session lasts a shift (about 12 h, no idle end); engineers and integrators keep 1 h and 15 min idle. Draft PR: it touches sign-in.
+  needs: where the setup code comes from on a preloaded Skipper (a label, or a file beside the pairing files)
+  depends: settings-on-device
+  est: 2w
+  difficulty: high
+  id: first-run-and-accounts
+- [ ] **The project download carries its history** — Nick, 2026-11-23: a Skipper's revisions (the newest 200 per project, `project/history.rs`) exist only on that device, and the .zip holds the files alone. The download gains the revisions (who, when, what, the recorded instruction), and an upload of such a .zip brings them back, so a backup made by hand is whole. Bounded and checked like any upload; an older .zip without history still loads.
+  result: one file is a complete backup of a project
+  est: 3d
+  difficulty: med
+  id: history-in-download
+
+- [ ] **Nothing a user can download: what is missing** — Nick, 2026-11-23: "are these going to be releases in the repo users can download?" Not today. Shipping publishes the site and the playground in the browser (Pages serves master's docs/) and the relay; someone who wants Helmsman on their own hardware has to clone and build. Missing, smallest first: (1) no tags, no GitHub Releases and no version that means anything across the four repositories the release train promotes together; (2) no box binary to download: CI builds and tests it on Linux, macOS and Windows and keeps none, and the box is a binary plus a folder (`--ui DIR`, the canvas), so a download is an archive or an installer, not one file; (3) no Skipper image to download: the Box image workflow builds one and boots it under QEMU, then keeps only the boot log and the checksum for 14 days, and a preloaded image needs the setup code of card `first-run-and-accounts` first; (4) signing: an unsigned binary is stopped by Gatekeeper on a Mac and by SmartScreen on Windows; (5) the Windows job is not reliably green (card `windows-intermittent-failures`), so a Windows download is not ready to promise. Next door, supervictor already does the Linux half of this: a release workflow, tags (v0.2.1), one static musl binary, and an installer that checks the sha256 and installs a systemd unit (`scripts/install-endpoint.sh`); start from that pattern.
+  needs: Nick on what a download is first (a Linux binary with an installer, the Skipper image, or both) and on what a version number covers
+  result: a proposal with the first download named and sized; nothing built before it
+  est: 4h
+  difficulty: med
+  id: downloads-for-users
 
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 

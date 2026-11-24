@@ -86,6 +86,17 @@ Planned owners, not yet crates: the relay (separate stack, private per
 (`wasm-tier`) is built inside `helmsman-plc` (`wasm.rs`, the `wasm`
 feature), below.
 
+## Platforms
+
+CI builds, lints and tests the box (`helmsman-plc` and the crates it needs) on
+Linux x86_64 (`gate`), Linux aarch64 and macOS on Apple Silicon (`box (...)`
+in ci.yml) and Windows x86_64 (`box (windows-latest)`). EtherNet/IP and Modbus
+TCP run on all four. Unix-only, so absent or refused on Windows: raw Ethernet
+(`helmsman-l2`, `--dhcp`, PROFINET), the `deploy/` systemd and firstboot
+scripts and their tests, and `--time-zone` (it reads `/usr/share/zoneinfo`).
+Linux-only: the packet socket and the gpio board. Windows files take the
+account's ACL instead of mode bits (0600 / 0700).
+
 ## One scan, as built
 
 With a single program (the default deploy) each scan, every `--scan-ms`
@@ -925,7 +936,7 @@ test: a project's own CI still fails on one.
 The Requirements tab of the right panel (archived 2026-11-08) showed one row per test, green or
 red with why.
 
-The Agent tab is one path in the page and on a box (`agent-instruct`,
+The Describe tab is one path in the page and on a box (`agent-instruct`,
 crates/helmsman-canvas/src/instruct.rs; Nick 2026-11-05: no chat). The
 engineer types an instruction; the request carries the whole file in its
 scope (`scope::Scope::envelope`), the program and its errors, and the
@@ -963,11 +974,28 @@ failed attempts, the Agent's words), the scenarios kept as test files;
 Undo restores the revision before it. The tab shows only the instruction
 box, Send or Stop, Undo, and a status line with the reason.
 
+An answer without code is one reason and the nearest things to click
+(`describe-offers`, Nick 2026-11-23, `offers.rs`: "I can't do this one"
+is no answer where the program is edited by describing). The prose may
+end in at most two `Offer:` lines. `Offer: rename <old> <new>` is the
+page's to carry out, since an answer may change one file and a name is in
+io.map, every `.st` and the tests: it is planned when the answer comes in
+(`offers::kept`, over `device_form::rename_plan`; one that cannot be done
+is not shown), planned again on the click, written into every file and
+saved as one revision with its Agent page (`Instruct::rename_record`),
+so Undo and History treat it as a described change (`take_offer` in
+both views; on a box through `save_agent`). `Offer: instead <instruction>`
+is sent as the engineer's own. The reason shows in the tab's ink
+(`Tone::Note`), not as a warning. The rule is in each prompt that can
+reach the tab: `claude::SYSTEM`, `instruct::BOX_RULES`, and the relay's
+playground profile from `playground-v9`; an older profile sends none
+and the tab shows its words as before.
+
 "Chat about this" (`chat-about-this`, Nick 2026-11-16, `chat_about.rs`)
 makes the diagram something to point at. A right click on a block has the
 item, on the page and on a box; an input's or output's row will call
 `chat_about_signal(name, chrome)` on either view. Choosing it sends
-nothing: it opens the Agent tab and adds a chip to `Instruct::chips`,
+nothing: it opens the Describe tab and adds a chip to `Instruct::chips`,
 drawn above the instruction box (`instruct::chips_ui`: wrapped by hand
 and cut to the column, an x on each, at most eight, none twice). A chip
 holds the name, kind, file:line, the statement (cut at 40 lines or 2000
@@ -1002,7 +1030,7 @@ pick it; a plain click on a block picks it and makes it the whole
 selection, and a plain click on empty space or Esc clears it (Nick,
 2026-11-17). So does a click anywhere off the diagram
 (`app::clicked_off_the_diagram`, after the frame is drawn), except in the
-Agent tab and on its tab button, where the selection is being used: its
+Describe tab and on its tab button, where the selection is being used: its
 chips, and the instruction typed about it. Only a released click changes
 the selection: a press that becomes a drag (a block moved, the view
 moved, a band) leaves it as it was, and while a band is being drawn the
@@ -1266,7 +1294,7 @@ the person between screens.
   changes something, and a box desk that is not a desk at all is not
   fought over: the browser keeps it and the page says so.
 - **The Agent's conversation and the device form** (`desk-agent-and-forms`).
-  The desk also keeps the Agent tab's turns with the box's agent and the
+  The desk also keeps the Describe tab's turns with the box's agent and the
   last instruction's outcome (`desk::Conversation`), and a half-filled New
   device form with its points (`devices::NewDevice`; the EDS by its file
   name in the project, never its bytes). The conversation is capped at
@@ -3194,7 +3222,19 @@ the end of this section.
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
-  The zoom picks the level (`st_zoom.rs`, a child of `st_view`): each frame
+  The level does not follow the zoom for now (Nick, 2026-11-23: it looked
+  glitchy and like another interface): `st_zoom::SEMANTIC_ZOOM` is `false`,
+  `ZoomFolds::follows` starts from it, and the view stays at
+  `Level::Near`, the level a small program has at its fitted zoom, so a zoom
+  only scales. The machinery below stays for the later merge of nodes into
+  labelled groups, and its tests turn the field on. The corner of the
+  diagram (`Viewer::corner_controls`, drawn by `canvas` so the page and a
+  box both have it) holds the hand toggle (`Viewer::hand`, view state: a
+  primary drag on empty space pans instead of boxing), zoom in and zoom out
+  (`ZOOM_STEP` about the middle of the area, the wheel's 0.15 to 3 limits),
+  left of the lamp fixture when there is one.
+  With `SEMANTIC_ZOOM` on, the zoom picks the level (`st_zoom.rs`, a child of
+  `st_view`): each frame
   `follow_zoom` takes the camera's zoom through `zoom::level`, and when the
   level changes the folds are drawn again and the point under the pointer
   (the view's middle without one) keeps its place in the band of its
@@ -3289,7 +3329,7 @@ the end of this section.
   button can be drawn twice: both report to `PlaygroundView::hold` and the
   input is on while either is held. A right-click on a card offers "Chat
   about this" (`assign_ui::row_menu`, `chat_about_signal`: a chip for the
-  point on the Agent tab, nothing sent) above the port's assignment
+  point on the Describe tab, nothing sent) above the port's assignment
   items. An input set by hand while the simulation is stopped or paused
   is set all the same (`PlaygroundView::set_by_hand`: the panel's values
   outlive Stop, so that is how a machine is set up before it starts), and
@@ -3306,22 +3346,38 @@ the end of this section.
   details open).
 - **Start state in words** (`start_state.rs`, `PlaygroundView::start_ui`):
   above the Inputs cards, the simulation's I/O tab has one field, "Describe
-  a start state…", and a send glyph. It is there only when the relay's
-  status lists the `start` agent (`Chat::serves`: the free chat, as for
-  `ask`; on a key, a local proxy or a relay without it there is no field,
-  and the cards are as before), and it is off while the program runs (an
-  Agent never moves a running machine). `start_state::message` sends the
-  words in `<start_description>` and the inputs, one `NAME | TYPE | what
-  it takes | now VALUE` line each, in `<program_inputs>` (closing tags of
-  either defanged, `claude::neutralize`; TIME in whole milliseconds), over
-  a link of its own (`start_link`, not the question card's). The answer is
-  `NAME = value` lines and nothing else, in one fence at most, or `NONE`
-  (`start_state::parse`): a name that is not an input (matched in any
+  a start state…", and a send glyph. The field is always there (Nick,
+  2026-11-23: a control that is hidden or does nothing reads as broken).
+  It asks only when the relay's status lists the `start` agent
+  (`Chat::serves`: the free chat, as for `ask`); on a key, a local proxy or
+  a relay without it the field is off, says "Not available here", and the
+  send glyph writes the reason in the line under it
+  (`PlaygroundView::start_unavailable`). It is also off while the program
+  runs (an Agent never moves a running machine). `start_state::message_for`
+  sends the words in `<start_description>`, the inputs, one `NAME | TYPE |
+  what it takes | now VALUE` line each, in `<program_inputs>`, the outputs
+  in `<program_outputs>` and a request for up to two `Offer: rename <old>
+  <new>` lines (closing tags of any defanged, `claude::neutralize`; TIME in
+  whole milliseconds), over a link of its own (`start_link`, not the
+  question card's). The request for names is the page's own sentence
+  because the served `start-v1` prompt knows only value lines and a served
+  profile never changes: a `start-v2` that asks for names itself would make
+  it reliable. The answer is `NAME = value` lines and `Offer:` lines,
+  nothing else, in one fence at most, or `NONE`
+  (`offers::split` takes the offers out; `start_state::parse` reads the
+  rest): a name that is not an input (matched in any
   case, kept as the program spells it), a name twice, a value that
   `Session::try_input` would refuse, prose, more than 64 lines or 8 KiB
   refuse the whole answer, which is one quiet line under the field and
-  sets nothing. What passes is a proposal card, `NAME: old → new` for each
-  input that would change, with Set these and Discard; nothing is set
+  sets nothing, offers included. What passes is a proposal card, `NAME: old
+  → new` for each input that would change, with Set these and Discard, and
+  a button per rename (`offers::ui`, the files it touches under it) for an
+  `Offer: rename` whose old name is an input or output and which
+  `offers::kept` finds the project can carry out (a taken or unknown name
+  is not shown). A click is `rename_everywhere`: every file, one revision,
+  a History entry, Undo; the proposal then follows the new name and the
+  machine stays stopped. Renames are one click, never automatic; "labels"
+  are the variables' names (no separate label store). Nothing is set
   until Set these, which goes through `set_by_hand` (so the "nothing
   reacts yet" line appears) and only while nothing runs and the program
   text is the one the proposal was made for (`Card::accept`; a changed
@@ -3330,8 +3386,10 @@ the end of this section.
   `helmsman/start-v1`, a new id and a deploy). Tests: `start_state_tests.rs`
   (hostile messages and answers), `ui_tests/start_state.rs` (proposal
   before set, set, discard, started and edited between, the refused
-  answer, no field without the agent, and 40 long-named inputs in the
-  list and the grid at the panel's width).
+  answer, the field off with its reason, a rename as an offer and one
+  revision on the click, hostile answers and renames the project cannot
+  carry out, and 40 long-named inputs and long offers in the list and the
+  grid at the panel's width).
 - **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from
@@ -3390,11 +3448,31 @@ the end of this section.
   Chat about this while `Viewer::chat_ok` (the diagram is of the text the
   host's files hold; a box always), and a program port's block has the
   io.map items. Both hosts draw `Menu`; none of its items changes the
-  code. On the diagram the user moves blocks (`diagram.layout`), folds,
-  zooms, selects and switches inputs (the simulation's virtual inputs, a
-  box's forces); code changes are typed or asked of the Agent.
+  program's logic. On the diagram the user moves blocks (`diagram.layout`),
+  folds, zooms, selects and switches inputs (the simulation's virtual
+  inputs, a box's forces); logic changes are typed or asked of the Agent.
   The removed code edits, with what they taught, are recorded in
   `docs/decisions/diagram-edits.md`.
+  Names and set values are changed by hand (`diagram-names-values`, Nick
+  2026-11-23, `by_hand.rs`). `by_hand::target` says what a block offers: the
+  variable a Read, Write, Access, function block call or FOR names, spelled
+  as the program spells it, or the literal a Const is (an operator drawn
+  with its one literal stands for it), found in its file by
+  `helmsman_iec::literal_at` at the block's position, so a diagram older
+  than the files offers no value. The menu asks the host for it one frame
+  after it opens (`Menu::take_edit_query`, `set_edit`) and shows "Rename…"
+  or "Set value…" last; a double click asks the same (`Viewer::edit_ask`),
+  except on an input's block in the simulation, where it stays "Simulate
+  this input". A name goes through the Devices tab's rename question and
+  `device_form::rename_plan` (the name of a program, function block or
+  function is left alone: `rename_ident`); a value through
+  `by_hand::set_value`, which takes one literal (`is_literal`), replaces
+  that literal's characters and refuses a project that built before and
+  would not after. The I/O rows have "Rename…" too (`assign_ui::row_menu`).
+  Every one is saved as a described change is: one revision with its Agent
+  page, the outcome and Undo in the Describe tab (`rename_everywhere`,
+  `set_value` and, on the page, `commit_by_hand`; on a box `save_agent`).
+  The Devices tab's own Rename… is saved the same way now.
 
 ## Explain mode (`explain-mode`, built)
 
@@ -3483,7 +3561,7 @@ Markdown. `--relay-design-agent V` names the profile (default
 ## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
 
 For someone in trouble who did not write the program (Nick, 2026-11-07,
-interview). The box's Agent tab has two modes, "Change the program" (the
+interview). The box's Describe tab has two modes, "Change the program" (the
 instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`),
 switched by a two-glyph toggle (< > and ?) at the tab's top right; the
 heading names the mode, with a dot for the agent's state beside it (green
@@ -3625,31 +3703,6 @@ in `tests/site.rs`, `site_tests.rs`).
   docs/UI.md's clean-up; the site returns with a fleet view. The box side
   above is unchanged.
 
-## The diagram in 3D (`canvas-3d-mvp`)
-
-A toggle ("3D" on the diagram's left edge, "2D" back) in the playground
-shows the program's POUs as nodes (the middle level, y = 9) over one board
-per POU of blocks and wires (the bottom level, from the deterministic
-layout); regions lift what they hold. 2D is the default and is untouched
-while the toggle is off. A double click or Enter on a POU flies the camera
-down to its blocks in 0.3 s, eased, the middle level left as a faint ghost
-above; Escape flies back. The top level (plant and devices) is
-`canvas-3d-devices`; free orbit and snap keys are `canvas-3d-nav`.
-
-- `scene3d.rs` (scene from `helmsman-diagram`), `cam3d.rs` (matrices, ray,
-  framing, easing), `batch3d.rs` (vertex data and theme colours) and
-  `view3d.rs` (`Nav`, the egui view and its labels) hold no GL; their
-  tests are `*3d_tests.rs`.
-- `gl3d.rs` is the GL pass: an `egui_glow::CallbackFn` into an offscreen
-  target, a bright pass of what a traced scan lights (`live::annotate`), a
-  two-pass blur at half size, and a composite onto egui's framebuffer. No
-  new dependency (`eframe::glow`). Shaders take their version line from
-  `ShaderVersion` (GLSL 1.40 native, ES 3.00 in the browser); a context
-  without them leaves the view on a message and the 2D button.
-- **`unsafe`**: `gl3d.rs` is the one module of the canvas with it (glow's
-  calls are `unsafe fn`); main.rs denies `unsafe_code` for the rest, and
-  every block carries its safety comment.
-
 ## The canvas's loading screen
 
 Both pages (`index.html` on the box, `playground.html`) include
@@ -3727,7 +3780,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
   laptop's, a tablet's and a phone's width).
 - **Name the I/O first** (`io_names.rs`; Nick, 2026-11-14): while an
-  instruction makes a new project (`Scope::NewProject`), the Agent tab
+  instruction makes a new project (`Scope::NewProject`), the Describe tab
   carries a fold where the engineer lists the program's points: a name,
   input or output, BOOL / INT / REAL, and what it is in a few words
   (`PlaygroundView::new_io`). `send_instruction` puts the list ahead of
@@ -3737,7 +3790,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   written from such a list. Contracts in `io_names.rs`'s tests and
   `ui_tests/io_names.rs` (the pane keeps its width with long names).
 - **Spec mode** (`spec_mode.rs`; Nick, 2026-11-15): with `Scope::NewProject`
-  the Agent tab offers "From a spec…", a window (`spec_mode::form_ui`)
+  the Describe tab offers "From a spec…", a window (`spec_mode::form_ui`)
   where a specification is pasted or `.md` / `.txt` files are added
   (`Spec::add_file` holds `helmsman_project::check_text`'s rules and
   refuses with the reason; the wasm picker is `web::pick_spec_file`, which
@@ -3772,7 +3825,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   is not built. Contracts in `spec_mode_tests.rs` and
   `ui_tests/spec_mode.rs`.
   - **On a box** (`box_spec.rs`, `box_view.rs`; Nick, 2026-11-15, "in both"):
-    the same window and review with `Spec::on_box`. The Agent tab's "From a
+    the same window and review with `Spec::on_box`. The Describe tab's "From a
     spec…" is for an engineer (`BoxView::spec_entry_blocked`) with the
     agent reachable, a project open or not. `Spec` also takes PDFs
     (`Pdf`): the box's caps (`BOX_PDF` 2 MiB, `BOX_PDFS` 5, `BOX_HISTORY`
@@ -3859,7 +3912,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   with no `NAME_ok`, a red requirement test. Each is one line of what
   went wrong, the better way when a rule knows one, and two buttons. Fix
   it (`PlaygroundView::fix_noticed`) puts an instruction that carries the
-  failure in the Agent's box, shows the Agent tab and sends it through the
+  failure in the Agent's box, shows the Describe tab and sends it through the
   usual checks; Not now hides it until something else is wrong. The words
   come from rules, not the model, so watching spends no model turn; only
   the click does. `watch::Watching` holds it back while an edit is
@@ -3894,20 +3947,22 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   its scope and the earlier instructions for the file (`instruct.rs`,
   above); a checked answer is written into the file and never run. On a
   built-in example the program becomes a project of its own, named once.
-- **The key.** Pasted into a password field, held in page memory; an
-  explicit "Remember on this device" (off by default, with a warning)
-  keeps it in `localStorage`, and unticking or Forget removes it. It goes
-  only into the `x-api-key` header of a request to
-  `https://api.anthropic.com/v1/messages` with
-  `anthropic-dangerous-direct-browser-access: true`; never into a URL, a
-  body or a log (`ApiKey`'s and the request's `Debug` redact it). The
-  page's CSP allows `connect-src 'self' https://api.anthropic.com` only.
+- **The key and the model.** The page never asks for a key and never
+  offers a model. The model is always `claude-sonnet-5-5` on the routes
+  that name one (`claude::MODEL`, with the server-side refusal fallback).
+  The ways to an answer, in order: the local proxy (below), the free chat
+  (below), and in a native build only the machine's `ANTHROPIC_API_KEY`
+  (`Route::Direct`, `x-api-key` to `api.anthropic.com`; `ApiKey`'s and the
+  request's `Debug` redact it). With none of them the Describe tab says it is
+  not available in this build. A key an earlier build stored in
+  `localStorage` is removed on load. The page's CSP allows
+  `connect-src 'self'` and, on a free-chat build, the relay's origin.
 - **Local proxy** (`scripts/playground-serve.sh`): the playground built
   for `/`, served on 127.0.0.1 by helmsman-agent's `playground-proxy`
   example, whose `POST /proxy/v1/messages` adds `x-api-key` from
   `ANTHROPIC_API_KEY` and streams the answer back (the agent crate's
   rustls client, no new crate). The page finds it (`GET /proxy/health`,
-  asked only when served from localhost) and hides the key field. It
+  asked only when served from localhost) and the page answers through it. It
   requires its own `Host`, a `x-helmsman-playground: 1` header (forcing a
   preflight it never grants), a same-origin `Origin` when one is sent,
   1 MiB bodies; it passes on only `anthropic-version` and `anthropic-beta`
@@ -3918,16 +3973,16 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   (`claude::Route::Free`, the relay's `docs/demo.md`): the body is the
   turns and nothing else, since the relay there pins the prompt, the model
   and the output cap, and earlier turns are dropped oldest first to fit
-  its limits. The Agent tab then has no key field and no model picker,
-  and one notice under the box saying the text goes to a hosted model. The
+  its limits. The Describe tab has no key field and no model picker in any
+  state, and one notice under the box saying the text goes to a hosted model. The
   page asks the relay once whether the chat is open
   (`GET /demo/v1/status`); closed or out of reach, the tab says so in
   place of the box and asks one question (which service the visitor would
   want), sent once to `POST /demo/v1/survey`. The build puts the relay's
-  origin in the page's `connect-src` in place of the model API's, so a
-  page on the free chat cannot reach the model API at all. A local proxy,
+  origin in the page's `connect-src`, so no page can reach the model API
+  at all. A local proxy,
   when there is one, still wins. Tests: `playground_tests.rs` ("the free
-  chat"), `the_free_chat_tab_has_no_key_and_keeps_the_panel_width`
+  chat"), `the_agent_tab_has_no_key_and_no_model_and_keeps_the_panel_width`
   (`ui_tests.rs`).
 - **The Agent ladder** (`agent_ladder_tests.rs`, ignored: it spends
   tokens). The page's instruction loop (`instruct`, `verify`, the
@@ -4176,8 +4231,8 @@ fault.
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; the box serves HTTPS with a self-signed certificate whose fingerprint the person checks once (journal, ⋯ menu), the cookie is `Secure` over it, and plain HTTP is served only from the box's own host | built (`canvas-token`, `box-https`; `helmsman-plc/tests/https.rs`, `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
-| playground visitor ↔ Claude | the visitor's own key, program and question | the key only in `x-api-key` to api.anthropic.com (redacted `Debug`, page CSP `connect-src` to that host and self), memory unless "remember" is ticked; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run; or the local proxy holds the key | built (`playground`) |
-| playground visitor ↔ free chat | the program and the instruction; one survey answer | a page built with `HELMSMAN_FREE_CHAT_URL` holds no key and sends only the turns, to that one origin (page CSP `connect-src` to it and self, no credentials, no referrer); what a stranger can make it cost is bounded by the relay's demo function, not by the page (its own credit-limited key, one pinned profile, counters that close it: the relay's `docs/demo.md`); the answer is checked like any other and never run | page side built, off until the published page is built with the address (`free-chat`) |
+| playground visitor ↔ Claude | the program and question | the page holds no key (the local proxy or the free chat's relay holds it; a native build reads the machine's `ANTHROPIC_API_KEY`, redacted in `Debug`); page CSP `connect-src` to self and the relay; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run | built (`playground`) |
+| playground visitor ↔ free chat | the program and the instruction; one survey answer | a page built with `HELMSMAN_FREE_CHAT_URL` sends only the turns, to that one origin (page CSP `connect-src` to it and self, no credentials, no referrer); what a stranger can make it cost is bounded by the relay's demo function, not by the page (its own credit-limited key, one pinned profile, counters that close it: the relay's `docs/demo.md`); the answer is checked like any other and never run | page side built, off until the published page is built with the address (`free-chat`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 

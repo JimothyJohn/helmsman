@@ -1,10 +1,13 @@
 //! The diagram's right-click menu. On the diagram the reader moves blocks,
 //! folds, zooms, selects and toggles inputs; the code is written in the
 //! editor or by the Agent (Nick, 2026-11-18). So the menu holds no change
-//! to the program: a block of a program port has its io.map items
+//! to the program's logic: a block of a program port has its io.map items
 //! ("Assign to device I/O…", "Back to simulated I/O"), and any block has
 //! "Chat about this" while the diagram's lines are the text the host's
-//! files hold ([`Viewer::chat_ok`]).
+//! files hold ([`Viewer::chat_ok`]). Names and set values are the
+//! exception (Nick, 2026-11-23, [`crate::by_hand`]): "Rename…" on a block
+//! that names a variable and "Set value…" on a literal, which a double
+//! click asks for too.
 
 use eframe::egui::{self, Pos2, Rect, RichText, Vec2};
 use helmsman_diagram::layout::{PORT_ROW, in_port};
@@ -121,12 +124,16 @@ struct Entries {
     assign: Option<crate::assign::PortMenu>,
     /// The block "Chat about this" is about ([`crate::chat_about`]).
     chat: Option<NodeId>,
+    /// What the block lets the engineer change by hand, once the host
+    /// has said ([`Menu::set_edit`]).
+    edit: Option<crate::by_hand::Target>,
 }
 
 fn entries(v: &Viewer, node: NodeId) -> Entries {
     Entries {
         assign: v.port_block(node).cloned(),
         chat: v.chat_ok.then_some(node),
+        edit: None,
     }
 }
 
@@ -143,6 +150,11 @@ pub struct Menu {
     assign: Option<(String, crate::assign_ui::PortAsk)>,
     /// "Chat about this" chosen in the menu, for the host to take.
     chat: Option<NodeId>,
+    /// The block just opened on, until the host has said what it lets
+    /// the engineer change by hand.
+    edit_query: Option<NodeId>,
+    /// "Rename…" or "Set value…" chosen in the menu, for the host to take.
+    edit: Option<crate::by_hand::Target>,
     /// The Agent tab holds as many chips as it takes: the menu item is
     /// off and says why. The host sets it before [`Self::show`].
     pub chat_full: bool,
@@ -163,6 +175,26 @@ impl Menu {
             at: g.at,
             entries: entries(v, g.node),
         });
+        self.edit_query = v.chat_ok.then_some(g.node);
+    }
+
+    /// The block the menu just opened on, once: the host answers with
+    /// [`Self::set_edit`].
+    pub fn take_edit_query(&mut self) -> Option<NodeId> {
+        self.edit_query.take()
+    }
+
+    /// What the open menu's block lets the engineer change by hand.
+    pub fn set_edit(&mut self, target: Option<crate::by_hand::Target>) {
+        if let Some(o) = &mut self.open {
+            o.entries.edit = target;
+        }
+    }
+
+    /// The name or value the menu asked to change, once; the menu is
+    /// closed then.
+    pub fn take_edit(&mut self) -> Option<crate::by_hand::Target> {
+        self.edit.take()
     }
 
     /// Whether the menu is open (it takes Escape).
@@ -191,6 +223,7 @@ impl Menu {
         let width = (area.width() - 24.0).clamp(120.0, POPUP_W);
         let mut assign: Option<(String, crate::assign_ui::PortAsk)> = None;
         let mut chat: Option<NodeId> = None;
+        let mut edit: Option<crate::by_hand::Target> = None;
         let chat_full = self.chat_full;
         let r = egui::Area::new(egui::Id::unique("diagram-menu-popup"))
             .order(egui::Order::Foreground)
@@ -241,11 +274,36 @@ impl Menu {
                             if chat_full {
                                 crate::chat_about::FULL
                             } else {
-                                "Puts this block and its statement in the Agent tab, with what drives it and what it drives. Nothing is sent until you type what to ask and send it."
+                                "Puts this block and its statement in the Describe tab, with what drives it and what it drives. Nothing is sent until you type what to ask and send it."
                             },
                         )
                     {
                         chat = Some(n);
+                    }
+                    // Last, so the rows above stay where they were when
+                    // the host's answer adds it.
+                    let row = match &e.edit {
+                        Some(crate::by_hand::Target::Name(name)) => Some((
+                            "diagram menu rename",
+                            "Rename…",
+                            format!(
+                                "Renames {name} everywhere in the project, the wiring and the tests with the program. Double-click the block does the same."
+                            ),
+                        )),
+                        Some(crate::by_hand::Target::Value(l)) => Some((
+                            "diagram menu set value",
+                            "Set value…",
+                            format!(
+                                "Writes a new value in place of {} in the code. Double-click the block does the same.",
+                                l.text
+                            ),
+                        )),
+                        None => None,
+                    };
+                    if let Some((key, text, tip)) = row
+                        && row_on(ui, chrome, key, text, true, &tip)
+                    {
+                        edit.clone_from(&e.edit);
                     }
                 });
             });
@@ -256,6 +314,10 @@ impl Menu {
         }
         if chat.is_some() {
             self.chat = chat;
+            return;
+        }
+        if edit.is_some() {
+            self.edit = edit;
             return;
         }
         if crate::theme::dismissed(ctx, "diagram-menu-popup", &[r.response.rect]) {

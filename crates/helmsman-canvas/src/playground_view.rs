@@ -11,7 +11,7 @@ use helmsman_diagram::Scan;
 use helmsman_iec::{Ty, Value};
 
 use crate::arrange::Layers;
-use crate::claude::{Chat, Model, Phase, Proxy, Request};
+use crate::claude::{Chat, Phase, Proxy, Request};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
@@ -88,7 +88,10 @@ impl Link {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = ctx;
-            self.inbox.push(crate::claude::Incoming::Proxy(false));
+            // Natively there is no proxy to find; the tests start with
+            // one answering, so the Agent tab has a route (a test that
+            // wants none says so with `Incoming::Proxy(false)`).
+            self.inbox.push(crate::claude::Incoming::Proxy(cfg!(test)));
         }
     }
 
@@ -154,8 +157,6 @@ pub struct PlaygroundView {
     seen: Seen,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
-    /// The diagram in 3D, behind its toggle ([`crate::view3d`]).
-    pub view3d: crate::view3d::View3d,
     /// The Agent's last change, marked on the diagram and in the code
     /// until the file is edited ([`crate::agent_marks`]).
     pub agent_change: Option<crate::agent_marks::AgentChange>,
@@ -169,6 +170,8 @@ pub struct PlaygroundView {
     /// The menu a right click on the diagram opened
     /// (`crate::diagram_menu`).
     pub dmenu: crate::diagram_menu::Menu,
+    /// The question "what value?" open on a literal of the diagram.
+    pub value_ask: Option<crate::by_hand::ValueAsk>,
     /// The program's ports as last read, by the source they came from:
     /// the I/O tab and the diagram ask every frame.
     ports_memo: std::cell::RefCell<Option<(String, Vec<crate::device_form::Port>)>>,
@@ -291,6 +294,9 @@ pub struct PlaygroundView {
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
+    /// The program file last open in the editor, with its project: the
+    /// Agent's scope while a test, a map or a settings file is open.
+    last_program: Option<(String, String)>,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -322,24 +328,23 @@ impl PlaygroundView {
     #[must_use]
     pub fn with_stores(projects: Box<dyn Storage>, tweaks: Box<dyn Storage>) -> Self {
         #[cfg(target_arch = "wasm32")]
-        let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::web::LocalKeyStore);
-        #[cfg(not(target_arch = "wasm32"))]
-        let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::claude::NoStore);
+        crate::web::clear_old_key();
         let proj = SimProjects::load(projects);
         let mut v = Self {
             session: Session::new(&proj.build_src()),
             viewer: None,
             agent_change: None,
             history_at: None,
+
             layers: Layers::load(tweaks),
             fresh: false,
             dmenu: crate::diagram_menu::Menu::default(),
-            view3d: crate::view3d::View3d::default(),
+            value_ask: None,
             ports_memo: std::cell::RefCell::new(None),
             viewer_of: String::new(),
             pending: None,
             last_pick: None,
-            chat: Chat::new(store),
+            chat: Chat::new(),
             link: Link::default(),
             proxy_asked: false,
             free_asked: false,
@@ -392,6 +397,7 @@ impl PlaygroundView {
             watching: crate::watch::Watching::default(),
             noticed: None,
             selection: None,
+            last_program: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -646,8 +652,13 @@ impl PlaygroundView {
                 // Recorded with the instruction that produced it.
                 let apply = self.to_name.take();
                 let what = apply.as_ref().map_or_else(
-                    || format!("took the Agent's answer into {}", self.proj.current),
-                    |a| format!("Agent: {}", a.instruction).chars().take(120).collect(),
+                    || format!("took the described change into {}", self.proj.current),
+                    |a| {
+                        format!("Described: {}", a.instruction)
+                            .chars()
+                            .take(120)
+                            .collect()
+                    },
                 );
                 self.proj
                     .save_as(&what, apply.as_ref().map(|a| a.record.as_str()));
@@ -669,7 +680,7 @@ impl PlaygroundView {
                     format!(" {why}")
                 });
                 self.notice = Some(format!(
-                    "{} opened from the Agent's answer; Deploy runs it.{size}{red}",
+                    "{} opened from the answer; Deploy runs it.{size}{red}",
                     self.proj.current
                 ));
             }
@@ -1032,7 +1043,7 @@ impl PlaygroundView {
             agent: Some(agent),
             quick: false,
         });
-        let req = crate::claude::request_turn(&route, self.chat.model, &[], message, turn);
+        let req = crate::claude::request_turn(&route, &[], message, turn);
         let seq = self.side_answer.start();
         self.side.send(seq, req, ctx);
     }
@@ -1258,12 +1269,13 @@ impl PlaygroundView {
         }
         let Ok(route) = self.chat.route() else { return };
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
-        let message = crate::start_state::message(&self.start.draft, &inputs);
+        let outputs: Vec<Point> = self.session.outputs().cloned().collect();
+        let message = crate::start_state::message_for(&self.start.draft, &inputs, &outputs);
         let turn = self.chat.takes.allow(crate::claude::Turn {
             agent: Some(crate::start_state::AGENT),
             quick: false,
         });
-        let req = crate::claude::request_turn(&route, self.chat.model, &[], &message, turn);
+        let req = crate::claude::request_turn(&route, &[], &message, turn);
         let seq = self.start_answer.start();
         self.start_link.send(seq, req, ctx);
         self.start.asked();
@@ -1291,9 +1303,15 @@ impl PlaygroundView {
         if let Some(done) = self.start_answer.take() {
             if self.start.phase == Phase::Working {
                 let inputs: Vec<Point> = self.session.inputs().cloned().collect();
+                let outputs: Vec<Point> = self.session.outputs().cloned().collect();
                 let src = self.session.src.clone();
-                self.start
-                    .answered(done.as_deref().map_err(String::as_str), &src, &inputs);
+                self.start.answered(
+                    done.as_deref().map_err(String::as_str),
+                    &src,
+                    &inputs,
+                    &outputs,
+                    &self.proj.files,
+                );
             }
         } else if self.start.phase == Phase::Working {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -1302,6 +1320,50 @@ impl PlaygroundView {
             self.start.stopped();
             self.start.line = Some("The program changed, so the proposal was dropped.".into());
         }
+    }
+
+    /// Why the start-state field cannot ask now, in a line, when it
+    /// cannot: there is nobody to ask, or the relay does not serve it.
+    #[must_use]
+    pub fn start_unavailable(&self) -> Option<&'static str> {
+        if self.chat.serves(crate::start_state::AGENT) {
+            return None;
+        }
+        Some(
+            if matches!(self.chat.route(), Ok(crate::claude::Route::Free(_))) {
+                "This relay does not serve start states, so nothing can be asked. Set the inputs by hand."
+            } else {
+                "Start states are asked of Helmsman's free chat, which is not open here. Set the inputs by hand."
+            },
+        )
+    }
+
+    /// Rename `k` of the proposal, clicked: the whole project is renamed
+    /// ([`Self::rename_everywhere`]) and the proposal follows the new name.
+    fn start_rename(&mut self, k: usize) {
+        use crate::start_state::Phase;
+        let Phase::Proposed(p) = &self.start.phase else {
+            return;
+        };
+        let Some(crate::offers::What::Rename { old, new }) = p.offers.get(k).map(|o| o.what.clone()) else {
+            return;
+        };
+        let before = self.proj.files.clone();
+        let was_running = self.session.running;
+        self.rename_everywhere(&old, &new);
+        // A rename is no reason to start the machine: values are set
+        // before it starts, and never on a running one.
+        if !was_running {
+            self.session.set_running(false);
+        }
+        if self.proj.files == before {
+            self.start.line = Some(format!("{old} was not renamed. Nothing changed."));
+            return;
+        }
+        let src = self.session.src.clone();
+        self.start.renamed(k, &src);
+        let names: Vec<String> = self.session.inputs().map(|p| p.name.clone()).collect();
+        self.start.respell(&names);
     }
 
     /// Sets what the Agent proposed, each value as set by hand, if the
@@ -1329,30 +1391,31 @@ impl PlaygroundView {
     /// capped to the tab's width, with 12 pt left for the scroll bar.
     fn start_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::start_state::Phase;
-        if !self.offers_start() {
-            return;
-        }
         let t = theme(ui);
+        let off = self.start_unavailable();
         let running = self.session.running;
         let working = self.start.phase == Phase::Working;
         let width = (ui.available_width() - 12.0).max(120.0);
         ui.set_max_width(width);
         let mut send = false;
         let mut stop = false;
+        let mut say_off = false;
         let glyph = crate::st_view::TAP * 1.5;
         ui.horizontal(|ui| {
             let field_w = (width - glyph - ui.spacing().item_spacing.x - 4.0).max(80.0);
-            let tip = if running {
-                "Stop the program first: an Agent never changes the inputs of a running machine."
+            let tip = if let Some(why) = off {
+                why
+            } else if running {
+                "Stop the program first: start values are never changed on a running machine."
             } else {
                 "Describe the state the machine should start in, in your own words, for example \
-                 part seated, guard open, speed 40. The Agent answers with input values as a \
+                 part seated, guard open, speed 40. The answer is input values, as a \
                  proposal; nothing is set until you accept it. Enter sends."
             };
-            let out = ui.add_enabled_ui(!running && !working, |ui| {
+            let out = ui.add_enabled_ui(!running && !working && off.is_none(), |ui| {
                 egui::TextEdit::singleline(&mut self.start.draft)
                     .id_salt("start-state")
-                    .hint_text("Describe a start state…")
+                    .hint_text(if off.is_some() { "Not available here" } else { "Describe a start state…" })
                     .char_limit(crate::start_state::MAX_DESCRIPTION)
                     .desired_width(field_w)
                     .show(ui)
@@ -1368,22 +1431,30 @@ impl PlaygroundView {
                 chrome.hit("start stop", r.rect);
                 stop = r.clicked();
             } else {
-                let why_not = if running {
-                    Some("Stop the program first: an Agent never changes the inputs of a running machine.")
+                let why_not = if let Some(why) = off {
+                    Some(why)
+                } else if running {
+                    Some("Stop the program first: start values are never changed on a running machine.")
                 } else if self.start.draft.trim().is_empty() {
                     Some("Write a start state first.")
                 } else {
                     None
                 };
-                let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true).tip(
+                // Off, the send glyph stays live to say why in a line.
+                let live = why_not.is_none() || off.is_some();
+                let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, live, true).tip(
                     why_not.unwrap_or(
-                        "Send: asks the Agent for input values that match this description. They are shown as a proposal first.",
+                        "Send: asks for input values that match this description. They are shown as a proposal first.",
                     ),
                 );
                 chrome.hit("start send", r.rect);
                 send = (r.clicked() || enter) && why_not.is_none();
+                say_off = r.clicked() && off.is_some();
             }
         });
+        if say_off {
+            self.start.line = off.map(str::to_owned);
+        }
         if working {
             let r = ui
                 .add(
@@ -1394,7 +1465,7 @@ impl PlaygroundView {
                     )
                     .wrap(),
                 )
-                .tip("The Agent is reading your description. Stop it with the square beside the field.");
+                .tip("Reading your description. Stop it with the square beside the field.");
             chrome.hit("start working", r.rect);
         }
         if let Some(line) = self.start.line.clone() {
@@ -1405,6 +1476,7 @@ impl PlaygroundView {
         }
         let mut accept = false;
         let mut discard = false;
+        let mut pick = None;
         if let Phase::Proposed(p) = &self.start.phase {
             let frame = egui::Frame::new()
                 .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
@@ -1416,7 +1488,11 @@ impl PlaygroundView {
                     let r = ui
                         .add(
                             egui::Label::new(
-                                RichText::new("The Agent proposes these start values:")
+                                RichText::new(if p.changes.is_empty() {
+                                    "Proposed names:"
+                                } else {
+                                    "Proposed start values:"
+                                })
                                     .strong()
                                     .size(crate::theme::MIN_TEXT),
                             )
@@ -1424,6 +1500,9 @@ impl PlaygroundView {
                         )
                         .tip("Nothing is set yet. Set these puts every value below into its input, as if you had set it by hand.");
                     chrome.hit("start proposal", r.rect);
+                    if !p.offers.is_empty() {
+                        pick = crate::offers::ui(ui, chrome, &p.offers);
+                    }
                     egui::ScrollArea::vertical()
                         .id_salt("start-proposal")
                         .max_height(160.0)
@@ -1438,22 +1517,24 @@ impl PlaygroundView {
                                     show(c.ty, c.new)
                                 );
                                 ui.add(egui::Label::new(RichText::new(line).size(crate::theme::MIN_TEXT)).wrap())
-                                    .tip("An input the Agent would change: now → proposed.");
+                                    .tip("An input this would change: now → proposed.");
                             }
                         });
                     ui.horizontal_wrapped(|ui| {
-                        let go = ui
-                            .add_enabled(
-                                !running,
-                                egui::Button::new(RichText::new("Set these").size(crate::theme::MIN_TEXT)),
-                            )
-                            .tip(if running {
-                                "Stop the program first: an Agent never changes the inputs of a running machine."
-                            } else {
-                                "Put these values into the inputs. The program then starts with them."
-                            });
-                        chrome.hit("start set", go.rect);
-                        accept = go.clicked();
+                        if !p.changes.is_empty() {
+                            let go = ui
+                                .add_enabled(
+                                    !running,
+                                    egui::Button::new(RichText::new("Set these").size(crate::theme::MIN_TEXT)),
+                                )
+                                .tip(if running {
+                                    "Stop the program first: start values are never changed on a running machine."
+                                } else {
+                                    "Put these values into the inputs. The program then starts with them."
+                                });
+                            chrome.hit("start set", go.rect);
+                            accept = go.clicked();
+                        }
                         let no = ui
                             .add(egui::Button::new(RichText::new("Discard").size(crate::theme::MIN_TEXT)))
                             .tip("Drop the proposal. Nothing is set.");
@@ -1465,6 +1546,18 @@ impl PlaygroundView {
             chrome.hit("start card", r.rect);
         }
         ui.add_space(4.0);
+        match pick {
+            Some(crate::offers::Pick::Take(k)) => self.start_rename(k),
+            Some(crate::offers::Pick::Leave) => {
+                if let Phase::Proposed(p) = &mut self.start.phase {
+                    p.offers.clear();
+                    if p.changes.is_empty() {
+                        self.start.phase = Phase::Idle;
+                    }
+                }
+            }
+            None => {}
+        }
         if stop || discard {
             self.start_stop();
         } else if accept {
@@ -1490,7 +1583,7 @@ impl PlaygroundView {
     /// Why a spec run cannot start now, if it cannot (the window's Build).
     fn spec_blocked(&self) -> Option<String> {
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         if self.scope() != crate::scope::Scope::NewProject {
             return Some("A spec makes a new project: open a built-in example first.".into());
@@ -1609,7 +1702,7 @@ impl PlaygroundView {
     /// design entry's own words (those are said beside the entry).
     fn design_blocked(&self) -> Option<String> {
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         self.design
             .busy()
@@ -1680,7 +1773,7 @@ impl PlaygroundView {
     fn design_keep_blocked(&self) -> Option<String> {
         self.instruct
             .busy()
-            .then(|| "The Agent is still working on the last instruction.".to_string())
+            .then(|| "Still working on the last instruction.".to_string())
     }
 
     /// Keep: the design goes into the open project as `design.md`, one
@@ -1732,7 +1825,7 @@ impl PlaygroundView {
         let (d, problems) = self.design_cache.get(text);
         let built = self.design_built.get(&self.proj.open).copied().unwrap_or(0);
         let blocked = if self.instruct.busy() {
-            Some("The Agent is still working on the last instruction.".to_string())
+            Some("Still working on the last instruction.".to_string())
         } else {
             self.chat.route().err().map(str::to_string)
         };
@@ -2115,18 +2208,37 @@ impl PlaygroundView {
         dropped
     }
 
-    /// The ST file the Agent's scope starts from: the open one, or the
-    /// project's first program file when a map or settings file is open.
+    /// A file an instruction may change: ST, and not a requirement test.
+    fn is_program(file: &str) -> bool {
+        crate::sim_projects::is_st(file) && !helmsman_iec::spec::is_test(file)
+    }
+
+    /// The ST file the Agent's scope starts from: the open one, or, when
+    /// a map, a settings file or a requirement test is open, the program
+    /// last open in this project, else its first program file. A test is
+    /// never the scope: it goes with every instruction as the program's
+    /// check, and with one open the Agent was told the program was out of
+    /// its reach (2026-11-22). The first program by name would be the
+    /// wrong one as often as not in a project with several.
     fn scope_file(&self) -> Option<String> {
-        if crate::sim_projects::is_st(&self.proj.current) && self.proj.files.contains_key(&self.proj.current)
-        {
+        let here = |f: &str| Self::is_program(f) && self.proj.files.contains_key(f);
+        if here(&self.proj.current) {
             return Some(self.proj.current.clone());
         }
-        self.proj
-            .files
-            .keys()
-            .find(|f| crate::sim_projects::is_st(f))
-            .cloned()
+        if let Some((project, file)) = &self.last_program
+            && *project == self.proj.open
+            && here(file)
+        {
+            return Some(file.clone());
+        }
+        self.proj.files.keys().find(|f| Self::is_program(f)).cloned()
+    }
+
+    /// Remembers the program in the editor, for [`Self::scope_file`].
+    fn note_program(&mut self) {
+        if Self::is_program(&self.proj.current) && self.proj.files.contains_key(&self.proj.current) {
+            self.last_program = Some((self.proj.open.clone(), self.proj.current.clone()));
+        }
     }
 
     /// Where the paused scan stands, as the files show it: `12` or
@@ -2254,7 +2366,7 @@ impl PlaygroundView {
             .as_ref()
             .is_some_and(|r| r.project != self.proj.open);
         if moved {
-            self.stop_answer_with("the open project changed while the Agent was answering");
+            self.stop_answer_with("the open project changed before the answer came");
             self.log_outcome();
         }
     }
@@ -2272,7 +2384,6 @@ impl PlaygroundView {
                 ..Default::default()
             });
         }
-        let a = self.chat.answer.as_ref();
         let lines = self
             .instruct
             .run
@@ -2283,13 +2394,6 @@ impl PlaygroundView {
         Some(crate::instruct::Progress {
             estimate: Some(crate::instruct::estimate_secs(lines)),
             secs: now - self.asked_at,
-            stage: a.map_or(crate::instruct::Stage::Waiting, |a| {
-                crate::instruct::stage(a.thinking, &a.text)
-            }),
-            why: a.and_then(|a| crate::instruct::why_line(&a.text)),
-            code: a
-                .and_then(|a| crate::instruct::partial_code(&a.text))
-                .map(str::to_string),
             naming: false,
             review: false,
         })
@@ -2388,26 +2492,9 @@ impl PlaygroundView {
 
     /// The outcome of the last instruction, in Messages.
     fn log_outcome(&mut self) {
-        use crate::instruct::Kind;
         let Some(o) = &self.instruct.outcome else { return };
         let at = self.session.now_ms as f64 / 1000.0;
-        let mut line = o.status.clone();
-        if let Some(w) = &o.why {
-            line.push_str(" Why: ");
-            line.push_str(w);
-        }
-        for p in &o.problems {
-            line.push(' ');
-            line.push_str(p);
-        }
-        // A refusal is an error: the Messages count it in red and open
-        // (Nick, 2026-11-13: errors go there, not in the Agent tab).
-        match o.kind {
-            // An update with checks that did not pass is a warning.
-            Kind::Applied if !o.problems.is_empty() => self.log.warning(at, line),
-            Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
-            Kind::Refused | Kind::Failed => self.log.error(at, line),
-        }
+        self.log.outcome(at, o);
     }
 
     /// The Agent's last change, marked while its file is what the Agent
@@ -2522,7 +2609,7 @@ impl PlaygroundView {
             .map(|(n, t)| (n.clone(), t.clone()))
             .collect();
         if self.proj.revisions().last().is_none_or(|r| r.files != saved) {
-            self.proj.save_as("saved before the Agent's change", None);
+            self.proj.save_as("saved before the described change", None);
         }
         let before = self.proj.revisions().last().map(|r| r.n);
         let was = self.proj.files.get(&apply.file).cloned().unwrap_or_default();
@@ -2539,7 +2626,7 @@ impl PlaygroundView {
             self.proj.files.insert(f.clone(), t.clone());
         }
         self.proj.current.clone_from(&apply.file);
-        let what: String = format!("Agent: {}", apply.instruction)
+        let what: String = format!("Described: {}", apply.instruction)
             .chars()
             .take(120)
             .collect();
@@ -2560,6 +2647,117 @@ impl PlaygroundView {
         });
         self.instruct.applied(&apply, undo);
         self.log_outcome();
+    }
+
+    /// Offer `k` under the last answer, clicked ([`crate::offers`]): an
+    /// instruction is sent as the engineer's own; a rename is written
+    /// into every file it touches and saved as one revision with its
+    /// History entry, as a described change is, so Undo and the arrows
+    /// take it back the same way.
+    pub fn take_offer(&mut self, k: usize, ctx: &egui::Context) {
+        use crate::offers::What;
+        match self.instruct.offer(k).cloned() {
+            Some(What::Instead { text }) => {
+                self.instruct.draft = text;
+                self.send_instruction(ctx);
+            }
+            Some(What::Rename { old, new }) => self.rename_everywhere(&old, &new),
+            None => {}
+        }
+    }
+
+    /// `old` renamed to `new` in the open project, saved as one revision.
+    pub fn rename_everywhere(&mut self, old: &str, new: &str) {
+        let plan = match crate::offers::plan(&self.proj.files, old, new) {
+            Ok(p) => p,
+            Err(why) => {
+                self.instruct.offer_refused(&why);
+                return self.log_outcome();
+            }
+        };
+        let record = crate::instruct::Instruct::rename_record(old, new, &plan.lines());
+        let count = plan.files.len();
+        let changed = plan.files.into_iter().map(|(f, t, _)| (f, t)).collect();
+        let undo = self.commit_by_hand(changed, &format!("Renamed {old} to {new}"), &record);
+        self.instruct.renamed(old, new, count, undo);
+        self.log_outcome();
+    }
+
+    /// A literal of the diagram written `new` (`text` is its file after),
+    /// saved as one revision.
+    pub fn set_value(&mut self, lit: &crate::by_hand::Literal, new: &str, text: String) {
+        let record = crate::by_hand::value_record(lit, new);
+        let what = format!("Set {} to {new}", lit.text);
+        let undo = self.commit_by_hand(vec![(lit.file.clone(), text)], &what, &record);
+        self.instruct.value_set(&lit.text, new, &lit.file, undo);
+        self.log_outcome();
+    }
+
+    /// Files changed by hand (a rename, a set value) into the open
+    /// project as one revision with its History entry, the way a
+    /// described change is written: unsaved edits are saved first as
+    /// their own revision, and the program runs on with the change.
+    /// Returns what Undo restores.
+    fn commit_by_hand(
+        &mut self,
+        changed: Vec<(String, String)>,
+        what: &str,
+        record: &str,
+    ) -> Option<crate::instruct::Undo> {
+        if self.proj.dirty() {
+            self.proj.save();
+        }
+        let saved: std::collections::BTreeMap<String, String> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        if self.proj.revisions().last().is_none_or(|r| r.files != saved) {
+            self.proj.save_as("saved before the change by hand", None);
+        }
+        let before = self.proj.revisions().last().map(|r| r.n);
+        // Undo is offered while the file on screen is as the change left it.
+        let is_st = |f: &str| helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St);
+        let shown = changed
+            .iter()
+            .find(|(f, _)| *f == self.proj.current)
+            .or_else(|| changed.iter().find(|(f, _)| is_st(f)))
+            .or(changed.first())
+            .cloned();
+        for (f, text) in changed {
+            self.proj.files.insert(f, text);
+        }
+        self.proj.save_as(what, Some(record));
+        self.reload_running();
+        before
+            .zip(shown)
+            .map(|(revision, (file, text))| crate::instruct::Undo {
+                project: self.proj.open.clone(),
+                file,
+                revision,
+                text,
+            })
+    }
+
+    /// What block `n` of the diagram lets the engineer change by hand
+    /// ([`crate::by_hand`]): nothing in a read-only example, or while the
+    /// diagram is older than the code.
+    fn by_hand_target(&self, n: helmsman_diagram::NodeId) -> Option<crate::by_hand::Target> {
+        if self.assign_write().is_err() {
+            return None;
+        }
+        let v = self.viewer.as_ref().filter(|v| v.src == self.proj.build_src())?;
+        crate::by_hand::target(v.diagram(), n, &|l| self.proj.locate(l), &self.proj.files)
+    }
+
+    /// Opens the question for a name or a value.
+    fn by_hand_ask(&mut self, t: crate::by_hand::Target) {
+        match t {
+            crate::by_hand::Target::Name(n) => self.devices_ui.renaming = Some((n.clone(), n)),
+            crate::by_hand::Target::Value(l) => self.value_ask = Some(crate::by_hand::ValueAsk::new(l)),
+        }
     }
 
     /// Why Undo is off now, if it is.
@@ -2632,6 +2830,10 @@ impl PlaygroundView {
             crate::agent_marks::AgentChange::new(&self.proj.open, &file, &before, after, baseline)
         });
         self.history_at = (!newest).then_some(n);
+        // The tab as it stood for this step, and nothing of it in the
+        // Messages: what an old version's compile or run says is not news.
+        self.instruct.show_step(rev.page.as_deref(), &rev.what);
+        self.seen.quiet = true;
     }
 
     /// Undo: the project back to the revision before the Agent's change,
@@ -2694,7 +2896,7 @@ impl PlaygroundView {
         let mut ok = false;
         let m = crate::theme::near_pointer(ctx, "pg-program-name").show(ctx, |ui| {
             ui.set_max_width(420.0);
-            let why = "The Agent's answers in this conversation land in a project of this name: \
+            let why = "The answers in this conversation land in a project of this name: \
                        the newest as main.st, the earlier ones kept under it.";
             ui.label(RichText::new("Name this program").strong().size(16.0))
                 .tip(why);
@@ -2806,14 +3008,15 @@ impl PlaygroundView {
         if let Some(crate::devices::DeviceAct::Rename(plan)) =
             self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
         {
-            for (f, text, _) in plan.files {
-                if let Some(t) = self.proj.files.get_mut(&f) {
-                    *t = text;
-                }
+            self.rename_everywhere(&plan.old, &plan.new);
+        }
+        if let Some(mut ask) = self.value_ask.take() {
+            let mut open = true;
+            match ask.ui(&ui.ctx().clone(), chrome, &self.proj.files, &mut open) {
+                Some(text) => self.set_value(&ask.lit, ask.text.trim(), text),
+                None if open => self.value_ask = Some(ask),
+                None => {}
             }
-            self.proj
-                .note(format!("Renamed {} to {}.", plan.old, plan.new), false);
-            self.edited(f64::NEG_INFINITY);
         }
         if self.devices_ui.assigning.is_some() {
             self.assign_context();
@@ -3032,7 +3235,7 @@ impl PlaygroundView {
                         ui.set_width(width - 24.0);
                         ui.add(
                             egui::Label::new(
-                                RichText::new(format!("The Agent noticed: {}", n.what))
+                                RichText::new(format!("Helmsman noticed: {}", n.what))
                                     .color(t.ink(WARN))
                                     .size(size),
                             )
@@ -3043,9 +3246,9 @@ impl PlaygroundView {
                         }
                         ui.add_space(4.0);
                         ui.horizontal_wrapped(|ui| {
-                            let r = ui.button(RichText::new("Fix it").size(size)).tip(
-                                "Asks the Agent to fix this. Its change is checked like any other before it lands.",
-                            );
+                            let r = ui
+                                .button(RichText::new("Fix it").size(size))
+                                .tip("Asks for a fix. Its change is checked like any other before it lands.");
                             chrome.hit("agent fix it", r.rect);
                             fix = r.clicked();
                             let r = ui
@@ -3079,6 +3282,7 @@ impl PlaygroundView {
     }
 
     pub fn tick(&mut self, ctx: &egui::Context) {
+        self.note_program();
         self.notice_problems(ctx.input(|i| i.time));
         if !self.proxy_asked {
             self.proxy_asked = true;
@@ -3177,7 +3381,6 @@ impl PlaygroundView {
                 trend.signals.hash(h);
             }),
             asks: self.chat.seq(),
-            keyed: self.chat.route().is_ok(),
             trend_open: chrome.trend && chrome.bottom == editor::Bottom::Trend,
         }
     }
@@ -3186,6 +3389,8 @@ impl PlaygroundView {
 /// What [`PlaygroundView::watch`] compares against.
 #[derive(Default)]
 struct Seen {
+    /// A revision was just put on show: the next watch logs nothing.
+    quiet: bool,
     fault: Option<String>,
     diags: Vec<String>,
     warned: Option<String>,
@@ -3200,6 +3405,14 @@ impl PlaygroundView {
     /// errors (as they appear), a fault, a notice, a storage problem,
     /// the program starting or stopping.
     fn watch(&mut self, t: f64) {
+        // Stepping through History changes what compiles and runs: the
+        // watch takes note of it and says nothing.
+        self.log.muted = std::mem::take(&mut self.seen.quiet) || self.history_at.is_some();
+        self.watch_changes(t);
+        self.log.muted = false;
+    }
+
+    fn watch_changes(&mut self, t: f64) {
         let fault = self.session.fault.as_ref().map(ToString::to_string);
         let ended = (self.seen.running == Some(true) && !self.session.running)
             || (fault.is_some() && fault != self.seen.fault)
@@ -3374,8 +3587,10 @@ impl Body for PlaygroundView {
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
         let mut go = false;
-        // The header is the open file's name (Nick, 2026-11-08), then word
-        // wrap, then the → that deploys this version.
+        let mut to_error: Option<(String, u32)> = None;
+        // The header is the open file's name (Nick, 2026-11-08), the
+        // magnifier and word wrap; at its right end Deploy, and before it
+        // the errors when there are any.
         let name = self.proj.current.clone();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -3385,26 +3600,8 @@ impl Body for PlaygroundView {
                 &name,
                 "The open file. It is checked as you type; Deploy runs it.",
             );
+            editor::find_toggle(ui, chrome);
             editor::wrap_toggle(ui, chrome);
-            go = crate::projects::deploy_arrow(
-                ui,
-                chrome,
-                "code deploy",
-                &Ok(()),
-                "Deploys this version: compiles the open project and runs it in the page (Ctrl Shift Enter, File › Deploy).",
-            );
-            if self.pending.is_some() {
-                ui.add(crate::theme::whole(RichText::new("…").color(t.muted)))
-                    .tip("Checking the edit.");
-            } else if errors > 0 {
-                ui.add(crate::theme::whole(
-                    RichText::new(format!("✖ {errors} error(s)")).color(crate::theme::theme(ui).ink(RED)),
-                ))
-                .tip("The list under the code has each one. Click an error to go to its line.");
-            } else {
-                ui.add(crate::theme::whole(RichText::new("✔ compiles").color(t.muted)))
-                    .tip("The program has no errors.");
-            }
             if undeployed {
                 let note = if errors > 0 {
                     "The program running is unchanged. Fix the errors, then Deploy."
@@ -3414,9 +3611,37 @@ impl Body for PlaygroundView {
                 ui.add(crate::theme::whole(RichText::new("· not deployed").color(t.muted)))
                     .tip(note);
             }
+            // Nothing while the code compiles (Nick, 2026-11-23); a red ✖
+            // with the first error in its popup while it does not.
+            let first = self
+                .diags()
+                .into_iter()
+                .find(|d| d.severity == projects::Severity::Error);
+            let said = first
+                .as_ref()
+                .map(|d| format!("{} line {}: {}", d.file, d.line, d.message));
+            let pressed = editor::header_right(
+                ui,
+                chrome,
+                &editor::Status {
+                    errors: if self.pending.is_some() { 0 } else { errors },
+                    first: said.as_deref(),
+                    deploy: &Ok(()),
+                    deploy_tip: "Ctrl Shift Enter: deploy this version.\nCompiles the open project and runs it in the page.",
+                },
+            );
+            go = pressed.deploy;
+            if pressed.errors
+                && let Some(d) = first
+            {
+                to_error = Some((d.file, d.line));
+            }
         });
         if go {
             self.deploy();
+        }
+        if let Some((file, line)) = to_error {
+            self.goto(&file, line, chrome);
         }
         let all = self.diags();
         let current = self.proj.current.clone();
@@ -3429,13 +3654,11 @@ impl Body for PlaygroundView {
         if let Some(draft) = self.agent_draft() {
             let r = ui
                 .label(
-                    RichText::new(
-                        "The Agent's draft, as it is written. It is checked before it goes into the file.",
-                    )
-                    .color(t.muted)
-                    .italics(),
+                    RichText::new("The draft, as it is written. It is checked before it goes into the file.")
+                        .color(t.muted)
+                        .italics(),
                 )
-                .tip("The file itself is unchanged until the checks pass. Stop in the Agent tab ends it.");
+                .tip("The file itself is unchanged until the checks pass. Stop in the Describe tab ends it.");
             chrome.hit("st draft note", r.rect);
             let mut shown: &str = &draft;
             let r = ui
@@ -3508,6 +3731,7 @@ impl Body for PlaygroundView {
         let open = self.proj.open.clone();
         let current = self.proj.current.clone();
         let listing = Listing {
+            place: projects::Place::Browser,
             projects: &rows,
             open: Some(&open),
             files,
@@ -3668,15 +3892,6 @@ impl Body for PlaygroundView {
                 .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
             v.crumbs_ui(ui, &[]);
             let area = ui.available_rect_before_wrap();
-            if self.view3d.on {
-                let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
-                self.view3d.ui(ui, v, scan);
-                self.view3d.toggle_ui(ui, area);
-                return;
-            }
-            if self.view3d.wants_release() {
-                self.view3d.release(ui, area);
-            }
             v.breaks.clone_from(&self.session.breaks);
             v.paused = self.session.paused_at();
             let now = ui.input(|i| i.time);
@@ -3685,7 +3900,6 @@ impl Body for PlaygroundView {
             }
             v.menu_open = self.dmenu.is_open() || self.sim_popup.is_some();
             v.canvas(ui, scan);
-            self.view3d.toggle_ui(ui, area);
             let reads = v.reads_on_screen();
             // The switches over the Read blocks take the right-click first.
             v.secondary_on_controls(ui, &reads);
@@ -3729,7 +3943,24 @@ impl Body for PlaygroundView {
             if let Some(n) = self.dmenu.take_chat() {
                 self.chat_about_node(n, chrome);
             }
+            if let Some(n) = self.dmenu.take_edit_query() {
+                let t = self.by_hand_target(n);
+                self.dmenu.set_edit(t);
+            }
             self.map_inputs(ui, area, &reads);
+            // A double click on an input's block is "Simulate this input"
+            // (above); its name is in the right-click menu.
+            let asked = self
+                .viewer
+                .as_mut()
+                .and_then(|v| v.edit_ask.take())
+                .filter(|_| self.sim_popup.is_none());
+            if let Some(t) = asked
+                .and_then(|n| self.by_hand_target(n))
+                .or_else(|| self.dmenu.take_edit())
+            {
+                self.by_hand_ask(t);
+            }
             if let Some(line) = jump {
                 match self.proj.locate(line) {
                     Some((file, l)) => self.goto(&file, l, chrome),
@@ -3779,6 +4010,8 @@ impl PlaygroundView {
         let mut chat = crate::assign_ui::RowChat {
             full: self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS,
             asked: Vec::new(),
+            rename_off: self.assign_write().err(),
+            rename: Vec::new(),
         };
         // What the diagram says of each point; nothing while there is none.
         let cards = self.viewer.as_ref().map(crate::st_view::Viewer::output_cards);
@@ -3844,10 +4077,10 @@ impl PlaygroundView {
                                 let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
                                 let text =
                                     format!("{} = {}", p.name.to_ascii_lowercase(), show(p.ty, p.value));
-                                crate::io_cards::value(ui, Some(glyph), t.fg, &text);
+                                crate::io_cards::value(ui, Some(glyph), t.fg, &text, true);
                                 return None;
                             }
-                            let r = ui.scope(|ui| input_ui(ui, p, &said));
+                            let r = ui.scope(|ui| input_ui(ui, p, &said, form == Form::Tile));
                             Some((r.inner.0, r.inner.1, r.response.rect))
                         });
                         if let Some((value, anchor, rect)) = control {
@@ -3936,6 +4169,10 @@ impl PlaygroundView {
         }
         for name in chat.asked {
             self.chat_about_signal(&name, chrome);
+        }
+        if let Some(name) = chat.rename.pop() {
+            let name = crate::by_hand::spelled(&self.proj.files, &name);
+            self.devices_ui.renaming = Some((name.clone(), name));
         }
         for (port, ask) in asks {
             self.assign_ask(port, ask);
@@ -4040,6 +4277,7 @@ impl PlaygroundView {
     /// The signals to trend (outputs, then inputs) and the chart.
     fn trend_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        chrome.hit("trend tab", ui.max_rect());
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
@@ -4052,29 +4290,53 @@ impl PlaygroundView {
             .collect();
         // The heading shares the signals' row: on a line of its own it
         // and the slider left the plot the smallest part of the panel.
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Signals").strong().color(t.muted))
-                .tip(format!(
-                    "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
-                ));
-            for name in &points {
-                let on = self.session.trend.signals.contains(name);
-                let tip = if on {
-                    "On the trend. Click to take it off."
-                } else {
-                    "Click to pin it to the trend."
-                };
-                if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
-                    .tip(tip)
-                    .clicked()
-                {
-                    self.session.trend.toggle(name);
-                }
-            }
-        });
+        // The rows wrap, and scroll past a third of the tab: an Agent's
+        // program has dozens of points, and unbounded their rows took the
+        // whole panel and left the plot no height (Nick, 2026-11-22; the
+        // third, 2026-11-23).
+        // Whole rows only: a cap that cuts a row in half shows a sliver.
+        let (row, gap) = (
+            (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).ceil(),
+            ui.spacing().item_spacing.y,
+        );
+        let cap = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
+        let rows = ((cap + gap) / (row + gap)).floor().max(1.0);
+        let rows_h = rows * (row + gap) - gap;
+        let legend = egui::ScrollArea::vertical()
+            .id_salt("pg-trend-signals")
+            .max_height(rows_h)
+            .show(ui, |ui| {
+                // Room for the scroll bar, or the panel grows to fit it.
+                ui.set_max_width(ui.available_width() - 12.0);
+                ui.horizontal_wrapped(|ui| {
+                    // A button that does not fit moves to the next row
+                    // whole; left to wrap its text it became a sliver.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    ui.label(RichText::new("Signals").strong().color(t.muted))
+                        .tip(format!(
+                            "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
+                        ));
+                    for name in &points {
+                        let on = self.session.trend.signals.contains(name);
+                        let tip = if on {
+                            "On the trend. Click to take it off."
+                        } else {
+                            "Click to pin it to the trend."
+                        };
+                        let b =
+                            crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(tip);
+                        chrome.hit(format!("trend signal {}", name.to_ascii_lowercase()), b.rect);
+                        if b.clicked() {
+                            self.session.trend.toggle(name);
+                        }
+                    }
+                });
+            });
+        chrome.hit("trend signals", legend.inner_rect);
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
         let plot = self.trend_plot(ui, chrome);
+        chrome.hit("trend plot", plot);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
             self.session.trend.move_signal(from, to);
         }
@@ -4089,10 +4351,16 @@ impl PlaygroundView {
             // Room for the scroll bar: a full-width field plus the bar is
             // wider than the panel, and a resizable panel grows to fit.
             ui.set_max_width(ui.available_width() - 12.0);
-            // The free chat: no key and no model to choose. Closed, it
-            // says so and asks its one question in place of the chat box.
+            // The page never asks for a key or a model. The free chat,
+            // closed, says so and asks its one question in place of the
+            // chat box; with no route at all the tab says so.
             let free = self.chat.free_base().is_some();
             if free && self.free_closed_ui(ui, chrome) {
+                return;
+            }
+            if self.chat.unavailable() {
+                let r = ui.label(RichText::new(crate::claude::UNAVAILABLE_TEXT).color(t.muted));
+                chrome.hit("agent unavailable", r.rect);
                 return;
             }
             match self.chat.proxy {
@@ -4105,10 +4373,7 @@ impl PlaygroundView {
                     ui.label(RichText::new("Checking for a local proxy…").color(t.muted))
                         .tip("With a local proxy the API key stays on this machine.");
                 }
-                Proxy::No => self.key_ui(ui, chrome),
-            }
-            if !free {
-                self.model_ui(ui);
+                Proxy::No => {}
             }
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
@@ -4121,7 +4386,7 @@ impl PlaygroundView {
                             !self.instruct.busy(),
                             egui::Button::new(RichText::new("From a spec…").size(crate::theme::BODY)),
                         )
-                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The Agent drafts the whole project from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
+                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The whole project is drafted from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
                     chrome.hit("spec open", r.rect);
                     if r.clicked() {
                         self.spec.open = true;
@@ -4137,10 +4402,9 @@ impl PlaygroundView {
             if let Some(act) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
                 self.design_act(act, &ctx);
             }
-            let r = ui
-                .checkbox(&mut chrome.agent_resets, "Stop and reset after a change")
-                .tip("On: when the Agent's change lands, the program stops with every variable, timer and output back at its start, ready to run from scratch. Off: the changed program runs at once. Remembered in this browser.");
-            chrome.hit("agent resets", r.rect);
+            // In the simulation a change runs at once unless the View
+            // menu's switch says to stop and reset (Nick, 2026-11-23: no
+            // checkbox in the tab).
             self.after_change = if chrome.agent_resets {
                 AfterChange::Reset
             } else {
@@ -4160,6 +4424,15 @@ impl PlaygroundView {
                     .as_ref()
                     .filter(|b| b.0 == self.instruct.draft)
                     .map(|b| b.1),
+                io: Some(self.phrasing_io()),
+                versions: Some(crate::instruct::Versions {
+                    rows: self.proj.revisions().iter().map(SimRevision::row).collect(),
+                    // By number, so a searched list knows which is on show.
+                    at: self
+                        .history_at
+                        .filter(|n| self.shows_revision(*n))
+                        .or_else(|| self.proj.revisions().last().map(|r| r.n)),
+                }),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
@@ -4170,9 +4443,29 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::RunSteps) => self.run_steps(&ctx),
                 Some(crate::instruct::Act::Revision(n)) => self.show_revision(n),
                 Some(crate::instruct::Act::Answer(k)) => self.answer_question(k, &ctx),
+                Some(crate::instruct::Act::Offer(k)) => self.take_offer(k, &ctx),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });
+    }
+
+    /// The inputs and outputs of the program on screen as its source
+    /// spells them, for the phrasing help in the Describe tab (a built-in
+    /// example's too: a change to it starts from its code); none when no
+    /// program is open.
+    fn phrasing_io(&self) -> Vec<crate::phrasing::Io> {
+        let src = &self.session.src;
+        self.session
+            .inputs()
+            .chain(self.session.outputs())
+            // A bare address (`%QX0.1`) is no name to spell.
+            .filter(|p| !p.name.starts_with('%'))
+            .map(|p| crate::phrasing::Io {
+                name: crate::phrasing::spelled(src, &p.name),
+                input: p.dir == crate::playground::Dir::In,
+                boolean: p.ty == Ty::Bool,
+            })
+            .collect()
     }
 
     /// The free chat while it is closed or cannot be reached: what
@@ -4193,7 +4486,7 @@ impl PlaygroundView {
             ),
             Free::Unreachable => (
                 "The free chat cannot be reached from here. The editor, the diagram and the simulation work without it.",
-                "The page could not reach the relay that answers the Agent. A firewall or an ad blocker can cause this.",
+                "The page could not reach the service that writes the changes. A firewall or an ad blocker can cause this.",
             ),
         };
         let r = ui.label(RichText::new(text).strong()).tip(tip);
@@ -4247,49 +4540,31 @@ impl PlaygroundView {
         true
     }
 
-    /// The model picker of the key and proxy routes.
-    fn model_ui(&mut self, ui: &mut egui::Ui) {
-        let t = theme(ui);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Model").color(t.muted))
-                .tip("The model that answers. A larger one is slower and costs more.");
-            // No wider than the panel: a row that overflows a resizable
-            // panel widens it every frame. `width` is only a floor, so
-            // the selected text is truncated to the room (2026-11-08:
-            // with two tabs the panel is narrower than this row was).
-            egui::ComboBox::from_id_salt("pg-model")
-                .width((ui.available_width() - 40.0).max(60.0))
-                .wrap_mode(egui::TextWrapMode::Truncate)
-                // The name alone: the note in brackets is in the list.
-                .selected_text(self.chat.model.label().split(" (").next().unwrap_or_default())
-                .show_ui(ui, |ui| {
-                    for m in Model::ALL {
-                        ui.selectable_value(&mut self.chat.model, m, m.label())
-                            .tip(format!("Answers with {}.", m.label()));
-                    }
-                })
-                .response
-                .tip("The model that answers. A larger one is slower and costs more.");
-        });
-    }
-
-    /// The Agent tab's scope line (card agent-scoped-edits), only while a
-    /// selection or a pick narrows it: what the next instruction may
-    /// change and which rule gave it, with Whole file.
+    /// The Agent tab's scope line (card agent-scoped-edits): what the next
+    /// instruction may change and which rule gave it. Shown while a
+    /// selection or a pick narrows it, with Whole file, and while the file
+    /// it names is not the one in the editor (a test is open, and the
+    /// instruction changes the program).
     fn scope_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let scope = self.scope();
-        if scope.lines().is_none() {
+        let elsewhere = scope.file().is_some_and(|f| f != self.proj.current);
+        if scope.lines().is_none() && !elsewhere {
             return;
         }
+        let rule = if elsewhere && scope.lines().is_none() {
+            "the program, because the file open in the Code tab is not one an instruction changes"
+        } else {
+            scope.rule()
+        };
         let mut whole = false;
         // Wrapped: a long name in a plain row would widen the panel.
         ui.horizontal_wrapped(|ui| {
-            let r = ui.label(RichText::new(scope.label()).strong()).tip(scope.rule());
+            let r = ui.label(RichText::new(scope.label()).strong()).tip(rule);
             chrome.hit("agent scope", r.rect);
             if scope.lines().is_some() {
                 let b = ui
                     .small_button("Whole file")
-                    .tip("Drops the selection and the pick: the Agent edits the open file.");
+                    .tip("Drops the selection and the pick: the change goes into the whole open file.");
                 chrome.hit("scope whole file", b.rect);
                 whole = b.clicked();
             }
@@ -4298,68 +4573,6 @@ impl PlaygroundView {
             self.whole_file(&ui.ctx().clone());
         }
         ui.add_space(4.0);
-    }
-
-    fn key_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let held = "Held in this page only; sent only to api.anthropic.com, billed to your account.";
-        let key_tip = if self.chat.from_env {
-            format!("{held} Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
-        } else {
-            held.to_string()
-        };
-        ui.label(RichText::new("Anthropic API key").strong())
-            .tip(&key_tip);
-        let r = ui
-            .add(
-                egui::TextEdit::singleline(self.chat.key_mut())
-                    .id_salt("pg-key")
-                    .password(true)
-                    .hint_text("sk-ant-…")
-                    .desired_width(f32::INFINITY),
-            )
-            .tip(&key_tip);
-        chrome.hit("agent key", r.rect);
-        if r.changed() {
-            self.chat.key_changed();
-        }
-        if self.chat.has_key() && !self.chat.key_looks_right() {
-            ui.label(
-                RichText::new("That does not look like an Anthropic key (sk-ant-…).")
-                    .small()
-                    .color(crate::theme::theme(ui).ink(RED)),
-            );
-        }
-        let mut remember = self.chat.remember;
-        if ui
-            .checkbox(&mut remember, "Remember on this device")
-            .tip("Stores the key in this browser's localStorage.")
-            .changed()
-        {
-            self.chat.set_remember(remember);
-        }
-        if remember {
-            ui.label(
-                RichText::new(
-                    "Stored in this browser's localStorage, readable by any script on this site. \
-                     Untick, or Forget, on a shared computer.",
-                )
-                .small()
-                .color(crate::theme::theme(ui).ink(RED)),
-            );
-        }
-        // Wrapped: in a plain row a label extends, and a row wider than a
-        // resizable panel widens it every frame.
-        ui.horizontal_wrapped(|ui| {
-            if self.chat.has_key()
-                && ui
-                    .button("Forget key")
-                    .tip("Clears the key from this page and this browser.")
-                    .clicked()
-            {
-                self.chat.forget_key();
-            }
-        });
-        ui.add_space(6.0);
     }
 
     /// Draws the trend; returns the rect it filled (the lanes' handles go
@@ -4561,6 +4774,12 @@ pub fn window_label(ms: u64) -> String {
 
 /// Width of a lane's label column, which is also its drag handle.
 const LANE_HANDLE_W: f32 = 88.0;
+
+/// The Trend tab's signal buttons wrap, and take at most this share of its
+/// height before they scroll, so the plot keeps the rest.
+const SIGNAL_ROWS_SHARE: f32 = 1.0 / 3.0;
+/// ... and never less than one row of them.
+const SIGNAL_ROWS_MIN: f32 = 34.0;
 
 /// A place in the trend's palette as it is drawn on this page: the brand
 /// colours, as ink on the light page, where the last (white) is the
@@ -5453,7 +5672,7 @@ impl Default for PlaygroundView {
 
 /// One input: its control, and the response a right-click on its row
 /// opens a menu from. `place` is where the point is now, in its tooltip.
-fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::Response) {
+fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Value>, egui::Response) {
     let t = theme(ui);
     let label = match p.address() {
         Some(a) => format!("{}  {a}", p.name.to_ascii_lowercase()),
@@ -5467,7 +5686,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
     // What a button gets beside the glyph: any wider and it wraps under it.
     let beside = (ui.available_width() - crate::glyphs::ROW - ui.spacing().item_spacing.x - 1.0).max(40.0);
     // A button is that wide and no wider: its name is cut, never the row.
-    let size = Vec2::new(beside.min(TAP * 3.0), TAP * 0.8);
+    let size = Vec2::new(if tile { beside.min(TAP * 3.0) } else { beside }, TAP * 0.8);
     // A tile is too narrow for a slider beside the box: the box alone.
     let slider = ui.available_width() >= 150.0;
     let boxed = Vec2::new((ui.available_width() - 2.0).clamp(40.0, 84.0), TAP * 0.6);
@@ -5483,9 +5702,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                             .color(if on { BLACK } else { t.fg }),
                     )
                     .fill(if on { YELLOW } else { t.rule })
-                    .sense(Sense::click_and_drag())
-                    .wrap_mode(egui::TextWrapMode::Truncate);
-                let r = ui.add_sized(size, b).tip(format!(
+                    .sense(Sense::click_and_drag());
+                let r = control_button(ui, b, size, tile).tip(format!(
                     "Push button: on while held. Double-click for its details.\n{place}"
                 ));
                 out = Some(Value::Bool(r.is_pointer_button_down_on()));
@@ -5498,9 +5716,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
                         .strong()
                         .color(if on { BLACK } else { t.fg }),
                 )
-                .fill(if on { YELLOW } else { t.rule })
-                .wrap_mode(egui::TextWrapMode::Truncate);
-                let r = ui.add_sized(size, b).tip(format!(
+                .fill(if on { YELLOW } else { t.rule });
+                let r = control_button(ui, b, size, tile).tip(format!(
                     "Switch: click to flip. Double-click for its details.\n{place}"
                 ));
                 if r.clicked() {
@@ -5593,6 +5810,26 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str) -> (Option<Value>, egui::
     (out, anchor)
 }
 
+/// An input's button on its card. A tile's is `size`, its name cut; a
+/// row's is at least that and grows to a second line when the name needs
+/// it, so the name shows whole.
+fn control_button(ui: &mut egui::Ui, b: egui::Button<'_>, size: Vec2, tile: bool) -> egui::Response {
+    if tile {
+        ui.add_sized(size, b.wrap_mode(egui::TextWrapMode::Truncate))
+    } else {
+        let w = size.x;
+        ui.allocate_ui_with_layout(
+            Vec2::new(w, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_max_width(w);
+                ui.add(b.wrap_mode(egui::TextWrapMode::Wrap).min_size(size))
+            },
+        )
+        .inner
+    }
+}
+
 /// A row's name, where a right-click lands, saying where the point is.
 fn row_label(ui: &mut egui::Ui, label: &str, place: &str) -> egui::Response {
     ui.add(egui::Label::new(label).sense(Sense::click()))
@@ -5622,7 +5859,7 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
     };
     // A tile has the lamp and the name; the glyph would take half of it.
     let glyph = (!tile).then(|| crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
-    crate::io_cards::value(ui, glyph, color, &text);
+    crate::io_cards::value(ui, glyph, color, &text, !tile);
 }
 
 /// A value for a readout (TIME in ms).

@@ -544,7 +544,7 @@ fn a_behaviour_preserving_change_passes_only_with_the_unchanged_behaviour_line()
     let c = check(&file(), &files, &claimed, settings());
     assert!(c.green(), "{:?}", c.problems());
     assert!(c.unchanged);
-    assert!(crate::instruct::status("main.st", &c).contains("behaviour unchanged (the Agent's claim)"));
+    assert!(crate::instruct::status("main.st", &c).contains("behaviour unchanged (as the answer says)"));
     // The claim does not excuse a failing scenario.
     let broken = claimed.replace("lamp := pressed", "lamp := NOT pressed");
     assert!(check(&file(), &files, &broken, settings()).red());

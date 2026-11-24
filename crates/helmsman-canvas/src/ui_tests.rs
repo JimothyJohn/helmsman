@@ -217,6 +217,20 @@ impl Harness {
         self.shapes.iter().any(|c| walk(&c.shape, needle))
     }
 
+    /// Whether the last frame drew a piece of text containing `needle`
+    /// cut short with an ellipsis (`drew` sees the whole text of such a
+    /// label; this one sees what is shown).
+    fn elided(&self, needle: &str) -> bool {
+        fn walk(shape: &egui::Shape, needle: &str) -> bool {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+                egui::Shape::Text(t) => t.galley.job.text.contains(needle) && t.galley.elided,
+                _ => false,
+            }
+        }
+        self.shapes.iter().any(|c| walk(&c.shape, needle))
+    }
+
     /// The simulation's ST editor's widget id for the open file.
     fn editor_id(&self) -> egui::Id {
         self.app.sim.as_ref().unwrap().source_id()
@@ -227,6 +241,16 @@ impl Harness {
     }
 
     fn press(&mut self, key: &str) {
+        // File, Edit, View and Help are the submenus of the one menu: with
+        // it shut, the way to one is the menu button first.
+        if key.starts_with("bar ") && key != "bar menu" {
+            // A menu an item just closed is gone a frame later.
+            self.frame(vec![]);
+        }
+        if key.starts_with("bar ") && key != "bar menu" && !self.has(key) {
+            let at = self.rect("bar menu").center();
+            self.click(at);
+        }
         let at = self.rect(key).center();
         self.click(at);
     }
@@ -414,9 +438,14 @@ mod glyphs_and_help {
         for k in ["messages info", "messages warnings", "messages errors"] {
             assert!(h.has(k), "no {k}");
         }
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().log.show,
+            [false, false, true],
+            "errors only, to start"
+        );
         h.press("messages info");
         let log = &h.app.sim.as_ref().unwrap().log;
-        assert_eq!(log.show, [false, true, true], "info filtered out");
+        assert_eq!(log.show, [true, false, true], "info listed too");
         assert_eq!(h.app.chrome.bottom, Bottom::Messages);
         assert!(!h.has("st"), "no Files header row either");
     }
@@ -440,11 +469,12 @@ mod glyphs_and_help {
             assert!(!h.drew(&format!("{word} ")), "the word {word:?} is drawn");
         }
         assert!(h.drew("deploy refused"), "the message itself is");
+        assert!(!h.drew("a deploy ran"), "info is hidden to start");
         let r = h.rect("messages errors");
         assert!(r.width() >= 24.0 && r.height() >= 24.0, "a target: {r:?}");
         h.press("messages errors");
         h.wait(0.1);
-        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [true, true, false]);
+        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [false, false, false]);
         assert!(!h.drew("deploy refused"), "errors left out");
         h.press("messages errors");
         h.wait(0.1);
@@ -493,6 +523,68 @@ mod glyphs_and_help {
             h.app.sim.as_ref().unwrap().log.text(),
             "what is shown, as text"
         );
+    }
+
+    /// Nick, 2026-11-23: an outcome is a short line in the Messages, the
+    /// whole text one hover or one Copy all away, and Clear empties the
+    /// log with its counts.
+    #[test]
+    fn an_outcome_is_a_short_line_clear_empties_and_a_hidden_level_still_counts() {
+        use crate::instruct::{Kind, Outcome};
+        let mut h = Harness::new(App::sim());
+        let long: Vec<String> = (1..=6)
+            .map(|k| format!("scenario test_{k} failed: expected the lamp on at scan 40 and it stayed off"))
+            .collect();
+        let mut refused = Outcome::new(Kind::Refused, "Not changed:");
+        refused.problems = long;
+        let mut said = Outcome::new(Kind::Applied, "Updated main.st.");
+        said.why = Some("The lamp now follows the button.".into());
+        {
+            let log = &mut h.app.sim.as_mut().unwrap().log;
+            log.outcome(1.0, &said);
+            log.outcome(2.0, &refused);
+        }
+        h.press("bottom messages");
+        h.wait(0.2);
+        assert!(h.drew("Not changed:"), "the short line");
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .log
+                .shown()
+                .any(|m| m.text.ends_with("(+5 more)")),
+            "and how many more"
+        );
+        assert!(!h.drew("scenario test_6"), "not every problem line");
+        assert!(!h.drew("Updated main.st"), "info is hidden");
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert!(
+            log.counts()[0] >= 1 && log.counts()[2] == 1,
+            "the hidden level is still counted: {:?}",
+            log.counts()
+        );
+        assert!(
+            log.errors() == 1 && log.alarm(2.5, false).is_some(),
+            "the error still pulses"
+        );
+        h.press("messages copy");
+        let all = h.copied.last().expect("Copy all copied").clone();
+        assert!(
+            all.contains("scenario test_6 failed"),
+            "Copy all has the whole: {all}"
+        );
+        assert!(!all.contains("Updated main.st"), "Copy all copies what is shown");
+        assert!(h.has("messages clear"), "Clear is there");
+        let r = h.rect("messages clear");
+        assert!(r.width() >= 24.0 && r.height() >= 24.0, "a target: {r:?}");
+        h.press("messages clear");
+        h.wait(0.1);
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert!(log.is_empty() && log.counts() == [0; 3] && log.errors() == 0);
+        assert!(log.alarm(2.5, false).is_none(), "nothing pulses or stays red");
+        assert!(!h.has("messages clear"), "nothing to clear now");
     }
 
     #[test]
@@ -1026,29 +1118,31 @@ END_PROGRAM",
         assert!(h.rect("st editor").right() <= pane, "wrapped again");
     }
 
-    /// Nick, 2026-11-01: one tall row, menus left, the project right; the
-    /// bar that held ST, Reset layout and Save as default is gone.
+    /// Nick, 2026-11-01: one tall row, the project right; the bar that held
+    /// ST, Reset layout and Save as default is gone. 2026-11-23: one menu
+    /// (a hamburger) holds File, Edit, View and Help.
     #[test]
-    fn the_header_is_one_tall_row_with_file_edit_and_view_menus() {
+    fn the_header_is_one_tall_row_with_one_menu_holding_file_edit_view_and_help() {
         let mut h = Harness::new(App::sim());
         let header = h.rect("header");
         assert!(header.height() >= HEADER_H, "{header:?}");
-        for k in [
-            "mark", "bar file", "bar edit", "bar view", "bar help", "title", "editor", "monitor", "help",
-        ] {
+        for k in ["mark", "bar menu", "title", "editor", "monitor", "help"] {
             assert!(h.has(k), "no {k}");
+        }
+        for k in ["bar file", "bar edit", "bar view", "bar help"] {
+            assert!(!h.has(k), "{k} is inside the menu, shut now");
         }
         assert!(!h.has("deploy"), "Deploy is the File menu's");
         assert!(!h.has("menu"), "no ⋯ any more");
-        let (file, view, help, toggle) = (
-            h.rect("bar file"),
-            h.rect("bar view"),
+        let (mark, menu, help, toggle) = (
+            h.rect("mark"),
+            h.rect("bar menu"),
             h.rect("help"),
             h.rect("monitor"),
         );
         assert!(
-            file.left() < view.left() && view.right() < help.left(),
-            "menus left, ? right"
+            mark.right() <= menu.left(),
+            "the wordmark, then the menu: {mark:?} {menu:?}"
         );
         assert!(
             help.left() >= toggle.right(),
@@ -1056,12 +1150,141 @@ END_PROGRAM",
         );
         assert!(help.right() <= 1400.0, "on screen");
         assert!(!h.has("st") && !h.has("reset layout"), "no second bar");
+        // The wordmark is the brand's mark and its name, not the old text.
+        assert!(h.drew("Helmsman") && !h.drew("HELMSMAN"), "the wordmark");
+        assert!(h.rect("mark").height() <= HEADER_H, "inside the row");
+        // Open, it lists the four, and each holds its items.
+        h.press("bar menu");
+        for k in ["bar file", "bar edit", "bar view", "bar help"] {
+            assert!(h.has(k), "no {k} in the menu");
+        }
+        assert!(
+            h.rect("bar file").bottom() <= h.rect("bar edit").top()
+                && h.rect("bar edit").bottom() <= h.rect("bar view").top()
+                && h.rect("bar view").bottom() <= h.rect("bar help").top(),
+            "File, Edit, View, Help, top to bottom"
+        );
         // The menus are there on the Monitor too.
+        h.press("bar menu");
         h.press("monitor");
         assert_eq!(h.app.screen, Screen::Monitor);
-        assert!(h.has("bar view"));
+        assert!(h.has("bar menu"));
         h.view_menu("view editor");
         assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    /// Nick, 2026-11-23: the chevron that folds a pane was not intuitive.
+    /// It is a panel now: a window outline with the pane's side filled and
+    /// an arrow pointing the way the pane goes, into its edge to hide it,
+    /// away from it to show it. Same hooks, `left` and `right`.
+    #[test]
+    fn the_fold_glyph_is_a_panel_with_an_arrow_the_way_it_will_move() {
+        /// What the last frame drew in `area`: the filled rects, and the
+        /// line segments (the arrow's two strokes).
+        fn drawn(h: &Harness, area: egui::Rect) -> (Vec<egui::Rect>, Vec<[egui::Pos2; 2]>) {
+            fn walk(s: &egui::Shape, area: egui::Rect, out: &mut (Vec<egui::Rect>, Vec<[egui::Pos2; 2]>)) {
+                match s {
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
+                    egui::Shape::Rect(r)
+                        if r.fill != egui::Color32::TRANSPARENT && area.contains_rect(r.rect) =>
+                    {
+                        out.0.push(r.rect);
+                    }
+                    egui::Shape::LineSegment { points, .. } if points.iter().all(|p| area.contains(*p)) => {
+                        out.1.push(*points);
+                    }
+                    _ => {}
+                }
+            }
+            let mut out = (Vec::new(), Vec::new());
+            for c in &h.shapes {
+                walk(&c.shape, area, &mut out);
+            }
+            out
+        }
+        /// Which way the arrow points: its two strokes meet at the tip.
+        fn points_right(segs: &[[egui::Pos2; 2]]) -> bool {
+            assert_eq!(segs.len(), 2, "an arrow is two strokes: {segs:?}");
+            let tip = segs[0]
+                .iter()
+                .find(|p| segs[1].contains(p))
+                .expect("the strokes meet");
+            let back = segs[0].iter().find(|p| *p != tip).unwrap();
+            tip.x > back.x
+        }
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.dock(Pane::Claude, true);
+        h.wait(0.3);
+        assert!(h.app.chrome.left && h.app.chrome.right, "both panes open");
+        for (hook, pane_left) in [("left", true), ("right", false)] {
+            // Open: the pane's side is filled, the arrow points into its edge.
+            let r = h.rect(hook);
+            assert!(
+                r.width() <= crate::st_view::TAP && r.height() <= crate::st_view::TAP,
+                "{hook}: {r:?}"
+            );
+            let (fills, segs) = drawn(&h, r);
+            let slab = fills
+                .iter()
+                .find(|f| f.width() < r.width() * 0.5 && f.height() > 12.0);
+            let slab = slab.unwrap_or_else(|| panic!("{hook}: no filled side in {fills:?}"));
+            assert_eq!(
+                slab.center().x < r.center().x,
+                pane_left,
+                "{hook}: the filled side is the pane's"
+            );
+            assert_eq!(
+                points_right(&segs),
+                !pane_left,
+                "{hook}: hide moves the pane to its edge"
+            );
+            // Click: the pane shuts, and its strip's button is the same
+            // glyph the other way about.
+            h.press(hook);
+            h.wait(0.3);
+            let shut = if pane_left {
+                h.app.chrome.left
+            } else {
+                h.app.chrome.right
+            };
+            assert!(!shut, "{hook}: the glyph hides its pane");
+            let r = h.rect(hook);
+            let (fills, segs) = drawn(&h, r);
+            let slab = fills.iter().find(|f| f.width() < 12.0 && f.height() > 12.0);
+            let slab = slab.unwrap_or_else(|| panic!("{hook} strip: no filled side in {fills:?}"));
+            assert_eq!(
+                slab.center().x < r.center().x,
+                pane_left,
+                "{hook} strip: the same side"
+            );
+            assert_eq!(
+                points_right(&segs),
+                pane_left,
+                "{hook} strip: show moves the pane in"
+            );
+            h.press(hook);
+            h.wait(0.3);
+            let open = if pane_left {
+                h.app.chrome.left
+            } else {
+                h.app.chrome.right
+            };
+            assert!(open, "{hook}: the strip's glyph shows its pane again");
+        }
+    }
+
+    /// The tab row's tips lead with the key and stay at two lines.
+    #[test]
+    fn the_pane_and_panel_tips_lead_with_the_key_and_fit_two_lines() {
+        for p in [Pane::Files, Pane::Code, Pane::Devices] {
+            let t = p.tip();
+            assert!(t.starts_with("Alt+Shift+"), "{t}");
+            assert!(t.lines().count() <= 2 && t.chars().count() <= 110, "{t}");
+        }
+        for b in [crate::editor::Bottom::Trend, crate::editor::Bottom::Messages] {
+            let t = b.tip();
+            assert!(t.lines().count() <= 2 && t.chars().count() <= 110, "{t}");
+        }
     }
 
     /// Nick, 2026-11-01: the Monitor needs play, start, stop. In the
@@ -1190,13 +1413,14 @@ END_PROGRAM",
     /// Nick, 2026-11-13: "I would love to see progressive changes being
     /// made rather than waiting a long time assuming something is
     /// happening." Nick, 2026-11-14: the thoughts flickered; only major
-    /// updates. While the Agent thinks: the time and "Planning", never the
-    /// thinking; then its reason; once it writes: the code as it arrives,
-    /// in the Agent tab and in the Code tab, marked a draft; the file
-    /// itself unchanged until the checks pass; both panes keep their
-    /// widths throughout.
+    /// updates. Nick, 2026-11-22: "don't need to share the code of the
+    /// output ... you're just waiting for an answer". The Describe tab
+    /// says one line and the clock from send to answer, never the
+    /// thinking, the reason or the code; the Code tab still shows the
+    /// draft as it arrives; the file itself unchanged until the checks
+    /// pass; both panes keep their widths throughout.
     #[test]
-    fn the_agent_shows_its_stage_then_the_code_as_it_is_written() {
+    fn the_tab_waits_in_one_line_while_the_code_tab_shows_the_draft() {
         use crate::claude::Incoming;
         use crate::instruct_tests::{LAMP, follows};
         let ev = |name: &str, data: serde_json::Value| format!("event: {name}\ndata: {data}\n\n");
@@ -1229,7 +1453,7 @@ END_PROGRAM",
                 .push(Incoming::Chunk { seq, text });
             h.wait(0.3);
         };
-        assert!(h.drew("Sending to the Agent · "), "the clock from the start");
+        assert!(h.drew("Working on it · "), "the clock from the start");
         assert!(
             h.drew("takes 5 to 30 s"),
             "and how long it takes, least to most (9 lines)"
@@ -1244,7 +1468,7 @@ END_PROGRAM",
             ]
             .concat(),
         );
-        assert!(h.drew("Planning the change · "));
+        assert!(h.drew("Working on it · "), "thinking: the same line");
         assert!(
             !h.drew("A comment after the assignment says why"),
             "the thinking itself is never shown"
@@ -1263,16 +1487,18 @@ END_PROGRAM",
             .concat(),
         );
         let lines = head.lines().count();
+        assert!(lines > 0);
+        assert!(h.drew("Working on it · "), "writing: the same line");
         assert!(
-            h.drew(&format!("Writing main.st · {lines} lines")),
-            "the lines so far"
+            !h.has("agent draft") && !h.has("agent plan"),
+            "no code or reason in the tab"
         );
-        assert!(h.has("agent draft"));
-        assert!(h.has("agent plan") && h.drew("it says why the lamp is on."));
-        let plan = h.rect("agent plan");
-        assert!(plan.bottom() <= h.size.y, "the reason is on screen: {plan:?}");
-        let draft = h.rect("agent draft");
-        assert!(draft.bottom() <= h.size.y, "the draft is on screen: {draft:?}");
+        assert!(
+            !h.drew("it says why the lamp is on."),
+            "the reason waits for the answer"
+        );
+        let working = h.rect("agent working");
+        assert!(working.bottom() <= h.size.y, "the line is on screen: {working:?}");
         assert!(h.has("st draft"), "the Code tab shows the draft");
         assert!(h.drew("END_VAR"), "the code written so far is drawn");
         assert_eq!(
@@ -1387,7 +1613,7 @@ END_PROGRAM",
         h.frame(vec![Event::Text("comment it".into())]);
         h.press("agent send");
         h.wait(4.0);
-        assert!(h.drew("Sending to the Agent · 4 s · takes 5 to 30 s"));
+        assert!(h.drew("Working on it · 4 s · takes 5 to 30 s"));
         // Code that does not compile: the Agent is asked again.
         let v = h.app.sim.as_mut().unwrap();
         let (seq, _) = v.link.sent.last().cloned().unwrap();
@@ -1402,7 +1628,7 @@ END_PROGRAM",
         v.link.inbox.push(Incoming::End { seq });
         h.wait(2.0);
         assert_eq!(h.app.sim.as_ref().unwrap().link.sent.len(), 2, "a retry");
-        assert!(h.drew("Try 2 of 3"));
+        assert!(h.drew("Fixing what failed, try 2 of 3"));
         assert!(
             h.drew("6 s · takes 5 to 30 s"),
             "the clock started again at the retry"
@@ -1478,13 +1704,47 @@ END_PROGRAM",
             assert!(!h.has(gone), "{gone}");
         }
         assert!(h.has("agent instruction") && h.has("agent send"));
+        // Nick, 2026-11-22: at least half the tab is the answer's.
         let field = h.rect("agent instruction");
+        let area = h.rect("agent answer area");
+        let tab = h.rect("right");
         assert!(
-            field.height() > 0.5 * h.rect("right").height(),
-            "the box takes the tab's height: {field:?} in {:?}",
-            h.rect("right")
+            area.height() >= 0.45 * tab.height(),
+            "the answer area: {area:?} in {tab:?}"
         );
+        // Nick, 2026-11-23: the box at the bottom, one row, growing
+        // upward to four as it is typed in; the answer does not move.
+        let send = h.rect("agent send");
+        assert!(area.bottom() < field.top(), "the answer over the box");
+        assert!(
+            field.bottom() <= send.top() + 1.0,
+            "the buttons under the box: {field:?} {send:?} {area:?}"
+        );
+        assert!(send.bottom() <= h.size.y, "on screen: {send:?}");
+        assert!(field.height() < 2.0 * 24.0, "one row to start: {field:?}");
         h.click(field.center());
+        h.frame(vec![Event::Text("one\ntwo\nthree\nfour\nfive\nsix".into())]);
+        h.wait(0.5);
+        let (grown, over) = (h.rect("agent instruction"), h.rect("agent answer area"));
+        assert!(
+            grown.height() >= 3.5 * 24.0 && grown.height() <= 5.0 * 24.0,
+            "four rows of six, the rest scrolls inside: {grown:?}"
+        );
+        assert!(
+            (grown.bottom() - field.bottom()).abs() <= 1.0,
+            "its bottom edge stays"
+        );
+        assert!((over.top() - area.top()).abs() <= 1.0, "the answer's top stays");
+        assert!(
+            (h.rect("agent send").top() - send.top()).abs() <= 1.0,
+            "the buttons stay"
+        );
+        h.app.sim.as_mut().unwrap().instruct.draft.clear();
+        h.wait(0.5);
+        assert!(
+            h.rect("agent instruction").height() < 2.0 * 24.0,
+            "empty, one row again"
+        );
         h.frame(vec![Event::Text("comment it".into())]);
         h.press("agent send");
         h.frame(vec![]);
@@ -1504,12 +1764,20 @@ END_PROGRAM",
                 "running before the change"
             );
         }
+        // The View menu's switch, on (and remembered): the change lands
+        // stopped, to run from scratch.
+        assert!(h.app.chrome.saved().contains("reset=0"), "off to start");
+        h.view_menu("view agent resets");
+        h.frame(vec![]);
+        assert!(
+            crate::editor::Chrome::restored(&h.app.chrome.saved()).agent_resets,
+            "remembered"
+        );
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
         {
             let v = h.app.sim.as_ref().unwrap();
             assert_eq!(v.proj.files["main.st"], new);
-            // Nick, 2026-11-14: a change lands stopped, to run from scratch.
             assert!(
                 !v.session.running && v.session.scans == 0 && v.session.now_ms == 0,
                 "the change lands stopped and reset"
@@ -1517,15 +1785,14 @@ END_PROGRAM",
             let logged = v
                 .log
                 .iter()
-                .map(|e| e.text.clone())
+                .map(|e| e.full().to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(logged.contains("Why: it says why the lamp is on."), "{logged}");
         }
-        assert!(
-            !h.has("agent result"),
-            "a change that landed is not described in the tab"
-        );
+        assert!(h.has("agent result"), "a change that landed says so, in one line");
+        assert!(h.drew("Done: it says why the lamp is on."));
+        assert!(!h.has("agent details"), "nothing to look up");
         assert!(h.has("agent back") && h.has("agent forward"));
         assert!(
             !h.drew("Before") && !h.drew("After"),
@@ -1535,16 +1802,14 @@ END_PROGRAM",
             h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
             "the change is marked"
         );
-        // A second instruction: the arrows walk back over both. With the
-        // switch off (remembered), its change runs at once.
+        // A second instruction: the arrows walk back over both. The tab
+        // has no switch for it: in the simulation a change runs at once
+        // unless the View menu says to stop and reset.
         let newer = new.replace("(* follows start *)", "(* on with start *)");
-        assert!(h.app.chrome.saved().contains("reset=1"));
-        h.press("agent resets");
+        assert!(!h.has("agent resets"), "no checkbox in the tab");
+        h.view_menu("view agent resets");
         h.frame(vec![]);
-        assert!(
-            !crate::editor::Chrome::restored(&h.app.chrome.saved()).agent_resets,
-            "remembered"
-        );
+        assert!(h.app.chrome.saved().contains("reset=0"), "off again");
         h.click(h.rect("agent instruction").center());
         h.frame(vec![Event::Text("reword it".into())]);
         h.press("agent send");
@@ -1593,7 +1858,9 @@ END_PROGRAM",
     }
 
     /// A refused answer: an error in the Messages (red count, opened), the
-    /// box outlined, and one line in the tab that opens the Messages.
+    /// box outlined, and in the tab what failed, in red, with a line that
+    /// opens the Messages (Nick, 2026-11-22: "the error messages are
+    /// invisible").
     #[test]
     fn a_refused_answer_is_an_error_in_the_messages_and_one_red_line() {
         use crate::instruct_tests::LAMP;
@@ -1622,11 +1889,93 @@ END_PROGRAM",
         let v = h.app.sim.as_ref().unwrap();
         assert_eq!(v.proj.files["main.st"], LAMP, "nothing written");
         assert!(v.log.errors() >= 1, "an error, so the Messages count it red");
-        assert!(h.has("agent result"));
+        assert!(h.has("agent result") && h.drew("Not changed:"));
+        assert!(h.drew("The code does not compile"), "what failed is in the tab");
+        let area = h.rect("agent answer area");
+        assert!(
+            h.rect("agent result").top() >= area.top() && h.rect("agent details").bottom() <= area.bottom()
+        );
+        assert!(area.bottom() <= h.size.y, "on screen: {area:?}");
         h.app.chrome.trend = false;
-        h.press("agent result");
+        h.press("agent details");
         assert!(h.app.chrome.trend, "the line opens the Messages");
         assert_eq!(h.app.chrome.bottom, crate::editor::Bottom::Messages);
+    }
+
+    /// Nick, 2026-11-22, on the programs that came back wrong: help with
+    /// the words, in the tab. An empty box offers examples in the
+    /// program's own names, one click puts one in the box; a name typed
+    /// as words is offered as declared, one click puts it in; the panels
+    /// keep their width at the right pane's default, with the longest
+    /// names.
+    #[test]
+    fn the_tab_offers_examples_and_fixes_names_at_the_panels_width() {
+        let long = "Conveyor_Infeed_Photo_Eye_Blocked_Too_Long_Alarm_Lamp";
+        let src = format!(
+            "PROGRAM line\nVAR_INPUT\n  StartPB : BOOL;\n  StopPB : BOOL;\nEND_VAR\nVAR_OUTPUT\n  GreenLamp : BOOL;\n  {long} : BOOL;\nEND_VAR\nGreenLamp := StartPB AND NOT StopPB;\n{long} := StopPB;\nEND_PROGRAM\n"
+        );
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        h.press("tab claude");
+        h.wait(0.2);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(crate::claude::Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), src.clone());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.3);
+        let kept = |h: &Harness, what: &str| {
+            assert!((h.rect("left").right() - left.right()).abs() <= 8.0, "{what}");
+            assert!((right.left() - h.rect("right").left()).abs() <= 8.0, "{what}");
+        };
+        assert!(h.has("phrase examples") && h.has("phrase example 0"));
+        assert!(
+            h.drew("Turn GreenLamp on when StartPB is pressed and keep it on until StopPB is pressed"),
+            "spelled as the source writes them"
+        );
+        let area = h.rect("agent answer area");
+        assert!(
+            h.rect("phrase example 0").top() >= area.top(),
+            "in the answer area"
+        );
+        kept(&h, "examples");
+        h.press("phrase example 0");
+        h.wait(0.2);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().instruct.draft,
+            "Turn GreenLamp on when StartPB is pressed and keep it on until StopPB is pressed"
+        );
+        assert!(!h.has("phrase examples"), "a box with words in it: no examples");
+        // Words for a name: the fix, then the name in the box.
+        let typed = "flash the conveyor infeed photo eye blocked too long alarm lamp while stop pb is held";
+        h.app.sim.as_mut().unwrap().instruct.draft = typed.into();
+        h.wait(0.2);
+        assert!(h.has("phrase fix 0") && h.has("phrase fix 1"), "both names");
+        assert!(h.drew("\u{201c}stop pb\u{201d} is StopPB in this program."));
+        kept(&h, "fixes");
+        h.press("phrase fix 0");
+        h.wait(0.2);
+        assert!(h.has("phrase fix 0") && !h.has("phrase fix 1"), "one left");
+        h.press("phrase fix 0");
+        h.wait(0.2);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().instruct.draft,
+            format!("flash the {long} while StopPB is held")
+        );
+        assert!(!h.has("phrase fix 0"), "nothing left to fix");
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().proj.files["main.st"],
+            src,
+            "nothing was sent or written"
+        );
+        assert!(
+            h.app.sim.as_ref().unwrap().link.sent.is_empty(),
+            "nothing was sent"
+        );
     }
 
     /// Shift+Enter goes on with a list, and ends it on an empty item.
@@ -1718,8 +2067,26 @@ END_PROGRAM",
                 text: String::new(),
             }),
             review: vec![3, 4],
+            offers: Vec::new(),
         };
+        // What stands in the way, with the nearest things on offer, at
+        // the panel's default width: long names and a long instruction.
+        let mut offered = outcome(Kind::Said, &long);
+        offered.offers = vec![
+            crate::offers::Offer {
+                what: crate::offers::What::Rename {
+                    old: "conveyor_infeed_photo_eye_blocked_for_too_long".into(),
+                    new: "conveyor_infeed_photo_eye_blocked_much_too_long".into(),
+                },
+                touches: vec![long.clone(), long.clone(), long.clone()],
+            },
+            crate::offers::Offer {
+                what: crate::offers::What::Instead { text: word.clone() },
+                touches: Vec::new(),
+            },
+        ];
         let states = [
+            (offered, "agent offer leave"),
             (
                 outcome(Kind::Applied, &format!("Updated {word}.st: 2 scenarios passed")),
                 "agent undo",
@@ -1761,8 +2128,8 @@ END_PROGRAM",
     }
 
     #[test]
-    fn the_third_tab_reads_agent() {
-        assert_eq!(crate::editor::Tab::Claude.label(), "Agent");
+    fn the_third_tab_reads_describe() {
+        assert_eq!(crate::editor::Tab::Claude.label(), "Describe");
     }
 
     #[test]
@@ -2173,7 +2540,7 @@ mod chrome {
         let band = h.rect("hint 3");
         let editor = h.rect("st editor");
         assert!(editor.contains(band.center()), "{band:?} in {editor:?}");
-        let said = |h: &Harness| h.app.sim.as_ref().unwrap().log.text();
+        let said = |h: &Harness| h.app.sim.as_ref().unwrap().log.full_text();
         assert!(!said(&h).contains("hint(s)"), "not while the text is new");
         h.wait(SETTLE + 0.3);
         let log = said(&h);
@@ -2316,6 +2683,17 @@ mod chrome {
             h.key(Modifiers::NONE, Key::Escape);
             h.frame(vec![]);
         };
+        // The one menu: its four submenu buttons fill its width alike.
+        h.press("bar menu");
+        h.frame(vec![]);
+        let four = ["bar file", "bar edit", "bar view", "bar help"].map(|k| h.rect(k));
+        let widest = four.iter().map(Rect::width).fold(0.0, f32::max);
+        assert!(
+            widest <= 220.0 * crate::theme::BODY / 12.5,
+            "the menu is {widest} pt wide"
+        );
+        assert!(four.iter().all(|r| (r.width() - widest).abs() < 1.0), "{four:?}");
+        h.press("bar menu");
         menu(&mut h, "bar file", &["file new", "file save", "file download"]);
         menu(&mut h, "bar edit", &["edit undo", "edit redo"]);
         menu(&mut h, "bar view", &["view st", "view files", "reset layout"]);
@@ -3370,14 +3748,14 @@ mod chrome {
     #[test]
     fn a_versions_description_shows_on_two_lines() {
         let mut h = Harness::new(App::sim());
-        let long = "Agent: the lamp now latches when start is pressed and stays on until stop is pressed, \
+        let long = "Described: the lamp now latches when start is pressed and stays on until stop is pressed, \
                     with a two second run-on timer before the belt stops and a horn while it runs on";
         {
             let sim = h.app.sim.as_mut().unwrap();
             sim.proj.create("mine", None);
             sim.open_project("mine");
             sim.proj.current_text_mut().unwrap().push_str("\n(* short *)");
-            sim.proj.save_as("Agent: a comment", None);
+            sim.proj.save_as("Described: a comment", None);
             sim.proj.current_text_mut().unwrap().push_str("\n(* long *)");
             sim.proj.save_as(long, None);
         }
@@ -3557,7 +3935,7 @@ mod chrome {
         assert_eq!(sim.proj.files.len(), before + 1, "{:?}", sim.proj.files.keys());
         let notice = sim.notice.clone().unwrap_or_default();
         assert!(
-            notice.contains("opened from the Agent's answer")
+            notice.contains("opened from the answer")
                 && notice.contains("test_lamp")
                 && notice.ends_with("is red."),
             "{notice}"
@@ -4236,6 +4614,167 @@ mod simulated {
         assert_eq!(order(&h), [a, b, c]);
     }
 
+    /// Nick, 2026-11-22: after a few Agent changes the trend drew nothing
+    /// but its window slider, running, and a signal clicked on never
+    /// showed. The Agent's programs have far more points than the
+    /// examples, and their buttons wrapped over the whole panel, leaving
+    /// the plot no height. With many points the plot keeps most of the
+    /// panel at its default height and every pinned lane is drawn.
+    #[test]
+    fn a_program_with_many_points_still_leaves_the_trend_room_for_its_lanes() {
+        use std::fmt::Write as _;
+        let mut src = String::from("PROGRAM cell\nVAR_INPUT\n");
+        for k in 0..24 {
+            let _ = writeln!(src, "  station_{k}_part_present : BOOL;");
+        }
+        src.push_str("END_VAR\nVAR_OUTPUT\n");
+        for k in 0..16 {
+            let _ = writeln!(src, "  station_{k}_clamp_valve : BOOL;");
+        }
+        src.push_str("END_VAR\n");
+        for k in 0..16 {
+            let _ = writeln!(src, "station_{k}_clamp_valve := station_{k}_part_present;");
+        }
+        src.push_str("END_PROGRAM\n");
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        {
+            let s = &mut h.app.sim.as_mut().unwrap().session;
+            assert!(s.load(&src), "{:?}", s.diag_lines());
+            s.set_running(true);
+        }
+        h.wait(0.5);
+        let signals = h.app.sim.as_ref().unwrap().session.trend.signals.clone();
+        assert_eq!(signals.len(), 4, "the first four are pinned");
+        let plot = h.rect("trend plot");
+        let panel = h.rect("trend tab");
+        // Unbounded, the rows also grew the panel to twice its height.
+        assert!(
+            panel.height() <= crate::editor::BOTTOM_H,
+            "the panel grew to {} pt",
+            panel.height()
+        );
+        assert!(
+            plot.height() >= panel.height() * 0.4,
+            "the plot has {} pt of the panel's {}",
+            plot.height(),
+            panel.height()
+        );
+        for name in &signals {
+            let lane = h.rect(&format!("trend lane {}", name.to_ascii_lowercase()));
+            assert!(lane.height() >= 20.0, "{name}'s lane is {} pt", lane.height());
+            assert!(
+                lane.bottom() <= panel.bottom() + 0.5,
+                "{name}'s lane is inside the panel"
+            );
+        }
+        let v = h.app.sim.as_ref().unwrap();
+        for name in &signals {
+            assert!(v.session.trend.history.changes(name) >= 1, "{name} records");
+        }
+    }
+
+    /// A program of `n` BOOL inputs with long names, loaded and running.
+    fn trend_program(n: usize) -> Harness {
+        use std::fmt::Write as _;
+        let mut src = String::from("PROGRAM cell\nVAR_INPUT\n");
+        for k in 0..n {
+            let _ = writeln!(src, "  station_{k}_part_present_sensor : BOOL;");
+        }
+        src.push_str("END_VAR\nEND_PROGRAM\n");
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        {
+            let s = &mut h.app.sim.as_mut().unwrap().session;
+            assert!(s.load(&src), "{:?}", s.diag_lines());
+            s.set_running(true);
+        }
+        h.wait(0.5);
+        h
+    }
+
+    /// Nick, 2026-11-23: the signal legend is rows, not one crowded row.
+    /// A handful of signals wraps onto more than one row, every button is
+    /// on screen and whole, and nothing scrolls sideways.
+    #[test]
+    fn a_handful_of_trend_signals_wrap_onto_rows_and_all_show() {
+        let h = trend_program(6);
+        let legend = h.rect("trend signals");
+        let tab = h.rect("trend tab");
+        let mut tops = Vec::new();
+        for k in 0..6 {
+            let b = h.rect(&format!("trend signal station_{k}_part_present_sensor"));
+            assert!(b.height() >= 16.0, "button {k} is {} pt high", b.height());
+            assert!(
+                legend.contains_rect(b),
+                "button {k} {b:?} is clipped by the legend {legend:?}"
+            );
+            if !tops.iter().any(|t: &f32| (t - b.top()).abs() < 1.0) {
+                tops.push(b.top());
+            }
+        }
+        assert!(tops.len() > 1, "one row only: {tops:?}");
+        assert!(legend.height() <= tab.height() / 3.0 + 0.5, "within a third");
+        assert!(legend.right() <= tab.right() + 0.5, "no wider than the tab");
+    }
+
+    /// With 40 signals the legend stops at a third of the tab and scrolls
+    /// inside itself: the panel keeps its height, the plot its room, and
+    /// the first button is still where it was. No row widens the panel.
+    #[test]
+    fn many_trend_signals_scroll_in_a_legend_capped_at_a_third() {
+        let mut h = trend_program(40);
+        let legend = h.rect("trend signals");
+        let tab = h.rect("trend tab");
+        let plot = h.rect("trend plot");
+        let panel = tab;
+        assert!(
+            legend.height() <= tab.height() / 3.0 + 0.5,
+            "the legend is {} pt of the tab's {}",
+            legend.height(),
+            tab.height()
+        );
+        assert!(legend.height() > 34.0, "more than one row is shown");
+        assert!(
+            panel.height() <= crate::editor::BOTTOM_H,
+            "the panel grew to {}",
+            panel.height()
+        );
+        assert!(
+            plot.height() >= tab.height() * 0.4,
+            "the plot has {} pt",
+            plot.height()
+        );
+        // Later buttons are scrolled out of the legend's window, not
+        // squeezed in: the last one starts below its bottom.
+        let last = h.rect("trend signal station_39_part_present_sensor");
+        assert!(
+            last.top() >= legend.bottom() - 0.5,
+            "the last button is out of view"
+        );
+        // Wheel over the legend scrolls it, and the panel stays put.
+        h.frame(vec![Event::PointerMoved(legend.center())]);
+        for _ in 0..4 {
+            h.frame(vec![Event::MouseWheel {
+                unit: MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -400.0),
+                modifiers: Modifiers::NONE,
+                phase: eframe::egui::TouchPhase::Move,
+                source: eframe::egui::MouseWheelSource::Wheel,
+            }]);
+            h.wait(0.3);
+        }
+        let last = h.rect("trend signal station_39_part_present_sensor");
+        let legend = h.rect("trend signals");
+        assert!(
+            last.top() < legend.bottom(),
+            "scrolled into view {last:?} {legend:?}"
+        );
+        assert_eq!(h.rect("trend tab").height(), panel.height(), "the panel held");
+        assert_eq!(h.rect("trend tab").width(), panel.width(), "and its width");
+        assert_eq!(h.rect("trend plot").height(), plot.height(), "so did the plot");
+    }
+
     /// Nick, 2026-11-11: a trend signal's colour is the user's to pick. A
     /// click on a lane's label opens the palette; the swatch clicked is
     /// that signal's colour whichever lane it is in, and the browser
@@ -4343,6 +4882,46 @@ mod simulated {
         assert_eq!(window_label(10_000), "10 s");
         assert_eq!(window_label(60_000), "1 min");
         assert_eq!(window_label(600_000), "10 min");
+    }
+
+    /// With a requirement test open the next instruction changes the
+    /// program, a file that is not the one on screen: the tab says which,
+    /// at the right pane's default width, and stops saying it once the
+    /// program itself is open.
+    #[test]
+    fn the_scope_line_names_the_program_while_another_file_is_open() {
+        use crate::scope::Scope;
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        h.wait(0.3);
+        let right = h.rect("right");
+        h.press("pane code");
+        h.press("tab claude");
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+        }
+        h.wait(0.3);
+        assert!(!h.has("agent scope"), "the open file is the scope");
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.add_file(
+                "test_a_long_requirement_name_for_the_lamp.st",
+                "PROGRAM test_a_long_requirement_name_for_the_lamp\nEND_PROGRAM\n".into(),
+            );
+            sim.proj.open_file("test_a_long_requirement_name_for_the_lamp.st");
+        }
+        h.wait(0.3);
+        let scope = h.app.sim.as_ref().unwrap().scope();
+        assert_eq!(scope, Scope::File("main.st".into()));
+        assert!(h.has("agent scope"));
+        assert!(!h.has("scope whole file"), "nothing narrows it");
+        let r = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
+        h.app.sim.as_mut().unwrap().proj.open_file("main.st");
+        h.wait(0.3);
+        assert!(!h.has("agent scope"));
     }
 
     /// Card agent-scoped-edits: the Agent tab says what the next
@@ -4592,13 +5171,31 @@ mod simulated {
         assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
     }
 
-    /// A page built with the free chat: no key field and no model picker,
-    /// one notice under the Agent's box. Closed or out of reach, the tab
-    /// says so in place of the box and asks its one question. The right
-    /// panel keeps its default width through every one of these states.
+    /// The Agent tab never has a key field or a model picker, in any
+    /// state: no route, the local proxy, the free chat open, closed or out
+    /// of reach. With no route at all it says so in one line; closed or out
+    /// of reach, the free chat says so in place of the box and asks its one
+    /// question. The right panel keeps its default width through every one
+    /// of these states.
     #[test]
-    fn the_free_chat_tab_has_no_key_and_keeps_the_panel_width() {
+    fn the_agent_tab_has_no_key_and_no_model_and_keeps_the_panel_width() {
         use crate::claude::{Free, Incoming};
+        // No key field and no model picker, whatever the state.
+        fn bare(h: &mut Harness, what: &str) {
+            assert!(!h.has("agent key"), "{what}: a key field");
+            let text = crate::ui_tests::all_text(h);
+            for word in [
+                "API key",
+                "Remember on this device",
+                "Forget key",
+                "Model",
+                "Sonnet",
+                "Opus",
+                "Haiku",
+            ] {
+                assert!(!text.contains(word), "{what}: the tab shows {word:?}");
+            }
+        }
         let mut h = Harness::new(App::sim());
         // Docked right: the Agent at the right pane's default width, its narrowest place.
         h.app.chrome.dock(crate::editor::Pane::Claude, true);
@@ -4606,11 +5203,25 @@ mod simulated {
         let right = h.rect("right");
         h.press("tab claude");
         h.wait(0.3);
-        assert!(h.has("agent key"), "with no free chat the page asks for a key");
         let grew = |h: &Harness, what: &str| {
             let r = right.left() - h.rect("right").left();
             assert!((0.0..=8.0).contains(&r), "{what}: the right panel grew {r} pt");
         };
+        // Still looking for a proxy: the chat box, no form.
+        bare(&mut h, "checking for a proxy");
+        // No proxy and no free chat in this build: one line, no box.
+        h.app.sim.as_mut().unwrap().chat.receive(Incoming::Proxy(false));
+        h.wait(0.3);
+        bare(&mut h, "no route");
+        assert!(h.has("agent unavailable") && !h.has("agent instruction"));
+        grew(&h, "no route");
+        // The local proxy: the chat box, no form.
+        h.app.sim.as_mut().unwrap().chat.receive(Incoming::Proxy(true));
+        h.wait(0.3);
+        bare(&mut h, "local proxy");
+        assert!(h.has("agent instruction") && !h.has("agent unavailable"));
+        grew(&h, "local proxy");
+        h.app.sim.as_mut().unwrap().chat.receive(Incoming::Proxy(false));
         h.app
             .sim
             .as_mut()
@@ -4618,7 +5229,8 @@ mod simulated {
             .chat
             .set_free_base("https://relay.example");
         h.wait(0.3);
-        assert!(!h.has("agent key") && h.has("agent instruction"));
+        bare(&mut h, "free checking");
+        assert!(h.has("agent instruction") && !h.has("agent unavailable"));
         grew(&h, "checking");
         assert_eq!(
             h.app.sim.as_ref().unwrap().link.free_checks,
@@ -4632,7 +5244,8 @@ mod simulated {
             .chat
             .receive(Incoming::Free(Free::Open));
         h.wait(0.3);
-        assert!(!h.has("agent key") && h.has("agent instruction"));
+        bare(&mut h, "free open");
+        assert!(h.has("agent instruction"));
         assert!(!h.has("agent free closed") && !h.has("survey google"));
         grew(&h, "open");
         for state in [
@@ -4643,7 +5256,8 @@ mod simulated {
             h.app.sim.as_mut().unwrap().chat.receive(Incoming::Free(state));
             h.wait(0.3);
             assert!(h.has("agent free closed"), "{state:?}");
-            assert!(!h.has("agent instruction") && !h.has("agent key"), "{state:?}");
+            bare(&mut h, &format!("{state:?}"));
+            assert!(!h.has("agent instruction"), "{state:?}");
             assert_eq!(
                 h.has("survey google") && h.has("survey other field"),
                 state != Free::Unreachable,
@@ -5309,7 +5923,7 @@ mod boxed {
         assert!(
             boxed(&h)
                 .log
-                .text()
+                .full_text()
                 .contains("Help: an issue was written (Conveyor stops when rio drops)."),
             "in Messages"
         );
@@ -6342,6 +6956,9 @@ mod tour {
         let sim = h.app.sim.as_ref().unwrap();
         assert!(sim.proj.files[&sim.proj.current].contains("T#200ms"));
         assert_eq!(step(&h), Step::Deploy);
+        assert_eq!(anchor(&h).as_deref(), Some("bar menu"));
+        card_is_fair(&h, "menu");
+        h.press("bar menu");
         assert_eq!(anchor(&h).as_deref(), Some("bar file"));
         card_is_fair(&h, "file menu");
         h.press("bar file");
@@ -6373,12 +6990,18 @@ mod tour {
         card_is_fair(&h, "agent tab");
         h.press("tab claude");
         h.wait(0.3);
-        assert_eq!(anchor(&h).as_deref(), Some("agent key"));
-        card_is_fair(&h, "key");
-        h.press("agent key");
-        h.frame(vec![Event::Text("sk-ant-api03-tour".into())]);
+        // The tab never asks for a key: the card points at the box.
+        assert!(!h.has("agent key"));
+        // The local proxy answers (the page's way to a model here).
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .chat
+            .receive(crate::claude::Incoming::Proxy(true));
         h.wait(0.2);
         assert_eq!(anchor(&h).as_deref(), Some("agent instruction"));
+        card_is_fair(&h, "instruction");
         h.press("agent instruction");
         h.frame(vec![Event::Text(
             "keep the lamp on for 1 s and off for 2 s".into(),
@@ -6999,6 +7622,7 @@ mod chat_about;
 mod design;
 mod device_io;
 mod diagram_menu;
+mod files_tab;
 mod front;
 mod io_cards;
 mod io_names;
@@ -7011,4 +7635,5 @@ mod sim_popup;
 mod spec_mode;
 mod start_state;
 mod vendor;
+mod versions;
 mod wired;

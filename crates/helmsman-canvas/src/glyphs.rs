@@ -40,6 +40,8 @@ pub enum Icon {
     /// → : deploy the open project, its latest edits (Nick, 2026-11-08).
     /// Beside the running project in Files and the Code header.
     Deploy,
+    /// A magnifier: find (and replace) in the open file.
+    Find,
     /// A line turning back under itself: word wrap in the Code tab
     /// (Nick, 2026-11-08), lit while on.
     Wrap,
@@ -81,6 +83,16 @@ pub enum Icon {
     List,
     /// Four squares: the I/O tab's cards as tiles.
     Grid,
+    /// Two sheets, one behind the other: copy (the Messages tab).
+    Copy,
+    /// A bin: empty the Messages.
+    Clear,
+    /// An open hand: pan the diagram (the corner controls).
+    Hand,
+    /// A magnifier with a plus: zoom in.
+    ZoomIn,
+    /// A magnifier with a minus: zoom out.
+    ZoomOut,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -121,6 +133,38 @@ pub fn action(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool) -> Re
         painter,
         Rect::from_center_size(rect.center(), Vec2::splat(side)),
         icon,
+        ink,
+    );
+    r
+}
+
+/// How wide the Deploy button is, points.
+pub const DEPLOY_W: f32 = TAP * 1.6;
+
+/// Deploy as a button that reads as one (Nick, 2026-11-23): filled
+/// green, a black arrow, bigger than the glyphs beside it. The caller
+/// tips it.
+pub fn deploy(ui: &mut egui::Ui, enabled: bool) -> Response {
+    let size = Vec2::new(DEPLOY_W, TAP * 0.85);
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, r) = ui.allocate_exact_size(size, sense);
+    let t = theme(ui);
+    let hot = enabled && r.hovered();
+    let (fill, ink) = if enabled {
+        (
+            if hot { GREEN.gamma_multiply(0.85) } else { GREEN },
+            crate::st_view::brand::BLACK,
+        )
+    } else {
+        (t.rule.gamma_multiply(0.5), t.muted.gamma_multiply(0.5))
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(5), fill);
+    let side = rect.height() * 0.5;
+    draw(
+        painter,
+        Rect::from_center_size(rect.center(), Vec2::new(side * 1.4, side)),
+        Icon::Deploy,
         ink,
     );
     r
@@ -481,6 +525,39 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 p.rect_stroke(q, CornerRadius::same(1), stroke, egui::StrokeKind::Inside);
             }
         }
+        Icon::Hand => {
+            // A palm with four fingers up and a thumb out to the side.
+            let palm = Rect::from_min_max(
+                Pos2::new(l + b.width() * 0.12, t + b.height() * 0.5),
+                Pos2::new(r - b.width() * 0.12, bt),
+            );
+            p.rect_stroke(palm, CornerRadius::same(3), stroke, egui::StrokeKind::Inside);
+            for k in 0..4_u8 {
+                let x = palm.left() + palm.width() * (0.12 + 0.253 * f32::from(k));
+                let up = t + b.height() * if (1..=2).contains(&k) { 0.0 } else { 0.1 };
+                p.line_segment([Pos2::new(x, palm.top()), Pos2::new(x, up)], stroke);
+            }
+            p.line_segment(
+                [
+                    Pos2::new(palm.left(), palm.top() + palm.height() * 0.3),
+                    Pos2::new(l, c.y),
+                ],
+                stroke,
+            );
+        }
+        Icon::ZoomIn | Icon::ZoomOut => {
+            // A lens up and to the left, its handle down and to the right.
+            let radius = b.width() * 0.34;
+            let lens = Pos2::new(l + radius, t + radius);
+            p.circle_stroke(lens, radius, stroke);
+            let reach = radius * std::f32::consts::FRAC_1_SQRT_2;
+            p.line_segment([lens + Vec2::splat(reach), Pos2::new(r, bt)], stroke);
+            let bar = radius * 0.55;
+            p.line_segment([lens - Vec2::new(bar, 0.0), lens + Vec2::new(bar, 0.0)], stroke);
+            if icon == Icon::ZoomIn {
+                p.line_segment([lens - Vec2::new(0.0, bar), lens + Vec2::new(0.0, bar)], stroke);
+            }
+        }
         Icon::Back | Icon::Forward => {
             // A shaft across the middle, an open arrowhead at one end.
             let (from, to) = if icon == Icon::Back { (r, l) } else { (l, r) };
@@ -494,6 +571,17 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             p.line_segment(
                 [Pos2::new(to, c.y), Pos2::new(to + dir * head, c.y + head)],
                 stroke,
+            );
+        }
+        Icon::Find => {
+            // A lens and its handle, down to the right.
+            let rad = b.width() * 0.32;
+            let at = Pos2::new(l + rad + w * 0.5, t + rad + w * 0.5);
+            p.circle_stroke(at, rad, stroke);
+            let d = rad * std::f32::consts::FRAC_1_SQRT_2;
+            p.line_segment(
+                [Pos2::new(at.x + d, at.y + d), Pos2::new(r, bt)],
+                Stroke::new(w * 1.3, color),
             );
         }
         Icon::Deploy => {
@@ -621,6 +709,43 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             );
             p.circle_filled(Pos2::new(c.x, t + b.height() * 0.8), w * 0.7, color);
         }
+        Icon::Copy => {
+            let k = b.width() * 0.62;
+            let front = Rect::from_min_size(Pos2::new(r - k, bt - k), Vec2::splat(k));
+            // The sheet behind shows only what the front one leaves.
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(l + k, bt - k),
+                    Pos2::new(l + k, t),
+                    Pos2::new(l, t),
+                    Pos2::new(l, t + k),
+                    Pos2::new(r - k, t + k),
+                ],
+                stroke,
+            ));
+            p.rect_stroke(front, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+        }
+        Icon::Clear => {
+            // A bin: the lid and its handle over a tapering body.
+            let lid = t + b.height() * 0.22;
+            p.line_segment([Pos2::new(l, lid), Pos2::new(r, lid)], stroke);
+            p.line_segment(
+                [
+                    Pos2::new(c.x - b.width() * 0.18, t + w * 0.5),
+                    Pos2::new(c.x + b.width() * 0.18, t + w * 0.5),
+                ],
+                stroke,
+            );
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(l + b.width() * 0.14, lid),
+                    Pos2::new(l + b.width() * 0.22, bt - w * 0.5),
+                    Pos2::new(r - b.width() * 0.22, bt - w * 0.5),
+                    Pos2::new(r - b.width() * 0.14, lid),
+                ],
+                stroke,
+            ));
+        }
         Icon::Error => {
             p.circle_stroke(c, b.width() * 0.5 - w * 0.5, stroke);
             let k = b.width() * 0.2;
@@ -637,5 +762,46 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 color,
             );
         }
+    }
+}
+
+/// The brand's stencil encoder mark (docs/brand, the `se` symbol: a rim cut
+/// by eight bridges, a hub ring cut by four, the dot, eight detached teeth)
+/// drawn in `rect`'s square in `color`. The SVG masks the cuts out; here the
+/// rim and the hub ring are arcs that stop short of them.
+pub fn paint_mark(p: &egui::Painter, rect: Rect, color: Color32) {
+    let u = rect.width().min(rect.height()) / 96.0;
+    let c = rect.center();
+    let at = |deg: f32, radius: f32| {
+        let a = deg.to_radians();
+        c + Vec2::new(a.sin(), -a.cos()) * radius * u
+    };
+    // Arcs of a ring at `radius`, one between each pair of cuts: the cuts
+    // sit at `first` degrees and every `step` after, and an arc stops
+    // `gap` degrees short of each.
+    let ring = |radius: f32, width: f32, first: f32, step: f32, gap: f32| {
+        let mut from = first + gap;
+        while from + step - 2.0 * gap <= 360.0 + first {
+            let to = from + step - 2.0 * gap;
+            let pts: Vec<Pos2> = (0..=6u8)
+                .map(|i| at(from + (to - from) * f32::from(i) / 6.0, radius))
+                .collect();
+            p.add(egui::Shape::line(pts, Stroke::new(width * u, color)));
+            from += step;
+        }
+    };
+    ring(26.5, 9.0, 22.5, 45.0, 4.0);
+    ring(11.0, 4.0, 45.0, 90.0, 7.0);
+    p.circle_filled(c, 4.0 * u, color);
+    for k in 0..8u8 {
+        let a = (45.0 * f32::from(k)).to_radians();
+        let tooth: Vec<Pos2> = [(-5.0, 33.0), (5.0, 33.0), (5.0, 43.0), (-5.0, 43.0)]
+            .iter()
+            .map(|&(x, y): &(f32, f32)| {
+                // (x, -y) turned clockwise by the tooth's angle.
+                c + Vec2::new(x * a.cos() + y * a.sin(), x * a.sin() - y * a.cos()) * u
+            })
+            .collect();
+        p.add(egui::Shape::convex_polygon(tooth, color, Stroke::NONE));
     }
 }

@@ -13,27 +13,51 @@ this; change it here first when a decision changes.
   holds Chat about this and the io.map items (Assign to device I/O…, Back
   to simulated I/O), none of which changes the code. What was built and why it
   went: docs/decisions/diagram-edits.md. (The node-graph Lab
-  editor is gone.)
+  editor is gone.) **Names and set values are the exception** (Nick,
+  2026-11-23: "I do want to be able to change set values, labels, and names
+  on the visual panel, but I don't want to manipulate the logic"): Rename…
+  on a block that names a variable and on an I/O row, Set value… on a
+  constant or a timer's preset, a double click for either, and the code
+  follows. Each is saved as one revision with a History entry, as a
+  described change is, and Undo takes it back. The label is the variable's
+  name; a label of its own is a later layer (TODO.md `label-layer`).
 - **One app wherever it runs.** Served by a Pi, it talks to that Pi. Opened
   from the public site (docs/playground), it runs a simulated box in the
   page. Same screens, same buttons; the source is a setting, not a mode.
+- **Runs in every engine, with or without a GPU.** Chromium (Chrome, Edge),
+  Firefox and WebKit (Safari on a Mac or iPad) each need WebGL2. `make
+  canvas-smoke BROWSER=all` and `NOGPU=1` drive all three headless, with
+  hardware drawing and in software, on every PR (the `canvas-browsers` job).
+  A browser with no WebGL2 shows a notice (loading/loading.js) in place of
+  the app.
 - **Two screens: Editor and Monitor.** No Lab, Live, Site, Demo, Andon or
   Playground modes.
 - **Navigation is never lost.** The header is always there: project name,
   Editor | Monitor, Save, Deploy, login, and a ⋯ menu (Proposals with a
   badge when one waits, Upload, Download).
 
+## Tooltips (Nick, 2026-11-23)
+
+The key first, then what it does; two lines at most. A longer
+explanation belongs in Help. `tips_tests` counts the tips over the limit
+(110 characters, or more than one line break) and holds the count: it may
+only go down.
+
 ## Editor (desktop and tablet; a phone opens the Monitor)
 
-- **One header row (48 pt):** on the left the HELMSMAN wordmark (a link
-  to the site) and a menu bar: File (New project, Copy project, Save,
-  Deploy, Upload, Download),
+- **One header row (48 pt):** on the left the brand wordmark (the
+  stencil encoder mark and "Helmsman", a link to the site; the name is in
+  the canvas's own text face until the brand's face is bundled) and one
+  menu, a three-line glyph (Nick, 2026-11-23): File (New project, Copy
+  project, Save, Deploy, Upload, Download),
   Edit (Undo, Redo, Go to definition, Cross references), View (Editor /
   Monitor, Structured Text, Files, Devices, the right pane, Tab to the right, the Agent's tabs, Trend,
   Zoom to fit, the layout items, Scan detail for an engineer, and Light
   mode: dark by default, the choice kept per browser with the layout) and Help
   (Help and Keyboard shortcuts on the site, About Helmsman: version,
-  build, licence, and on a box its certificate fingerprint). After them
+  build, licence, and on a box its certificate fingerprint) are its
+  submenus, on a desk as on a phone (hooks `bar menu`, then `bar file`,
+  `bar edit`, `bar view`, `bar help` once it is open).. After them
   the program's state, green running, red stopped or faulted (a box: its
   link). On the right the project's name, its edited mark, a "n waiting"
   badge when proposals wait, the Editor | Monitor toggle (a glyph a
@@ -43,8 +67,7 @@ this; change it here first when a decision changes.
   box" are View items. A fault, a deploy under way or a stale file shows
   on a line under the header only while it lasts. Below the narrow width
   (a phone) the wordmark, the state and the "simulation" tag are hidden,
-  the four menus fold into one Menu button with File, Edit, View and Help
-  as submenus, and the project's name is truncated, so the two groups
+  the project's name is truncated, so the two groups
   never overlap (2026-11-08).
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
   restart (the simulation), then save, upload, download. Strokes in the
@@ -55,8 +78,12 @@ this; change it here first when a decision changes.
   as it moves; Nick, 2026-11-02) and
   Messages (the last 200 things the page had to say, filtered by level
   with the counts on the filters: info, warnings,
-  errors, with the error count on the tab), so a fault or a refused
-  deploy is still there to read after the line under the header has gone.
+  errors, with the error count on the tab; errors are listed to start and
+  a click on info or warnings lists them too, Nick, 2026-11-23), so a
+  fault or a refused deploy is still there to read after the line under
+  the header has gone. An Agent outcome is one short line there, its
+  whole text on hover and in Copy all; Copy all and Clear are icons
+  beside the filters, Clear emptying the log and its counts.
 - **One pane of tabs, on the left, the Agent first** (Nick, 2026-11-13:
   two side panels by default was too many; one keeps the diagram wide and
   the focus where it is most of the time). All six tabs start there:
@@ -93,7 +120,10 @@ this; change it here first when a decision changes.
   say why.
 - **Panes collapse** from their chevron, their Alt key, or a double click
   on any of their tabs (Nick, 2026-11-07), on either side.
-- **The tabs (left pane 320 pt):** Files (the projects, the
+- **The tabs (left pane 320 pt):** Files (a heading naming where the
+  projects are kept, "Files in this browser" or "Files on the box", then
+  the projects in two sections that fold with a click and are
+  remembered, My Files and Examples, none on a box; the
   open one expanded with its files under it, Nick 2026-11-13: no
   separate files section and no program tree, the diagram's crumbs
   reach the POUs; a right-click on a project offers Copy, Rename,
@@ -105,8 +135,14 @@ this; change it here first when a decision changes.
   tab, every delete is confirmed in a modal at the screen's centre, and
   the earlier iterations of the program, `vN.st`, fold under one
   "earlier (n)" row with `main.st` marked as the one running; the running
-  program, open, carries a → that deploys it again with the latest edits,
-  as does the Code tab's Structured Text header, Nick 2026-11-08),
+  program, open, carries a → that deploys it again with the latest edits
+  (Nick 2026-11-08); the Code tab's header has Deploy at its right end as
+  a filled green button with a black arrow, bigger than the glyphs, a
+  magnifier beside the file's name for Find, Replace and Replace all, and
+  no compile status while the code compiles: a red ✖ with the count when
+  it does not, which goes to the first error's line (Nick 2026-11-23).
+  Ctrl F is the program's find even with the keyboard off the canvas
+  (loading/loading.js hands the key over),
   Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
   system's, each with its points under it, live values and the link's
   state, which on a box says the protocol a device by its profile is
@@ -250,8 +286,16 @@ this; change it here first when a decision changes.
   the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
-  and the Agent's one-sentence reason. In the simulation (Nick,
-  2026-11-13) the box takes the tab's height and scrolls past it; Shift
+  and the Agent's one-sentence reason. In the simulation the answer area
+  is on top and the box under it at the tab's bottom edge, one row
+  growing upward to four and scrolling inside past that, eased over
+  0.1 s, so the output does not move (Nick, 2026-11-23; from 2026-11-13
+  to then the box was on top and took the tab's height). The output can
+  be selected. The arrows restore the prompt and the output of the step
+  shown and log nothing; the clock beside them turns the answer area into
+  the searchable list of versions. No "Stop and reset" checkbox: a
+  described change runs at once in the simulation unless View › Reset
+  after a described change is on. Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
   instruction sent, greyed. On a new project (a built-in example
@@ -260,7 +304,7 @@ this; change it here first when a decision changes.
   against the one request's cap, and Build; the draft comes back on a
   review screen (the name, the I/O, each requirement passed or not, the
   untested ones, the reason) and nothing is made until Accept. On a box
-  (Nick, 2026-11-15; `crate::box_spec`) the Agent tab offers it to an
+  (Nick, 2026-11-15; `crate::box_spec`) the Describe tab offers it to an
   engineer with a project open or not, the window also takes `.pdf`
   files with the box's caps beside the total, the review lists the
   inputs that need a device, and Accept sends the project to the box as
@@ -333,7 +377,7 @@ this; change it here first when a decision changes.
   box; the blocks it touches are selected (Shift or Ctrl/Cmd adds). Shift
   or Ctrl/Cmd and a click toggles one block. A plain click on a block
   selects that block alone; a click on empty space, a click anywhere off
-  the diagram (the Agent tab aside, where the selection is used) or Esc
+  the diagram (the Describe tab aside, where the selection is used) or Esc
   deselects (Nick, 2026-11-17). Only a released click changes the
   selection: while the button is down the highlights stay, and a box
   being drawn shows what it touches. The proposal review's diagram takes
@@ -344,6 +388,18 @@ this; change it here first when a decision changes.
   longer pans the diagram: Space and a drag, or the middle button, do; the
   arrow keys and W A S D too, and the wheel zooms. Hovering empty space
   says so.
+- **Zoom only scales; corner controls (Nick, 2026-11-23).** The diagram is
+  drawn the same way at every zoom: it no longer swaps to lines of text
+  zoomed out or to the sections' blocks mid-zoom (it looked glitchy and like
+  another interface), and stays at the one level a small program has when
+  first fitted. Folds the reader makes (a double click, the tabs, the CASE
+  and interlock tables) work as before; zooming out will later merge nodes
+  into labelled groups in the same style
+  (`st_zoom::SEMANTIC_ZOOM`). In the diagram's bottom-right corner, left of
+  the lamps: a hand (while on, a drag on empty space moves the view instead
+  of drawing a box; off by default, not saved with the project), zoom in
+  and zoom out (one step about the middle, the wheel's limits). Each is a
+  44 pt glyph with a tooltip.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).
@@ -374,7 +430,16 @@ this; change it here first when a decision changes.
   frames its blocks, running or not. A tap on an output lights the path
   that sets it, framed as the Q/E jump frames, no closer than the current
   zoom. List or tiles at the top; Inputs and Outputs fold behind their
-  arrows. The diagram stays in source order.
+  arrows. The diagram stays in source order. (Nick, 2026-11-23: a quick
+  snapshot, minimal.) A row gives its long lines the room they need
+  (a name, the wired line and the part in the scheme wrap inside the
+  column instead of ending in an ellipsis; an input's button grows to a
+  second line); a tile is flat (one thin outline, the same fill open or
+  not, no growth under the pointer) and still cuts a name to its width.
+  "Describe a start state" is an input to Helmsman: the values it finds
+  are a proposal, and a rename it offers is a button that renames the
+  point in every file on a click. Where the relay cannot answer it, the
+  field says "Not available here" and its send glyph says why.
 - **Assign to device I/O (2026-11-15, `assign.rs`, `assign_ui.rs`):** a
   program's inputs and outputs start on simulated or on-screen I/O
   (`in start bool box di:0`, `out speed int screen speed safe=0`). A device

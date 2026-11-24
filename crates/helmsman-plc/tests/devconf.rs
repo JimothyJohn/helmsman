@@ -942,17 +942,25 @@ fn the_kept_password_is_private_bounded_and_never_returned() {
     );
     assert_eq!(r.status, 200);
     {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = b.state.join("devconf");
-        assert_eq!(
-            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
+        // Windows has no mode bits: the directory takes the ACL of its parent.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(dir.join("moxa.password"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         let file = dir.join("moxa.password");
-        assert_eq!(
-            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
         assert_eq!(std::fs::read_to_string(&file).unwrap().trim_end(), SECRET);
     }
     // No route gives it back.

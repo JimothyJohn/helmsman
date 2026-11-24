@@ -287,6 +287,37 @@ fn renewing_extends_by_unicast_and_a_renewal_after_a_lost_file_is_taken_back_on(
     assert_eq!(send(&mut taken, T0, &outside), None);
 }
 
+/// A device with a reservation renews an address that is not its
+/// reserved one, and the box has no record of it (a lost lease file, or
+/// the reservation was made while the device ran on a pool address).
+/// Taking that renewal back on handed out a lease the next DISCOVER moved
+/// the device off (the hostile sequence test found it on CI, 2026-11-22):
+/// the renewal gets no answer, and the device comes back by DISCOVER to
+/// the address reserved for it.
+#[test]
+fn a_reserved_device_renewing_another_address_is_not_taken_back_on_there() {
+    let mut c = config(100, 105);
+    c.reserved.insert(mac(3), ip(102));
+    let mut s = Server::new(c).unwrap();
+    let mut renew = request(mac(3), Some(Kind::Request));
+    renew.ciaddr = ip(100);
+    assert_eq!(send(&mut s, T0, &renew), None);
+    assert!(!s.bindings().contains_key(&mac(3)), "{:?}", s.bindings());
+    assert_eq!(lease(&mut s, T0, mac(3)), ip(102));
+
+    // A renewal of the reserved address itself is still taken back on.
+    let mut fresh = Server::new({
+        let mut c = config(100, 105);
+        c.reserved.insert(mac(3), ip(102));
+        c
+    })
+    .unwrap();
+    renew.ciaddr = ip(102);
+    let (_, ack) = send(&mut fresh, T0, &renew).expect("an answer");
+    assert_eq!((ack.kind(), ack.yiaddr), (Some(Kind::Ack), ip(102)));
+    assert_eq!(lease(&mut fresh, T0 + 10, mac(3)), ip(102));
+}
+
 #[test]
 fn a_declined_address_is_skipped_until_its_hold_ends() {
     let mut s = server(100, 101);

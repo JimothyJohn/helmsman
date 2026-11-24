@@ -47,7 +47,11 @@ impl RevisionRow {
     #[must_use]
     pub fn short(&self) -> String {
         let text = self.about.as_deref().unwrap_or(&self.what);
-        let text = text.strip_prefix("Agent: ").unwrap_or(text);
+        // "Agent: " is how revisions before 2026-11-23 were marked.
+        let text = text
+            .strip_prefix("Described: ")
+            .or_else(|| text.strip_prefix("Agent: "))
+            .unwrap_or(text);
         let line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let mut c = line.chars();
         c.next()
@@ -75,15 +79,22 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
     let t = theme(ui);
     if rows.is_empty() {
         ui.label(RichText::new("No versions yet.").color(t.muted))
-            .tip("Every save and every change the Agent makes is kept here, newest at the top.");
+            .tip("Every save and every described change is kept here, newest at the top.");
         return None;
     }
     let newest: Vec<&RevisionRow> = rows.iter().rev().collect();
-    let here = at.and_then(|n| newest.iter().position(|r| r.n == n)).unwrap_or(0);
+    // The row on show: the newest when none is picked. A version on show
+    // that is not among `rows` (a searched list) marks none of them, and
+    // the steps are off.
+    let shown = at.map_or(Some(0), |n| newest.iter().position(|r| r.n == n));
+    let here = shown.unwrap_or(usize::MAX);
     let mut pick = None;
     ui.horizontal(|ui| {
         let r = ui
-            .add_enabled(here > 0, egui::Button::new(RichText::new("▲ Newer").size(18.0)))
+            .add_enabled(
+                shown.is_some_and(|k| k > 0),
+                egui::Button::new(RichText::new("▲ Newer").size(18.0)),
+            )
             .tip("Runs the next newer version (Up key).");
         chrome.hit("history newer", r.rect);
         if r.clicked() {
@@ -91,7 +102,7 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
         }
         let r = ui
             .add_enabled(
-                here + 1 < newest.len(),
+                shown.is_some_and(|k| k + 1 < newest.len()),
                 egui::Button::new(RichText::new("▼ Older").size(18.0)),
             )
             .tip("Runs the next older version (Down key).");
@@ -108,9 +119,9 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
                 i.key_pressed(egui::Key::ArrowDown),
             )
         });
-        if up && here > 0 {
+        if up && shown.is_some_and(|k| k > 0) {
             pick = Some(Pick::Show(newest[here - 1].n));
-        } else if down && here + 1 < newest.len() {
+        } else if down && shown.is_some_and(|k| k + 1 < newest.len()) {
             pick = Some(Pick::Show(newest[here + 1].n));
         }
     }
@@ -140,7 +151,7 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
             row.by,
             when(row.at_ms),
             row.n,
-            if row.page { " · from the Agent" } else { "" }
+            if row.page { " · described" } else { "" }
         ));
         if r.double_clicked() {
             pick = Some(Pick::Details(row.n));
@@ -359,7 +370,7 @@ pub fn modal(
             .max_height((screen.height() - 220.0).max(120.0))
             .show(ui, |ui| {
                 if let Some(page) = &view.page {
-                    ui.label(RichText::new("The Agent page").strong());
+                    ui.label(RichText::new("The Describe page").strong());
                     let shown: String = page.chars().take(MAX_PAGE_SHOWN).collect();
                     let cut = shown.len() < page.len();
                     ui.label(RichText::new(shown).monospace().small());

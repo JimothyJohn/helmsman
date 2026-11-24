@@ -28,14 +28,27 @@ pub struct Message {
     /// Page time, seconds.
     pub at: f64,
     pub level: Level,
+    /// The line the tab shows.
     pub text: String,
+    /// The whole of it when the line is a summary (an Agent outcome):
+    /// the row's tooltip, Copy all and the Help request carry this.
+    pub detail: Option<String>,
+}
+
+impl Message {
+    /// The whole text: [`Self::detail`], else the line.
+    #[must_use]
+    pub fn full(&self) -> &str {
+        self.detail.as_deref().unwrap_or(&self.text)
+    }
 }
 
 /// The bounded log.
 #[derive(Debug)]
 pub struct Log {
     items: VecDeque<Message>,
-    /// Which levels the tab shows: info, warning, error (all, to start).
+    /// Which levels the tab shows: info, warning, error (errors only, to
+    /// start: Nick, 2026-11-23). Hidden levels are still kept and counted.
     pub show: [bool; 3],
     /// When the newest error came in, page time.
     error_at: Option<f64>,
@@ -44,6 +57,9 @@ pub struct Log {
     /// An error came in and the Editor has not been told yet
     /// ([`Self::take_fresh`]).
     fresh: bool,
+    /// Nothing is taken while this holds: what changes while the
+    /// engineer steps through History is the old version's, not news.
+    pub muted: bool,
 }
 
 /// How long the Messages tab pulses after an error comes in, seconds.
@@ -53,10 +69,11 @@ impl Default for Log {
     fn default() -> Self {
         Self {
             items: VecDeque::new(),
-            show: [true; 3],
+            show: [false, false, true],
             error_at: None,
             unseen: 0,
             fresh: false,
+            muted: false,
         }
     }
 }
@@ -73,11 +90,40 @@ impl Log {
     /// Adds a message; the oldest goes once [`KEEP`] is passed. The same
     /// text twice in a row is kept once (a notice repeats every frame).
     pub fn push(&mut self, at: f64, level: Level, text: impl Into<String>) {
+        self.push_message(at, level, text.into(), None);
+    }
+
+    /// [`Self::push`] a short `text` that stands for `detail`, the whole
+    /// of it.
+    pub fn push_detail(&mut self, at: f64, level: Level, text: impl Into<String>, detail: impl Into<String>) {
         let text = text.into();
+        let detail = detail.into();
+        let detail = (detail != text).then_some(detail);
+        self.push_message(at, level, text, detail);
+    }
+
+    /// An Agent outcome: a warning when its checks did not pass, an error
+    /// when it was refused or failed (Nick, 2026-11-13: errors go there),
+    /// else info; the short line shown, the whole text in the detail.
+    pub fn outcome(&mut self, at: f64, o: &crate::instruct::Outcome) {
+        use crate::instruct::Kind;
+        let (line, full) = o.log_entry();
+        let level = match o.kind {
+            Kind::Applied if !o.problems.is_empty() => Level::Warning,
+            Kind::Applied | Kind::Undone | Kind::Said => Level::Info,
+            Kind::Refused | Kind::Failed => Level::Error,
+        };
+        self.push_detail(at, level, line, full);
+    }
+
+    fn push_message(&mut self, at: f64, level: Level, text: String, detail: Option<String>) {
+        if self.muted {
+            return;
+        }
         if self
             .items
             .back()
-            .is_some_and(|m| m.level == level && m.text == text)
+            .is_some_and(|m| m.level == level && m.text == text && m.detail == detail)
         {
             return;
         }
@@ -86,7 +132,12 @@ impl Log {
             self.unseen += 1;
             self.fresh = true;
         }
-        self.items.push_back(Message { at, level, text });
+        self.items.push_back(Message {
+            at,
+            level,
+            text,
+            detail,
+        });
         while self.items.len() > KEEP {
             self.items.pop_front();
         }
@@ -170,18 +221,38 @@ impl Log {
         n
     }
 
+    /// Empties the log and its counts: what Clear does. A pulse in
+    /// progress ends with it.
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.error_at = None;
+        self.unseen = 0;
+        self.fresh = false;
+    }
+
     /// The shown messages as plain text, one a line, as Copy all copies
-    /// them: `  12.3s error   the text`.
+    /// them: `  12.3s error   the text`, the whole text of each.
     #[must_use]
     pub fn text(&self) -> String {
-        self.shown()
+        Self::lines(self.shown())
+    }
+
+    /// Every message, shown or not, as [`Self::text`]: what the box's
+    /// Help gets with a question.
+    #[must_use]
+    pub fn full_text(&self) -> String {
+        Self::lines(self.items.iter())
+    }
+
+    fn lines<'a>(items: impl Iterator<Item = &'a Message>) -> String {
+        items
             .map(|m| {
                 let tag = match m.level {
                     Level::Info => "info",
                     Level::Warning => "warning",
                     Level::Error => "error",
                 };
-                format!("{:>8.1}s {tag:<7} {}", m.at, m.text)
+                format!("{:>8.1}s {tag:<7} {}", m.at, m.full())
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -219,12 +290,29 @@ impl Log {
                 chrome.hit(format!("messages {name}"), r.rect);
             }
             if !self.items.is_empty() {
-                let r = ui
-                    .button("Copy all")
-                    .tip("Copies the messages shown, as text, to paste into a bug report or to the Agent.");
+                let r = crate::glyphs::button_sized(
+                    ui,
+                    Icon::Copy,
+                    FILTER_ICON + 8.0,
+                    true,
+                    false,
+                    "Copy all: copies the messages shown, in full, as text, to paste into a bug report or into the Describe tab.",
+                );
                 chrome.hit("messages copy", r.rect);
                 if r.clicked() {
                     ui.ctx().copy_text(self.text());
+                }
+                let r = crate::glyphs::button_sized(
+                    ui,
+                    Icon::Clear,
+                    FILTER_ICON + 8.0,
+                    true,
+                    false,
+                    "Clear: empties the log, hidden levels too, and its counts.",
+                );
+                chrome.hit("messages clear", r.rect);
+                if r.clicked() {
+                    self.clear();
                 }
             }
         });
@@ -257,7 +345,11 @@ impl Log {
                         let (rect, r) = ui.allocate_exact_size(Vec2::splat(ROW_ICON), Sense::hover());
                         crate::glyphs::paint(ui.painter(), rect.shrink(1.0), icon, color);
                         r.tip(tag);
-                        ui.add(egui::Label::new(RichText::new(&m.text).color(t.fg)).selectable(true));
+                        let row =
+                            ui.add(egui::Label::new(RichText::new(&m.text).color(t.fg)).selectable(true));
+                        if m.detail.is_some() {
+                            row.tip(m.full());
+                        }
                     });
                 }
             });
@@ -280,7 +372,7 @@ pub fn copyable(
         chrome.hit(key, r.rect);
         let b = ui
             .button("Copy")
-            .tip("Copies this message, to paste into a bug report or to the Agent.");
+            .tip("Copies this message, to paste into a bug report or into the Describe tab.");
         chrome.hit(format!("{key} copy"), b.rect);
         if b.clicked() {
             ui.ctx().copy_text(text.to_string());
@@ -336,6 +428,7 @@ fn capital(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{KEEP, Level, Log};
+    use crate::instruct::{Kind, Outcome};
 
     #[test]
     fn the_log_is_bounded_dedupes_repeats_and_counts_errors() {
@@ -366,7 +459,11 @@ mod tests {
         l.error(3.0, "c");
         l.error(4.0, "d");
         assert_eq!(l.counts(), [1, 1, 2]);
-        assert_eq!(l.shown().count(), 4, "all to start");
+        assert_eq!(l.show, [false, false, true], "errors only to start");
+        let shown: Vec<&str> = l.shown().map(|m| m.text.as_str()).collect();
+        assert_eq!(shown, ["c", "d"]);
+        l.show = [true; 3];
+        assert_eq!(l.shown().count(), 4);
         l.show = [false, false, true];
         let shown: Vec<&str> = l.shown().map(|m| m.text.as_str()).collect();
         assert_eq!(shown, ["c", "d"]);
@@ -375,5 +472,49 @@ mod tests {
         assert_eq!(shown, ["a", "b"]);
         l.show = [false; 3];
         assert_eq!(l.shown().count(), 0);
+    }
+
+    /// The log keeps the whole text of an outcome; the line is short.
+    #[test]
+    fn an_outcome_line_is_short_and_the_whole_is_kept() {
+        let mut l = Log::default();
+        let mut o = Outcome::new(Kind::Refused, "Not changed:");
+        o.why = Some("Why it was tried.".into());
+        o.problems = vec!["x".repeat(500), "second".into(), "third".into()];
+        l.outcome(1.0, &o);
+        let m = l.iter().next().unwrap();
+        assert_eq!(m.level, Level::Error);
+        assert!(
+            m.text.chars().count() <= crate::instruct::LOG_SUMMARY,
+            "{}",
+            m.text
+        );
+        let full = m.full();
+        assert!(full.contains("Why: Why it was tried.") && full.contains("third"));
+        assert!(full.contains(&"x".repeat(500)), "nothing cut from the whole");
+        assert!(l.text().contains("third"), "Copy all has the whole");
+        // Hidden levels still reach the box's Help request.
+        let mut a = Outcome::new(Kind::Applied, "Updated main.st.");
+        a.why = Some("Because.".into());
+        l.outcome(2.0, &a);
+        assert_eq!(l.shown().count(), 1, "info is not shown");
+        assert!(l.full_text().contains("Updated main.st. Why: Because."));
+        assert_eq!(l.counts(), [1, 0, 1]);
+    }
+
+    #[test]
+    fn clear_empties_the_log_and_its_counts() {
+        let mut l = Log::default();
+        l.info(1.0, "a");
+        l.error(2.0, "b");
+        assert!(l.flashing(2.5) && l.errors() == 1);
+        l.clear();
+        assert!(l.is_empty() && l.counts() == [0; 3] && l.errors() == 0);
+        assert!(!l.flashing(2.5) && l.alarm(2.5, false).is_none());
+        assert!(!l.take_fresh());
+        assert_eq!(l.text(), "");
+        l.error(3.0, "b");
+        assert_eq!(l.errors(), 1, "an error after a clear counts again");
+        assert!(l.alarm(3.1, false).is_some());
     }
 }

@@ -20,14 +20,13 @@ helmsman-devconf = { path = "../helmsman-devconf", optional = true }
 # the one interface (IP_BOUND_IF / SO_BINDTODEVICE; libc, already in the
 # lock).
 helmsman-dhcp = { path = "../helmsman-dhcp", optional = true }
-helmsman-l2 = { path = "../helmsman-l2", optional = true }
 # Explain mode: the box explains its own traces (/api/explain).
 helmsman-diagram = { path = "../helmsman-diagram", optional = true }
 helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"], optional = true }
+rusqlite = { version = "0.43.0", default-features = false, features = ["bundled"], optional = true }
 sha2 = { version = "0.11.1", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
 webpki-roots = { version = "1.0.11", optional = true }
@@ -47,6 +46,11 @@ helmsman-sim = { path = "../helmsman-sim", optional = true }
 # without its default features it is signal-hook-registry and libc only.
 signal-hook = { version = "0.4.6", default-features = false, optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
+
+# Raw Ethernet and the one-interface socket tie have no Windows half
+# (docs/ARCHITECTURE.md, Platforms): `--dhcp` is refused there.
+[target.'cfg(unix)'.dependencies]
+helmsman-l2 = { path = "../helmsman-l2", optional = true }
 
 [dev-dependencies]
 # docs/FEATURES.md and the box it is held to (tests/features.rs).

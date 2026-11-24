@@ -36,7 +36,7 @@
 //! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
 //! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
 //! POST /api/market/list                   token: {index}: the signed index at that URL, verified, its bundles (see [`market`])
-//! POST /api/market/install                token: {index, name, version?, without_review?}: that bundle fetched, checked against the index, reviewed by the Agent (it can only refuse), then imported as POST /api/bundles; without a review it stops (409) until an engineer session sends without_review (see [`review`])
+//! POST /api/market/install                token: {index, name, version?, without_review?}: that bundle fetched, checked against the index, reviewed by Helmsman (it can only refuse), then imported as POST /api/bundles; without a review it stops (409) until an engineer session sends without_review (see [`review`])
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
 //! POST /api/snapshots/{id}/rollback       as apply: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
@@ -115,7 +115,9 @@
 //! **Bounded.** Thread per connection, at most [`Limits::workers`] at
 //! once (503 beyond), event streams at most [`Limits::streams`] of those.
 //! One request per connection. The whole request must arrive within
-//! [`Limits::deadline`]; a stalled writer is dropped after
+//! [`Limits::deadline`] (one refused for that or for its size is read
+//! from for [`Limits::linger`] more, so the refusal reaches a client
+//! that is still sending); a stalled writer is dropped after
 //! [`Limits::write_timeout`], and an event stream ends after
 //! [`Limits::stream_life`] (the browser reconnects). Sizes are capped
 //! ([`Limits`]).
@@ -970,7 +972,13 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
         }
         // A TLS client that never finished its handshake gets nothing.
         Err(_) if stream.handshaking() => return,
-        Err(http::ReadError::Status(code, why)) => Reply::Once(Response::error(code, why)),
+        // The client may still be sending what was refused: see `linger`.
+        Err(http::ReadError::Status(code, why)) => {
+            if http::respond(&mut stream, &Response::error(code, why)).is_ok() {
+                stream.linger(limits.linger);
+            }
+            return;
+        }
         Err(http::ReadError::Closed) => return,
     };
     let _ = stream.set_read_timeout(None);
@@ -1240,7 +1248,7 @@ fn chat_status(ctx: &Ctx) -> Json {
             json!({
                 "state": "unconfigured", "since": null, "kind": null, "reason": null,
                 "seq": 0, "fallback": false,
-                "message": "no relay configured on this box (--relay); the agent is offline",
+                "message": "no relay configured on this box (--relay); the answer service is offline",
             })
         },
         chat::Chat::status,
@@ -1252,7 +1260,7 @@ fn start_chat(req: &Request, ctx: &Ctx) -> Reply {
     let Some(chat) = &ctx.chat else {
         let r = Response::error(
             503,
-            "no relay configured on this box (--relay); the agent is offline",
+            "no relay configured on this box (--relay); the answer service is offline",
         );
         return Reply::Once(match audit(ctx, req, 503, "chat: no relay configured") {
             Some(_) => r,
@@ -1288,7 +1296,7 @@ fn start_design(req: &Request, ctx: &Ctx) -> Reply {
     let Some(chat) = &ctx.chat else {
         let r = Response::error(
             503,
-            "no relay configured on this box (--relay); the design step needs the agent",
+            "no relay configured on this box (--relay); the design step needs the answer service",
         );
         return Reply::Once(match audit(ctx, req, 503, "design: no relay configured") {
             Some(_) => r,
@@ -1332,7 +1340,7 @@ fn start_explain(req: &Request, ctx: &Ctx) -> Reply {
         return refuse(
             Response::error(
                 503,
-                "no relay configured on this box (--relay); the agent is offline. The box's own explanation still works.",
+                "no relay configured on this box (--relay); the answer service is offline. The box's own explanation still works.",
             ),
             "explain: no relay configured",
         );
@@ -2063,7 +2071,7 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/device-profile/proposal", true, "token or session: {name, text, summary}: the text is read by the profile checker; 201 holds it and lists its channels, 422 lists problems with lines"),
             e("POST", "/api/device-profile/proposal/accept", true, "engineer session: {id, project, name?, channels?: {FROM: TO}}: rename, check again and save NAME.device into the project as a new file"),
             e("DELETE", "/api/device-profile/proposal", true, "engineer session: drop the proposal"),
-            e("POST", "/api/device-profile/publish", true, "engineer session: {project, file}: the saved NAME.device, read again by the profile checker and sent to the agent service, which opens a draft pull request into the device library; 201 with {number, url, created, draft, folder}, 200 when it already has one open, 422 with the reason or the profile's problems"),
+            e("POST", "/api/device-profile/publish", true, "engineer session: {project, file}: the saved NAME.device, read again by the profile checker and sent to the answer service, which opens a draft pull request into the device library; 201 with {number, url, created, draft, folder}, 200 when it already has one open, 422 with the reason or the profile's problems"),
             e("GET", "/api/proposals", true, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", true, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),
@@ -2082,7 +2090,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/snapshots/{id}/bundle", true, "that snapshot as an unsigned bundle file (sign it off the box)"),
             e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/market/list", true, "{index}: the signed marketplace index at that URL, verified against the trusted publishers, and its bundles"),
-            e("POST", "/api/market/install", true, "{index, name, version?, without_review?}: that bundle fetched from the index's site, checked against the index, reviewed by the Agent (422 if it advises against installing; 409 if it could not be reviewed, until an engineer's login session sends without_review: true), then imported as POST /api/bundles"),
+            e("POST", "/api/market/install", true, "{index, name, version?, without_review?}: that bundle fetched from the index's site, checked against the index, reviewed by Helmsman (422 if it advises against installing; 409 if it could not be reviewed, until an engineer's login session sends without_review: true), then imported as POST /api/bundles"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
             e("GET", "/api/replays/{n}", true, "a replay kept as evidence"),

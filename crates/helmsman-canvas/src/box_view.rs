@@ -132,6 +132,8 @@ pub struct BoxView {
     /// The diagram's right-click menu: the chat and what io.map can take
     /// (`crate::assign`); the code is changed in the editor.
     pub dmenu: crate::diagram_menu::Menu,
+    /// The question "what value?" open on a literal of the diagram.
+    pub value_ask: Option<crate::by_hand::ValueAsk>,
     /// The program's ports as last read, by the text they came from: the
     /// diagram and the I/O tab ask every frame.
     ports_memo: std::cell::RefCell<Option<(String, Vec<crate::device_form::Port>)>>,
@@ -362,6 +364,7 @@ impl BoxView {
             last_pick: None,
             io_open: std::collections::BTreeSet::new(),
             dmenu: crate::diagram_menu::Menu::default(),
+            value_ask: None,
             ports_memo: std::cell::RefCell::new(None),
             open_at: None,
             #[cfg(target_arch = "wasm32")]
@@ -686,7 +689,7 @@ impl BoxView {
         }
         if self.agent_files().is_none() {
             return Some(
-                "Open a program file first: the Agent changes the file open in the Code tab.".into(),
+                "Open a program file first: the change goes into the file open in the Code tab.".into(),
             );
         }
         None
@@ -869,7 +872,7 @@ impl BoxView {
             #[cfg(target_arch = "wasm32")]
             self.chat.abort();
             self.instruct
-                .failed("the open project changed while the Agent was answering");
+                .failed("the open project changed before the answer came");
             return self.log_agent();
         }
         if self.agent.seq() == self.answered_seq {
@@ -887,7 +890,7 @@ impl BoxView {
                 // is may be half an answer, and half a file is never written.
                 let said = match stop.as_str() {
                     "budget" | "max_tokens" => format!("the answer was cut off ({stop})"),
-                    _ => format!("the agent stopped ({stop})"),
+                    _ => format!("the answer stopped ({stop})"),
                 };
                 self.instruct.failed(&why.unwrap_or(said));
                 self.instruct.proposed(&proposals);
@@ -1017,7 +1020,7 @@ impl BoxView {
             return Some(self.agent.status.line());
         }
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         None
     }
@@ -1184,7 +1187,7 @@ impl BoxView {
             return Some(self.agent.status.line());
         }
         if self.instruct.busy() {
-            return Some("The Agent is still working on the last instruction.".into());
+            return Some("Still working on the last instruction.".into());
         }
         self.design
             .busy()
@@ -1253,7 +1256,7 @@ impl BoxView {
             .or_else(|| {
                 self.instruct
                     .busy()
-                    .then(|| "The Agent is still working on the last instruction.".into())
+                    .then(|| "Still working on the last instruction.".into())
             })
             .or_else(|| {
                 self.projects.dirty().then(|| {
@@ -1328,7 +1331,7 @@ impl BoxView {
         let blocked = self.agent_blocked().or_else(|| {
             self.instruct
                 .busy()
-                .then(|| "The Agent is still working on the last instruction.".to_string())
+                .then(|| "Still working on the last instruction.".to_string())
         });
         let (d, problems) = self.design_cache.get(&text);
         Some(crate::design_step::kept_view(d, problems, built, blocked))
@@ -1496,20 +1499,8 @@ impl BoxView {
 
     /// The outcome of the last instruction, in Messages.
     fn log_agent(&mut self) {
-        use crate::instruct::Kind;
         let Some(o) = &self.instruct.outcome else { return };
-        let mut line = o.status.clone();
-        for p in &o.problems {
-            line.push(' ');
-            line.push_str(p);
-        }
-        let at = self.agent_at;
-        match o.kind {
-            // An update with checks that did not pass is a warning.
-            Kind::Applied if !o.problems.is_empty() => self.log.warning(at, line),
-            Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
-            Kind::Refused | Kind::Failed => self.log.error(at, line),
-        }
+        self.log.outcome(self.agent_at, o);
     }
 
     /// Why Undo is off now, if it is.
@@ -1570,7 +1561,7 @@ impl BoxView {
             return;
         }
         self.help_seq += 1;
-        let req = crate::help::request(&self.help.draft, &self.log.text(), self.help_seq);
+        let req = crate::help::request(&self.help.draft, &self.log.full_text(), self.help_seq);
         self.help.helping = Some(crate::help::Helping::new(self.help_seq));
         #[cfg(target_arch = "wasm32")]
         self.help_http.send(req, ctx);
@@ -1692,6 +1683,8 @@ impl BoxView {
             // `agent-wait-questions`: a box after `agent-progress-box`).
             card: None,
             big: None,
+            io: None,
+            versions: None,
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
@@ -1723,7 +1716,7 @@ impl BoxView {
                                     egui::Button::new(RichText::new("From a spec…").size(crate::theme::BODY)),
                                 )
                                 .tip(spec_off.clone().unwrap_or_else(|| {
-                                    "Opens a window to paste a scope of work or product documentation, or add .md, .txt and .pdf files. The Agent drafts a new project on this box from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.".into()
+                                    "Opens a window to paste a scope of work or product documentation, or add .md, .txt and .pdf files. A new project is drafted on this box from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.".into()
                                 }));
                             chrome.hit("spec open", r.rect);
                             if r.clicked() {
@@ -1766,8 +1759,117 @@ impl BoxView {
             Some(Act::Review(id)) => self.wants_review = Some(id),
             // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
+            Some(Act::Offer(k)) => self.take_offer(k, &ctx),
             Some(Act::Revision(_) | Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
+    }
+
+    /// Offer `k` under the last answer, clicked ([`crate::offers`]): an
+    /// instruction is sent as the engineer's own; a rename is saved into
+    /// every file it touches with its History entry, as a described
+    /// change is.
+    pub fn take_offer(&mut self, k: usize, ctx: &egui::Context) {
+        use crate::offers::What;
+        match self.instruct.offer(k).cloned() {
+            Some(What::Instead { text }) => {
+                self.instruct.draft = text;
+                self.send_instruction(ctx);
+            }
+            Some(What::Rename { old, new }) => self.rename_everywhere(&old, &new),
+            None => {}
+        }
+    }
+
+    /// A literal of the diagram written `new` (`text` is its file after),
+    /// saved on the box with its History entry.
+    pub fn set_value(&mut self, lit: &crate::by_hand::Literal, new: &str, text: String) {
+        let Some(project) = self.projects.open.as_ref().map(|o| o.name.clone()) else {
+            return;
+        };
+        let before = self.projects.history.last().map(|r| r.n);
+        let record = crate::by_hand::value_record(lit, new);
+        self.projects.save_agent(&lit.file, &text, &record, &[]);
+        let undo = before.map(|revision| crate::instruct::Undo {
+            project,
+            file: lit.file.clone(),
+            revision,
+            text,
+        });
+        self.instruct.value_set(&lit.text, new, &lit.file, undo);
+        self.log_agent();
+    }
+
+    /// What block `n` of the diagram lets the engineer change by hand
+    /// ([`crate::by_hand`]): nothing for someone who may not write, or
+    /// while the diagram's lines are not the open project's.
+    fn by_hand_target(&self, n: helmsman_diagram::NodeId) -> Option<crate::by_hand::Target> {
+        if self.assign_write().is_err() {
+            return None;
+        }
+        let v = self.view.as_ref()?;
+        let (_, _, files) = self.agent_files()?;
+        let locate = box_locate(&v.src, &files, self.diagram_running());
+        crate::by_hand::target(v.diagram(), n, &locate, &files)
+    }
+
+    /// Opens the question for a name or a value.
+    fn by_hand_ask(&mut self, t: crate::by_hand::Target) {
+        match t {
+            crate::by_hand::Target::Name(n) => self.devices_ui.renaming = Some((n.clone(), n)),
+            crate::by_hand::Target::Value(l) => self.value_ask = Some(crate::by_hand::ValueAsk::new(l)),
+        }
+    }
+
+    /// `old` renamed to `new` in the open project, saved on the box in
+    /// every file with one History entry.
+    pub fn rename_everywhere(&mut self, old: &str, new: &str) {
+        let files: crate::scope::Files = self.loaded_files().into_iter().collect();
+        let plan = match crate::offers::plan(&files, old, new) {
+            Ok(p) => p,
+            Err(why) => {
+                self.instruct.offer_refused(&why);
+                return self.log_agent();
+            }
+        };
+        let Some(project) = self.projects.open.as_ref().map(|o| o.name.clone()) else {
+            return;
+        };
+        let before = self.projects.history.last().map(|r| r.n);
+        let record = crate::instruct::Instruct::rename_record(old, new, &plan.lines());
+        let count = plan.files.len();
+        // The program file carries the History entry; the others go with it.
+        let lead = plan
+            .files
+            .iter()
+            .position(|(f, ..)| {
+                helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                    && !helmsman_iec::spec::is_test(f)
+            })
+            .or_else(|| {
+                plan.files.iter().position(|(f, ..)| {
+                    helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                })
+            })
+            .unwrap_or(0);
+        let mut rest: Vec<(String, String)> = Vec::new();
+        let mut first = None;
+        for (k, (f, t, _)) in plan.files.into_iter().enumerate() {
+            if k == lead {
+                first = Some((f, t));
+            } else {
+                rest.push((f, t));
+            }
+        }
+        let Some((file, text)) = first else { return };
+        self.projects.save_agent(&file, &text, &record, &rest);
+        let undo = before.map(|revision| crate::instruct::Undo {
+            project,
+            file,
+            revision,
+            text,
+        });
+        self.instruct.renamed(old, new, count, undo);
+        self.log_agent();
     }
 
     /// Reports to the log what changed: the link, a deploy's outcome, a
@@ -1887,12 +1989,16 @@ impl BoxView {
         }
         if let Some(crate::devices::DeviceAct::Rename(plan)) =
             self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
-            && let Some(o) = &mut self.projects.open
         {
-            for (f, text, _) in plan.files {
-                if let Some(b) = o.bufs.get_mut(&f).filter(|b| b.loaded) {
-                    b.text = text;
-                }
+            self.rename_everywhere(&plan.old, &plan.new);
+        }
+        if let Some(mut ask) = self.value_ask.take() {
+            let files = self.agent_files().map(|(_, _, f)| f).unwrap_or_default();
+            let mut open = true;
+            match ask.ui(&ui.ctx().clone(), chrome, &files, &mut open) {
+                Some(text) => self.set_value(&ask.lit, ask.text.trim(), text),
+                None if open => self.value_ask = Some(ask),
+                None => {}
             }
         }
         if self.devices_ui.assigning.is_some() {
@@ -2881,6 +2987,7 @@ impl Body for BoxView {
                 })
                 .unwrap_or_default();
             let listing = Listing {
+                place: projects::Place::Box,
                 projects: &self.projects.projects,
                 open: open.as_ref().map(|o| o.name.as_str()),
                 files,
@@ -3145,14 +3252,8 @@ impl Body for BoxView {
                     &name,
                     "The open file of the project. Save keeps it on the box; Deploy runs it.",
                 );
+                editor::find_toggle(ui, chrome);
                 editor::wrap_toggle(ui, chrome);
-                go = projects::deploy_arrow(
-                    ui,
-                    chrome,
-                    "code deploy",
-                    &deploy,
-                    "Deploys this version: saves, checks and runs the project on the box (Ctrl Shift Enter, File › Deploy).",
-                );
                 match &write {
                     Ok(()) => {}
                     Err(why) => {
@@ -3162,6 +3263,17 @@ impl Body for BoxView {
                         chrome.hit("read-only", r.rect);
                     }
                 }
+                go = editor::header_right(
+                    ui,
+                    chrome,
+                    &editor::Status {
+                        errors: 0,
+                        first: None,
+                        deploy: &deploy,
+                        deploy_tip: "Ctrl Shift Enter: deploy this version.\nSaves, checks and runs the project on the box.",
+                    },
+                )
+                .deploy;
             });
             if go {
                 self.deploy();
@@ -3270,6 +3382,8 @@ impl Body for BoxView {
         let mut chat = crate::assign_ui::RowChat {
             full: self.instruct.chips.len() >= crate::chat_about::MAX_CHIPS,
             asked: Vec::new(),
+            rename_off: self.assign_write().err(),
+            rename: Vec::new(),
         };
         let known = &self.devices_ui.wired;
         // What the diagram says of each point; nothing while there is none.
@@ -3416,6 +3530,7 @@ impl Body for BoxView {
                                     (form != Form::Tile).then_some(glyph),
                                     color,
                                     &text,
+                                    form != Form::Tile,
                                 );
                             });
                             crate::assign_ui::row_menu(&card, chrome, &menus, name, &mut asks, &mut chat);
@@ -3434,6 +3549,11 @@ impl Body for BoxView {
         }
         for name in chat.asked {
             self.chat_about_signal(&name, chrome);
+        }
+        if let Some(name) = chat.rename.pop() {
+            let files = self.agent_files().map(|(_, _, f)| f).unwrap_or_default();
+            let name = crate::by_hand::spelled(&files, &name);
+            self.devices_ui.renaming = Some((name.clone(), name));
         }
         for (port, ask) in asks {
             self.assign_ask(port, ask);
@@ -3498,6 +3618,17 @@ impl Body for BoxView {
         }
         if let Some(n) = self.dmenu.take_chat() {
             self.chat_about_node(n, chrome);
+        }
+        if let Some(n) = self.dmenu.take_edit_query() {
+            let t = self.by_hand_target(n);
+            self.dmenu.set_edit(t);
+        }
+        let asked = self.view.as_mut().and_then(|v| v.edit_ask.take());
+        if let Some(t) = asked
+            .and_then(|n| self.by_hand_target(n))
+            .or_else(|| self.dmenu.take_edit())
+        {
+            self.by_hand_ask(t);
         }
         if let Some((at, line)) = jump {
             match at {

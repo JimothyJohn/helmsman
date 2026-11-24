@@ -22,6 +22,8 @@ pub mod manifest;
 #[cfg(feature = "box")]
 pub mod opcua;
 #[cfg(feature = "box")]
+pub mod os_random;
+#[cfg(feature = "box")]
 pub mod policy;
 #[cfg(feature = "box")]
 pub mod project;

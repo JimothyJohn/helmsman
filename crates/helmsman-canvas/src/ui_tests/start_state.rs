@@ -84,15 +84,14 @@ fn value(h: &Harness, name: &str) -> Value {
 const ANSWER: &str = "PART_SEATED = TRUE\nGUARD_CLOSED = FALSE\nESTOP_OK = TRUE\nSPEED = 40";
 
 #[test]
-fn the_field_is_there_only_where_the_relay_serves_the_agent() {
-    for agents in [&[][..], &["ask", "check", "edits"][..]] {
-        let h = on(agents, CELL);
-        assert!(!h.has("start field") && !h.has("start send"), "{agents:?}");
-        assert!(h.has("io head inputs"), "the cards are there without it");
-    }
-    // The key route, a local proxy and a closed relay cannot ask it.
+fn the_field_is_always_there_and_says_plainly_where_it_cannot_ask() {
+    // Where the relay does not serve the agent, or there is no free chat,
+    // the field is off and the send glyph says why instead of doing nothing.
+    let mut cases: Vec<(&str, Harness)> = vec![
+        ("no agents", on(&[], CELL)),
+        ("no start agent", on(&["ask", "check", "edits"], CELL)),
+    ];
     let mut h = served(CELL);
-    assert!(h.has("start field") && h.has("start send"));
     h.app
         .sim
         .as_mut()
@@ -100,14 +99,31 @@ fn the_field_is_there_only_where_the_relay_serves_the_agent() {
         .chat
         .receive(Incoming::Free(Free::Closed { reopens: false }));
     h.wait(0.3);
-    assert!(!h.has("start field"));
+    cases.push(("a closed relay", h));
     let mut h = Harness::new(App::sim());
     h.app.chrome.dock(Pane::Io, true);
     h.app.sim.as_mut().unwrap().load(CELL, "test");
     h.wait(0.3);
     h.press("tab io");
     h.wait(0.3);
-    assert!(!h.has("start field"), "no free chat, no field");
+    cases.push(("no free chat", h));
+    for (what, mut h) in cases {
+        assert!(h.has("start field") && h.has("start send"), "{what}");
+        assert!(h.has("io head inputs"), "{what}: the cards are there");
+        assert!(h.drew("Not available here"), "{what}: the field says so");
+        assert!(!h.has("start line"), "{what}: no line until asked");
+        h.wait(1.0);
+        h.press("start send");
+        h.wait(0.3);
+        assert!(h.has("start line"), "{what}: the glyph says why");
+        assert!(h.drew("Set the inputs by hand"), "{what}: and what to do instead");
+        let v = h.app.sim.as_ref().unwrap();
+        assert!(v.start_link.sent.is_empty(), "{what}: nothing was asked");
+        assert_eq!(v.start.phase, crate::start_state::Phase::Idle, "{what}");
+    }
+    // Served, it is the field it always was.
+    let h = served(CELL);
+    assert!(h.drew("Describe a start state") && !h.drew("Not available here"));
 }
 
 #[test]
@@ -250,6 +266,7 @@ fn the_accept_itself_refuses_a_program_that_is_running_or_changed() {
                 old: Value::Bool(false),
                 new: Value::Bool(true),
             }],
+            offers: vec![],
         }),
         line: None,
     };
@@ -349,7 +366,7 @@ fn a_refusal_from_the_relay_is_one_quiet_line() {
     });
     h.wait(0.3);
     assert!(!h.has("start card") && h.has("start line"));
-    assert!(h.drew("did not answer"));
+    assert!(h.drew("No answer:"));
     assert!(h.has("start send"), "and it can be asked again");
 }
 
@@ -431,4 +448,264 @@ fn enter_sends_and_an_empty_field_sends_nothing() {
     h.key(Modifiers::NONE, Key::Enter);
     h.wait(0.3);
     assert_eq!(h.app.sim.as_ref().unwrap().start_link.sent.len(), 1);
+}
+
+// ---- names: a rename proposed beside the values ----
+
+const MAP: &str = "in part_seated bool box di:0\nin speed int box ai:0\nout run_lamp bool box do:0\n";
+const CHECK: &str = "\
+PROGRAM test_cell
+VAR_INPUT run_lamp : BOOL; END_VAR
+VAR_OUTPUT part_seated : BOOL; speed : INT; guard_closed : BOOL; estop_ok : BOOL; done : BOOL; END_VAR
+VAR c : ASSERT; END_VAR
+part_seated := TRUE; speed := 5; guard_closed := TRUE; estop_ok := TRUE;
+c(COND := run_lamp OR NOT run_lamp);
+done := TRUE;
+END_PROGRAM
+";
+
+/// A served chat with `src` as the one program of a project of its own,
+/// beside `more` files (a rename reaches every file of the project).
+fn project(src: &str, more: &[(&str, &str)]) -> Harness {
+    let mut h = Harness::new(App::sim());
+    h.app.chrome.dock(Pane::Io, true);
+    {
+        let v = h.app.sim.as_mut().unwrap();
+        v.proj.create("startstate", None);
+        v.proj.files.insert("main.st".into(), src.into());
+        for (f, t) in more {
+            v.proj.files.insert((*f).into(), (*t).into());
+        }
+        v.proj.save();
+        v.open_project("startstate");
+        v.session.running = false;
+        v.chat.receive(Incoming::Proxy(false));
+        v.chat.set_free_base("https://relay.example");
+        v.chat.receive(Incoming::Takes(Takes {
+            thinking_off: true,
+            agents: ["ask", "check", "edits", "start"].map(String::from).to_vec(),
+        }));
+        v.chat.receive(Incoming::Free(Free::Open));
+    }
+    h.wait(0.4);
+    h.press("tab io");
+    h.wait(0.3);
+    h
+}
+
+/// The cell with its wiring and a requirement test, which both name the
+/// points a rename must reach.
+fn named() -> Harness {
+    project(CELL, &[(helmsman_project::IO_MAP, MAP), ("test_cell.st", CHECK)])
+}
+
+fn files(h: &Harness) -> std::collections::BTreeMap<String, String> {
+    h.app.sim.as_ref().unwrap().proj.files.clone()
+}
+
+#[test]
+fn the_request_asks_for_names_too_and_lists_the_outputs() {
+    let mut h = served(CELL);
+    type_and_send(&mut h, "call the speed the belt speed");
+    let v = h.app.sim.as_ref().unwrap();
+    let body: serde_json::Value = serde_json::from_str(&v.start_link.sent[0].1.body).unwrap();
+    let said = body["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        said.contains("<program_outputs>\nRUN_LAMP | BOOL\n</program_outputs>"),
+        "{said}"
+    );
+    assert!(said.contains("Offer: rename <old> <new>"), "{said}");
+}
+
+#[test]
+fn a_rename_beside_the_values_is_one_click_and_renames_every_file_once() {
+    let mut h = named();
+    let revs = h.app.sim.as_ref().unwrap().proj.revisions().len();
+    let before = files(&h);
+    type_and_send(&mut h, "part seated, belt at speed 40");
+    reply(
+        &mut h,
+        "PART_SEATED = TRUE\nSPEED = 40\nOffer: rename speed belt_speed\n",
+    );
+    assert!(h.has("start card") && h.has("start set"));
+    assert!(h.has("agent offer 0"), "a button for the rename");
+    assert!(h.drew("Rename speed to belt_speed"));
+    assert!(
+        h.drew("main.st") && h.drew("io.map") && h.drew("test_cell.st"),
+        "the files it touches"
+    );
+    assert_eq!(files(&h), before, "nothing is renamed until it is clicked");
+    assert_eq!(h.app.sim.as_ref().unwrap().proj.revisions().len(), revs);
+
+    h.wait(1.0);
+    h.press("agent offer 0");
+    h.wait(0.3);
+    let after = files(&h);
+    for f in ["main.st", "io.map", "test_cell.st"] {
+        assert!(
+            !after[f]
+                .to_lowercase()
+                .replace("belt_speed", "")
+                .contains("speed"),
+            "{f}: {}",
+            after[f]
+        );
+        assert!(after[f].to_lowercase().contains("belt_speed"), "{f}");
+    }
+    let v = h.app.sim.as_ref().unwrap();
+    assert_eq!(v.proj.revisions().len(), revs + 1, "one revision");
+    assert_eq!(
+        v.proj.revisions().last().unwrap().what,
+        "Renamed speed to belt_speed"
+    );
+    assert!(
+        matches!(&v.start.phase, crate::start_state::Phase::Proposed(p) if p.offers.is_empty() && p.changes.len() == 2),
+        "the values are still proposed, now for the new name"
+    );
+    assert!(h.has("start set") && !h.has("agent offer 0"));
+    // The values go to the renamed input.
+    h.wait(1.0);
+    h.press("start set");
+    h.wait(0.3);
+    assert_eq!(value(&h, "BELT_SPEED"), Value::Int(40));
+    assert_eq!(value(&h, "PART_SEATED"), Value::Bool(true));
+}
+
+#[test]
+fn a_rename_alone_is_a_proposal_and_leave_it_drops_it() {
+    let mut h = named();
+    let before = files(&h);
+    type_and_send(&mut h, "call the lamp the run light");
+    reply(&mut h, "NONE\nOffer: rename run_lamp run_light\n");
+    assert!(h.drew("Proposed names") && h.has("agent offer 0"));
+    assert!(!h.has("start set"), "no values to set");
+    h.wait(1.0);
+    h.press("agent offer leave");
+    h.wait(0.3);
+    assert!(!h.has("start card"));
+    assert_eq!(files(&h), before);
+    // Taken from the card it renames an output.
+    type_and_send(&mut h, "call the lamp the run light");
+    reply(&mut h, "Offer: rename run_lamp run_light\n");
+    h.wait(1.0);
+    h.press("agent offer 0");
+    h.wait(0.3);
+    assert!(files(&h)["main.st"].contains("run_light"));
+    assert!(!h.has("start card"), "nothing is left to propose");
+}
+
+#[test]
+fn answers_that_are_not_the_expected_form_change_nothing() {
+    let hostile = [
+        // Prose around the lines.
+        "Sure! SPEED = 40\nOffer: rename speed belt_speed",
+        // A value the input cannot hold, beside a good rename.
+        "SPEED = 99999\nOffer: rename speed belt_speed",
+        // An input the program does not have.
+        "NOPE = 1\nOffer: rename speed belt_speed",
+        // The same input twice.
+        "SPEED = 40\nSPEED = 41\nOffer: rename speed belt_speed",
+    ];
+    for answer in hostile {
+        let mut h = named();
+        let before = files(&h);
+        type_and_send(&mut h, "belt at speed 40");
+        reply(&mut h, answer);
+        assert!(!h.has("start card") && !h.has("agent offer 0"), "{answer:?}");
+        assert!(h.has("start line"), "{answer:?}: it says why");
+        assert_eq!(files(&h), before, "{answer:?}");
+        assert_eq!(value(&h, "SPEED"), Value::Int(0), "{answer:?}");
+    }
+}
+
+#[test]
+fn renames_the_project_cannot_carry_out_are_not_offered() {
+    // Unknown name, a name that is taken, a name that is no input or
+    // output (a local), a name that is not a name, and a rename to itself.
+    let src = CELL.replace(
+        "END_VAR\nrun_lamp",
+        "END_VAR\nVAR scratch : INT; END_VAR\nrun_lamp",
+    );
+    for rename in [
+        "Offer: rename nowhere somewhere",
+        "Offer: rename speed guard_closed",
+        "Offer: rename scratch tmp",
+        "Offer: rename speed 9lives",
+        "Offer: rename speed speed",
+        "Offer: rename speed a b c",
+    ] {
+        let mut h = project(&src, &[]);
+        let before = files(&h);
+        type_and_send(&mut h, "x");
+        reply(&mut h, &format!("SPEED = 40\n{rename}\n"));
+        let v = h.app.sim.as_ref().unwrap();
+        assert!(
+            matches!(&v.start.phase, crate::start_state::Phase::Proposed(p) if p.offers.is_empty()),
+            "{rename}"
+        );
+        assert!(!h.has("agent offer 0"), "{rename}");
+        assert_eq!(files(&h), before, "{rename}");
+    }
+}
+
+#[test]
+fn a_rename_that_no_longer_fits_when_clicked_changes_nothing() {
+    let mut h = named();
+    type_and_send(&mut h, "x");
+    reply(&mut h, "SPEED = 40\nOffer: rename speed belt_speed\n");
+    // Meanwhile something else takes the name.
+    let taken = CELL.replace("speed : INT;", "speed : INT; belt_speed : INT;");
+    h.app
+        .sim
+        .as_mut()
+        .unwrap()
+        .proj
+        .files
+        .insert("main.st".into(), taken.clone());
+    h.wait(1.0);
+    h.press("agent offer 0");
+    h.wait(0.3);
+    assert_eq!(files(&h)["main.st"], taken, "not renamed");
+}
+
+#[test]
+fn long_names_in_the_offers_leave_the_panel_its_width() {
+    let long = "conveyor_07_photo_eye_blocked_by_tote_signal";
+    let new = "conveyor_07_photo_eye_blocked_by_tote_detected";
+    let src = format!(
+        "PROGRAM wide\nVAR_INPUT\n  {long} : BOOL;\nEND_VAR\nVAR_OUTPUT o : BOOL; END_VAR\no := {long};\nEND_PROGRAM\n"
+    );
+    for grid in [false, true] {
+        let mut h = project(&src, &[]);
+        if grid {
+            h.press("io grid");
+            h.wait(0.3);
+        }
+        let right = h.rect("right");
+        type_and_send(&mut h, "blocked");
+        reply(&mut h, &format!("{long} = TRUE\nOffer: rename {long} {new}\n"));
+        assert!(
+            h.has("agent offer 0"),
+            "grid {grid}: {:?} {:?}",
+            h.app.sim.as_ref().unwrap().start.line,
+            h.app.sim.as_ref().unwrap().start.phase
+        );
+        let now = h.rect("right");
+        assert!(
+            (right.left() - now.left()).abs() <= 8.0,
+            "grid {grid}: the panel grew"
+        );
+        for key in [
+            "agent offer 0",
+            "agent offer touches 0",
+            "agent offer leave",
+            "start card",
+        ] {
+            let r = h.rect(key);
+            assert!(
+                r.left() >= h.size.x - RIGHT_W - 8.0 && r.right() <= h.size.x,
+                "grid {grid}: {key} {r:?} stays in the {RIGHT_W} pt panel"
+            );
+        }
+    }
 }

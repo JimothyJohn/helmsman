@@ -565,10 +565,10 @@ fn the_pin_file_is_private_and_round_trips() {
     assert_eq!(Pins::load(&dir, 1).unwrap(), Pins::default(), "no file: no PINs");
     let p = pins();
     p.save(&dir).unwrap();
-    let path = dir.join(helmsman_plc::policy::pin::FILE);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(helmsman_plc::policy::pin::FILE);
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600

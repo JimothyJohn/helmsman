@@ -3,6 +3,7 @@ what the native tests cannot see: console errors and panics, and a
 screenshot of each step to look at.
 
 usage: python3 -I scripts/canvas-smoke.py [--dist DIR] [--out DIR] [--box]
+                                          [--browser chromium|firefox|webkit|all] [--no-gpu]
        make canvas-smoke            (after make canvas-web; --box also
                                      needs cargo build -p helmsman-plc)
 
@@ -16,8 +17,19 @@ directory with an engineer account (alice / alice-engineer-pw), and drives
 the box-served page signed out, then signed in. Everything is stopped at
 the end.
 
-Needs Playwright's Chromium for python3 (pip install playwright;
-python3 -m playwright install chromium). The app draws at 2 CSS px a point
+--browser picks the engine (default chromium; all runs the three, WebKit
+standing in for Safari). With all, each engine runs twice: as the engine
+picks its drawing, and with software drawing forced (SwiftShader flags for
+Chromium, software WebRender and WebGL prefs for Firefox; WebKit headless
+has no switch, so its two runs differ only in name). --no-gpu forces
+software drawing for a single --browser. Screenshots of a run go to
+OUT/<engine>[-nogpu]/ (OUT itself for plain Chromium), and the run logs
+the WebGL2 renderer the engine gave the page. A last scenario makes
+getContext('webgl2') return null and asserts the page's plain notice and
+no console error (the app must not start, let alone panic).
+
+Needs Playwright's browsers for python3 (pip install playwright;
+python3 -m playwright install chromium firefox webkit). The app draws at 2 CSS px a point
 on a doubled viewport at DPR 2 but maps the pointer one to one, so clicks
 are given in points of the 1400x860 layout (docs/UI.md). The remembered
 layout is seeded into localStorage from a same-origin URL that is not the
@@ -58,6 +70,16 @@ PLC = None  # set in main: target/debug/helmsman-plc
 KEY = "helmsman-canvas/editor"
 W, H = 1400, 860
 S = 2
+# CSS pixels per point of the layout, per engine, set in main. Chromium and
+# Firefox with an emulated device_scale_factor give eframe a canvas buffer of
+# CSS size while it assumes the DPR, so the 1400 x 860 point layout spans
+# 2800 x 1720 CSS px (2 per point). WebKit behaves as a real Retina screen:
+# 1 CSS px per point on a 1400 x 860 viewport. Measured 2026-11-22 (canvas
+# width attribute 1400 vs 2800 at a 1400 CSS px viewport and DPR 2).
+K = 2
+# --headed: show the browser (under xvfb-run on a runner). Headless Firefox on
+# Linux may have no GL context at all; a headed one under a virtual display does.
+HEADED = False
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 USER, PASSWORD = "alice", "alice-engineer-pw"
 # Console lines the smoke itself causes.
@@ -91,10 +113,6 @@ BOTTOM_TABS = (330, 575, 300, 50)
 MESSAGES = (330, 640, 700, 200)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
-# The 3D toggle over the diagram's left edge, and the POU node in the 3D
-# overview, in points.
-TOGGLE_3D = (352, 489)
-POU_3D = (860, 275)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt), and the bottom panel's Trend and
 # Messages.
@@ -108,13 +126,19 @@ TAB_RIGHT_FIRST = (1229, 71)
 FOLD_LINE_2 = (14, 168)
 TAB_TREND = (344, 600)
 TAB_MESSAGES = (385, 600)
-# The View menu, its "Pane layouts…" item, and two of the popup's
-# ready-made layouts.
-VIEW_MENU = (235, 26)
-VIEW_PANE_LAYOUTS = (279, 479)
-# On a box's page the menu has two more rows above it (Proposals, Simulate
-# in this browser).
-VIEW_PANE_LAYOUTS_BOX = (279, 553)
+# The one menu (the three-line glyph, 2026-11-23), its four submenus, the
+# View submenu's "Pane layouts…" item and, on a box's page, its Proposals
+# item (the box's View menu has two more rows above Pane layouts:
+# Proposals and Simulate in this browser). The submenus open to the right
+# of the menu. Measured with the native harness, 1400 x 860 points.
+MENU = (182, 26)
+MENU_FILE = (201, 64)
+MENU_EDIT = (202, 92)
+MENU_VIEW = (207, 120)
+MENU_HELP = (206, 148)
+VIEW_PANE_LAYOUTS = (396, 541)
+VIEW_PANE_LAYOUTS_BOX = (396, 615)
+VIEW_PROPOSALS_BOX = (396, 198)
 LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
 HEADER_RIGHT = (1150, 8, 200, 36)
@@ -139,18 +163,24 @@ class Run:
         self.page.screenshot(path=os.path.join(self.out, f"{self.prefix}-{self.n:02d}-{name}.png"))
 
     def look(self, region):
-        x, y, w, h = (v * S for v in region)
+        x, y, w, h = (v * K for v in region)
         clip = {"x": x, "y": y, "width": w, "height": h}
         return hashlib.sha256(self.page.screenshot(clip=clip)).hexdigest()
 
-    def step(self, name, do, watch, ms=700):
-        """`do`, then a screenshot; `watch` (a region) must have changed."""
+    def step(self, name, do, watch, ms=700, stays=False):
+        """`do`, then a screenshot; `watch` (a region) must have changed,
+        or with `stays` must not have: a build without the free chat shows
+        "Describing a change is not available in this build." in the tab,
+        with no spec button or window to open, so a click or typing there
+        leaves the pane as it was."""
         before = self.look(watch)
         do()
         self.wait(ms)
         self.shot(name)
-        if self.look(watch) == before:
-            self.same.append(f"[smoke] {self.prefix}: '{name}' changed nothing on screen")
+        changed = self.look(watch) != before
+        if changed == stays:
+            what = "changed" if changed else "changed nothing"
+            self.same.append(f"[smoke] {self.prefix}: '{name}' {what} on screen")
 
     def click(self, x, y, button="left"):
         self.page.mouse.click(x, y, button=button)
@@ -202,19 +232,28 @@ def playground(ctx, base, out):
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.
     r.step("code", lambda: r.click(*TAB_CODE), LEFT)
+    # Ctrl F with the keyboard off the canvas (as after a click on the
+    # browser's own chrome) opens the program's find row over the code,
+    # not the browser's find (loading/loading.js); Esc shuts it again.
+    def find_off_canvas():
+        r.page.evaluate("document.activeElement && document.activeElement.blur()")
+        r.key(f"{MOD}+f")
+    r.step("find-off-canvas", find_off_canvas, LEFT)
+    r.step("find-closed", lambda: r.key("Escape"), LEFT, 400)
     # Fold the VAR_OUTPUT section by its gutter arrow (line 2), then open it.
     r.step("folded", lambda: r.click(*FOLD_LINE_2), LEFT)
     r.click(*FOLD_LINE_2); r.wait(300)
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
-    # Spec mode (2026-11-15): "From a spec..." opens its window; text typed
-    # into it shows; Escape shuts it with the text kept.
-    r.step("spec-window", lambda: r.click(*AGENT_SPEC), SPEC_WINDOW)
-    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), SPEC_WINDOW)
+    # This build has no free chat: the tab says so (UNAVAILABLE_TEXT) and a
+    # click or typing on it changes nothing. (With a chat URL: "From a
+    # spec..." opens its window; text typed into it shows.)
+    r.step("spec-window", lambda: r.click(*AGENT_SPEC), LEFT, stays=True)
+    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), LEFT, stays=True)
     r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
-    for x, name in ((137, "file-menu"), (190, "edit-menu"), (235, "view-menu"), (283, "help-menu")):
-        r.click(x, 26); r.wait(500); r.shot(name); r.key("Escape")
+    for sub, name in ((MENU_FILE, "file-menu"), (MENU_EDIT, "edit-menu"), (MENU_VIEW, "view-menu"), (MENU_HELP, "help-menu")):
+        r.click(*MENU); r.wait(300); r.click(*sub); r.wait(500); r.shot(name); r.key("Escape"); r.key("Escape")
     # Type a comment into the program, then deploy it.
     def edit():
         # A comment typed where the caret lands (egui's End chord moves
@@ -240,14 +279,6 @@ def playground(ctx, base, out):
         m.move(800, 200, steps=12); m.up()
     r.step("diagram-selected", band, DIAGRAM, 800)
     r.step("diagram-deselected", lambda: r.key("Escape"), DIAGRAM, 500)
-    # The diagram in 3D (canvas-3d-mvp): the toggle on the diagram's left
-    # edge, a double click on the POU node dives to its blocks, Escape
-    # climbs, the toggle again goes back to the flat diagram. Headless
-    # Chromium needs a software WebGL2 (the launch flags in main).
-    r.step("3d-on", lambda: r.click(*TOGGLE_3D), DIAGRAM, 2500)
-    r.step("3d-dive", lambda: r.page.mouse.dblclick(*POU_3D), DIAGRAM, 1500)
-    r.step("3d-up", lambda: r.key("Escape"), DIAGRAM, 1500)
-    r.step("3d-off", lambda: r.click(*TOGGLE_3D), DIAGRAM, 1000)
     r.step("trend-hidden", lambda: r.key("Alt+Shift+Digit2"), BOTTOM_TABS)
     r.key("Alt+Shift+Digit2"); r.wait(400)
     # Alt+Shift+5 docks the Code tab on the right, the I/O shown on the
@@ -258,13 +289,17 @@ def playground(ctx, base, out):
     r.key("Alt+Shift+Digit3"); r.wait(400)
     def drag_back():
         m = r.page.mouse
-        m.move(*TAB_RIGHT_FIRST); m.down()
-        m.move(160, 300, steps=12); m.up()
+        # A frame between each phase: egui starts a drag from the press it
+        # saw on a hovered tab, and WebKit delivers the events faster than
+        # the page draws.
+        m.move(*TAB_RIGHT_FIRST); r.wait(150); m.down(); r.wait(150)
+        m.move(160, 300, steps=12); r.wait(150); m.up()
     r.step("docked-back", drag_back, RIGHT_TABS)
     # View › Pane layouts… (2026-11-15): the popup, then the ready-made
     # Programming layout (the code docked on the right), then Default.
     def layouts():
-        r.click(*VIEW_MENU); r.wait(1500)
+        r.click(*MENU); r.wait(500)
+        r.click(*MENU_VIEW); r.wait(1500)
         r.click(*VIEW_PANE_LAYOUTS)
     r.step("pane-layouts", layouts, LEFT, 1500)
     r.step("layout-programming", lambda: r.click(*LAYOUT_PROGRAMMING), RIGHT_TABS, 1000)
@@ -356,7 +391,8 @@ def box(ctx, base, out):
     if kept.status != 200:
         extra.append(f"the pane layout was refused: {kept.status} {kept.text()[:200]}")
     def layouts():
-        r.click(*VIEW_MENU); r.wait(1500)
+        r.click(*MENU); r.wait(500)
+        r.click(*MENU_VIEW); r.wait(1500)
         r.click(*VIEW_PANE_LAYOUTS_BOX)
     r.step("pane-layouts", layouts, LEFT, 2500)
     r.key("Escape"); r.wait(400)
@@ -513,7 +549,7 @@ def market(browser, dist, out):
             port = free_port()
             proc = start_market_box(dist, work, trust_key, port, relay_port)
             try:
-                ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
+                ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
                 base = f"http://127.0.0.1:{port}"
                 r = Run(open_app(ctx, base, "", layout()), out, f"market-{label}")
                 r.wait(4000)
@@ -524,8 +560,9 @@ def market(browser, dist, out):
                     r.page.keyboard.type(PASSWORD)
                     r.key("Enter")
                 sign_in(); r.wait(6000)
-                r.click(*VIEW_MENU); r.wait(1500)
-                r.click(259, 135); r.wait(1500)
+                r.click(*MENU); r.wait(500)
+                r.click(*MENU_VIEW); r.wait(1500)
+                r.click(*VIEW_PROPOSALS_BOX); r.wait(1500)
                 r.shot("proposals-screen")
                 problems += install_steps(r, index, label)
                 problems += r.problems()
@@ -574,7 +611,7 @@ def install_steps(r, index, label):
 
 
 def phone(browser, base, query, out, prefix):
-    ctx = browser.new_context(viewport={"width": 390 * S, "height": 844 * S}, device_scale_factor=S, color_scheme="dark")
+    ctx = browser.new_context(viewport={"width": 390 * K, "height": 844 * K}, device_scale_factor=S, color_scheme="dark")
     r = Run(open_app(ctx, base, query, layout()), out, prefix)
     r.wait(3000); r.shot("phone")
     problems = r.problems()
@@ -633,14 +670,118 @@ def start_box(dist, state, port):
     return proc
 
 
+# What the loading screen says without WebGL2 (loading/loading.js, "nowebgl").
+NO_WEBGL2_NOTICE = "This browser cannot draw Helmsman"
+
+NO_WEBGL2_INIT = """
+const get = HTMLCanvasElement.prototype.getContext;
+HTMLCanvasElement.prototype.getContext = function (kind, ...rest) {
+    return kind === 'webgl2' ? null : get.call(this, kind, ...rest);
+};
+"""
+
+PROBE = """() => {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    if (!gl) return null;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.VERSION);
+}"""
+
+
+def launch(p, engine, nogpu):
+    """The engine's browser, with software drawing forced when `nogpu`."""
+    if engine == "chromium":
+        args = ["--disable-gpu", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] if nogpu else []
+        return p.chromium.launch(args=args)
+    if engine == "firefox":
+        # Without a GPU (a CI runner) Firefox's blocklist leaves WebGL2 off
+        # and the page shows its notice: force it on in both modes, and in
+        # software mode draw in software as well.
+        prefs = {"webgl.force-enabled": True, "webgl.disabled": False}
+        if nogpu:
+            prefs.update({"layers.acceleration.disabled": True, "gfx.webrender.software": True})
+        return p.firefox.launch(firefox_user_prefs=prefs, headless=not HEADED)
+    return p.webkit.launch()
+
+
+PROBE_APP = """() => {
+    const c = document.getElementById('canvas');
+    const r = c.getBoundingClientRect();
+    return `dpr ${devicePixelRatio} inner ${innerWidth}x${innerHeight} canvas buffer ${c.width}x${c.height} css ${r.width}x${r.height}`;
+}"""
+
+PROBE_GL1 = """() => {
+    const gl = document.createElement('canvas').getContext('webgl');
+    if (!gl) return null;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.VERSION);
+}"""
+
+
+def probe_webgl2(browser, base):
+    """One line: the WebGL2 and WebGL1 renderers the engine gives a page, and
+    the size of the app's canvas against its CSS size at this engine's layout."""
+    page = browser.new_page()
+    page.goto(base + "/__seed", wait_until="load")
+    gl2, gl1 = page.evaluate(PROBE), page.evaluate(PROBE_GL1)
+    page.close()
+    ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S)
+    page = open_app(ctx, base, "?playground&editor", layout())
+    page.wait_for_timeout(3000)
+    metrics = page.evaluate(PROBE_APP)
+    ctx.close()
+    return f"WebGL2 {gl2!r}, WebGL1 {gl1!r}, {metrics} (viewport {W * K}x{H * K})"
+
+
+def no_webgl2(browser, base, out):
+    """With getContext('webgl2') answering null the page shows its notice."""
+    ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
+    ctx.add_init_script(NO_WEBGL2_INIT)
+    r = Run(open_app(ctx, base, "?playground&editor", layout()), out, "nowebgl")
+    r.wait(4000)
+    r.shot("notice")
+    problems = r.problems()
+    shown = r.page.locator("#loading-why").inner_text() if r.page.locator("#loading-why").count() else ""
+    if not r.page.locator("#loading-failed").is_visible() or NO_WEBGL2_NOTICE not in shown:
+        problems.append(f"[smoke] no WebGL2: the notice did not show (page said {shown!r})")
+    else:
+        print(f"[smoke] no WebGL2 notice: {shown}")
+    ctx.close()
+    return problems
+
+
+def run_engine(browser, base, out, a, proc, box_port):
+    """Every scenario in one launched browser: its problems."""
+    if a.market_only:
+        return market(browser, a.dist, out)
+    problems = []
+    ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
+    problems += playground(ctx, base, out)
+    ctx.close()
+    problems += phone(browser, base, "?playground&editor", out, "pg")
+    problems += no_webgl2(browser, base, out)
+    if proc:
+        bbase = f"http://127.0.0.1:{box_port}"
+        ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
+        problems += box(ctx, bbase, out)
+        ctx.close()
+        problems += phone(browser, bbase, "", out, "box")
+        problems += market(browser, a.dist, out)
+    return problems
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dist", default=os.path.join(ROOT, "target", "canvas-dist"))
     ap.add_argument("--out", default=os.path.join(ROOT, "target", "canvas-smoke"))
     ap.add_argument("--box", action="store_true", help="also start a loopback box and drive its page")
     ap.add_argument("--market-only", action="store_true", help="only the marketplace install scenario (starts its own boxes)")
+    ap.add_argument("--browser", default="chromium", choices=("chromium", "firefox", "webkit", "all"))
+    ap.add_argument("--no-gpu", action="store_true", help="force software drawing (with --browser all both modes run regardless)")
+    ap.add_argument("--headed", action="store_true", help="Firefox with a window (xvfb-run on a runner), for a GL context headless lacks")
     a = ap.parse_args()
-    global PLC
+    global PLC, HEADED
+    HEADED = a.headed
     PLC = os.path.join(ROOT, "target", "debug", "helmsman-plc")
     if not os.path.exists(os.path.join(a.dist, "index.html")):
         sys.exit(f"no canvas build in {a.dist}: make canvas-web")
@@ -655,22 +796,19 @@ def main():
             box_port = free_port()
             proc = start_box(a.dist, state, box_port)
         with sync_playwright() as p:
-            browser = p.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"])
-            if a.market_only:
-                problems += market(browser, a.dist, a.out)
-            else:
-                ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
-                problems += playground(ctx, base, a.out)
-                ctx.close()
-                problems += phone(browser, base, "?playground&editor", a.out, "pg")
-                if proc:
-                    bbase = f"http://127.0.0.1:{box_port}"
-                    ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")
-                    problems += box(ctx, bbase, a.out)
-                    ctx.close()
-                    problems += phone(browser, bbase, "", a.out, "box")
-                    problems += market(browser, a.dist, a.out)
-            browser.close()
+            every = a.browser == "all"
+            for engine in (("chromium", "firefox", "webkit") if every else (a.browser,)):
+                for nogpu in ((False, True) if every else (a.no_gpu,)):
+                    name = engine + ("-nogpu" if nogpu else "")
+                    out = os.path.join(a.out, name) if every or a.no_gpu or engine != "chromium" else a.out
+                    os.makedirs(out, exist_ok=True)
+                    global K
+                    K = 1 if engine == "webkit" else 2
+                    browser = launch(p, engine, nogpu)
+                    print(f"[smoke] {name}: {probe_webgl2(browser, base)}", flush=True)
+                    found = [f"{name}: {x}" for x in run_engine(browser, base, out, a, proc, box_port if proc else None)]
+                    problems += found
+                    browser.close()
     finally:
         srv.shutdown()
         if proc:
@@ -680,7 +818,7 @@ def main():
             except subprocess.TimeoutExpired:
                 proc.kill()
         shutil.rmtree(state, ignore_errors=True)
-    shots = sorted(f for f in os.listdir(a.out) if f.endswith(".png"))
+    shots = [f for _, _, fs in os.walk(a.out) for f in fs if f.endswith(".png")]
     print(f"{len(shots)} screenshots in {a.out}")
     if problems:
         print(f"{len(problems)} console problem(s):")

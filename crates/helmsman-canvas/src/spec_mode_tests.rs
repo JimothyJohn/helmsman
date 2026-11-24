@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 use eframe::egui;
 
-use crate::claude::{Exchange, FREE_MAX_BODY, Incoming, Model, Route};
+use crate::claude::{Exchange, FREE_MAX_BODY, Incoming, Route};
 use crate::instruct::Kind;
 use crate::playground_view::PlaygroundView;
 use crate::sim_projects::Storage;
@@ -136,7 +136,6 @@ fn a_specification_at_the_cap_and_two_retries_still_fit_the_free_route() {
     ];
     let req = crate::claude::request(
         &Route::Free("https://relay.example".into()),
-        Model::default(),
         &history,
         &format!("retry two {}\n{RETRY}", "r".repeat(1500)),
     );

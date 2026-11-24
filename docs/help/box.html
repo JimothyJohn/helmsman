@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">Describing a change</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="on-a-box">On a box</h1>
 <p>A box is a controller on the machine's network. It serves this app
@@ -132,11 +132,11 @@ reaches the box.</p>
 <h2 id="your-work-survives-a-reload">Your work survives a reload</h2>
 <p>This browser keeps what you had in front of you: the project and file
 you had open, every edit you had not saved yet, what you had typed into
-the Agent and Requirements boxes, whether you were on the Monitor, and
-the name in the sign-in form (never a password or PIN). Reload the page,
-or come back after the box restarts, and it is all where you left it; a
-note says when unsaved edits came back. If someone saved the same file
-since, saving your edits asks which version to keep instead of
+the Describe and Requirements boxes, whether you were on the Monitor,
+and the name in the sign-in form (never a password or PIN). Reload the
+page, or come back after the box restarts, and it is all where you left
+it; a note says when unsaved edits came back. If someone saved the same
+file since, saving your edits asks which version to keep instead of
 overwriting theirs. Edits still need an engineer signed in to be
 saved.</p>
 <h2 id="the-monitor">The Monitor</h2>
@@ -185,7 +185,7 @@ startup and shown in Help › About, so you can compare the two. From the
 box's own host, plain HTTP still works for scripts.</p>
 </main>
 </div>
-<footer><div class="wrap">Helmsman Factory Automation · early release · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
+<footer><div class="wrap">Helmsman Factory Automation · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
 <script>
 (function(){var c=document.querySelectorAll('nav.help a');for(var i=0;i<c.length;i++){if(c[i].getAttribute('href')==='box.html'){c[i].className='current';}}})();
 (function(){var h=document.documentElement,b=document.querySelector('header.top .theme');if(!b){return}function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();

@@ -63,13 +63,13 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">Describing a change</a><a href="lints.html">Code checks</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="code-checks">Code checks</h1>
 <p>The editor reads your Structured Text for patterns that compile and
 still cause trouble on a real machine. Each finding is listed under the
 editor as a warning, with a stable ID, the file and the line, and it is
-sent to the Agent with the compile errors when you ask it for code. The
+sent to Helmsman with the compile errors when you ask it for code. The
 IDs are the same on the page, on a box and in the audit trail, so you
 can look one up.</p>
 <p>Two of the checks hold the code. A finding of either one stops
@@ -151,9 +151,9 @@ as HELMSMAN-L2.</p>
 <ul>
 <li>In the editor, in the list under the code, and in the Messages tab.
 A finding that holds the code says so on its row.</li>
-<li>In the Agent's answer: a finding the answer adds is sent back to the
-Agent for another try. A finding the project already had is not blamed
-on the answer.</li>
+<li>In the answer: a finding the answer adds is sent back to Helmsman
+for another try. A finding the project already had is not blamed on the
+answer.</li>
 <li>On a box, a deploy that holds a finding is refused before anything
 changes, and the answer lists the finding with its line.</li>
 </ul>
@@ -161,7 +161,7 @@ changes, and the answer lists the finding with its line.</li>
 error.</p>
 </main>
 </div>
-<footer><div class="wrap">Helmsman Factory Automation · early release · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
+<footer><div class="wrap">Helmsman Factory Automation · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
 <script>
 (function(){var c=document.querySelectorAll('nav.help a');for(var i=0;i<c.length;i++){if(c[i].getAttribute('href')==='lints.html'){c[i].className='current';}}})();
 (function(){var h=document.documentElement,b=document.querySelector('header.top .theme');if(!b){return}function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();

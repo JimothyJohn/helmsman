@@ -184,8 +184,39 @@ pub enum Act {
     ShowRevision(u32),
 }
 
+/// Where the projects are kept: what the tab's header names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// The page's own storage in this browser.
+    Browser,
+    /// The device the page is connected to.
+    Box,
+}
+
+impl Place {
+    /// The tab's header.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Browser => "Files in this browser",
+            Self::Box => "Files on the box",
+        }
+    }
+
+    const fn tip(self) -> &'static str {
+        match self {
+            Self::Browser => {
+                "Your programs are kept in this browser, on this computer. Download a project to keep a copy elsewhere."
+            }
+            Self::Box => "Your programs are kept on the box itself, so they stay when this page closes.",
+        }
+    }
+}
+
 /// What the sidebar shows.
 pub struct Listing<'a> {
+    /// Where the projects are kept.
+    pub place: Place,
     pub projects: &'a [ProjectRow],
     pub open: Option<&'a str>,
     /// The open project's files, each with whether it has unsaved edits.
@@ -317,11 +348,26 @@ impl FilesUi {
     pub fn show(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) -> Option<Act> {
         let t = theme(ui);
         let mut act = None;
+        let r = ui
+            .add(egui::Label::new(RichText::new(l.place.title()).strong().color(t.fg)).truncate())
+            .tip(l.place.tip());
+        chrome.hit("files place", r.rect);
+        // Your own come first, whether or not there are any.
         let mut shown = Group::Mine;
+        let mine = l.projects.iter().filter(|p| p.group == Group::Mine).count();
+        group_header(ui, chrome, Group::Mine, mine);
+        if mine == 0 && !chrome.files_fold_mine {
+            ui.label(RichText::new("No projects yet.").color(t.muted))
+                .tip("Right-click the empty space below, or use File › New project.");
+        }
         for p in l.projects {
             if p.group != shown {
                 shown = p.group;
-                group_header(ui, shown);
+                let n = l.projects.iter().filter(|q| q.group == shown).count();
+                group_header(ui, chrome, shown, n);
+            }
+            if chrome.files_folded(p.group) {
+                continue;
             }
             let open = l.open == Some(p.name.as_str());
             let mut text = format!("{} {}", if open { "▾" } else { "▸" }, p.name);
@@ -454,10 +500,6 @@ impl FilesUi {
                     self.files_under(ui, l, chrome, &mut act);
                 });
             }
-        }
-        if l.projects.is_empty() {
-            ui.label(RichText::new("No projects yet.").color(t.muted))
-                .tip("Right-click the empty space below, or use File › New project.");
         }
         if l.starters {
             self.starters_ui(ui, l, chrome);
@@ -888,14 +930,14 @@ impl FilesUi {
                     )
                     .tip(match &a {
                         Act::DeleteProject(_) | Act::DeleteFile(_) => "Deletes it. There is no undo.",
-                        Act::UseAnswer { .. } => "Saves the edits here, then opens the agent's code.",
+                        Act::UseAnswer { .. } => "Saves the edits here, then opens the answer's code.",
                         _ => "Opens it. The edits here are lost.",
                     });
                 chrome.hit("confirm yes", yes.rect);
                 if let Act::UseAnswer { name, text, .. } = &a {
                     let drop = ui
                         .add(egui::Button::new("Drop them, then open").min_size(tall))
-                        .tip("Opens the agent's code. The edits here are lost.");
+                        .tip("Opens the answer's code. The edits here are lost.");
                     chrome.hit("confirm drop", drop.rect);
                     if drop.clicked() {
                         out = Some(Act::UseAnswer {
@@ -1104,14 +1146,45 @@ fn free_name(l: &Listing<'_>, base: &str) -> String {
         .unwrap_or_else(|| format!("{base}-{last}"))
 }
 
-/// A list's heading.
-fn group_header(ui: &mut egui::Ui, g: Group) {
+/// A list's heading: its name and count, a click folds it or opens it.
+fn group_header(ui: &mut egui::Ui, chrome: &mut Chrome, g: Group, count: usize) {
     let t = theme(ui);
+    let (title, key, tip) = match g {
+        Group::Mine => (
+            "My Files",
+            "files head mine",
+            "The programs you made or copied. Right-click one to copy, rename or delete it.",
+        ),
+        Group::FirstSteps => (
+            "Examples",
+            "files head examples",
+            "Short programs that teach one thing each. Click one to make your own copy under a name you choose.",
+        ),
+    };
+    let folded = chrome.files_folded(g);
     if g == Group::FirstSteps {
         ui.add_space(4.0);
-        ui.label(RichText::new("Examples").strong().color(t.muted)).tip(
-            "Short programs that teach one thing each. Click one to make your own copy under a name you choose.",
-        );
+    }
+    let arrow = if folded { "▸" } else { "▾" };
+    let how = if folded {
+        "Click to show them."
+    } else {
+        "Click to fold them away."
+    };
+    let r = ui
+        .add(
+            egui::Label::new(
+                RichText::new(format!("{arrow} {title}  {count}"))
+                    .strong()
+                    .color(t.muted),
+            )
+            .truncate()
+            .sense(egui::Sense::click()),
+        )
+        .tip(format!("{tip} {how}"));
+    chrome.hit(key, r.rect);
+    if r.clicked() {
+        chrome.set_files_folded(g, !folded);
     }
 }
 

@@ -549,8 +549,11 @@ fn statuses_and_garbage_are_classified() {
 #[test]
 fn a_closed_port_is_a_connect_error() {
     let url = Url::parse(&format!("http://127.0.0.1:{}/", closed_port())).unwrap();
+    // Windows retries a refused loopback connect for about two seconds
+    // before it reports the refusal, so 2 s is a timeout there.
+    let wait = Duration::from_secs(if cfg!(windows) { 10 } else { 2 });
     assert!(matches!(
-        post(&url, Duration::from_secs(2), true),
+        post(&url, wait, true),
         Outcome::Retry(SendError::Connect(_))
     ));
 }
@@ -1127,6 +1130,9 @@ fn sinks_publish_what_fires_end_to_end() {
 }
 
 #[test]
+// 1_704_067_200 is 2024-01-01T00:00Z as a Unix timestamp: seconds read
+// truer than clippy's `from_hours(473352)`.
+#[allow(clippy::duration_suboptimal_units)]
 fn wall_clock_before_2024_is_untrusted() {
     use helmsman_plc::sink::wall_ms;
     use std::time::{SystemTime, UNIX_EPOCH};

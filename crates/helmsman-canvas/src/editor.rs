@@ -41,7 +41,7 @@ impl Tab {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Claude => "Agent",
+            Self::Claude => "Describe",
         }
     }
 
@@ -50,7 +50,7 @@ impl Tab {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Io => "I/O: the program's inputs and outputs with their live values.",
-            Self::Claude => "Agent: ask the agent about the program, or have it propose a change.",
+            Self::Claude => "Describe: say what the program should do, and the change is made and checked.",
         }
     }
 }
@@ -79,9 +79,9 @@ impl Bottom {
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Trend => "Trend: pinned signals over time (Alt+Shift+2).",
+            Self::Trend => "Alt+Shift+2  Trend: pinned signals over time.",
             Self::Messages => {
-                "Messages: what needs saying now and what happened (connections, deploys, faults and errors), newest last. Red while an error stands or one has come in since you last looked."
+                "Messages: what happened, newest last.\nRed while an error stands or a new one came in."
             }
         }
     }
@@ -150,14 +150,10 @@ impl Pane {
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Files => "Files: the projects and the open one's files (Alt+Shift+0 opens or shuts it).",
-            Self::Devices => {
-                "Devices: the I/O map, the remote modules and their points (Alt+Shift+4 opens or shuts it)."
-            }
-            Self::Code => "Code: the Structured Text of the open file (Alt+Shift+1 opens or shuts it).",
-            Self::History => {
-                "History: every saved version of the open project, newest at the top. Click one, or step with the arrows, to run it."
-            }
+            Self::Files => "Alt+Shift+0  Files: the projects and their files.",
+            Self::Devices => "Alt+Shift+4  Devices: the I/O map and its modules.",
+            Self::Code => "Alt+Shift+1  Code: the open file's Structured Text.",
+            Self::History => "History: every saved version, newest at the top.\nClick one to run it.",
             Self::Claude | Self::Io => match self.tab() {
                 Some(t) => t.tip(),
                 None => "",
@@ -319,6 +315,10 @@ pub struct Chrome {
     pub io_fold_in: bool,
     /// The I/O tab's Outputs are folded away. Remembered.
     pub io_fold_out: bool,
+    /// The Files tab's My Files section is folded away. Remembered.
+    pub files_fold_mine: bool,
+    /// The Files tab's Examples section is folded away. Remembered.
+    pub files_fold_examples: bool,
 }
 
 impl Default for Chrome {
@@ -348,15 +348,33 @@ impl Default for Chrome {
             hints: crate::st_hints::Hints::default(),
             folds: crate::st_fold::Folds::default(),
             advanced: false,
-            agent_resets: true,
+            agent_resets: false,
             io_grid: false,
             io_fold_in: false,
             io_fold_out: false,
+            files_fold_mine: false,
+            files_fold_examples: false,
         }
     }
 }
 
 impl Chrome {
+    /// Whether the Files tab's section for `g` is folded away.
+    #[must_use]
+    pub const fn files_folded(&self, g: crate::projects::Group) -> bool {
+        match g {
+            crate::projects::Group::Mine => self.files_fold_mine,
+            crate::projects::Group::FirstSteps => self.files_fold_examples,
+        }
+    }
+
+    pub(crate) const fn set_files_folded(&mut self, g: crate::projects::Group, folded: bool) {
+        match g {
+            crate::projects::Group::Mine => self.files_fold_mine = folded,
+            crate::projects::Group::FirstSteps => self.files_fold_examples = folded,
+        }
+    }
+
     /// What is kept per browser, as text. `dock=2` marks the layout of
     /// 2026-11-13 (every tab in one left pane); a text without it is
     /// from before, and its panes are not read back.
@@ -380,7 +398,7 @@ impl Chrome {
             format!(" hidden={}", list(&self.hidden))
         };
         format!(
-            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={} iogrid={} iofold={}{}{colors}",
+            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} bottom={} light={} wrap={} advanced={} reset={} iogrid={} iofold={}{} filefold={}{}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             list(&self.lefts),
@@ -394,7 +412,9 @@ impl Chrome {
             u8::from(self.agent_resets),
             u8::from(self.io_grid),
             u8::from(self.io_fold_in),
-            u8::from(self.io_fold_out)
+            u8::from(self.io_fold_out),
+            u8::from(self.files_fold_mine),
+            u8::from(self.files_fold_examples)
         )
     }
 
@@ -423,6 +443,10 @@ impl Chrome {
                 Some(("iofold", v)) => {
                     c.io_fold_in = v.starts_with('1');
                     c.io_fold_out = v.ends_with('1') && v.len() == 2;
+                }
+                Some(("filefold", v)) => {
+                    c.files_fold_mine = v.starts_with('1');
+                    c.files_fold_examples = v.ends_with('1') && v.len() == 2;
                 }
                 Some(("colors", v)) => {
                     c.colors = v
@@ -772,7 +796,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Right pane",
         right && docked,
         &k(Action::Panel),
-        "Shows or hides the pane on the right, once a tab is docked there (drag a tab to the right edge, or Alt+Shift+5).",
+        "Shows or hides the right pane, once a tab is docked there.",
     ) && docked
     {
         chrome.right = !right;
@@ -784,7 +808,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Tab to the right",
         false,
         &k(Action::DockRight),
-        "Docks the left pane's tab in a pane on the right and shows the next one on the left. Drag a tab back to the left pane to return it.",
+        "Docks the left pane's tab on the right.\nDrag it back to return it.",
     ) {
         chrome.send_right();
     }
@@ -945,7 +969,7 @@ fn strip(
     let side = ui.available_width().clamp(STRIP - 16.0, TAB);
     for (k, t) in tabs.iter().enumerate() {
         let r =
-            crate::glyphs::tab(ui, t.icon, side, t.on, None).tip(format!("{} Opens the pane on it.", t.tip));
+            crate::glyphs::tab(ui, t.icon, side, t.on, None).tip(format!("{}\nOpens the pane on it.", t.tip));
         hits.push((t.key.clone(), r.rect));
         if r.clicked() {
             picked = Some(k);
@@ -954,45 +978,73 @@ fn strip(
     (picked, strip_toggle(ui, left, hover))
 }
 
-/// The rest of a collapsed sidebar's strip as one button: a chevron
-/// pointing `left` or right, tinted under the pointer.
+/// The rest of a collapsed sidebar's strip as one button: the fold glyph
+/// for showing the pane, tinted under the pointer. `left`: the pane is the
+/// right one, so showing it moves it left (the strip is on the right).
 fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
     let size = Vec2::new(
         ui.available_width().max(STRIP - 8.0),
         ui.available_height().max(TAP),
     );
     let (rect, r) = ui.allocate_exact_size(size, Sense::click());
-    let r = r.on_hover_text(hover);
+    let r = r.tip(hover);
     if r.hovered() {
         let tint = ui.style().interact(&r).bg_fill;
         ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
     }
-    chevron(ui, rect.center(), left, r.hovered());
+    fold_glyph(ui, rect.center(), !left, false, r.hovered());
     r
 }
 
-/// An open sidebar's hide button, the same chevron in the header row.
+/// An open sidebar's hide button in the header row. `left`: the pane is
+/// the left one.
 fn header_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(Vec2::splat(TAP * 0.75), Sense::click());
-    let r = r.on_hover_text(hover);
+    let r = r.tip(hover);
     if r.hovered() {
         let tint = ui.style().interact(&r).bg_fill;
         ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
     }
-    chevron(ui, rect.center(), left, r.hovered());
+    fold_glyph(ui, rect.center(), left, true, r.hovered());
     r
 }
 
-/// A 16 pt stroked chevron at `c`.
-fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
-    let s = 8.0;
-    let dir = if left { -1.0 } else { 1.0 };
-    let tip = Pos2::new(c.x + dir * s * 0.5, c.y);
-    let back = c.x - dir * s * 0.5;
+/// The fold glyph (Nick, 2026-11-23: the chevron was not intuitive): a
+/// window outline with the pane's side filled, and an arrow in the rest
+/// of it pointing the way the pane will move, into its edge to hide it,
+/// out of it to show it. `pane_left`: the pane is on the left.
+fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool) {
     let t = theme(ui);
-    let stroke = Stroke::new(2.5, if hot { t.accent } else { t.muted });
-    ui.painter().line_segment([Pos2::new(back, c.y - s), tip], stroke);
-    ui.painter().line_segment([Pos2::new(back, c.y + s), tip], stroke);
+    let ink = if hot { t.accent } else { t.muted };
+    let (w, h, slab) = (22.0, 18.0, 7.0);
+    let frame = Rect::from_center_size(c, Vec2::new(w, h));
+    let p = ui.painter();
+    p.rect_stroke(
+        frame,
+        CornerRadius::same(2),
+        Stroke::new(2.0, ink),
+        egui::StrokeKind::Inside,
+    );
+    let side = if pane_left { -1.0 } else { 1.0 };
+    let edge = if pane_left { frame.left() } else { frame.right() };
+    let slab_rect = Rect::from_x_y_ranges(
+        if pane_left {
+            edge..=edge + slab
+        } else {
+            edge - slab..=edge
+        },
+        frame.top()..=frame.bottom(),
+    );
+    p.rect_filled(slab_rect, CornerRadius::same(1), ink);
+    // The arrow's head points toward the pane's edge to hide, away to show.
+    let dir = if hiding { side } else { -side };
+    let mid = Pos2::new(edge - side * (slab + (w - slab) / 2.0), c.y);
+    let reach = 3.0;
+    let tip = Pos2::new(mid.x + dir * reach, c.y);
+    let back = mid.x - dir * reach;
+    let stroke = Stroke::new(2.0, ink);
+    p.line_segment([Pos2::new(back, c.y - 4.0), tip], stroke);
+    p.line_segment([Pos2::new(back, c.y + 4.0), tip], stroke);
 }
 
 /// How far from the window's right edge a tab dragged out of the left
@@ -1064,9 +1116,15 @@ fn side_pane(
         )
     };
     let (other, chevron_tip) = if right {
-        ("the left pane", "Hides the pane (Alt+Shift+3).")
+        (
+            "the left pane",
+            format!(
+                "{}  Hide the pane.",
+                crate::hotkeys::label(ui.ctx(), crate::hotkeys::Action::Panel)
+            ),
+        )
     } else {
-        ("the window's right edge", "Hides the pane.")
+        ("the window's right edge", "Hide the pane.".to_string())
     };
     let shown = egui::Panel::show_switched(ui, &mut open, strip_panel, panel, |ui, is_open| {
         let toggle = if is_open {
@@ -1084,13 +1142,13 @@ fn side_pane(
             let fill = row - n * (size + gap_x) - TAP * 0.75 - gap_x;
             ui.horizontal_wrapped(|ui| {
                 if right {
-                    t = Some(header_toggle(ui, false, chevron_tip));
+                    t = Some(header_toggle(ui, false, &chevron_tip));
                 }
                 for &p in tabs {
                     let r =
                         crate::glyphs::tab_sensed(ui, p.icon(), size, on == p, None, Sense::click_and_drag())
                             .tip(format!(
-                                "{} Drag it along the row to reorder, or to {other} to dock it there; right-click to hide the tab; double-click hides the pane.",
+                                "{}\nDrag to reorder or to {other}; right-click hides the tab.",
                                 p.tip()
                             ));
                     r.dnd_set_drag_payload(p);
@@ -1128,7 +1186,7 @@ fn side_pane(
                     if fill > 0.0 {
                         ui.add_space(fill);
                     }
-                    t = Some(header_toggle(ui, true, chevron_tip));
+                    t = Some(header_toggle(ui, true, &chevron_tip));
                 }
             });
             ui.separator();
@@ -1145,11 +1203,14 @@ fn side_pane(
                 })
                 .collect();
             let hover = if right {
-                "Shows the pane (Alt+Shift+3)."
+                format!(
+                    "{}  Show the pane.",
+                    crate::hotkeys::label(ui.ctx(), crate::hotkeys::Action::Panel)
+                )
             } else {
-                "Shows the pane."
+                "Show the pane.".to_string()
             };
-            let (picked, t) = strip(ui, &strip_tabs, right, hover, hits);
+            let (picked, t) = strip(ui, &strip_tabs, right, &hover, hits);
             if let Some(k) = picked {
                 on = tabs[k];
                 hide = true;
@@ -1446,7 +1507,7 @@ pub fn st_editor(
 ) -> egui::Response {
     let font = FontId::monospace(crate::theme::MONO);
     let row = ui.fonts_mut(|f| f.row_height(&font));
-    let found = crate::find::row(ui, &mut chrome.find, id, text.as_str());
+    let found = crate::find::row(ui, &mut chrome.find, id, text);
     let wrap_on = chrome.wrap;
     let mut scroll = if wrap_on {
         egui::ScrollArea::vertical()
@@ -1664,11 +1725,87 @@ pub fn wrap_toggle(ui: &mut egui::Ui, chrome: &mut Chrome) {
     }
 }
 
+/// The Code header's magnifier, drawn as "code find" for the tests: it
+/// opens the find row over the code (Find, Replace, Replace all), and
+/// shuts it again.
+pub fn find_toggle(ui: &mut egui::Ui, chrome: &mut Chrome) {
+    let open = chrome.find.is_some();
+    let r = crate::glyphs::button_sized(
+        ui,
+        crate::glyphs::Icon::Find,
+        crate::glyphs::ROW,
+        true,
+        open,
+        "Ctrl F: find in this file, and replace.\nCtrl G next, Ctrl Shift G previous, Esc closes.",
+    );
+    chrome.hit("code find", r.rect);
+    if r.clicked() {
+        if open {
+            chrome.find = None;
+        } else {
+            crate::find::Find::open(&mut chrome.find);
+        }
+    }
+}
+
+/// What the Code header's right end shows: Deploy, and before it the
+/// errors when the code does not compile (nothing while it does: Nick,
+/// 2026-11-23).
+pub struct Status<'a> {
+    /// How many errors, and the first one's words for the popup.
+    pub errors: usize,
+    pub first: Option<&'a str>,
+    /// Whether Deploy may be pressed, or why not.
+    pub deploy: &'a Result<(), String>,
+    pub deploy_tip: &'a str,
+}
+
+/// What was pressed at the header's right end.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pressed {
+    pub deploy: bool,
+    /// The red ✖: go to the first error.
+    pub errors: bool,
+}
+
+/// The header's right end, right to left: Deploy as a filled green
+/// button with a black arrow ("code deploy"), then a red ✖ with the count
+/// when the code has errors ("code errors"), its popup the first error.
+pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> Pressed {
+    let mut out = Pressed::default();
+    // What is left of the row, up to the pane's right edge.
+    chrome.hit("code header rest", ui.available_rect_before_wrap());
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let tip = s.deploy.as_ref().err().map_or(s.deploy_tip, String::as_str);
+        let r = crate::glyphs::deploy(ui, s.deploy.is_ok()).tip(tip);
+        chrome.hit("code deploy", r.rect);
+        out.deploy = r.clicked();
+        if s.errors > 0 {
+            let red = crate::theme::theme(ui).ink(crate::st_view::brand::RED);
+            let r = ui
+                .add(
+                    egui::Label::new(RichText::new(format!("✖ {}", s.errors)).strong().color(red))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .tip(format!(
+                    "{}\nClick to go to its line; the list under the code has each one.",
+                    s.first.unwrap_or("The code does not compile.")
+                ));
+            chrome.hit("code errors", r.rect);
+            out.errors = r.clicked();
+        }
+    });
+    out
+}
+
 /// The Code header's name: the open file, truncated to leave the row's
 /// glyphs and notes their room, drawn as "code file" for the tests.
 pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str) {
-    // Two glyphs, their spacing and a short note stay on the row.
-    let room = (ui.available_width() - 2.0 * (crate::glyphs::ROW + 6.0) - 120.0).max(60.0);
+    // Two glyphs, their spacing, the errors' count and Deploy stay on
+    // the row.
+    let room =
+        (ui.available_width() - 2.0 * (crate::glyphs::ROW + 6.0) - crate::glyphs::DEPLOY_W - 80.0).max(60.0);
     let r = ui
         .scope(|ui| {
             ui.set_max_width(room);
@@ -1920,7 +2057,7 @@ fn removed_rules(
             out.response.id.with(("removed", *line)),
             egui::Sense::hover(),
         );
-        let mut tip = format!("The Agent removed {n} line(s) here:");
+        let mut tip = format!("The change removed {n} line(s) here:");
         for g in gone {
             tip.push('\n');
             tip.push_str(g);

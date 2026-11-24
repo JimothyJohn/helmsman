@@ -1246,6 +1246,56 @@ fn a_slowloris_client_is_cut_off_at_the_deadline_and_cannot_starve_others() {
     Bench::wait("a free worker", || get(b.addr, "/api").status == 200);
 }
 
+/// A refusal sent while the client is still sending must reach it. A
+/// socket closed with bytes unread, or one that gets bytes after it
+/// closed, answers with a reset, and a reset throws away what the client
+/// had not read yet (always on Windows: the dribbler above read status 0
+/// in CI on 2026-11-23).
+#[test]
+fn a_client_cut_off_at_the_deadline_reads_the_408_however_late_it_stops_sending() {
+    let deadline = Duration::from_millis(300);
+    let b = Bench::with(Setup {
+        limits: Limits {
+            deadline,
+            ..Limits::default()
+        },
+        ..Setup::default()
+    });
+    let mut s = TcpStream::connect(b.addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let t0 = Instant::now();
+    s.write_all(b"GET /api HTTP/1.1\r\nX-Slow: ").unwrap();
+    // It keeps sending past the deadline and reads nothing until it stops.
+    let mut sent = Ok(());
+    while sent.is_ok() && t0.elapsed() < deadline + Duration::from_millis(300) {
+        sent = s.write_all(b"a");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let mut out = Vec::new();
+    let read = s.read_to_end(&mut out);
+    let r = parse(&out);
+    assert_eq!(r.status, 408, "sent: {sent:?}, read: {read:?}, got: {r:?}");
+}
+
+#[test]
+fn a_request_refused_for_its_size_reads_the_431_after_sending_all_of_it() {
+    let b = Bench::new();
+    let mut s = TcpStream::connect(b.addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    // Far past the head limit, in one go, before reading anything.
+    let mut raw = b"GET /api HTTP/1.1\r\nX-Big: ".to_vec();
+    raw.resize(512 * 1024, b'a');
+    let sent = s.write_all(&raw);
+    let mut out = Vec::new();
+    let read = s.read_to_end(&mut out);
+    let r = parse(&out);
+    assert_eq!(
+        r.status, 431,
+        "sent: {sent:?}, read: {read:?}, head: {:?}",
+        r.head
+    );
+}
+
 #[test]
 fn a_client_that_never_reads_its_event_stream_is_dropped() {
     let b = Bench::with(Setup {
@@ -1367,8 +1417,11 @@ fn hammering_the_api_does_not_hold_up_the_scan() {
         .as_u64()
         .unwrap();
     assert!(served.load(Ordering::Relaxed) > 50, "the hammer hammered");
+    // 154 ticks against 680 quiet on a Windows runner (2026-11-23): 25
+    // client threads take more of its few cores from the scan than on Linux.
+    let allowed_fall = if cfg!(windows) { 8 } else { 4 };
     assert!(
-        busy * 4 >= quiet,
+        busy * allowed_fall >= quiet,
         "scan ticks fell from {quiet} to {busy} per {window:?} under load"
     );
     assert!(

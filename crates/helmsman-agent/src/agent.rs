@@ -45,7 +45,7 @@ impl Default for Budget {
             steps: 24,
             output_tokens: 200_000,
             tools_per_turn: 16,
-            time: Duration::from_secs(15 * 60),
+            time: Duration::from_mins(15),
         }
     }
 }
@@ -640,7 +640,7 @@ impl Agent {
 }
 
 /// What the user is told when the relay no longer has their session.
-const LOST: &str = "The relay no longer has this conversation (it expired after 7 days without a step, or the relay lost it). Everything said before this message, and the documents it had fetched, are gone from the agent's memory; continuing in a new conversation from this message.";
+const LOST: &str = "The relay no longer has this conversation (it expired after 7 days without a step, or the relay lost it). Everything said before this message, and the documents it had fetched, are no longer remembered; continuing in a new conversation from this message.";
 
 /// Protocol v2: the relay holds the conversation. One user message is a
 /// run of steps: send the new input, stream the text, save any document

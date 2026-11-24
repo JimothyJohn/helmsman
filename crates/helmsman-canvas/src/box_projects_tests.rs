@@ -595,6 +595,7 @@ struct Harness {
     ctx: egui::Context,
     app: App,
     time: f64,
+    shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl Harness {
@@ -608,6 +609,7 @@ impl Harness {
             ctx: egui::Context::default(),
             app,
             time: 0.0,
+            shapes: Vec::new(),
         };
         h.frame(vec![]);
         h.frame(vec![]);
@@ -625,6 +627,19 @@ impl Harness {
         let Self { ctx, app, .. } = self;
         let mut out = ctx.run_ui(input, |ui| app.show(ui));
         out.textures_delta.clear();
+        self.shapes = out.shapes;
+    }
+
+    /// Whether the last frame drew a piece of text containing `needle`.
+    fn drew(&self, needle: &str) -> bool {
+        fn walk(shape: &egui::Shape, needle: &str) -> bool {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+                egui::Shape::Text(t) => t.galley.job.text.contains(needle),
+                _ => false,
+            }
+        }
+        self.shapes.iter().any(|c| walk(&c.shape, needle))
     }
 
     fn click(&mut self, at: Pos2) {
@@ -677,6 +692,15 @@ impl Harness {
     }
 
     fn press(&mut self, key: &str) {
+        // File, Edit, View and Help are the submenus of the one menu.
+        if key.starts_with("bar ") && key != "bar menu" {
+            // A menu an item just closed is gone a frame later.
+            self.frame(vec![]);
+        }
+        if key.starts_with("bar ") && key != "bar menu" && self.app.chrome.rect(key).is_none() {
+            let at = self.rect("bar menu").center();
+            self.click(at);
+        }
         let at = self.rect(key).center();
         self.click(at);
     }
@@ -2060,7 +2084,7 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
         .projects
         .history
         .iter()
-        .find(|r| r.what == "took the Agent's answer into main.st")
+        .find(|r| r.what == "took the described change into main.st")
         .cloned()
         .expect("the change's revision");
     assert!(saved.page);
@@ -2325,7 +2349,7 @@ fn monitor(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> Harness {
 /// One frame, then every request the page queued answered by the box.
 fn monitor_pump(b: &Bench, jar: &Jar, h: &mut Harness) {
     h.frame(vec![]);
-    let Harness { ctx, app, time } = h;
+    let Harness { ctx, app, time, .. } = h;
     pump(b, jar, app.boxv.as_mut().unwrap(), ctx, *time);
     values(b, app.boxv.as_mut().unwrap(), *time);
     h.frame(vec![]);
@@ -3987,7 +4011,7 @@ fn pump_until(b: &Bench, jar: &Jar, h: &mut Harness, what: &str, mut done: impl 
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         h.frame(vec![]);
-        let Harness { ctx, app, time } = h;
+        let Harness { ctx, app, time, .. } = h;
         pump(b, jar, app.boxv.as_mut().unwrap(), ctx, *time);
         h.frame(vec![]);
         if done(h) {
@@ -4205,7 +4229,7 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
     let note = h.bv().devices_ui.vendor.note.clone().unwrap().text;
     assert_eq!(
         note,
-        "The box could not read latin1.eds: the document is not UTF-8 text. Nothing was sent to the agent."
+        "The box could not read latin1.eds: the document is not UTF-8 text. Nothing was sent."
     );
     // Control characters inside: 422 as well.
     h.press("vendor file 192.168.3.77");
@@ -4442,9 +4466,13 @@ fn the_diagram_of_a_box_offers_assign_on_a_port_block_with_its_code_edits_off() 
         "offered on a box"
     );
     assert!(
-        h.app.chrome.rect("diagram menu rename").is_none()
-            && h.app.chrome.rect("diagram menu delete").is_none(),
-        "the code's own edits stay off on a box"
+        h.app.chrome.rect("diagram menu rename").is_some(),
+        "a name is the diagram's to change on a box too"
+    );
+    assert!(
+        h.app.chrome.rect("diagram menu delete").is_none()
+            && h.app.chrome.rect("diagram menu negate").is_none(),
+        "the logic's edits stay off on a box"
     );
     h.press("diagram menu assign");
     h.wait(0.2);
@@ -4783,4 +4811,206 @@ fn a_boxs_pane_layouts_answer_is_read_as_hostile() {
         bad && note.contains("at most 32") && note.starts_with("A was not kept"),
         "{note}"
     );
+}
+
+/// What a box's agent cannot do as written comes back as an offer; the
+/// rename, clicked, is saved on the box in the program and its test with
+/// a History entry, and Undo restores both (`crate::offers`).
+#[test]
+fn a_rename_offered_on_a_box_is_saved_in_every_file_with_its_history_and_undone() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::{FOLLOWS, LAMP};
+    use serde_json::json;
+
+    fn answer(v: &mut BoxView, text: &str) {
+        let seq = v.chat_sent.last().expect("a message").seq;
+        let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+        let body = [
+            ev("session", json!({"id": "s1"})),
+            ev("text", json!({ "delta": text })),
+            ev("done", json!({"stop": "end_turn", "why": null})),
+        ]
+        .concat();
+        v.agent.apply(Incoming::Chunk { seq, text: body });
+        v.agent.apply(Incoming::End { seq });
+    }
+    fn run(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context) {
+        v.tick(ctx);
+        for _ in 0..20 {
+            pump(b, jar, v, ctx, 1.0);
+            if v.psent.is_empty() {
+                return;
+            }
+        }
+        panic!("the box never went quiet");
+    }
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", LAMP), ("test_lamp.st", FOLLOWS)],
+    );
+    v.projects.open_file("main.st");
+    run(&b, &jar, &mut v, &ctx);
+    let before = v.projects.history.last().map(|r| r.n).expect("revisions");
+
+    v.instruct.draft = "make the lamp orange".into();
+    v.send_instruction(&ctx);
+    answer(
+        &mut v,
+        "The lamp is an on/off output, so its colour comes from its name.\nOffer: rename lamp orange_lamp\n",
+    );
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Said, "{o:?}");
+    assert_eq!(o.offers.len(), 1, "{o:?}");
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "nothing yet"
+    );
+
+    v.take_offer(0, &ctx);
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(o.status, "Renamed lamp to orange_lamp in 2 files.");
+    assert_eq!(o.undo.as_ref().map(|u| u.revision), Some(before));
+    let on_box = |f: &str| {
+        b.json(&format!("/api/projects/line/files/{f}"))["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(on_box("main.st").contains("orange_lamp := start;"));
+    assert!(on_box("test_lamp.st").contains("lamp_follows(COND := orange_lamp);"));
+    let saved = v
+        .projects
+        .history
+        .iter()
+        .find(|r| r.page)
+        .cloned()
+        .expect("the rename's History entry");
+    let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
+    assert!(
+        page["page"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("Instruction: Rename lamp to orange_lamp\nFile: main.st\n")),
+        "{page}"
+    );
+
+    v.undo_change();
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+    assert_eq!(on_box("main.st"), LAMP);
+    assert_eq!(on_box("test_lamp.st"), FOLLOWS);
+}
+
+#[test]
+fn the_files_tab_names_the_box_and_has_only_my_files() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let long = "a-very-long-project-name-that-keeps-going-on-n";
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", MAIN)]);
+    make(&b, &jar, &mut v.projects, long, &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.app.chrome.show_files();
+    h.wait(0.3);
+    let left = h.rect("left");
+    assert!(h.drew("Files on the box"), "the header names the device");
+    assert!(!h.drew("in this browser"));
+    assert!(h.app.chrome.rect("files head mine").is_some());
+    assert!(
+        h.app.chrome.rect("files head examples").is_none(),
+        "a box has no examples: no empty section"
+    );
+    assert!(h.app.chrome.rect("project line").is_some());
+    assert!(h.app.chrome.rect(&format!("project {long}")).is_some());
+    // The long name leaves the pane its width.
+    let grew = left.right() - h.rect("left").right();
+    assert!(grew.abs() <= 8.0, "{grew}");
+    // Folding My Files hides the rows and is kept.
+    h.press("files head mine");
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("project line").is_none(), "folded away");
+    assert!(h.app.chrome.rect("files head mine").is_some());
+    assert!(crate::editor::Chrome::restored(&h.app.chrome.saved()).files_fold_mine);
+    h.press("files head mine");
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("project line").is_some(), "unfolded");
+}
+
+/// A value set by hand on a box's diagram is saved on the box in its file
+/// with a History entry, and Undo restores the file (`crate::by_hand`).
+#[test]
+fn a_value_set_by_hand_on_a_box_is_saved_with_its_history_and_undone() {
+    use crate::instruct::Kind;
+
+    const TIMED: &str = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nVAR\n  t : TON;\nEND_VAR\nt(IN := start, PT := T#5s);\nlamp := t.Q;\nEND_PROGRAM\n";
+    fn run(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context) {
+        v.tick(ctx);
+        for _ in 0..20 {
+            pump(b, jar, v, ctx, 1.0);
+            if v.psent.is_empty() {
+                return;
+            }
+        }
+        panic!("the box never went quiet");
+    }
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", TIMED)]);
+    v.projects.open_file("main.st");
+    run(&b, &jar, &mut v, &ctx);
+    let before = v.projects.history.last().map(|r| r.n).expect("revisions");
+
+    let files: crate::scope::Files = [("main.st".to_string(), TIMED.to_string())].into();
+    let lit = crate::by_hand::Literal {
+        text: "T#5s".into(),
+        file: "main.st".into(),
+        line: 11,
+        col: 22,
+    };
+    let text = crate::by_hand::set_value(&files, &lit, "T#2s").expect("a time fits a preset");
+    v.set_value(&lit, "T#2s", text);
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(o.status, "Set T#5s to T#2s in main.st.");
+    assert_eq!(o.undo.as_ref().map(|u| u.revision), Some(before));
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        TIMED.replace("T#5s", "T#2s").as_str()
+    );
+    let saved = v
+        .projects
+        .history
+        .iter()
+        .find(|r| r.page)
+        .cloned()
+        .expect("its History entry");
+    let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
+    assert!(
+        page["page"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("Instruction: Set T#5s to T#2s on line 11\nFile: main.st\n")),
+        "{page}"
+    );
+
+    v.undo_change();
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], TIMED);
 }

@@ -4,7 +4,8 @@
 // old browser reaches the message instead of a blank page.
 //
 // Told by: helmsman-canvas-initializer.js (download progress, init failure)
-// and the app itself (helmsman-started, helmsman-start-failed, src/main.rs).
+// and the app itself (helmsman-started, helmsman-start-failed,
+// helmsman-no-webgl2, src/main.rs).
 // Must never contain a script tag's text: the box scans the page for them.
 (function () {
     'use strict';
@@ -17,6 +18,7 @@
         load: 'A file this page needs did not load. Reload the page. If it happens again, the connection or the server may be down.',
         start: 'The page loaded, but the program could not start in this browser. Reload the page. If it happens again, try a current version of your browser.',
         unsupported: 'This browser cannot run the program: it needs WebAssembly, which is missing or turned off. Use a current version of Chrome, Edge, Firefox or Safari.',
+        nowebgl: 'This browser cannot draw Helmsman: WebGL, the browser feature that draws graphics, is missing or turned off. Turn on hardware acceleration in the browser settings, or use a current version of Chrome, Edge, Firefox or Safari.',
         stalled: 'This is taking longer than it should. The connection may be slow or down. You can keep waiting, or reload the page.'
     };
 
@@ -122,6 +124,10 @@
         fail('start', messageOf(e.detail));
     });
 
+    window.addEventListener('helmsman-no-webgl2', function () {
+        fail('nowebgl', '');
+    });
+
     window.addEventListener('helmsman-started', function () {
         started = true;
         clearTimeout(stall);
@@ -161,6 +167,32 @@
             fail('start', message);
         }
     };
+
+    // Ctrl or Cmd F is the program's own find wherever the keyboard is.
+    // With the focus on the page and not on the canvas (after a click on
+    // the browser's own chrome, or before the first click) the key never
+    // reached the program and the browser opened its find instead. Here
+    // the key is kept from the browser, the canvas takes the focus, and
+    // the same key is handed to it.
+    window.addEventListener('keydown', function (e) {
+        if (!started || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) { return; }
+        if (e.key !== 'f' && e.key !== 'F') { return; }
+        var canvas = document.getElementById('canvas');
+        var at = document.activeElement;
+        // On the canvas, or in the text field the program types through:
+        // the program hears it already.
+        if (!canvas || at === canvas || (at && at.tagName === 'INPUT')) { return; }
+        e.preventDefault();
+        try {
+            canvas.focus();
+            var init = { key: e.key, code: 'KeyF', ctrlKey: e.ctrlKey, metaKey: e.metaKey, bubbles: true, cancelable: true };
+            canvas.dispatchEvent(new KeyboardEvent('keydown', init));
+            canvas.dispatchEvent(new KeyboardEvent('keyup', init));
+        } catch (ignore) {
+            // An old browser without KeyboardEvent: its own find stays shut,
+            // and the next Ctrl F reaches the canvas, which has the focus now.
+        }
+    }, true);
 
     if (typeof WebAssembly !== 'object' || typeof WebAssembly.instantiate !== 'function') {
         fail('unsupported', '');

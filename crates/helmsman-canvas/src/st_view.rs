@@ -235,6 +235,8 @@ pub enum Pick {
 /// One module's diagram on screen, whatever the scans come from (the
 /// in-page demo, or a box over its API): scopes, camera, selection, the
 /// variable "on because" is shown for, and the panels drawing them.
+// Flags of independent view state (chat_ok, menu_open, hand ...), not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Viewer {
     pub src: String,
     pub module: Module,
@@ -300,6 +302,9 @@ pub struct Viewer {
     pub chat_ok: bool,
     /// The right click the host has not taken yet.
     pub gesture: Option<crate::diagram_menu::Gesture>,
+    /// A double click on a block that names a variable or is a literal,
+    /// which the host has not taken yet ([`crate::by_hand`]).
+    pub edit_ask: Option<NodeId>,
     /// What io.map can do with each of the program's inputs and outputs
     /// (the host sets it each frame): the diagram's menu on the block of a
     /// port offers "Assign to device I/O…", since it changes io.map and not
@@ -333,6 +338,9 @@ pub struct Viewer {
     cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
     /// What the zoom closes ([`zoom_fold`]).
     zoom: zoom_fold::ZoomFolds,
+    /// The hand toggle of the corner controls: a primary drag on empty
+    /// space pans instead of selecting. View state, never saved.
+    hand: bool,
 }
 
 /// Whether folds of `kind` start as their blocks and fold when the reader
@@ -359,7 +367,7 @@ pub struct TreeRow {
 
 /// What hovering empty diagram space says.
 const EMPTY_TIP: &str = "Click a block to select it, or drag to select the blocks the box touches; \
-Shift or Ctrl adds. The Agent tab then asks about them. Esc, a click here or a click off the diagram \
+Shift or Ctrl adds. The Describe tab then asks about them. Esc, a click here or a click off the diagram \
 lets them go. Move the view with Space and a drag, the middle button, or the arrow keys.";
 
 /// What a drag on the diagram holds.
@@ -581,6 +589,10 @@ impl Arrangement {
 
 /// The smallest thing a finger can hit, in points.
 pub const TAP: f32 = 44.0;
+/// The gap between the corner controls and the edge, and between them.
+const CORNER_GAP: f32 = 8.0;
+/// What one tap of zoom in or zoom out scales by.
+const ZOOM_STEP: f32 = 1.25;
 
 impl Viewer {
     /// `module`, lowered from `src`: the program first, then each user
@@ -667,6 +679,7 @@ impl Viewer {
             change: None,
             chat_ok: false,
             gesture: None,
+            edit_ask: None,
             assign: Vec::new(),
             folds,
             opened: std::collections::BTreeSet::new(),
@@ -677,7 +690,8 @@ impl Viewer {
             frame_lit: false,
             cards: std::cell::RefCell::new(None),
             jumped: None,
-            zoom: zoom_fold::ZoomFolds::default(),
+            zoom: zoom_fold::ZoomFolds::new(),
+            hand: false,
         };
         v.reshow();
         v
@@ -2289,6 +2303,7 @@ impl Viewer {
         let painter = ui.painter_at(area);
         let t = theme(ui);
         let size = self.shown().size;
+        let corner = self.corner_rect(area, scan);
         let cam = &mut self.cams[self.scope];
         // The view changed size (a pane opened, the window resized) and
         // the operator had not panned or zoomed: fit again, or the
@@ -2377,7 +2392,11 @@ impl Viewer {
             .ctx()
             .input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
         // Shift or Ctrl clicks select; they do not also open or fit.
-        let double = response.double_clicked() && !additive;
+        let double = response.double_clicked()
+            && !additive
+            && !response
+                .interact_pointer_pos()
+                .is_some_and(|p| corner.contains(p));
         if (cam.offset, cam.zoom) != glided || double || response.dragged() {
             self.glide = None;
         }
@@ -2411,9 +2430,28 @@ impl Viewer {
             let into = response
                 .interact_pointer_pos()
                 .and_then(|p| self.instance_at(cam, p));
-            match into {
-                Some(k) => self.open(k),
-                None => self.cams[self.scope].fitted = false,
+            // A block that names a variable or is a literal asks for its
+            // new name or value (while the diagram is of the host's text).
+            let by_hand = response
+                .interact_pointer_pos()
+                .filter(|_| self.chat_ok)
+                .and_then(|p| self.hit_at(cam, p))
+                .filter(|n| {
+                    crate::by_hand::literal_node(self.diagram(), *n).is_some()
+                        || self.diagram().nodes.get(n.0 as usize).is_some_and(|n| {
+                            matches!(
+                                n.kind,
+                                NodeKind::Read { .. }
+                                    | NodeKind::Write { .. }
+                                    | NodeKind::Access { .. }
+                                    | NodeKind::For { .. }
+                            )
+                        })
+                });
+            match (into, by_hand) {
+                (Some(k), _) => self.open(k),
+                (None, Some(n)) => self.edit_ask = Some(n),
+                (None, None) => self.cams[self.scope].fitted = false,
             }
         }
         // A primary drag that starts on a block moves it, on a region's
@@ -2432,9 +2470,11 @@ impl Viewer {
             self.grab = Some(match at {
                 None => Grab::Idle,
                 Some(_) if middle || space => Grab::Pan,
+                Some(p) if corner.contains(p) => Grab::Idle,
                 Some(_) if !primary => Grab::Idle,
                 Some(p) => match self.grab_at(cam, p) {
                     Grab::Empty if self.on_pin(cam, p) => Grab::Idle,
+                    Grab::Empty if self.hand => Grab::Pan,
                     Grab::Empty => Grab::Band(p),
                     g => g,
                 },
@@ -2714,15 +2754,89 @@ impl Viewer {
         // The program's BOOL outputs as lamps in the corner (a traffic
         // light for a red, a yellow and a green), on the program's own
         // diagram only: a block instance's outputs are not the machine's.
-        if let Some(scan) = scan
-            && self.scopes[self.scope].prefix.is_empty()
-        {
-            let outs = self.outputs();
-            let fixture = crate::lamps::fixture(outs.iter().map(|p| (p.as_str(), scan.get(p))));
-            if let Some(f) = &fixture {
-                crate::lamps::paint(&painter, area, f);
-            }
+        if let Some(f) = self.fixture(scan) {
+            crate::lamps::paint(&painter, area, &f);
         }
+        self.corner_controls(ui, area, corner);
+    }
+
+    /// The lamp fixture of the program's BOOL outputs, when there is one
+    /// to draw on the diagram shown.
+    fn fixture(&self, scan: Option<&dyn Scan>) -> Option<crate::lamps::Fixture> {
+        let scan = scan.filter(|_| self.scopes[self.scope].prefix.is_empty())?;
+        let outs = self.outputs();
+        crate::lamps::fixture(outs.iter().map(|p| (p.as_str(), scan.get(p))))
+    }
+
+    /// Where the pan, zoom in and zoom out controls sit: the bottom-right
+    /// corner of `area`, left of the lamp fixture when there is one.
+    fn corner_rect(&self, area: Rect, scan: Option<&dyn Scan>) -> Rect {
+        let w = 3.0 * TAP + 2.0 * CORNER_GAP;
+        let mut right = area.right() - CORNER_GAP;
+        if let Some(f) = self.fixture(scan) {
+            right = crate::lamps::rect(area, &f).left() - CORNER_GAP;
+        }
+        // A window narrower than the row keeps it inside the area.
+        let left = (right - w).max(area.left());
+        let top = (area.bottom() - CORNER_GAP - TAP).max(area.top());
+        Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + w, top + TAP).min(area.max))
+    }
+
+    /// The corner controls: the hand (a drag on empty space pans), zoom in
+    /// and zoom out about the middle of `area`.
+    fn corner_controls(&mut self, ui: &mut egui::Ui, area: Rect, at: Rect) {
+        use crate::glyphs::{Icon, button_sized};
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(at)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        row.spacing_mut().item_spacing.x = CORNER_GAP;
+        // A ground of their own: zoomed in, blocks reach the corner, and
+        // a glyph drawn over a block's text reads as neither.
+        ui.painter().rect_filled(
+            at.expand(4.0),
+            CornerRadius::same(6),
+            ui.visuals().panel_fill.gamma_multiply(0.92),
+        );
+        let hand = button_sized(
+            &mut row,
+            Icon::Hand,
+            TAP,
+            true,
+            self.hand,
+            "Pan: while on, a drag on empty space moves the view\n(otherwise it selects; Space and drag always pans)",
+        );
+        let inn = button_sized(
+            &mut row,
+            Icon::ZoomIn,
+            TAP,
+            true,
+            false,
+            "Zoom in on the middle of the diagram",
+        );
+        let out = button_sized(
+            &mut row,
+            Icon::ZoomOut,
+            TAP,
+            true,
+            false,
+            "Zoom out from the middle of the diagram",
+        );
+        if hand.clicked() {
+            self.hand = !self.hand;
+        }
+        let factor = if inn.clicked() {
+            ZOOM_STEP
+        } else if out.clicked() {
+            1.0 / ZOOM_STEP
+        } else {
+            return;
+        };
+        self.glide = None;
+        self.cams[self.scope].zoom_at(area.center(), factor);
+        let size = self.shown().size;
+        self.cams[self.scope].clamp(area, size);
     }
 
     /// What drives the "because" variable's value in `scan`, on the

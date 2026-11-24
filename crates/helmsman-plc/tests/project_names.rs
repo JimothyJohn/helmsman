@@ -50,7 +50,14 @@ fn run(name: &str) -> Outcome {
 
     // A folder as an older or newer box left it. The file system cannot
     // hold a name with a separator or a NUL: those never reach this reader.
-    let folder = if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\0']) {
+    // Windows also refuses `\ : * ? " < > |`, control characters, and a
+    // trailing dot or space.
+    let unwritable = cfg!(windows)
+        && (name.contains(['\\', ':', '*', '?', '"', '<', '>', '|'])
+            || name.chars().any(char::is_control)
+            || name.ends_with(['.', ' ']));
+    let folder = if unwritable || name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\0'])
+    {
         None
     } else {
         let dir = tmp.join("folder");
@@ -269,6 +276,8 @@ fn a_folder_with_odd_entries_still_opens_and_keeps_only_clean_files() {
     fs::write(dir.join("blob.bin"), [0xFF, 0xFE, 0x00]).unwrap();
     fs::write(dir.join("big.dat"), vec![b'x'; project::MAX_FILE + 1]).unwrap();
     fs::write(dir.join("ctl.txt"), "a\u{7}b").unwrap();
+    // Making a symlink needs a privilege on Windows: Unix hosts only.
+    #[cfg(unix)]
     std::os::unix::fs::symlink("/etc/passwd", dir.join("link.txt")).unwrap();
     fs::write(dir.join(".save-1-1"), "temporary").unwrap();
     let files = read_folder(&dir).expect("opens");

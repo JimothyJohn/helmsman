@@ -559,8 +559,11 @@ fn run(
     let beacon = state.me.encode();
     let mut next = Duration::ZERO;
     let mut send_failed = false;
-    // One byte more than a beacon may be: a datagram that fills it is too long.
-    let mut buf = [0u8; MAX_BEACON + 1];
+    // The largest a UDP datagram can be, so any datagram is read whole and
+    // `Beacon::parse` calls a long one too long. Windows fails a receive
+    // into a buffer the datagram does not fit (WSAEMSGSIZE) without naming
+    // the sender, where Unix truncates it.
+    let mut buf = vec![0u8; 65_535];
     while !stop.load(Ordering::Acquire) {
         let now = state.t0.elapsed();
         if now >= next {

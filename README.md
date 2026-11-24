@@ -4,9 +4,9 @@
 
 # Helmsman Factory Automation
 
-The soft PLC you program by describing the machine. The agent writes
+The soft PLC you program by describing the machine. Helmsman writes
 standard IEC 61131-3 Structured Text from your spec, you check it on a live
-diagram, and an engineer approves it before it runs. **Early release.**
+diagram, and an engineer approves it before it runs.
 
 - **Robust:** a minimal set of dependencies; every change passes more than
   1,300 automated tests and interoperability tests in CI.
@@ -35,7 +35,7 @@ messaging, the Class 1 scanner), `helmsman-adapter` (CIP target),
 (I/O map, drivers, Modbus TCP), `helmsman-modbus` (the Modbus codec,
 `no_std`), `helmsman-iolink` (the IO-Link message codec, `no_std`), `helmsman-project` (a project's files and archive),
 `helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live diagram),
-`helmsman-agent` (the box's agent loop behind the Agent tab),
+`helmsman-agent` (the box's agent loop behind the Describe tab),
 `helmsman-canvas` (the browser app). Outside the workspace,
 `crates/helmsman-node` is the ESP32-POE2 edge firmware and
 `crates/helmsman-node-p4` the ESP32-P4 one (`docs/EDGE.md`). `make help` lists

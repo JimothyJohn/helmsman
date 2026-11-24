@@ -9,6 +9,13 @@ shows them.
 
 ## Files
 
+- **The heading** at the top of the Files tab says where the projects are
+  kept: "Files in this browser" on the simulation page, "Files on the box"
+  when you are connected to one. Under it, **My Files** holds your own
+  projects and **Examples** the built-in ones (a box has none, so it shows
+  only My Files). Each shows how many it holds; a click on its name folds
+  it away or opens it again, and the editor remembers which are folded.
+
 - **New project** and **Copy project** are in the File menu; a right-click
   on the pane's blank space offers New project too, and a right-click on a
   project offers Copy, Rename and Delete. A copy of an example is how
@@ -27,13 +34,13 @@ shows them.
   screen; Escape keeps it. The examples cannot be deleted.
 - **earlier (n)** folds the program's earlier iterations, `v1.st`,
   `v2.st`, ... (what `main.st` was before each answer you took from the
-  Agent). They are kept with the project and never built; click the row
+  Describe tab). They are kept with the project and never built; click the row
   to see them, newest first. `main.st` is marked when the project runs.
 - **history (n)** folds the project's revisions: every save, upload,
   import and restore, newest first, with who did it, when and what. Click
-  one to see it in the middle of the screen: the Agent page it came from,
+  one to see it in the middle of the screen: the Describe page it came from,
   if any, and each file's lines added and removed since. A change from
-  the Agent says what it changed ("took the Agent's answer into lines
+  Helmsman says what it changed ("took the described change into lines
   4–6 of main.st"). **Restore this
   revision** puts the files back as they were (a new revision; an
   engineer's on a box). The box keeps the last two hundred, the
@@ -63,7 +70,7 @@ and offers Reload; the other files land.
 A requirement is worth keeping as a test. A file named `test_NAME.st` is
 one: a PROGRAM that drives the program's inputs, lets the clock run and
 checks the outputs. Its first comment states the requirement in your
-words. The Agent writes one for each change it makes, and a red one names
+words. Helmsman writes one for each change it makes, and a red one names
 itself in the Deploy error with which check failed and when.
 
 ```st
@@ -121,9 +128,9 @@ test's until the test makes it misbehave.
 The page runs the tests whenever the project's build changes; a box runs
 them when a project opens, after each save and before every deploy
 (`POST /api/projects/{p}/tests` runs them on demand). **A red test never
-stops a deploy or a change from the Agent.** The deploy goes ahead and the
+stops a deploy or a change from Helmsman.** The deploy goes ahead and the
 note beside it names the test and why it failed; on a box the same line
-is written to the audit trail. The Agent writes the tests with each
+is written to the audit trail. Helmsman writes the tests with each
 change and fixes what fails before it answers; a check it could not get
 to pass is listed with its answer. Edit the tests like any file.
 
