@@ -10,7 +10,7 @@
 //! GET  /                          the node's page (status and the settings form)
 //! GET  /settings                  the same
 //! POST /settings                  the form: SaveSettings (token in the form or as a bearer)
-//! POST /io_map                    the form: SaveIoMap (the box's io.map format, one Modbus TCP block)
+//! POST /io_map                    the form: SaveIoMap (the box's io.map format: modbus-tcp and enip-io devices)
 //! GET  /api/modules               the one module
 //! GET  /api/modules/{name}        with its source
 //! PUT  /api/modules/{name}        token: Deploy the body (ST text, or {"source": ...})

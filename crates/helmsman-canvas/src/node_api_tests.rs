@@ -195,3 +195,114 @@ fn the_beacon_parses_as_the_box_reads_beacons() {
     assert_eq!(keys, ["helmsman-site", "site", "id", "name", "api", "version"]);
     assert!(b.len() <= 512);
 }
+
+/// A node that drives several devices lists each with its own state and
+/// its points with their own types: the canvas reads that as it reads a
+/// box's devices and signals (card node-multi-device).
+#[test]
+fn several_devices_in_mixed_states_and_numeric_points_read_as_a_boxs_do() {
+    use helmsman_iec::Value;
+    let mut v = view();
+    v.io_map = helmsman_nodecore::iomap::IoMap::factory([192, 168, 3, 60], "rio").text;
+    v.devices = vec![
+        DeviceView {
+            name: "rio".into(),
+            state: "up",
+            error: None,
+            address: Some("192.168.3.60:502".into()),
+        },
+        DeviceView {
+            name: "drive".into(),
+            state: "down",
+            error: Some("refused: 0x0106 ownership conflict".into()),
+            address: Some("192.168.33.1:44818".into()),
+        },
+        DeviceView {
+            name: "press".into(),
+            state: "unknown",
+            error: None,
+            address: Some("192.168.3.71:502".into()),
+        },
+    ];
+    v.signals = vec![
+        SignalView {
+            name: "estop".into(),
+            dir: "in",
+            value: Some(SignalValue::Bool(true)),
+            quality: "good",
+            point_error: None,
+        },
+        SignalView {
+            name: "pos".into(),
+            dir: "in",
+            value: Some(SignalValue::Int(-70_000)),
+            quality: "stale",
+            point_error: Some("refused: 0x0106 ownership conflict".into()),
+        },
+        SignalView {
+            name: "level".into(),
+            dir: "in",
+            value: Some(SignalValue::Real(12.25)),
+            quality: "good",
+            point_error: None,
+        },
+        SignalView {
+            name: "whole".into(),
+            dir: "out",
+            value: Some(SignalValue::Real(3.0)),
+            quality: "good",
+            point_error: None,
+        },
+        SignalView {
+            name: "nan".into(),
+            dir: "in",
+            value: Some(SignalValue::Real(f64::NAN)),
+            quality: "good",
+            point_error: None,
+        },
+    ];
+    let mut s = BoxState::new();
+    s.apply(Msg::Got(Fetch::Devices, Ok(api::devices(&v).to_string())), 1.0);
+    let seen: Vec<(&str, &str, Option<&str>)> = s
+        .devices
+        .iter()
+        .map(|d| (d.name.as_str(), d.state.as_str(), d.error.as_deref()))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("rio", "up", None),
+            ("drive", "down", Some("refused: 0x0106 ownership conflict")),
+            ("press", "unknown", None)
+        ]
+    );
+    assert_eq!(s.devices[1].address.as_deref(), Some("192.168.33.1:44818"));
+
+    s.apply(Msg::Opened(Stream::Values), 1.1);
+    s.apply(
+        Msg::Event(Stream::Values, "values".into(), api::values_event(&v).to_string()),
+        1.2,
+    );
+    assert_eq!(s.signals.len(), 5);
+    assert_eq!(s.signals[0].value, Some(Value::Bool(true)));
+    assert_eq!(s.signals[1].value, Some(Value::Int(-70_000)));
+    assert_eq!(s.signals[1].quality, "stale");
+    assert_eq!(s.signals[2].value, Some(Value::Real(12.25)));
+    assert_eq!(
+        s.signals[3].value,
+        Some(Value::Real(3.0)),
+        "a whole real stays a real"
+    );
+    assert_eq!(
+        s.signals[4].value, None,
+        "a real that is not a number is no value"
+    );
+
+    // The map reply carries the points' addresses beside the text; a
+    // reader that does not know the field takes the text as before.
+    let reply = api::io_map(&v);
+    assert_eq!(reply["image"][0]["address"], "%IX0.0");
+    s.apply(Msg::Got(Fetch::IoMap, Ok(reply.to_string())), 1.3);
+    assert_eq!(s.io_map.as_deref(), Some(v.io_map.as_str()));
+    assert!(s.problem.is_none());
+}
