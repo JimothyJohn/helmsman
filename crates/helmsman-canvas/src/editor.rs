@@ -189,8 +189,8 @@ pub const RIGHT_W: f32 = 236.0;
 /// at 1280x800 the diagram keeps about 430 pt above it.
 pub const BOTTOM_H: f32 = 320.0;
 /// The Messages' height under the left pane's tab when first opened,
-/// points: their header and about three rows.
-pub const MESSAGES_H: f32 = 130.0;
+/// points: their header and about four rows.
+pub const MESSAGES_H: f32 = 170.0;
 /// How many trend colour picks a browser keeps.
 pub const MAX_COLORS: usize = 64;
 
@@ -1064,9 +1064,9 @@ fn messages_panel(
     let header = |ui: &mut egui::Ui, chrome: &mut Chrome, hits: &mut Vec<(String, Rect)>| {
         ui.horizontal_wrapped(|ui| {
             let r = crate::glyphs::tab(ui, Icon::Messages, TAB, chrome.msgs, cue.alarm).tip(if chrome.msgs {
-                "Messages: what happened, newest last.\nRed while an error stands or a new one came in.\nClick to fold them away."
+                "Messages: what happened, newest last.\nClick to fold them away."
             } else {
-                "Messages: what happened, newest last.\nRed while an error stands or a new one came in.\nClick to show them."
+                "Messages: what happened, newest last.\nClick to show them."
             });
             hits.push(("messages fold".to_string(), r.rect));
             if r.clicked() {
@@ -1103,7 +1103,14 @@ fn messages_panel(
             header(ui, chrome, hits);
             ui.separator();
             if body.has_notices() {
-                ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
+                // Long, in a narrow pane: they scroll before they push the
+                // list out of the panel.
+                egui::ScrollArea::vertical()
+                    .id_salt("ed-msgs-notices")
+                    .max_height(ui.available_height())
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
+                    });
                 ui.separator();
             }
             body.messages().ui(ui, chrome);

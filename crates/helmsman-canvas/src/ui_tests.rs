@@ -650,7 +650,7 @@ mod glyphs_and_help {
             fold.right() <= left.right() + 1.0,
             "in the left pane: {fold:?} {left:?}"
         );
-        assert!(fold.top() > h.rect("pane claude").bottom(), "under the tabs");
+        assert!(fold.top() > h.rect("tab claude").bottom(), "under the tabs");
         // The fold hides the list and its filters, and is kept.
         assert!(h.has("messages errors"));
         h.press("messages fold");
@@ -2747,7 +2747,7 @@ mod chrome {
         assert!(log(&h).0.is_some(), "unread: red");
         assert!(!h.app.chrome.msgs, "a folded Messages keeps its fold");
         assert!(
-            h.has("messages errors"),
+            h.has("messages error count"),
             "and the error count shows beside the header"
         );
         h.press("messages fold");

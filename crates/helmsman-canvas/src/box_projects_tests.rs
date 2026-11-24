@@ -972,6 +972,18 @@ fn a_stale_save_is_a_409_and_reload_brings_the_boxs_text() {
     let mut h = Harness::new(c, None);
     h.app.chrome.msgs = true;
     h.frame(vec![]);
+    // The notice is long in a narrow pane: it scrolls inside the Messages
+    // and Reload is under it.
+    let at = h.rect("notice").center();
+    h.frame(vec![Event::PointerMoved(at)]);
+    h.frame(vec![Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -600.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+    }]);
+    h.wait(0.2);
     h.press("reload");
     let reqs = h.sent();
     for q in reqs {

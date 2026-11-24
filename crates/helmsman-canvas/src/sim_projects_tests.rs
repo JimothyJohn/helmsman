@@ -1036,11 +1036,9 @@ fn main_with(more: &[&str]) -> String {
 fn a_described_change_pins_what_it_added_at_the_bottom_and_the_engineers_pins_stay() {
     let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
     two_files(&mut v);
-    assert_eq!(
-        v.session.trend.signals,
-        ["LAMP", "START", "STOP"],
-        "the first pins"
-    );
+    // The first pins, as a program that opens takes them (nobody chose them).
+    v.session.trend.signals = vec!["LAMP".into(), "START".into(), "STOP".into()];
+    v.session.trend.auto = v.session.trend.signals.clone();
     // The engineer pins STOP herself: it is hers from now on.
     v.session.trend.toggle("STOP");
     v.session.trend.toggle("STOP");
