@@ -393,6 +393,11 @@ mod glyphs_and_help {
             h.app.sim.as_ref().unwrap().session.scans > scans,
             "a step moves on"
         );
+        // The clock text is a figure wider than it was: the strip takes a
+        // few frames to settle on it.
+        for _ in 0..4 {
+            h.frame(vec![]);
+        }
         h.press("restart");
         assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
         h.press("run");
@@ -406,7 +411,7 @@ mod glyphs_and_help {
             assert_eq!((s.scans, s.now_ms), (0, 0));
         }
         h.frame(vec![]);
-        assert!(h.drew("stopped · 0.0s"));
+        assert!(h.drew("stopped · 0.00s"));
         h.press("run");
         assert!(
             h.app.sim.as_ref().unwrap().session.running,
