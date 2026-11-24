@@ -345,7 +345,7 @@ mod tests {
             (5.0, "5.00"),
             (0.0, "0.00"),
             (0.012_345, "0.0123"),
-            (-3.14159, "-3.14"),
+            (-3.142, "-3.14"),
             (12420.4, "12420"),
             (123.4, "123"),
             (9.996, "10.0"),
@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(Value::Int(12345).shown(), "12345");
         assert_eq!(Value::Bool(true).shown(), "TRUE");
         assert_eq!(
-            Value::Real(49.873_512_f32 as f64).to_string(),
+            Value::Real(f64::from(49.873_512_f32)).to_string(),
             "49.873512",
             "Display still round-trips"
         );
