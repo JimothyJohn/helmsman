@@ -1,5 +1,5 @@
 //! The node (docs/EDGE.md Phase 4): settings on flash, a fixed scan of the
-//! deployed program, the remote block on its own I/O task, the box API
+//! deployed program, each device of the I/O map on its own I/O task, the box API
 //! subset on the settings' port for the canvas, the site beacon, and a
 //! report line every 10 s over serial and UDP.
 //!
@@ -36,18 +36,23 @@ use esp_println::println;
 use esp_storage::FlashStorage;
 use helmsman_iec::{Image, ImageSizes, Program, compile};
 use helmsman_node_p4::report::parse_endpoint;
-use helmsman_node_p4::state::{self, IO_BYTES, Pending, PointNames, Shared};
+use helmsman_node_p4::state::{self, DeviceLive, IO_BYTES, Pending, Shared};
 use helmsman_node_p4::{beacon, board, ethernet, flash, io, ota, server};
 use helmsman_nodecore::api::State;
 use helmsman_nodecore::iomap::{self, IoMap};
+use helmsman_nodecore::ioplan::Plan;
 use helmsman_nodecore::router::Control;
 use helmsman_nodecore::settings::{Net, Settings};
 use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-/// Internal heap. The P4 has 768 KB of SRAM; the stack takes what is left.
-const HEAP_SIZE: usize = 320 * 1024;
+/// Internal heap. The P4 has 768 KB of SRAM, 440 KB of it the application's;
+/// the stack takes what the heap and the statics leave. Sixteen devices' static
+/// state (their sockets in `ethernet::RESOURCES`, task futures, buffers) took
+/// the main stack from 58 KB to 15 KB, under the 32 KB floor `node-build.sh`
+/// holds, so the heap gave 32 KB back (320 KB before: docs/EDGE.md "Sixteen devices").
+const HEAP_SIZE: usize = 288 * 1024;
 
 /// The remote block (a settings-record field later).
 const E1213_ADDR: &str = match option_env!("E1213_ADDR") {
@@ -59,7 +64,13 @@ const SEED_CHASE: bool = option_env!("NODE_SEED_CHASE").is_some();
 
 const SCAN: Duration = Duration::from_millis(10);
 const REPORT_EVERY: Duration = Duration::from_secs(10);
-const SIZES: ImageSizes = ImageSizes { i: 32, q: 32, m: 64 };
+/// The image a program is compiled against: the map's whole image each way
+/// (`iomap::IMAGE_BYTES`, 192) and 64 bytes of memory.
+const SIZES: ImageSizes = ImageSizes {
+    i: IO_BYTES,
+    q: IO_BYTES,
+    m: 64,
+};
 
 /// The bench program: a one-of-three chase on DO-00..02 every 500 ms.
 const CHASE: &str = "
@@ -88,7 +99,10 @@ END_PROGRAM
 ";
 
 static SHARED: StaticCell<Shared> = StaticCell::new();
-static NAMES: StaticCell<PointNames> = StaticCell::new();
+static MAP: StaticCell<IoMap> = StaticCell::new();
+static PLANS: StaticCell<alloc::vec::Vec<Plan>> = StaticCell::new();
+static LINKS: io::Links = io::Links::new();
+static IO_CTX: StaticCell<io::Ctx> = StaticCell::new();
 static SETTINGS: StaticCell<Settings> = StaticCell::new();
 static STORE: StaticCell<server::StoreCell> = StaticCell::new();
 static CTX: StaticCell<server::Ctx> = StaticCell::new();
@@ -181,16 +195,9 @@ async fn main(spawner: Spawner) -> ! {
         match iomap::parse(&stored_map) {
             Ok(m) => {
                 println!(
-                    "io map: {} at {}.{}.{}.{}:{} unit {}, {} inputs, {} coils",
-                    m.device,
-                    m.host[0],
-                    m.host[1],
-                    m.host[2],
-                    m.host[3],
-                    m.port,
-                    m.unit,
-                    m.input_count(),
-                    m.coil_count()
+                    "io map: {} device(s), {} point(s)",
+                    m.devices.len(),
+                    m.points.len()
                 );
                 m
             }
@@ -200,17 +207,8 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
     };
-    let names: &'static PointNames = NAMES.init(PointNames::of(&map));
-    let block = IpEndpoint::new(
-        IpAddress::Ipv4(Ipv4Address::new(
-            map.host[0],
-            map.host[1],
-            map.host[2],
-            map.host[3],
-        )),
-        map.port,
-    );
-    let (unit, input_count, coil_count) = (map.unit, map.input_count(), map.coil_count());
+    let map: &'static IoMap = MAP.init(map);
+    let plans: &'static [Plan] = PLANS.init((0..map.devices.len()).map(|k| map.plan(k)).collect());
     let store: &'static server::StoreCell = STORE.init(embassy_sync::mutex::Mutex::new(RefCell::new(store)));
 
     let shared: &'static Shared = SHARED.init(Mutex::new(RefCell::new(state::Live::default())));
@@ -222,14 +220,28 @@ async fn main(spawner: Spawner) -> ! {
     };
     println!("{ota_line}");
     state::with(shared, |live| {
-        live.device.name.clone_from(&map.device);
-        live.device.address = alloc::format!("{block}");
+        live.devices = map
+            .devices
+            .iter()
+            .map(|d| DeviceLive {
+                name: d.id.clone(),
+                address: alloc::format!(
+                    "{}.{}.{}.{}:{}",
+                    d.host[0],
+                    d.host[1],
+                    d.host[2],
+                    d.host[3],
+                    d.port
+                ),
+                ..DeviceLive::default()
+            })
+            .collect();
         live.io_map.clone_from(&map.text);
         if let Some((name, source, p)) = &program {
             live.module.name.clone_from(name);
             live.module.source.clone_from(source);
             live.module.state = Some(State::Running);
-            live.module.signals = state::signals_of(p, &[0; IO_BYTES], &[0; IO_BYTES], names);
+            live.module.signals = state::signals_of(p, map, &[0; IO_BYTES], &[0; IO_BYTES], &[]);
         }
     });
 
@@ -289,11 +301,17 @@ async fn main(spawner: Spawner) -> ! {
         println!("address {}; API on port {}", cfg.address, settings.api_port);
     }
 
-    // The tasks: the block (as the map says), the server (two
-    // connections), the beacon.
-    match io::io_task(stack, block, unit, input_count, coil_count, shared) {
-        Ok(t) => spawner.spawn(t),
-        Err(_) => halt("the I/O task would not spawn").await,
+    // The tasks: a link for each device of the map (and the cyclic task
+    // if one is EtherNet/IP), the server (two connections), the beacon.
+    let io_ctx: &'static io::Ctx = IO_CTX.init(io::Ctx {
+        shared,
+        map,
+        plans,
+        links: &LINKS,
+        mac,
+    });
+    if let Err(why) = io::spawn_all(spawner, stack, io_ctx) {
+        halt(why).await;
     }
     let ctx: &'static server::Ctx = CTX.init(server::Ctx {
         shared,
@@ -459,7 +477,10 @@ async fn main(spawner: Spawner) -> ! {
             scan_count += 1;
             let outputs: [u8; IO_BYTES] = image.q[..IO_BYTES].try_into().unwrap_or([0; IO_BYTES]);
             let refresh = scan_count.is_multiple_of(10);
-            let signals = refresh.then(|| state::signals_of(p, &inputs, &outputs, names));
+            let signals = refresh.then(|| {
+                let links = state::link_states(shared);
+                state::signals_of(p, map, &inputs, &outputs, &links)
+            });
             let faulted = result.as_ref().err().map(|f| alloc::format!("{f}"));
             state::with(shared, |live| {
                 live.module.scans += 1;
@@ -509,7 +530,7 @@ async fn main(spawner: Spawner) -> ! {
                 live.link_up = link_up;
                 live.ip = ip;
                 alloc::format!(
-                    "up {}s {} scans {} late {} over {} exec max {} us device {} heap used {} B peak {} B external {} B {}",
+                    "up {}s {} scans {} late {} over {} exec max {} us devices up {} of {} heap used {} B peak {} B external {} B {}",
                     start.elapsed().as_secs(),
                     if live.module.state.is_some() {
                         live.module.name.as_str()
@@ -520,11 +541,8 @@ async fn main(spawner: Spawner) -> ! {
                     live.module.late,
                     live.module.over,
                     live.module.exec.spread().map_or(0.0, |s| s.max),
-                    match live.device.up {
-                        Some(true) => "up",
-                        Some(false) => "down",
-                        None => "?",
-                    },
+                    live.devices.iter().filter(|d| d.up == Some(true)).count(),
+                    live.devices.len(),
                     state::heap().0,
                     esp_alloc::HEAP.stats().max_usage,
                     state::heap().1.map_or(0, |(_, used)| used),

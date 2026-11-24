@@ -10,7 +10,7 @@
 //! GET  /                          the node's page (status and the settings form)
 //! GET  /settings                  the same
 //! POST /settings                  the form: SaveSettings (token in the form or as a bearer)
-//! POST /io_map                    the form: SaveIoMap (the box's io.map format, one Modbus TCP block)
+//! POST /io_map                    the form: SaveIoMap (the box's io.map format: modbus-tcp and enip-io devices)
 //! GET  /api/modules               the one module
 //! GET  /api/modules/{name}        with its source
 //! PUT  /api/modules/{name}        token: Deploy the body (ST text, or {"source": ...})
@@ -132,7 +132,7 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
         }
         ("POST", ["settings"]) => settings_form(req, view, settings),
         ("POST", ["io_map"]) => io_map_form(req, view, settings),
-        ("PUT", ["api", "io_map"]) => io_map_put(req, settings),
+        ("PUT", ["api", "io_map"]) => io_map_put(req, view, settings),
         ("GET", ["api", "firmware"]) => Outcome::Reply(match &view.firmware {
             Some(fw) => Response::json(200, &fw.json()),
             None => Response::error(404, "this board cannot update its firmware over the network"),
@@ -259,8 +259,8 @@ fn io_map_form(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
         .find(|(k, _)| k == "map")
         .map(|(_, v)| v.replace("\r\n", "\n"))
         .unwrap_or_default();
-    match crate::iomap::parse(&text) {
-        Ok(_) => Outcome::Effect(Effect::SaveIoMap { text, page: true }),
+    match map_this_board_runs(&text, view) {
+        Ok(()) => Outcome::Effect(Effect::SaveIoMap { text, page: true }),
         Err(bad) => Outcome::Reply(Response::html(
             422,
             api::settings_page(view, settings, Some(&format!("map not saved: {bad}"))),
@@ -268,8 +268,18 @@ fn io_map_form(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
     }
 }
 
+/// Parses `text` as a map, and as one the board can run: a one-block
+/// board ([`NodeView::one_block`]) takes less than the format allows.
+fn map_this_board_runs(text: &str, view: &NodeView) -> Result<(), crate::iomap::Bad> {
+    let map = crate::iomap::parse(text)?;
+    if view.one_block {
+        map.one_block()?;
+    }
+    Ok(())
+}
+
 /// `PUT /api/io_map`: `{"text": "..."}` or the map as `text/plain`.
-fn io_map_put(req: &Request, settings: &Settings) -> Outcome {
+fn io_map_put(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
     if let Err(e) = authorize(req.bearer(), settings) {
         return Outcome::Reply(e);
     }
@@ -290,8 +300,8 @@ fn io_map_put(req: &Request, settings: &Settings) -> Outcome {
             Err(_) => return Outcome::Reply(Response::error(400, "the map is not UTF-8")),
         }
     };
-    match crate::iomap::parse(&text) {
-        Ok(_) => Outcome::Effect(Effect::SaveIoMap { text, page: false }),
+    match map_this_board_runs(&text, view) {
+        Ok(()) => Outcome::Effect(Effect::SaveIoMap { text, page: false }),
         Err(bad) => Outcome::Reply(Response::error(422, &alloc::format!("{bad}"))),
     }
 }
@@ -566,6 +576,59 @@ mod tests {
             &s,
         ));
         assert_eq!(r.status, 204);
+    }
+
+    /// A one-block board refuses, at the API and at the form, a map that
+    /// parses but that it cannot run, and never hands it on to be saved.
+    #[test]
+    fn a_one_block_board_saves_only_a_map_it_runs() {
+        let mut v = sample_view();
+        v.one_block = true;
+        let s = settings();
+        let auth = "Authorization: Bearer tok\r\n";
+        let put = |body: &str| {
+            req(&format!(
+                "PUT /api/io_map HTTP/1.1\r\n{auth}Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ))
+        };
+        let one = "device rio modbus-tcp 192.168.3.60\nin estop bool rio di:0\n";
+        assert_eq!(
+            handle(&put(one), &v, &s),
+            Outcome::Effect(Effect::SaveIoMap {
+                text: one.into(),
+                page: false
+            })
+        );
+        for more in [
+            "device a modbus-tcp 10.0.0.1\ndevice b modbus-tcp 10.0.0.2\n",
+            "device e enip-io 10.0.0.2 profile=moxa-e1213\n",
+            "device rio modbus-tcp 192.168.3.60\nin level real rio hr:5:f32\n",
+        ] {
+            let r = reply(handle(&put(more), &v, &s));
+            assert_eq!(r.status, 422, "{more:?}");
+            assert!(
+                String::from_utf8_lossy(&r.body).contains("one Modbus TCP block"),
+                "{more:?}"
+            );
+            // The same map is fine on a board that runs it.
+            assert!(matches!(
+                handle(&put(more), &sample_view(), &s),
+                Outcome::Effect(Effect::SaveIoMap { .. })
+            ));
+            let form = format!(
+                "map={}&auth=tok",
+                more.replace(' ', "+")
+                    .replace('\n', "%0A")
+                    .replace(':', "%3A")
+                    .replace('=', "%3D")
+            );
+            let posted = req(&format!(
+                "POST /io_map HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{form}",
+                form.len()
+            ));
+            assert_eq!(reply(handle(&posted, &v, &s)).status, 422, "the form: {more:?}");
+        }
     }
 
     #[test]

@@ -277,7 +277,7 @@ fn a_design_is_read_kept_and_built_a_batch_at_a_time_without_the_pane_growing() 
     assert_eq!(sim(&mut h).design.read.as_ref().map(|r| r.section), Some(2));
     h.press("design window close");
     h.wait(0.2);
-    h.size = Vec2::new(1400.0, 860.0);
+    h.size = Vec2::new(1400.0, 1180.0);
     h.wait(0.3);
     // The card, at the default width.
     assert!(

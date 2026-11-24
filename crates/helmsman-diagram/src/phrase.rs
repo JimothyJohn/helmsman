@@ -313,10 +313,7 @@ impl Phraser<'_> {
             Some(Value::Bool(false)) => "OFF".into(),
             Some(Value::Int(n)) if self.w.times.contains(path) => duration(n),
             Some(v) => {
-                let n = match v {
-                    Value::Real(x) => trim(x, 3),
-                    v => v.to_string(),
-                };
+                let n = v.shown();
                 match self.w.units.get(path) {
                     Some(u) if !u.is_empty() => format!("{n} {u}"),
                     _ => n,
@@ -504,7 +501,7 @@ impl Phraser<'_> {
             }
             RegionKind::Case | RegionKind::CaseElse => {
                 if let Some(t) = g.tests.first() {
-                    let v = t.value.map_or_else(|| "unknown".into(), |v| v.to_string());
+                    let v = t.value.map_or_else(|| "unknown".into(), |v| v.shown());
                     parts.push(format!("`{}` is {v}, which picks `{}`", t.text, g.label));
                     for i in &t.inputs {
                         say.noted(&i.path);
@@ -653,7 +650,7 @@ impl Phraser<'_> {
                     for i in &t.inputs {
                         say.noted(&i.path);
                     }
-                    let v = t.value.map_or_else(|| "unknown".into(), |v| v.to_string());
+                    let v = t.value.map_or_else(|| "unknown".into(), |v| v.shown());
                     (
                         format!("`{}` is {v}, which does not pick `{}`", t.text, g.label),
                         Some(format!("needs `{}` to pick `{}`", t.text, g.label)),

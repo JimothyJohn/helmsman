@@ -435,6 +435,7 @@ impl BoxView {
                     self.pane_layouts.answer(&call, &a);
                 }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
+                PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
                 PCall::FindWired => {
@@ -744,7 +745,7 @@ impl BoxView {
             .collect();
         let started = self.with_env(None, |i, env| {
             let file = crate::instruct::target(&env.scope);
-            let earlier = crate::instruct::recent(pages.iter().map(String::as_str), &file);
+            let earlier = crate::instruct::history(pages.iter().map(String::as_str), &file);
             i.start(env, &earlier)
         });
         match started {
@@ -968,6 +969,15 @@ impl BoxView {
         ));
         self.projects
             .save_agent(&apply.file, &apply.text, &apply.record, &apply.tests);
+        // What the change added to the program joins the trend once the
+        // box reports it (a change is saved first and deployed after).
+        let known = crate::device_form::ports_of(&was);
+        let added: Vec<String> = crate::device_form::ports_of(&apply.text)
+            .into_iter()
+            .map(|p| p.name)
+            .filter(|n| !known.iter().any(|k| k.name == *n))
+            .collect();
+        self.trend.expect(&added);
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),
@@ -2645,9 +2655,12 @@ impl Body for BoxView {
         if let Some(s) = &self.state.scan {
             ui.separator();
             ui.label(
-                RichText::new(format!("t={:.1}s", s.now_ms as f64 / 1000.0))
-                    .monospace()
-                    .color(t.muted),
+                RichText::new(format!(
+                    "t={}s",
+                    helmsman_iec::shown_real(s.now_ms as f64 / 1000.0)
+                ))
+                .monospace()
+                .color(t.muted),
             )
             .tip(format!("The box's clock since start, at scan {}.", s.scan));
         }
@@ -2985,6 +2998,10 @@ impl Body for BoxView {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.scan = crate::devices::Scan::Running;
                 self.projects.discover();
+            }
+            Some(crate::devices::DeviceAct::Ask(address)) => {
+                self.devices_ui.ask_note = Some(format!("Asking {address}…"));
+                self.projects.ask(address);
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.open(d),
             Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),

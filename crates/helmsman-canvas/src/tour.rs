@@ -254,7 +254,7 @@ impl Tour {
                 Step::Edit => &["st editor", "pane code", "left"],
                 Step::Deploy => &["file deploy", "bar file", "bar menu"],
                 Step::Watch => &["io outputs", "tab io"],
-                Step::Trend => &["trend window", "bottom trend"],
+                Step::Trend => &["trend window", "trend tab"],
                 Step::Agent => &["agent instruction", "tab claude"],
             }
         };
