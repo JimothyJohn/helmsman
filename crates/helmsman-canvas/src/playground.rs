@@ -752,6 +752,11 @@ pub struct Trend {
     pub history: History,
     /// The width of the window drawn, ms (`WINDOW_MIN_MS..=WINDOW_MAX_MS`).
     pub window_ms: u64,
+    /// The pins nobody chose (the first few, and what a described change
+    /// brought), oldest first: the ones that make room at the cap.
+    pub auto: Vec<String>,
+    /// The lanes that just joined, popping.
+    pub flashes: crate::ekg::Flashes,
 }
 
 impl Default for Trend {
@@ -760,6 +765,8 @@ impl Default for Trend {
             signals: Vec::new(),
             history: History::default(),
             window_ms: TREND_MS,
+            auto: Vec::new(),
+            flashes: crate::ekg::Flashes::default(),
         }
     }
 }
@@ -772,11 +779,28 @@ impl Trend {
     /// Adds or removes `name` (at most [`TREND_SIGNALS`]). The history
     /// is every signal's and stays: a new lane is drawn with its past,
     /// the others go on (Nick, 2026-11-13: adding one reset them all).
+    /// A pin the engineer makes at the cap takes the place of the oldest
+    /// one nobody chose, if there is one.
     pub fn toggle(&mut self, name: &str) {
+        self.auto.retain(|a| a != name);
         if let Some(k) = self.signals.iter().position(|s| s == name) {
             self.signals.remove(k);
-        } else if self.signals.len() < TREND_SIGNALS {
-            self.signals.push(name.to_string());
+        } else {
+            if self.signals.len() >= TREND_SIGNALS && !self.auto.is_empty() {
+                let old = self.auto.remove(0);
+                self.signals.retain(|s| *s != old);
+            }
+            if self.signals.len() < TREND_SIGNALS {
+                self.signals.push(name.to_string());
+            }
+        }
+    }
+
+    /// The inputs and outputs a described change brought join the trend
+    /// at the bottom, each popping ([`crate::ekg::pin_auto`]).
+    pub fn pin_added(&mut self, added: &[String]) {
+        for name in crate::ekg::pin_auto(&mut self.signals, &mut self.auto, added, TREND_SIGNALS) {
+            self.flashes.add(&name);
         }
     }
 
@@ -788,6 +812,8 @@ impl Trend {
             return;
         }
         let s = self.signals.remove(from);
+        // Moved by the engineer: theirs now.
+        self.auto.retain(|a| *a != s);
         self.signals.insert(to, s);
     }
 }
@@ -1090,6 +1116,9 @@ impl Session {
                     let outs = b.points.iter().filter(|p| p.dir == Dir::Out);
                     let ins = b.points.iter().filter(|p| p.dir == Dir::In);
                     self.trend.signals = outs.chain(ins).take(4).map(|p| p.name.clone()).collect();
+                    // Nobody chose these: a described change's variables
+                    // may take their place at the cap.
+                    self.trend.auto.clone_from(&self.trend.signals);
                 }
                 self.diags.clear();
                 let had = self.build.is_some();

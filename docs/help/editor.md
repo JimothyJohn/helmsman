@@ -284,11 +284,14 @@ redrawn.
   A double click on any tab hides its pane. The tabs are glyphs; hover one for its name. A hidden pane keeps
   its tabs down the strip at the edge, and a click on one opens the pane
   on that tab.
-- **The bottom panel** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>): the **Trend** of the
-  signals you pin, with a long time axis, and **Messages**: what needs
+- **The trend** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>) runs along the whole
+  bottom of the window, under both side panes: the signals you pin, each
+  drawn as a pulse that sweeps from left to right.
+- **Messages** sit in the left pane under the tab's content: what needs
   saying now, then the last two hundred things the page had to say, with
-  the error count beside the tab. Tick or untick info, warnings and
-  errors to list or leave out each.
+  the error count beside their header. Click the header to fold them
+  away; it stays red while an error is unread. Tick or untick info,
+  warnings and errors to list or leave out each.
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 

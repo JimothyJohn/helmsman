@@ -27,7 +27,7 @@ Step runs to the next change. It scans until a value changes or the
 program takes another path through its statements, and shows that scan.
 A timer's elapsed time counting up does not count as a change, so a step
 lands on the scan where the timer's output turns on. If nothing changes in 60 seconds of program time, the step stops
-there and the Messages tab says so.
+there and the Messages say so.
 
 <img src="img/monitor-stopped.png" alt="The Monitor's header with the program paused: run, stop, step and restart beside the crumbs." width="700">
 
@@ -40,7 +40,7 @@ Pick a block in the diagram and press <kbd>Shift</kbd> <kbd>F9</kbd> (or
 **Edit › Breakpoint**): a red dot marks it. The next scan that reaches
 the block stops just before it runs, the simulation stops with it, and
 the diagram and every value show the scan as it stood at that moment.
-The block is framed in orange and the Messages tab names its line. <kbd>F8</kbd> runs the rest of that scan.
+The block is framed in orange and the Messages name its line. <kbd>F8</kbd> runs the rest of that scan.
 <kbd>Ctrl</kbd> <kbd>Enter</kbd> goes on to the next stop: the same
 block's next pass in a loop, another breakpoint, or the next scan. An
 input you change while stopped shows at once in what the diagram shows.
@@ -179,13 +179,21 @@ so a run is the same run every time.
 
 ## The trend
 
-The Trend tab along the bottom plots the signals you pin, up to six,
-each in its own lane with its last value. The Window slider sets how
-much of the past the pane shows, from 100 ms to 10 minutes on a
+The trend along the whole bottom of the window plots the signals you
+pin, up to six, each in its own lane: the name at the left, the trace
+and, beside the newest point, the value. A lane is drawn like a heart
+monitor. A bright point sweeps from left to right with the newest
+value, the trace behind it fades with age, and at the right edge the
+point returns to the left and draws over the oldest trace. While the
+program is stopped the point stands still. The Window slider sets how
+much time one sweep covers, from 100 ms to 10 minutes on a
 logarithmic scale (it opens on 30 s), and the plot follows as you drag;
-history is kept for the widest, so widening shows what already ran. The
+history is kept for the widest, so widening shows what already ran.
+When a described change adds inputs or outputs, they are pinned at the
+bottom and their lanes flash briefly; when six are pinned already, the
+oldest one you did not pin yourself makes room. The
 lane's scale is at its right edge: it rounds out to an even step and
-moves only when the values cross one. Pin from the tab's list. Every
+moves only when the values cross one. Pin from the list above the lanes. Every
 input and output is recorded from the first scan, pinned or not, so a
 signal you pin later arrives with its past and the lanes already there
 carry on. Deploying again keeps the history; a cold restart starts it
@@ -195,11 +203,11 @@ colour from the palette; the browser keeps your choice. Until you pick
 one, a signal named after a colour (`red`, `lamp_green`) is drawn in
 that colour, the same as its lamp.
 
-![The Trend tab: three pinned signals, the Window slider, a lane each with its scale at the right edge.](img/trend.png)
+![The trend: three pinned signals, the Window slider, a lane each with its scale at the right edge.](img/trend.png)
 
 ## Faults
 
 A program that divides by zero, runs past its watchdog, or writes an
 output out of range **faults**: it stops at the statement that did it,
 outputs go to their safe values, the state reads `faulted` in red and
-the Messages tab records what happened. Run or Step restarts it.
+the Messages record what happened. Run or Step restarts it.

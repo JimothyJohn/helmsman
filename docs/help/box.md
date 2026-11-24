@@ -46,7 +46,7 @@ field opens for the value), and <kbd>Alt</kbd> <kbd>Shift</kbd>
 
 ## The trend
 
-The Trend tab opens with the box's own history of each pinned signal,
+The trend opens with the box's own history of each pinned signal,
 the last ten minutes, then streams. The window opens on 30 s and widens
 to the whole ten minutes. Drag a lane's name up or down to change the
 order of the lanes, and click one to pick that signal's colour. Pins and their order are yours while you are signed

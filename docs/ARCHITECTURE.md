@@ -1247,7 +1247,7 @@ one did. `record.rs` and `replay.rs` in `helmsman-plc`; contract in
 
 ## Trends on the box (`box-trend-source`, built)
 
-The Editor's Trend tab on a box opens with the last minutes of each pinned
+The Editor's trend on a box opens with the last minutes of each pinned
 signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
 `api.rs` and canvas `box_projects_tests.rs` tests; the canvas side is
 `box_trend.rs`).
@@ -2185,7 +2185,7 @@ on the box; contract in `pane_layout_tests.rs`, `ui_tests/layouts.rs`,
 `box_projects_tests.rs`, and the box's `tests/pane_layouts.rs` and
 `tests/accounts.rs`). A layout is where the editor's side tabs sit (left,
 right or hidden, in order), which tab each side shows, which panes are
-open, the bottom panel's tab and the three pane sizes. One text holds a
+open, whether the Messages are open and the three pane sizes. One text holds a
 list of them, `{"format": "helmsman-pane-layouts 1", "layouts": [...]}`:
 it is what the browser stores (`helmsman-canvas/pane-layouts`, at most
 32), what Export downloads and Import reads, and what the box answers.

@@ -1167,6 +1167,12 @@ impl PlaygroundView {
         }
     }
 
+    /// A checked change written into the open project, for the tests.
+    #[cfg(test)]
+    pub fn write_for_test(&mut self, apply: crate::instruct::Apply) {
+        self.write(apply);
+    }
+
     /// A click on answer `k`, for the tests.
     #[cfg(test)]
     pub fn answer_question_for_test(&mut self, k: usize) {
@@ -2678,9 +2684,24 @@ impl PlaygroundView {
             .take(120)
             .collect();
         self.proj.save_as(&what, Some(&apply.record));
+        let known: Vec<String> = self
+            .session
+            .inputs()
+            .chain(self.session.outputs())
+            .map(|p| p.name.clone())
+            .collect();
         // A described change runs at once (Nick, 2026-11-23: no stop and
         // reset, not as a switch either).
         self.reload_running();
+        // What the change added to the program joins the trend.
+        let added: Vec<String> = self
+            .session
+            .inputs()
+            .chain(self.session.outputs())
+            .map(|p| p.name.clone())
+            .filter(|n| !known.contains(n))
+            .collect();
+        self.session.trend.pin_added(&added);
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),
@@ -3424,7 +3445,7 @@ impl PlaygroundView {
                 trend.signals.hash(h);
             }),
             asks: self.chat.seq(),
-            trend_open: chrome.trend && chrome.bottom == editor::Bottom::Trend,
+            trend_open: chrome.trend,
         }
     }
 }
@@ -4378,6 +4399,9 @@ impl PlaygroundView {
         chrome.hit("trend signals", legend.inner_rect);
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
+        if self.session.trend.flashes.tick(ui.input(|i| i.time)) {
+            ui.ctx().request_repaint();
+        }
         let plot = self.trend_plot(ui, chrome);
         chrome.hit("trend plot", plot);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
@@ -4644,60 +4668,40 @@ impl PlaygroundView {
         let n = trend.signals.len();
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / n as f32;
-        let end = trend.history.last_t().unwrap_or(0);
-        let window = trend.window_ms.max(1);
-        let start = end.saturating_sub(window);
-        // Samples older than the window are kept for a wider one: not drawn.
-        #[allow(clippy::cast_precision_loss)]
-        let x_of = |t: u64| {
-            rect.left() + 90.0 + (rect.width() - 90.0 - SCALE_W) * ((t - start) as f32 / window as f32)
-        };
+        // The head sits at the newest scan; stopped, it stands still.
+        let sweep = crate::ekg::Sweep::new(trend.window_ms, trend.history.last_t().unwrap_or(0));
+        let now = ui.input(|i| i.time);
         for (k, name) in trend.signals.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = lane_color(&t, chrome, name, k);
-            let (lo, hi) = trend
-                .history
-                .lane(name, start)
-                .map(|(_, v)| v)
-                .filter(|v| v.is_finite())
+            let runs = sweep.runs(trend.history.lane(name, sweep.oldest_ms()));
+            let (lo, hi) = runs
+                .iter()
+                .flatten()
+                .map(|p| p.1)
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let last = trend.history.last_value(name);
-            painter.text(
-                Pos2::new(rect.left() + 6.0, top + lane / 2.0),
-                egui::Align2::LEFT_CENTER,
-                format!(
-                    "{}\n{}",
-                    name.to_ascii_lowercase(),
-                    last.filter(|v| v.is_finite())
-                        .map_or("–".into(), helmsman_iec::shown_real)
-                ),
-                FontId::monospace(crate::theme::MIN_TEXT),
-                color,
+            let number = trend
+                .history
+                .last_value(name)
+                .filter(|v| v.is_finite())
+                .map(helmsman_iec::shown_real);
+            crate::ekg::paint_lane(
+                &painter,
+                &t,
+                rect,
+                (top, lane),
+                &crate::ekg::Lane {
+                    name,
+                    color: lane_color(&t, chrome, name, k),
+                    number,
+                    pop: trend.flashes.strength(name, now),
+                },
+                &sweep,
+                &runs,
+                nice_range(lo, hi),
             );
-            painter.line_segment(
-                [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
-                Stroke::new(1.0, t.rule),
-            );
-            let (lo, hi, step) = nice_range(lo, hi);
-            scale_labels(&painter, &t, rect, top, lane, (lo, hi, step));
-            let y_of = |v: f64| {
-                #[allow(clippy::cast_possible_truncation)]
-                let f = ((v - lo) / (hi - lo)) as f32;
-                top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
-            };
-            let pts = lane_points(
-                trend
-                    .history
-                    .lane(name, start)
-                    .filter(|(_, v)| v.is_finite())
-                    .map(|(t, v)| (x_of(t), y_of(v))),
-            );
-            if pts.len() > 1 {
-                painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
-            }
         }
         rect
     }
@@ -4808,7 +4812,7 @@ pub fn window_label(ms: u64) -> String {
 }
 
 /// Width of a lane's label column, which is also its drag handle.
-const LANE_HANDLE_W: f32 = 88.0;
+pub const LANE_HANDLE_W: f32 = 88.0;
 
 /// The Trend tab's signal buttons wrap, and take at most this share of its
 /// height before they scroll, so the plot keeps the rest.

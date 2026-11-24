@@ -983,6 +983,15 @@ impl BoxView {
         ));
         self.projects
             .save_agent(&apply.file, &apply.text, &apply.record, &apply.tests);
+        // What the change added to the program joins the trend once the
+        // box reports it (a change is saved first and deployed after).
+        let known = crate::device_form::ports_of(&was);
+        let added: Vec<String> = crate::device_form::ports_of(&apply.text)
+            .into_iter()
+            .map(|p| p.name)
+            .filter(|n| !known.iter().any(|k| k.name == *n))
+            .collect();
+        self.trend.expect(&added);
         let undo = before.map(|revision| crate::instruct::Undo {
             project: apply.project.clone(),
             file: apply.file.clone(),

@@ -2,7 +2,7 @@
 //! it is placed or hidden, what a file may hold, and what a hostile one
 //! is held to.
 
-use crate::editor::{Bottom, Chrome, LEFT_W, Pane};
+use crate::editor::{Chrome, LEFT_W, Pane};
 use crate::pane_layout::{
     FILE, FORMAT, Layouts, MAX_FILE, MAX_LAYOUTS, MAX_NAME, MAX_SIZE, MIN_SIZE, PaneLayout, Sizes,
     clean_name, parse, pick_refusal, presets,
@@ -129,7 +129,7 @@ fn applying_a_layout_arranges_the_panes_and_asks_for_its_sizes() {
     c.apply(programming);
     assert_eq!(c.layout().lefts, programming.lefts);
     assert_eq!(c.side, Pane::Code);
-    assert_eq!(c.bottom, Bottom::Messages);
+    assert!(c.msgs, "the Messages stay as they were");
     assert_eq!(
         c.resize,
         Some(Sizes {
@@ -163,7 +163,7 @@ fn layouts_go_to_a_file_and_come_back_the_same() {
     c.dock(Pane::Io, true);
     c.hide(Pane::History);
     c.left = false;
-    c.bottom = Bottom::Messages;
+    c.msgs = false;
     c.sizes = Sizes {
         left: Some(400.0),
         right: Some(300.0),
@@ -272,7 +272,7 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
             7, null, {{}}, {{"name":""}}, {{"name":17}},
             {{"name":"Odd","left":["code","code","../../etc/passwd",5,"io"],"right":"io",
               "hidden":["io","history"],"left_shows":"nope","right_shows":"files",
-              "left_open":"yes","bottom_shows":"cellar",
+              "left_open":"yes","bottom_shows":"cellar","messages_open":"yes",
               "left_width":1e30,"right_width":-5,"bottom_height":"tall"}},
             {{"name":"Default","left":["files"]}},
             {{"name":"  Odd  ","left":["files"]}},
@@ -300,7 +300,10 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
     assert!(odd.rights.is_empty(), "a list that is not a list is empty");
     assert_eq!(odd.pane, Pane::Claude, "an unknown shown tab: the first page's");
     assert!(odd.left, "a flag that is not a flag keeps the first page's value");
-    assert_eq!(odd.bottom, Bottom::Trend);
+    assert!(
+        odd.msgs,
+        "a flag that is not a flag: Messages open, as the first page has them"
+    );
     assert_eq!(
         odd.sizes,
         Sizes {
@@ -325,4 +328,31 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
         br#"{"format":"helmsman-pane-layouts 1","layouts":[{"name":"new"}]}"#,
     );
     assert!(why.unwrap_err().contains("Delete one first"));
+}
+
+/// A layout file written when the bottom panel had tabs (`bottom_shows`)
+/// still reads: its panes come back as they were and the Messages are
+/// open, as the first page has them.
+#[test]
+fn a_layout_file_from_the_tabbed_bottom_panel_still_reads() {
+    let file = format!(
+        r#"{{"format":"{FORMAT}","layouts":[
+            {{"name":"Old","left":["files","claude"],"right":["code","io","devices","history"],
+              "left_shows":"files","right_shows":"code","left_open":true,"right_open":true,
+              "bottom_open":false,"bottom_shows":"messages","left_width":300,"bottom_height":210}}
+        ]}}"#
+    );
+    let (name, l) = &parse(&file).unwrap()[0];
+    assert_eq!(name, "Old");
+    assert_eq!(l.lefts[..2], [Pane::Files, Pane::Claude]);
+    assert_eq!(l.pane, Pane::Files);
+    assert_eq!(l.side, Pane::Code);
+    assert!(l.right && !l.trend && l.msgs);
+    assert_eq!((l.sizes.left, l.sizes.bottom), (Some(300.0), Some(210.0)));
+    // And one that keeps the Messages folded keeps them so.
+    let mut c = Chrome::default();
+    c.msgs = false;
+    let json = c.layout().to_json("Folded").to_string();
+    let file = format!(r#"{{"format":"{FORMAT}","layouts":[{json}]}}"#);
+    assert!(!parse(&file).unwrap()[0].1.msgs);
 }
