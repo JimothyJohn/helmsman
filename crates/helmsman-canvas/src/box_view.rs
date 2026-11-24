@@ -3905,10 +3905,14 @@ fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
     let pulse = s.pending && s.ready.is_ok();
     ui.add_space(4.0);
     // At the tab's right edge, as Send is (Nick, 2026-11-24).
+    // One row of one button's height: a bare right-to-left layout takes
+    // all the height below it and pushed the rest of the tab off the end.
     let r = ui
-        .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::glyphs::deploy(ui, s.ready.is_ok()).tip(tip)
-        })
+        .allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), crate::glyphs::ROW),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| crate::glyphs::deploy(ui, s.ready.is_ok()).tip(tip),
+        )
         .inner;
     chrome.hit("agent deploy", r.rect);
     if pulse {
