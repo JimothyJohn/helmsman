@@ -5,9 +5,11 @@
 //!
 //! - **One request per instruction**: the whole file in its scope
 //!   ([`crate::scope::Scope::envelope`]), the program and its errors, and
-//!   the last [`RECENT`] instructions already carried out on this file,
-//!   read from the project's History ([`recent`]), so "now make it blink
-//!   faster" works without a visible conversation.
+//!   every change already carried out on this file, each with its reason
+//!   and result, read from the project's History ([`history`]) and cut to
+//!   [`HISTORY_TOKENS`] ([`fit`]), so "now make it blink faster" works
+//!   without a visible conversation and a decision made weeks ago is
+//!   still known.
 //! - **Checked before it is written** ([`crate::verify::check`]): the code
 //!   is applied to a copy, compiled, and the Agent's scenarios and the
 //!   project's requirement tests run on it. A red answer goes back with
@@ -34,8 +36,29 @@ use crate::scope::{Files, Scope};
 use crate::tips::Tip;
 use crate::verify::{self, Check, Next};
 
-/// How many earlier instructions for the file go with a new one.
-pub const RECENT: usize = 5;
+/// How much of a file's history goes with a new instruction, in tokens
+/// (Nick, 2026-11-23: "the entire commit history is slowly fed into
+/// context but compacted every 64k tokens"). Past it the oldest changes
+/// are left out ([`fit`]) until a summary stands in for them
+/// ([`SUMMARY`]).
+pub const HISTORY_TOKENS: usize = 64_000;
+
+/// About how many tokens `text` is: a third of its characters, rounded
+/// up. On the high side for prose and for code, so the estimate ends the
+/// history before the model's own count would.
+#[must_use]
+pub fn tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(3)
+}
+
+/// The first line of a History page that is a summary of a file's older
+/// changes, with the file's name after it. Its second line is
+/// [`COVERS`] and how many changes it stands for; the rest is the
+/// summary. [`history`] starts again from the newest one for a file, so a
+/// summary is made once and what it covers is never sent again.
+pub const SUMMARY: &str = "Summary for: ";
+/// The second line of a [`SUMMARY`] page.
+pub const COVERS: &str = "Covers: ";
 /// Longest instruction, in characters.
 pub const MAX_INSTRUCTION: usize = 2000;
 /// Longest reason shown, in characters.
@@ -457,8 +480,9 @@ impl Instruct {
         }
     }
 
-    /// Starts the typed instruction on `env`, after the `earlier` ones
-    /// for its file (oldest first, at most [`RECENT`] go). The draft is
+    /// Starts the typed instruction on `env`, after the `earlier` changes
+    /// to its file (oldest first, as [`history`] reads them; what fits
+    /// [`HISTORY_TOKENS`] goes). The draft is
     /// emptied.
     ///
     /// # Errors
@@ -519,7 +543,7 @@ impl Instruct {
         plan: bool,
         spec: bool,
     ) -> Ask {
-        let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
+        let earlier: Vec<String> = fit(earlier, HISTORY_TOKENS);
         // The collected chips go with an instruction (a run from a
         // specification keeps them for the next one).
         self.about = if spec { String::new() } else { self.take_about() };
@@ -1484,11 +1508,10 @@ pub fn record(run: &Run, file: &str, why: Option<&str>, status: &str, check: &Ch
         let _ = writeln!(r, "Why: {w}");
     }
     let _ = writeln!(r, "Result: {status}");
+    // How many, not which: each is in History under its own entry, and a
+    // list here would be read back as part of this change's own words.
     if !run.earlier.is_empty() {
-        r.push_str("\nEarlier instructions sent with it:\n");
-        for e in &run.earlier {
-            let _ = writeln!(r, "- {}", clean(e, MAX_INSTRUCTION));
-        }
+        let _ = writeln!(r, "\nEarlier changes sent with it: {}", run.earlier.len());
     }
     if !check.scenarios.is_empty() {
         r.push_str("\nScenarios:\n");
@@ -1525,22 +1548,113 @@ pub fn record(run: &Run, file: &str, why: Option<&str>, status: &str, check: &Ch
     r
 }
 
-/// The last [`RECENT`] instructions carried out on `file`, oldest first,
-/// read from History entries (`pages`, oldest first) that [`record`]
-/// wrote; other entries are skipped.
+/// One line of a History page that starts with `key`, trimmed; `None`
+/// when there is none or it is empty.
+fn field(page: &str, key: &str) -> Option<String> {
+    page.lines()
+        .find_map(|l| l.strip_prefix(key))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Every change carried out on `file`, oldest first, read from History
+/// entries (`pages`, oldest first) that [`record`] and the by-hand
+/// changes wrote; other entries are skipped. Each is the instruction,
+/// then its reason and its result on lines of their own under it, as the
+/// `<earlier_instructions>` envelope carries them. A [`SUMMARY`] page for
+/// the file takes the place of everything before it.
 #[must_use]
-pub fn recent<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<String> {
-    let mut out: Vec<String> = pages
-        .into_iter()
-        .filter_map(|p| {
-            let mut lines = p.lines();
-            let i = lines.next()?.strip_prefix(INSTRUCTION)?;
-            let f = lines.next()?.strip_prefix(FILE)?;
-            (f == file && !i.trim().is_empty()).then(|| i.trim().to_string())
-        })
-        .collect();
-    let extra = out.len().saturating_sub(RECENT);
-    out.drain(..extra);
+pub fn history<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in pages {
+        let mut lines = p.lines();
+        let Some(first) = lines.next() else { continue };
+        if let Some(of) = first.strip_prefix(SUMMARY) {
+            if of.trim() != file {
+                continue;
+            }
+            let Some(covers) = lines.next().and_then(|l| l.strip_prefix(COVERS)) else {
+                continue;
+            };
+            let text = clean(&lines.collect::<Vec<_>>().join(" "), MAX_SUMMARY);
+            if text.is_empty() {
+                continue;
+            }
+            out.clear();
+            out.push(format!(
+                "(a summary of the {} earlier changes) {text}",
+                clean(covers, 12)
+            ));
+            continue;
+        }
+        let Some(i) = first.strip_prefix(INSTRUCTION) else {
+            continue;
+        };
+        let Some(f) = lines.next().and_then(|l| l.strip_prefix(FILE)) else {
+            continue;
+        };
+        if f != file || i.trim().is_empty() {
+            continue;
+        }
+        let mut entry = clean(i, MAX_INSTRUCTION);
+        if let Some(w) = field(p, "Why: ") {
+            let _ = write!(entry, "\n  why: {}", clean(&w, MAX_REASON));
+        }
+        if let Some(r) = field(p, "Result: ") {
+            let _ = write!(entry, "\n  result: {}", clean(&r, MAX_REASON));
+        }
+        out.push(entry);
+    }
+    out
+}
+
+/// Longest summary taken from a [`SUMMARY`] page, in characters.
+const MAX_SUMMARY: usize = 24_000;
+
+/// `earlier` cut to `budget` tokens ([`tokens`]): the newest changes word
+/// for word, as many as fit, and in front of them one line that says how
+/// many older ones are left out. A summary at the front ([`history`])
+/// stays as long as it fits with at least the newest change.
+#[must_use]
+pub fn fit(earlier: &[String], budget: usize) -> Vec<String> {
+    let cost = |e: &String| tokens(e) + 2;
+    let total: usize = earlier.iter().map(cost).sum();
+    if total <= budget {
+        return earlier.to_vec();
+    }
+    // Room for the line that says what is missing.
+    let budget = budget.saturating_sub(24);
+    let summary = earlier.first().filter(|e| e.starts_with("(a summary of "));
+    let rest = &earlier[usize::from(summary.is_some())..];
+    let mut room = budget.saturating_sub(summary.map_or(0, cost));
+    let mut kept = 0;
+    for e in rest.iter().rev() {
+        if cost(e) > room {
+            break;
+        }
+        room -= cost(e);
+        kept += 1;
+    }
+    // A summary that leaves no room for even the newest change goes.
+    let summary = summary.filter(|_| kept > 0 || rest.is_empty());
+    if summary.is_none() && kept == 0 {
+        room = budget;
+        for e in rest.iter().rev() {
+            if cost(e) > room {
+                break;
+            }
+            room -= cost(e);
+            kept += 1;
+        }
+    }
+    let left_out = rest.len() - kept;
+    let mut out = Vec::with_capacity(kept + 2);
+    out.extend(summary.cloned());
+    if left_out > 0 {
+        out.push(format!("({left_out} older changes are not shown)"));
+    }
+    out.extend(rest[rest.len() - kept..].iter().cloned());
     out
 }
 

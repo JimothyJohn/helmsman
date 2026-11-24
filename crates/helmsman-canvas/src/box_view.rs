@@ -752,7 +752,7 @@ impl BoxView {
             .collect();
         let started = self.with_env(None, |i, env| {
             let file = crate::instruct::target(&env.scope);
-            let earlier = crate::instruct::recent(pages.iter().map(String::as_str), &file);
+            let earlier = crate::instruct::history(pages.iter().map(String::as_str), &file);
             i.start(env, &earlier)
         });
         match started {

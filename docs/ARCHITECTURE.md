@@ -940,9 +940,21 @@ The Describe tab is one path in the page and on a box (`agent-instruct`,
 crates/helmsman-canvas/src/instruct.rs; Nick 2026-11-05: no chat). The
 engineer types an instruction; the request carries the whole file in its
 scope (`scope::Scope::envelope`), the program and its errors, and the
-last five instructions carried out on that file, read back from the
-project's History (`instruct::recent` over the revisions' Agent pages,
-`<earlier_instructions>`). The answer is a `Why:` line, the whole file in
+history of that file, read back from the project's History
+(`instruct::history` over the revisions' Agent pages,
+`<earlier_instructions>`): every change to the file, oldest first, each
+its instruction with its reason and its result on lines under it (Nick,
+2026-11-23, `history-in-context`; until then the last five instructions
+alone). It is cut to `HISTORY_TOKENS` (64 000, estimated at a third of
+the characters, `instruct::tokens`) by `instruct::fit`: the newest whole,
+and one line saying how many older ones are not shown. A History page
+that opens `Summary for: FILE` / `Covers: N` stands for everything before
+it on that file, so a summary is made once and what it covers is never
+sent again; nothing writes one yet (the relay's summarising step is the
+other half of the card). A change's own History record says how many
+earlier changes went with it, not which. A box keeps every Agent page of
+the open project it has read (`box_projects::PAGES`, as many as the box
+keeps revisions), where it kept the newest ten. The answer is a `Why:` line, the whole file in
 one ```` ```st ```` block and ```` ```st scenario ```` blocks
 (requirement tests in the same format). It is checked before anything is
 written (`verify::check`): the code taken into a copy through

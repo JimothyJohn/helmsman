@@ -194,6 +194,11 @@ pub struct PReq {
     pub ctype: &'static str,
 }
 
+/// The most Agent pages kept for the open project: as many revisions as a
+/// box keeps of one (`MAX_REVISIONS` in helmsman-plc's project history),
+/// so the whole of what the box has can go with an instruction.
+pub const PAGES: usize = 200;
+
 impl fmt::Debug for PReq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PReq")
@@ -1666,15 +1671,15 @@ impl BoxProjects {
                         .as_array()
                         .map(|a| a.iter().filter_map(revision_row).collect())
                         .unwrap_or_default();
-                    // The latest Agent pages, for the next instruction's
-                    // earlier ones (twice as many as it takes: some are
-                    // for other files).
+                    // Every Agent page the box keeps, for the history that
+                    // goes with the next instruction
+                    // (`instruct::history`): each is read once and kept.
                     let want: Vec<u32> = self
                         .history
                         .iter()
                         .rev()
                         .filter(|r| r.page)
-                        .take(2 * crate::instruct::RECENT)
+                        .take(PAGES)
                         .map(|r| r.n)
                         .filter(|n| !self.pages.contains_key(n))
                         .collect();
@@ -1695,7 +1700,7 @@ impl BoxProjects {
                     && let Some(page) = j["page"].as_str()
                 {
                     self.pages.insert(n, page.to_string());
-                    while self.pages.len() > 4 * crate::instruct::RECENT {
+                    while self.pages.len() > PAGES {
                         self.pages.pop_first();
                     }
                 }
