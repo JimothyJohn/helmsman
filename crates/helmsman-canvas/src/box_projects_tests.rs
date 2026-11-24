@@ -605,6 +605,9 @@ impl Harness {
         r.state.session = session;
         app.review = Some(r);
         app.boxv = Some(bv);
+        // The Messages are folded here: the tabs' tests want the left
+        // pane's whole height (`h.app.chrome.msgs = true` opens them).
+        app.chrome.msgs = false;
         let mut h = Self {
             ctx: egui::Context::default(),
             app,
@@ -618,7 +621,7 @@ impl Harness {
 
     fn frame(&mut self, events: Vec<Event>) {
         let input = RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 860.0))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 1180.0))),
             time: Some(self.time),
             events,
             ..Default::default()
@@ -967,7 +970,20 @@ fn a_stale_save_is_a_409_and_reload_brings_the_boxs_text() {
     );
     // The toolbar offers Reload; it brings the box's text.
     let mut h = Harness::new(c, None);
-    h.press("bottom messages");
+    h.app.chrome.msgs = true;
+    h.frame(vec![]);
+    // The notice is long in a narrow pane: it scrolls inside the Messages
+    // and Reload is under it.
+    let at = h.rect("notice").center();
+    h.frame(vec![Event::PointerMoved(at)]);
+    h.frame(vec![Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, -600.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+    }]);
+    h.wait(0.2);
     h.press("reload");
     let reqs = h.sent();
     for q in reqs {
@@ -1152,7 +1168,8 @@ fn compile_errors_name_file_and_line_and_a_click_opens_it_there() {
         Some("main.st")
     );
     assert_eq!(h.app.chrome.line, Some(12));
-    h.press("bottom messages");
+    h.app.chrome.msgs = true;
+    h.frame(vec![]);
     assert!(h.app.chrome.rect("deploy failed").is_some());
 }
 
@@ -2119,7 +2136,7 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
         m["message"]
             .as_str()
             .unwrap()
-            .contains("<earlier_instructions>\n- comment it\n</earlier_instructions>"),
+            .contains("<earlier_instructions>\n- comment it\n  why: it says so.\n  result: Updated main.st"),
         "{m}"
     );
     let red = st(&LAMP.replace("lamp := start;", "lamp := NOT start;"));
@@ -5013,4 +5030,51 @@ fn a_value_set_by_hand_on_a_box_is_saved_with_its_history_and_undone() {
     run(&b, &jar, &mut v, &ctx);
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
     assert_eq!(b.json("/api/projects/line/files/main.st")["text"], TIMED);
+}
+
+/// A box's whole History goes with an instruction, not its last ten
+/// pages (Nick, 2026-11-23, `instruct::history`): every described change
+/// it keeps is read once the project is open again.
+#[test]
+fn a_box_reads_every_history_page_it_keeps_for_the_next_instruction() {
+    use crate::instruct_tests::LAMP;
+
+    fn run(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context) {
+        v.tick(ctx);
+        for _ in 0..60 {
+            pump(b, jar, v, ctx, 1.0);
+            if v.psent.is_empty() {
+                return;
+            }
+        }
+        panic!("the box never went quiet");
+    }
+
+    const CHANGES: usize = 14;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    run(&b, &jar, &mut v, &ctx);
+    for k in 0..CHANGES {
+        let text = LAMP.replace("lamp := start;", &format!("lamp := start; (* step {k} *)"));
+        let record =
+            format!("Instruction: step {k}\nFile: main.st\nWhy: reason {k}\nResult: Updated main.st.\n");
+        v.projects.save_agent("main.st", &text, &record, &[]);
+        run(&b, &jar, &mut v, &ctx);
+    }
+    // A fresh page on the same box: it has read nothing yet.
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    v.projects.open_project("line");
+    run(&b, &jar, &mut v, &ctx);
+    v.projects.open_file("main.st");
+    run(&b, &jar, &mut v, &ctx);
+    let pages: Vec<String> = v.projects.agent_pages().into_iter().map(str::to_string).collect();
+    let got = crate::instruct::history(pages.iter().map(String::as_str), "main.st");
+    let want: Vec<String> = (0..CHANGES)
+        .map(|k| format!("step {k}\n  why: reason {k}\n  result: Updated main.st."))
+        .collect();
+    assert_eq!(got, want, "all {CHANGES}, oldest first");
 }

@@ -5,9 +5,11 @@
 //!
 //! - **One request per instruction**: the whole file in its scope
 //!   ([`crate::scope::Scope::envelope`]), the program and its errors, and
-//!   the last [`RECENT`] instructions already carried out on this file,
-//!   read from the project's History ([`recent`]), so "now make it blink
-//!   faster" works without a visible conversation.
+//!   every change already carried out on this file, each with its reason
+//!   and result, read from the project's History ([`history`]) and cut to
+//!   [`HISTORY_TOKENS`] ([`fit`]), so "now make it blink faster" works
+//!   without a visible conversation and a decision made weeks ago is
+//!   still known.
 //! - **Checked before it is written** ([`crate::verify::check`]): the code
 //!   is applied to a copy, compiled, and the Agent's scenarios and the
 //!   project's requirement tests run on it. A red answer goes back with
@@ -34,8 +36,29 @@ use crate::scope::{Files, Scope};
 use crate::tips::Tip;
 use crate::verify::{self, Check, Next};
 
-/// How many earlier instructions for the file go with a new one.
-pub const RECENT: usize = 5;
+/// How much of a file's history goes with a new instruction, in tokens
+/// (Nick, 2026-11-23: "the entire commit history is slowly fed into
+/// context but compacted every 64k tokens"). Past it the oldest changes
+/// are left out ([`fit`]) until a summary stands in for them
+/// ([`SUMMARY`]).
+pub const HISTORY_TOKENS: usize = 64_000;
+
+/// About how many tokens `text` is: a third of its characters, rounded
+/// up. On the high side for prose and for code, so the estimate ends the
+/// history before the model's own count would.
+#[must_use]
+pub fn tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(3)
+}
+
+/// The first line of a History page that is a summary of a file's older
+/// changes, with the file's name after it. Its second line is
+/// [`COVERS`] and how many changes it stands for; the rest is the
+/// summary. [`history`] starts again from the newest one for a file, so a
+/// summary is made once and what it covers is never sent again.
+pub const SUMMARY: &str = "Summary for: ";
+/// The second line of a [`SUMMARY`] page.
+pub const COVERS: &str = "Covers: ";
 /// Longest instruction, in characters.
 pub const MAX_INSTRUCTION: usize = 2000;
 /// Longest reason shown, in characters.
@@ -378,6 +401,21 @@ impl Outcome {
         (short, full)
     }
 
+    /// The whole of this outcome as text for the clipboard: what it says,
+    /// the reason, and every line of what failed, one to a line.
+    #[must_use]
+    pub fn copy_text(&self) -> String {
+        let mut lines = Vec::new();
+        if !self.status.is_empty() {
+            lines.push(self.status.clone());
+        }
+        if let Some(w) = &self.why {
+            lines.push(format!("Why: {w}"));
+        }
+        lines.extend(self.problems.iter().cloned());
+        lines.join("\n")
+    }
+
     pub(crate) fn new(kind: Kind, status: impl Into<String>) -> Self {
         Self {
             kind,
@@ -399,6 +437,11 @@ pub struct Instruct {
     /// The prompt the arrows last put in the box ([`Self::show_step`]):
     /// while the box still holds it, the next step may replace it.
     pub stepped: Option<String>,
+    /// The instruction last sent from the box, so it is never lost to
+    /// Enter (Nick, 2026-11-24): it comes back into the empty box on its
+    /// own when it ended with nothing written, and with the Up key at
+    /// any time ([`Self::recall`]).
+    pub last: String,
     /// The answer area shows the versions' index (the clock).
     pub versions_open: bool,
     /// What the index is searched for.
@@ -440,6 +483,19 @@ impl Instruct {
         self.run.is_some()
     }
 
+    /// Puts the instruction last sent back in the box, to change and send
+    /// again. Only into an empty box: what the engineer has typed since
+    /// is theirs. Says whether it did.
+    pub fn recall(&mut self) -> bool {
+        if self.busy() || self.last.is_empty() || !self.draft.trim().is_empty() {
+            return false;
+        }
+        self.draft.clone_from(&self.last);
+        // The arrows through the revisions may still replace it.
+        self.stepped = Some(self.last.clone());
+        true
+    }
+
     /// Why the draft cannot go, if it cannot.
     #[must_use]
     pub fn refusal(&self) -> Option<String> {
@@ -457,8 +513,9 @@ impl Instruct {
         }
     }
 
-    /// Starts the typed instruction on `env`, after the `earlier` ones
-    /// for its file (oldest first, at most [`RECENT`] go). The draft is
+    /// Starts the typed instruction on `env`, after the `earlier` changes
+    /// to its file (oldest first, as [`history`] reads them; what fits
+    /// [`HISTORY_TOKENS`] goes). The draft is
     /// emptied.
     ///
     /// # Errors
@@ -519,10 +576,13 @@ impl Instruct {
         plan: bool,
         spec: bool,
     ) -> Ask {
-        let earlier: Vec<String> = earlier[earlier.len().saturating_sub(RECENT)..].to_vec();
+        let earlier: Vec<String> = fit(earlier, HISTORY_TOKENS);
         // The collected chips go with an instruction (a run from a
         // specification keeps them for the next one).
         self.about = if spec { String::new() } else { self.take_about() };
+        if !spec {
+            self.last.clone_from(&instruction);
+        }
         let message = env.message(text, &earlier, self.edits, &self.about);
         self.outcome = None;
         self.run = Some(Run {
@@ -557,6 +617,22 @@ impl Instruct {
         let Some(run) = self.run.take() else {
             return Step::Done;
         };
+        let spec = run.spec;
+        let step = self.answered_run(run, answer, env);
+        // Ended with nothing written: the instruction is back in the box.
+        if !spec
+            && self.run.is_none()
+            && self
+                .outcome
+                .as_ref()
+                .is_some_and(|o| matches!(o.kind, Kind::Refused | Kind::Failed))
+        {
+            self.recall();
+        }
+        step
+    }
+
+    fn answered_run(&mut self, run: Run, answer: &str, env: &Env<'_>) -> Step {
         match run.mode {
             Mode::Direct => self.checked(run, answer, env),
             Mode::Planning { .. } => self.planned(run, answer, env),
@@ -1168,16 +1244,21 @@ impl Instruct {
 
     /// A green answer the caller could not write, and why.
     pub fn not_written(&mut self, file: &str, why: &str) {
-        self.run = None;
+        let back = self.run.take().is_some_and(|r| !r.spec);
         let mut o = Outcome::new(Kind::Refused, format!("{} is unchanged.", capital(file)));
         o.problems = vec![why.to_string()];
         self.outcome = Some(o);
+        if back {
+            self.recall();
+        }
     }
 
     /// The request could not be made, was stopped, or its answer broke:
     /// the instruction ends with nothing written.
     pub fn failed(&mut self, why: &str) {
-        let status = self.run.take().map_or_else(
+        let run = self.run.take();
+        let back = run.as_ref().is_some_and(|r| !r.spec);
+        let status = run.map_or_else(
             || {
                 let w = sentence(why);
                 let mut c = w.chars();
@@ -1191,6 +1272,9 @@ impl Instruct {
             o.review.clone_from(&r.review);
         }
         self.outcome = Some(o);
+        if back {
+            self.recall();
+        }
     }
 
     /// The box's agent stored proposals instead of answering with the file.
@@ -1484,11 +1568,10 @@ pub fn record(run: &Run, file: &str, why: Option<&str>, status: &str, check: &Ch
         let _ = writeln!(r, "Why: {w}");
     }
     let _ = writeln!(r, "Result: {status}");
+    // How many, not which: each is in History under its own entry, and a
+    // list here would be read back as part of this change's own words.
     if !run.earlier.is_empty() {
-        r.push_str("\nEarlier instructions sent with it:\n");
-        for e in &run.earlier {
-            let _ = writeln!(r, "- {}", clean(e, MAX_INSTRUCTION));
-        }
+        let _ = writeln!(r, "\nEarlier changes sent with it: {}", run.earlier.len());
     }
     if !check.scenarios.is_empty() {
         r.push_str("\nScenarios:\n");
@@ -1525,22 +1608,299 @@ pub fn record(run: &Run, file: &str, why: Option<&str>, status: &str, check: &Ch
     r
 }
 
-/// The last [`RECENT`] instructions carried out on `file`, oldest first,
-/// read from History entries (`pages`, oldest first) that [`record`]
-/// wrote; other entries are skipped.
+/// One line of a History page that starts with `key`, trimmed; `None`
+/// when there is none or it is empty.
+fn field(page: &str, key: &str) -> Option<String> {
+    page.lines()
+        .find_map(|l| l.strip_prefix(key))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Every change carried out on `file`, oldest first, read from History
+/// entries (`pages`, oldest first) that [`record`] and the by-hand
+/// changes wrote; other entries are skipped. Each is the instruction,
+/// then its reason and its result on lines of their own under it, as the
+/// `<earlier_instructions>` envelope carries them. A [`SUMMARY`] page for
+/// the file takes the place of everything before it.
 #[must_use]
-pub fn recent<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<String> {
-    let mut out: Vec<String> = pages
-        .into_iter()
-        .filter_map(|p| {
-            let mut lines = p.lines();
-            let i = lines.next()?.strip_prefix(INSTRUCTION)?;
-            let f = lines.next()?.strip_prefix(FILE)?;
-            (f == file && !i.trim().is_empty()).then(|| i.trim().to_string())
-        })
-        .collect();
-    let extra = out.len().saturating_sub(RECENT);
-    out.drain(..extra);
+pub fn history<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in pages {
+        let mut lines = p.lines();
+        let Some(first) = lines.next() else { continue };
+        if let Some(of) = first.strip_prefix(SUMMARY) {
+            if of.trim() != file {
+                continue;
+            }
+            let Some(covers) = lines.next().and_then(|l| l.strip_prefix(COVERS)) else {
+                continue;
+            };
+            let text = clean(&lines.collect::<Vec<_>>().join(" "), MAX_SUMMARY);
+            if text.is_empty() {
+                continue;
+            }
+            out.clear();
+            out.push(format!(
+                "{SUMMARISED}{} earlier changes) {text}",
+                clean(covers, 12)
+            ));
+            continue;
+        }
+        let Some(i) = first.strip_prefix(INSTRUCTION) else {
+            continue;
+        };
+        let Some(f) = lines.next().and_then(|l| l.strip_prefix(FILE)) else {
+            continue;
+        };
+        if f != file || i.trim().is_empty() {
+            continue;
+        }
+        let mut entry = clean(i, MAX_INSTRUCTION);
+        if let Some(w) = field(p, "Why: ") {
+            let _ = write!(entry, "\n  why: {}", clean(&w, MAX_REASON));
+        }
+        if let Some(r) = field(p, "Result: ") {
+            let _ = write!(entry, "\n  result: {}", clean(&r, MAX_REASON));
+        }
+        out.push(entry);
+    }
+    out
+}
+
+/// How the entry that is a summary opens, before the count it covers.
+const SUMMARISED: &str = "(a summary of the ";
+
+/// A History page as the project's history log keeps it
+/// (`sim_projects::SimProjects::log`): a change's instruction, file,
+/// reason and result and nothing else of its record, or a summary page
+/// whole. `None` for a page that is neither. The log outlives the
+/// revisions (a browser keeps twenty), so what was asked and decided is
+/// still known when the version that did it is gone.
+#[must_use]
+pub fn log_entry(page: &str) -> Option<String> {
+    let mut lines = page.lines();
+    let first = lines.next()?;
+    if first.starts_with(SUMMARY) {
+        let covers = lines.next().filter(|l| l.starts_with(COVERS))?;
+        let text = clean(&lines.collect::<Vec<_>>().join(" "), MAX_SUMMARY);
+        return (!text.is_empty()).then(|| format!("{first}\n{covers}\n{text}\n"));
+    }
+    let i = first.strip_prefix(INSTRUCTION).filter(|i| !i.trim().is_empty())?;
+    let f = lines.next()?.strip_prefix(FILE)?;
+    let mut out = format!("{INSTRUCTION}{}\n{FILE}{f}\n", clean(i, MAX_INSTRUCTION));
+    if let Some(w) = field(page, "Why: ") {
+        let _ = writeln!(out, "Why: {}", clean(&w, MAX_REASON));
+    }
+    if let Some(r) = field(page, "Result: ") {
+        let _ = writeln!(out, "Result: {}", clean(&r, MAX_REASON));
+    }
+    Some(out)
+}
+
+/// `text` between `<tag>` and `</tag>`, for the summary agent's message.
+/// Every closing tag inside it is defanged (`<\/`), white space after
+/// the `<` included, so nothing an engineer typed or a model wrote ends
+/// an envelope early or opens another.
+fn tagged(tag: &str, text: &str) -> String {
+    let mut safe = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(k) = rest.find('<') {
+        safe.push_str(&rest[..k]);
+        let after = &rest[k + 1..];
+        safe.push('<');
+        if after.trim_start().starts_with('/') {
+            safe.push('\\');
+        }
+        rest = after;
+    }
+    safe.push_str(rest);
+    format!("<{tag}>\n{safe}\n</{tag}>\n")
+}
+
+/// The relay agent that writes a summary.
+pub const SUMMARY_AGENT: &str = "summary";
+/// The most of a history one request to it carries, in tokens: the
+/// oldest changes beyond that wait for the next summary.
+const SUMMARY_INPUT: usize = 48_000;
+
+/// A summary to ask for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compact {
+    pub file: String,
+    /// How many of the changes in front of the request the summary takes
+    /// over (the summary that already stands aside).
+    pub take: usize,
+    /// How many changes it will stand for in all, with those the earlier
+    /// summary covered.
+    pub covers: usize,
+    /// What goes to [`SUMMARY_AGENT`].
+    pub message: String,
+}
+
+/// The summary to ask for when `earlier` (the file's [`history`]) is past
+/// `budget` tokens: its oldest changes, as many as leave the rest at half
+/// the budget (and no more than one request carries), with the summary
+/// that already stands in front of them. `None` while everything fits,
+/// or when there is nothing but the newest change to give.
+#[must_use]
+pub fn compaction(earlier: &[String], file: &str, budget: usize) -> Option<Compact> {
+    let cost = |e: &String| tokens(e) + 2;
+    let total: usize = earlier.iter().map(cost).sum();
+    if total <= budget {
+        return None;
+    }
+    let (before, was) = match earlier.first().and_then(|e| e.strip_prefix(SUMMARISED)) {
+        Some(rest) => {
+            let (n, text) = rest.split_once(" earlier changes) ")?;
+            (n.trim().parse::<usize>().unwrap_or(0), Some(text))
+        }
+        None => (0, None),
+    };
+    let changes = &earlier[usize::from(was.is_some())..];
+    let mut over = total.saturating_sub(budget / 2);
+    let mut given = 0;
+    let mut take = 0;
+    for e in changes.iter().take(changes.len().saturating_sub(1)) {
+        if over == 0 || given + cost(e) > SUMMARY_INPUT {
+            break;
+        }
+        over = over.saturating_sub(cost(e));
+        given += cost(e);
+        take += 1;
+    }
+    if take == 0 {
+        return None;
+    }
+    let mut message = tagged("file", file);
+    if let Some(text) = was {
+        message.push_str(&tagged("earlier_summary", text));
+    }
+    let mut list = String::new();
+    for e in &changes[..take] {
+        for (k, line) in e.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let _ = writeln!(list, "{}{}", if k == 0 { "- " } else { "  " }, line.trim());
+        }
+    }
+    message.push_str(&tagged("changes", list.trim_end()));
+    Some(Compact {
+        file: file.to_string(),
+        take,
+        covers: before + take,
+        message,
+    })
+}
+
+/// The page that keeps `answer`, the agent's summary, for `ask`; `None`
+/// when the answer is no summary (empty, or far too long to be one). An
+/// answer of `NONE` is kept as a summary that says so: the changes it
+/// covers held nothing to carry on.
+#[must_use]
+pub fn summary_page(ask: &Compact, answer: &str) -> Option<String> {
+    let text = clean(&prose(answer), MAX_SUMMARY);
+    if text.is_empty() || tokens(&text) > 4_000 {
+        return None;
+    }
+    let text = if text.eq_ignore_ascii_case("none") {
+        "Nothing in these changes needs carrying on.".to_string()
+    } else {
+        text
+    };
+    Some(format!("{SUMMARY}{}\n{COVERS}{}\n{text}\n", ask.file, ask.covers))
+}
+
+/// `log` (the project's history log, [`log_entry`] pages, oldest first)
+/// with `page`, the summary asked for with `ask`, in the place of what it
+/// covers: the summary of that file that stood before it, and the
+/// `ask.take` changes to the file after that. Other files' pages and the
+/// file's later changes stay where they are.
+#[must_use]
+pub fn summarised(log: &[String], ask: &Compact, page: &str) -> Vec<String> {
+    let of = |e: &String, key: &str| {
+        let mut l = e.lines();
+        match key {
+            SUMMARY => {
+                l.next().and_then(|f| f.strip_prefix(SUMMARY)).map(str::trim) == Some(ask.file.as_str())
+            }
+            _ => {
+                l.next().is_some_and(|f| f.starts_with(INSTRUCTION))
+                    && l.next().and_then(|f| f.strip_prefix(FILE)) == Some(ask.file.as_str())
+            }
+        }
+    };
+    // What history() reads for the file starts after its last summary.
+    let from = log.iter().rposition(|e| of(e, SUMMARY));
+    let mut out = Vec::with_capacity(log.len() + 1);
+    let mut taken = 0;
+    let mut placed = false;
+    for (k, e) in log.iter().enumerate() {
+        let dead = from.is_some_and(|f| k <= f) && (of(e, SUMMARY) || of(e, INSTRUCTION));
+        let covered = !dead && from.is_none_or(|f| k > f) && of(e, INSTRUCTION) && taken < ask.take;
+        if covered {
+            taken += 1;
+        }
+        if dead || covered {
+            if !placed {
+                out.push(page.to_string());
+                placed = true;
+            }
+            continue;
+        }
+        out.push(e.clone());
+    }
+    if !placed {
+        out.push(page.to_string());
+    }
+    out
+}
+
+/// Longest summary taken from a [`SUMMARY`] page, in characters.
+const MAX_SUMMARY: usize = 24_000;
+
+/// `earlier` cut to `budget` tokens ([`tokens`]): the newest changes word
+/// for word, as many as fit, and in front of them one line that says how
+/// many older ones are left out. A summary at the front ([`history`])
+/// stays as long as it fits with at least the newest change.
+#[must_use]
+pub fn fit(earlier: &[String], budget: usize) -> Vec<String> {
+    let cost = |e: &String| tokens(e) + 2;
+    let total: usize = earlier.iter().map(cost).sum();
+    if total <= budget {
+        return earlier.to_vec();
+    }
+    // Room for the line that says what is missing.
+    let budget = budget.saturating_sub(24);
+    let summary = earlier.first().filter(|e| e.starts_with(SUMMARISED));
+    let rest = &earlier[usize::from(summary.is_some())..];
+    let mut room = budget.saturating_sub(summary.map_or(0, cost));
+    let mut kept = 0;
+    for e in rest.iter().rev() {
+        if cost(e) > room {
+            break;
+        }
+        room -= cost(e);
+        kept += 1;
+    }
+    // A summary that leaves no room for even the newest change goes.
+    let summary = summary.filter(|_| kept > 0 || rest.is_empty());
+    if summary.is_none() && kept == 0 {
+        room = budget;
+        for e in rest.iter().rev() {
+            if cost(e) > room {
+                break;
+            }
+            room -= cost(e);
+            kept += 1;
+        }
+    }
+    let left_out = rest.len() - kept;
+    let mut out = Vec::with_capacity(kept + 2);
+    out.extend(summary.cloned());
+    if left_out > 0 {
+        out.push(format!("({left_out} older changes are not shown)"));
+    }
+    out.extend(rest[rest.len() - kept..].iter().cloned());
     out
 }
 
@@ -2349,7 +2709,8 @@ fn box_ui(
         .as_ref()
         .is_some_and(|o| matches!(o.kind, Kind::Refused | Kind::Failed));
     let tip = format!(
-        "Enter sends; Shift+Enter starts a new line and goes on with a list (- , * or 1. ); Tab indents.\n\
+        "Enter sends; Shift+Enter starts a new line and goes on with a list (- , * or 1. ); Tab indents. \
+         The Up arrow in the empty box brings back the last message you sent.\n\
          Say what {target} should do: it is checked before anything is written."
     );
     // One row of it: the box starts one row tall.
@@ -2362,7 +2723,18 @@ fn box_ui(
         })
         .inner
     } else {
-        chat_box_sized(ui, &mut s.draft, "agent-instruction", hint, tip, height)
+        let out = chat_box_sized(ui, &mut s.draft, "agent-instruction", hint, tip, height);
+        // Up in the empty box: the last message sent, the caret at its end.
+        if out.0.has_focus() && ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) && s.recall() {
+            use egui::text::{CCursor, CCursorRange};
+            let state = egui::TextEdit::load_state(ui.ctx(), out.0.id); // tip: exempt, the box's caret, no control
+            if let Some(mut state) = state {
+                let end = CCursor::new(s.draft.chars().count());
+                state.cursor.set_char_range(Some(CCursorRange::one(end)));
+                state.store(ui.ctx(), out.0.id);
+            }
+        }
+        out
     };
     if failed {
         ui.painter().rect_stroke(
@@ -2713,6 +3085,23 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
                 .selectable(true),
         );
     }
+    // The answer to the clipboard, whole (Nick, 2026-11-24: "I STILL
+    // can't copy agent message outputs").
+    let text = o.copy_text();
+    if !text.is_empty() {
+        let r = crate::glyphs::button_sized(
+            ui,
+            crate::glyphs::Icon::Copy,
+            crate::glyphs::SIZE,
+            true,
+            false,
+            "Copy: copies this answer, in full, as text.",
+        );
+        chrome.hit("agent copy", r.rect);
+        if r.clicked() {
+            ui.ctx().copy_text(text);
+        }
+    }
     if a.tone != Tone::Done && !matches!(o.kind, Kind::Said) {
         let more = match a.more {
             0 => "Details in the Messages".to_string(),
@@ -2724,8 +3113,7 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
             .tip("Opens the Messages, which keep every line of it.");
         chrome.hit("agent details", r.rect);
         if r.clicked() {
-            chrome.trend = true;
-            chrome.bottom = crate::editor::Bottom::Messages;
+            chrome.show_messages();
         }
     }
     if !o.review.is_empty() {
@@ -2789,7 +3177,40 @@ fn fixes_ui(
             }
         });
     }
-    if !fixes.is_empty() {
+    // A word of one's own where the program has a name for it (Nick,
+    // 2026-11-24): the names it could be, a click each.
+    let loose = crate::phrasing::loose(&s.draft, io);
+    for (k, l) in loose.iter().enumerate() {
+        ui.horizontal_wrapped(|ui| {
+            let r = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(format!("\u{201c}{}\u{201d}: use the program's name?", l.from))
+                            .color(t.ink(WARN)),
+                    )
+                    .wrap(),
+                )
+                .tip("The program's own name for it says exactly which input or output you mean.");
+            chrome.hit(format!("phrase loose note {k}"), r.rect);
+            for (j, name) in l.to.iter().enumerate() {
+                let b = ui.button(name).tip(format!(
+                    "Puts {name} in the box in place of \u{201c}{}\u{201d}.",
+                    l.from
+                ));
+                chrome.hit(format!("phrase loose {k} {j}"), b.rect);
+                if b.clicked() {
+                    s.draft = crate::phrasing::apply(
+                        &s.draft,
+                        &crate::phrasing::Fix {
+                            from: l.from.clone(),
+                            to: name.clone(),
+                        },
+                    );
+                }
+            }
+        });
+    }
+    if !fixes.is_empty() || !loose.is_empty() {
         ui.add_space(6.0);
     }
 }

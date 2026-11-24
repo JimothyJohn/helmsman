@@ -498,7 +498,7 @@ fn collect(d: &Diagram, n: NodeId, port: usize, out: &mut Vec<String>) {
 }
 
 fn show(v: Option<Value>) -> String {
-    v.map_or_else(|| "?".to_string(), |v| v.to_string())
+    v.map_or_else(|| "?".to_string(), |v| v.shown())
 }
 
 impl Because {

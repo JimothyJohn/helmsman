@@ -2852,7 +2852,7 @@ impl Viewer {
         );
         let hand = button_sized(
             &mut row,
-            Icon::Hand,
+            Icon::Pan,
             TAP,
             true,
             self.hand,
@@ -2964,7 +2964,7 @@ fn fitted(
 }
 
 pub fn show(v: Option<Value>) -> String {
-    v.map_or_else(|| "–".into(), |v| v.to_string())
+    v.map_or_else(|| "–".into(), |v| v.shown())
 }
 
 fn font(size: f32) -> FontId {
@@ -3317,7 +3317,7 @@ fn value_text(
     let path = match &node.kind {
         NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => path,
         NodeKind::Const { .. } => return None,
-        _ => return Some(v.to_string()),
+        _ => return Some(v.shown()),
     };
     let var = var_of(vars, path);
     if var.is_some_and(|x| x.constant) {
@@ -3325,7 +3325,7 @@ fn value_text(
     }
     match v {
         Value::Int(ns) if !path.contains(['.', '[']) && var.is_some_and(|x| x.ty == "TIME") => {
-            Some(helmsman_diagram::text::time(ns))
+            Some(helmsman_diagram::text::time_shown(ns))
         }
         // A DATE, TOD or DT reads as the literal that writes it.
         Value::Int(ns) if !path.contains(['.', '[']) => {
@@ -3334,10 +3334,10 @@ fn value_text(
                 .filter(|t| t.is_calendar())
             {
                 Some(t) => Some(helmsman_iec::dt::literal(t, ns)),
-                None => Some(v.to_string()),
+                None => Some(v.shown()),
             }
         }
-        v => Some(v.to_string()),
+        v => Some(v.shown()),
     }
 }
 
@@ -4107,6 +4107,15 @@ END_PROGRAM
             "a TIME in its unit, not nanoseconds"
         );
         assert_eq!(
+            value_text(d, read("PERIOD"), Value::Int(1_234_567_890), vars).as_deref(),
+            Some("T#1.23s"),
+            "a running timer reads at three figures"
+        );
+        assert_eq!(
+            value_text(d, read("PERIOD"), Value::Int(2_000_000_000), vars).as_deref(),
+            Some("T#2.00s")
+        );
+        assert_eq!(
             value_text(d, read("N"), Value::Int(7), vars).as_deref(),
             Some("7")
         );
@@ -4146,6 +4155,15 @@ END_PROGRAM
         let real = Value::Real(f64::from(23.7f32));
         assert_eq!(value_text(d, plus, real, vars).as_deref(), Some("23.7"));
         assert_eq!(super::show(Some(real)), "23.7");
+        // Three figures, and the same width while the value moves.
+        let moving = Value::Real(f64::from(49.873_512_f32));
+        assert_eq!(value_text(d, plus, moving, vars).as_deref(), Some("49.9"));
+        assert_eq!(super::show(Some(moving)), "49.9");
+        for i in 0..=100 {
+            let v = Value::Real(f64::from(49.5_f32 + i as f32 * 0.01));
+            assert_eq!(super::show(Some(v)).chars().count(), 4, "{v:?}");
+            assert_eq!(value_text(d, plus, v, vars).unwrap().chars().count(), 4, "{v:?}");
+        }
 
         let ctx = egui::Context::default();
         let mut width = 0.0;

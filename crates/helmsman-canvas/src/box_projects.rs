@@ -127,6 +127,10 @@ pub enum PCall {
     /// `POST /api/devices/discover`: the Devices tab's Scan (answered by
     /// the view, not here).
     Discover,
+    /// `POST /api/devices/discover?address=A`: the Devices tab's Ask, one
+    /// address (the text is the validated IPv4 address, for the answer's
+    /// note).
+    Ask(String),
     /// `GET /api/devices/library?vendor=&product=`: a found device's
     /// profile for the quick form (answered by the view, not here).
     Library,
@@ -193,6 +197,11 @@ pub struct PReq {
     /// The body's `Content-Type`.
     pub ctype: &'static str,
 }
+
+/// The most Agent pages kept for the open project: as many revisions as a
+/// box keeps of one (`MAX_REVISIONS` in helmsman-plc's project history),
+/// so the whole of what the box has can go with an instruction.
+pub const PAGES: usize = 200;
 
 impl fmt::Debug for PReq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -563,6 +572,17 @@ impl BoxProjects {
             PCall::Discover,
             "POST",
             "/api/devices/discover?fresh=1".into(),
+            &json!({}),
+        ));
+    }
+
+    /// Asks the box about the one device at `address` (the Devices tab's
+    /// Ask), for a device that does not answer the scan's broadcast.
+    pub fn ask(&mut self, address: std::net::Ipv4Addr) {
+        self.queue.push(PReq::json(
+            PCall::Ask(address.to_string()),
+            "POST",
+            format!("/api/devices/discover?address={address}"),
             &json!({}),
         ));
     }
@@ -1666,15 +1686,15 @@ impl BoxProjects {
                         .as_array()
                         .map(|a| a.iter().filter_map(revision_row).collect())
                         .unwrap_or_default();
-                    // The latest Agent pages, for the next instruction's
-                    // earlier ones (twice as many as it takes: some are
-                    // for other files).
+                    // Every Agent page the box keeps, for the history that
+                    // goes with the next instruction
+                    // (`instruct::history`): each is read once and kept.
                     let want: Vec<u32> = self
                         .history
                         .iter()
                         .rev()
                         .filter(|r| r.page)
-                        .take(2 * crate::instruct::RECENT)
+                        .take(PAGES)
                         .map(|r| r.n)
                         .filter(|n| !self.pages.contains_key(n))
                         .collect();
@@ -1695,7 +1715,7 @@ impl BoxProjects {
                     && let Some(page) = j["page"].as_str()
                 {
                     self.pages.insert(n, page.to_string());
-                    while self.pages.len() > 4 * crate::instruct::RECENT {
+                    while self.pages.len() > PAGES {
                         self.pages.pop_first();
                     }
                 }
@@ -1956,6 +1976,7 @@ impl BoxProjects {
             | PCall::SavePins
             | PCall::Trend
             | PCall::Discover
+            | PCall::Ask(_)
             | PCall::Library
             | PCall::Wired(_)
             | PCall::FindWired

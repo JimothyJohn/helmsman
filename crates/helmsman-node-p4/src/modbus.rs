@@ -103,6 +103,9 @@ impl<'a> Client<'a> {
         if self.retry_at.is_some_and(|t| Instant::now() < t) {
             return Err(Error::Link("backing off after a failed connect"));
         }
+        if self.failures >= 2 {
+            crate::dial::wait_turn().await;
+        }
         match with_timeout(self.timeout, self.socket.connect(self.endpoint)).await {
             Ok(Ok(())) => {
                 self.connected = true;
@@ -126,7 +129,7 @@ impl<'a> Client<'a> {
     /// after 250 ms, 500 ms, 1 s, and from there every
     /// [`CONNECT_BACKOFF`], which is what a unit that is not there gets.
     fn connect_failed(&mut self) {
-        self.socket.abort();
+        crate::dial::give_up(&mut self.socket);
         self.failures = self.failures.saturating_add(1);
         let wait = match self.failures {
             1 => return,
@@ -198,6 +201,26 @@ impl<'a> Client<'a> {
     /// See [`Self::request`].
     pub async fn write_coils(&mut self, start: u16, values: &[bool]) -> Result<(), Error> {
         let req = pdu::write_coils(start, values)?;
+        let rep = self.request(&req).await?;
+        Ok(reply::echo(&req, &rep)?)
+    }
+
+    /// FC 0x03 or 0x04: `qty` registers from `start`.
+    ///
+    /// # Errors
+    /// See [`Self::request`].
+    pub async fn read_registers(&mut self, fc: u8, start: u16, qty: u16) -> Result<Vec<u16>, Error> {
+        let req = pdu::read(fc, start, qty)?;
+        let rep = self.request(&req).await?;
+        Ok(reply::registers(fc, qty, &rep)?)
+    }
+
+    /// FC 0x10: the registers from `start`, one round trip.
+    ///
+    /// # Errors
+    /// See [`Self::request`].
+    pub async fn write_registers(&mut self, start: u16, values: &[u16]) -> Result<(), Error> {
+        let req = pdu::write_registers(start, values)?;
         let rep = self.request(&req).await?;
         Ok(reply::echo(&req, &rep)?)
     }

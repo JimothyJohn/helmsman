@@ -54,15 +54,16 @@ pub struct ModuleView {
     pub source: String,
 }
 
-/// A signal's value: the node's are booleans and integers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A signal's value: a node's points are booleans, integers and reals.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SignalValue {
     Bool(bool),
     Int(i64),
+    Real(f64),
 }
 
 /// One named point as the canvas lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SignalView {
     pub name: String,
     /// `in` or `out`.
@@ -108,6 +109,9 @@ pub struct NodeView {
     pub board: &'static str,
     /// The I/O map text, for `GET /api/io_map`.
     pub io_map: String,
+    /// The board drives one Modbus TCP block only (the ESP32 nodes): a
+    /// map it is given must pass [`crate::iomap::IoMap::one_block`].
+    pub one_block: bool,
     /// The firmware half (`GET /api/firmware`); `None` on a board that
     /// cannot update itself over the network.
     pub firmware: Option<crate::ota::status::Firmware>,
@@ -184,6 +188,8 @@ fn value(v: Option<SignalValue>) -> Json {
     match v {
         Some(SignalValue::Bool(b)) => json!(b),
         Some(SignalValue::Int(i)) => json!(i),
+        // A real that is not finite has no JSON number: null, as a box says it.
+        Some(SignalValue::Real(x)) => json!(x),
         None => Json::Null,
     }
 }
@@ -231,7 +237,19 @@ pub fn devices(view: &NodeView) -> Json {
 /// `GET /api/io_map`.
 #[must_use]
 pub fn io_map(view: &NodeView) -> Json {
-    json!({ "snapshot": "node", "text": view.io_map })
+    let mut j = json!({ "snapshot": "node", "text": view.io_map });
+    // Where each point sits in the program's process image (`%IX0.0`,
+    // `%ID16`): a box's reply has no such field and a reader that does
+    // not know it ignores it.
+    if let Ok(map) = crate::iomap::parse(&view.io_map) {
+        j["image"] = Json::Array(
+            map.layout()
+                .into_iter()
+                .map(|(name, dir, address)| json!({ "name": name, "dir": dir.area().to_string(), "address": address }))
+                .collect(),
+        );
+    }
+    j
 }
 
 /// The `values` event the canvas's live view is built from.
@@ -555,7 +573,7 @@ Link {link}{ip}.</p>\
 <button type=\"submit\">Save and restart</button>\
 </form>\
 <h2>I/O map</h2>\
-<p>The block this node drives and the names of its points, in the box's io.map format: one <code>device NAME modbus-tcp IP[:PORT] [unit=N]</code> line, then <code>in NAME bool DEVICE di:N</code> and <code>out NAME bool DEVICE coil:N</code> lines. A program reads and writes them as <code>%IX0.N</code> and <code>%QX0.N</code>. Saving restarts the node.</p>\
+<p>The devices this node drives (up to 16, <code>modbus-tcp</code> or <code>enip-io</code>) and the names of their points, in the box's io.map format: <code>device NAME DRIVER IP</code> lines, then <code>in|out NAME bool|int|real DEVICE ADDRESS</code> lines. The program address of each point is listed by <code>GET /api/io_map</code>. Saving restarts the node.</p>\
 <form method=\"post\" action=\"/io_map\">\
 <label>Map <textarea name=\"map\" rows=\"12\" spellcheck=\"false\">{map}</textarea></label>\
 <label>API token <input type=\"password\" name=\"auth\" value=\"\" maxlength=\"64\" autocomplete=\"off\"></label>\
@@ -658,6 +676,7 @@ pub(crate) fn sample_view() -> NodeView {
         version: "0.1.0",
         board: "ESP32-POE-ISO",
         io_map: "device rio modbus-tcp 192.168.3.60\n".into(),
+        one_block: false,
         firmware: Some(crate::ota::status::Firmware {
             version: "0.1.0",
             build: "",
@@ -763,6 +782,18 @@ mod tests {
         assert!(!settings_page(&v, &settings(), None).contains("external memory"));
         assert_eq!(n["net"]["mode"], "dhcp");
         assert_eq!(io_map(&v)["text"], "device rio modbus-tcp 192.168.3.60\n");
+        assert_eq!(io_map(&v)["image"], json!([]), "a map with no points lists none");
+        let mut with_points = v.clone();
+        with_points.io_map = crate::iomap::tests::THREE.into();
+        let image = io_map(&with_points)["image"].clone();
+        assert_eq!(
+            image[0],
+            json!({ "name": "estop", "dir": "I", "address": "%IX0.0" })
+        );
+        assert_eq!(image.as_array().unwrap().len(), 7);
+        let mut broken = v.clone();
+        broken.io_map = "not a map".into();
+        assert!(io_map(&broken).get("image").is_none());
         let sj = settings_json(&settings());
         assert_eq!(sj["token_set"], true);
         assert!(sj.get("token").is_none());

@@ -48,10 +48,7 @@ or output another way ("green lamp" for `GreenLamp`, or `StratPB` for
 in. None of this is sent anywhere.
 
 On a box nothing runs until you deploy it, as with any edit of your own.
-In the simulation the changed program runs at once. To have it load
-stopped instead, with every variable, timer and output back at its
-start, turn on **View › Reset after a described change**; the choice is
-remembered in this browser.
+In the simulation the changed program runs at once.
 
 The instruction box is at the top of the tab, one row tall. It grows as
 you type, to four rows, and scrolls inside after that. Under it are the
@@ -148,9 +145,16 @@ the answer back.
 
 ## Follow-ups
 
-Each instruction goes to Helmsman with the whole file and the last five
-instructions carried out on that file, read from History. So "now make it
-blink faster" works: Helmsman knows what "it" is, even after a reload.
+Each instruction goes to Helmsman with the whole file and the history of
+that file, read from History: every change made to it, oldest first, each
+with what was asked, why, and how it came out. So "now make it blink
+faster" works, Helmsman knows what "it" is even after a reload, and a
+decision made weeks ago is still known. In the browser this history is
+kept with the project, apart from its versions, so it is still there
+after old versions have gone, and it is in the project's download. When
+it grows very long, Helmsman writes up the oldest changes once as a short
+summary, which takes their place; the newest changes always go word for
+word.
 To start over, describe the whole behaviour in the instruction.
 
 ## What a change may touch

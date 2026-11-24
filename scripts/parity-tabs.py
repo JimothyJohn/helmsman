@@ -37,13 +37,15 @@ FEATURES = os.path.join(ROOT, "docs", "FEATURES.md")
 # the 1400 x 860 point window drawn at 2 px a point (docs/UI.md).
 KEY = "helmsman-canvas/editor"
 W, H, S = 1400, 860, 2
-# The side pane's tabs, in their first order, and the bottom panel's.
+# The side pane's tabs, in their first order, and the panels that are not
+# tabs: the trend along the bottom from the left pane's edge and the
+# Messages at the foot of the left pane, under its tabs (2026-11-24).
 PANES = ("claude", "code", "io", "devices", "files", "history")
 BOTTOM = ("trend", "messages")
-# Where a tab's content is, in points: the left pane under its tab row, and
-# the bottom panel under its tabs.
-PANE_BODY = (0, 66, 300, 480)
-BOTTOM_BODY = (330, 620, 700, 200)
+# Where a tab's content is, in points: the left pane under its tab row, the
+# trend under the diagram, the Messages beside it at the pane's foot.
+PANE_BODY = (0, 90, 300, 225)
+BOTTOM_BODY = {"trend": (330, 545, 1070, 315), "messages": (0, 650, 300, 200)}
 # Console lines the seeding itself causes (the seed URL is not the app).
 EXPECTED = ["/__seed", "status of 404", "favicon"]
 # Served from loopback (--dist) only: the page asks the deployed demo relay
@@ -58,11 +60,11 @@ def manifest_tabs(path=FEATURES):
         return sorted(set(re.findall(r"`tab:([a-z0-9-]+)`", f.read())))
 
 
-def layout(pane="code", bottom="trend"):
+def layout(pane="code", msgs=1):
     """The layout string the canvas reads (canvas-smoke.py `layout`)."""
     return (
         f"dock=2 left=1 right=1 lefts={','.join(PANES)} pane={pane}"
-        f" scan=0 trend=1 bottom={bottom} light=0"
+        f" scan=0 trend=1 msgs={msgs} light=0"
     )
 
 
@@ -89,7 +91,7 @@ def open_tab(browser, base, key, out):
     if key in PANES:
         lay, region = layout(pane=key), PANE_BODY
     elif key in BOTTOM:
-        lay, region = layout(bottom=key), BOTTOM_BODY
+        lay, region = layout(), BOTTOM_BODY[key]
     else:
         return [f"[{key}] docs/FEATURES.md names a tab this script cannot show: add it to PANES or BOTTOM"], None
     ctx = browser.new_context(viewport={"width": W * S, "height": H * S}, device_scale_factor=S, color_scheme="dark")

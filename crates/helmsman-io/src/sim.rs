@@ -17,10 +17,10 @@ use std::time::Duration;
 
 use crate::modbus::{
     COIL_OFF, COIL_ON, ENCAPSULATED_INTERFACE, ILLEGAL_DATA_ADDRESS, ILLEGAL_DATA_VALUE, ILLEGAL_FUNCTION,
-    MAX_PDU, MAX_READ_BITS, MAX_READ_REGS, MAX_WRITE_REGS, MBAP_LEN, MEI_READ_DEVICE_ID,
+    MAX_PDU, MAX_READ_BITS, MAX_READ_REGS, MAX_WRITE_COILS, MAX_WRITE_REGS, MBAP_LEN, MEI_READ_DEVICE_ID,
     OBJECT_MAJOR_MINOR_REVISION, OBJECT_PRODUCT_CODE, OBJECT_VENDOR_NAME, READ_COILS, READ_DISCRETE_INPUTS,
-    READ_HOLDING_REGISTERS, READ_INPUT_REGISTERS, SERVER_DEVICE_FAILURE, WRITE_MULTIPLE_REGISTERS,
-    WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER,
+    READ_HOLDING_REGISTERS, READ_INPUT_REGISTERS, SERVER_DEVICE_FAILURE, WRITE_MULTIPLE_COILS,
+    WRITE_MULTIPLE_REGISTERS, WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER,
 };
 
 /// A misbehaviour for the next request(s).
@@ -239,6 +239,7 @@ impl State {
 
     /// Answers one request PDU (App §6), or an exception (App §7).
     #[must_use]
+    #[allow(clippy::too_many_lines)] // one arm a function code
     pub fn handle(&mut self, pdu: &[u8]) -> Vec<u8> {
         let Some(&fc) = pdu.first() else {
             return vec![0x80, ILLEGAL_FUNCTION];
@@ -304,6 +305,26 @@ impl State {
                 self.coils[usize::from(addr)] = v == COIL_ON;
                 self.apply_wires();
                 pdu.to_vec()
+            }
+            WRITE_MULTIPLE_COILS => {
+                let (Some(start), Some(qty), Some(&n)) = (word(1), word(3), pdu.get(5)) else {
+                    return ex(ILLEGAL_DATA_VALUE);
+                };
+                if qty == 0
+                    || qty > MAX_WRITE_COILS
+                    || usize::from(n) != usize::from(qty).div_ceil(8)
+                    || pdu.len() != 6 + usize::from(n)
+                {
+                    return ex(ILLEGAL_DATA_VALUE);
+                }
+                let Some(r) = range(bit_holes, self.coils.len(), start, qty) else {
+                    return ex(ILLEGAL_DATA_ADDRESS);
+                };
+                for (i, slot) in self.coils[r].iter_mut().enumerate() {
+                    *slot = pdu[6 + i / 8] & (1 << (i % 8)) != 0;
+                }
+                self.apply_wires();
+                pdu[..5].to_vec()
             }
             WRITE_SINGLE_REGISTER => {
                 let (Some(addr), Some(v), 5) = (word(1), word(3), pdu.len()) else {

@@ -18,7 +18,7 @@ use eframe::egui::{self, Rect, RichText, Vec2};
 use serde_json::{Value as Json, json};
 
 use crate::box_projects::{Answer, PCall, PReq};
-use crate::editor::{BOTTOM_H, Bottom, Chrome, LEFT_W, Pane, RIGHT_W};
+use crate::editor::{BOTTOM_H, Chrome, LEFT_W, Pane, RIGHT_W};
 use crate::st_view::TAP;
 use crate::theme::theme;
 use crate::tips::Tip;
@@ -53,6 +53,8 @@ pub struct Sizes {
 }
 
 /// One arrangement of the panes.
+// Independent switches, not states of one thing.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaneLayout {
     /// The left pane's tabs, in order.
@@ -68,8 +70,8 @@ pub struct PaneLayout {
     pub left: bool,
     pub right: bool,
     pub trend: bool,
-    /// The bottom panel's tab.
-    pub bottom: Bottom,
+    /// The Messages under the left pane's tab are open.
+    pub msgs: bool,
     pub sizes: Sizes,
 }
 
@@ -93,7 +95,7 @@ impl Chrome {
             left: self.left,
             right: self.right,
             trend: self.trend,
-            bottom: self.bottom,
+            msgs: self.msgs,
             sizes: self.sizes,
         }
     }
@@ -109,7 +111,7 @@ impl Chrome {
         self.left = l.left;
         self.right = l.right;
         self.trend = l.trend;
-        self.bottom = l.bottom;
+        self.msgs = l.msgs;
         self.tidy();
         self.resize = Some(Sizes {
             left: Some(l.sizes.left.unwrap_or(LEFT_W)),
@@ -139,14 +141,13 @@ pub fn presets() -> Vec<Preset> {
         },
         Preset {
             name: "Programming",
-            tip: "The Describe tab on the left and the code on the right, with the messages along the bottom.",
+            tip: "The Describe tab on the left and the code on the right, with the trend along the bottom.",
             layout: PaneLayout {
                 lefts: vec![Claude, Files, History],
                 rights: vec![Code, Io, Devices],
                 pane: Claude,
                 side: Code,
                 right: true,
-                bottom: Bottom::Messages,
                 sizes: Sizes {
                     right: Some(420.0),
                     ..Sizes::default()
@@ -242,7 +243,8 @@ impl PaneLayout {
             "left_open": self.left,
             "right_open": self.right,
             "bottom_open": self.trend,
-            "bottom_shows": self.bottom.key(),
+            "bottom_shows": "trend",
+            "messages_open": self.msgs,
         });
         for (k, s) in [
             ("left_width", self.sizes.left),
@@ -279,10 +281,7 @@ impl PaneLayout {
         c.left = v["left_open"].as_bool().unwrap_or(c.left);
         c.right = v["right_open"].as_bool().unwrap_or(c.right);
         c.trend = v["bottom_open"].as_bool().unwrap_or(c.trend);
-        c.bottom = v["bottom_shows"]
-            .as_str()
-            .and_then(Bottom::from_key)
-            .unwrap_or_default();
+        c.msgs = v["messages_open"].as_bool().unwrap_or(c.msgs);
         c.sizes = Sizes {
             left: size(&v["left_width"]),
             right: size(&v["right_width"]),

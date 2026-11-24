@@ -640,6 +640,13 @@ impl SimProjects {
     /// [`Self::save`], recorded in the project's history as `what`, with
     /// the Agent `page` the change came from when there was one.
     pub fn save_as(&mut self, what: &str, page: Option<&str>) {
+        // A change's page goes into the history log too, which is saved
+        // with the files below and outlives this revision.
+        if let Some(entry) = page.and_then(crate::instruct::log_entry) {
+            let mut log = self.log();
+            log.push(entry);
+            self.log_write(&log);
+        }
         let files = Files(self.files.clone());
         if let Err(e) = files.check() {
             self.note(format!("Not saved: {}", e.join("; ")), true);
@@ -692,6 +699,65 @@ impl SimProjects {
             let extra = revs.len() - MAX_SIM_REVISIONS;
             revs.drain(..extra);
         }
+    }
+
+    /// The open project's history log, oldest first: what was asked of
+    /// each file, why, and how it came out (`instruct::log_entry` pages),
+    /// with a summary where older entries were written up. Kept in the
+    /// project's `agent.md` (`helmsman_project::agent`: saved and zipped
+    /// with the project, in no revision), so it is still there when the
+    /// revisions it tells of are gone: a browser keeps
+    /// [`MAX_SIM_REVISIONS`]. A project from before the log has the pages
+    /// of the revisions it still holds.
+    #[must_use]
+    pub fn log(&self) -> Vec<String> {
+        let kept: Vec<String> = self
+            .files
+            .get(helmsman_project::AGENT)
+            .map(|t| helmsman_project::agent::parse(t))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| crate::instruct::log_entry(&p.answer))
+            .collect();
+        if !kept.is_empty() {
+            return kept;
+        }
+        self.revisions()
+            .iter()
+            .filter_map(|r| r.page.as_deref().and_then(crate::instruct::log_entry))
+            .collect()
+    }
+
+    /// Writes `log` as the open project's history log, into its files and
+    /// into what is stored of it (the log is no edit: it never makes the
+    /// project unsaved).
+    fn log_write(&mut self, log: &[String]) {
+        let pages: Vec<helmsman_project::agent::Page> = log
+            .iter()
+            .map(|e| helmsman_project::agent::Page {
+                // A heading for someone reading agent.md; the entry is the answer.
+                question: e.lines().next().unwrap_or_default().chars().take(80).collect(),
+                asked: String::new(),
+                answer: e.clone(),
+            })
+            .collect();
+        let text = helmsman_project::agent::render(&pages);
+        self.files.insert(helmsman_project::AGENT.into(), text.clone());
+        if let Some(saved) = self.saved.get_mut(&self.open) {
+            saved.0.insert(helmsman_project::AGENT.into(), text);
+        }
+    }
+
+    /// The summary `page`, asked for with `ask`, takes the place of the
+    /// log entries it covers (`instruct::summarised`), and the log is
+    /// stored.
+    pub fn log_summarise(&mut self, ask: &crate::instruct::Compact, page: &str) {
+        if self.is_example() {
+            return;
+        }
+        let log = crate::instruct::summarised(&self.log(), ask, page);
+        self.log_write(&log);
+        self.persist();
     }
 
     /// The open project's revisions, oldest first.
