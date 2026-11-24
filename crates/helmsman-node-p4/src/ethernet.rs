@@ -33,10 +33,10 @@ use crate::board::{self, EthPins};
 /// takes them (esp-hal's example uses 10 and 10).
 pub const RX_FRAMES: usize = 10;
 pub const TX_FRAMES: usize = 10;
-/// Sockets the stack holds: DHCP, the TCP links (Modbus, the explicit
-/// session), the UDP I/O socket, two HTTP connections, the beacon, the
-/// UDP log, spare. smoltcp panics on a socket past this.
-pub const SOCKETS: usize = 10;
+/// Sockets the stack holds: DHCP, one TCP link a device (16: Modbus or the explicit
+/// session), the UDP I/O socket, two HTTP connections, the firmware fetch, the beacon, the
+/// UDP log, spare (1 + 16 + 1 + 2 + 1 + 1 + 1 = 23). smoltcp panics on a socket past this.
+pub const SOCKETS: usize = 24;
 /// How often the PHY is asked about the link.
 pub const LINK_POLL: Duration = Duration::from_millis(500);
 

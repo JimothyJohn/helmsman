@@ -141,7 +141,7 @@ fn what_a_port_cannot_run_is_refused_with_its_line() {
         );
         assert_eq!(e.line, *line, "{from:?} -> {to:?}: {e}");
     }
-    let long = format!("{MAP}{}", "#".repeat(2048));
+    let long = format!("{MAP}{}", "#".repeat(iomap::MAX_TEXT));
     assert_eq!(parse(&long, 2).unwrap_err().line, 0);
     let points: Vec<String> = (0..33).map(|i| format!("in p{i} bool d pd:{i}")).collect();
     let many = format!("device d iolink port=1\n{}\n", points.join("\n"));

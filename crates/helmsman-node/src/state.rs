@@ -217,6 +217,7 @@ pub fn view(
             version: helmsman_nodecore::VERSION,
             board,
             io_map,
+            one_block: true,
             firmware: None,
         }
     })
@@ -234,16 +235,10 @@ pub struct PointNames {
 impl PointNames {
     /// The names a map gives its points.
     #[must_use]
-    pub fn of(map: &helmsman_nodecore::iomap::IoMap) -> Self {
-        let own = |points: &[helmsman_nodecore::iomap::Point]| {
-            helmsman_nodecore::iomap::IoMap::names(points)
-                .into_iter()
-                .map(|n| n.map(String::from))
-                .collect()
-        };
+    pub fn of(block: &helmsman_nodecore::iomap::OneBlock) -> Self {
         Self {
-            inputs: own(&map.inputs),
-            outputs: own(&map.outputs),
+            inputs: block.inputs.clone(),
+            outputs: block.outputs.clone(),
         }
     }
 }
