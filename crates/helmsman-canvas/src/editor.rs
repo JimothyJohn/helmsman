@@ -1826,8 +1826,8 @@ pub struct Pressed {
     pub errors: bool,
 }
 
-/// The header's right end, right to left: Deploy as a filled green
-/// button with a black arrow ("code deploy"), then a red ✖ with the count
+/// The header's right end, right to left: Deploy as a filled yellow
+/// button with a black arrow, the row's height ("code deploy"), then a red ✖ with the count
 /// when the code has errors ("code errors"), its popup the first error.
 pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> Pressed {
     let mut out = Pressed::default();
