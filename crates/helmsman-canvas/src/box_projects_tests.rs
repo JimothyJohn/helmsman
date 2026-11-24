@@ -5187,3 +5187,59 @@ fn the_first_sign_in_asks_for_the_projects_a_locked_box_refused() {
     bv.step_all(&ctx, vec![], vec![], 0.3);
     assert_eq!(asked(&mut bv), 0, "and not on every step");
 }
+
+/// Nick 2026-11-24: "there needs to be a deploy button on the agent tab as
+/// well ... make it pulse or something to indicate that it's required".
+/// The Agent tab has Deploy; it says the program is not running yet while
+/// an edit waits, and pressing it sends the program as the Code tab's does.
+#[test]
+fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
+    use crate::remote::Fetch;
+    const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let mut bv = BoxView::new();
+    bv.projects.available = Some(false);
+    bv.state.apply(
+        Msg::Got(
+            Fetch::Modules,
+            Ok(r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#.into()),
+        ),
+        1.0,
+    );
+    bv.state.select("drive");
+    let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
+    bv.state.apply(
+        Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+        1.1,
+    );
+    bv.node_token = true;
+    bv.watches_node = true;
+    bv.projects.track_module("drive", SRC);
+    let mut h = Harness::new(bv, None);
+    // The Skipper's token, held as the sign-in panel holds it.
+    let r = h.app.review.as_mut().unwrap();
+    r.token_held = true;
+    r.remote = Some("http://10.0.0.41:8088".into());
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("agent deploy").is_some(),
+        "Deploy is on the Agent tab"
+    );
+    assert!(
+        h.app.chrome.rect("agent deploy pending").is_none(),
+        "nothing waits: no pulse"
+    );
+    h.bv().projects.module.as_mut().unwrap().text = SRC.replace("slew := 0;", "slew := 500;");
+    h.wait(0.1);
+    assert!(
+        h.app.chrome.rect("agent deploy pending").is_some(),
+        "an edit waits: it says so"
+    );
+    assert!(h.drew("Not running yet"));
+    h.press("agent deploy");
+    let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(
+        (sent[0].method, sent[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
+    );
+}

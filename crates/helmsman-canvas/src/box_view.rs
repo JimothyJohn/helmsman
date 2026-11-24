@@ -1717,6 +1717,8 @@ impl BoxView {
         let spec_off = self.spec_entry_blocked();
         let design_off = self.design_blocked();
         let mut design_act = None;
+        let deploy_state = self.agent_deploy();
+        let mut deploy_go = false;
         let (act, help_act) = egui::ScrollArea::vertical()
             .id_salt("box-agent")
             .show(ui, |ui| {
@@ -1734,6 +1736,7 @@ impl BoxView {
                 match self.help.mode {
                     Mode::Code => {
                         let act = crate::instruct::ui(ui, chrome, &mut self.instruct, &view);
+                        deploy_go = deploy_row(ui, chrome, &deploy_state);
                         ui.horizontal_wrapped(|ui| {
                             let r = ui
                                 .add_enabled(
@@ -1763,6 +1766,9 @@ impl BoxView {
                 }
             })
             .inner;
+        if deploy_go {
+            self.deploy();
+        }
         if let Some(a) = design_act {
             self.design_act(a, &ctx);
         }
@@ -2396,6 +2402,37 @@ impl BoxView {
             return;
         };
         editor::st_editor(ui, id, &mut m.text, &[], &[], MAX_FILE, chrome);
+    }
+
+    /// The Agent tab's Deploy: whether it may be pressed, whether what is
+    /// saved is not running yet, and where it goes.
+    fn agent_deploy(&self) -> AgentDeploy {
+        let (ready, pending) = if self.has_projects() {
+            let dirty = self
+                .projects
+                .open
+                .as_ref()
+                .is_some_and(|o| o.bufs.values().any(crate::box_projects::Buf::dirty));
+            (self.writable(), self.projects.undeployed || dirty)
+        } else {
+            (
+                self.module_writable(),
+                self.projects
+                    .module
+                    .as_ref()
+                    .is_some_and(crate::box_projects::ModuleEdit::dirty),
+            )
+        };
+        let ready = if self.projects.deploy.busy() {
+            Err("Deploying…".to_string())
+        } else {
+            ready
+        };
+        AgentDeploy {
+            ready,
+            pending,
+            to_node: self.watches_node,
+        }
     }
 
     #[must_use]
@@ -3837,4 +3874,59 @@ fn box_locate<'a>(
         Some(at) => running.then_some(at),
         None => single().map(|f| (f, l)),
     }
+}
+
+/// What the Agent tab's Deploy row shows ([`BoxView::agent_deploy`]).
+struct AgentDeploy {
+    ready: Result<(), String>,
+    /// Saved changes that are not running yet: the button pulses.
+    pending: bool,
+    /// Deploy sends to the Skipper this page watches.
+    to_node: bool,
+}
+
+/// The Agent tab's Deploy (Nick, 2026-11-24: "there needs to be a deploy
+/// button on the agent tab as well ... make it pulse or something to
+/// indicate that it's required"): the Code tab's yellow arrow, with a ring
+/// that pulses while what the agent (or anyone) saved is not running, and
+/// a line that says so. Whether it was pressed.
+fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
+    let t = theme(ui);
+    let mut go = false;
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let where_to = if s.to_node { "the Skipper" } else { "the box" };
+        let tip = match &s.ready {
+            Ok(()) => format!("Deploy: checks this version, replays it in the simulation if the policy asks, and runs it on {where_to}."),
+            Err(why) => why.clone(),
+        };
+        let r = crate::glyphs::deploy(ui, s.ready.is_ok()).tip(tip);
+        chrome.hit("agent deploy", r.rect);
+        go = r.clicked();
+        if s.pending && s.ready.is_ok() {
+            // A ring that breathes about once a second, and nothing else
+            // moves: the eye finds it without the page flashing.
+            let time = ui.input(|i| i.time);
+            #[allow(clippy::cast_possible_truncation)]
+            let phase = ((time * std::f64::consts::TAU).sin() * 0.5 + 0.5) as f32;
+            let grow = 1.0 + 4.0 * phase;
+            ui.painter().rect_stroke(
+                r.rect.expand(grow),
+                egui::CornerRadius::same(7),
+                egui::Stroke::new(2.0, crate::st_view::brand::YELLOW.gamma_multiply(1.0 - 0.7 * phase)),
+                egui::StrokeKind::Outside,
+            );
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+            let l = ui.label(
+                RichText::new(format!("Not running yet: deploy to run it on {where_to}."))
+                    .color(t.accent)
+                    .size(crate::theme::BODY),
+            );
+            chrome.hit("agent deploy pending", l.rect);
+        } else if s.ready.is_ok() {
+            ui.label(RichText::new("Deploy").color(t.muted).size(crate::theme::BODY));
+        }
+    });
+    go
 }
