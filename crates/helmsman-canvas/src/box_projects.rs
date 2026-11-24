@@ -209,6 +209,16 @@ pub struct PReq {
 /// so the whole of what the box has can go with an instruction.
 pub const PAGES: usize = 200;
 
+impl PCall {
+    /// Whether the call is the watched node's (`?box=`): a module deploy
+    /// and the map window's check and download. The rest are the serving
+    /// box's.
+    #[must_use]
+    pub const fn on_node(&self) -> bool {
+        matches!(self, Self::DeployModule(_) | Self::NodeMap(_))
+    }
+}
+
 impl fmt::Debug for PReq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PReq")
@@ -420,6 +430,10 @@ pub struct BoxProjects {
     /// The running module being edited, on a box or Skipper without
     /// projects (`PUT /api/modules/{name}`).
     pub module: Option<ModuleEdit>,
+    /// Deploy sends the checked project to the watched node (a page a box
+    /// served, watching a Skipper with `?box=`) instead of running it on
+    /// the box.
+    pub to_node: bool,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
     /// How the box would check a project made now (its image sizes and
@@ -547,6 +561,24 @@ fn short(s: &str) -> &str {
     s.get(..8).unwrap_or(s)
 }
 
+/// What a node is sent for a project: every ST file but the requirement
+/// tests (`test_*.st`), in name order, one after another.
+#[must_use]
+pub fn node_source(o: &OpenProject) -> String {
+    let mut out = String::new();
+    for (name, b) in &o.bufs {
+        let lower = name.to_ascii_lowercase();
+        if !lower.ends_with(".st") || lower.starts_with("test_") {
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&b.text);
+    }
+    out
+}
+
 /// A running module's source being edited where there are no projects:
 /// a Skipper, or a box run without `--projects`. The box's copy is what it
 /// last said it runs; the edits stay until a deploy of them succeeds.
@@ -597,6 +629,45 @@ impl BoxProjects {
                 });
             }
         }
+    }
+
+    /// The checked project, to the watched node: its one program and the
+    /// project's other ST files (function blocks), as one source, under
+    /// the program's name. The box's lint holds still hold it; the box's
+    /// approval policy is the box's own and does not apply to a node,
+    /// which takes a write on its token.
+    fn send_to_node(&mut self, project: &str, check: &Json) {
+        let held: Vec<&str> = check["held"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+            .collect();
+        if !held.is_empty() {
+            self.deploy = Deploy::Failed(format!("{project} was not sent: {}", held.join("; ")));
+            return;
+        }
+        let [module] = self.modules.as_slice() else {
+            self.deploy = Deploy::Failed(format!(
+                "A Skipper runs one program; {project} builds {}: {}.",
+                self.modules.len(),
+                self.modules.join(", ")
+            ));
+            return;
+        };
+        let module = module.clone();
+        let Some(o) = &self.open else { return };
+        let source = node_source(o);
+        self.module = Some(ModuleEdit {
+            name: module.clone(),
+            base: String::new(),
+            text: source.clone(),
+            seen: String::new(),
+            sent: None,
+        });
+        // The check is over; the send is the deploy's last step.
+        self.deploy = Deploy::Idle;
+        self.deploy_module();
     }
 
     /// Sends the edited module to the box, which compiles it and runs it
@@ -1506,7 +1577,19 @@ impl BoxProjects {
     pub fn answer_for(&mut self, call: PCall, a: &Answer, signed_in: bool) {
         let ok = (200..300).contains(&a.status);
         let j: Json = serde_json::from_str(&a.body).unwrap_or(Json::Null);
-        if a.status == 401 {
+        if a.status == 401 && call.on_node() {
+            // The watched node refused its token: the box's session is fine.
+            if let Some(m) = &mut self.module {
+                m.sent = None;
+            }
+            if self.deploy.busy() {
+                self.deploy = Deploy::Failed(
+                    "The Skipper refused the token: enter its token under Sign in (top right).".into(),
+                );
+            }
+            return;
+        }
+        if a.status == 401 && !call.on_node() {
             self.ended = true;
             self.saving_layout = None;
             if self.deploy.busy() {
@@ -1939,7 +2022,9 @@ impl BoxProjects {
                             .collect()
                     })
                     .unwrap_or_default();
-                if j["approval"]["needs"]["replay"].as_bool() == Some(true) {
+                if self.to_node {
+                    self.send_to_node(&name, &j);
+                } else if j["approval"]["needs"]["replay"].as_bool() == Some(true) {
                     self.replay(&name);
                 } else {
                     self.deploy_now(&name, None);

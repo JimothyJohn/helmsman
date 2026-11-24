@@ -448,3 +448,148 @@ fn the_module_editor_follows_the_box_without_losing_edits() {
         ("chase", "PROGRAM chase\nEND_PROGRAM\n")
     );
 }
+
+/// A project open on a box, as `BoxProjects` holds it after opening.
+fn opened(files: &[(&str, &str)]) -> crate::box_projects::OpenProject {
+    crate::box_projects::OpenProject {
+        name: "skipper_drive".into(),
+        bufs: files
+            .iter()
+            .map(|(n, t)| {
+                (
+                    (*n).to_string(),
+                    crate::box_projects::Buf {
+                        text: (*t).into(),
+                        base: (*t).into(),
+                        loaded: true,
+                        ..crate::box_projects::Buf::default()
+                    },
+                )
+            })
+            .collect(),
+        current: Some("main.st".into()),
+        runs: None,
+    }
+}
+
+fn check_answer(body: serde_json::Value) -> crate::box_projects::Answer {
+    crate::box_projects::Answer {
+        status: 200,
+        retry_after: None,
+        body: body.to_string(),
+    }
+}
+
+const FB: &str = "FUNCTION_BLOCK ramp\nVAR_INPUT x : DINT; END_VAR\nEND_FUNCTION_BLOCK\n";
+const TEST: &str = "PROGRAM test_drive\nEND_PROGRAM\n";
+
+/// Nick 2026-11-24 (the agent on a Skipper page): a page a box served
+/// deploys the checked project to the Skipper it watches: the program and
+/// its function blocks as one source, never the requirement tests or the
+/// map, under the program's name, which the Skipper's router takes.
+#[test]
+fn a_checked_project_goes_to_the_watched_skipper_as_one_program() {
+    use crate::box_projects::{BoxProjects, Deploy, PCall};
+    use helmsman_nodecore::router::{Effect, Outcome};
+    let mut p = BoxProjects::default();
+    p.available = Some(true);
+    p.open = Some(opened(&[
+        ("main.st", NEW),
+        ("ramp.st", FB),
+        ("test_drive.st", TEST),
+        ("io.map", "device drive enip-io 192.168.33.1\n"),
+    ]));
+    p.to_node = true;
+    p.deploy = Deploy::Checking;
+    p.answer(
+        PCall::Check("skipper_drive".into()),
+        &check_answer(serde_json::json!({
+            "ok": true, "held": [], "diagnostics": [], "warnings": [],
+            "modules": [{"name": "drive", "file": "main.st"}],
+            "approval": {"needs": {"replay": true}}
+        })),
+    );
+    let reqs = p.poll();
+    assert_eq!(reqs.len(), 1, "no replay or box deploy: {reqs:?}");
+    let q = &reqs[0];
+    assert!(q.call.on_node());
+    assert_eq!((q.method, q.url.as_str()), ("PUT", "/api/modules/drive"));
+    let Outcome::Effect(Effect::Deploy { name, source }) = routed(q, "bench-token-2026") else {
+        panic!("the Skipper's router did not take it")
+    };
+    assert_eq!(name, "drive");
+    assert!(
+        source.contains("slew := 5000;") && source.contains("FUNCTION_BLOCK ramp"),
+        "{source}"
+    );
+    assert!(
+        !source.contains("test_drive"),
+        "requirement tests stay on the box: {source}"
+    );
+    assert!(
+        !source.contains("enip-io"),
+        "the map is not program text: {source}"
+    );
+}
+
+/// What the box's lint holds is not sent; nor is a project of two programs
+/// (a Skipper runs one); nothing reaches the Skipper either way.
+#[test]
+fn a_held_or_two_program_project_is_not_sent_to_a_skipper() {
+    use crate::box_projects::{BoxProjects, Deploy, PCall};
+    for (body, says) in [
+        (
+            serde_json::json!({"ok": true, "held": ["main.st:3:5: tick (TON) is called inside an IF"],
+                "modules": [{"name": "drive"}], "approval": {"needs": {}}}),
+            "called inside an IF",
+        ),
+        (
+            serde_json::json!({"ok": true, "held": [],
+                "modules": [{"name": "drive"}, {"name": "other"}], "approval": {"needs": {}}}),
+            "runs one program",
+        ),
+    ] {
+        let mut p = BoxProjects::default();
+        p.available = Some(true);
+        p.open = Some(opened(&[("main.st", NEW)]));
+        p.to_node = true;
+        p.deploy = Deploy::Checking;
+        p.answer(PCall::Check("skipper_drive".into()), &check_answer(body));
+        assert_eq!(p.poll().len(), 0);
+        let Deploy::Failed(why) = &p.deploy else {
+            panic!("{:?}", p.deploy)
+        };
+        assert!(why.contains(says), "{why}");
+    }
+}
+
+/// A Skipper that refuses the token is the token's fault: the box's own
+/// session is not ended, and the page says where the token goes.
+#[test]
+fn a_skipper_refusing_the_token_leaves_the_box_session_alone() {
+    use crate::box_projects::{Answer, BoxProjects, Deploy, PCall};
+    let mut p = BoxProjects::default();
+    p.available = Some(false);
+    p.track_module("drive", OLD);
+    p.module.as_mut().unwrap().text = NEW.into();
+    p.deploy_module();
+    let _ = p.poll();
+    p.answer(
+        PCall::DeployModule("drive".into()),
+        &Answer {
+            status: 401,
+            retry_after: None,
+            body: r#"{"error":"a token is needed"}"#.into(),
+        },
+    );
+    assert!(!p.ended, "the box's session is not the Skipper's token");
+    let Deploy::Failed(why) = &p.deploy else {
+        panic!("{:?}", p.deploy)
+    };
+    assert!(why.contains("token"), "{why}");
+    assert!(p.module.as_ref().unwrap().dirty(), "the edits stay");
+    // Only the watched node's calls go there; the box's stay at home.
+    assert!(PCall::DeployModule("x".into()).on_node());
+    assert!(!PCall::Check("x".into()).on_node());
+    assert!(!PCall::List.on_node());
+}

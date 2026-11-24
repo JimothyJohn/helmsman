@@ -83,6 +83,15 @@ pub fn set_base(origin: &str) {
     BASE.with(|b| *b.borrow_mut() = Some(origin.trim_end_matches('/').to_string()));
 }
 
+/// Whether `url` goes to the base origin ([`set_base`]).
+fn is_remote(url: &str) -> bool {
+    BASE.with(|b| {
+        b.borrow()
+            .as_ref()
+            .is_some_and(|base| url.starts_with(base.as_str()))
+    })
+}
+
 /// `url` on the base origin, when one is set; `url` itself otherwise.
 fn absolute(url: &str) -> String {
     BASE.with(|b| match &*b.borrow() {
@@ -243,7 +252,7 @@ async fn get(url: &str) -> (Option<String>, Result<String, String>) {
 
 async fn get_body(url: &str, build: &mut Option<String>) -> Result<String, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init("GET")?;
+    let (init, headers) = init("GET", url)?;
     init.set_headers(&headers);
     // A reply that never comes would leave its read "asked" for ever.
     let controller = web_sys::AbortController::new().map_err(|e| text(&e))?;
@@ -561,12 +570,16 @@ impl Http {
 /// CORS, no cookie (the page has none there), and the token the person
 /// gave for it ([`set_token`]) as `Authorization: Bearer`, which the node
 /// answers a preflight for.
-fn init(method: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String> {
+fn init(method: &str, url: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String> {
     let init = web_sys::RequestInit::new();
     init.set_method(method);
     init.set_cache(web_sys::RequestCache::NoStore);
     let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
-    let remote = BASE.with(|b| b.borrow().is_some());
+    // Only a call that goes to the base origin is cross-origin: on a page
+    // a box served with `?box=` pointing at a Skipper, the box's own
+    // routes (sign-in, projects, the agent) stay same-origin with the
+    // session cookie, and the Skipper's get its token.
+    let remote = is_remote(url);
     if remote {
         init.set_mode(web_sys::RequestMode::Cors);
         init.set_credentials(web_sys::RequestCredentials::Omit);
@@ -604,7 +617,7 @@ async fn fetch(
     ctype: Option<&str>,
 ) -> Result<Answer, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init(method)?;
+    let (init, headers) = init(method, url)?;
     if let Some(b) = &body {
         if let Some(t) = ctype {
             headers.set("Content-Type", t).map_err(|e| text(&e))?;
@@ -711,7 +724,7 @@ async fn chat(
 
     let seq = req.seq;
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init("POST")?;
+    let (init, headers) = init("POST", &req.url)?;
     headers
         .set("Content-Type", "application/json")
         .map_err(|e| text(&e))?;
@@ -785,10 +798,16 @@ impl ProjHttp {
                 .as_ref()
                 .map(|b| JsValue::from(web_sys::js_sys::Uint8Array::from(b.as_slice())));
             let ctype = body.as_ref().map(|_| req.ctype);
-            // On a `?box=` page the call goes to that box, as the reads
-            // do: relative, it reached the page's own server (a PUT of a
-            // module answered 501 there, 2026-11-24).
-            let answer = fetch(req.method, &absolute(&req.url), body, ctype)
+            // A call to the watched node goes to the `?box=` origin, as
+            // the reads do: relative, it reached the page's own server (a
+            // PUT of a module answered 501 there, 2026-11-24). The rest
+            // are the serving box's own (projects, its agent).
+            let url = if req.call.on_node() {
+                absolute(&req.url)
+            } else {
+                req.url.clone()
+            };
+            let answer = fetch(req.method, &url, body, ctype)
                 .await
                 .unwrap_or_else(|why| Answer {
                     status: 0,

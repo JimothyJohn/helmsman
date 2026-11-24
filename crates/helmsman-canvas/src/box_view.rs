@@ -155,6 +155,10 @@ pub struct BoxView {
     /// Project and force requests not carried out (tests carry them out).
     #[cfg(not(target_arch = "wasm32"))]
     pub psent: Vec<PReq>,
+    /// This browser holds the watched node's token (the sign-in panel's).
+    pub node_token: bool,
+    /// The page watches a node by address (`?box=`): Deploy sends there.
+    pub watches_node: bool,
 }
 
 impl Default for BoxView {
@@ -407,6 +411,8 @@ impl BoxView {
             sent: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             psent: Vec::new(),
+            node_token: false,
+            watches_node: false,
         }
     }
 
@@ -2305,7 +2311,11 @@ impl BoxView {
     /// box or Skipper without projects, for an engineer, once its source
     /// came.
     fn module_writable(&self) -> Result<(), String> {
-        is_engineer(self.session.as_ref())?;
+        if !self.node_token {
+            is_engineer(self.session.as_ref()).map_err(|_| {
+                "Enter the Skipper's token to edit and deploy: Sign in, top right.".to_string()
+            })?;
+        }
         if self.projects.available != Some(false) {
             return Err("Waiting for the box to say what it holds.".into());
         }
@@ -2908,6 +2918,7 @@ impl Workspace for BoxView {
 
     fn deploy(&mut self) {
         if self.writable().is_ok() {
+            self.projects.to_node = self.watches_node;
             self.projects.deploy();
         } else if self.module_writable().is_ok() {
             self.projects.deploy_module();
@@ -3380,7 +3391,11 @@ impl Body for BoxView {
                         errors: 0,
                         first: None,
                         deploy: &deploy,
-                        deploy_tip: "Ctrl Shift Enter: deploy this version.\nSaves, checks and runs the project on the box.",
+                        deploy_tip: if self.watches_node {
+                            "Ctrl Shift Enter: deploy this version.\nSaves and checks the project on this box, then runs it on the Skipper this page watches."
+                        } else {
+                            "Ctrl Shift Enter: deploy this version.\nSaves, checks and runs the project on the box."
+                        },
                     },
                 )
                 .deploy;
