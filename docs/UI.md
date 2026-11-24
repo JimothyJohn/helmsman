@@ -286,12 +286,16 @@ only go down.
   the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
-  and the Agent's one-sentence reason. In the simulation the answer area
-  is on top and the box under it at the tab's bottom edge, one row
-  growing upward to four and scrolling inside past that, eased over
-  0.1 s, so the output does not move (Nick, 2026-11-23; from 2026-11-13
-  to then the box was on top and took the tab's height). The output can
-  be selected. The arrows restore the prompt and the output of the step
+  and the Agent's one-sentence reason. In the simulation the box is on
+  top, one row growing to four and scrolling inside past that, eased over
+  0.1 s; its buttons under it; then the answer area down to the bottom of
+  the tab (Nick, 2026-11-23 evening. That morning he asked for the box at
+  the bottom growing upward; tried, the answer area sat where the box had
+  been and took no click, and he could not find where to type). A click on
+  the answer area puts the keyboard in the box. A question is a card in
+  the accent colour between the buttons and the answer area, never a row
+  inside the answer. No example prompts in the empty tab (he found them
+  confusing). The output can be selected. The arrows restore the prompt and the output of the step
   shown and log nothing; the clock beside them turns the answer area into
   the searchable list of versions. No "Stop and reset" checkbox: a
   described change runs at once in the simulation unless View › Reset

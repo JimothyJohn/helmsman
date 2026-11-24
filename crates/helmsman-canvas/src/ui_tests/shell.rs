@@ -421,6 +421,28 @@ fn replace_writes_one_match_then_all_of_them() {
                 |(_, pos, g)| pos + g.size() / 2.0,
             )
     };
+    // The find field has its row and the replace field its own: the count
+    // and the buttons start under each, never laid over it (Nick,
+    // 2026-11-23: "the buttons are showing up on top of the find field").
+    {
+        let id = h.editor_id();
+        let rect = |id: eframe::egui::Id| h.ctx.read_response(id).expect("drawn").rect;
+        let (find, replace) = (rect(id.with("find")), rect(id.with("replace")));
+        let arrow = text_at(&h, "▲")
+            .first()
+            .map(|(_, pos, _)| *pos)
+            .expect("the previous-match button");
+        let all = button(&h, "Replace all");
+        assert!(
+            arrow.y >= find.bottom() - 1.0,
+            "▲ at {arrow:?} is under the find field {find:?}"
+        );
+        assert!(arrow.y < replace.top(), "and over the replace field {replace:?}");
+        assert!(
+            all.y >= replace.bottom() - 1.0,
+            "Replace all at {all:?} is under the replace field {replace:?}"
+        );
+    }
     let at = button(&h, "Replace");
     h.click(at);
     h.wait(0.3);

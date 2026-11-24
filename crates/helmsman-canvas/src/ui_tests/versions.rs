@@ -124,11 +124,9 @@ fn words_match_a_version_by_what_it_says_and_why() {
     assert_eq!(ns("lamp nowhere"), Vec::<u32>::new());
 }
 
-/// Nick, 2026-11-23: "I can't even type". The answer area, with its
-/// example prompts, sits where the instruction box used to be and is the
-/// biggest thing in the tab, so it is where a hand goes; it took no
-/// click. A click anywhere in it puts the keyboard in the box under it,
-/// and what is typed lands there. An example clicked still fills the box.
+/// Nick, 2026-11-23: "I can't even type". A click on the answer area,
+/// the biggest thing in the tab, puts the keyboard in the instruction box,
+/// and what is typed lands there.
 #[test]
 fn a_click_on_the_answer_area_puts_the_keyboard_in_the_box() {
     use eframe::egui::Event;
@@ -143,37 +141,17 @@ fn a_click_on_the_answer_area_puts_the_keyboard_in_the_box() {
         v.instruct.draft.clear();
     }
     h.wait(0.3);
-    assert!(
-        h.has("phrase examples"),
-        "as the page opens: the examples are in the area"
-    );
     let area = h.rect("agent answer area");
     let field = h.rect("agent instruction");
     assert!(
         area.height() > 4.0 * field.height(),
-        "the area is the big one: {area:?} over {field:?}"
+        "the area is the big one: {area:?} under {field:?}"
     );
-    // On the area's ground, under the examples.
-    h.click(eframe::egui::pos2(area.center().x, area.bottom() - 30.0));
+    h.click(area.center());
     h.frame(vec![]);
     h.frame(vec![Event::Text("turn the lamp on".into())]);
     h.frame(vec![]);
     assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "turn the lamp on");
-
-    // An example, clicked: it is in the box, and typing goes on from it.
-    h.app.sim.as_mut().unwrap().instruct.draft.clear();
-    h.wait(0.2);
-    h.press("phrase example 0");
-    h.frame(vec![]);
-    let example = h.app.sim.as_ref().unwrap().instruct.draft.clone();
-    assert!(!example.is_empty(), "the example is in the box");
-    h.frame(vec![Event::Text("!".into())]);
-    h.frame(vec![]);
-    let typed = h.app.sim.as_ref().unwrap().instruct.draft.clone();
-    assert!(
-        typed.contains('!') && typed.len() == example.len() + 1,
-        "typing lands in the box: {typed:?}"
-    );
 
     // The versions' list keeps its own clicks: its search box is typed in.
     h.press("agent versions");

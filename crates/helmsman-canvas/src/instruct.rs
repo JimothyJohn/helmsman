@@ -2301,33 +2301,34 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
         {
             act = big_ui(ui, chrome, estimate).or(act);
         }
+        act = question_ui(ui, chrome, v).or(act);
         return area_ui(ui, chrome, s, v, None).or(act);
     };
-    // Top down, with the heights worked out first: the answer area takes
-    // what the box, the buttons' row (as tall as it was drawn last
-    // frame) and the owner's room under the tab leave, so the box's
-    // bottom edge stays where it is while its top moves.
-    let mut act = None;
+    // Top down: the box, its buttons, a question when there is one, and
+    // the answer area in what is left.
+    let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
+    let height = box_height(ui, empty);
+    let enter = box_ui(ui, chrome, s, v, Some(height));
+    let mut act = buttons_ui(ui, chrome, s, v, enter);
     if let Some(estimate) = v.big
         && !s.busy()
     {
-        act = big_ui(ui, chrome, estimate);
+        act = big_ui(ui, chrome, estimate).or(act);
     }
-    let row = ui.spacing().interact_size.y;
-    let gap = ui.spacing().item_spacing.y;
-    let buttons_id = egui::Id::unique("agent-buttons-height");
-    let buttons = ui.data(|d| d.get_temp::<f32>(buttons_id)).unwrap_or(2.0 * row);
-    let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
-    let height = box_height(ui, empty);
-    let fill = (ui.available_height() - height - buttons - 2.0 * ANSWER_MARGIN - 2.0 - 3.0 * gap - below)
-        .max(3.0 * row);
-    act = area_ui(ui, chrome, s, v, Some(fill)).or(act);
-    let enter = box_ui(ui, chrome, s, v, Some(height));
-    let top = ui.cursor().top();
-    act = buttons_ui(ui, chrome, s, v, enter).or(act);
-    let drawn = ui.cursor().top() - top - gap;
-    ui.data_mut(|d| d.insert_temp(buttons_id, drawn));
-    act
+    act = question_ui(ui, chrome, v).or(act);
+    let fill = (ui.available_height() - 2.0 * ANSWER_MARGIN - 2.0 - below).max(0.0);
+    area_ui(ui, chrome, s, v, Some(fill)).or(act)
+}
+
+/// The question that waits for the engineer, on its own between the
+/// buttons and the answer area (Nick, 2026-11-23: "the questions should
+/// pop up distinctly"): [`crate::ask::ui`] draws it as a card in the
+/// accent colour.
+fn question_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, v: &View) -> Option<Act> {
+    let card = v.card.as_ref()?;
+    let k = crate::ask::ui(ui, chrome, card);
+    ui.add_space(4.0);
+    k.map(Act::Answer)
 }
 
 /// The instruction box, `height` tall. Returns whether Enter was pressed
@@ -2401,8 +2402,9 @@ fn box_ui(
     enter
 }
 
-/// One row: Send or Stop, the arrows through the revisions (or Undo),
-/// the clock of the versions' index.
+/// One row, left to right (Nick, 2026-11-23): the clock of the
+/// versions' index, the arrows through the revisions (or Undo), and at
+/// the row's right end Send, or Stop while an answer is under way.
 fn buttons_ui(
     ui: &mut egui::Ui,
     chrome: &mut crate::editor::Chrome,
@@ -2413,24 +2415,30 @@ fn buttons_ui(
     let mut act = None;
     let target = &v.target;
     let why_not = v.blocked.clone().or_else(|| s.refusal());
-    ui.horizontal_wrapped(|ui| {
-        if s.busy() {
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Stop, true, false)
-                .tip("Stop: stops waiting. The file stays as it is.");
-            chrome.hit("agent stop", r.rect);
-            if r.clicked() {
-                act = Some(Act::Stop);
-            }
+    // As many buttons as the row holds share its width, none wider than
+    // an action button is: four of those do not fit the pane's default.
+    let count = 1
+        + usize::from(v.versions.is_some())
+        + if v.steps.is_some() {
+            2
         } else {
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true)
-                .tip(why_not.clone().unwrap_or_else(|| {
-                format!(
-                    "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
-                )
-            }));
-            chrome.hit("agent send", r.rect);
-            if r.clicked() || (enter && why_not.is_none()) {
-                act = Some(Act::Send);
+            usize::from(s.undo().is_some())
+        };
+    let gap = ui.spacing().item_spacing.x;
+    #[allow(clippy::cast_precision_loss)]
+    let wide = ((ui.available_width() - gap * (count as f32 - 1.0)) / count as f32)
+        .clamp(crate::st_view::TAP, crate::glyphs::ACTION_W);
+    ui.horizontal(|ui| {
+        if v.versions.is_some() {
+            let on = s.versions_open;
+            let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::History, true, on, wide).tip(if on {
+                "Versions: back to the answer."
+            } else {
+                "Versions: every saved version of this project, to search and step to."
+            });
+            chrome.hit("agent versions", r.rect);
+            if r.clicked() {
+                s.versions_open = !on;
             }
         }
         if let Some(steps) = &v.steps {
@@ -2448,7 +2456,7 @@ fn buttons_ui(
                     "Forward: this is the newest revision.",
                 ),
             ] {
-                let r = crate::glyphs::action(ui, icon, to.is_some(), false)
+                let r = crate::glyphs::action_wide(ui, icon, to.is_some(), false, wide)
                     .tip(to.as_ref().map_or(end, |(_, tip)| tip.as_str()));
                 chrome.hit(key, r.rect);
                 if r.clicked()
@@ -2459,29 +2467,39 @@ fn buttons_ui(
             }
         } else if let Some(u) = s.undo() {
             let r = match &v.undo_blocked {
-                None => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, true, false).tip(format!(
+                None => crate::glyphs::action_wide(ui, crate::glyphs::Icon::Undo, true, false, wide).tip(format!(
                     "Undo: puts {} back as it was in revision {}. The change stays in History.",
                     u.file, u.revision
                 )),
-                Some(why) => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, false, false).tip(why),
+                Some(why) => crate::glyphs::action_wide(ui, crate::glyphs::Icon::Undo, false, false, wide).tip(why),
             };
             chrome.hit("agent undo", r.rect);
             if r.clicked() {
                 act = Some(Act::Undo);
             }
         }
-        if v.versions.is_some() {
-            let on = s.versions_open;
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::History, true, on).tip(if on {
-                "Versions: back to the answer."
+        // Send has the right end of the row, under the box's right edge.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if s.busy() {
+                let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Stop, true, false, wide)
+                    .tip("Stop: stops waiting. The file stays as it is.");
+                chrome.hit("agent stop", r.rect);
+                if r.clicked() {
+                    act = Some(Act::Stop);
+                }
             } else {
-                "Versions: every saved version of this project, to search and step to."
-            });
-            chrome.hit("agent versions", r.rect);
-            if r.clicked() {
-                s.versions_open = !on;
+                let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Send, why_not.is_none(), true, wide)
+                    .tip(why_not.clone().unwrap_or_else(|| {
+                    format!(
+                        "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
+                    )
+                }));
+                chrome.hit("agent send", r.rect);
+                if r.clicked() || (enter && why_not.is_none()) {
+                    act = Some(Act::Send);
+                }
             }
-        }
+        });
     });
     act
 }
@@ -2609,11 +2627,6 @@ fn answer_area(
 
     let t = crate::theme::theme(ui);
     let mut act = None;
-    if let Some(card) = &v.card
-        && let Some(k) = crate::ask::ui(ui, chrome, card)
-    {
-        act = Some(Act::Answer(k));
-    }
     let plan = s.run.as_ref().and_then(|r| match &r.mode {
         Mode::Steps(p) => Some(p),
         _ => None,
@@ -2658,14 +2671,6 @@ fn answer_area(
                 None => {}
             }
         }
-    }
-    if s.draft.trim().is_empty()
-        && let Some(io) = &v.io
-    {
-        if s.outcome.is_some() {
-            ui.add_space(12.0);
-        }
-        examples_ui(ui, chrome, s, io);
     }
     act
 }
@@ -2786,42 +2791,5 @@ fn fixes_ui(
     }
     if !fixes.is_empty() {
         ui.add_space(6.0);
-    }
-}
-
-/// Example requests in the program's own names
-/// ([`crate::phrasing::examples`]): one click puts one in the box.
-fn examples_ui(
-    ui: &mut egui::Ui,
-    chrome: &mut crate::editor::Chrome,
-    s: &mut Instruct,
-    io: &[crate::phrasing::Io],
-) {
-    use egui::RichText;
-
-    let t = crate::theme::theme(ui);
-    let r = ui
-        .add(
-            egui::Label::new(
-                RichText::new("Name the inputs and outputs and say when. For example:").color(t.muted),
-            )
-            .wrap(),
-        )
-        .tip("A request that names what it reads, what it drives and when usually passes its checks first time.");
-    chrome.hit("phrase examples", r.rect);
-    for (k, e) in crate::phrasing::examples(io).into_iter().enumerate() {
-        ui.add_space(4.0);
-        let r = ui
-            .add(
-                egui::Label::new(RichText::new(format!("\u{201c}{e}\u{201d}")).color(t.fg))
-                    .wrap()
-                    .sense(egui::Sense::click()),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .tip("Puts this in the box, to change or send.");
-        chrome.hit(format!("phrase example {k}"), r.rect);
-        if r.clicked() {
-            s.draft = e;
-        }
     }
 }
