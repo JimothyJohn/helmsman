@@ -80,6 +80,14 @@ fn packed(text: &str) -> PathBuf {
     dir.join("dist").join(format!("helmsman-{TARGET}.tar.gz"))
 }
 
+/// `d` laid out as a release is before it is packed: the stand-in box,
+/// a unit, and the editor under `ui/`.
+fn staged(d: &Path) {
+    pieces(d, "x");
+    fs::rename(d.join("canvas-dist"), d.join("ui")).unwrap();
+    fs::write(d.join("helmsman-plc.service"), "[Unit]\n").unwrap();
+}
+
 /// An archive of `stage`'s `members`, with its checksum, named as a release.
 fn archive_of(stage: &Path, members: &[&str]) -> PathBuf {
     let name = format!("helmsman-{TARGET}.tar.gz");
@@ -297,9 +305,7 @@ fn an_archive_that_is_not_exactly_a_release_installs_nothing() {
         (
             "a file a release does not hold",
             |d| {
-                pieces(d, "x");
-                fs::rename(d.join("canvas-dist"), d.join("ui")).unwrap();
-                fs::write(d.join("helmsman-plc.service"), "[Unit]\n").unwrap();
+                staged(d);
                 fs::write(d.join("post-install.sh"), "rm -rf /\n").unwrap();
                 archive_of(
                     d,
@@ -311,9 +317,7 @@ fn an_archive_that_is_not_exactly_a_release_installs_nothing() {
         (
             "a symbolic link in the editor",
             |d| {
-                pieces(d, "x");
-                fs::rename(d.join("canvas-dist"), d.join("ui")).unwrap();
-                fs::write(d.join("helmsman-plc.service"), "[Unit]\n").unwrap();
+                staged(d);
                 std::os::unix::fs::symlink("/etc/passwd", d.join("ui/passwd.html")).unwrap();
                 archive_of(d, &["helmsman-plc", "helmsman-plc.service", "ui"])
             },
@@ -322,9 +326,7 @@ fn an_archive_that_is_not_exactly_a_release_installs_nothing() {
         (
             "no box",
             |d| {
-                pieces(d, "x");
-                fs::rename(d.join("canvas-dist"), d.join("ui")).unwrap();
-                fs::write(d.join("helmsman-plc.service"), "[Unit]\n").unwrap();
+                staged(d);
                 archive_of(d, &["helmsman-plc.service", "ui"])
             },
             "holds no helmsman-plc",
