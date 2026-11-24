@@ -64,7 +64,10 @@ pub const MAX_INSTRUCTION: usize = 2000;
 /// Longest reason shown, in characters.
 const MAX_REASON: usize = 300;
 /// Longest reply without code shown, in characters.
-const MAX_SAID: usize = 600;
+const MAX_SAID: usize = 2000;
+/// Most exchanges without a change that go with the next instruction
+/// ([`Instruct::talk`]).
+pub const MAX_TALK: usize = 6;
 /// Longest History record, in bytes.
 pub const MAX_RECORD: usize = 16 * 1024;
 
@@ -414,6 +417,34 @@ impl Outcome {
     }
 }
 
+/// An instruction that changed nothing, and what was said to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Said {
+    pub project: String,
+    pub asked: String,
+    pub said: String,
+}
+
+impl Said {
+    /// As a line of `<earlier_instructions>`, which otherwise lists what
+    /// was carried out: this says it was not.
+    fn entry(&self) -> String {
+        format!(
+            "(not carried out) {}\n  result: nothing was changed. You answered: {}",
+            clean(&self.asked, MAX_INSTRUCTION),
+            self.said
+        )
+    }
+}
+
+/// Whether a reply without code asks the engineer something (Nick,
+/// 2026-11-24: "question marks are an obvious indicator of a need for
+/// user feedback").
+#[must_use]
+pub fn asks(reply: &str) -> bool {
+    reply.contains('?')
+}
+
 /// The tab's state.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Instruct {
@@ -444,6 +475,15 @@ pub struct Instruct {
     /// from the selection each frame by the owner, gone when it is. They
     /// go with an instruction too, and the selection stays.
     pub focus: crate::chat_about::Focus,
+    /// What was said since the last change was written (Nick, 2026-11-24:
+    /// a reply that asked something was forgotten by the next message):
+    /// each instruction that changed nothing and the reply to it, newest
+    /// last, at most [`MAX_TALK`]. They go with the next instruction of
+    /// their project, and are done with once a change lands.
+    pub talk: Vec<Said>,
+    /// A reply that asks something just came: the box takes the keyboard
+    /// for the answer.
+    pub(crate) answer_wanted: bool,
     /// The `<chat_about>` envelope the instruction under way went with,
     /// for the messages after its first (a retry, an answer to a
     /// question).
@@ -561,7 +601,13 @@ impl Instruct {
         plan: bool,
         spec: bool,
     ) -> Ask {
-        let earlier: Vec<String> = fit(earlier, HISTORY_TOKENS);
+        // What was said since the last change goes after what was done.
+        self.talk.retain(|t| t.project == env.project);
+        let mut all = earlier.to_vec();
+        if !spec {
+            all.extend(self.talk.iter().map(Said::entry));
+        }
+        let earlier: Vec<String> = fit(&all, HISTORY_TOKENS);
         // The collected chips go with an instruction (a run from a
         // specification keeps them for the next one).
         self.about = if spec { String::new() } else { self.take_about() };
@@ -1140,7 +1186,7 @@ impl Instruct {
             let mut o = Outcome::new(
                 Kind::Said,
                 if !said.is_empty() {
-                    said
+                    said.clone()
                 } else if offers.is_empty() {
                     format!("{} is unchanged: no code came back.", capital(&file))
                 } else {
@@ -1148,6 +1194,16 @@ impl Instruct {
                 },
             );
             o.offers = offers;
+            if !run.spec && !said.is_empty() {
+                self.answer_wanted = asks(&said);
+                self.talk.push(Said {
+                    project: run.project.clone(),
+                    asked: run.instruction.clone(),
+                    said: said.clone(),
+                });
+                let extra = self.talk.len().saturating_sub(MAX_TALK);
+                self.talk.drain(..extra);
+            }
             self.outcome = Some(o);
             return Step::Done;
         }
@@ -1214,6 +1270,8 @@ impl Instruct {
     /// before it, if there is one to go back to.
     pub fn applied(&mut self, apply: &Apply, undo: Option<Undo>) {
         self.run = None;
+        // The talk led to this change, whose History page stands for it.
+        self.talk.clear();
         let mut o = Outcome::new(Kind::Applied, apply.status.clone());
         o.why.clone_from(&apply.why);
         o.problems.clone_from(&apply.warnings);
@@ -2342,6 +2400,8 @@ pub enum Tone {
     /// Nothing changed and nothing is wrong: what stands in the way, in
     /// the tab's own ink.
     Note,
+    /// A reply that asks the engineer something: it waits for an answer.
+    Ask,
     Warn,
     Error,
 }
@@ -2382,6 +2442,7 @@ pub fn answer(o: &Outcome) -> Answer {
             },
         ),
         Kind::Undone => (Tone::Done, clean(&o.status, MAX_REASON)),
+        Kind::Said if asks(&o.status) => (Tone::Ask, clean(&o.status, MAX_SAID)),
         Kind::Said => (Tone::Note, clean(&o.status, MAX_SAID)),
         Kind::Refused if o.problems.is_empty() => (Tone::Error, clean(&o.status, MAX_REASON)),
         Kind::Refused => (Tone::Error, "Not changed:".to_string()),
@@ -2698,8 +2759,18 @@ fn box_ui(
          The Up arrow in the empty box brings back the last message you sent.\n\
          Say what {target} should do: it is checked before anything is written."
     );
+    // A reply that asked something waits for its answer here.
+    let asked = s.run.is_none()
+        && s.outcome
+            .as_ref()
+            .is_some_and(|o| o.kind == Kind::Said && asks(&o.status));
     // One row of it: the box starts one row tall.
-    let hint = "What should it do?".to_string();
+    let hint = if asked {
+        "Your answer"
+    } else {
+        "What should it do?"
+    }
+    .to_string();
     let (field, enter) = if let Some(run) = &s.run {
         // While it works the box shows what was sent, and takes no typing.
         let mut sent = run.instruction.clone();
@@ -2743,9 +2814,18 @@ fn box_ui(
         ui.painter().rect_stroke(
             shown.expand(1.0),
             4.0,
-            egui::Stroke::new(1.0, t.muted),
+            // In the question's colour while one waits.
+            if asked {
+                egui::Stroke::new(2.0, t.accent)
+            } else {
+                egui::Stroke::new(1.0, t.muted)
+            },
             egui::StrokeKind::Outside,
         );
+    }
+    // A question just came: the answer is typed straight away.
+    if std::mem::take(&mut s.answer_wanted) && s.run.is_none() {
+        field.request_focus();
     }
     // A click on the answer area a frame ago: the keyboard comes here.
     let asked = egui::Id::unique("agent-instruction-focus");
@@ -3045,6 +3125,7 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
     let ink = match a.tone {
         Tone::Done => t.ink(GREEN),
         Tone::Note => t.fg,
+        Tone::Ask => t.accent,
         Tone::Warn => t.ink(WARN),
         Tone::Error => t.ink(RED),
     };
@@ -3058,6 +3139,9 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
             .tip(match a.tone {
                 Tone::Done => "The change is in the program, marked in the code and on the diagram.",
                 Tone::Note => "The file is unchanged.",
+                Tone::Ask => {
+                    "A question for you: type your answer in the box and send. It goes with the question."
+                }
                 Tone::Warn => "The change is in the program. The Messages list what did not pass.",
                 Tone::Error => "Nothing in the program changed.",
             });
