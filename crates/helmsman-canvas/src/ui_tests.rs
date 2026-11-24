@@ -629,11 +629,13 @@ mod glyphs_and_help {
         assert!(!h.has("messages clear"), "nothing to clear now");
     }
 
-    /// Nick, 2026-11-23: the trend is the whole bottom strip, from the far
-    /// left, under both side panes and with no tabs; the Messages are in
-    /// the left pane under its tabs' content, with a fold that is kept.
+    /// Nick, 2026-11-24: the left pane has the page's whole height and
+    /// the trend starts at its right edge, running under the right pane;
+    /// with the left pane shut the trend is the whole bottom. The Messages
+    /// are in the left pane under its tabs' content (2026-11-23), with a
+    /// fold that is kept.
     #[test]
-    fn the_trend_is_the_whole_bottom_and_the_messages_sit_in_the_left_pane() {
+    fn the_trend_starts_beside_the_full_height_left_pane_which_holds_the_messages() {
         let mut h = Harness::new(App::sim());
         h.messages();
         h.wait(0.3);
@@ -643,14 +645,27 @@ mod glyphs_and_help {
         }
         let trend = h.rect("trend tab");
         let left = h.rect("left");
-        assert!(trend.left() < 12.0, "from the far left: {trend:?}");
+        assert!(
+            // The chevron is the last thing in the pane's tab row.
+            trend.left() >= left.right() - 1.0 && trend.left() < left.right() + 40.0,
+            "from the left pane's edge: {trend:?} {left:?}"
+        );
         assert!(trend.right() > h.size.x - 12.0, "to the far right: {trend:?}");
         assert!(trend.height() >= 200.0, "taller than it was: {trend:?}");
         let fold = h.rect("messages fold");
         assert!(
-            fold.bottom() <= trend.top(),
-            "above the trend: {fold:?} {trend:?}"
+            fold.top() > trend.top(),
+            "the Messages have the height beside the trend: {fold:?} {trend:?}"
         );
+        // The left pane shut: the trend has the whole bottom.
+        h.app.chrome.left = false;
+        h.wait(0.3);
+        let wide = h.rect("trend tab");
+        assert!(wide.left() < 60.0, "from the strip at the far left: {wide:?}");
+        h.app.chrome.left = true;
+        h.wait(0.3);
+        let left = h.rect("left");
+        let fold = h.rect("messages fold");
         assert!(
             fold.right() <= left.right() + 1.0,
             "in the left pane: {fold:?} {left:?}"
@@ -663,6 +678,11 @@ mod glyphs_and_help {
         assert!(!h.app.chrome.msgs);
         assert!(!h.has("messages errors"), "the filters went with the list");
         assert!(h.has("messages fold"), "the header stays");
+        let (fold, trend) = (h.rect("messages fold"), h.rect("trend tab"));
+        assert!(
+            fold.bottom() > trend.bottom() - 12.0,
+            "folded, the header is at the page's bottom, beside the trend: {fold:?} {trend:?}"
+        );
         let back = crate::editor::Chrome::restored(&h.app.chrome.saved());
         assert!(!back.msgs, "kept per browser");
         h.press("messages fold");
@@ -2031,6 +2051,25 @@ END_PROGRAM",
         assert!(v.log.errors() >= 1, "an error, so the Messages count it red");
         assert!(h.has("agent result") && h.drew("Not changed:"));
         assert!(h.drew("The code does not compile"), "what failed is in the tab");
+        // Nick, 2026-11-24: the answer copies, whole.
+        h.press("agent copy");
+        let copied = h.copied.last().expect("Copy copied").clone();
+        assert!(
+            copied.starts_with("main.st is unchanged") && copied.contains("\nThe code does not compile"),
+            "{copied}"
+        );
+        assert_eq!(
+            copied,
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .instruct
+                .outcome
+                .as_ref()
+                .unwrap()
+                .copy_text()
+        );
         let area = h.rect("agent answer area");
         assert!(
             h.rect("agent result").top() >= area.top() && h.rect("agent details").bottom() <= area.bottom()
@@ -2093,6 +2132,29 @@ END_PROGRAM",
             format!("flash the {long} while StopPB is held")
         );
         assert!(!h.has("phrase fix 0"), "nothing left to fix");
+        // A word of one's own (Nick, 2026-11-24): the names it could be,
+        // each a click, and the pane still its width with the long one.
+        h.app.sim.as_mut().unwrap().instruct.draft = "turn the lamp on while start is held".into();
+        h.wait(0.2);
+        assert!(h.drew("\u{201c}lamp\u{201d}: use the program's name?"));
+        assert!(
+            h.has("phrase loose 0 0") && h.has("phrase loose 0 1"),
+            "two lamps"
+        );
+        assert!(
+            h.has("phrase loose 1 0") && !h.has("phrase loose 1 1"),
+            "one start"
+        );
+        kept(&h, "loose words");
+        h.press("phrase loose 1 0");
+        h.wait(0.2);
+        h.press("phrase loose 0 0");
+        h.wait(0.2);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().instruct.draft,
+            "turn the GreenLamp on while StartPB is held"
+        );
+        assert!(!h.has("phrase loose 0 0"), "nothing loose left");
         assert_eq!(
             h.app.sim.as_ref().unwrap().proj.files["main.st"],
             src,
@@ -3857,7 +3919,23 @@ mod chrome {
         assert!(text.contains("  in plant_model (plant_model.st:"), "{text}");
         assert!(text.contains("not measured; level transmitter would"), "{text}");
         // Add a sensor: the form, filled in for the state, writes one in line.
-        h.right_click(h.rect("state level_m").center());
+        h.wait(0.3);
+        // The Ask row pushed this row down to the messages strip's edge:
+        // scroll the pane so the row is in the clear.
+        let at = h.rect("devices scan").center();
+        h.frame(vec![
+            eframe::egui::Event::PointerMoved(at),
+            eframe::egui::Event::MouseWheel {
+                unit: eframe::egui::MouseWheelUnit::Point,
+                delta: eframe::egui::Vec2::new(0.0, -120.0),
+                modifiers: eframe::egui::Modifiers::NONE,
+                phase: eframe::egui::TouchPhase::Move,
+                source: eframe::egui::MouseWheelSource::Wheel,
+            },
+        ]);
+        h.wait(0.3);
+        let row = h.rect("state level_m");
+        h.right_click(row.center());
         assert!(h.has("menu add sensor"));
         h.press("menu add sensor");
         h.wait(0.2);
@@ -6457,6 +6535,160 @@ mod boxed {
             h.app.boxv.as_ref().unwrap().devices_ui.scan,
             Scan::Failed(_)
         ));
+    }
+
+    /// Ask beside Scan: only one device's IPv4 address is sent, as
+    /// `?address=`; what answers joins the list (once per address), and
+    /// no answer or a refusal is said in words.
+    #[test]
+    fn ask_on_a_box_sends_one_address_and_lists_the_answer() {
+        use crate::box_projects::PCall;
+        use crate::review::Answer;
+        use eframe::egui::Event;
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.2);
+        let asks = |h: &mut Harness| -> Vec<(String, String)> {
+            std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
+                .into_iter()
+                .filter_map(|r| match r.call {
+                    PCall::Ask(a) => Some((a, r.url)),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Anything but a device's address leaves the button dead.
+        for bad in [
+            "",
+            "localhost",
+            "10.0.0",
+            "10.0.0.1:44818",
+            "255.255.255.255",
+            "224.0.0.1",
+            "0.0.0.0",
+        ] {
+            h.app.boxv.as_mut().unwrap().devices_ui.ask_address = bad.into();
+            h.frame(vec![]);
+            h.press("devices ask");
+            h.frame(vec![]);
+            assert!(asks(&mut h).is_empty(), "{bad:?} was sent");
+        }
+        h.app.boxv.as_mut().unwrap().devices_ui.ask_address.clear();
+        h.press("devices ask address");
+        h.frame(vec![Event::Text("192.168.33.1".into())]);
+        h.frame(vec![]);
+        h.press("devices ask");
+        h.frame(vec![]);
+        assert_eq!(
+            asks(&mut h),
+            vec![(
+                "192.168.33.1".to_string(),
+                "/api/devices/discover?address=192.168.33.1".to_string()
+            )]
+        );
+        let body = r#"{ "found": [ { "address": "192.168.33.1", "mapped": null, "library": null,
+            "identities": [ { "protocol": "ethernet-ip", "address": "192.168.33.1", "vendor_id": 1, "product_code": 2,
+              "product_name": "MDrive", "identity": "cip=1:2:0x1" } ] } ], "protocols": [] }"#;
+        let ctx = h.ctx.clone();
+        let answer = |h: &mut Harness, status: u16, body: &str| {
+            h.app.boxv.as_mut().unwrap().step_all(
+                &ctx,
+                Vec::new(),
+                vec![(
+                    PCall::Ask("192.168.33.1".into()),
+                    Answer {
+                        status,
+                        retry_after: None,
+                        body: body.into(),
+                    },
+                )],
+                h.time,
+            );
+        };
+        answer(&mut h, 200, body);
+        answer(&mut h, 200, body);
+        h.frame(vec![]);
+        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
+        assert_eq!(ui.found.len(), 1, "an address is listed once");
+        assert_eq!(ui.found[0].product_name, "MDrive");
+        assert_eq!(ui.ask_note, None);
+        assert!(h.has("network 192.168.33.1"));
+        answer(&mut h, 200, r#"{ "found": [] }"#);
+        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
+        assert_eq!(ui.found.len(), 1, "no answer leaves the list");
+        assert_eq!(
+            ui.ask_note.as_deref(),
+            Some("No device answered at 192.168.33.1.")
+        );
+        answer(
+            &mut h,
+            400,
+            r#"{"error":"address must be one IPv4 address\u0007"}"#,
+        );
+        assert_eq!(
+            h.app.boxv.as_ref().unwrap().devices_ui.ask_note.as_deref(),
+            Some("400: address must be one IPv4 address")
+        );
+        answer(&mut h, 200, "[[[");
+        assert!(h.app.boxv.as_ref().unwrap().devices_ui.ask_note.is_some());
+    }
+
+    /// In the simulation there is no network: Ask says so and lists nothing.
+    #[test]
+    fn ask_in_the_simulation_says_there_is_no_network() {
+        use eframe::egui::Event;
+        let mut h = Harness::new(App::sim());
+        h.messages();
+        h.press("pane devices");
+        h.wait(0.2);
+        h.press("devices ask address");
+        h.frame(vec![Event::Text("192.168.33.1".into())]);
+        h.frame(vec![]);
+        h.press("devices ask");
+        h.frame(vec![]);
+        let ui = &h.app.sim.as_ref().unwrap().devices_ui;
+        assert!(ui.found.is_empty(), "{:?}", ui.found);
+        assert!(
+            ui.ask_note.as_deref().is_some_and(|n| n.contains("no network")),
+            "{:?}",
+            ui.ask_note
+        );
+    }
+
+    /// The Ask row at the panel's default width: both controls sit inside
+    /// the panel that holds them, with a note showing as well.
+    #[test]
+    fn the_ask_row_fits_the_panel_at_its_default_width() {
+        let mut h = Harness::new(App::sim());
+        h.messages();
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
+        h.wait(0.3);
+        h.press("pane devices");
+        h.wait(0.3);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        h.app.sim.as_mut().unwrap().devices_ui.ask_note = Some(
+            "400: address must be one device's address, not a multicast, broadcast or unspecified one".into(),
+        );
+        h.app.sim.as_mut().unwrap().devices_ui.ask_address = "192.168.100.100".into();
+        h.wait(0.3);
+        let (field, button) = (h.rect("devices ask address"), h.rect("devices ask"));
+        assert!(
+            field.right() < button.left() + 1.0 || button.top() > field.top(),
+            "side by side or wrapped, never overlapping: {field:?} {button:?}"
+        );
+        assert!(
+            button.right() <= 8.0 + 236.0,
+            "the Ask row reaches {} pt, past the 236 pt default",
+            button.right()
+        );
+        let l = h.rect("left").right() - left.right();
+        let r = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&l), "the left pane grew {l} pt");
+        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
     }
 
     #[test]

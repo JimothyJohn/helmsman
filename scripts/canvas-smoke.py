@@ -107,11 +107,12 @@ def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
 LEFT = (0, 100, 300, 200)
 # Where a right pane's tabs show once one is docked there.
 RIGHT_TABS = (1180, 56, 210, 30)
-# The trend is the whole bottom strip since 2026-11-23, from the far left.
-BOTTOM_TABS = (0, 545, 1400, 315)
-# The Messages, under the left pane's tab content and above the trend since
-# 2026-11-23 (what a deploy says is there, not in a line under the header).
-MESSAGES = (0, 330, 320, 200)
+# The trend is the bottom strip from the left pane's edge since 2026-11-24
+# (the left pane has the page's whole height).
+BOTTOM_TABS = (330, 545, 1070, 315)
+# The Messages, at the foot of the left pane under its tab content, beside
+# the trend (what a deploy says is there, not in a line under the header).
+MESSAGES = (0, 650, 320, 200)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since

@@ -16,6 +16,7 @@ extern crate alloc;
 
 pub mod beacon;
 pub mod board;
+pub mod dial;
 pub mod enip;
 pub mod ethernet;
 pub mod flash;

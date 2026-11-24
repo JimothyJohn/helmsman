@@ -401,6 +401,21 @@ impl Outcome {
         (short, full)
     }
 
+    /// The whole of this outcome as text for the clipboard: what it says,
+    /// the reason, and every line of what failed, one to a line.
+    #[must_use]
+    pub fn copy_text(&self) -> String {
+        let mut lines = Vec::new();
+        if !self.status.is_empty() {
+            lines.push(self.status.clone());
+        }
+        if let Some(w) = &self.why {
+            lines.push(format!("Why: {w}"));
+        }
+        lines.extend(self.problems.iter().cloned());
+        lines.join("\n")
+    }
+
     pub(crate) fn new(kind: Kind, status: impl Into<String>) -> Self {
         Self {
             kind,
@@ -3070,6 +3085,23 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
                 .selectable(true),
         );
     }
+    // The answer to the clipboard, whole (Nick, 2026-11-24: "I STILL
+    // can't copy agent message outputs").
+    let text = o.copy_text();
+    if !text.is_empty() {
+        let r = crate::glyphs::button_sized(
+            ui,
+            crate::glyphs::Icon::Copy,
+            crate::glyphs::SIZE,
+            true,
+            false,
+            "Copy: copies this answer, in full, as text.",
+        );
+        chrome.hit("agent copy", r.rect);
+        if r.clicked() {
+            ui.ctx().copy_text(text);
+        }
+    }
     if a.tone != Tone::Done && !matches!(o.kind, Kind::Said) {
         let more = match a.more {
             0 => "Details in the Messages".to_string(),
@@ -3145,7 +3177,40 @@ fn fixes_ui(
             }
         });
     }
-    if !fixes.is_empty() {
+    // A word of one's own where the program has a name for it (Nick,
+    // 2026-11-24): the names it could be, a click each.
+    let loose = crate::phrasing::loose(&s.draft, io);
+    for (k, l) in loose.iter().enumerate() {
+        ui.horizontal_wrapped(|ui| {
+            let r = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(format!("\u{201c}{}\u{201d}: use the program's name?", l.from))
+                            .color(t.ink(WARN)),
+                    )
+                    .wrap(),
+                )
+                .tip("The program's own name for it says exactly which input or output you mean.");
+            chrome.hit(format!("phrase loose note {k}"), r.rect);
+            for (j, name) in l.to.iter().enumerate() {
+                let b = ui.button(name).tip(format!(
+                    "Puts {name} in the box in place of \u{201c}{}\u{201d}.",
+                    l.from
+                ));
+                chrome.hit(format!("phrase loose {k} {j}"), b.rect);
+                if b.clicked() {
+                    s.draft = crate::phrasing::apply(
+                        &s.draft,
+                        &crate::phrasing::Fix {
+                            from: l.from.clone(),
+                            to: name.clone(),
+                        },
+                    );
+                }
+            }
+        });
+    }
+    if !fixes.is_empty() || !loose.is_empty() {
         ui.add_space(6.0);
     }
 }

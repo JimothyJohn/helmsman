@@ -13,11 +13,13 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Instant;
 use helmsman_iec::Program;
 use helmsman_nodecore::api::{self, SignalValue, SignalView, Spread, State, Timing};
+use helmsman_nodecore::iomap::{Dir, IoMap};
+use helmsman_nodecore::ioplan;
 use helmsman_nodecore::router::Control;
 
-/// Bytes of the image the I/O task moves each way (the E1213: DI bits in
-/// byte 0 of the inputs, DO bits in byte 0 of the outputs).
-pub const IO_BYTES: usize = 4;
+/// Bytes of the process image the I/O tasks move each way: the map's bool
+/// windows and numeric area (`helmsman_nodecore::iomap::IMAGE_BYTES`).
+pub const IO_BYTES: usize = helmsman_nodecore::iomap::IMAGE_BYTES;
 /// Scans the timing numbers cover.
 pub const WINDOW: usize = 128;
 
@@ -90,7 +92,7 @@ pub struct ModuleLive {
     pub signals: Vec<SignalView>,
 }
 
-/// The device link.
+/// One device's link.
 #[derive(Default)]
 pub struct DeviceLive {
     pub name: String,
@@ -139,12 +141,12 @@ pub enum Pending {
 /// and the previous program runs again (or nothing, if that failed too).
 pub type DeployResult = Result<(), Vec<String>>;
 
-#[derive(Default)]
 pub struct Live {
     pub inputs: [u8; IO_BYTES],
     pub outputs: [u8; IO_BYTES],
     pub module: ModuleLive,
-    pub device: DeviceLive,
+    /// One link a device of the map, in the map's order.
+    pub devices: Vec<DeviceLive>,
     /// The I/O map text the node runs (card node-io-map): what
     /// `/api/io_map` and the settings page show.
     pub io_map: String,
@@ -160,6 +162,27 @@ pub struct Live {
     pub link_up: bool,
     pub ip: Option<[u8; 4]>,
     pub fw: FwLive,
+}
+
+impl Default for Live {
+    /// Arrays past 32 bytes have no derived default.
+    fn default() -> Self {
+        Self {
+            inputs: [0; IO_BYTES],
+            outputs: [0; IO_BYTES],
+            module: ModuleLive::default(),
+            devices: Vec::new(),
+            io_map: String::new(),
+            seq: 0,
+            at: None,
+            pending: None,
+            controlled: None,
+            deployed: None,
+            link_up: false,
+            ip: None,
+            fw: FwLive::default(),
+        }
+    }
 }
 
 pub type Shared = Mutex<CriticalSectionRawMutex, RefCell<Live>>;
@@ -219,27 +242,21 @@ pub fn view(
             },
             source: live.module.source.clone(),
         });
-        let devices = if live.device.name.is_empty() {
-            Vec::new()
-        } else {
-            alloc::vec![api::DeviceView {
-                name: live.device.name.clone(),
-                state: match live.device.up {
+        let devices = live
+            .devices
+            .iter()
+            .map(|d| api::DeviceView {
+                name: d.name.clone(),
+                state: match d.up {
                     None => "unknown",
                     Some(true) => "up",
                     Some(false) => "down",
                 },
-                error: live.device.error.clone(),
-                address: Some(live.device.address.clone()),
-            }]
-        };
-        let io_map = if !live.io_map.is_empty() {
-            live.io_map.clone()
-        } else if live.device.name.is_empty() {
-            String::new()
-        } else {
-            alloc::format!("device {} modbus-tcp {}\n", live.device.name, live.device.address)
-        };
+                error: d.error.clone(),
+                address: Some(d.address.clone()),
+            })
+            .collect();
+        let io_map = live.io_map.clone();
         api::NodeView {
             module,
             signals: live.module.signals.clone(),
@@ -257,6 +274,7 @@ pub fn view(
             version: helmsman_nodecore::VERSION,
             board,
             io_map,
+            one_block: false,
             firmware: live
                 .fw
                 .available
@@ -272,66 +290,61 @@ pub fn view(
     })
 }
 
-/// The block's point names in image order, from the I/O map
-/// (`helmsman_nodecore::iomap`): index `k` is bit `k % 8` of byte `k / 8`;
-/// `None` where the map names no point.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PointNames {
-    pub inputs: Vec<Option<String>>,
-    pub outputs: Vec<Option<String>>,
+/// How a device's link stands, for the points on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkState {
+    /// The link is down (a point on it shows the last value it had).
+    pub down: bool,
+    pub error: Option<String>,
 }
 
-impl PointNames {
-    /// The names a map gives its points.
-    #[must_use]
-    pub fn of(map: &helmsman_nodecore::iomap::IoMap) -> Self {
-        let own = |points: &[helmsman_nodecore::iomap::Point]| {
-            helmsman_nodecore::iomap::IoMap::names(points)
-                .into_iter()
-                .map(|n| n.map(String::from))
-                .collect()
-        };
-        Self {
-            inputs: own(&map.inputs),
-            outputs: own(&map.outputs),
-        }
-    }
+/// The links as the signals list needs them, one a device.
+#[must_use]
+pub fn link_states(shared: &Shared) -> Vec<LinkState> {
+    with(shared, |live| {
+        live.devices
+            .iter()
+            .map(|d| LinkState {
+                down: d.up == Some(false),
+                error: if d.up == Some(false) {
+                    d.error.clone()
+                } else {
+                    None
+                },
+            })
+            .collect()
+    })
 }
 
-/// The node's signals: the block's points as the I/O task moves them,
-/// named by the map (`names`), then the program's ports with their
-/// values. The runtime does not list located variables (`AT %IX0.0`), so
-/// the points are read here from the image.
+/// The node's signals: the map's points as the I/O tasks move them (an
+/// input from `inputs`, an output from `outputs`), by name, in the
+/// order the map's image gives them, then the program's ports with their
+/// values. A point on a device whose link is down keeps its last value
+/// and says so (`stale`, with the link's error). The runtime does not
+/// list located variables (`AT %IX0.0`), so the points are read here from
+/// the image.
 #[must_use]
 pub fn signals_of(
     program: &Program,
+    map: &IoMap,
     inputs: &[u8; IO_BYTES],
     outputs: &[u8; IO_BYTES],
-    names: &PointNames,
+    links: &[LinkState],
 ) -> Vec<SignalView> {
-    let bit = |image: &[u8; IO_BYTES], k: usize| image.get(k / 8).is_some_and(|b| b & (1 << (k % 8)) != 0);
-    let point = |dir: &'static str, image: &[u8; IO_BYTES], k: usize, name: &Option<String>| {
-        name.as_ref().map(|n| SignalView {
-            name: n.clone(),
-            dir,
-            value: Some(SignalValue::Bool(bit(image, k))),
-            quality: "good",
-            point_error: None,
-        })
-    };
-    let mut out: Vec<SignalView> = names
-        .inputs
-        .iter()
-        .enumerate()
-        .filter_map(|(k, n)| point("in", inputs, k, n))
-        .chain(
-            names
-                .outputs
-                .iter()
-                .enumerate()
-                .filter_map(|(k, n)| point("out", outputs, k, n)),
-        )
-        .collect();
+    let mut out: Vec<SignalView> = Vec::with_capacity(map.points.len());
+    for dir in [Dir::In, Dir::Out] {
+        let image = if dir == Dir::In { inputs } else { outputs };
+        for point in map.in_image_order(dir) {
+            let link = links.get(point.device).filter(|l| l.down);
+            out.push(SignalView {
+                name: point.name.clone(),
+                dir: if dir == Dir::In { "in" } else { "out" },
+                value: ioplan::value_at(image, point),
+                quality: if link.is_some() { "stale" } else { "good" },
+                point_error: link.and_then(|l| l.error.clone()),
+            });
+        }
+    }
     out.extend(program.ports().iter().map(|p| {
         let value = match program.get(&p.name) {
             Some(helmsman_iec::Value::Bool(b)) => Some(SignalValue::Bool(b)),
