@@ -791,6 +791,13 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   difficulty: med
   id: downloads-for-users
 
+- [ ] **Describe carries the file's whole history, compacted at 64k tokens** — Nick, 2026-11-23: "context should carry over to where the entire commit history is slowly fed into context but compacted every 64k tokens". Today an instruction carries the program, the tests and the last five instructions on that file (`instruct::recent`), nothing older and nothing summarised. Decided in the interview that day: (1) each past change contributes its instruction, its one-line reason and its result (landed, what did not pass), not its code changes; (2) one record per file, as the last-five list is; (3) past 64k tokens the oldest part is summarised by Helmsman and the summary replaces it, the recent changes staying word for word; (4) the record goes as a cached prefix (prompt caching), and time and cost are measured on the agent ladder before it is the default. Open in the build: where a file's summary is kept so it is made once (a page in the project's History is the likely place, so it follows the project to a Skipper and into a download with `history-in-download`), how tokens are counted in the page (an estimate from characters is enough to decide when to compact), and what a hand edit, a rename or a set value contributes (their History entries already read as instructions).
+  needs: a relay profile for the summarising step and its deploy (Nick); the page half works without it and compacts nothing until the relay serves it
+  result: a change asked today knows what was asked and decided on that file from its first version on
+  est: 1w
+  difficulty: high
+  id: history-in-context
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
