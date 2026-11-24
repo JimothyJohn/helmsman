@@ -1,0 +1,49 @@
+helmsman-device 1
+# Novanta IMS Liberty / Lexium MDrive Ethernet (LMD), EtherNet/IP mode.
+# Identity: vendor 243, device type 43, product code 15362, revision 2.22
+# (EDS) or 2.36 (the bench unit). The connection and what each field did on
+# a unit are in docs/devices/novanta-mdrive.md ("On the bench").
+#
+# THIS IS THE LAYOUT OF ONE UNIT, NOT OF THE MANUAL. The bench unit's
+# output assembly 112 had been remapped in Novanta's TCP/IP Configuration
+# Utility (P, MF, VM, ER, CF, DE, RC, pad, SL, LG, MA, RD, AS, toggle
+# bits); a unit as delivered follows the manual's table instead (A, D, MA,
+# MR, RC, HC, OT, pad, SL, VI, VM), which no unit has confirmed. Read the
+# unit's E.I.P. mapping page before trusting an output channel.
+#
+# Proven on the bench (2026-11-16/17), one field at a time and read back
+# over MCode: enabled, moving, position, error-code (input); enable,
+# run-current, slew (output). max-velocity is the field's place in the
+# remapped layout and was not tried with a valid value.
+#
+# Left out on purpose, not proven: MF (4..7), ER out (12..15), CF (16), LG
+# (24..27), RD and AS (32, 33), the toggle bits (34..35), the input
+# assembly's LL (12..15) and the IN byte (1).
+# MA (move absolute, 28..31) is left out and must stay out of any default:
+# the first image sent to the unit put a velocity there and it moved
+# at about 1300 rpm; a small MA later moved nothing and left errors 25, 30.
+# Moves are made with slew until MA is understood.
+#
+# A silent controller does not stop a slew on this unit (only a
+# Forward_Close or an idle header does): safe= below is applied by the
+# box, the drive does not apply it itself. See TODO.md mdrive-bringup.
+vendor Novanta IMS
+model  Liberty / Lexium MDrive Ethernet (LMD), EtherNet/IP
+kind   drive
+
+# 36 bytes O->T (with the run/idle header the box adds: the unit wants it
+# though its EDS says modeless), 16 bytes T->O. The unit grants any RPI
+# from 1 to 500 ms and sends 1.3 to 1.5 times slower than granted.
+transport enip-io config=1 o2t=112:36 t2o=100:16 rpi_ms=20 cycle_ms=20..500
+
+# input assembly 100
+in  enabled        bool enip-io=in:0.0
+in  moving         bool enip-io=in:0.1
+in  position       int  unit=steps enip-io=in:4:i32
+in  error-code     int  enip-io=in:8:i32
+
+# output assembly 112 (the bench unit's mapping)
+out max-velocity   int  unit=steps/s enip-io=out:8:u32
+out enable         int  safe=0 enip-io=out:17:u8
+out run-current    int  unit=% enip-io=out:18:u8
+out slew           int  unit=steps/s safe=0 enip-io=out:20:i32
