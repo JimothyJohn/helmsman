@@ -2379,6 +2379,25 @@ fn box_ui(
         )
     });
     chrome.hit("agent instruction", shown);
+    // An outline while it waits, so the one row reads as the place to
+    // type and not as a status line (egui outlines it once it has focus).
+    if !failed && !field.has_focus() && s.run.is_none() {
+        ui.painter().rect_stroke(
+            shown.expand(1.0),
+            4.0,
+            egui::Stroke::new(1.0, t.muted),
+            egui::StrokeKind::Outside,
+        );
+    }
+    // A click on the answer area a frame ago: the keyboard comes here.
+    let asked = egui::Id::unique("agent-instruction-focus");
+    let now = ui.ctx().cumulative_pass_nr();
+    if ui.data(|d| d.get_temp::<u64>(asked)).is_some_and(|at| at < now) {
+        ui.data_mut(|d| d.remove::<u64>(asked));
+        if s.run.is_none() {
+            field.request_focus();
+        }
+    }
     enter
 }
 
@@ -2478,6 +2497,8 @@ fn area_ui(
 ) -> Option<Act> {
     let t = crate::theme::theme(ui);
     let mut act = None;
+    // The versions' index has a search box of its own to click into.
+    let versions = v.versions.is_some() && s.versions_open;
     let frame = egui::Frame::new()
         .fill(ui.visuals().faint_bg_color)
         .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.4)))
@@ -2510,6 +2531,24 @@ fn area_ui(
         })
         .response;
     chrome.hit("agent answer area", r.rect);
+    // The area is where the box used to be, and it is the biggest thing
+    // in the tab: a click anywhere in it puts the keyboard in the box
+    // under it (Nick, 2026-11-23: "I can't even type"). Read from the
+    // pointer, since what the area holds takes the click itself: an
+    // example still lands in the box, a button still acts.
+    if !versions
+        && fill.is_some()
+        && ui.input(|i| i.pointer.primary_clicked())
+        && ui
+            .input(|i| i.pointer.interact_pos())
+            .is_some_and(|p| r.rect.contains(p))
+    {
+        // Handed over on the next frame: asked for now, the box (drawn
+        // after this) would see the same click as one made elsewhere and
+        // give the keyboard straight back.
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(egui::Id::unique("agent-instruction-focus"), pass));
+    }
     act
 }
 
