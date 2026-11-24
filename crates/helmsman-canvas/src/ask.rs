@@ -352,10 +352,13 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, card: &Card) ->
     let q = card.shown()?;
     let t = crate::theme::theme(ui);
     let mut clicked = None;
+    // In the accent colour, filled: a question is the one thing in the
+    // tab that waits for an answer, and it must not pass for a status.
     let frame = egui::Frame::new()
-        .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.5)))
-        .corner_radius(4.0)
-        .inner_margin(6.0);
+        .fill(t.accent.gamma_multiply(0.12))
+        .stroke(egui::Stroke::new(2.0, t.accent))
+        .corner_radius(6.0)
+        .inner_margin(8.0);
     let room = (ui.available_height() - 16.0).max(120.0);
     let r = frame
         .show(ui, |ui| {

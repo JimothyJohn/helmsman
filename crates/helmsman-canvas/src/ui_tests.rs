@@ -1712,15 +1712,16 @@ END_PROGRAM",
             area.height() >= 0.45 * tab.height(),
             "the answer area: {area:?} in {tab:?}"
         );
-        // Nick, 2026-11-23: the box at the bottom, one row, growing
-        // upward to four as it is typed in; the answer does not move.
+        // Nick, 2026-11-23 (evening): the box at the top, one row, growing
+        // to four as it is typed in; its buttons under it, then the answer
+        // down to the bottom of the tab. (That morning it was asked for at
+        // the bottom, growing upward; tried, it was not where a hand went.)
         let send = h.rect("agent send");
-        assert!(area.bottom() < field.top(), "the answer over the box");
         assert!(
-            field.bottom() <= send.top() + 1.0,
-            "the buttons under the box: {field:?} {send:?} {area:?}"
+            field.bottom() <= send.top() + 1.0 && send.bottom() <= area.top() + 1.0,
+            "the box, its buttons, the answer: {field:?} {send:?} {area:?}"
         );
-        assert!(send.bottom() <= h.size.y, "on screen: {send:?}");
+        assert!(area.bottom() <= h.size.y, "on screen: {area:?}");
         assert!(field.height() < 2.0 * 24.0, "one row to start: {field:?}");
         h.click(field.center());
         h.frame(vec![Event::Text("one\ntwo\nthree\nfour\nfive\nsix".into())]);
@@ -1730,14 +1731,14 @@ END_PROGRAM",
             grown.height() >= 3.5 * 24.0 && grown.height() <= 5.0 * 24.0,
             "four rows of six, the rest scrolls inside: {grown:?}"
         );
+        assert!((grown.top() - field.top()).abs() <= 1.0, "its top edge stays");
         assert!(
-            (grown.bottom() - field.bottom()).abs() <= 1.0,
-            "its bottom edge stays"
+            (over.bottom() - area.bottom()).abs() <= 1.0,
+            "the answer still ends at the bottom of the tab: {over:?} was {area:?}"
         );
-        assert!((over.top() - area.top()).abs() <= 1.0, "the answer's top stays");
         assert!(
-            (h.rect("agent send").top() - send.top()).abs() <= 1.0,
-            "the buttons stay"
+            h.rect("agent send").top() >= grown.bottom() - 1.0,
+            "the buttons stay under the box"
         );
         h.app.sim.as_mut().unwrap().instruct.draft.clear();
         h.wait(0.5);
@@ -1909,7 +1910,7 @@ END_PROGRAM",
     /// keep their width at the right pane's default, with the longest
     /// names.
     #[test]
-    fn the_tab_offers_examples_and_fixes_names_at_the_panels_width() {
+    fn the_tab_fixes_names_and_offers_no_examples_at_the_panels_width() {
         let long = "Conveyor_Infeed_Photo_Eye_Blocked_Too_Long_Alarm_Lamp";
         let src = format!(
             "PROGRAM line\nVAR_INPUT\n  StartPB : BOOL;\n  StopPB : BOOL;\nEND_VAR\nVAR_OUTPUT\n  GreenLamp : BOOL;\n  {long} : BOOL;\nEND_VAR\nGreenLamp := StartPB AND NOT StopPB;\n{long} := StopPB;\nEND_PROGRAM\n"
@@ -1932,24 +1933,11 @@ END_PROGRAM",
             assert!((h.rect("left").right() - left.right()).abs() <= 8.0, "{what}");
             assert!((right.left() - h.rect("right").left()).abs() <= 8.0, "{what}");
         };
-        assert!(h.has("phrase examples") && h.has("phrase example 0"));
-        assert!(
-            h.drew("Turn GreenLamp on when StartPB is pressed and keep it on until StopPB is pressed"),
-            "spelled as the source writes them"
-        );
-        let area = h.rect("agent answer area");
-        assert!(
-            h.rect("phrase example 0").top() >= area.top(),
-            "in the answer area"
-        );
-        kept(&h, "examples");
-        h.press("phrase example 0");
-        h.wait(0.2);
-        assert_eq!(
-            h.app.sim.as_ref().unwrap().instruct.draft,
-            "Turn GreenLamp on when StartPB is pressed and keep it on until StopPB is pressed"
-        );
-        assert!(!h.has("phrase examples"), "a box with words in it: no examples");
+        // No example prompts (Nick, 2026-11-23: "confusing"): the empty
+        // tab offers nothing to click that writes an instruction.
+        assert!(!h.has("phrase examples") && !h.has("phrase example 0"));
+        assert!(!h.drew("For example"));
+        kept(&h, "empty");
         // Words for a name: the fix, then the name in the box.
         let typed = "flash the conveyor infeed photo eye blocked too long alarm lamp while stop pb is held";
         h.app.sim.as_mut().unwrap().instruct.draft = typed.into();
@@ -5307,6 +5295,19 @@ mod simulated {
                 card.bottom() <= 860.0,
                 "{what}: the card ends at {} pt, off the screen",
                 card.bottom()
+            );
+            // Nick, 2026-11-23: a question pops up on its own, between
+            // the buttons and the answer area, never inside the answer.
+            let (send, area) = (
+                h.app
+                    .chrome
+                    .rect("agent send")
+                    .or_else(|| h.app.chrome.rect("agent stop")),
+                h.rect("agent answer area"),
+            );
+            assert!(
+                send.is_some_and(|s| card.top() >= s.bottom() - 1.0) && card.bottom() <= area.top() + 1.0,
+                "{what}: the card {card:?} between the buttons {send:?} and the answer {area:?}"
             );
             for key in [
                 "agent question",

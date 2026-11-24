@@ -1,9 +1,10 @@
 //! Help with the words of an instruction (Nick, 2026-11-22: "seems to
 //! have a lot of programming issues so I might need some prompting
-//! assistance", then picked help in the tab over a prompt rework):
-//! example requests made from the program's own inputs and outputs, and
-//! the I/O names an instruction spells another way, each with a fix one
-//! click applies. All of it is worked out here: nothing is sent.
+//! assistance", then picked help in the tab over a prompt rework): the
+//! I/O names an instruction spells another way, each with a fix one
+//! click applies. All of it is worked out here: nothing is sent. (The
+//! example requests it also offered went on 2026-11-23: Nick found them
+//! confusing in the tab.)
 
 /// One input or output of the program, spelled as its source writes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,62 +23,8 @@ pub struct Fix {
     pub to: String,
 }
 
-/// At most this many examples are offered.
-pub const EXAMPLES: usize = 3;
-
 /// At most this many fixes are offered at once.
 pub const FIXES: usize = 3;
-
-/// Example requests for a program with `io`: each names the program's
-/// own inputs and outputs and says when, the way a request that passes
-/// its checks first time does. With no I/O to name, three small machines.
-#[must_use]
-pub fn examples(io: &[Io]) -> Vec<String> {
-    let ins: Vec<&str> = io
-        .iter()
-        .filter(|p| p.input && p.boolean)
-        .map(|p| p.name.as_str())
-        .collect();
-    let outs: Vec<&str> = io
-        .iter()
-        .filter(|p| !p.input && p.boolean)
-        .map(|p| p.name.as_str())
-        .collect();
-    let nums: Vec<&str> = io
-        .iter()
-        .filter(|p| p.input && !p.boolean)
-        .map(|p| p.name.as_str())
-        .collect();
-    let mut out = Vec::new();
-    if let (Some(o), [a, b, ..]) = (outs.first(), ins.as_slice()) {
-        out.push(format!(
-            "Turn {o} on when {a} is pressed and keep it on until {b} is pressed"
-        ));
-    }
-    if let (Some(o), Some(a)) = (outs.first(), ins.first()) {
-        out.push(format!(
-            "Turn {o} on 3 s after {a} goes on, and off as soon as {a} goes off"
-        ));
-    }
-    if let (Some(n), Some(o)) = (nums.first(), outs.first()) {
-        out.push(format!("Turn {o} on while {n} is above 50"));
-    }
-    if let (Some(a), Some(o)) = (ins.first(), outs.get(1).or(outs.first())) {
-        out.push(format!("Count each press of {a} and turn {o} on at the 5th"));
-    }
-    if let [o, p, ..] = outs.as_slice() {
-        out.push(format!("Flash {p} once a second while {o} is on"));
-    }
-    if out.is_empty() {
-        out = vec![
-            "A start and a stop button run a motor; the motor stops 10 s after stop is pressed".into(),
-            "A traffic light: red 5 s, green 5 s, yellow 2 s, over and over".into(),
-            "Count parts on a photo eye and stop the conveyor at the 10th".into(),
-        ];
-    }
-    out.truncate(EXAMPLES);
-    out
-}
 
 /// The names `draft` spells another way than `io` declares them: a
 /// declared `GreenLamp` or `green_lamp` typed as "green lamp", and a
@@ -282,31 +229,6 @@ mod tests {
             io("GreenLamp", false, true),
             io("RED_LAMP", false, true),
         ]
-    }
-
-    #[test]
-    fn examples_name_the_programs_own_io() {
-        let ex = examples(&lamp());
-        assert_eq!(ex.len(), EXAMPLES);
-        assert_eq!(
-            ex[0],
-            "Turn GreenLamp on when StartPB is pressed and keep it on until stop_pb is pressed"
-        );
-        assert!(ex[1].contains("GreenLamp") && ex[1].contains("StartPB"), "{ex:?}");
-        assert_eq!(ex[2], "Turn GreenLamp on while Speed is above 50");
-    }
-
-    #[test]
-    fn a_program_with_no_io_gets_three_small_machines() {
-        let ex = examples(&[]);
-        assert_eq!(ex.len(), 3);
-        assert!(ex.iter().all(|e| !e.contains('{')), "{ex:?}");
-    }
-
-    #[test]
-    fn a_program_with_only_outputs_still_gets_examples() {
-        let ex = examples(&[io("Red", false, true), io("Green", false, true)]);
-        assert_eq!(ex, ["Flash Green once a second while Red is on"]);
     }
 
     #[test]

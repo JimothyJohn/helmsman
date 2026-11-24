@@ -2301,33 +2301,34 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
         {
             act = big_ui(ui, chrome, estimate).or(act);
         }
+        act = question_ui(ui, chrome, v).or(act);
         return area_ui(ui, chrome, s, v, None).or(act);
     };
-    // Top down, with the heights worked out first: the answer area takes
-    // what the box, the buttons' row (as tall as it was drawn last
-    // frame) and the owner's room under the tab leave, so the box's
-    // bottom edge stays where it is while its top moves.
-    let mut act = None;
+    // Top down: the box, its buttons, a question when there is one, and
+    // the answer area in what is left.
+    let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
+    let height = box_height(ui, empty);
+    let enter = box_ui(ui, chrome, s, v, Some(height));
+    let mut act = buttons_ui(ui, chrome, s, v, enter);
     if let Some(estimate) = v.big
         && !s.busy()
     {
-        act = big_ui(ui, chrome, estimate);
+        act = big_ui(ui, chrome, estimate).or(act);
     }
-    let row = ui.spacing().interact_size.y;
-    let gap = ui.spacing().item_spacing.y;
-    let buttons_id = egui::Id::unique("agent-buttons-height");
-    let buttons = ui.data(|d| d.get_temp::<f32>(buttons_id)).unwrap_or(2.0 * row);
-    let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
-    let height = box_height(ui, empty);
-    let fill = (ui.available_height() - height - buttons - 2.0 * ANSWER_MARGIN - 2.0 - 3.0 * gap - below)
-        .max(3.0 * row);
-    act = area_ui(ui, chrome, s, v, Some(fill)).or(act);
-    let enter = box_ui(ui, chrome, s, v, Some(height));
-    let top = ui.cursor().top();
-    act = buttons_ui(ui, chrome, s, v, enter).or(act);
-    let drawn = ui.cursor().top() - top - gap;
-    ui.data_mut(|d| d.insert_temp(buttons_id, drawn));
-    act
+    act = question_ui(ui, chrome, v).or(act);
+    let fill = (ui.available_height() - 2.0 * ANSWER_MARGIN - 2.0 - below).max(0.0);
+    area_ui(ui, chrome, s, v, Some(fill)).or(act)
+}
+
+/// The question that waits for the engineer, on its own between the
+/// buttons and the answer area (Nick, 2026-11-23: "the questions should
+/// pop up distinctly"): [`crate::ask::ui`] draws it as a card in the
+/// accent colour.
+fn question_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, v: &View) -> Option<Act> {
+    let card = v.card.as_ref()?;
+    let k = crate::ask::ui(ui, chrome, card);
+    ui.add_space(4.0);
+    k.map(Act::Answer)
 }
 
 /// The instruction box, `height` tall. Returns whether Enter was pressed
@@ -2609,11 +2610,6 @@ fn answer_area(
 
     let t = crate::theme::theme(ui);
     let mut act = None;
-    if let Some(card) = &v.card
-        && let Some(k) = crate::ask::ui(ui, chrome, card)
-    {
-        act = Some(Act::Answer(k));
-    }
     let plan = s.run.as_ref().and_then(|r| match &r.mode {
         Mode::Steps(p) => Some(p),
         _ => None,
@@ -2658,14 +2654,6 @@ fn answer_area(
                 None => {}
             }
         }
-    }
-    if s.draft.trim().is_empty()
-        && let Some(io) = &v.io
-    {
-        if s.outcome.is_some() {
-            ui.add_space(12.0);
-        }
-        examples_ui(ui, chrome, s, io);
     }
     act
 }
@@ -2786,42 +2774,5 @@ fn fixes_ui(
     }
     if !fixes.is_empty() {
         ui.add_space(6.0);
-    }
-}
-
-/// Example requests in the program's own names
-/// ([`crate::phrasing::examples`]): one click puts one in the box.
-fn examples_ui(
-    ui: &mut egui::Ui,
-    chrome: &mut crate::editor::Chrome,
-    s: &mut Instruct,
-    io: &[crate::phrasing::Io],
-) {
-    use egui::RichText;
-
-    let t = crate::theme::theme(ui);
-    let r = ui
-        .add(
-            egui::Label::new(
-                RichText::new("Name the inputs and outputs and say when. For example:").color(t.muted),
-            )
-            .wrap(),
-        )
-        .tip("A request that names what it reads, what it drives and when usually passes its checks first time.");
-    chrome.hit("phrase examples", r.rect);
-    for (k, e) in crate::phrasing::examples(io).into_iter().enumerate() {
-        ui.add_space(4.0);
-        let r = ui
-            .add(
-                egui::Label::new(RichText::new(format!("\u{201c}{e}\u{201d}")).color(t.fg))
-                    .wrap()
-                    .sense(egui::Sense::click()),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .tip("Puts this in the box, to change or send.");
-        chrome.hit(format!("phrase example {k}"), r.rect);
-        if r.clicked() {
-            s.draft = e;
-        }
     }
 }
