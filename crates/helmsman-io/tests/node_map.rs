@@ -5,6 +5,8 @@
 //! Modbus half runs the node's requests against the simulated device; the
 //! EtherNet/IP half holds the node's assembly codec to the box's `Point`.
 
+#![allow(clippy::format_push_string)] // tests build map text a line at a time
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 

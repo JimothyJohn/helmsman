@@ -239,6 +239,7 @@ impl State {
 
     /// Answers one request PDU (App §6), or an exception (App §7).
     #[must_use]
+    #[allow(clippy::too_many_lines)] // one arm a function code
     pub fn handle(&mut self, pdu: &[u8]) -> Vec<u8> {
         let Some(&fc) = pdu.first() else {
             return vec![0x80, ILLEGAL_FUNCTION];
