@@ -390,6 +390,8 @@ pub struct Pending {
 
 /// Everything the Editor knows about the box's projects.
 #[derive(Debug, Default)]
+// Each flag is its own fact (available, ended, deployed, to the node).
+#[allow(clippy::struct_excessive_bools)]
 pub struct BoxProjects {
     /// `None` until the box answered; `Some(false)`: no `--projects`.
     pub available: Option<bool>,
@@ -567,8 +569,10 @@ fn short(s: &str) -> &str {
 pub fn node_source(o: &OpenProject) -> String {
     let mut out = String::new();
     for (name, b) in &o.bufs {
-        let lower = name.to_ascii_lowercase();
-        if !lower.ends_with(".st") || lower.starts_with("test_") {
+        let st = std::path::Path::new(name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("st"));
+        if !st || name.to_ascii_lowercase().starts_with("test_") {
             continue;
         }
         if !out.is_empty() && !out.ends_with('\n') {

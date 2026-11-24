@@ -472,7 +472,7 @@ fn opened(files: &[(&str, &str)]) -> crate::box_projects::OpenProject {
     }
 }
 
-fn check_answer(body: serde_json::Value) -> crate::box_projects::Answer {
+fn check_answer(body: &serde_json::Value) -> crate::box_projects::Answer {
     crate::box_projects::Answer {
         status: 200,
         retry_after: None,
@@ -503,7 +503,7 @@ fn a_checked_project_goes_to_the_watched_skipper_as_one_program() {
     p.deploy = Deploy::Checking;
     p.answer(
         PCall::Check("skipper_drive".into()),
-        &check_answer(serde_json::json!({
+        &check_answer(&serde_json::json!({
             "ok": true, "held": [], "diagnostics": [], "warnings": [],
             "modules": [{"name": "drive", "file": "main.st"}],
             "approval": {"needs": {"replay": true}}
@@ -554,7 +554,7 @@ fn a_held_or_two_program_project_is_not_sent_to_a_skipper() {
         p.open = Some(opened(&[("main.st", NEW)]));
         p.to_node = true;
         p.deploy = Deploy::Checking;
-        p.answer(PCall::Check("skipper_drive".into()), &check_answer(body));
+        p.answer(PCall::Check("skipper_drive".into()), &check_answer(&body));
         assert_eq!(p.poll().len(), 0);
         let Deploy::Failed(why) = &p.deploy else {
             panic!("{:?}", p.deploy)
