@@ -1583,7 +1583,7 @@ pub fn history<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<
             }
             out.clear();
             out.push(format!(
-                "(a summary of the {} earlier changes) {text}",
+                "{SUMMARISED}{} earlier changes) {text}",
                 clean(covers, 12)
             ));
             continue;
@@ -1609,6 +1609,192 @@ pub fn history<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<
     out
 }
 
+/// How the entry that is a summary opens, before the count it covers.
+const SUMMARISED: &str = "(a summary of the ";
+
+/// A History page as the project's history log keeps it
+/// (`sim_projects::SimProjects::log`): a change's instruction, file,
+/// reason and result and nothing else of its record, or a summary page
+/// whole. `None` for a page that is neither. The log outlives the
+/// revisions (a browser keeps twenty), so what was asked and decided is
+/// still known when the version that did it is gone.
+#[must_use]
+pub fn log_entry(page: &str) -> Option<String> {
+    let mut lines = page.lines();
+    let first = lines.next()?;
+    if first.starts_with(SUMMARY) {
+        let covers = lines.next().filter(|l| l.starts_with(COVERS))?;
+        let text = clean(&lines.collect::<Vec<_>>().join(" "), MAX_SUMMARY);
+        return (!text.is_empty()).then(|| format!("{first}\n{covers}\n{text}\n"));
+    }
+    let i = first.strip_prefix(INSTRUCTION).filter(|i| !i.trim().is_empty())?;
+    let f = lines.next()?.strip_prefix(FILE)?;
+    let mut out = format!("{INSTRUCTION}{}\n{FILE}{f}\n", clean(i, MAX_INSTRUCTION));
+    if let Some(w) = field(page, "Why: ") {
+        let _ = writeln!(out, "Why: {}", clean(&w, MAX_REASON));
+    }
+    if let Some(r) = field(page, "Result: ") {
+        let _ = writeln!(out, "Result: {}", clean(&r, MAX_REASON));
+    }
+    Some(out)
+}
+
+/// `text` between `<tag>` and `</tag>`, for the summary agent's message.
+/// Every closing tag inside it is defanged (`<\/`), white space after
+/// the `<` included, so nothing an engineer typed or a model wrote ends
+/// an envelope early or opens another.
+fn tagged(tag: &str, text: &str) -> String {
+    let mut safe = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(k) = rest.find('<') {
+        safe.push_str(&rest[..k]);
+        let after = &rest[k + 1..];
+        safe.push('<');
+        if after.trim_start().starts_with('/') {
+            safe.push('\\');
+        }
+        rest = after;
+    }
+    safe.push_str(rest);
+    format!("<{tag}>\n{safe}\n</{tag}>\n")
+}
+
+/// The relay agent that writes a summary.
+pub const SUMMARY_AGENT: &str = "summary";
+/// The most of a history one request to it carries, in tokens: the
+/// oldest changes beyond that wait for the next summary.
+const SUMMARY_INPUT: usize = 48_000;
+
+/// A summary to ask for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compact {
+    pub file: String,
+    /// How many of the changes in front of the request the summary takes
+    /// over (the summary that already stands aside).
+    pub take: usize,
+    /// How many changes it will stand for in all, with those the earlier
+    /// summary covered.
+    pub covers: usize,
+    /// What goes to [`SUMMARY_AGENT`].
+    pub message: String,
+}
+
+/// The summary to ask for when `earlier` (the file's [`history`]) is past
+/// `budget` tokens: its oldest changes, as many as leave the rest at half
+/// the budget (and no more than one request carries), with the summary
+/// that already stands in front of them. `None` while everything fits,
+/// or when there is nothing but the newest change to give.
+#[must_use]
+pub fn compaction(earlier: &[String], file: &str, budget: usize) -> Option<Compact> {
+    let cost = |e: &String| tokens(e) + 2;
+    let total: usize = earlier.iter().map(cost).sum();
+    if total <= budget {
+        return None;
+    }
+    let (before, was) = match earlier.first().and_then(|e| e.strip_prefix(SUMMARISED)) {
+        Some(rest) => {
+            let (n, text) = rest.split_once(" earlier changes) ")?;
+            (n.trim().parse::<usize>().unwrap_or(0), Some(text))
+        }
+        None => (0, None),
+    };
+    let changes = &earlier[usize::from(was.is_some())..];
+    let mut over = total.saturating_sub(budget / 2);
+    let mut given = 0;
+    let mut take = 0;
+    for e in changes.iter().take(changes.len().saturating_sub(1)) {
+        if over == 0 || given + cost(e) > SUMMARY_INPUT {
+            break;
+        }
+        over = over.saturating_sub(cost(e));
+        given += cost(e);
+        take += 1;
+    }
+    if take == 0 {
+        return None;
+    }
+    let mut message = tagged("file", file);
+    if let Some(text) = was {
+        message.push_str(&tagged("earlier_summary", text));
+    }
+    let mut list = String::new();
+    for e in &changes[..take] {
+        for (k, line) in e.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let _ = writeln!(list, "{}{}", if k == 0 { "- " } else { "  " }, line.trim());
+        }
+    }
+    message.push_str(&tagged("changes", list.trim_end()));
+    Some(Compact {
+        file: file.to_string(),
+        take,
+        covers: before + take,
+        message,
+    })
+}
+
+/// The page that keeps `answer`, the agent's summary, for `ask`; `None`
+/// when the answer is no summary (empty, or far too long to be one). An
+/// answer of `NONE` is kept as a summary that says so: the changes it
+/// covers held nothing to carry on.
+#[must_use]
+pub fn summary_page(ask: &Compact, answer: &str) -> Option<String> {
+    let text = clean(&prose(answer), MAX_SUMMARY);
+    if text.is_empty() || tokens(&text) > 4_000 {
+        return None;
+    }
+    let text = if text.eq_ignore_ascii_case("none") {
+        "Nothing in these changes needs carrying on.".to_string()
+    } else {
+        text
+    };
+    Some(format!("{SUMMARY}{}\n{COVERS}{}\n{text}\n", ask.file, ask.covers))
+}
+
+/// `log` (the project's history log, [`log_entry`] pages, oldest first)
+/// with `page`, the summary asked for with `ask`, in the place of what it
+/// covers: the summary of that file that stood before it, and the
+/// `ask.take` changes to the file after that. Other files' pages and the
+/// file's later changes stay where they are.
+#[must_use]
+pub fn summarised(log: &[String], ask: &Compact, page: &str) -> Vec<String> {
+    let of = |e: &String, key: &str| {
+        let mut l = e.lines();
+        match key {
+            SUMMARY => {
+                l.next().and_then(|f| f.strip_prefix(SUMMARY)).map(str::trim) == Some(ask.file.as_str())
+            }
+            _ => {
+                l.next().is_some_and(|f| f.starts_with(INSTRUCTION))
+                    && l.next().and_then(|f| f.strip_prefix(FILE)) == Some(ask.file.as_str())
+            }
+        }
+    };
+    // What history() reads for the file starts after its last summary.
+    let from = log.iter().rposition(|e| of(e, SUMMARY));
+    let mut out = Vec::with_capacity(log.len() + 1);
+    let mut taken = 0;
+    let mut placed = false;
+    for (k, e) in log.iter().enumerate() {
+        let dead = from.is_some_and(|f| k <= f) && (of(e, SUMMARY) || of(e, INSTRUCTION));
+        let covered = !dead && from.is_none_or(|f| k > f) && of(e, INSTRUCTION) && taken < ask.take;
+        if covered {
+            taken += 1;
+        }
+        if dead || covered {
+            if !placed {
+                out.push(page.to_string());
+                placed = true;
+            }
+            continue;
+        }
+        out.push(e.clone());
+    }
+    if !placed {
+        out.push(page.to_string());
+    }
+    out
+}
+
 /// Longest summary taken from a [`SUMMARY`] page, in characters.
 const MAX_SUMMARY: usize = 24_000;
 
@@ -1625,7 +1811,7 @@ pub fn fit(earlier: &[String], budget: usize) -> Vec<String> {
     }
     // Room for the line that says what is missing.
     let budget = budget.saturating_sub(24);
-    let summary = earlier.first().filter(|e| e.starts_with("(a summary of "));
+    let summary = earlier.first().filter(|e| e.starts_with(SUMMARISED));
     let rest = &earlier[usize::from(summary.is_some())..];
     let mut room = budget.saturating_sub(summary.map_or(0, cost));
     let mut kept = 0;

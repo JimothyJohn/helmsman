@@ -434,6 +434,11 @@ mod glyphs_and_help {
             h.app.sim.as_ref().unwrap().session.scans > scans,
             "a step moves on"
         );
+        // The clock text is a figure wider than it was: the strip takes a
+        // few frames to settle on it.
+        for _ in 0..4 {
+            h.frame(vec![]);
+        }
         h.press("restart");
         assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
         h.press("run");
@@ -447,7 +452,7 @@ mod glyphs_and_help {
             assert_eq!((s.scans, s.now_ms), (0, 0));
         }
         h.frame(vec![]);
-        assert!(h.drew("stopped · 0.0s"));
+        assert!(h.drew("stopped · 0.00s"));
         h.press("run");
         assert!(
             h.app.sim.as_ref().unwrap().session.running,
@@ -1880,24 +1885,21 @@ END_PROGRAM",
                 "running before the change"
             );
         }
-        // The View menu's switch, on (and remembered): the change lands
-        // stopped, to run from scratch.
-        assert!(h.app.chrome.saved().contains("reset=0"), "off to start");
-        h.view_menu("view agent resets");
+        // Nick, 2026-11-23: no stop and reset after a change, in the tab
+        // or the View menu. A layout saved with the old switch on still
+        // reads, and the change runs at once all the same.
+        assert!(!h.app.chrome.saved().contains("reset="), "nothing to remember");
+        h.app.chrome = crate::editor::Chrome::restored(&format!("{} reset=1", h.app.chrome.saved()));
+        h.press("bar view");
+        assert!(!h.has("view agent resets"), "no switch in the View menu");
+        h.press("bar view");
         h.frame(vec![]);
-        assert!(
-            crate::editor::Chrome::restored(&h.app.chrome.saved()).agent_resets,
-            "remembered"
-        );
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
         {
             let v = h.app.sim.as_ref().unwrap();
             assert_eq!(v.proj.files["main.st"], new);
-            assert!(
-                !v.session.running && v.session.scans == 0 && v.session.now_ms == 0,
-                "the change lands stopped and reset"
-            );
+            assert!(v.session.running, "the change runs at once");
             let logged = v
                 .log
                 .iter()
@@ -1944,14 +1946,9 @@ END_PROGRAM",
             h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
             "the change is marked"
         );
-        // A second instruction: the arrows walk back over both. The tab
-        // has no switch for it: in the simulation a change runs at once
-        // unless the View menu says to stop and reset.
+        // A second instruction: the arrows walk back over both.
         let newer = new.replace("(* follows start *)", "(* on with start *)");
         assert!(!h.has("agent resets"), "no checkbox in the tab");
-        h.view_menu("view agent resets");
-        h.frame(vec![]);
-        assert!(h.app.chrome.saved().contains("reset=0"), "off again");
         h.click(h.rect("agent instruction").center());
         h.frame(vec![Event::Text("reword it".into())]);
         h.press("agent send");
@@ -1963,7 +1960,7 @@ END_PROGRAM",
         assert_eq!(main(&h), newer);
         assert!(
             h.app.sim.as_ref().unwrap().session.running,
-            "switched off, the change runs at once"
+            "the second change runs at once too"
         );
         let enabled = |h: &mut Harness, key: &str| {
             let before = main(h);

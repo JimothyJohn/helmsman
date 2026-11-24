@@ -458,7 +458,7 @@ impl BoxTrend {
                 .last()
                 .map(|p| p.1)
                 .filter(|v| v.is_finite())
-                .map(|v| Value::Real(v).to_string());
+                .map(helmsman_iec::shown_real);
             crate::ekg::paint_lane(
                 &painter,
                 &t,

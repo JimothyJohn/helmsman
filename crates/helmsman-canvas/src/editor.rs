@@ -265,11 +265,6 @@ pub struct Chrome {
     /// protocols, addresses and typed points. Off, a device is added by
     /// a click on what the scan found. Remembered per browser.
     pub advanced: bool,
-    /// The Agent tab's "Stop and reset after a change" switch in the
-    /// simulation (Nick, 2026-11-14): on, a change the Agent lands leaves
-    /// the program stopped with every variable at its initial value, to
-    /// be run from scratch; off, it runs at once. Remembered per browser.
-    pub agent_resets: bool,
     /// The I/O tab shows its points as tiles, not one to a row
     /// ([`crate::io_cards`]). Remembered.
     pub io_grid: bool,
@@ -310,7 +305,6 @@ impl Default for Chrome {
             hints: crate::st_hints::Hints::default(),
             folds: crate::st_fold::Folds::default(),
             advanced: false,
-            agent_resets: false,
             io_grid: false,
             io_fold_in: false,
             io_fold_out: false,
@@ -360,7 +354,7 @@ impl Chrome {
             format!(" hidden={}", list(&self.hidden))
         };
         format!(
-            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} msgs={} light={} wrap={} advanced={} reset={} iogrid={} iofold={}{} filefold={}{}{colors}",
+            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} msgs={} light={} wrap={} advanced={} iogrid={} iofold={}{} filefold={}{}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             list(&self.lefts),
@@ -371,7 +365,6 @@ impl Chrome {
             u8::from(self.light),
             u8::from(self.wrap),
             u8::from(self.advanced),
-            u8::from(self.agent_resets),
             u8::from(self.io_grid),
             u8::from(self.io_fold_in),
             u8::from(self.io_fold_out),
@@ -400,7 +393,6 @@ impl Chrome {
                 Some(("light", v)) => c.light = v == "1",
                 Some(("wrap", v)) => c.wrap = v == "1",
                 Some(("advanced", v)) => c.advanced = v == "1",
-                Some(("reset", v)) => c.agent_resets = v == "1",
                 Some(("iogrid", v)) => c.io_grid = v == "1",
                 Some(("iofold", v)) => {
                     c.io_fold_in = v.starts_with('1');
