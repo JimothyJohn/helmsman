@@ -860,7 +860,11 @@ impl FilesUi {
                 )
                 .tip(format!(
                     "The name ({hint}). A space is saved as _{}. Enter confirms.",
-                    if project { " and capitals as small letters" } else { "" }
+                    if project {
+                        " and capitals as small letters"
+                    } else {
+                        ""
+                    }
                 ));
             chrome.hit("name", t.rect);
             if std::mem::take(&mut self.focus_name) {
