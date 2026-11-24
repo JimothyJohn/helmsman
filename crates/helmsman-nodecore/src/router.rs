@@ -372,7 +372,10 @@ fn io_map_check(req: &Request, view: &NodeView, settings: &Settings) -> Outcome 
         return Outcome::Reply(Response::error(422, &alloc::format!("{bad}")));
     }
     if check.running {
-        return Outcome::Reply(Response::error(409, "a check is already running; read GET /api/io_map/check"));
+        return Outcome::Reply(Response::error(
+            409,
+            "a check is already running; read GET /api/io_map/check",
+        ));
     }
     Outcome::Effect(Effect::CheckIoMap { text, page: false })
 }
@@ -745,7 +748,11 @@ mod tests {
         let j = refused(&checking(None, 0, 10), CHECKED);
         assert!(j["error"].as_str().unwrap().contains("still running"));
         // One device silent: named.
-        let silent = checking(Some(&[ok.clone(), Verdict::Failed("link: connect timed out".into())]), 5, 10);
+        let silent = checking(
+            Some(&[ok.clone(), Verdict::Failed("link: connect timed out".into())]),
+            5,
+            10,
+        );
         let j = refused(&silent, CHECKED);
         assert!(j["error"].as_str().unwrap().contains("sim did not answer"), "{j}");
         assert_eq!(j["check"]["devices"][1]["error"], "link: connect timed out");
@@ -759,12 +766,25 @@ mod tests {
             })
         );
         let other = CHECKED.replace("di:0", "di:1");
-        assert!(refused(&passed, &other)["error"].as_str().unwrap().contains("has not been checked"));
+        assert!(
+            refused(&passed, &other)["error"]
+                .as_str()
+                .unwrap()
+                .contains("has not been checked")
+        );
         let stale = checking(Some(&[ok.clone(), ok]), 5, 5 + FRESH_MS);
-        assert!(refused(&stale, CHECKED)["error"].as_str().unwrap().contains("check it again"));
+        assert!(
+            refused(&stale, CHECKED)["error"]
+                .as_str()
+                .unwrap()
+                .contains("check it again")
+        );
         // The token and the parser still come first.
         assert_eq!(reply(handle(&put_map("", CHECKED), &passed, &s)).status, 401);
-        assert_eq!(reply(handle(&put_map(AUTH, "device rio enip 1.1.1.1\n"), &passed, &s)).status, 422);
+        assert_eq!(
+            reply(handle(&put_map(AUTH, "device rio enip 1.1.1.1\n"), &passed, &s)).status,
+            422
+        );
     }
 
     #[test]
@@ -773,7 +793,10 @@ mod tests {
         let mut idle = sample_view();
         idle.check = Some(crate::check::Check::default());
         assert_eq!(reply(handle(&post_check("", CHECKED), &idle, &s)).status, 401);
-        assert_eq!(reply(handle(&post_check(AUTH, "nonsense here\n"), &idle, &s)).status, 422);
+        assert_eq!(
+            reply(handle(&post_check(AUTH, "nonsense here\n"), &idle, &s)).status,
+            422
+        );
         assert_eq!(
             handle(&post_check(AUTH, CHECKED), &idle, &s),
             Outcome::Effect(Effect::CheckIoMap {
@@ -796,7 +819,10 @@ mod tests {
         // A board that does not check has neither route, and saves as before.
         let plain = sample_view();
         assert_eq!(reply(handle(&post_check(AUTH, CHECKED), &plain, &s)).status, 404);
-        assert_eq!(reply(handle(&req("GET /api/io_map/check HTTP/1.1\r\n\r\n"), &plain, &s)).status, 404);
+        assert_eq!(
+            reply(handle(&req("GET /api/io_map/check HTTP/1.1\r\n\r\n"), &plain, &s)).status,
+            404
+        );
         assert!(matches!(
             handle(&put_map(AUTH, CHECKED), &plain, &s),
             Outcome::Effect(Effect::SaveIoMap { .. })
@@ -811,35 +837,57 @@ mod tests {
         use crate::check::Verdict;
         let s = settings();
         let silent = checking(
-            Some(&[Verdict::Answered { ms: 4 }, Verdict::Failed("<b>refused</b>".into())]),
+            Some(&[
+                Verdict::Answered { ms: 4 },
+                Verdict::Failed("<b>refused</b>".into()),
+            ]),
             5,
             10,
         );
-        let r = reply(handle(&req("GET /api/io_map/check HTTP/1.1\r\n\r\n"), &silent, &s));
+        let r = reply(handle(
+            &req("GET /api/io_map/check HTTP/1.1\r\n\r\n"),
+            &silent,
+            &s,
+        ));
         assert_eq!(r.status, 200);
         let j: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
-        assert_eq!((j["state"].as_str(), j["may_save"].as_bool()), (Some("done"), Some(false)));
-        let page = String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &silent, &s)).body).unwrap();
+        assert_eq!(
+            (j["state"].as_str(), j["may_save"].as_bool()),
+            (Some("done"), Some(false))
+        );
+        let page = String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &silent, &s)).body)
+            .unwrap();
         assert!(page.contains("Device check"));
         assert!(page.contains("answered in 4 ms"));
-        assert!(page.contains("&lt;b&gt;refused&lt;/b&gt;"), "a device's words are escaped");
+        assert!(
+            page.contains("&lt;b&gt;refused&lt;/b&gt;"),
+            "a device's words are escaped"
+        );
         assert!(page.contains("sim did not answer"));
         assert!(page.contains(">Check the devices</button>"));
         assert!(!page.contains("http-equiv=\"refresh\""));
         // The form holds the checked text, not the running map.
         assert!(page.contains("device sim modbus-tcp 192.168.3.10:1502"));
         let running = String::from_utf8(
-            reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &checking(None, 0, 1), &s)).body,
+            reply(handle(
+                &req("GET /settings HTTP/1.1\r\n\r\n"),
+                &checking(None, 0, 1),
+                &s,
+            ))
+            .body,
         )
         .unwrap();
         assert!(running.contains("http-equiv=\"refresh\""));
         assert!(running.contains("waiting"));
         let ok = Verdict::Answered { ms: 1 };
         let passed = checking(Some(&[ok.clone(), ok]), 5, 10);
-        let page = String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &passed, &s)).body).unwrap();
+        let page = String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &passed, &s)).body)
+            .unwrap();
         assert!(page.contains(">Save this map and restart</button>"));
         // A board that does not check keeps its old button and no check block.
-        let plain = String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &sample_view(), &s)).body).unwrap();
+        let plain =
+            String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &sample_view(), &s)).body)
+                .unwrap();
         assert!(plain.contains(">Save map and restart</button>"));
         assert!(!plain.contains("Device check"));
     }
@@ -860,7 +908,10 @@ mod tests {
                 page: true
             })
         );
-        assert_eq!(reply(handle(&form_map(CHECKED), &checking(None, 0, 1), &s)).status, 303);
+        assert_eq!(
+            reply(handle(&form_map(CHECKED), &checking(None, 0, 1), &s)).status,
+            303
+        );
         let ok = Verdict::Answered { ms: 1 };
         let passed = checking(Some(&[ok.clone(), ok.clone()]), 5, 10);
         assert_eq!(

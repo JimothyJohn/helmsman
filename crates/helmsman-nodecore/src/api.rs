@@ -580,10 +580,9 @@ pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>)
     // While a check runs, and for as long as its result lets the map be
     // saved or says why not, the form holds the checked text and the page
     // lists who answered.
-    let shown = view
-        .check
-        .as_ref()
-        .filter(|c| !c.text.is_empty() && (c.running || view.uptime_ms.saturating_sub(c.done_ms) < crate::check::FRESH_MS));
+    let shown = view.check.as_ref().filter(|c| {
+        !c.text.is_empty() && (c.running || view.uptime_ms.saturating_sub(c.done_ms) < crate::check::FRESH_MS)
+    });
     let map_text = shown.map_or(view.io_map.as_str(), |c| c.text.as_str());
     let refresh = if shown.is_some_and(|c| c.running) {
         "<meta http-equiv=\"refresh\" content=\"2;url=/settings\">"
