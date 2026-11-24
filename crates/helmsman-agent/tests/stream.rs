@@ -139,6 +139,52 @@ fn a_relay_error_mid_stream_fails_the_turn_and_says_whether_to_retry() {
     assert!(e.retryable);
 }
 
+/// The fixture's tool call with its input fragments replaced: `first` in
+/// the first, nothing in the rest.
+fn tool_call_with_input(first: &str, start_input: &str) -> String {
+    let mut t = fixture("tool-use.sse").replace(r#""input":{}}}"#, &format!(r#""input":{start_input}}}}}"#));
+    t = t.replace(
+        r#""partial_json":"{\"location\":""#,
+        &format!(r#""partial_json":"{first}""#),
+    );
+    for rest in [r#" \"San"#, " Francisc", "o,", r#" CA\"}"#] {
+        t = t.replace(&format!(r#""partial_json":"{rest}""#), r#""partial_json":"""#);
+    }
+    t
+}
+
+/// A tool that takes no input (list_devices, read_io_map, list_modules) is
+/// called by some models with `null` for its arguments, or a start event
+/// whose input is `null`: that is the empty object, not broken JSON
+/// (2026-11-24: the agent reported its reads "invalid JSON").
+#[test]
+fn a_null_or_empty_tool_input_is_the_empty_object() {
+    for (first, start) in [
+        ("null", "{}"),
+        ("", "null"),
+        (" null ", "{}"),
+        ("{}", "{}"),
+        ("", "{}"),
+    ] {
+        let t = turn(&tool_call_with_input(first, start));
+        assert_eq!(t.tool_calls[0].input, Ok(json!({})), "{first:?} {start}");
+        assert_eq!(t.content[1]["input"], json!({}), "{first:?} {start}");
+    }
+}
+
+/// What is not an object and not null stays broken, and is told as it was.
+#[test]
+fn an_input_that_is_neither_null_nor_an_object_stays_broken() {
+    for first in ["[]", "3", r#"\"x\""#, "nul"] {
+        let t = turn(&tool_call_with_input(first, "{}"));
+        assert!(
+            t.tool_calls[0].input.is_err(),
+            "{first}: {:?}",
+            t.tool_calls[0].input
+        );
+    }
+}
+
 #[test]
 fn broken_input_json_is_kept_as_text_and_history_gets_an_object() {
     let text =

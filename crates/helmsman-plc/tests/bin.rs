@@ -1630,3 +1630,60 @@ fn a_box_dies_with_the_test_that_started_it() {
         panic!("box {pid} outlived its test (API {api})");
     }
 }
+
+/// The box of 2026-11-24's report: `--projects`, an account, nothing
+/// deployed. The agent's reads (`BoxApi` with the box token from the state
+/// directory) answer, and a wrong token is a refusal said as one.
+#[test]
+fn the_agents_reads_answer_on_a_projects_box_with_accounts_and_nothing_deployed() {
+    use helmsman_agent::tools::{self, BoxApi, Drafts};
+    let dir = state_dir();
+    let (code, out) = account(&dir, &["add", "alice", "engineer"], "alice-secret-9\n");
+    assert_eq!(code, Some(0), "{out}");
+    let mut child = plc()
+        .args(["--projects", "--https", "off", "--state-dir"])
+        .arg(&dir)
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut api = None;
+    while api.is_none() {
+        let mut line = String::new();
+        assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
+        api = line
+            .strip_prefix("helmsman-plc: API on http://")
+            .and_then(|r| r.split('/').next())
+            .and_then(|a| a.parse::<std::net::SocketAddr>().ok());
+    }
+    let _run = Running { child, stderr };
+    let addr = api.unwrap();
+    let token = std::fs::read_to_string(dir.join("api-token"))
+        .unwrap()
+        .trim()
+        .to_string();
+    for (name, input) in [
+        ("list_devices", serde_json::json!({})),
+        ("read_io_map", serde_json::json!({})),
+        ("list_modules", serde_json::json!({})),
+        ("list_signals", serde_json::json!({ "prefix": "" })),
+    ] {
+        let o = tools::run(
+            &BoxApi::local(addr, token.clone()),
+            &mut Drafts::default(),
+            name,
+            &input,
+        );
+        assert!(o.ok, "{name}: {o:?}");
+    }
+    let bad = BoxApi::local(addr, "f".repeat(64));
+    let o = tools::run(
+        &bad,
+        &mut Drafts::default(),
+        "list_devices",
+        &serde_json::json!({}),
+    );
+    assert!(!o.ok && o.summary.starts_with("refused:"), "{o:?}");
+}
