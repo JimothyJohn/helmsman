@@ -27,6 +27,7 @@
 
 pub mod chips;
 pub mod idioms;
+pub mod ladder;
 pub mod states;
 pub mod structure;
 pub mod table;

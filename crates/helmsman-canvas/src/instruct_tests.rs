@@ -706,6 +706,63 @@ fn a_written_instruction_leaves_the_box_empty_and_can_be_recalled() {
     assert_eq!(v.instruct.draft, "comment it");
 }
 
+/// Nick, 2026-11-24: a reply that asked something "will forget what we
+/// just talked about". A reply without code is kept and goes with the
+/// next instruction, marked as not carried out; a change that lands ends
+/// the talk.
+#[test]
+fn a_reply_without_code_goes_with_the_next_instruction_until_a_change_lands() {
+    let mut v = mine();
+    instruct(
+        &mut v,
+        "make it safer",
+        &["Which do you mean: a stop button, or a timeout on the lamp?"],
+    );
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Said);
+    assert!(instruct::asks(&o.status));
+    assert_eq!(instruct::answer(&o).tone, instruct::Tone::Ask);
+    assert_eq!(v.instruct.talk.len(), 1);
+    assert_eq!(v.instruct.draft, "", "the box is empty for the answer");
+
+    // The answer goes with the question and what it was about.
+    let bodies = instruct(&mut v, "a timeout", &[&st(&commented())]);
+    let sent = &bodies[0];
+    assert!(sent.contains("(not carried out) make it safer"), "{sent}");
+    assert!(
+        sent.contains(
+            "nothing was changed. You answered: Which do you mean: a stop button, or a timeout on the lamp?"
+        ),
+        "{sent}"
+    );
+    assert!(sent.contains("a timeout"));
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
+    assert!(v.instruct.talk.is_empty(), "a change ends the talk");
+
+    // A statement is kept too, and is no question.
+    instruct(&mut v, "what does it do", &["It turns the lamp on with start."]);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert!(!instruct::asks(&o.status));
+    assert_eq!(instruct::answer(&o).tone, instruct::Tone::Note);
+    assert_eq!(v.instruct.talk.len(), 1);
+}
+
+/// The talk is one project's, and only its last few exchanges.
+#[test]
+fn the_talk_is_capped_and_stays_with_its_project() {
+    let mut v = mine();
+    for k in 0..instruct::MAX_TALK + 2 {
+        instruct(&mut v, &format!("question {k}"), &["Why do you ask?"]);
+    }
+    assert_eq!(v.instruct.talk.len(), instruct::MAX_TALK);
+    assert_eq!(v.instruct.talk[0].asked, "question 2", "the oldest went");
+    v.proj.create("other", None);
+    v.open_project("other");
+    v.tick(&egui::Context::default());
+    let bodies = instruct(&mut v, "comment it", &["No."]);
+    assert!(!bodies[0].contains("(not carried out) question"), "{}", bodies[0]);
+}
+
 #[test]
 fn undo_restores_the_version_before_the_change_and_keeps_it_in_history() {
     let mut v = mine();

@@ -110,6 +110,9 @@ mod monitor;
 mod monitor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod node_api_tests;
+mod node_map;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod node_map_tests;
 mod node_token;
 mod offers;
 mod pane_layout;

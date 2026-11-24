@@ -1063,6 +1063,129 @@ sooner**, which the board must be asked about (item 4 below).
 5. The 16 devices at once (a simulated server on the Studio per address
    alias) against the neighbour-lookup rule above, with half of them absent.
 
+### A map is saved once its devices answered the node (2026-11-24, card `node-comms-check`)
+
+Nick, 2026-11-24: "I do like being able to verify that there's not a comms
+issue before downloading the map to the Skipper", and the download is
+blocked until every device answers. The machine that wrote the map reaching
+a device says nothing about the node reaching it (another subnet, another
+switch port, a device holding its one connection for someone else), so the
+node asks, from its own port.
+
+- **`POST /api/io_map/check`** (the token; `{"text"}` or `text/plain`): the
+  map is parsed (422 with its line, as a save), then the node asks each
+  device in turn and answers 202 at once; 409 while a check runs.
+- **`GET /api/io_map/check`**: `state` (`none`, `running`, `done`),
+  `passed`, `may_save`, `age_ms`, the checked `text`, and a `devices` list
+  with each one's `state` (`waiting`, `answered` with `ms`, `failed` with
+  `error`).
+- **`PUT /api/io_map`** saves a text only when the last check was of exactly
+  that text, every device in it answered, and it finished less than ten
+  minutes ago (`check::FRESH_MS`); otherwise 409 with the reason and the
+  check. The page's form is one button: a text that has not passed is
+  checked (the page reloads while it runs and lists who answered), and the
+  same text sent again once it has passed is saved.
+- **What is asked** (`crates/helmsman-node-p4/src/check.rs`): a Modbus TCP
+  device is connected to and asked for the first read the map names on it
+  (the unit id and the address as well as the cable), or only connected to
+  when the map reads nothing from it; an EtherNet/IP device is connected to
+  and a session is registered and dropped. Nothing is written and no I/O
+  connection is opened: a check moves no output and takes no device from
+  its owner, and it runs beside the node's own I/O. So it does not prove an
+  assembly's size or an output's address; the first scan after the save
+  does, in `/api/devices`.
+- **A device on another subnet is not dialled.** With a static address and
+  no gateway the node fails it at once with the address it needs
+  (`check::off_subnet`), which tells a misaddressed device from a silent
+  one.
+- **The record is in RAM.** A restart forgets it, and a map is then checked
+  again before it is saved. The ESP32 nodes (`crates/helmsman-node`) have
+  no check and save a map as they did.
+
+- **The canvas sends the map** (card `node-comms-check`, part 2). A page
+  that watches a Skipper by address knows it by `"snapshot":"node"` in the
+  `GET /api/io_map` reply (`BoxState::io_map_node`; a box's reply carries
+  a snapshot id). Its Devices tab then has a "Skipper map" row whose
+  button opens a window (`crates/helmsman-canvas/src/node_map.rs`), not the
+  236 pt panel: the map text in a monospace editor, **Check devices**
+  (`POST /api/io_map/check`, then `GET` once a second for two minutes, a
+  line per device with its time or the node's own reason, cut to 240
+  printable characters), **Download** (`PUT /api/io_map`), and **Discard
+  edits**. Download is drawn only when the check's `may_save` is true and
+  its `text` equals the window's text character for character; one more
+  character withdraws it. A 200 says the Skipper is restarting and the
+  page's map read shows the new text when it is back; a 409 shows the
+  node's reason and the device list of its reply; a 422 shows the line.
+  Without a token the buttons say what is needed and nothing is sent. A
+  node that answers 404 to the check route (the ESP32 boards) is told so
+  in the window, and no Check or Download is offered: such a board saves a
+  map from its own page as before. Calls go through the transport Deploy
+  uses, so they carry the `?box=` origin and the bearer token.
+
+**On the board, 2026-11-24** (the P4, a four-device map): the E1213 on
+`enip-io` answered in 47 ms and the Studio's Modbus server in 45 ms while
+both were being driven by the running map; 192.168.3.99 was `link: connect
+timed out`; the MDrive's line read "192.168.33.1 is not on this node's
+network (192.168.3.56/24, no gateway): give the device an address there".
+`PUT /api/io_map` of that text was 409 before the check ("has not been
+checked") and after it ("gone, drive did not answer this node"), and the
+node kept running its old map. That board then went off USB (its serial
+port left the Studio, so not a firmware restart) and did not come back.
+
+**A check that passes, then the save (2026-11-24, a second P4, MAC
+e8:f6:0a:eb:37:b0, at 192.168.33.56/24 beside the MDrive):** the map of
+docs/devices/novanta-mdrive.md's drive (`enip-io`, assemblies 112 and 100)
+was checked: `done`, `passed`, `may_save` true, the drive answered in
+25 ms; `PUT /api/io_map` of the same text saved and restarted the node,
+which came up with `drive` up and the image addresses the program used.
+A program on that map then slewed the drive back and forth, watched live
+in a canvas page through `?box=`.
+
+**Editing the program from the canvas (2026-11-24, Nick: "It's running
+but I can't make any changes").** A box page edits through projects, which
+a node does not have, so a node's program was read-only in the canvas. An
+engineer (signed in with the node's token) now edits the running module in
+the Code pane and Deploy sends it whole as `PUT /api/modules/{name}`; the
+node compiles it and keeps the old program running if it will not, and
+the canvas says which. Two faults hid this on the bench: the canvas's
+write calls (Deploy, and the map window's Check and Download) went to the
+page's own server instead of the `?box=` origin, and the P4 served two
+HTTP connections, one of which each open page's values stream holds for
+good, so with two pages open every other request was reset. The P4 now
+serves four (`server::CONNECTIONS`; about 4 KiB of heap and 2 KiB of main
+stack each: 41.9 KiB of stack left, against 45.9 with two). A deploy from
+a headless Chromium through a `?box=` page answered 201 and the node ran
+the edited source.
+
+**The agent for a Skipper (2026-11-24, Nick: "Studio box writes").** A
+Skipper has no agent and no projects: the box on the programming side
+has both. A page that box served, opened with `?box=` naming the Skipper,
+signs in to the box (user and password: projects and the agent) and holds
+the Skipper's token (its writes); each call goes where it belongs (reads
+of the live view and a module deploy to the Skipper, everything else to
+the box). The box needs `--site` for its page to reach another origin
+(its `connect-src` names `http:` then). A project for a Skipper carries
+the Skipper's map as its `io.map` (the same text) and a program that
+binds by name; Deploy saves and checks it on the box, refuses what the
+box's lint holds, and sends the program (its function blocks with it, the
+requirement tests and the map not) to the Skipper as
+`PUT /api/modules/{name}`. The box's approval policy is the box's and is
+not asked: the Skipper takes a write on its token. On the bench, through
+a headless Chromium: a sign-in on the box, the Skipper's token, the agent
+asked "keep the drive disabled with slew 0, and set its run current to
+70" wrote that into the project with a requirement test; Deploy sent it,
+the Skipper answered 201, and the drive's `PR RC` read 70.
+
+The node now binds a program's `VAR_INPUT` and `VAR_OUTPUT` to the map's
+points by name, as a box does, so a program the agent wrote on a box runs
+on a Skipper unchanged (`helmsman-node-p4/src/bind.rs`; the matching and the
+image write are `ioplan::bindings` and `put_at`, host-tested). Names compare
+without regard to case; an input binds only to an `in` point and an output
+only to an `out` point; a port with no point is left alone. Located
+variables (`AT %QD18`) work as before. A point written by both a located
+variable and a name-bound output takes the name-bound value, which is
+applied after the scan. Proven on the host only; not yet run on a board.
+
 ### Updating a node without a cable (2026-11-18)
 
 A node in a cabinet takes new firmware over its network connection. You

@@ -18,7 +18,9 @@
 //! GET  /api/events                the values stream
 //! GET  /api/signals  /api/devices  /api/io_map  /api/site  /api/node  /api/settings
 //! PUT  /api/settings              token: SaveSettings from JSON
-//! PUT  /api/io_map                token: SaveIoMap from {"text"} or text/plain; 422 names the bad line
+//! PUT  /api/io_map                token: SaveIoMap from {"text"} or text/plain; 422 names the bad line; 409 until the check of that text passed
+//! POST /api/io_map/check          token: CheckIoMap: the node asks every device of the map (202; poll the GET)
+//! GET  /api/io_map/check          the last check: who answered, and whether the map may be saved
 //! GET  /api/firmware              the running image, its trial and the fetch (404 on a board with one slot)
 //! POST /api/firmware              token: FirmwareFetch {"url", "sha256"}; 202, the node fetches and restarts
 //! POST /api/firmware/confirm      token: FirmwareConfirm, the running image works
@@ -57,6 +59,11 @@ pub enum Effect {
     FirmwareFetch { fetch: ota::request::Fetch },
     /// End the running image's trial ([`firmware_confirmed`]).
     FirmwareConfirm,
+    /// Ask every device of the map `text` from this node
+    /// ([`check_started`]); the text parsed before it got here. The
+    /// result is [`crate::check::Check`], read with `GET
+    /// /api/io_map/check` or on the page.
+    CheckIoMap { text: String, page: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +140,11 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
         ("POST", ["settings"]) => settings_form(req, view, settings),
         ("POST", ["io_map"]) => io_map_form(req, view, settings),
         ("PUT", ["api", "io_map"]) => io_map_put(req, view, settings),
+        ("POST", ["api", "io_map", "check"]) => io_map_check(req, view, settings),
+        ("GET", ["api", "io_map", "check"]) => Outcome::Reply(match &view.check {
+            Some(c) => Response::json(200, &c.json(view.uptime_ms)),
+            None => Response::error(404, "this board saves a map without asking its devices"),
+        }),
         ("GET", ["api", "firmware"]) => Outcome::Reply(match &view.firmware {
             Some(fw) => Response::json(200, &fw.json()),
             None => Response::error(404, "this board cannot update its firmware over the network"),
@@ -260,7 +272,13 @@ fn io_map_form(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
         .map(|(_, v)| v.replace("\r\n", "\n"))
         .unwrap_or_default();
     match map_this_board_runs(&text, view) {
-        Ok(()) => Outcome::Effect(Effect::SaveIoMap { text, page: true }),
+        // The form is one button: a text that has not passed is checked,
+        // and the same text sent again once it has is saved.
+        Ok(()) => match save_or_check(&text, view) {
+            Ok(()) => Outcome::Effect(Effect::SaveIoMap { text, page: true }),
+            Err(crate::check::Refusal::Running) => Outcome::Reply(Response::see_other("/settings")),
+            Err(_) => Outcome::Effect(Effect::CheckIoMap { text, page: true }),
+        },
         Err(bad) => Outcome::Reply(Response::html(
             422,
             api::settings_page(view, settings, Some(&format!("map not saved: {bad}"))),
@@ -278,32 +296,110 @@ fn map_this_board_runs(text: &str, view: &NodeView) -> Result<(), crate::iomap::
     Ok(())
 }
 
+/// A request's map: `{"text": "..."}` or the body as `text/plain`.
+fn map_text(req: &Request) -> Result<String, Response> {
+    let is_json = req
+        .header("content-type")
+        .is_some_and(|t| t.starts_with("application/json"));
+    if is_json {
+        match serde_json::from_slice::<serde_json::Value>(&req.body) {
+            Ok(j) => match j["text"].as_str() {
+                Some(t) => Ok(String::from(t)),
+                None => Err(Response::error(400, "want {\"text\": \"...\"}")),
+            },
+            Err(_) => Err(Response::error(400, "body is not JSON")),
+        }
+    } else {
+        match core::str::from_utf8(&req.body) {
+            Ok(t) => Ok(String::from(t)),
+            Err(_) => Err(Response::error(400, "the map is not UTF-8")),
+        }
+    }
+}
+
 /// `PUT /api/io_map`: `{"text": "..."}` or the map as `text/plain`.
 fn io_map_put(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
     if let Err(e) = authorize(req.bearer(), settings) {
         return Outcome::Reply(e);
     }
-    let is_json = req
-        .header("content-type")
-        .is_some_and(|t| t.starts_with("application/json"));
-    let text = if is_json {
-        match serde_json::from_slice::<serde_json::Value>(&req.body) {
-            Ok(j) => match j["text"].as_str() {
-                Some(t) => String::from(t),
-                None => return Outcome::Reply(Response::error(400, "want {\"text\": \"...\"}")),
-            },
-            Err(_) => return Outcome::Reply(Response::error(400, "body is not JSON")),
-        }
-    } else {
-        match core::str::from_utf8(&req.body) {
-            Ok(t) => String::from(t),
-            Err(_) => return Outcome::Reply(Response::error(400, "the map is not UTF-8")),
-        }
+    let text = match map_text(req) {
+        Ok(t) => t,
+        Err(r) => return Outcome::Reply(r),
     };
-    match map_this_board_runs(&text, view) {
-        Ok(()) => Outcome::Effect(Effect::SaveIoMap { text, page: false }),
-        Err(bad) => Outcome::Reply(Response::error(422, &alloc::format!("{bad}"))),
+    if let Err(bad) = map_this_board_runs(&text, view) {
+        return Outcome::Reply(Response::error(422, &alloc::format!("{bad}")));
     }
+    match save_or_check(&text, view) {
+        Ok(()) => Outcome::Effect(Effect::SaveIoMap { text, page: false }),
+        Err(why) => Outcome::Reply(not_checked(&why, view)),
+    }
+}
+
+/// Whether `text` may be saved now: always on a board that does not
+/// check, else by the rule of [`crate::check::Check::allows`].
+fn save_or_check(text: &str, view: &NodeView) -> Result<(), crate::check::Refusal> {
+    match &view.check {
+        Some(c) => c.allows(text, view.uptime_ms),
+        None => Ok(()),
+    }
+}
+
+/// 409: the map was not saved, why, and the check as it stands.
+fn not_checked(why: &crate::check::Refusal, view: &NodeView) -> Response {
+    let check = view
+        .check
+        .as_ref()
+        .map_or(serde_json::Value::Null, |c| c.json(view.uptime_ms));
+    Response::json(409, &json!({ "error": alloc::format!("{why}"), "check": check }))
+}
+
+/// `POST /api/io_map/check`: `{"text": "..."}` or the map as `text/plain`.
+fn io_map_check(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
+    if let Err(e) = authorize(req.bearer(), settings) {
+        return Outcome::Reply(e);
+    }
+    let Some(check) = &view.check else {
+        return Outcome::Reply(Response::error(
+            404,
+            "this board saves a map without asking its devices",
+        ));
+    };
+    let text = match map_text(req) {
+        Ok(t) => t,
+        Err(r) => return Outcome::Reply(r),
+    };
+    if let Err(bad) = map_this_board_runs(&text, view) {
+        return Outcome::Reply(Response::error(422, &alloc::format!("{bad}")));
+    }
+    if check.running {
+        return Outcome::Reply(Response::error(
+            409,
+            "a check is already running; read GET /api/io_map/check",
+        ));
+    }
+    Outcome::Effect(Effect::CheckIoMap { text, page: false })
+}
+
+/// The reply to a [`Effect::CheckIoMap`] the firmware has started.
+#[must_use]
+pub fn check_started(page: bool) -> Response {
+    if page {
+        Response::see_other("/settings")
+    } else {
+        Response::json(
+            202,
+            &json!({
+                "checking": true,
+                "next": "poll GET /api/io_map/check; when may_save is true, PUT /api/io_map with the same text",
+            }),
+        )
+    }
+}
+
+/// The reply when the firmware could not start a check.
+#[must_use]
+pub fn check_not_started(why: &str) -> Response {
+    Response::error(409, why)
 }
 
 /// `POST /api/firmware`: `{"url": "http://a.b.c.d:port/file.bin", "sha256": "<64 hex>"}`.
@@ -576,6 +672,270 @@ mod tests {
             &s,
         ));
         assert_eq!(r.status, 204);
+    }
+
+    const CHECKED: &str = "device rio modbus-tcp 192.168.3.60\ndevice sim modbus-tcp 192.168.3.10:1502\nin estop bool rio di:0\n";
+
+    /// A view of a board that checks, with the check of [`CHECKED`] in
+    /// the state `verdicts` leave it (`None`: still running).
+    fn checking(verdicts: Option<&[crate::check::Verdict]>, done_ms: u64, now_ms: u64) -> NodeView {
+        let mut c = crate::check::Check::begin(&crate::iomap::parse(CHECKED).unwrap());
+        if let Some(v) = verdicts {
+            for (k, v) in v.iter().enumerate() {
+                c.set(k, v.clone());
+            }
+            c.finish(done_ms);
+        }
+        let mut v = sample_view();
+        v.uptime_ms = now_ms;
+        v.check = Some(c);
+        v
+    }
+
+    fn put_map(auth: &str, body: &str) -> Request {
+        req(&format!(
+            "PUT /api/io_map HTTP/1.1\r\n{auth}Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+    }
+
+    fn post_check(auth: &str, body: &str) -> Request {
+        req(&format!(
+            "POST /api/io_map/check HTTP/1.1\r\n{auth}Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+    }
+
+    fn form_map(text: &str) -> Request {
+        let enc: String = text
+            .bytes()
+            .map(|b| match b {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => char::from(b).to_string(),
+                _ => format!("%{b:02X}"),
+            })
+            .collect();
+        let form = format!("map={enc}&auth=tok");
+        req(&format!(
+            "POST /io_map HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{form}",
+            form.len()
+        ))
+    }
+
+    const AUTH: &str = "Authorization: Bearer tok\r\n";
+
+    /// The download is blocked until every device answered the node: a
+    /// map nobody checked, one whose check is running, one a device was
+    /// silent for, one checked too long ago and one that differs from
+    /// the checked text by a byte are all refused with a 409 that says
+    /// why and carries the check; only the passed text is handed on.
+    #[test]
+    fn a_map_is_saved_only_after_its_devices_answered_the_node() {
+        use crate::check::{FRESH_MS, Verdict};
+        let s = settings();
+        let ok = Verdict::Answered { ms: 4 };
+        let refused = |v: &NodeView, text: &str| {
+            let r = reply(handle(&put_map(AUTH, text), v, &s));
+            assert_eq!(r.status, 409, "{}", String::from_utf8_lossy(&r.body));
+            serde_json::from_slice::<serde_json::Value>(&r.body).unwrap()
+        };
+        // Never checked.
+        let mut never = sample_view();
+        never.check = Some(crate::check::Check::default());
+        let j = refused(&never, CHECKED);
+        assert!(j["error"].as_str().unwrap().contains("has not been checked"));
+        assert_eq!(j["check"]["state"], "none");
+        // Running.
+        let j = refused(&checking(None, 0, 10), CHECKED);
+        assert!(j["error"].as_str().unwrap().contains("still running"));
+        // One device silent: named.
+        let silent = checking(
+            Some(&[ok.clone(), Verdict::Failed("link: connect timed out".into())]),
+            5,
+            10,
+        );
+        let j = refused(&silent, CHECKED);
+        assert!(j["error"].as_str().unwrap().contains("sim did not answer"), "{j}");
+        assert_eq!(j["check"]["devices"][1]["error"], "link: connect timed out");
+        // Passed: this text, and only this text, while it is fresh.
+        let passed = checking(Some(&[ok.clone(), ok.clone()]), 5, 10);
+        assert_eq!(
+            handle(&put_map(AUTH, CHECKED), &passed, &s),
+            Outcome::Effect(Effect::SaveIoMap {
+                text: CHECKED.into(),
+                page: false
+            })
+        );
+        let other = CHECKED.replace("di:0", "di:1");
+        assert!(
+            refused(&passed, &other)["error"]
+                .as_str()
+                .unwrap()
+                .contains("has not been checked")
+        );
+        let stale = checking(Some(&[ok.clone(), ok]), 5, 5 + FRESH_MS);
+        assert!(
+            refused(&stale, CHECKED)["error"]
+                .as_str()
+                .unwrap()
+                .contains("check it again")
+        );
+        // The token and the parser still come first.
+        assert_eq!(reply(handle(&put_map("", CHECKED), &passed, &s)).status, 401);
+        assert_eq!(
+            reply(handle(&put_map(AUTH, "device rio enip 1.1.1.1\n"), &passed, &s)).status,
+            422
+        );
+    }
+
+    #[test]
+    fn a_check_is_started_with_the_token_for_a_map_the_board_runs() {
+        let s = settings();
+        let mut idle = sample_view();
+        idle.check = Some(crate::check::Check::default());
+        assert_eq!(reply(handle(&post_check("", CHECKED), &idle, &s)).status, 401);
+        assert_eq!(
+            reply(handle(&post_check(AUTH, "nonsense here\n"), &idle, &s)).status,
+            422
+        );
+        assert_eq!(
+            handle(&post_check(AUTH, CHECKED), &idle, &s),
+            Outcome::Effect(Effect::CheckIoMap {
+                text: CHECKED.into(),
+                page: false
+            })
+        );
+        let json = serde_json::json!({ "text": CHECKED }).to_string();
+        let as_json = req(&format!(
+            "POST /api/io_map/check HTTP/1.1\r\n{AUTH}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{json}",
+            json.len()
+        ));
+        assert!(matches!(
+            handle(&as_json, &idle, &s),
+            Outcome::Effect(Effect::CheckIoMap { page: false, .. })
+        ));
+        // One at a time.
+        let busy = reply(handle(&post_check(AUTH, CHECKED), &checking(None, 0, 1), &s));
+        assert_eq!(busy.status, 409);
+        // A board that does not check has neither route, and saves as before.
+        let plain = sample_view();
+        assert_eq!(reply(handle(&post_check(AUTH, CHECKED), &plain, &s)).status, 404);
+        assert_eq!(
+            reply(handle(&req("GET /api/io_map/check HTTP/1.1\r\n\r\n"), &plain, &s)).status,
+            404
+        );
+        assert!(matches!(
+            handle(&put_map(AUTH, CHECKED), &plain, &s),
+            Outcome::Effect(Effect::SaveIoMap { .. })
+        ));
+        assert_eq!(check_started(false).status, 202);
+        assert_eq!(check_started(true).status, 303);
+        assert_eq!(check_not_started("x").status, 409);
+    }
+
+    #[test]
+    fn the_check_reads_without_a_token_and_the_page_shows_it() {
+        use crate::check::Verdict;
+        let s = settings();
+        let silent = checking(
+            Some(&[
+                Verdict::Answered { ms: 4 },
+                Verdict::Failed("<b>refused</b>".into()),
+            ]),
+            5,
+            10,
+        );
+        let r = reply(handle(
+            &req("GET /api/io_map/check HTTP/1.1\r\n\r\n"),
+            &silent,
+            &s,
+        ));
+        assert_eq!(r.status, 200);
+        let j: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!(
+            (j["state"].as_str(), j["may_save"].as_bool()),
+            (Some("done"), Some(false))
+        );
+        let page = String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &silent, &s)).body)
+            .unwrap();
+        assert!(page.contains("Device check"));
+        assert!(page.contains("answered in 4 ms"));
+        assert!(
+            page.contains("&lt;b&gt;refused&lt;/b&gt;"),
+            "a device's words are escaped"
+        );
+        assert!(page.contains("sim did not answer"));
+        assert!(page.contains(">Check the devices</button>"));
+        assert!(!page.contains("http-equiv=\"refresh\""));
+        // The form holds the checked text, not the running map.
+        assert!(page.contains("device sim modbus-tcp 192.168.3.10:1502"));
+        let running = String::from_utf8(
+            reply(handle(
+                &req("GET /settings HTTP/1.1\r\n\r\n"),
+                &checking(None, 0, 1),
+                &s,
+            ))
+            .body,
+        )
+        .unwrap();
+        assert!(running.contains("http-equiv=\"refresh\""));
+        assert!(running.contains("waiting"));
+        let ok = Verdict::Answered { ms: 1 };
+        let passed = checking(Some(&[ok.clone(), ok]), 5, 10);
+        let page = String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &passed, &s)).body)
+            .unwrap();
+        assert!(page.contains(">Save this map and restart</button>"));
+        // A board that does not check keeps its old button and no check block.
+        let plain =
+            String::from_utf8(reply(handle(&req("GET /settings HTTP/1.1\r\n\r\n"), &sample_view(), &s)).body)
+                .unwrap();
+        assert!(plain.contains(">Save map and restart</button>"));
+        assert!(!plain.contains("Device check"));
+    }
+
+    /// The page's one button: a text that has not passed is checked, the
+    /// same text once it has passed is saved, and a press while the
+    /// check runs goes back to the page.
+    #[test]
+    fn the_form_checks_first_and_saves_what_passed() {
+        use crate::check::Verdict;
+        let s = settings();
+        let mut idle = sample_view();
+        idle.check = Some(crate::check::Check::default());
+        assert_eq!(
+            handle(&form_map(CHECKED), &idle, &s),
+            Outcome::Effect(Effect::CheckIoMap {
+                text: CHECKED.into(),
+                page: true
+            })
+        );
+        assert_eq!(
+            reply(handle(&form_map(CHECKED), &checking(None, 0, 1), &s)).status,
+            303
+        );
+        let ok = Verdict::Answered { ms: 1 };
+        let passed = checking(Some(&[ok.clone(), ok.clone()]), 5, 10);
+        assert_eq!(
+            handle(&form_map(CHECKED), &passed, &s),
+            Outcome::Effect(Effect::SaveIoMap {
+                text: CHECKED.into(),
+                page: true
+            })
+        );
+        // Edited after the pass: checked again, not saved.
+        let edited = CHECKED.replace("estop", "e_stop");
+        assert_eq!(
+            handle(&form_map(&edited), &passed, &s),
+            Outcome::Effect(Effect::CheckIoMap {
+                text: edited.clone(),
+                page: true
+            })
+        );
+        // A failed check of the same text: pressed again, asked again.
+        let failed = checking(Some(&[ok, Verdict::Failed("no".into())]), 5, 10);
+        assert!(matches!(
+            handle(&form_map(CHECKED), &failed, &s),
+            Outcome::Effect(Effect::CheckIoMap { page: true, .. })
+        ));
     }
 
     /// A one-block board refuses, at the API and at the form, a map that

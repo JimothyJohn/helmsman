@@ -83,6 +83,15 @@ pub fn set_base(origin: &str) {
     BASE.with(|b| *b.borrow_mut() = Some(origin.trim_end_matches('/').to_string()));
 }
 
+/// Whether `url` goes to the base origin ([`set_base`]).
+fn is_remote(url: &str) -> bool {
+    BASE.with(|b| {
+        b.borrow()
+            .as_ref()
+            .is_some_and(|base| url.starts_with(base.as_str()))
+    })
+}
+
 /// `url` on the base origin, when one is set; `url` itself otherwise.
 fn absolute(url: &str) -> String {
     BASE.with(|b| match &*b.borrow() {
@@ -91,13 +100,23 @@ fn absolute(url: &str) -> String {
     })
 }
 
-/// The `?box=ORIGIN` of this page, if it names one.
+/// The node this page watches: its `?box=ORIGIN`, else the one the box
+/// that served it names (`--node`, a `<meta name="helmsman-node">` in its
+/// head; Nick, 2026-11-24: "the box knows its Skipper"), so the plain
+/// address watches it. Both pass the same check.
 #[must_use]
 pub fn box_origin() -> Option<String> {
     let query = web_sys::window()
         .and_then(|w| w.location().search().ok())
         .unwrap_or_default();
-    crate::app::box_origin(&query)
+    crate::app::box_origin(&query).or_else(|| {
+        let content = web_sys::window()?
+            .document()?
+            .query_selector("meta[name=helmsman-node]")
+            .ok()??
+            .get_attribute("content")?;
+        crate::app::box_origin(&format!("?box={content}"))
+    })
 }
 
 /// An open `EventSource` and the callbacks it holds; closed when dropped.
@@ -243,7 +262,7 @@ async fn get(url: &str) -> (Option<String>, Result<String, String>) {
 
 async fn get_body(url: &str, build: &mut Option<String>) -> Result<String, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init("GET")?;
+    let (init, headers) = init("GET", url)?;
     init.set_headers(&headers);
     // A reply that never comes would leave its read "asked" for ever.
     let controller = web_sys::AbortController::new().map_err(|e| text(&e))?;
@@ -561,12 +580,16 @@ impl Http {
 /// CORS, no cookie (the page has none there), and the token the person
 /// gave for it ([`set_token`]) as `Authorization: Bearer`, which the node
 /// answers a preflight for.
-fn init(method: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String> {
+fn init(method: &str, url: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String> {
     let init = web_sys::RequestInit::new();
     init.set_method(method);
     init.set_cache(web_sys::RequestCache::NoStore);
     let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
-    let remote = BASE.with(|b| b.borrow().is_some());
+    // Only a call that goes to the base origin is cross-origin: on a page
+    // a box served with `?box=` pointing at a Skipper, the box's own
+    // routes (sign-in, projects, the agent) stay same-origin with the
+    // session cookie, and the Skipper's get its token.
+    let remote = is_remote(url);
     if remote {
         init.set_mode(web_sys::RequestMode::Cors);
         init.set_credentials(web_sys::RequestCredentials::Omit);
@@ -604,7 +627,7 @@ async fn fetch(
     ctype: Option<&str>,
 ) -> Result<Answer, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init(method)?;
+    let (init, headers) = init(method, url)?;
     if let Some(b) = &body {
         if let Some(t) = ctype {
             headers.set("Content-Type", t).map_err(|e| text(&e))?;
@@ -711,7 +734,7 @@ async fn chat(
 
     let seq = req.seq;
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init("POST")?;
+    let (init, headers) = init("POST", &req.url)?;
     headers
         .set("Content-Type", "application/json")
         .map_err(|e| text(&e))?;
@@ -785,7 +808,16 @@ impl ProjHttp {
                 .as_ref()
                 .map(|b| JsValue::from(web_sys::js_sys::Uint8Array::from(b.as_slice())));
             let ctype = body.as_ref().map(|_| req.ctype);
-            let answer = fetch(req.method, &req.url, body, ctype)
+            // A call to the watched node goes to the `?box=` origin, as
+            // the reads do: relative, it reached the page's own server (a
+            // PUT of a module answered 501 there, 2026-11-24). The rest
+            // are the serving box's own (projects, its agent).
+            let url = if req.call.on_node() {
+                absolute(&req.url)
+            } else {
+                req.url.clone()
+            };
+            let answer = fetch(req.method, &url, body, ctype)
                 .await
                 .unwrap_or_else(|why| Answer {
                     status: 0,
@@ -1137,5 +1169,62 @@ impl crate::sim_projects::Storage for LocalProjects {
         storage()?
             .set_item(PROJECTS_BACKUP_SLOT, value)
             .map_err(|e| text(&e))
+    }
+}
+
+/// Puts what the page copied on the clipboard where the browser will not
+/// let egui do it: a page served over plain HTTP from a LAN address is not
+/// a secure context, so `navigator.clipboard` is missing and every Copy
+/// button, Ctrl+C and selection copy did nothing (Nick, 2026-11-24: "The
+/// copy buttons don't do shit"). There the frame's copy commands are taken
+/// here and copied the older way, through a hidden text area and
+/// `execCommand("copy")`, while the click that asked is still the page's
+/// user gesture. In a secure context egui's own copy is left alone.
+pub fn take_copies(ctx: &egui::Context) {
+    let Some(window) = web_sys::window() else { return };
+    if window.is_secure_context() {
+        return;
+    }
+    let texts: Vec<String> = ctx.output_mut(|o| {
+        let mut taken = Vec::new();
+        o.commands.retain(|c| match c {
+            egui::OutputCommand::CopyText(t) => {
+                taken.push(t.clone());
+                false
+            }
+            _ => true,
+        });
+        taken
+    });
+    for t in texts {
+        if let Err(why) = copy_by_command(&window, &t) {
+            web_sys::console::warn_1(&JsValue::from_str(&format!("copy failed: {why}")));
+        }
+    }
+}
+
+fn copy_by_command(window: &web_sys::Window, copied_text: &str) -> Result<(), String> {
+    let document = window.document().ok_or("no document")?;
+    let body = document.body().ok_or("no body")?;
+    let area: web_sys::HtmlTextAreaElement = document
+        .create_element("textarea")
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|_| "not a textarea".to_string())?;
+    area.set_value(copied_text);
+    // Off screen, and never scrolls the page or shows a keyboard.
+    let _ = area.set_attribute("readonly", "");
+    let _ = area.set_attribute("style", "position:fixed;top:-1000px;left:-1000px;opacity:0");
+    body.append_child(&area).map_err(|e| text(&e))?;
+    area.select();
+    let html: web_sys::HtmlDocument = document
+        .dyn_into()
+        .map_err(|_| "not an HTML document".to_string())?;
+    let copied = html.exec_command("copy").map_err(|e| text(&e));
+    let _ = body.remove_child(&area);
+    match copied {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("the browser refused the copy".into()),
+        Err(why) => Err(why),
     }
 }

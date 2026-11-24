@@ -5078,3 +5078,195 @@ fn a_box_reads_every_history_page_it_keeps_for_the_next_instruction() {
         .collect();
     assert_eq!(got, want, "all {CHANGES}, oldest first");
 }
+
+/// Nick 2026-11-24 ("It's running but I can't make any changes"): on a
+/// Skipper (no projects) an engineer edits the running module in the Code
+/// pane and Deploy sends it; signed out it stays read-only.
+#[test]
+fn an_engineer_edits_and_deploys_the_running_module_on_a_skipper() {
+    use crate::remote::Fetch;
+    const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let skipper = || {
+        let mut bv = BoxView::new();
+        bv.projects.available = Some(false);
+        bv.state.apply(
+            Msg::Got(
+                Fetch::Modules,
+                Ok(
+                    r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#
+                        .into(),
+                ),
+            ),
+            1.0,
+        );
+        bv.state.select("drive");
+        let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
+        bv.state.apply(
+            Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+            1.1,
+        );
+        assert_eq!(bv.state.source(), Some(SRC));
+        bv
+    };
+    // Signed out: read, no Deploy.
+    let mut h = Harness::new(skipper(), None);
+    h.app.chrome.show_code();
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("read-only").is_some());
+    assert!(h.app.chrome.rect("code deploy").is_none());
+    assert!(h.drew("slew := 0;"), "the source shows without a traced scan");
+
+    // An engineer: the text is the editor's, and Deploy sends it.
+    let mut h = Harness::new(
+        skipper(),
+        Some(Session {
+            user: None,
+            role: "engineer".into(),
+        }),
+    );
+    h.app.chrome.show_code();
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("read-only").is_none());
+    h.bv()
+        .projects
+        .module
+        .as_mut()
+        .expect("the module is in the editor")
+        .text = SRC.replace("slew := 0;", "slew := 5000;");
+    h.frame(vec![]);
+    assert!(h.app.chrome.rect("module edited").is_some());
+    h.press("code deploy");
+    let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(
+        (sent[0].method, sent[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
+    );
+    let body: Json = serde_json::from_slice(sent[0].body.as_deref().unwrap()).unwrap();
+    assert!(body["source"].as_str().unwrap().contains("slew := 5000;"));
+}
+
+/// 2026-11-24, a box-served page watching a Skipper by address: the
+/// project list asked for before anyone signed in was refused (401), and
+/// the live view, being the Skipper's, never unlocked to ask again, so
+/// the box's projects never showed. The first sign-in asks for them.
+#[test]
+fn the_first_sign_in_asks_for_the_projects_a_locked_box_refused() {
+    let ctx = egui::Context::default();
+    let mut bv = BoxView::new();
+    bv.step_all(&ctx, vec![], vec![], 0.0);
+    let asked = |bv: &mut BoxView| {
+        std::mem::take(&mut bv.psent)
+            .iter()
+            .filter(|q| q.url == "/api/projects")
+            .count()
+    };
+    let _ = asked(&mut bv);
+    // Refused while nobody is signed in: nothing learned.
+    bv.step_all(
+        &ctx,
+        vec![],
+        vec![(
+            crate::box_projects::PCall::List,
+            Answer {
+                status: 401,
+                retry_after: None,
+                body: r#"{"error":"sign in"}"#.into(),
+            },
+        )],
+        0.1,
+    );
+    assert_eq!(bv.projects.available, None);
+    let _ = asked(&mut bv);
+    bv.session = Some(Session {
+        user: Some("nick".into()),
+        role: "engineer".into(),
+    });
+    bv.step_all(&ctx, vec![], vec![], 0.2);
+    assert_eq!(asked(&mut bv), 1, "the sign-in asks for the projects once");
+    bv.step_all(&ctx, vec![], vec![], 0.3);
+    assert_eq!(asked(&mut bv), 0, "and not on every step");
+}
+
+/// Nick 2026-11-24: "there needs to be a deploy button on the agent tab as
+/// well ... make it pulse or something to indicate that it's required".
+/// The Agent tab has Deploy; it says the program is not running yet while
+/// an edit waits, and pressing it sends the program as the Code tab's does.
+#[test]
+fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
+    use crate::remote::Fetch;
+    const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let mut bv = BoxView::new();
+    bv.projects.available = Some(false);
+    bv.state.apply(
+        Msg::Got(
+            Fetch::Modules,
+            Ok(r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#.into()),
+        ),
+        1.0,
+    );
+    bv.state.select("drive");
+    let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
+    bv.state.apply(
+        Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+        1.1,
+    );
+    bv.node_token = true;
+    bv.watches_node = true;
+    bv.projects.track_module("drive", SRC);
+    let mut h = Harness::new(bv, None);
+    // The Skipper's token, held as the sign-in panel holds it.
+    let r = h.app.review.as_mut().unwrap();
+    r.token_held = true;
+    r.remote = Some("http://10.0.0.41:8088".into());
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("agent deploy").is_some(),
+        "Deploy is on the Agent tab"
+    );
+    assert!(
+        h.app.chrome.rect("agent deploy pending").is_none(),
+        "nothing waits: no pulse"
+    );
+    h.bv().projects.module.as_mut().unwrap().text = SRC.replace("slew := 0;", "slew := 500;");
+    h.wait(0.1);
+    assert!(
+        h.app.chrome.rect("agent deploy pending").is_none(),
+        "an edit by hand does not pulse (Nick: only a successful Agent output)"
+    );
+    // A refusal does not either.
+    let outcome = |kind| crate::instruct::Outcome {
+        kind,
+        status: String::new(),
+        why: None,
+        problems: Vec::new(),
+        undo: None,
+        review: Vec::new(),
+        offers: Vec::new(),
+    };
+    h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Refused));
+    h.bv().log_agent();
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploy pending").is_none());
+    // The Agent's answer was written: it pulses and says so.
+    h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Applied));
+    h.bv().log_agent();
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploy pending").is_some());
+    // Deploy sits at the tab's right edge.
+    let tab = h.rect("agent tab");
+    let deploy = h.rect("agent deploy");
+    assert!(tab.right() - deploy.right() < 24.0, "{deploy:?} in {tab:?}");
+    h.press("agent deploy");
+    let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(
+        (sent[0].method, sent[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
+    );
+    // The deploy ran: the pulse stops.
+    h.bv().projects.deploy = crate::box_projects::Deploy::Done("drive is running".into());
+    h.wait(0.1);
+    assert!(!h.bv().agent_pending);
+    assert!(h.app.chrome.rect("agent deploy pending").is_none());
+}

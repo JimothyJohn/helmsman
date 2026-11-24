@@ -46,6 +46,9 @@ struct BoxSeen {
     warned: Option<String>,
 }
 
+// Each flag is its own fact (the node's token, watching a node, the
+// Agent's change waiting, ...).
+#[allow(clippy::struct_excessive_bools)]
 pub struct BoxView {
     pub state: BoxState,
     /// The Messages tab's log.
@@ -153,6 +156,13 @@ pub struct BoxView {
     /// Project and force requests not carried out (tests carry them out).
     #[cfg(not(target_arch = "wasm32"))]
     pub psent: Vec<PReq>,
+    /// This browser holds the watched node's token (the sign-in panel's).
+    pub node_token: bool,
+    /// The page watches a node by address (`?box=`): Deploy sends there.
+    pub watches_node: bool,
+    /// The Agent's last answer was written and has not been deployed: the
+    /// Agent tab's Deploy pulses.
+    pub(crate) agent_pending: bool,
 }
 
 impl Default for BoxView {
@@ -293,6 +303,13 @@ impl BoxView {
         if was.as_deref() == Some(who.as_str()) {
             return;
         }
+        // The list asked for before anyone signed in was refused (a box
+        // with accounts locks its reads). A page whose live view is the
+        // box's learns it again when the view unlocks; one watching a
+        // Skipper by address never does, so it asks here.
+        if self.projects.available.is_none() {
+            self.projects.relist();
+        }
         // The form's name is the person who just signed in.
         if let Some(u) = self.session.as_ref().and_then(|s| s.user.clone()) {
             self.desk_user = u;
@@ -404,6 +421,9 @@ impl BoxView {
             sent: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             psent: Vec::new(),
+            node_token: false,
+            watches_node: false,
+            agent_pending: false,
         }
     }
 
@@ -418,6 +438,9 @@ impl BoxView {
         // Who is signed in first, so an answer for the person before is
         // told from one for this person.
         self.follow_owner();
+        self.trend.local_pins = self.watches_node;
+        self.projects.node_map = self.state.io_map.clone().filter(|_| self.state.io_map_node);
+        self.projects.tick(now);
         self.on_box.step(self.session.as_ref());
         for m in msgs {
             self.state.apply(m, now);
@@ -451,6 +474,7 @@ impl BoxView {
                     self.devices_ui.proposal.answer(&call, a.status, &a.body);
                 }
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
+                PCall::NodeMap(op) => self.devices_ui.node_map.answer(op, a.status, &a.body),
                 PCall::DesignProject(name) => self.design_project_answer(&name, &a),
                 call => self.projects.answer_for(call, &a, signed_in),
             }
@@ -460,6 +484,7 @@ impl BoxView {
         }
         if std::mem::take(&mut self.projects.deployed) {
             self.state.relist();
+            self.state.reread_source();
         }
         if let Some(j) = self.state.take_agent() {
             self.agent.status = crate::box_agent::Status::parse(&j);
@@ -1309,8 +1334,11 @@ impl BoxView {
     }
 
     /// The outcome of the last instruction, in Messages.
-    fn log_agent(&mut self) {
+    pub(crate) fn log_agent(&mut self) {
         let Some(o) = &self.instruct.outcome else { return };
+        // Only an answer that was written waits to be deployed; a refusal,
+        // a reply without code, a failure or an Undo does not.
+        self.agent_pending = o.kind == crate::instruct::Kind::Applied;
         self.log.outcome(self.agent_at, o);
     }
 
@@ -1502,6 +1530,8 @@ impl BoxView {
         };
         let design_off = self.design_blocked();
         let mut design_act = None;
+        let deploy_state = self.agent_deploy();
+        let mut deploy_go = false;
         let (act, help_act) = egui::ScrollArea::vertical()
             .id_salt("box-agent")
             .show(ui, |ui| {
@@ -1519,6 +1549,7 @@ impl BoxView {
                 match self.help.mode {
                     Mode::Code => {
                         let act = crate::instruct::ui(ui, chrome, &mut self.instruct, &view);
+                        deploy_go = deploy_row(ui, chrome, &deploy_state);
                         let view = crate::design_ui::EntryView {
                             now: ctx.input(|i| i.time),
                             blocked: design_off.clone(),
@@ -1534,6 +1565,9 @@ impl BoxView {
                 }
             })
             .inner;
+        if deploy_go {
+            self.deploy();
+        }
         if let Some(a) = design_act {
             self.design_act(a, &ctx);
         }
@@ -1692,7 +1726,10 @@ impl BoxView {
         }
         if self.projects.deploy != self.seen.deploy {
             match &self.projects.deploy {
-                Deploy::Done(what) => self.log.info(now, format!("Deployed: {what}")),
+                Deploy::Done(what) => {
+                    self.agent_pending = false;
+                    self.log.info(now, format!("Deployed: {what}"));
+                }
                 Deploy::Failed(why) => self.log.error(now, format!("Deploy failed: {why}")),
                 _ => {}
             }
@@ -1735,6 +1772,11 @@ impl BoxView {
             crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
         }
         self.devices_ui.config.modal_ui(&ui.ctx().clone(), chrome);
+        self.devices_ui.node_map.window(&ui.ctx().clone(), chrome);
+        for r in self.devices_ui.node_map.take_requests() {
+            self.projects.enqueue(r);
+            ui.ctx().request_repaint();
+        }
         for r in self.devices_ui.config.take_requests() {
             self.projects.enqueue(r);
             ui.ctx().request_repaint();
@@ -2077,6 +2119,112 @@ impl BoxView {
             Some(b) if b.loaded => b.text = crate::devices::appended(&b.text, line),
             Some(_) => {}
             None => self.projects.new_file_with(helmsman_project::IO_MAP, line),
+        }
+    }
+
+    /// Whether the running module may be edited and deployed here: on a
+    /// box or Skipper without projects, for an engineer, once its source
+    /// came.
+    fn module_writable(&self) -> Result<(), String> {
+        if !self.node_token {
+            is_engineer(self.session.as_ref()).map_err(|_| {
+                "Enter the Skipper's token to edit and deploy: Sign in, top right.".to_string()
+            })?;
+        }
+        if self.projects.available != Some(false) {
+            return Err("Waiting for the box to say what it holds.".into());
+        }
+        if self.state.selected.is_none() {
+            return Err("Pick a module first.".into());
+        }
+        if self.state.source().is_none() {
+            return Err("Waiting for the module's source.".into());
+        }
+        Ok(())
+    }
+
+    /// The running module's source, editable, with Deploy at the header's
+    /// end: a Skipper, or a box run without projects, takes the program
+    /// straight (`PUT /api/modules/{name}`), compiles it and keeps the old
+    /// one running if it will not.
+    fn module_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        chrome: &mut Chrome,
+        name: &str,
+        write: &Result<(), String>,
+    ) {
+        let deploy = if self.projects.deploy.busy() {
+            Err("Deploying…".to_string())
+        } else {
+            write.clone()
+        };
+        let dirty = self
+            .projects
+            .module
+            .as_ref()
+            .is_some_and(super::box_projects::ModuleEdit::dirty);
+        let errors = self.projects.diags.iter().filter(|d| !d.is_warning()).count();
+        let first = self.projects.diags.first().map(|d| d.message.clone());
+        let mut go = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            editor::file_header(
+                ui,
+                chrome,
+                name,
+                "The module that runs. Edit it here; Deploy sends it, and the old version keeps running if it does not compile.",
+            );
+            editor::wrap_toggle(ui, chrome);
+            if dirty {
+                let t = theme(ui);
+                let r = ui
+                    .add(crate::theme::whole(RichText::new("edited").color(t.accent)))
+                    .tip("Not running yet: Deploy sends it.");
+                chrome.hit("module edited", r.rect);
+            }
+            go = editor::header_right(
+                ui,
+                chrome,
+                &editor::Status {
+                    errors,
+                    first: first.as_deref(),
+                    deploy: &deploy,
+                    deploy_tip: "Ctrl Shift Enter: deploy this version.\nThe box compiles it and runs it in place of the old one.",
+                },
+            )
+            .deploy;
+        });
+        if go {
+            self.deploy();
+        }
+        let id = editor::source_id("box-st-module", "", name);
+        let Some(m) = self.projects.module.as_mut() else {
+            return;
+        };
+        editor::st_editor(ui, id, &mut m.text, &[], &[], MAX_FILE, chrome);
+    }
+
+    /// The Agent tab's Deploy: whether it may be pressed, whether what is
+    /// saved is not running yet, and where it goes.
+    fn agent_deploy(&self) -> AgentDeploy {
+        // It pulses for the Agent's written answer only (Nick, 2026-11-24:
+        // "only pulse once the agent has a successful output").
+        let pending = self.agent_pending;
+        let ready = if self.has_projects() {
+            self.writable()
+        } else {
+            self.module_writable()
+        };
+        let ready = if self.projects.deploy.busy() {
+            Err("Deploying…".to_string())
+        } else {
+            ready
+        };
+        AgentDeploy {
+            ready,
+            pending,
+            to_node: self.watches_node,
         }
     }
 
@@ -2608,7 +2756,10 @@ impl Workspace for BoxView {
 
     fn deploy(&mut self) {
         if self.writable().is_ok() {
+            self.projects.to_node = self.watches_node;
             self.projects.deploy();
+        } else if self.module_writable().is_ok() {
+            self.projects.deploy_module();
         }
     }
 
@@ -2994,6 +3145,12 @@ impl Body for BoxView {
                 project: open.map(|o| o.name.clone()),
                 saved_text,
             });
+        self.devices_ui.node_map.set_context(
+            self.state.io_map_node,
+            self.session.is_some(),
+            self.state.io_map.as_deref(),
+        );
+        self.devices_ui.node_map.row(ui, chrome);
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.scan = crate::devices::Scan::Running;
@@ -3072,7 +3229,11 @@ impl Body for BoxView {
                         errors: 0,
                         first: None,
                         deploy: &deploy,
-                        deploy_tip: "Ctrl Shift Enter: deploy this version.\nSaves, checks and runs the project on the box.",
+                        deploy_tip: if self.watches_node {
+                            "Ctrl Shift Enter: deploy this version.\nSaves and checks the project on this box, then runs it on the Skipper this page watches."
+                        } else {
+                            "Ctrl Shift Enter: deploy this version.\nSaves, checks and runs the project on the box."
+                        },
                     },
                 )
                 .deploy;
@@ -3127,13 +3288,44 @@ impl Body for BoxView {
             .selected
             .clone()
             .unwrap_or_else(|| "Program".to_string());
+        if let (Some(m), Some(src)) = (
+            self.state.selected.clone(),
+            self.state.source().map(str::to_string),
+        ) {
+            self.projects.track_module(&m, &src);
+        }
+        let write = self.module_writable();
+        if write.is_ok() {
+            self.module_editor(ui, chrome, &name, &write);
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             editor::file_header(ui, chrome, &name, "The source of the module that runs.");
             editor::wrap_toggle(ui, chrome);
-            ui.add(crate::theme::whole(RichText::new("read-only").color(t.muted)))
-                .tip("Changes reach the box as proposals.");
+            let why = write.err().unwrap_or_default();
+            let r = ui
+                .add(crate::theme::whole(RichText::new("read-only").color(t.muted)))
+                .tip(why);
+            chrome.hit("read-only", r.rect);
         });
+        if self.view.is_none()
+            && let Some(src) = self.state.source()
+        {
+            {
+                let mut src: &str = src;
+                editor::st_editor(
+                    ui,
+                    editor::source_id("box-st-module", "", &name),
+                    &mut src,
+                    &[],
+                    &[],
+                    usize::MAX,
+                    chrome,
+                );
+                return;
+            }
+        }
         // With no source yet, the canvas beside this pane says what the
         // box waits for; said here too it was on screen twice.
         if let Some(v) = &self.view {
@@ -3475,4 +3667,69 @@ fn box_locate<'a>(
         Some(at) => running.then_some(at),
         None => single().map(|f| (f, l)),
     }
+}
+
+/// What the Agent tab's Deploy row shows ([`BoxView::agent_deploy`]).
+struct AgentDeploy {
+    ready: Result<(), String>,
+    /// Saved changes that are not running yet: the button pulses.
+    pending: bool,
+    /// Deploy sends to the Skipper this page watches.
+    to_node: bool,
+}
+
+/// The Agent tab's Deploy (Nick, 2026-11-24: "there needs to be a deploy
+/// button on the agent tab as well ... make it pulse or something to
+/// indicate that it's required"): the Code tab's yellow arrow, with a ring
+/// that pulses while what the agent (or anyone) saved is not running, and
+/// a line that says so. Whether it was pressed.
+fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
+    let t = theme(ui);
+    let where_to = if s.to_node { "the Skipper" } else { "the box" };
+    let tip = match &s.ready {
+        Ok(()) => format!(
+            "Deploy: checks this version, replays it in the simulation if the policy asks, and runs it on {where_to}."
+        ),
+        Err(why) => why.clone(),
+    };
+    let pulse = s.pending && s.ready.is_ok();
+    ui.add_space(4.0);
+    // At the tab's right edge, as Send is (Nick, 2026-11-24).
+    // One row of one button's height: a bare right-to-left layout takes
+    // all the height below it and pushed the rest of the tab off the end.
+    let r = ui
+        .allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), crate::glyphs::ROW),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| crate::glyphs::deploy(ui, s.ready.is_ok()).tip(tip),
+        )
+        .inner;
+    chrome.hit("agent deploy", r.rect);
+    if pulse {
+        // A ring that breathes about once a second, and nothing else
+        // moves: the eye finds it without the page flashing.
+        let time = ui.input(|i| i.time);
+        #[allow(clippy::cast_possible_truncation)]
+        let phase = ((time * std::f64::consts::TAU).sin() * 0.5 + 0.5) as f32;
+        ui.painter().rect_stroke(
+            r.rect.expand(1.0 + 4.0 * phase),
+            egui::CornerRadius::same(7),
+            egui::Stroke::new(
+                2.0,
+                crate::st_view::brand::YELLOW.gamma_multiply(1.0 - 0.7 * phase),
+            ),
+            egui::StrokeKind::Outside,
+        );
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(33));
+        let l = ui.label(
+            RichText::new(format!(
+                "The Agent's change is not running yet: Deploy runs it on {where_to}."
+            ))
+            .color(t.accent)
+            .size(crate::theme::BODY),
+        );
+        chrome.hit("agent deploy pending", l.rect);
+    }
+    r.clicked()
 }

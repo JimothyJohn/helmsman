@@ -37,7 +37,7 @@ use esp_storage::FlashStorage;
 use helmsman_iec::{Image, ImageSizes, Program, compile};
 use helmsman_node_p4::report::parse_endpoint;
 use helmsman_node_p4::state::{self, DeviceLive, IO_BYTES, Pending, Shared};
-use helmsman_node_p4::{beacon, board, ethernet, flash, io, ota, server};
+use helmsman_node_p4::{beacon, bind, board, check, ethernet, flash, io, ota, server};
 use helmsman_nodecore::api::State;
 use helmsman_nodecore::iomap::{self, IoMap};
 use helmsman_nodecore::ioplan::Plan;
@@ -302,7 +302,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     // The tasks: a link for each device of the map (and the cyclic task
-    // if one is EtherNet/IP), the server (two connections), the beacon.
+    // if one is EtherNet/IP), the server ([`server::CONNECTIONS`]), the beacon.
     let io_ctx: &'static io::Ctx = IO_CTX.init(io::Ctx {
         shared,
         map,
@@ -327,13 +327,17 @@ async fn main(spawner: Spawner) -> ! {
         Ok(t) => spawner.spawn(t),
         Err(_) => halt("the firmware task would not spawn").await,
     }
+    match check::check_task(stack, shared, settings) {
+        Ok(t) => spawner.spawn(t),
+        Err(_) => halt("the check task would not spawn").await,
+    }
     if on_trial {
         match ota::confirm_task(ctx) {
             Ok(t) => spawner.spawn(t),
             Err(_) => halt("the confirm task would not spawn").await,
         }
     }
-    for _ in 0..2 {
+    for _ in 0..server::CONNECTIONS {
         match server::http_task(stack, ctx) {
             Ok(t) => spawner.spawn(t),
             Err(_) => halt("an HTTP task would not spawn").await,
@@ -368,6 +372,11 @@ async fn main(spawner: Spawner) -> ! {
     // The scan loop.
     let mut image = Image::new(SIZES);
     let mut running = program.map(|(_, _, p)| p);
+    // The ports bound to the map's points by name (bind.rs), once a load.
+    let mut binds = running
+        .as_ref()
+        .map(|p| bind::binds_of(p, map))
+        .unwrap_or_default();
     let mut stopped = false;
     let start = Instant::now();
     let mut ticker = Ticker::every(SCAN);
@@ -395,6 +404,7 @@ async fn main(spawner: Spawner) -> ! {
                 running = None;
                 let result = match compile(&source, SIZES) {
                     Ok(p) => {
+                        binds = bind::binds_of(&p, map);
                         running = Some(p);
                         stopped = false;
                         state::with(shared, |live| {
@@ -419,7 +429,10 @@ async fn main(spawner: Spawner) -> ! {
                         // Back to what ran, if it still compiles.
                         if !old_source.is_empty() {
                             match compile(&old_source, SIZES) {
-                                Ok(p) => running = Some(p),
+                                Ok(p) => {
+                                    binds = bind::binds_of(&p, map);
+                                    running = Some(p);
+                                }
                                 Err(_) => state::with(shared, |live| {
                                     live.module.state = Some(State::Faulted(String::from(
                                         "deploy refused and the previous program could not be restored",
@@ -472,7 +485,11 @@ async fn main(spawner: Spawner) -> ! {
             let inputs = state::with(shared, |live| live.inputs);
             image.i[..IO_BYTES].copy_from_slice(&inputs);
             let now = CoreDuration::from_micros(start.elapsed().as_micros());
+            bind::apply_inputs(&binds, p, map, &inputs);
             let result = p.scan_at(&mut image, now);
+            if result.is_ok() {
+                bind::apply_outputs(&binds, p, map, &mut image.q[..IO_BYTES]);
+            }
             let exec_us = u32::try_from(t0.elapsed().as_micros()).unwrap_or(u32::MAX);
             scan_count += 1;
             let outputs: [u8; IO_BYTES] = image.q[..IO_BYTES].try_into().unwrap_or([0; IO_BYTES]);

@@ -305,3 +305,138 @@ fn two_devices_never_write_one_anothers_bool_windows() {
     assert_eq!(image[4], 1, "device 1's window starts at byte 4");
     assert_eq!(image[7], 0x80);
 }
+
+fn put_map() -> IoMap {
+    parse(
+        "device a enip-io 10.0.0.1 config=1 o2t=112:36 t2o=100:16\n\
+        out b bool a out:0.0\nout c bool a out:0.1\nout u8 int a out:4:u8\nout i8 int a out:5:i8\n\
+        out u16 int a out:6:u16\nout i16 int a out:8:i16\nout u32 int a out:12:u32\n\
+        out i32 int a out:16:i32\nout f real a out:20:f32\n",
+    )
+    .unwrap()
+}
+
+fn roundtrip(name: &str, put: i64) -> Option<SignalValue> {
+    let m = put_map();
+    let p = point(&m, name);
+    let mut image = [0xA5u8; IMAGE_BYTES];
+    put_at(&mut image, p, SignalValue::Int(put));
+    value_at(&image, p)
+}
+
+#[test]
+fn put_at_round_trips_and_clamps_every_format() {
+    let cases: [(&str, i64, i64); 22] = [
+        ("u8", 0, 0),
+        ("u8", 255, 255),
+        ("u8", 300, 255),
+        ("u8", -5, 0),
+        ("i8", -128, -128),
+        ("i8", 127, 127),
+        ("i8", -1000, -128),
+        ("i8", 1000, 127),
+        ("u16", 65535, 65535),
+        ("u16", 70000, 65535),
+        ("u16", -1, 0),
+        ("i16", -32768, -32768),
+        ("i16", -40000, -32768),
+        ("i16", 40000, 32767),
+        ("u32", 4_294_967_295, 4_294_967_295),
+        ("u32", i64::MAX, 4_294_967_295),
+        ("u32", i64::MIN, 0),
+        ("i32", -2_147_483_648, -2_147_483_648),
+        ("i32", i64::MIN, -2_147_483_648),
+        ("i32", i64::MAX, 2_147_483_647),
+        ("i32", -1, -1),
+        ("i16", -1, -1),
+    ];
+    for (name, put, want) in cases {
+        assert_eq!(roundtrip(name, put), Some(SignalValue::Int(want)), "{name} {put}");
+    }
+}
+
+#[test]
+fn put_at_stores_a_real_as_f32() {
+    let m = put_map();
+    let p = point(&m, "f");
+    let mut image = [0u8; IMAGE_BYTES];
+    put_at(&mut image, p, SignalValue::Real(-2.5));
+    assert_eq!(value_at(&image, p), Some(SignalValue::Real(-2.5)));
+}
+
+#[test]
+fn put_at_sets_and_clears_one_bit_only() {
+    let m = put_map();
+    let (b, c) = (point(&m, "b"), point(&m, "c"));
+    let mut image = [0u8; IMAGE_BYTES];
+    put_at(&mut image, c, SignalValue::Bool(true));
+    put_at(&mut image, b, SignalValue::Bool(true));
+    assert_eq!(value_at(&image, b), Some(SignalValue::Bool(true)));
+    assert_eq!(value_at(&image, c), Some(SignalValue::Bool(true)));
+    put_at(&mut image, b, SignalValue::Bool(false));
+    assert_eq!(value_at(&image, b), Some(SignalValue::Bool(false)));
+    assert_eq!(
+        value_at(&image, c),
+        Some(SignalValue::Bool(true)),
+        "the neighbour keeps its bit"
+    );
+}
+
+#[test]
+fn put_at_ignores_a_value_of_the_wrong_kind() {
+    let m = put_map();
+    for (name, v) in [
+        ("b", SignalValue::Int(1)),
+        ("b", SignalValue::Real(1.0)),
+        ("u16", SignalValue::Bool(true)),
+        ("u16", SignalValue::Real(3.0)),
+        ("f", SignalValue::Int(3)),
+        ("f", SignalValue::Bool(true)),
+    ] {
+        let mut image = [0x5Au8; IMAGE_BYTES];
+        put_at(&mut image, point(&m, name), v);
+        assert_eq!(image, [0x5Au8; IMAGE_BYTES], "{name} {v:?}");
+    }
+}
+
+#[test]
+fn put_at_past_the_image_end_does_not_panic() {
+    let m = put_map();
+    for name in ["b", "u8", "u32", "f"] {
+        let mut image = [0u8; 1];
+        put_at(&mut image, point(&m, name), SignalValue::Int(7));
+        put_at(&mut image, point(&m, name), SignalValue::Bool(true));
+        put_at(&mut image, point(&m, name), SignalValue::Real(1.0));
+        let mut empty: [u8; 0] = [];
+        put_at(&mut empty, point(&m, name), SignalValue::Int(7));
+    }
+}
+
+#[test]
+fn bindings_match_by_name_without_case_and_by_direction() {
+    let m = parse(
+        "device a modbus-tcp 10.0.0.1\nin Estop bool a di:0\nout motor bool a coil:0\n\
+        in pos int a hr:0:i16\nout speed int a hr:1:i16\n",
+    )
+    .unwrap();
+    let ports = [
+        ("ESTOP", true),  // binds to point 0
+        ("MOTOR", false), // binds to point 1
+        ("MOTOR", true),  // an input never binds to an out point
+        ("POS", false),   // an output never binds to an in point
+        ("NOPE", true),   // no point
+        ("SPEED", false), // binds to point 3
+    ];
+    assert_eq!(bindings(&m, &ports), [(0, 0), (1, 1), (5, 3)]);
+    assert_eq!(bindings(&m, &[]), []);
+}
+
+#[test]
+fn bindings_with_duplicate_names_take_the_first_point() {
+    // The parser refuses duplicates; a hand-built map must still be
+    // deterministic.
+    let mut m = parse("device a modbus-tcp 10.0.0.1\nin x bool a di:0\nin y bool a di:1\n").unwrap();
+    m.points[1].name = String::from("X");
+    assert_eq!(bindings(&m, &[("X", true)]), [(0, 0)]);
+    assert_eq!(bindings(&m, &[("X", true), ("x", true)]), [(0, 0), (1, 0)]);
+}

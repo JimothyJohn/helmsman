@@ -76,6 +76,10 @@ pub struct BoxTrend {
     pub notice: Option<String>,
     /// Why this browser does not keep pins, if it does not.
     pub problem: Option<String>,
+    /// The signals are another node's (a page watching a Skipper by
+    /// address): the box behind the page does not know their names and
+    /// refuses them as pins (422), so this browser keeps them.
+    pub local_pins: bool,
     /// The pins nobody chose, oldest first ([`crate::ekg::pin_auto`]).
     auto: Vec<String>,
     /// The lanes that just joined, popping.
@@ -114,6 +118,7 @@ impl BoxTrend {
             window_ms: crate::playground::TREND_MS,
             notice: None,
             problem: None,
+            local_pins: false,
             auto: Vec::new(),
             flashes: crate::ekg::Flashes::default(),
             expecting: Vec::new(),
@@ -152,6 +157,14 @@ impl BoxTrend {
         self.asked = Some(now);
         if self.pins.is_empty() {
             self.series.clear();
+            return;
+        }
+        // Another node's signals: the box behind the page has no history
+        // of them, and its answer carries its own clock, which moved the
+        // window off the node's points and froze the line (2026-11-24,
+        // Nick: "The trend line isn't moving even though the values are
+        // updating"). The line is drawn from the values as they come.
+        if self.local_pins {
             return;
         }
         let list: Vec<String> = self.pins.iter().map(|p| segment(p)).collect();
@@ -214,7 +227,7 @@ impl BoxTrend {
         if self.loaded.as_deref() != Some(key.as_str()) {
             self.loaded = Some(key);
             self.series.clear();
-            if who.is_some() {
+            if who.is_some() && !self.local_pins {
                 self.queue
                     .push(PReq::get(PCall::TrendPins, "/api/trends/pins".into()));
             } else {
@@ -297,7 +310,7 @@ impl BoxTrend {
     /// Keeps the pins, in order: on the box for a person signed in, in
     /// this browser otherwise.
     fn keep_pins(&mut self, session: Option<&Session>) {
-        if session.is_some() {
+        if session.is_some() && !self.local_pins {
             self.queue.push(PReq::json(
                 PCall::SavePins,
                 "PUT",
@@ -580,6 +593,52 @@ mod tests {
         s.apply(ev(2, 300), 2.1);
         t.step(None, &s, 2.1);
         assert_eq!(t.series["lamp"], [(200, 1.0), (300, 1.0)], "and it extends");
+    }
+
+    /// Nick, 2026-11-24: "The trend line isn't moving even though the
+    /// values are updating". On a page a box served that watches a Skipper,
+    /// the box's history answer set the window to the box's clock, so the
+    /// Skipper's points fell outside it. There the box is not asked, the
+    /// pins stay in this browser, and the window follows the Skipper.
+    #[test]
+    fn a_skipper_page_trends_the_skippers_values_on_the_skippers_clock() {
+        use crate::remote::{Msg, Stream};
+        let me = Session {
+            user: Some("nick".into()),
+            role: "engineer".into(),
+        };
+        let mut t = BoxTrend::new(Box::new(MemStorage(Some(r#"["position"]"#.into()))));
+        t.local_pins = true;
+        let mut s = BoxState::new();
+        t.step(Some(&me), &s, 0.0);
+        assert!(
+            t.poll().is_empty(),
+            "neither the box's pins nor its history are asked"
+        );
+        assert_eq!(t.pins, ["position"], "the browser's pins");
+        let ev = |seq: u64, at: u64, v: i64| {
+            Msg::Event(
+                Stream::Values,
+                "values".into(),
+                json!({ "seq": seq, "at_ms": at, "modules": [],
+                        "signals": [{ "name": "position", "dir": "in", "value": v, "quality": "good" }] })
+                .to_string(),
+            )
+        };
+        for (k, at, v) in [(1, 1_914_892, 10), (2, 1_914_992, 20), (3, 1_915_092, 30)] {
+            s.apply(ev(k, at, v), 1.0);
+            t.step(Some(&me), &s, 1.0);
+        }
+        assert_eq!(
+            t.now_ms, 1_915_092,
+            "the window ends at the Skipper's newest point"
+        );
+        assert_eq!(t.series["position"].len(), 3);
+        t.toggle("slew", Some(&me), 2.0);
+        assert!(
+            t.poll().is_empty(),
+            "a new pin asks the box for nothing (its answer would carry its own clock)"
+        );
     }
 
     #[test]
