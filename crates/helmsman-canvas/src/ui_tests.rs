@@ -2278,6 +2278,52 @@ END_PROGRAM",
         assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "latch the lamp twice");
     }
 
+    /// Nick, 2026-11-24: a reply with a question in it "needs to be more
+    /// interactive". It shows as a question, the box says it is for the
+    /// answer and has the keyboard, and what is typed goes with it.
+    #[test]
+    fn a_reply_that_asks_puts_the_keyboard_in_the_box_for_the_answer() {
+        use crate::instruct_tests::LAMP;
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(crate::claude::Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.2);
+        assert!(h.drew("What should it do?"));
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("make it safer".into())]);
+        h.press("agent send");
+        h.frame(vec![]);
+        // Somewhere else has the keyboard when the reply comes.
+        h.ctx
+            .memory_mut(|m| m.surrender_focus(m.focused().unwrap_or(eframe::egui::Id::NULL)));
+        crate::instruct_tests::reply(
+            h.app.sim.as_mut().unwrap(),
+            "A stop button, or a timeout on the lamp?",
+        );
+        h.wait(0.2);
+        assert!(h.has("agent result") && h.drew("A stop button, or a timeout on the lamp?"));
+        assert!(h.drew("Your answer") && !h.drew("What should it do?"));
+        // No click: what is typed lands in the box.
+        h.frame(vec![Event::Text("a timeout".into())]);
+        assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "a timeout");
+        h.key(Modifiers::NONE, Key::Enter);
+        h.frame(vec![]);
+        let v = h.app.sim.as_ref().unwrap();
+        let sent = &v.link.sent.last().unwrap().1.body;
+        assert!(
+            sent.contains("(not carried out) make it safer") && sent.contains("a timeout on the lamp?"),
+            "{sent}"
+        );
+    }
+
     /// Every outcome the tab can show, with long words, and the tab while
     /// the Agent fixes an answer: the panels keep their width throughout.
     #[test]
