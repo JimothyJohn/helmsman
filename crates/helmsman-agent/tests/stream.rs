@@ -153,7 +153,7 @@ fn tool_call_with_input(first: &str, start_input: &str) -> String {
     t
 }
 
-/// A tool that takes no input (list_devices, read_io_map, list_modules) is
+/// A tool that takes no input (`list_devices`, `read_io_map`, `list_modules`) is
 /// called by some models with `null` for its arguments, or a start event
 /// whose input is `null`: that is the empty object, not broken JSON
 /// (2026-11-24: the agent reported its reads "invalid JSON").
