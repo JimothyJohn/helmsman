@@ -100,6 +100,9 @@ pub enum PCall {
         replay: Option<u64>,
     },
     Upload(String),
+    /// `PUT /api/modules/{name}`: the edited source of a module, on a box
+    /// or Skipper without projects.
+    DeployModule(String),
     Import {
         project: String,
         file: String,
@@ -414,6 +417,9 @@ pub struct BoxProjects {
     pub layout_saved: Option<String>,
     /// The layout being saved.
     saving_layout: Option<String>,
+    /// The running module being edited, on a box or Skipper without
+    /// projects (`PUT /api/modules/{name}`).
+    pub module: Option<ModuleEdit>,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
     /// How the box would check a project made now (its image sizes and
@@ -541,7 +547,81 @@ fn short(s: &str) -> &str {
     s.get(..8).unwrap_or(s)
 }
 
+/// A running module's source being edited where there are no projects:
+/// a Skipper, or a box run without `--projects`. The box's copy is what it
+/// last said it runs; the edits stay until a deploy of them succeeds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleEdit {
+    pub name: String,
+    /// What the box runs, as far as this page knows: what it sent, or what
+    /// a deploy from here put there.
+    pub base: String,
+    /// The editor's text.
+    pub text: String,
+    /// The box's source as last read, so a re-read that brings nothing new
+    /// never undoes a deploy made from here.
+    seen: String,
+    /// The text on its way in a deploy.
+    sent: Option<String>,
+}
+
+impl ModuleEdit {
+    #[must_use]
+    pub fn dirty(&self) -> bool {
+        self.text != self.base
+    }
+}
+
 impl BoxProjects {
+    /// Keeps the module editor on `name` with the box's `source`: another
+    /// module, or a source changed on the box, replaces the text unless it
+    /// holds edits.
+    pub fn track_module(&mut self, name: &str, source: &str) {
+        match &mut self.module {
+            Some(m) if m.name == name => {
+                if m.seen != source {
+                    m.seen = source.to_string();
+                    if !m.dirty() {
+                        m.text = source.to_string();
+                    }
+                    m.base = source.to_string();
+                }
+            }
+            _ => {
+                self.module = Some(ModuleEdit {
+                    name: name.to_string(),
+                    base: source.to_string(),
+                    text: source.to_string(),
+                    seen: source.to_string(),
+                    sent: None,
+                });
+            }
+        }
+    }
+
+    /// Sends the edited module to the box, which compiles it and runs it
+    /// in place of the old one, or refuses it and keeps the old one.
+    pub fn deploy_module(&mut self) {
+        if self.deploy.busy() {
+            return;
+        }
+        let Some(m) = &mut self.module else { return };
+        if m.text.trim().is_empty() {
+            self.deploy = Deploy::Failed("The program is empty: nothing to deploy.".into());
+            return;
+        }
+        m.sent = Some(m.text.clone());
+        let (name, text) = (m.name.clone(), m.text.clone());
+        self.diags.clear();
+        self.deploy = Deploy::Deploying;
+        self.queue.push(PReq::json(
+            PCall::DeployModule(name.clone()),
+            "PUT",
+            crate::remote::module_url(&name),
+            &json!({ "source": text }),
+        ));
+    }
+
     /// Starts: the project list.
     #[must_use]
     pub fn new() -> Self {
@@ -1913,6 +1993,34 @@ impl BoxProjects {
                     self.deploy = Deploy::Failed(deploy_words(format!(
                         "{project} was not deployed: {}",
                         error_of(a)
+                    )));
+                }
+            }
+            PCall::DeployModule(name) => {
+                let sent = self
+                    .module
+                    .as_mut()
+                    .filter(|m| m.name == name)
+                    .and_then(|m| m.sent.take().map(|t| (m, t)));
+                if ok {
+                    if let Some((m, t)) = sent {
+                        m.base = t;
+                    }
+                    self.deploy = Deploy::Done(format!("{name} is running the version deployed from here."));
+                    self.deployed = true;
+                } else {
+                    if a.status == 422 {
+                        self.diags = diags_of(&j);
+                    }
+                    // A Skipper lists the compiler's lines under `errors`.
+                    let lines: Vec<&str> = j["errors"].as_array().into_iter().flatten().filter_map(Json::as_str).collect();
+                    let why = if lines.is_empty() {
+                        error_of(a)
+                    } else {
+                        format!("{}: {}", error_of(a), lines.join("; "))
+                    };
+                    self.deploy = Deploy::Failed(deploy_words(format!(
+                        "{name} was not deployed (the old version keeps running): {why}"
                     )));
                 }
             }

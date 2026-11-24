@@ -2302,6 +2302,75 @@ impl BoxView {
     }
 
     #[must_use]
+    /// Whether the running module may be edited and deployed here: on a
+    /// box or Skipper without projects, for an engineer, once its source
+    /// came.
+    fn module_writable(&self) -> Result<(), String> {
+        is_engineer(self.session.as_ref())?;
+        if self.projects.available != Some(false) {
+            return Err("Waiting for the box to say what it holds.".into());
+        }
+        if self.state.selected.is_none() {
+            return Err("Pick a module first.".into());
+        }
+        if self.state.source().is_none() {
+            return Err("Waiting for the module's source.".into());
+        }
+        Ok(())
+    }
+
+    /// The running module's source, editable, with Deploy at the header's
+    /// end: a Skipper, or a box run without projects, takes the program
+    /// straight (`PUT /api/modules/{name}`), compiles it and keeps the old
+    /// one running if it will not.
+    fn module_editor(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, write: &Result<(), String>) {
+        let deploy = if self.projects.deploy.busy() {
+            Err("Deploying…".to_string())
+        } else {
+            write.clone()
+        };
+        let dirty = self.projects.module.as_ref().is_some_and(super::box_projects::ModuleEdit::dirty);
+        let errors = self.projects.diags.iter().filter(|d| !d.is_warning()).count();
+        let first = self.projects.diags.first().map(|d| d.message.clone());
+        let mut go = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            editor::file_header(
+                ui,
+                chrome,
+                name,
+                "The module that runs. Edit it here; Deploy sends it, and the old version keeps running if it does not compile.",
+            );
+            editor::wrap_toggle(ui, chrome);
+            if dirty {
+                let t = theme(ui);
+                let r = ui
+                    .add(crate::theme::whole(RichText::new("edited").color(t.accent)))
+                    .tip("Not running yet: Deploy sends it.");
+                chrome.hit("module edited", r.rect);
+            }
+            go = editor::header_right(
+                ui,
+                chrome,
+                &editor::Status {
+                    errors,
+                    first: first.as_deref(),
+                    deploy: &deploy,
+                    deploy_tip: "Ctrl Shift Enter: deploy this version.\nThe box compiles it and runs it in place of the old one.",
+                },
+            )
+            .deploy;
+        });
+        if go {
+            self.deploy();
+        }
+        let id = editor::source_id("box-st-module", "", name);
+        let Some(m) = self.projects.module.as_mut() else {
+            return;
+        };
+        editor::st_editor(ui, id, &mut m.text, &[], &[], MAX_FILE, chrome);
+    }
+
     pub fn has_projects(&self) -> bool {
         self.projects.available == Some(true)
     }
@@ -2830,6 +2899,8 @@ impl Workspace for BoxView {
     fn deploy(&mut self) {
         if self.writable().is_ok() {
             self.projects.deploy();
+        } else if self.module_writable().is_ok() {
+            self.projects.deploy_module();
         }
     }
 
@@ -3354,13 +3425,39 @@ impl Body for BoxView {
             .selected
             .clone()
             .unwrap_or_else(|| "Program".to_string());
+        if let (Some(m), Some(src)) = (self.state.selected.clone(), self.state.source().map(str::to_string)) {
+            self.projects.track_module(&m, &src);
+        }
+        let write = self.module_writable();
+        if write.is_ok() {
+            self.module_editor(ui, chrome, &name, &write);
+            return;
+        }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             editor::file_header(ui, chrome, &name, "The source of the module that runs.");
             editor::wrap_toggle(ui, chrome);
-            ui.add(crate::theme::whole(RichText::new("read-only").color(t.muted)))
-                .tip("Changes reach the box as proposals.");
+            let why = write.err().unwrap_or_default();
+            let r = ui
+                .add(crate::theme::whole(RichText::new("read-only").color(t.muted)))
+                .tip(why);
+            chrome.hit("read-only", r.rect);
         });
+        if self.view.is_none() {
+            if let Some(src) = self.state.source() {
+                let mut src: &str = src;
+                editor::st_editor(
+                    ui,
+                    editor::source_id("box-st-module", "", &name),
+                    &mut src,
+                    &[],
+                    &[],
+                    usize::MAX,
+                    chrome,
+                );
+                return;
+            }
+        }
         // With no source yet, the canvas beside this pane says what the
         // box waits for; said here too it was on screen twice.
         if let Some(v) = &self.view {

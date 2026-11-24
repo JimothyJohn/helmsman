@@ -844,6 +844,12 @@ impl Default for BoxState {
 }
 
 impl BoxState {
+    /// The selected module's source, once fetched.
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
     /// Starts watching: the module list and the values stream.
     #[must_use]
     pub fn new() -> Self {

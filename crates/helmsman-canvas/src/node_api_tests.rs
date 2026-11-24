@@ -308,3 +308,140 @@ fn several_devices_in_mixed_states_and_numeric_points_read_as_a_boxs_do() {
     assert_eq!(s.io_map.as_deref(), Some(v.io_map.as_str()));
     assert!(s.problem.is_none());
 }
+
+/// What the page sends for an edited module, as the node's router reads it.
+fn routed(q: &crate::box_projects::PReq, token: &str) -> helmsman_nodecore::router::Outcome {
+    use helmsman_nodecore::http::{Read, parse};
+    let settings = Settings {
+        token: "bench-token-2026".into(),
+        ..Settings::default()
+    };
+    let body = q.body.clone().unwrap_or_default();
+    let (name, value) = crate::node_token::header(&crate::node_token::clean(token).unwrap());
+    let mut raw = format!(
+        "{} {} HTTP/1.1\r\nHost: node\r\n{name}: {value}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
+        q.method,
+        q.url,
+        q.ctype,
+        body.len()
+    )
+    .into_bytes();
+    raw.extend_from_slice(&body);
+    match parse(&raw).expect("a whole request") {
+        Read::Done(r, _) => helmsman_nodecore::router::handle(&r, &view(), &settings),
+        Read::Incomplete => panic!("incomplete"),
+    }
+}
+
+const OLD: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+const NEW: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 5000;\nEND_PROGRAM\n";
+
+/// Nick 2026-11-24 ("It's running but I can't make any changes"): a module
+/// edited on a Skipper's page reaches the Skipper's own router as exactly
+/// that program, under the token, and a 201 makes it what runs here too.
+#[test]
+fn an_edited_module_reaches_the_skippers_router_and_becomes_what_runs() {
+    use crate::box_projects::{Answer, BoxProjects, Deploy, PCall};
+    use helmsman_nodecore::router::{Effect, Outcome, deployed};
+    let mut p = BoxProjects::default();
+    p.available = Some(false);
+    p.track_module("drive", OLD);
+    p.module.as_mut().unwrap().text = NEW.into();
+    assert!(p.module.as_ref().unwrap().dirty());
+    p.deploy_module();
+    assert_eq!(p.deploy, Deploy::Deploying);
+    let reqs = p.poll();
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    let q = &reqs[0];
+    assert_eq!((q.method, q.url.as_str()), ("PUT", "/api/modules/drive"));
+    match routed(q, "bench-token-2026") {
+        Outcome::Effect(Effect::Deploy { name, source }) => {
+            assert_eq!(name, "drive");
+            assert_eq!(source, NEW, "the node compiles the edited text, byte for byte");
+        }
+        other => panic!("not a deploy: {other:?}"),
+    }
+    let Outcome::Reply(r) = routed(q, "bench-token-2025") else {
+        panic!("a wrong token is refused")
+    };
+    assert_eq!(r.status, 401);
+    // Pressing again while one is on its way sends nothing more.
+    p.deploy_module();
+    assert!(p.poll().is_empty());
+
+    let ok = deployed("drive", NEW.len());
+    p.answer(
+        PCall::DeployModule("drive".into()),
+        &Answer {
+            status: ok.status,
+            retry_after: None,
+            body: String::from_utf8(ok.body.clone()).unwrap(),
+        },
+    );
+    assert!(matches!(p.deploy, Deploy::Done(_)), "{:?}", p.deploy);
+    assert!(p.deployed, "the module list is read again");
+    let m = p.module.as_ref().unwrap();
+    assert!(!m.dirty(), "what was deployed is what runs");
+    // The node has no traces, so the page may re-read the old source it
+    // already had: that never puts the old program back in the editor.
+    p.track_module("drive", OLD);
+    assert_eq!(p.module.as_ref().unwrap().text, NEW);
+}
+
+/// A program the Skipper will not compile is refused with its lines, the
+/// old one keeps running, and the edits stay in the editor to fix.
+#[test]
+fn a_refused_module_keeps_the_edits_and_says_why() {
+    use crate::box_projects::{Answer, BoxProjects, Deploy, PCall};
+    use helmsman_nodecore::router::deploy_refused;
+    let mut p = BoxProjects::default();
+    p.available = Some(false);
+    p.track_module("drive", OLD);
+    p.module.as_mut().unwrap().text = "PROGRAM drive\nslew := ;\nEND_PROGRAM\n".into();
+    p.deploy_module();
+    let _ = p.poll();
+    let no = deploy_refused(&["2:9: expected an expression".into()]);
+    p.answer(
+        PCall::DeployModule("drive".into()),
+        &Answer {
+            status: no.status,
+            retry_after: None,
+            body: String::from_utf8(no.body.clone()).unwrap(),
+        },
+    );
+    let Deploy::Failed(why) = &p.deploy else {
+        panic!("{:?}", p.deploy)
+    };
+    assert!(why.contains("old version keeps running"), "{why}");
+    assert!(why.contains("2:9: expected an expression"), "{why}");
+    let m = p.module.as_ref().unwrap();
+    assert!(m.dirty(), "the edits stay");
+    assert_eq!(m.base, OLD);
+    // An empty program is not sent at all.
+    p.module.as_mut().unwrap().text = "  \n".into();
+    p.deploy = Deploy::Idle;
+    p.deploy_module();
+    assert!(p.poll().is_empty());
+    assert!(matches!(p.deploy, Deploy::Failed(_)));
+}
+
+/// Edits survive a change on the box; another module replaces them.
+#[test]
+fn the_module_editor_follows_the_box_without_losing_edits() {
+    use crate::box_projects::BoxProjects;
+    let mut p = BoxProjects::default();
+    p.track_module("drive", OLD);
+    // Unedited: a new source on the box shows.
+    p.track_module("drive", NEW);
+    assert_eq!(p.module.as_ref().unwrap().text, NEW);
+    // Edited: a new source on the box does not overwrite the edits.
+    p.module.as_mut().unwrap().text = "PROGRAM drive\nEND_PROGRAM\n".into();
+    p.track_module("drive", OLD);
+    let m = p.module.as_ref().unwrap();
+    assert_eq!(m.text, "PROGRAM drive\nEND_PROGRAM\n");
+    assert_eq!(m.base, OLD);
+    // Another module is another file.
+    p.track_module("chase", "PROGRAM chase\nEND_PROGRAM\n");
+    let m = p.module.as_ref().unwrap();
+    assert_eq!((m.name.as_str(), m.text.as_str()), ("chase", "PROGRAM chase\nEND_PROGRAM\n"));
+}
