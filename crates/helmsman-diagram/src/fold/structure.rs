@@ -320,6 +320,31 @@ pub fn statements(d: &Diagram, src: &str) -> Vec<Fold> {
     out
 }
 
+/// The source of each statement of `d` as it is written in `src`, line
+/// breaks and comments kept, by its index into [`Diagram::stmts`]: what
+/// the closest rung of the zoom ladder draws ([`super::ladder`]). Empty
+/// for a source that does not parse, or a POU the source lacks.
+#[must_use]
+pub fn sources(d: &Diagram, src: &str) -> HashMap<usize, String> {
+    let Ok(unit) = ast::parse(src) else {
+        return HashMap::new();
+    };
+    let Some(pou) = unit.pous.iter().find(|p| p.name.eq_ignore_ascii_case(&d.pou)) else {
+        return HashMap::new();
+    };
+    let mut ends = HashMap::new();
+    spans(src, &pou.body, &mut ends);
+    d.stmts
+        .iter()
+        .enumerate()
+        .filter_map(|(k, s)| {
+            let start = offset_in(src, s.pos);
+            let text = ends.get(&start).and_then(|&end| src.get(start..end))?;
+            Some((k, text.to_string()))
+        })
+        .collect()
+}
+
 /// The byte offset of a 1-based line and column (the lexer counts bytes).
 fn offset_in(s: &str, p: ast::Pos) -> usize {
     let mut at = 0;
