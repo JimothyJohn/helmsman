@@ -171,6 +171,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Next to build
 
+- [x] **Scan asks from every interface, and one address on request** — Why it matters: on 2026-11-24 the MDrive (192.168.33.1) was invisible to Scan because Wi-Fi was the Studio's default route and a broadcast leaves on that interface only. Measured from the Studio (en1 Wi-Fi 10.0.0.41 default; en0 192.168.3.10 with an alias 192.168.33.10): an unbound socket sending to 255.255.255.255 got the E1213 only; a socket bound to 192.168.3.10 or 192.168.33.10 got the E1213 and the MDrive; a directed broadcast to 192.168.33.255 got nobody; a ListIdentity straight to 192.168.33.1 was answered. The sweep now asks once from each local non-loopback IPv4 address (addresses read from `ip -o -4 addr`, else `ifconfig`; none readable falls back to the single send), and `POST /api/devices/discover?address=A` plus an Ask field beside Scan asks one device.
+  result: a device on a wire that is not the default route is listed by Scan, or found and added by its address
+  needs: a run on the bench from the try box to see the MDrive listed (cargo-built binaries cannot reach the LAN from a session; not run)
+  difficulty: med
+  id: scan-every-interface
+  asked: 2026-11-24
+  by: worker
+  status: done
+
 - [ ] **Windows: what the green CI job does not prove yet** — the box builds, lints and passes its tests on windows-latest since #565 (2026-11-23), with these left open. (1) Names Windows treats as devices (`con`, `nul`, `aux`, `com1`, `lpt1`, with or without `.st`) as project and file names: not tested; a write to `nul.st` may vanish without an error. (2) Shutdown: no test sends Ctrl-C or a terminate on Windows, so RETAIN on exit is unproven there (the SIGTERM test is Unix-only). (3) `--time-zone` and the zone tests are Unix-only (no tz database on Windows). (4) The Windows job checks out with LF; a project with CRLF files is not tested on any platform. (5) EtherNet/IP and Modbus TCP pass on loopback there, never against a device. (6) `hammering_the_api_does_not_hold_up_the_scan` allows an 8x fall on Windows against 4x elsewhere (154 ticks against 680 on the runner): measure on a real Windows machine before calling the scan timing good there. (7) `box (windows-latest)`, `box (macos-latest)` and `box (ubuntu-24.04-arm)` are not required checks.
   needs: a Windows machine for (5) and (6); the rest runs in CI
   result: each point has a test or a line in docs/ARCHITECTURE.md "Platforms" saying it is not supported
