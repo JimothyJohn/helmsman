@@ -422,6 +422,11 @@ pub struct Instruct {
     /// The prompt the arrows last put in the box ([`Self::show_step`]):
     /// while the box still holds it, the next step may replace it.
     pub stepped: Option<String>,
+    /// The instruction last sent from the box, so it is never lost to
+    /// Enter (Nick, 2026-11-24): it comes back into the empty box on its
+    /// own when it ended with nothing written, and with the Up key at
+    /// any time ([`Self::recall`]).
+    pub last: String,
     /// The answer area shows the versions' index (the clock).
     pub versions_open: bool,
     /// What the index is searched for.
@@ -461,6 +466,19 @@ impl Instruct {
     #[must_use]
     pub const fn busy(&self) -> bool {
         self.run.is_some()
+    }
+
+    /// Puts the instruction last sent back in the box, to change and send
+    /// again. Only into an empty box: what the engineer has typed since
+    /// is theirs. Says whether it did.
+    pub fn recall(&mut self) -> bool {
+        if self.busy() || self.last.is_empty() || !self.draft.trim().is_empty() {
+            return false;
+        }
+        self.draft.clone_from(&self.last);
+        // The arrows through the revisions may still replace it.
+        self.stepped = Some(self.last.clone());
+        true
     }
 
     /// Why the draft cannot go, if it cannot.
@@ -547,6 +565,9 @@ impl Instruct {
         // The collected chips go with an instruction (a run from a
         // specification keeps them for the next one).
         self.about = if spec { String::new() } else { self.take_about() };
+        if !spec {
+            self.last.clone_from(&instruction);
+        }
         let message = env.message(text, &earlier, self.edits, &self.about);
         self.outcome = None;
         self.run = Some(Run {
@@ -581,6 +602,22 @@ impl Instruct {
         let Some(run) = self.run.take() else {
             return Step::Done;
         };
+        let spec = run.spec;
+        let step = self.answered_run(run, answer, env);
+        // Ended with nothing written: the instruction is back in the box.
+        if !spec
+            && self.run.is_none()
+            && self
+                .outcome
+                .as_ref()
+                .is_some_and(|o| matches!(o.kind, Kind::Refused | Kind::Failed))
+        {
+            self.recall();
+        }
+        step
+    }
+
+    fn answered_run(&mut self, run: Run, answer: &str, env: &Env<'_>) -> Step {
         match run.mode {
             Mode::Direct => self.checked(run, answer, env),
             Mode::Planning { .. } => self.planned(run, answer, env),
@@ -1192,16 +1229,21 @@ impl Instruct {
 
     /// A green answer the caller could not write, and why.
     pub fn not_written(&mut self, file: &str, why: &str) {
-        self.run = None;
+        let back = self.run.take().is_some_and(|r| !r.spec);
         let mut o = Outcome::new(Kind::Refused, format!("{} is unchanged.", capital(file)));
         o.problems = vec![why.to_string()];
         self.outcome = Some(o);
+        if back {
+            self.recall();
+        }
     }
 
     /// The request could not be made, was stopped, or its answer broke:
     /// the instruction ends with nothing written.
     pub fn failed(&mut self, why: &str) {
-        let status = self.run.take().map_or_else(
+        let run = self.run.take();
+        let back = run.as_ref().is_some_and(|r| !r.spec);
+        let status = run.map_or_else(
             || {
                 let w = sentence(why);
                 let mut c = w.chars();
@@ -1215,6 +1257,9 @@ impl Instruct {
             o.review.clone_from(&r.review);
         }
         self.outcome = Some(o);
+        if back {
+            self.recall();
+        }
     }
 
     /// The box's agent stored proposals instead of answering with the file.
@@ -2649,7 +2694,8 @@ fn box_ui(
         .as_ref()
         .is_some_and(|o| matches!(o.kind, Kind::Refused | Kind::Failed));
     let tip = format!(
-        "Enter sends; Shift+Enter starts a new line and goes on with a list (- , * or 1. ); Tab indents.\n\
+        "Enter sends; Shift+Enter starts a new line and goes on with a list (- , * or 1. ); Tab indents. \
+         The Up arrow in the empty box brings back the last message you sent.\n\
          Say what {target} should do: it is checked before anything is written."
     );
     // One row of it: the box starts one row tall.
@@ -2662,7 +2708,18 @@ fn box_ui(
         })
         .inner
     } else {
-        chat_box_sized(ui, &mut s.draft, "agent-instruction", hint, tip, height)
+        let out = chat_box_sized(ui, &mut s.draft, "agent-instruction", hint, tip, height);
+        // Up in the empty box: the last message sent, the caret at its end.
+        if out.0.has_focus() && ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) && s.recall() {
+            use egui::text::{CCursor, CCursorRange};
+            let state = egui::TextEdit::load_state(ui.ctx(), out.0.id); // tip: exempt, the box's caret, no control
+            if let Some(mut state) = state {
+                let end = CCursor::new(s.draft.chars().count());
+                state.cursor.set_char_range(Some(CCursorRange::one(end)));
+                state.store(ui.ctx(), out.0.id);
+            }
+        }
+        out
     };
     if failed {
         ui.painter().rect_stroke(
