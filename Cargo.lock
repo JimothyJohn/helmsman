@@ -1578,7 +1578,6 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
- "sha2 0.11.1",
  "wasm-bindgen-futures",
  "web-sys",
 ]

@@ -1,8 +1,8 @@
 //! The design step's screens (`crate::design_step` holds the state): the
 //! entry in the Agent tab (the button, how a design under way is coming
 //! along, the card of a design on show and of the project's kept design),
-//! the window where the machine is described and the window where the
-//! design is read.
+//! the window where the machine is described (and its documents added) and
+//! the window where the design is read.
 //!
 //! Everything here takes plain data and answers with an [`Act`], so the
 //! simulation's page and a box's page draw the same screens. The tab's
@@ -28,6 +28,8 @@ pub enum Act {
     Keep,
     /// Build the next batch of the kept design.
     Build,
+    /// Open the file picker for the documents.
+    AddFile,
 }
 
 /// The project's kept design, as the tab shows it.
@@ -85,7 +87,7 @@ pub fn entry_ui(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut Designer, v: &En
                 egui::Button::new(RichText::new("Design a machine…").size(size)),
             )
             .tip(v.blocked.clone().or_else(|| d.closed_line(v.now)).unwrap_or_else(|| {
-                "Opens a window to describe a whole machine. A strong model writes its control system design: the signals, the parts, the faults, numbered requirements and the order to build it in. It takes a few minutes. You read the design before anything is kept, and it is then built step by step.".into()
+                "Opens a window to describe a whole machine, or to paste or add the scope of work or product documentation it comes from. A strong model writes its control system design: the signals, the parts, the faults, numbered requirements and the order to build it in. It takes a few minutes. You read the design before anything is kept, and it is then built step by step, with a test for each requirement.".into()
             }));
         chrome.hit("design open", r.rect);
         if r.clicked() {
@@ -322,13 +324,13 @@ pub fn ask_window(
     }
     let size = crate::theme::BODY;
     let width = window_width(ctx);
-    let tall = (ctx.content_rect().height() * 0.3).max(80.0);
+    let tall = (ctx.content_rect().height() * 0.25).max(80.0);
     let mut act = None;
     let m = egui::Modal::new(egui::Id::unique("design-form")).show(ctx, |ui| {
         let t = crate::theme::theme(ui);
         ui.set_width(width);
         ui.label(RichText::new("Design a machine").strong().size(size))
-            .tip("Describe the whole machine and what it must do. A strong model writes its control system design; you read it before anything is kept.");
+            .tip("Describe the whole machine and what it must do, and add the documents it comes from. A strong model writes its control system design; you read it before anything is kept.");
         ui.add_space(6.0);
         egui::ScrollArea::vertical()
             .id_salt("design-scroll")
@@ -342,9 +344,16 @@ pub fn ask_window(
                             .desired_rows(8)
                             .desired_width(f32::INFINITY),
                     )
-                    .tip("The machine, in your words: what it makes or moves, its stations, its sensors and actuators, and what must happen when something goes wrong.");
+                    .tip("The machine, in your words: what it makes or moves, its stations, its sensors and actuators, and what must happen when something goes wrong. The description can be left out when a document says it.");
                 chrome.hit("design text", r.rect.intersect(ui.clip_rect()));
             });
+        let screen = ctx.content_rect().height();
+        let tall = ((screen * 0.15).max(60.0), (screen * 0.1).max(40.0));
+        if let Some(crate::documents::IntakeAct::AddFile) =
+            crate::documents::intake_ui(ui, chrome, &mut d.docs, &d.description, tall)
+        {
+            act = Some(Act::AddFile);
+        }
         let n = d.description.trim().chars().count();
         let over = n > MAX_DESCRIPTION;
         let r = ui
@@ -359,12 +368,12 @@ pub fn ask_window(
             .tip("The longest description the design entry takes.");
         chrome.hit("design count", r.rect);
         let why = blocked.map(str::to_string).or_else(|| {
-            if n == 0 {
-                Some("Describe the machine first.".into())
+            if n == 0 && d.docs.is_empty() {
+                Some("Describe the machine, or add a document, first.".into())
             } else if over {
                 Some(format!("A description is at most {MAX_DESCRIPTION} characters."))
             } else {
-                None
+                d.docs.refusal(d.description.trim())
             }
         });
         if let Some(e) = d.error.as_ref().or(why.as_ref()) {
@@ -378,7 +387,7 @@ pub fn ask_window(
             let go = ui
                 .add_enabled(why.is_none(), egui::Button::new(RichText::new("Ask for a design").strong().size(size)))
                 .tip(why.clone().unwrap_or_else(|| {
-                    "Sends the description. The design takes a few minutes; you can watch it come in, and Stop drops it.".into()
+                    "Sends the description and the documents. The design takes a few minutes; you can watch it come in, and Stop drops it.".into()
                 }));
             chrome.hit("design send", go.rect);
             if go.clicked() {

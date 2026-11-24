@@ -2128,7 +2128,6 @@ END_PROGRAM",
             retries: 1,
             asked_scenarios: false,
             mode: crate::instruct::Mode::Direct,
-            spec: false,
             attempts: vec![Attempt {
                 asked: String::new(),
                 answer: String::new(),
@@ -5370,7 +5369,6 @@ mod simulated {
             asked_scenarios: false,
             mode: crate::instruct::Mode::Direct,
             attempts: Vec::new(),
-            spec: false,
         });
         h.app.sim.as_mut().unwrap().card = Some(Card {
             question: Some(Question {
@@ -7659,7 +7657,6 @@ mod outputs;
 mod proposal;
 mod shell;
 mod sim_popup;
-mod spec_mode;
 mod start_state;
 mod vendor;
 mod versions;

@@ -302,17 +302,10 @@ only go down.
   after a described change is on. Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
-  instruction sent, greyed. On a new project (a built-in example
-  open) "From a spec…" opens a window (Nick, 2026-11-15, `crate::spec_mode`):
-  paste a scope of work or add `.md` and `.txt` files, with the total
-  against the one request's cap, and Build; the draft comes back on a
-  review screen (the name, the I/O, each requirement passed or not, the
-  untested ones, the reason) and nothing is made until Accept. On a box
-  (Nick, 2026-11-15; `crate::box_spec`) the Describe tab offers it to an
-  engineer with a project open or not, the window also takes `.pdf`
-  files with the box's caps beside the total, the review lists the
-  inputs that need a device, and Accept sends the project to the box as
-  one zip. "Design a machine…" (`crate::design_step`, `crate::design_ui`;
+  instruction sent, greyed. "Design a machine…" takes the description and, in the same window, pasted
+  text or `.md` and `.txt` files (`crate::documents`, Nick, 2026-11-23: one
+  entry, not a second "From a spec" button), with the total against the cap.
+  "Design a machine…" (`crate::design_step`, `crate::design_ui`;
   card `design-step-canvas`) asks a strong model for a whole machine's
   control system design: a window takes the description, the tab shows
   the elapsed time and the model's thinking summary while the turns come

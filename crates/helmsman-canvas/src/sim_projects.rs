@@ -186,20 +186,6 @@ pub fn example_project(src: &str) -> (String, String) {
 /// nothing wired; a number output on the screen.
 #[must_use]
 pub fn example_io_map(src: &str) -> String {
-    io_map_of(src, true)
-}
-
-/// [`example_io_map`] for a box: the same lines, except that a number
-/// input gets none. A box refuses `in NAME int screen NAME` (a screen tile
-/// is something the box shows, an out signal), and no other line is the
-/// right one without knowing the device, so the input has no signal until
-/// it is assigned to a device channel.
-#[must_use]
-pub fn box_io_map(src: &str) -> String {
-    io_map_of(src, false)
-}
-
-fn io_map_of(src: &str, screen_inputs: bool) -> String {
     use crate::playground::Dir;
     use helmsman_iec::Ty;
     let s = crate::playground::Session::new(src);
@@ -223,10 +209,7 @@ fn io_map_of(src: &str, screen_inputs: bool) -> String {
                 format!("out {name} bool box do:{} safe=false", dq - 1)
             }
             (Dir::Out, _) => format!("out {name} int screen {name} safe=0"),
-            (Dir::In, _) if screen_inputs => format!("in  {name} int screen {name}"),
-            (Dir::In, _) => {
-                format!("# {name} is a number input: assign it to a device channel, then it gets its line")
-            }
+            (Dir::In, _) => format!("in  {name} int screen {name}"),
         };
         out.push_str(&line);
         out.push('\n');

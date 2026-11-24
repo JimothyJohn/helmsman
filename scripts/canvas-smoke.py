@@ -171,7 +171,7 @@ class Run:
         """`do`, then a screenshot; `watch` (a region) must have changed,
         or with `stays` must not have: a build without the free chat shows
         "Describing a change is not available in this build." in the tab,
-        with no spec button or window to open, so a click or typing there
+        with no design button or window to open, so a click or typing there
         leaves the pane as it was."""
         before = self.look(watch)
         do()
@@ -199,10 +199,9 @@ class Run:
         ]
 
 
-# "From a spec..." in the Agent tab of a new project, and the box its window
-# draws in the middle of the page, in points.
-AGENT_SPEC = (78, 308)
-SPEC_WINDOW = (380, 285, 640, 330)
+# "Design a machine..." in the Agent tab of a new project (about where the
+# button sits), in points.
+AGENT_DESIGN = (78, 308)
 
 # The front door's "Fail the high switch" and "Open the editor", in points
 # at the smoke's 1400 x 860 window (crates/helmsman-canvas/src/front.rs).
@@ -245,10 +244,10 @@ def playground(ctx, base, out):
     r.click(*FOLD_LINE_2); r.wait(300)
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
     # This build has no free chat: the tab says so (UNAVAILABLE_TEXT) and a
-    # click or typing on it changes nothing. (With a chat URL: "From a
-    # spec..." opens its window; text typed into it shows.)
-    r.step("spec-window", lambda: r.click(*AGENT_SPEC), LEFT, stays=True)
-    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), LEFT, stays=True)
+    # click or typing on it changes nothing. (With a design entry:
+    # "Design a machine..." opens its window; text typed into it shows.)
+    r.step("design-window", lambda: r.click(*AGENT_DESIGN), LEFT, stays=True)
+    r.step("design-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), LEFT, stays=True)
     r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
