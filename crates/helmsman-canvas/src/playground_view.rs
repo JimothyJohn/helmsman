@@ -3898,6 +3898,7 @@ impl Body for PlaygroundView {
                 self.devices_ui.simulated_scan(&map);
                 self.wired_lib.scan(&mut self.devices_ui);
             }
+            Some(crate::devices::DeviceAct::Ask(_)) => self.devices_ui.simulated_ask(),
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
             Some(crate::devices::DeviceAct::AddIo(device)) => {
                 // A read-only example is copied first; the copy keeps the
