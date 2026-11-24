@@ -221,9 +221,11 @@ pub struct Chrome {
     pub pane: Pane,
     /// Which of the right pane's tabs shows.
     pub side: Pane,
-    /// The Trend is the whole bottom strip, under both side panes (Nick,
-    /// 2026-11-01: a long time axis beats a tall one; 2026-11-23: from
-    /// the far left, and nothing else in it).
+    /// The Trend is the bottom strip from the left pane's edge, under the
+    /// right pane (Nick, 2026-11-01: a long time axis beats a tall one;
+    /// 2026-11-23: nothing else in it; 2026-11-24: the left pane keeps
+    /// its whole height, so the strip is the whole bottom only while
+    /// that pane is shut).
     pub trend: bool,
     /// The Messages under the left pane's tab are open, not folded to
     /// their header (Nick, 2026-11-23). Remembered.
@@ -1434,6 +1436,24 @@ fn drag_ghost(ctx: &egui::Context, at: Option<Pos2>, p: Pane, t: &Theme) {
     crate::glyphs::paint(&painter, r.shrink(TAB * 0.24), p.icon(), t.fg);
 }
 
+/// The Trend, a bottom panel across whatever width is left when it is
+/// drawn; its height is kept.
+fn trend_panel(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
+    let mut trend = chrome.trend;
+    egui::Panel::bottom(BOTTOM_ID)
+        .resizable(true)
+        .default_size(BOTTOM_H)
+        .show_collapsible(ui, &mut trend, |ui| body.trend(ui, chrome));
+    if trend
+        && chrome.trend
+        && let Some(state) =
+            egui::containers::panel::PanelState::load(ui.ctx(), ui.scope_id().with(BOTTOM_ID))
+    {
+        chrome.sizes.bottom = Some(state.size().y.round());
+    }
+    chrome.trend = trend;
+}
+
 /// One frame of the Editor.
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut hits = Vec::new();
@@ -1478,22 +1498,15 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         errors: body.messages().errors(),
     };
 
-    // The Trend first: a panel drawn before the side panes takes the whole
-    // width, so it runs under both of them.
-    let mut trend = chrome.trend;
-    egui::Panel::bottom(BOTTOM_ID)
-        .resizable(true)
-        .default_size(BOTTOM_H)
-        .show_collapsible(ui, &mut trend, |ui| body.trend(ui, chrome));
-    if trend
-        && chrome.trend
-        && let Some(state) =
-            egui::containers::panel::PanelState::load(ui.ctx(), ui.scope_id().with(BOTTOM_ID))
-    {
-        chrome.sizes.bottom = Some(state.size().y.round());
+    // The left pane has the page's whole height, for its tab and the
+    // Messages under it, and the Trend starts at its edge (the whole
+    // width while that pane is shut) and runs under the right pane (Nick,
+    // 2026-11-24). On a phone the pane leaves no width beside it, so
+    // there the Trend keeps the whole bottom, under both panes.
+    let phone = ui.ctx().content_rect().width() < crate::monitor::NARROW;
+    if phone {
+        trend_panel(ui, chrome, body);
     }
-    chrome.trend = trend;
-
     let left = (!lefts.is_empty()).then(|| {
         side_pane(
             ui,
@@ -1505,6 +1518,9 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             (!host_right).then_some(&cue),
         )
     });
+    if !phone {
+        trend_panel(ui, chrome, body);
+    }
     let right = (!rights.is_empty()).then(|| {
         side_pane(
             ui,
