@@ -2838,8 +2838,7 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
             .tip("Opens the Messages, which keep every line of it.");
         chrome.hit("agent details", r.rect);
         if r.clicked() {
-            chrome.trend = true;
-            chrome.bottom = crate::editor::Bottom::Messages;
+            chrome.show_messages();
         }
     }
     if !o.review.is_empty() {

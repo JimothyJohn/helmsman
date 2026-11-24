@@ -212,3 +212,21 @@ fn only_a_layout_that_keeps_every_rule_is_read() {
     let deep = format!("{}{}", "[".repeat(1500), "]".repeat(1500));
     assert!(Layout::read(deep.as_bytes()).is_err());
 }
+
+/// 2026-11-23: the Messages fold is part of a layout; a page from before
+/// it sends none (open), and a value that is not a flag is refused.
+#[test]
+fn the_messages_fold_is_kept_and_a_page_from_before_it_sends_none() {
+    assert_eq!(layout("A").messages_open, None, "absent: open");
+    let mut j = body("B");
+    j["messages_open"] = json!(false);
+    let l = Layout::read(j.to_string().as_bytes()).unwrap();
+    assert_eq!(l.messages_open, Some(false));
+    let back: Json = serde_json::to_value(&l).unwrap();
+    assert_eq!(back["messages_open"], json!(false));
+    for bad in [json!("no"), json!(1), json!([])] {
+        let mut j = body("C");
+        j["messages_open"] = bad.clone();
+        assert!(Layout::read(j.to_string().as_bytes()).is_err(), "{bad}");
+    }
+}

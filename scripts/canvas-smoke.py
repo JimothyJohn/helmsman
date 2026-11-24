@@ -91,13 +91,13 @@ EXPECTED = ("/__seed", "status of 404", "status of 401", "status of 409", "statu
 PANES = ("claude", "code", "io", "devices", "files", "history")
 
 
-def layout(left=1, pane="code", rights="", scan=0, trend=1, bottom="trend", light=0):
+def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
     docked = [p for p in rights.split(",") if p]
     lefts = ",".join(p for p in PANES if p not in docked)
     right = f" rights={rights} side={docked[0]}" if docked else ""
     return (
         f"dock=2 left={left} right=1 lefts={lefts} pane={pane}{right}"
-        f" scan={scan} trend={trend} bottom={bottom} light={light}"
+        f" scan={scan} trend={trend} msgs={msgs} light={light}"
     )
 
 
@@ -107,15 +107,15 @@ def layout(left=1, pane="code", rights="", scan=0, trend=1, bottom="trend", ligh
 LEFT = (0, 120, 300, 500)
 # Where a right pane's tabs show once one is docked there.
 RIGHT_TABS = (1180, 56, 210, 30)
-BOTTOM_TABS = (330, 575, 300, 50)
-# The Messages tab's rows, under its filters (what a deploy says is there
-# since 2026-11-11, not in a line under the header).
-MESSAGES = (330, 640, 700, 200)
+# The trend is the whole bottom strip since 2026-11-23, from the far left.
+BOTTOM_TABS = (0, 540, 1400, 320)
+# The Messages, under the left pane's tab content and above the trend since
+# 2026-11-23 (what a deploy says is there, not in a line under the header).
+MESSAGES = (0, 400, 320, 140)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
-# 2026-11-13 (29.4 pt each at 320 pt), and the bottom panel's Trend and
-# Messages.
+# 2026-11-13 (29.4 pt each at 320 pt).
 TAB_AGENT = (23, 70)
 TAB_CODE = (60, 70)
 TAB_IO = (97, 70)
@@ -124,8 +124,6 @@ TAB_HISTORY = (210, 70)
 TAB_RIGHT_FIRST = (1229, 71)
 # The fold arrow of the Code tab's second line, in the gutter.
 FOLD_LINE_2 = (14, 168)
-TAB_TREND = (344, 600)
-TAB_MESSAGES = (385, 600)
 # The one menu (the three-line glyph, 2026-11-23), its four submenus, the
 # View submenu's "Pane layouts…" item and, on a box's page, its Proposals
 # item (the box's View menu has two more rows above Pane layouts:
@@ -263,9 +261,7 @@ def playground(ctx, base, out):
         r.key(f"{MOD}+End"); r.wait(100)
         r.page.keyboard.type("\n(* smoke *)")
     r.step("edited", edit, LEFT, 1200)
-    r.click(*TAB_MESSAGES); r.wait(600)
     r.step("deployed", lambda: r.key(f"Shift+{MOD}+Enter"), MESSAGES, 1200)
-    r.click(*TAB_TREND); r.wait(400)
     r.click(989, 268); r.wait(1000); r.shot("diagram-why")
     # A right click on the GREEN row's AND block opens its menu (Chat about
     # this); Escape shuts it. The diagram never changes the code.

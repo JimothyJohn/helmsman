@@ -12,14 +12,14 @@
 
 use std::collections::BTreeMap;
 
-use eframe::egui::{self, CornerRadius, FontId, Pos2, RichText, Sense, Stroke};
+use eframe::egui::{self, CornerRadius, FontId, RichText, Sense};
 use helmsman_iec::Value;
 use serde_json::{Value as Json, json};
 
 use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::Chrome;
 use crate::playground::nice_range;
-use crate::playground_view::{SCALE_W, lane_handles, scale_labels, window_slider};
+use crate::playground_view::{lane_handles, window_slider};
 use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
@@ -35,6 +35,9 @@ pub const WINDOW_MS: u64 = 600_000;
 pub const MAX_POINTS: usize = 2400;
 /// Seconds between history asks while the tab is open.
 pub const RENEW_S: f64 = 600.0;
+/// How long, page seconds, a variable a change added is waited for: the
+/// change is saved first and runs once it is deployed.
+pub const EXPECT_S: f64 = 1800.0;
 
 /// Whose pins these are: a person signed in (their label), or the browser.
 fn owner(s: Option<&Session>) -> Option<String> {
@@ -73,6 +76,14 @@ pub struct BoxTrend {
     pub notice: Option<String>,
     /// Why this browser does not keep pins, if it does not.
     pub problem: Option<String>,
+    /// The pins nobody chose, oldest first ([`crate::ekg::pin_auto`]).
+    auto: Vec<String>,
+    /// The lanes that just joined, popping.
+    flashes: crate::ekg::Flashes,
+    /// Variables a described change added to the open program, waiting to
+    /// be pinned once the box reports them (`(name, page time first
+    /// looked for)`): a change is saved before it is deployed.
+    expecting: Vec<(String, Option<f64>)>,
     store: Box<dyn Storage>,
     /// The owner the pins were loaded for (`""`: the browser).
     loaded: Option<String>,
@@ -103,6 +114,9 @@ impl BoxTrend {
             window_ms: crate::playground::TREND_MS,
             notice: None,
             problem: None,
+            auto: Vec::new(),
+            flashes: crate::ekg::Flashes::default(),
+            expecting: Vec::new(),
             store,
             loaded: None,
             asked: None,
@@ -147,6 +161,51 @@ impl BoxTrend {
         ));
     }
 
+    /// Variables a described change just added to the program, to be
+    /// pinned when the box reports them ([`Self::step`]).
+    pub fn expect(&mut self, added: &[String]) {
+        for n in added {
+            self.expecting.retain(|(e, _)| !e.eq_ignore_ascii_case(n));
+            self.expecting.push((n.clone(), None));
+        }
+    }
+
+    /// The expected variables the box reports now join the pins, at the
+    /// bottom, popping; the pins the engineer chose stay, the oldest
+    /// automatic one makes room. The ones left unreported for
+    /// [`EXPECT_S`] are given up.
+    fn pin_expected(&mut self, session: Option<&Session>, state: &BoxState, now: f64) {
+        if self.expecting.is_empty() {
+            return;
+        }
+        for (_, at) in &mut self.expecting {
+            at.get_or_insert(now);
+        }
+        let mut found = Vec::new();
+        self.expecting.retain(|(n, at)| {
+            match state.signals.iter().find(|s| s.name.eq_ignore_ascii_case(n)) {
+                Some(s) => {
+                    found.push(s.name.clone());
+                    false
+                }
+                None => at.is_some_and(|at| now - at < EXPECT_S),
+            }
+        });
+        if found.is_empty() {
+            return;
+        }
+        let before = self.pins.clone();
+        let pinned = crate::ekg::pin_auto(&mut self.pins, &mut self.auto, &found, PINS);
+        for n in &pinned {
+            self.flashes.add(n);
+        }
+        self.series.retain(|n, _| self.pins.contains(n));
+        if self.pins != before {
+            self.keep_pins(session);
+            self.ask(now);
+        }
+    }
+
     /// Every frame: the session (pins follow whoever is signed in), the
     /// newest values, and a renewal when due.
     pub fn step(&mut self, session: Option<&Session>, state: &BoxState, now: f64) {
@@ -174,6 +233,7 @@ impl BoxTrend {
         if self.asked.is_some_and(|a| now - a >= RENEW_S) {
             self.ask(now);
         }
+        self.pin_expected(session, state, now);
         if state.seq != self.seq {
             self.seq = state.seq;
             if let Some(at) = state.values_at_ms {
@@ -199,13 +259,22 @@ impl BoxTrend {
     /// Pins or unpins `name` (at most [`PINS`]), kept for the person or
     /// in this browser, and asks for the new set's history.
     pub fn toggle(&mut self, name: &str, session: Option<&Session>, now: f64) {
+        self.auto.retain(|a| a != name);
         if let Some(k) = self.pins.iter().position(|p| p == name) {
             self.pins.remove(k);
             self.series.remove(name);
-        } else if self.pins.len() < PINS {
-            self.pins.push(name.to_string());
         } else {
-            return;
+            // At the cap a pin of the engineer's takes the place of the
+            // oldest one nobody chose.
+            if self.pins.len() >= PINS && !self.auto.is_empty() {
+                let old = self.auto.remove(0);
+                self.pins.retain(|p| *p != old);
+                self.series.remove(&old);
+            }
+            if self.pins.len() >= PINS {
+                return;
+            }
+            self.pins.push(name.to_string());
         }
         self.keep_pins(session);
         self.ask(now);
@@ -220,6 +289,7 @@ impl BoxTrend {
             return;
         }
         let p = self.pins.remove(from);
+        self.auto.retain(|a| *a != p);
         self.pins.insert(to, p);
         self.keep_pins(session);
     }
@@ -339,6 +409,9 @@ impl BoxTrend {
         }
         window_slider(ui, chrome, &mut self.window_ms);
         ui.add_space(6.0);
+        if self.flashes.tick(now) {
+            ui.ctx().request_repaint();
+        }
         let plot = self.chart(ui, chrome);
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.pins) {
             self.move_pin(from, to, session);
@@ -363,75 +436,44 @@ impl BoxTrend {
             );
             return rect;
         }
-        let end = self.now_ms;
-        let window = self.window_ms.max(1);
-        let start = end.saturating_sub(window);
+        let sweep = crate::ekg::Sweep::new(self.window_ms, self.now_ms);
+        let now = ui.input(|i| i.time);
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / self.pins.len() as f32;
-        #[allow(clippy::cast_precision_loss)]
-        let x_of = |t: u64| {
-            rect.left()
-                + 90.0
-                + (rect.width() - 90.0 - SCALE_W) * (t.max(start) - start) as f32 / window as f32
-        };
         for (k, name) in self.pins.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = crate::playground_view::lane_color(&t, chrome, name, k);
             let line: &[(u64, f64)] = self.series.get(name).map_or(&[], Vec::as_slice);
             // The point before the window holds its value into it; the
             // scale is the window's.
-            let (lo, hi) = line
+            let runs = sweep.runs(line.iter().copied());
+            let (lo, hi) = runs
                 .iter()
-                .enumerate()
-                .filter(|(i, p)| p.0 >= start || line.get(i + 1).is_none_or(|n| n.0 >= start))
-                .map(|(_, p)| p.1)
-                .filter(|v| v.is_finite())
+                .flatten()
+                .map(|p| p.1)
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let last = line.last().map(|p| p.1).filter(|v| v.is_finite());
-            painter.text(
-                Pos2::new(rect.left() + 6.0, top + lane / 2.0),
-                egui::Align2::LEFT_CENTER,
-                format!(
-                    "{}\n{}",
-                    name.to_ascii_lowercase(),
-                    last.map_or("–".into(), |v| Value::Real(v).to_string())
-                ),
-                FontId::monospace(crate::theme::MIN_TEXT),
-                color,
+            let number = line
+                .last()
+                .map(|p| p.1)
+                .filter(|v| v.is_finite())
+                .map(|v| Value::Real(v).to_string());
+            crate::ekg::paint_lane(
+                &painter,
+                &t,
+                rect,
+                (top, lane),
+                &crate::ekg::Lane {
+                    name,
+                    color: crate::playground_view::lane_color(&t, chrome, name, k),
+                    number,
+                    pop: self.flashes.strength(name, now),
+                },
+                &sweep,
+                &runs,
+                nice_range(lo, hi),
             );
-            painter.line_segment(
-                [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
-                Stroke::new(1.0, t.rule),
-            );
-            let (lo, hi, step) = nice_range(lo, hi);
-            scale_labels(&painter, &t, rect, top, lane, (lo, hi, step));
-            let y_of = |v: f64| {
-                #[allow(clippy::cast_possible_truncation)]
-                let f = ((v - lo) / (hi - lo)) as f32;
-                top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
-            };
-            let mut pts: Vec<Pos2> = Vec::new();
-            for &(t, v) in line {
-                if !v.is_finite() {
-                    continue;
-                }
-                let p = Pos2::new(x_of(t), y_of(v));
-                // Steps: a value holds until the next change.
-                if let Some(prev) = pts.last().copied() {
-                    pts.push(Pos2::new(p.x, prev.y));
-                }
-                pts.push(p);
-            }
-            // The last value holds to now.
-            if let Some(prev) = pts.last().copied() {
-                pts.push(Pos2::new(x_of(end), prev.y));
-            }
-            if pts.len() > 1 {
-                painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
-            }
         }
         rect
     }
@@ -610,6 +652,66 @@ mod tests {
         );
         let body: Json = serde_json::from_slice(sent[0].body.as_deref().unwrap()).unwrap();
         assert_eq!(body, json!({ "signals": ["y", "x"] }));
+    }
+
+    /// A described change on a box is saved first: its new variables join
+    /// the pins (kept the way pins are kept, the box's `PUT`) when the box
+    /// reports them, at the bottom, popping. Ones it never reports are
+    /// given up, a change that adds nothing pins nothing, and the
+    /// engineer's own pins stay at the cap.
+    #[test]
+    fn variables_a_change_added_are_pinned_when_the_box_reports_them() {
+        let me = Session {
+            user: Some("nick".into()),
+            role: "engineer".into(),
+        };
+        let mut t = BoxTrend::new(Box::new(MemStorage(None)));
+        let mut s = BoxState::new();
+        t.step(Some(&me), &s, 0.0);
+        t.answer(
+            &PCall::TrendPins,
+            &Answer {
+                status: 200,
+                retry_after: None,
+                body: r#"{"pins":["a","b"]}"#.into(),
+            },
+            0.0,
+        );
+        t.poll();
+        t.expect(&[]);
+        t.step(Some(&me), &s, 1.0);
+        assert!(t.poll().is_empty(), "nothing added, nothing asked or saved");
+        // Saved, not deployed yet: the box does not report them.
+        t.expect(&["fan".to_string(), "horn".to_string()]);
+        t.step(Some(&me), &s, 2.0);
+        assert_eq!(t.pins, ["a", "b"]);
+        // Deployed: it reports FAN (in its own case) and not HORN.
+        s.signals = vec![row("FAN", true)];
+        t.step(Some(&me), &s, 3.0);
+        assert_eq!(t.pins, ["a", "b", "FAN"], "at the bottom, as the box spells it");
+        let sent = t.poll();
+        let put = sent.iter().find(|r| r.method == "PUT").expect("kept for her");
+        assert_eq!(put.url, "/api/trends/pins");
+        assert!(t.flashes.tick(3.0) && t.flashes.strength("FAN", 3.0) > 0.9);
+        assert!(!t.flashes.tick(4.6), "settled");
+        // HORN is given up after EXPECT_S; later it pins nothing.
+        t.step(Some(&me), &s, 3.0 + EXPECT_S + 1.0);
+        s.signals.push(row("horn", false));
+        t.step(Some(&me), &s, 3.0 + EXPECT_S + 2.0);
+        assert_eq!(t.pins, ["a", "b", "FAN"]);
+        // At the cap: the engineer's pins (a, b by the box) stay, FAN, the
+        // oldest automatic pin, makes room.
+        let names: Vec<String> = (0..PINS).map(|k| format!("n{k}")).collect();
+        s.signals = names.iter().map(|n| row(n, true)).collect();
+        t.expect(&names);
+        t.step(Some(&me), &s, 4000.0);
+        assert_eq!(t.pins.len(), PINS);
+        assert_eq!(t.pins[..2], ["a", "b"], "the box's pins are the engineer's own");
+        assert!(
+            !t.pins.contains(&"FAN".to_string()),
+            "the automatic pin made room"
+        );
+        assert_eq!(t.pins.last().map(String::as_str), Some("n5"));
     }
 
     #[test]

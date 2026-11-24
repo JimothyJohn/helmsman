@@ -287,8 +287,6 @@ fn download_then_upload_round_trips_in_the_simulation_and_with_the_box() {
 fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     let mut app = App::sim();
     app.sim = Some(PlaygroundView::with_storage(Box::new(Broken)));
-    // What the page has to say is in the Messages tab.
-    app.chrome.bottom = crate::editor::Bottom::Messages;
     let ctx = egui::Context::default();
     for k in 0..30 {
         frame(&ctx, &mut app, f64::from(k) / 60.0);
@@ -999,4 +997,79 @@ fn deploy_in_the_page_formats_the_edited_file_and_runs_the_formatted_text() {
     assert_eq!(v.session.src, tidy, "the editor's source follows");
     // The edits stay edits until Save: Deploy does not save.
     assert!(v.proj.dirty());
+}
+
+/// A described change of `main.st` to `text`, as the checks hand it over.
+fn described(v: &PlaygroundView, text: &str) -> crate::instruct::Apply {
+    crate::instruct::Apply {
+        project: v.proj.open.clone(),
+        scope: crate::scope::Scope::File("main.st".into()),
+        file: "main.st".into(),
+        text: text.into(),
+        tests: Vec::new(),
+        warnings: Vec::new(),
+        record: String::new(),
+        status: String::new(),
+        why: None,
+        instruction: "add outputs".into(),
+        evidence: Box::new(crate::instruct::Evidence {
+            answer: String::new(),
+            ran: Vec::new(),
+        }),
+    }
+}
+
+/// `MAIN` with `more` extra BOOL outputs.
+fn main_with(more: &[&str]) -> String {
+    let mut text = MAIN.to_string();
+    for n in more.iter().rev() {
+        text = text.replace("  lamp : BOOL;\n", &format!("  lamp : BOOL;\n  {n} : BOOL;\n"));
+    }
+    text
+}
+
+/// Nick, 2026-11-23: what a described change adds to the program joins the
+/// trend at the bottom, popping; a change that adds nothing pins nothing;
+/// at the cap the oldest pin nobody chose makes room and the engineer's own
+/// stay.
+#[test]
+fn a_described_change_pins_what_it_added_at_the_bottom_and_the_engineers_pins_stay() {
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    two_files(&mut v);
+    assert_eq!(
+        v.session.trend.signals,
+        ["LAMP", "START", "STOP"],
+        "the first pins"
+    );
+    // The engineer pins STOP herself: it is hers from now on.
+    v.session.trend.toggle("STOP");
+    v.session.trend.toggle("STOP");
+    // A change that adds nothing pins nothing and pops nothing.
+    let same = described(&v, MAIN);
+    v.write_for_test(same);
+    assert_eq!(v.session.trend.signals, ["LAMP", "START", "STOP"]);
+    assert!(!v.session.trend.flashes.tick(1.0), "nothing pops");
+    // Two outputs: at the bottom, each popping from the first frame.
+    let two = described(&v, &main_with(&["fan", "horn"]));
+    v.write_for_test(two);
+    assert_eq!(v.session.trend.signals, ["LAMP", "START", "STOP", "FAN", "HORN"]);
+    assert!(v.session.trend.flashes.tick(10.0));
+    assert!(v.session.trend.flashes.strength("FAN", 10.0) > 0.9);
+    assert!(!v.session.trend.flashes.tick(11.6), "settled");
+    // Three more: the cap is six; LAMP (nobody chose it) makes room,
+    // STOP stays.
+    let more = described(&v, &main_with(&["fan", "horn", "a", "b", "c"]));
+    v.write_for_test(more);
+    let s = &v.session.trend.signals;
+    assert_eq!(s.len(), crate::playground::TREND_SIGNALS);
+    assert!(s.contains(&"STOP".to_string()), "the engineer's pin stays: {s:?}");
+    assert!(
+        !s.contains(&"LAMP".to_string()),
+        "the oldest automatic one went: {s:?}"
+    );
+    assert_eq!(
+        s.last().map(String::as_str),
+        Some("C"),
+        "the newest at the bottom"
+    );
 }

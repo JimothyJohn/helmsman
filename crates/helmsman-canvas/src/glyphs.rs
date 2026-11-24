@@ -53,8 +53,6 @@ pub enum Icon {
     Io,
     /// A speech bubble: the Agent tab.
     Agent,
-    /// A trace across two axes: the Trend tab.
-    Trend,
     /// A list of lines, each behind its mark: the Messages tab.
     Messages,
     /// A paper plane: send to the Agent (Nick, 2026-11-13: no words).
@@ -357,17 +355,6 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                     Stroke::new(w * 0.8, color),
                 );
             }
-        }
-        Icon::Trend => {
-            p.add(egui::Shape::line(
-                vec![Pos2::new(l, t), Pos2::new(l, bt), Pos2::new(r, bt)],
-                stroke,
-            ));
-            let at = |x: f32, y: f32| Pos2::new(l + b.width() * x, t + b.height() * y);
-            p.add(egui::Shape::line(
-                vec![at(0.2, 0.72), at(0.42, 0.38), at(0.62, 0.58), at(0.96, 0.1)],
-                stroke,
-            ));
         }
         Icon::Send => {
             // A paper plane pointing right: its outline, and the fold.

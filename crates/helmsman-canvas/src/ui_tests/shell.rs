@@ -272,10 +272,9 @@ fn text_at(
 #[test]
 fn a_long_message_wraps_inside_the_messages_panel() {
     let mut h = Harness::new(App::sim());
-    h.wait(0.3);
+    h.messages();
     let long = "Deploy of blink refused. ".to_string() + &"the divisor read zero ".repeat(20);
     h.app.sim.as_mut().unwrap().log.error(1.0, long.clone());
-    h.press("bottom messages");
     h.wait(0.5);
     let found = text_at(&h, "the divisor read zero");
     assert_eq!(found.len(), 1, "the message is drawn once");
@@ -320,14 +319,13 @@ fn a_file_the_picker_cannot_take_is_told_in_messages() {
     assert!(why.contains("big.zip") && why.contains("MB"), "{why}");
 
     let mut h = Harness::new(App::sim());
-    h.wait(0.3);
+    h.messages();
     let before = crate::editor::Body::messages(h.app.sim.as_mut().unwrap()).errors();
     h.app.pick_failed(vec![why.clone()], 1.0);
     assert_eq!(
         crate::editor::Body::messages(h.app.sim.as_mut().unwrap()).errors(),
         before + 1
     );
-    h.press("bottom messages");
     h.wait(0.3);
     assert!(h.drew("big.zip was not read"), "Messages lists it");
 }

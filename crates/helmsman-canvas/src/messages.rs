@@ -1,4 +1,5 @@
-//! The Messages tab along the bottom, beside the Trend (Nick, 2026-11-01):
+//! The Messages, under the left pane's tabs (Nick, 2026-11-01 along the
+//! bottom beside the Trend; 2026-11-23 on the left, as user feedback):
 //! what the page had to say recently, as info, warnings and errors, so a
 //! fault or a refused deploy is still there to read after the notice line
 //! under the header has gone. Bounded ([`KEEP`]); newest last.
@@ -319,7 +320,7 @@ impl Log {
         let t = theme(ui);
         if self.items.is_empty() {
             ui.label(RichText::new("Nothing to report yet.").color(t.muted));
-            // The panel keeps the height it has on the Trend tab.
+            // The list fills the panel, however few the rows.
             ui.allocate_space(ui.available_size());
             return;
         }

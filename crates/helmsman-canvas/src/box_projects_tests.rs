@@ -605,6 +605,9 @@ impl Harness {
         r.state.session = session;
         app.review = Some(r);
         app.boxv = Some(bv);
+        // The Messages are folded here: the tabs' tests want the left
+        // pane's whole height (`h.app.chrome.msgs = true` opens them).
+        app.chrome.msgs = false;
         let mut h = Self {
             ctx: egui::Context::default(),
             app,
@@ -618,7 +621,7 @@ impl Harness {
 
     fn frame(&mut self, events: Vec<Event>) {
         let input = RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 860.0))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 1180.0))),
             time: Some(self.time),
             events,
             ..Default::default()
@@ -967,7 +970,8 @@ fn a_stale_save_is_a_409_and_reload_brings_the_boxs_text() {
     );
     // The toolbar offers Reload; it brings the box's text.
     let mut h = Harness::new(c, None);
-    h.press("bottom messages");
+    h.app.chrome.msgs = true;
+    h.frame(vec![]);
     h.press("reload");
     let reqs = h.sent();
     for q in reqs {
@@ -1152,7 +1156,8 @@ fn compile_errors_name_file_and_line_and_a_click_opens_it_there() {
         Some("main.st")
     );
     assert_eq!(h.app.chrome.line, Some(12));
-    h.press("bottom messages");
+    h.app.chrome.msgs = true;
+    h.frame(vec![]);
     assert!(h.app.chrome.rect("deploy failed").is_some());
 }
 
