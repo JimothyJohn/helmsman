@@ -874,12 +874,46 @@ status is scan health, memory and fieldbus links. What exists:
 
 ### Sixteen devices on one node (2026-11-24, card `node-multi-device`)
 
-**Nothing here has run on a board.** The bench P4 carries another project's
-firmware and was not flashed, reset or opened. What was run: the parser, the
-layout and the codecs on the host (`crates/helmsman-nodecore`, with
-`crates/helmsman-io/tests/node_map.rs` holding them to the box's own Modbus
-and `enip-io` drivers and the simulated Modbus device), and `crates/helmsman-node-p4`
-built and linted for the target. The bench runs it still needs are on the card.
+**On the board, 2026-11-24** (the Waveshare ESP32-P4-ETH on USB power, no
+PoE module, flashed from the branch; logs in the worktree's `target/bench/`).
+Runs 1 to 5 below passed; what is still not run is listed after them.
+
+1. **The map already on flash.** The factory one-device map booted as it
+   was: `rio` up, the chase running, `di0`.. at `%IX0.0`.. and `do0`.. at
+   `%QX0.0`.. as before.
+2. **Three devices, one absent.** The E1213 on Modbus TCP (three inputs,
+   three coils, its DI-00 counter as `ir:16:u32`), a Modbus TCP server on
+   the Studio (`hr:0:u16`, `hr:5:f32`, an output on `hr:10:u16`) and
+   192.168.3.99, where nothing lives. `/api/devices` read `rio` up, `sim`
+   up, `gone` down with its error; the float read 21.5 as the server held
+   it; a program that adds 1000 to the server's seconds counter (`%IW34`)
+   into `%QW32` was seen by the server as writes to `hr10` once a second.
+3. **A device that leaves and comes back.** Over 240 s the server was
+   stopped at 60 s and started at 150 s: its points went `stale` and held
+   their last value, `rio` stayed up, the API answered throughout, no
+   overrun, lateness 141 us at most, heap 220 KB of 288 KB and flat; the
+   server was up again within 15 s of its restart.
+4. **EtherNet/IP and Modbus TCP together.** The E1213 as `enip-io
+   profile=moxa-e1213` with the Modbus server beside it: both up, the
+   chase's outputs read back from the unit over Modbus from the Studio
+   (`0100 0010 1000` in turn), 0 overruns in 7350 scans, lateness 94 us at
+   most, heap 219 KB.
+5. **What the first try found.** With the absent address in the map the
+   node kept scanning and answered nothing, no ping and no API, and the
+   Modbus server on the same wire never got a connection. smoltcp keeps an
+   aborted socket's endpoint until its RST has gone out, and towards an
+   address nobody answers at it never does, so the socket asked for that
+   neighbour every second for good and each ask silences every other
+   lookup for a second (`iface/neighbor.rs`, `SILENT_TIME`). A dial nobody
+   answered now clears the socket's endpoint and pushes the next dial back
+   from its end (`dial::give_up`). The one-block node on dev has the same
+   code path; it was not run there with its block absent.
+
+What was run on the host: the parser, the layout and the codecs
+(`crates/helmsman-nodecore`, with `crates/helmsman-io/tests/node_map.rs`
+holding them to the box's own Modbus and `enip-io` drivers and the simulated
+Modbus device), and `crates/helmsman-node-p4` built and linted for the
+target.
 
 Nick, 2026-11-24: one node drives up to 16 devices at once, any mix of Modbus TCP
 and EtherNet/IP (Class 1); points are bool, int and real; the map text stays
@@ -1012,19 +1046,17 @@ the plans) and the signal list (96 entries, copied on each API request), about
 program (the 12 KB cell used 253 KB of the 320 KB) now spills into PSRAM
 sooner**, which the board must be asked about (item 4 below).
 
-**Bench runs this needs** (none done):
+**Bench runs still to do** (the ones above are done):
 
-1. Boot on the P4 with the factory map and with a stored one-device map, then
-   the three-device example above with the E1213 on Modbus, the MDrive on
-   EtherNet/IP (192.168.33.1, the en0 alias) and a second Modbus server (the
-   Studio's simulated one, if no second unit): each device's state in
-   `/api/devices`, the points in `/api/signals`, 0 late scans at 10 ms.
-2. The E1213 on EtherNet/IP and the MDrive on EtherNet/IP together (two
-   connections, one UDP socket, T->O routed by source address), and the unit's
-   Modbus map on a separate run (one connection a unit).
-3. Pull one device's cable mid-run: the others stay up and their scans stay
-   on time; the outputs of the lost EtherNet/IP device come back with the
-   image's values after the reopen; the node's report line shows the count.
+1. The MDrive on EtherNet/IP as a second kind of device. It is on
+   192.168.33.1 and a node has one address, so it has to be given an
+   address on the node's subnet first (Nick, 2026-11-24: devices are
+   re-addressed, a node takes no extra addresses).
+2. The E1213 and the MDrive on EtherNet/IP together (two connections, one
+   UDP socket, T->O routed by source address).
+3. Pull one device's cable mid-run (run 3 above stopped a server instead):
+   the outputs of a lost EtherNet/IP device come back with the image's
+   values after the reopen; the node's report line shows the count.
 4. Heap and stack with 16 devices and the 12 KB cell: the report line's heap
    used, peak and PSRAM figures, and the scan's execution time against the
    dev tip's (51 to 72 us for the chase; 1 ms for the cell).
