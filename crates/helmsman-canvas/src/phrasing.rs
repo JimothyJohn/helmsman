@@ -87,6 +87,62 @@ pub fn fixes(draft: &str, io: &[Io]) -> Vec<Fix> {
     out
 }
 
+/// A loose word of the instruction that is part of one or more declared
+/// names: "lamp" where the program has `GreenLamp` and `RED_LAMP`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Loose {
+    /// The word as typed.
+    pub from: String,
+    /// The declared names it is a word of, at most [`FIXES`].
+    pub to: Vec<String>,
+}
+
+/// The loose words of `draft` (Nick, 2026-11-24: a hint to put the
+/// actual variable name in place of one's own word, "to give more
+/// precision"): a typed word of three letters or more that is one word
+/// of a declared name of several ("lamp" of `GreenLamp`, "start" of
+/// `StartPB`), each with the names it could mean. A word that is a
+/// declared name itself, or that [`fixes`] already covers, is left
+/// alone. With the fixes, at most [`FIXES`] hints show.
+#[must_use]
+pub fn loose(draft: &str, io: &[Io]) -> Vec<Loose> {
+    let fixed = fixes(draft, io);
+    let mut out: Vec<Loose> = Vec::new();
+    for (a, b) in spans(draft, |c| c.is_ascii_alphanumeric() || c == '_') {
+        let typed = &draft[a..b];
+        let word = typed.to_ascii_lowercase();
+        if word.len() < 3
+            || !word.chars().all(|c| c.is_ascii_alphabetic())
+            || io.iter().any(|p| p.name.eq_ignore_ascii_case(typed))
+            || out.iter().any(|l| l.from.eq_ignore_ascii_case(typed))
+            // Part of a name already offered whole ("green lamp").
+            || fixed.iter().any(|f| {
+                spans(&f.from, |c| c.is_ascii_alphanumeric())
+                    .into_iter()
+                    .any(|(x, y)| f.from[x..y].eq_ignore_ascii_case(typed))
+            })
+        {
+            continue;
+        }
+        let mut to: Vec<String> = Vec::new();
+        for p in io {
+            let parts = parts(&p.name);
+            if parts.len() >= 2 && parts.contains(&word) && !to.contains(&p.name) {
+                to.push(p.name.clone());
+            }
+        }
+        to.truncate(FIXES);
+        if !to.is_empty() {
+            out.push(Loose {
+                from: typed.to_string(),
+                to,
+            });
+        }
+    }
+    out.truncate(FIXES.saturating_sub(fixed.len()));
+    out
+}
+
 /// `draft` with every `fix.from` made `fix.to`, where it stands as a
 /// whole word (never inside a longer one).
 #[must_use]
@@ -249,6 +305,47 @@ mod tests {
         );
         let f = fixes("Red-Lamp flashes", &lamp());
         assert_eq!(f[0].to, "RED_LAMP");
+    }
+
+    #[test]
+    fn a_loose_word_is_offered_the_names_it_is_part_of() {
+        let l = loose("turn the lamp on when start is pressed", &lamp());
+        assert_eq!(
+            l,
+            [
+                Loose {
+                    from: "lamp".into(),
+                    to: vec!["GreenLamp".into(), "RED_LAMP".into()]
+                },
+                Loose {
+                    from: "start".into(),
+                    to: vec!["StartPB".into()]
+                },
+            ]
+        );
+        // One click's worth: the word becomes the name, where it is a word.
+        let fix = Fix {
+            from: "lamp".into(),
+            to: "GreenLamp".into(),
+        };
+        assert_eq!(apply("lamp on, lamps off", &fix), "GreenLamp on, lamps off");
+    }
+
+    #[test]
+    fn a_declared_name_a_fixed_one_and_small_words_are_not_loose() {
+        // The names themselves, in any case.
+        assert_eq!(loose("GreenLamp on, speed up", &lamp()), []);
+        // "green lamp" is offered whole as GreenLamp; its words are not
+        // offered again one by one.
+        let l = loose("turn the green lamp on", &lamp());
+        assert_eq!(l, [], "{l:?}");
+        // Two letters, a number, a word of no name.
+        assert_eq!(loose("pb 2 is the conveyor", &lamp()), []);
+        // A single-word name has no parts to be loose about.
+        assert_eq!(loose("speeds", &lamp()), []);
+        // With the fixes, three hints at most.
+        let many = loose("green lamp, red lamp, start pb, stop", &lamp());
+        assert!(fixes("green lamp, red lamp, start pb, stop", &lamp()).len() + many.len() <= FIXES);
     }
 
     #[test]

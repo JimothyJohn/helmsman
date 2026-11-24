@@ -38,14 +38,14 @@ FEATURES = os.path.join(ROOT, "docs", "FEATURES.md")
 KEY = "helmsman-canvas/editor"
 W, H, S = 1400, 860, 2
 # The side pane's tabs, in their first order, and the panels that are not
-# tabs: the trend along the whole bottom and the Messages in the left pane
-# under its tabs (2026-11-23).
+# tabs: the trend along the bottom from the left pane's edge and the
+# Messages at the foot of the left pane, under its tabs (2026-11-24).
 PANES = ("claude", "code", "io", "devices", "files", "history")
 BOTTOM = ("trend", "messages")
 # Where a tab's content is, in points: the left pane under its tab row, the
-# trend under the diagram, the Messages above it.
+# trend under the diagram, the Messages beside it at the pane's foot.
 PANE_BODY = (0, 90, 300, 225)
-BOTTOM_BODY = {"trend": (0, 545, 1400, 315), "messages": (0, 330, 300, 200)}
+BOTTOM_BODY = {"trend": (330, 545, 1070, 315), "messages": (0, 650, 300, 200)}
 # Console lines the seeding itself causes (the seed URL is not the app).
 EXPECTED = ["/__seed", "status of 404", "favicon"]
 # Served from loopback (--dist) only: the page asks the deployed demo relay
