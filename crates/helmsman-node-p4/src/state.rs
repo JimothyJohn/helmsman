@@ -162,6 +162,8 @@ pub struct Live {
     pub link_up: bool,
     pub ip: Option<[u8; 4]>,
     pub fw: FwLive,
+    /// The comms check: the last one, or the one running.
+    pub check: helmsman_nodecore::check::Check,
 }
 
 impl Default for Live {
@@ -181,6 +183,7 @@ impl Default for Live {
             link_up: false,
             ip: None,
             fw: FwLive::default(),
+            check: helmsman_nodecore::check::Check::default(),
         }
     }
 }
@@ -275,6 +278,7 @@ pub fn view(
             board,
             io_map,
             one_block: false,
+            check: Some(live.check.clone()),
             firmware: live
                 .fw
                 .available

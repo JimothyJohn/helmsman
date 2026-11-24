@@ -25,6 +25,7 @@
 extern crate alloc;
 
 pub mod api;
+pub mod check;
 pub mod http;
 pub mod iolink;
 pub mod iomap;

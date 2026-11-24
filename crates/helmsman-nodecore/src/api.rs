@@ -112,6 +112,10 @@ pub struct NodeView {
     /// The board drives one Modbus TCP block only (the ESP32 nodes): a
     /// map it is given must pass [`crate::iomap::IoMap::one_block`].
     pub one_block: bool,
+    /// The comms check ([`crate::check`]): the last one run or the one
+    /// running. `None` on a board that does not check, which saves a map
+    /// unasked as it always did.
+    pub check: Option<crate::check::Check>,
     /// The firmware half (`GET /api/firmware`); `None` on a board that
     /// cannot update itself over the network.
     pub firmware: Option<crate::ota::status::Firmware>,
@@ -509,6 +513,38 @@ fn heap_text(view: &NodeView) -> String {
     )
 }
 
+/// The comms check as the page shows it: one line a device, and what
+/// happens next.
+fn check_html(c: &crate::check::Check, now_ms: u64) -> String {
+    use crate::check::Verdict;
+    let mut rows = String::new();
+    for r in &c.rows {
+        let said = match &r.verdict {
+            Verdict::Waiting => String::from("waiting"),
+            Verdict::Answered { ms } => format!("answered in {ms} ms"),
+            Verdict::Failed(why) => format!("<b>no answer</b>: {}", html_escape(why)),
+        };
+        rows.push_str(&format!(
+            "<li><b>{}</b> {} ({}): {said}</li>",
+            html_escape(&r.name),
+            html_escape(&r.address),
+            r.driver
+        ));
+    }
+    let next = if c.running {
+        String::from("Asking the devices; this page reloads until they have all been asked.")
+    } else {
+        match c.allows(&c.text, now_ms) {
+            Ok(()) => String::from("Every device answered this node. Save the map above to run it."),
+            Err(why) => format!(
+                "{}. The map is saved once every device in it answers.",
+                html_escape(&why.to_string())
+            ),
+        }
+    };
+    format!("<h2>Device check</h2><ul>{rows}</ul><p class=\"notice\">{next}</p>")
+}
+
 /// The node's own page: what it is, how it is, and the settings form.
 /// Plain HTML, no scripts, so it reads on a phone at the panel.
 #[must_use]
@@ -541,12 +577,31 @@ pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>)
     let notice = notice.map_or(String::new(), |n| {
         format!("<p class=\"notice\">{}</p>", html_escape(n))
     });
+    // While a check runs, and for as long as its result lets the map be
+    // saved or says why not, the form holds the checked text and the page
+    // lists who answered.
+    let shown = view
+        .check
+        .as_ref()
+        .filter(|c| !c.text.is_empty() && (c.running || view.uptime_ms.saturating_sub(c.done_ms) < crate::check::FRESH_MS));
+    let map_text = shown.map_or(view.io_map.as_str(), |c| c.text.as_str());
+    let refresh = if shown.is_some_and(|c| c.running) {
+        "<meta http-equiv=\"refresh\" content=\"2;url=/settings\">"
+    } else {
+        ""
+    };
+    let check = shown.map_or_else(String::new, |c| check_html(c, view.uptime_ms));
+    let map_button = match shown {
+        Some(c) if c.allows(&c.text, view.uptime_ms).is_ok() => "Save this map and restart",
+        _ if view.check.is_some() => "Check the devices",
+        _ => "Save map and restart",
+    };
     let sink = settings
         .log_sink
         .map_or(String::new(), |(ip, port)| format!("{}:{port}", ip_text(ip)));
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">{refresh}\
 <title>{name} (Helmsman node)</title>\
 <style>body{{font:18px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#222}}\
 label{{display:block;margin:.6rem 0 .2rem}}input[type=text],input[type=password]{{width:100%;font-size:18px;padding:.4rem}}\
@@ -573,12 +628,13 @@ Link {link}{ip}.</p>\
 <button type=\"submit\">Save and restart</button>\
 </form>\
 <h2>I/O map</h2>\
-<p>The devices this node drives (up to 16, <code>modbus-tcp</code> or <code>enip-io</code>) and the names of their points, in the box's io.map format: <code>device NAME DRIVER IP</code> lines, then <code>in|out NAME bool|int|real DEVICE ADDRESS</code> lines. The program address of each point is listed by <code>GET /api/io_map</code>. Saving restarts the node.</p>\
+<p>The devices this node drives (up to 16, <code>modbus-tcp</code> or <code>enip-io</code>) and the names of their points, in the box's io.map format: <code>device NAME DRIVER IP</code> lines, then <code>in|out NAME bool|int|real DEVICE ADDRESS</code> lines. The program address of each point is listed by <code>GET /api/io_map</code>. Before a map is saved the node asks every device in it, and saves once each has answered; saving restarts the node.</p>\
 <form method=\"post\" action=\"/io_map\">\
 <label>Map <textarea name=\"map\" rows=\"12\" spellcheck=\"false\">{map}</textarea></label>\
 <label>API token <input type=\"password\" name=\"auth\" value=\"\" maxlength=\"64\" autocomplete=\"off\"></label>\
-<button type=\"submit\">Save map and restart</button>\
+<button type=\"submit\">{map_button}</button>\
 </form>\
+{check}\
 <p>The canvas reads this node at <code>http://{host}:{api_port}/api/</code>; writes need the token as <code>Authorization: Bearer</code>.</p>\
 </body></html>",
         name = html_escape(if settings.name.is_empty() {
@@ -588,7 +644,10 @@ Link {link}{ip}.</p>\
         }),
         name_attr = html_escape(&settings.name),
         site = html_escape(&settings.site),
-        map = html_escape(&view.io_map),
+        map = html_escape(map_text),
+        refresh = refresh,
+        check = check,
+        map_button = map_button,
         version = html_escape(view.version),
         board = html_escape(view.board),
         up = view.uptime_ms / 1000,
@@ -677,6 +736,7 @@ pub(crate) fn sample_view() -> NodeView {
         board: "ESP32-POE-ISO",
         io_map: "device rio modbus-tcp 192.168.3.60\n".into(),
         one_block: false,
+        check: None,
         firmware: Some(crate::ota::status::Firmware {
             version: "0.1.0",
             build: "",

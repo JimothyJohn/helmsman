@@ -218,6 +218,7 @@ pub fn view(
             board,
             io_map,
             one_block: true,
+            check: None,
             firmware: None,
         }
     })

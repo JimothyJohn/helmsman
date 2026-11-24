@@ -174,6 +174,26 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
             Ok(ended) => (router::firmware_confirmed(ended), false),
             Err(why) => (router::firmware_not_started(&why), false),
         },
+        Effect::CheckIoMap { text, page } => {
+            // The record first, then the task: a reader never finds a
+            // check that was accepted and is not there.
+            let started = helmsman_nodecore::iomap::parse(&text).is_ok_and(|map| {
+                state::with(ctx.shared, |live| {
+                    if live.check.running {
+                        false
+                    } else {
+                        live.check = helmsman_nodecore::check::Check::begin(&map);
+                        true
+                    }
+                })
+            });
+            if started {
+                crate::check::START.signal(());
+                (router::check_started(page), false)
+            } else {
+                (router::check_not_started("a check is already running"), false)
+            }
+        }
         Effect::SaveIoMap { text, page } => {
             // Beside the program on flash; the restart makes the I/O task
             // drive the block it names.
