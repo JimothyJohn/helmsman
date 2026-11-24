@@ -2801,7 +2801,7 @@ impl Viewer {
         );
         let hand = button_sized(
             &mut row,
-            Icon::Hand,
+            Icon::Pan,
             TAP,
             true,
             self.hand,

@@ -438,6 +438,7 @@ impl BoxView {
                     self.pane_layouts.answer(&call, &a);
                 }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
+                PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
                 PCall::FindWired => {
@@ -3224,6 +3225,10 @@ impl Body for BoxView {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.scan = crate::devices::Scan::Running;
                 self.projects.discover();
+            }
+            Some(crate::devices::DeviceAct::Ask(address)) => {
+                self.devices_ui.ask_note = Some(format!("Asking {address}…"));
+                self.projects.ask(address);
             }
             Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.open(d),
             Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),

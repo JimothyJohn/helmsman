@@ -171,6 +171,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Next to build
 
+- [x] **Scan asks from every interface, and one address on request** — Why it matters: on 2026-11-24 the MDrive (192.168.33.1) was invisible to Scan because Wi-Fi was the Studio's default route and a broadcast leaves on that interface only. Measured from the Studio (en1 Wi-Fi 10.0.0.41 default; en0 192.168.3.10 with an alias 192.168.33.10): an unbound socket sending to 255.255.255.255 got the E1213 only; a socket bound to 192.168.3.10 or 192.168.33.10 got the E1213 and the MDrive; a directed broadcast to 192.168.33.255 got nobody; a ListIdentity straight to 192.168.33.1 was answered. The sweep now asks once from each local non-loopback IPv4 address (addresses read from `ip -o -4 addr`, else `ifconfig`; none readable falls back to the single send), and `POST /api/devices/discover?address=A` plus an Ask field beside Scan asks one device.
+  result: a device on a wire that is not the default route is listed by Scan, or found and added by its address
+  needs: a run on the bench from the try box to see the MDrive listed (cargo-built binaries cannot reach the LAN from a session; not run)
+  difficulty: med
+  id: scan-every-interface
+  asked: 2026-11-24
+  by: worker
+  status: done
+
 - [ ] **Windows: what the green CI job does not prove yet** — the box builds, lints and passes its tests on windows-latest since #565 (2026-11-23), with these left open. (1) Names Windows treats as devices (`con`, `nul`, `aux`, `com1`, `lpt1`, with or without `.st`) as project and file names: not tested; a write to `nul.st` may vanish without an error. (2) Shutdown: no test sends Ctrl-C or a terminate on Windows, so RETAIN on exit is unproven there (the SIGTERM test is Unix-only). (3) `--time-zone` and the zone tests are Unix-only (no tz database on Windows). (4) The Windows job checks out with LF; a project with CRLF files is not tested on any platform. (5) EtherNet/IP and Modbus TCP pass on loopback there, never against a device. (6) `hammering_the_api_does_not_hold_up_the_scan` allows an 8x fall on Windows against 4x elsewhere (154 ticks against 680 on the runner): measure on a real Windows machine before calling the scan timing good there. (7) `box (windows-latest)`, `box (macos-latest)` and `box (ubuntu-24.04-arm)` are not required checks.
   needs: a Windows machine for (5) and (6); the rest runs in CI
   result: each point has a test or a line in docs/ARCHITECTURE.md "Platforms" saying it is not supported
@@ -241,6 +250,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: starter-io-map-loads
   asked: 2026-11-16
+  by: claude-session
+
+- [ ] **helmsman-adapter: `output_comes_back_as_input` read zeros where it had waited for the pattern** — Why it matters: the test waits until the adapter echoes the 32 output bytes back as input and then asserts on what it got, so a failure there is either a wait that returns before the data matches or an adapter that answers a match and hands back another packet; one of the two is wrong, and a scanner relying on that wait would act on stale input. Seen once, on CI's `box (macos-latest)` for #614 (2026-11-24, run 45465568201, crates/helmsman-adapter/tests/bin.rs:60): `left` was 32 zeros, `right` the pattern 1..=32, in 3.06 s. #614 does not touch the adapter or helmsman-proto, the job is not a required check, and the PR merged. Not reproduced locally (the full gate passed on the same commit, twice).
+  needs: nothing
+  result: the cause named (the wait in `IoConnection::wait_for_input_eq` or the adapter's echo), a test that fails on it every time, and the fix
+  est: 2h
+  difficulty: med
+  id: adapter-echo-flake
+  asked: 2026-11-24
   by: claude-session
 
 - [ ] **helmsman-dhcp: a client moves off its running lease (found by its own property test)** — Why it matters: the DHCP server's promise is that an address handed out in an ACK stays that client's while the lease runs; a block that is moved to another address mid-lease drops its fieldbus connection. On 2026-11-15 `cargo test --workspace` failed once in `crates/helmsman-dhcp/tests/hostile.rs`, `no_request_sequence_breaks_the_invariants`: "00-07-46-00-00-03 moved off its running lease", left 192.168.3.102, right 192.168.3.101. It is rare (the next three runs of that test passed), so CI can fail on it at random on any PR. To reproduce every time, add this line to `crates/helmsman-dhcp/tests/hostile.proptest-regressions`: `cc 32024c1c7cf224596c6941b14f9b5192e7b4dba694ca7a7b2831f9d34cc24c4b`. The shrunk case begins with a DHCPREQUEST from that client with ciaddr 192.168.3.100 and ends with its DHCPDISCOVER. Not fixed here: it was found while gating an unrelated change (the Devices tab's wired line), the crate is another task's, and the seed was left out of that branch so dev stays green until the fix lands with it, regression first.
