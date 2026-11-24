@@ -1,4 +1,4 @@
-//! The Novanta IMS MDrive (Lexium Liberty, EtherNet/IP mode) by its
+//! The Novanta IMS `MDrive` (Lexium Liberty, EtherNet/IP mode) by its
 //! profile, against a simulated unit with the identity, the assemblies and
 //! the connection points the bench unit showed on 2026-11-16
 //! (docs/devices/novanta-mdrive.md). The simulator is a layout, not the

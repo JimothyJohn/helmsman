@@ -661,10 +661,10 @@ mod tests {
         }
     }
 
-    /// The Novanta MDrive's library entry as the library's index will
+    /// The Novanta `MDrive`'s library entry as the library's index will
     /// carry it (helmsman-devices `devices/novanta/lexium-mdrive-ethernet`,
     /// with its profile file), and the scan's identity for the bench unit:
-    /// vendor 243, product code 15362, "MDrive", revision 2.36.
+    /// vendor 243, product code 15362, revision 2.36.
     const MDRIVE: &str = r#"{ "format": "helmsman-devices-index 1", "devices": [
       { "folder": "devices/novanta/lexium-mdrive-ethernet", "vendor": "Novanta IMS",
         "model": "Liberty / Lexium MDrive Ethernet (LMD), EtherNet/IP", "kind": "drive",
@@ -692,9 +692,9 @@ mod tests {
         // (revision 2.22 by the EDS, 2.36 on the bench) are one entry.
         assert_eq!(i.by_identity(243, 15362).len(), 1);
         // Another product code or vendor is another device, by identity.
-        assert!(i.by_identity(243, 15363).is_empty());
-        assert!(i.by_identity(244, 15362).is_empty());
-        assert!(i.by_identity(15362, 243).is_empty());
+        assert_eq!(i.by_identity(243, 15363).len(), 0);
+        assert_eq!(i.by_identity(244, 15362).len(), 0);
+        assert_eq!(i.by_identity(15362, 243).len(), 0);
         assert_ne!(i.by_identity(991, 515)[0].folder, e.folder);
         // And an unrelated name does not match by text.
         assert!(i.lookup(243, 15363, "Something Else").is_none());
