@@ -149,8 +149,12 @@ Each instruction goes to Helmsman with the whole file and the history of
 that file, read from History: every change made to it, oldest first, each
 with what was asked, why, and how it came out. So "now make it blink
 faster" works, Helmsman knows what "it" is even after a reload, and a
-decision made weeks ago is still known. A very long history is cut at the
-old end, and the request then says how many older changes it leaves out.
+decision made weeks ago is still known. In the browser this history is
+kept with the project, apart from its versions, so it is still there
+after old versions have gone, and it is in the project's download. When
+it grows very long, Helmsman writes up the oldest changes once as a short
+summary, which takes their place; the newest changes always go word for
+word.
 To start over, describe the whole behaviour in the instruction.
 
 ## What a change may touch

@@ -691,7 +691,15 @@ fn accept_makes_the_project_in_one_revision_with_everything_in_it() {
     v.accept_spec();
     assert!(v.spec_review.is_none());
     assert_eq!(v.proj.open, "belt-4");
-    let names: Vec<&str> = v.proj.files.keys().map(String::as_str).collect();
+    // The history log (agent.md) is kept beside them and is no file of the
+    // project's to list.
+    let names: Vec<&str> = v
+        .proj
+        .files
+        .keys()
+        .map(String::as_str)
+        .filter(|n| !helmsman_project::agent::is_agent_file(n))
+        .collect();
     assert_eq!(
         names,
         [
@@ -742,7 +750,10 @@ fn accept_makes_the_project_in_one_revision_with_everything_in_it() {
     let (_, zip) = v.proj.zip().expect("a download");
     let back = helmsman_project::read_zip(&zip).unwrap();
     assert_eq!(back.0.get("spec.md"), v.proj.files.get("spec.md"));
-    assert_eq!(back.0.len(), 7);
+    // The seven files and the history log beside them: what was asked of
+    // the project goes with its download.
+    assert_eq!(back.0.len(), 8);
+    assert!(back.0.contains_key(helmsman_project::AGENT));
     // The sidebar lists it and it opens as text.
     v.proj.open_file("spec.md");
     assert_eq!(v.proj.current, "spec.md");
