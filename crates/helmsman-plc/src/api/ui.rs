@@ -52,6 +52,8 @@ const REVALIDATE: &str = "no-cache";
 #[derive(Debug, Clone)]
 pub struct Ui {
     root: PathBuf,
+    /// The Skipper this box programs (`--node`): its page watches it.
+    node: Option<String>,
 }
 
 /// A file ready to send.
@@ -84,7 +86,16 @@ impl Ui {
                 "no index.html in it (build it with `make canvas-web`)",
             ));
         }
-        Ok(Self { root })
+        Ok(Self { root, node: None })
+    }
+
+    /// The node this box programs (an origin, [`node_origin`]): its page
+    /// carries it as `<meta name="helmsman-node">` and watches that node
+    /// as `?box=` would, and may fetch from it.
+    #[must_use]
+    pub fn with_node(mut self, origin: String) -> Self {
+        self.node = Some(origin);
+        self
     }
 
     #[must_use]
@@ -143,9 +154,15 @@ impl Ui {
             if (&asset.file).take(MAX_HTML).read_to_end(&mut body).is_err() {
                 return Err(Response::error(500, "cannot read the UI"));
             }
+            if let Some(node) = &self.node {
+                body = with_node_meta(&body, node);
+            }
             asset.len = body.len() as u64;
             asset.csp = Some(csp(&String::from_utf8_lossy(&body)));
             asset.body = Some(body);
+            if self.node.is_some() {
+                asset.allow_peers();
+            }
         }
         Ok(asset)
     }
@@ -161,6 +178,43 @@ impl Asset {
             *c = c.replacen(CONNECT_SELF, "connect-src 'self' http:;", 1);
         }
     }
+}
+
+/// `origin` if it is one an operator may name with `--node`: `http://` or
+/// `https://`, a host of letters, digits, `.` and `-` (or an IPv4
+/// address), an optional port, nothing after it but one `/`. Nothing in it
+/// can leave the attribute it is written into.
+#[must_use]
+pub fn node_origin(origin: &str) -> Option<String> {
+    let rest = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))?;
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    let (host, port) = match rest.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (rest, None),
+    };
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    let port_ok = port.is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.parse::<u16>().is_ok_and(|n| n > 0));
+    (host_ok && port_ok).then(|| origin.trim_end_matches('/').to_string())
+}
+
+/// `html` with `<meta name="helmsman-node" content="ORIGIN">` right after
+/// its `<head>` (at the start when it has none). `origin` is a checked
+/// [`node_origin`].
+fn with_node_meta(html: &[u8], origin: &str) -> Vec<u8> {
+    let meta = format!(r#"<meta name="helmsman-node" content="{origin}">"#);
+    let text = String::from_utf8_lossy(html);
+    let at = text.find("<head>").map_or(0, |i| i + "<head>".len());
+    let mut out = String::with_capacity(text.len() + meta.len());
+    out.push_str(&text[..at]);
+    out.push_str(&meta);
+    out.push_str(&text[at..]);
+    out.into_bytes()
 }
 
 /// The connect directive of [`csp`].
@@ -349,5 +403,71 @@ mod tests {
         assert!(!hashed("helmsman-canvas.js"));
         assert!(!hashed("app-0123456789abcdeg.js"));
         assert!(!hashed("app-0123456789abcdef0.js"));
+    }
+
+    /// Nick 2026-11-24 ("the box knows its Skipper"): `--node` takes an
+    /// origin and nothing that could leave the meta tag's attribute.
+    #[test]
+    fn a_node_is_an_origin_and_nothing_else() {
+        for ok in [
+            "http://192.168.33.56:8080",
+            "http://192.168.33.56:8080/",
+            "https://skipper-1.lan",
+            "http://a-b.c:1",
+        ] {
+            assert_eq!(node_origin(ok).as_deref(), Some(ok.trim_end_matches('/')), "{ok}");
+        }
+        for bad in [
+            "",
+            "192.168.33.56:8080",
+            "javascript:alert(1)",
+            "ftp://h",
+            "http://",
+            "http://h:0",
+            "http://h:99999",
+            "http://h:",
+            "http://h/path",
+            "http://h:80/x",
+            "http://h\"><script>x()</script>",
+            "http://h onload=x",
+            "http://user@h",
+        ] {
+            assert_eq!(node_origin(bad), None, "{bad:?}");
+        }
+    }
+
+    /// The page a box with `--node` serves names the node in a meta tag in
+    /// its head, may fetch from other origins, and keeps its scripts'
+    /// hashes (the tag adds no script).
+    #[test]
+    fn a_box_with_a_node_writes_it_into_its_page() {
+        let dir = std::env::temp_dir().join(format!("helmsman-ui-node-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let html = "<html><head><title>t</title></head><body><script>x()</script></body></html>";
+        std::fs::write(dir.join("index.html"), html).unwrap();
+        let plain = Ui::open(&dir).unwrap();
+        let a = plain.resolve(&[String::new()]).unwrap();
+        let body = String::from_utf8(a.body.clone().unwrap()).unwrap();
+        assert!(!body.contains("helmsman-node"), "no --node, no tag");
+        assert!(a.csp.as_deref().unwrap().contains("connect-src 'self';"));
+        let ui = Ui::open(&dir)
+            .unwrap()
+            .with_node("http://192.168.33.56:8080".into());
+        let a = ui.resolve(&[String::new()]).unwrap();
+        let body = String::from_utf8(a.body.clone().unwrap()).unwrap();
+        assert!(
+            body.starts_with(
+                r#"<html><head><meta name="helmsman-node" content="http://192.168.33.56:8080"><title>"#
+            ),
+            "{body}"
+        );
+        assert_eq!(a.len, body.len() as u64);
+        let csp = a.csp.as_deref().unwrap();
+        assert!(csp.contains("connect-src 'self' http:;"), "{csp}");
+        assert!(
+            csp.contains("'sha256-D6IGS8VMvCoyaR/l0h9tERrBTATY01CoPS7l6xDv0kI='"),
+            "{csp}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

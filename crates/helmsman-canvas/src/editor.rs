@@ -1087,21 +1087,23 @@ fn messages_panel(
             .show(ui, |ui| header(ui, chrome, hits));
         return;
     }
+    // One fixed height, never resized by what is in it (Nick, 2026-11-24:
+    // "I want the messages box to be a fixed height"): a resizable panel
+    // grows to any row that overflows it, and a long deploy error pushed
+    // the Messages up over the tab above. Everything in it scrolls.
     let most = (ui.available_height() - 120.0).max(80.0);
     egui::Panel::bottom("ed-msgs")
-        .resizable(true)
-        .default_size(MESSAGES_H.min(most))
-        .min_size(80.0)
-        .max_size(most)
+        .resizable(false)
+        .exact_size(MESSAGES_H.min(most))
         .show(ui, |ui| {
             header(ui, chrome, hits);
             ui.separator();
             if body.has_notices() {
-                // Long, in a narrow pane: they scroll before they push the
-                // list out of the panel.
+                // Long, in a narrow pane: they scroll in at most 40% of the
+                // panel, and the log keeps the rest.
                 egui::ScrollArea::vertical()
                     .id_salt("ed-msgs-notices")
-                    .max_height(ui.available_height())
+                    .max_height(ui.available_height() * 0.4)
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
                     });
