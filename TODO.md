@@ -834,6 +834,17 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   difficulty: high
   id: history-in-context
 
+- [ ] **Zoom ladder: the Process and Machine levels** — Nick asked for seven levels (interview 2026-11-23): Code, Wiring, Statements, Sections, Programs, Process, Machine. Five are built (`fold::ladder`, `st_ladder.rs`): each is a card painted over its own blocks, so a level needs something on the canvas to stand over. Past the one program's card there is nothing yet: Programs needs every program and function block of the project placed in one world with the calls between them, Process needs the sequences (a CASE on a state variable, `fold::states`) drawn as steps with the live one lit, and Machine needs the devices and their points placed around the programs. Start with the world of several programs; the other two sit on it.
+  result: zooming out past one program shows the project, then what the machine does, then the machine
+  est: 4d
+  difficulty: hard
+  id: zoom-ladder-upper
+- [ ] **Take out the old three-level zoom** — `fold::zoom`, `st_zoom.rs` and their tests (`st_zoom_tests.rs`, `tests/fold_zoom.rs`) close folds and lay the diagram out again at each level. It has been off since 2026-11-23 (`SEMANTIC_ZOOM`), the zoom ladder replaces it, and only its own tests turn it on. The corner-control tests in `st_zoom_tests.rs` are of what ships and move to the ladder's tests.
+  depends: zoom-ladder-upper
+  est: 0.5d
+  difficulty: easy
+  id: zoom-old-levels-out
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).

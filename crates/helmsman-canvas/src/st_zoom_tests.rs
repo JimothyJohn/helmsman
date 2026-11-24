@@ -435,11 +435,12 @@ impl Harness {
 
     /// The rect of corner control `k` (0 hand, 1 zoom in, 2 zoom out).
     fn control(&self, k: u8) -> Rect {
+        // The three glyphs lead the row; the rung's name follows them.
         let row = self.view.corner_rect(self.area(), self.scan());
-        let step = row.width() / 3.0;
+        let step = TAP + 8.0;
         Rect::from_min_size(
             row.min + Vec2::new(step * f32::from(k), 0.0),
-            Vec2::new(step, row.height()),
+            Vec2::new(TAP, row.height()),
         )
     }
 
@@ -572,6 +573,7 @@ fn the_hand_makes_a_drag_on_empty_space_pan_and_off_it_selects() {
 
 #[test]
 fn zoom_in_and_out_step_the_zoom_and_stop_at_the_wheels_limits() {
+    use helmsman_diagram::fold::ladder::{MAX_ZOOM, MIN_ZOOM};
     let mut h = shipped(SRC);
     let z0 = h.cam().zoom;
     h.click(h.control(1).center());
@@ -579,14 +581,15 @@ fn zoom_in_and_out_step_the_zoom_and_stop_at_the_wheels_limits() {
     assert!((z1 / z0 - super::super::ZOOM_STEP).abs() < 1e-3, "{z0} -> {z1}");
     h.click(h.control(2).center());
     assert!((h.cam().zoom - z0).abs() < 1e-3);
+    // The limits are the zoom ladder's: its closest and farthest rungs.
     for _ in 0..30 {
         h.click(h.control(1).center());
     }
-    assert!((h.cam().zoom - 3.0).abs() < 1e-3, "{}", h.cam().zoom);
+    assert!((h.cam().zoom - MAX_ZOOM).abs() < 1e-3, "{}", h.cam().zoom);
     for _ in 0..60 {
         h.click(h.control(2).center());
     }
-    assert!((h.cam().zoom - 0.15).abs() < 1e-3, "{}", h.cam().zoom);
+    assert!((h.cam().zoom - MIN_ZOOM).abs() < 1e-3, "{}", h.cam().zoom);
     // None of it changed what is drawn or counted as an edit.
     assert_eq!(h.view.zoom_level(), Level::Near);
     assert_eq!(h.view.edits, 0);
