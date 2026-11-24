@@ -2208,6 +2208,20 @@ impl BoxProjects {
             PCall::Replay(name) => match j["replay"].as_u64().filter(|_| a.status == 201) {
                 Some(_) if self.to_node => self.send_to_node(),
                 Some(n) => self.deploy_now(&name, Some(n)),
+                // For a Skipper, in plain words (Nick, 2026-11-24, at "the
+                // replay cannot run: modules do not fit together: drive:
+                // port SEEN: no signal of that name").
+                None if self.to_node && !unbound_ports(&error_of(a)).is_empty() => {
+                    let ports = unbound_ports(&error_of(a));
+                    let (names, verb, them) = (
+                        ports.join(", "),
+                        if ports.len() == 1 { "is" } else { "are" },
+                        if ports.len() == 1 { "it" } else { "them" },
+                    );
+                    self.deploy = Deploy::Failed(format!(
+                        "Not deployed: {names} {verb} not in the I/O list. Add {them} to the I/O list, or declare {them} under VAR in the program."
+                    ));
+                }
                 None => {
                     self.deploy = Deploy::Failed(deploy_words(format!(
                         "the sim replay did not run: {}",

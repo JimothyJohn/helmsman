@@ -848,3 +848,36 @@ fn an_unchanged_io_list_is_not_sent_again() {
         ("PUT", "/api/modules/drive")
     );
 }
+
+/// Nick 2026-11-24, at 0:54 of his recording: "the replay cannot run:
+/// modules do not fit together: drive: port SEEN: no signal of that name".
+/// For a Skipper the page says it in plain words and sends nothing.
+#[test]
+fn a_replay_refused_for_a_port_without_a_signal_says_so_plainly() {
+    use crate::box_projects::{BoxProjects, Deploy, PCall};
+    let mut p = BoxProjects::default();
+    p.available = Some(true);
+    p.open = Some(opened(&[("main.st", NEW)]));
+    p.to_node = true;
+    p.deploy = Deploy::Checking;
+    p.answer(
+        PCall::Check("skipper_drive".into()),
+        &check_answer(&serde_json::json!({"ok": true, "held": [],
+            "modules": [{"name": "drive"}], "approval": {"needs": {"replay": true}}})),
+    );
+    let _ = p.poll();
+    p.answer(
+        PCall::Replay("skipper_drive".into()),
+        &answer(422, &serde_json::json!({"changed": false,
+            "error": "the replay cannot run: modules do not fit together: drive: port SEEN: no signal of that name"})),
+    );
+    let Deploy::Failed(why) = &p.deploy else {
+        panic!("{:?}", p.deploy)
+    };
+    assert_eq!(
+        why,
+        "Not deployed: seen is not in the I/O list. Add it to the I/O list, or declare it under VAR in the program."
+    );
+    p.tick(100.0);
+    assert!(p.poll().is_empty());
+}
