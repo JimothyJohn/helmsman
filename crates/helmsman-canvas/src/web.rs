@@ -100,13 +100,23 @@ fn absolute(url: &str) -> String {
     })
 }
 
-/// The `?box=ORIGIN` of this page, if it names one.
+/// The node this page watches: its `?box=ORIGIN`, else the one the box
+/// that served it names (`--node`, a `<meta name="helmsman-node">` in its
+/// head; Nick, 2026-11-24: "the box knows its Skipper"), so the plain
+/// address watches it. Both pass the same check.
 #[must_use]
 pub fn box_origin() -> Option<String> {
     let query = web_sys::window()
         .and_then(|w| w.location().search().ok())
         .unwrap_or_default();
-    crate::app::box_origin(&query)
+    crate::app::box_origin(&query).or_else(|| {
+        let content = web_sys::window()?
+            .document()?
+            .query_selector("meta[name=helmsman-node]")
+            .ok()??
+            .get_attribute("content")?;
+        crate::app::box_origin(&format!("?box={content}"))
+    })
 }
 
 /// An open `EventSource` and the callbacks it holds; closed when dropped.

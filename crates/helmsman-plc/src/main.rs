@@ -159,6 +159,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --devices-index URL  the device library's index the Devices tab and the
                        agent look a found device up in (default the public
                        library's, see docs/devices/; `off` for none)
+  --node URL           the Skipper this box programs (http://IP:PORT): the
+                       canvas this box serves watches that node, as its
+                       ?box= would, and deploys to it. Needs --ui
   --site NAME          announce this box on the LAN as part of site NAME
                        (a UDP multicast beacon to 239.255.72.77:41910, TTL
                        1, every 5 s) and list the boxes of that site it
@@ -254,6 +257,8 @@ struct Opts {
     relay_publish_agent: Option<String>,
     ui: Option<PathBuf>,
     site: Option<String>,
+    /// `--node`: the Skipper this box's canvas watches.
+    node: Option<String>,
     /// `--devices-index`: `None` is the default library, `Some("off")` none.
     devices_index: Option<String>,
     box_name: Option<String>,
@@ -329,6 +334,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_publish_agent: None,
         ui: None,
         site: None,
+        node: None,
         devices_index: None,
         box_name: None,
         dhcp: None,
@@ -454,6 +460,10 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 o.devices_index = Some(v.clone());
             }
             "--devices-index" => return Err(format!("--devices-index: a http(s):// URL or off, got {v:?}")),
+            "--node" => match helmsman_plc::api::ui::node_origin(v) {
+                Some(origin) => o.node = Some(origin),
+                None => return Err(format!("--node: an origin, http://IP:PORT, got {v:?}")),
+            },
             "--site" if site::valid_token(v) => o.site = Some(v.clone()),
             "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
             "--dhcp"
@@ -494,6 +504,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.site.is_some() && o.api.is_none_or(|a| a.port() == 0) {
         return Err("--site announces the API's port; it needs --api IP:PORT with a fixed port".into());
+    }
+    if o.node.is_some() && o.ui.is_none() {
+        return Err("--node names the Skipper the canvas watches; it needs --ui DIR".into());
     }
     if o.box_name.is_some() && o.site.is_none() {
         return Err("--box-name names this box in its site; it needs --site NAME".into());
@@ -1210,7 +1223,11 @@ fn start_api(
     let ui =
         o.ui.as_deref()
             .map(|d| api::ui::Ui::open(d).map_err(|e| format!("--ui {}: {e}", d.display())))
-            .transpose()?;
+            .transpose()?
+            .map(|ui| match &o.node {
+                Some(node) => ui.with_node(node.clone()),
+                None => ui,
+            });
     let dir = state_dir(o);
     let token =
         api::token::load_or_create(&dir).map_err(|e| format!("API token in {}: {e}", dir.display()))?;
