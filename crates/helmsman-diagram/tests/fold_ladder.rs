@@ -176,7 +176,7 @@ fn a_statement_is_named_by_what_it_sets_and_keeps_its_text() {
         g,
         "the code is the statements, closer"
     );
-    assert!(groups(&d, &src, Rung::Wiring).is_empty());
+    assert_eq!(groups(&d, &src, Rung::Wiring), []);
 }
 
 #[test]

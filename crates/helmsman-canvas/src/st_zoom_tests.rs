@@ -573,6 +573,7 @@ fn the_hand_makes_a_drag_on_empty_space_pan_and_off_it_selects() {
 
 #[test]
 fn zoom_in_and_out_step_the_zoom_and_stop_at_the_wheels_limits() {
+    use helmsman_diagram::fold::ladder::{MAX_ZOOM, MIN_ZOOM};
     let mut h = shipped(SRC);
     let z0 = h.cam().zoom;
     h.click(h.control(1).center());
@@ -581,7 +582,6 @@ fn zoom_in_and_out_step_the_zoom_and_stop_at_the_wheels_limits() {
     h.click(h.control(2).center());
     assert!((h.cam().zoom - z0).abs() < 1e-3);
     // The limits are the zoom ladder's: its closest and farthest rungs.
-    use helmsman_diagram::fold::ladder::{MAX_ZOOM, MIN_ZOOM};
     for _ in 0..30 {
         h.click(h.control(1).center());
     }

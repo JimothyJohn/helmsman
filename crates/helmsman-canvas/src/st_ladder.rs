@@ -32,6 +32,17 @@ const CHAR_EM: f32 = 0.62;
 /// How wide the rung's name is in the corner controls, points.
 pub(super) const NAME_W: f32 = 124.0;
 
+/// What a rung shows, for its row in the corner's list.
+pub(super) const fn rung_tip(rung: Rung) -> &'static str {
+    match rung {
+        Rung::Code => "Closest: each statement as the Structured Text that wrote it.",
+        Rung::Wiring => "The blocks and wires of every statement.",
+        Rung::Statements => "One card per statement, named by what it sets.",
+        Rung::Sections => "One card per section, IF or CASE arm.",
+        Rung::Program => "Farthest: the whole program as one card.",
+    }
+}
+
 /// The groups of one POU, by rung.
 #[derive(Debug, Default, Clone)]
 pub(super) struct Groups {
@@ -73,7 +84,7 @@ pub struct Card {
     /// How strongly it is outlined, 0 to 1.
     pub outline: f32,
     /// How formed the card is, 0 to 1.
-    pub card: f32,
+    pub formed: f32,
     /// How formed its text is ([`Rung::Code`] only), 0 to 1.
     pub code: f32,
 }
@@ -82,7 +93,7 @@ impl Card {
     /// Whether the card takes the pointer from the blocks under it.
     #[must_use]
     pub fn solid(&self) -> bool {
-        self.card >= SOLID || self.code >= SOLID
+        self.formed >= SOLID || self.code >= SOLID
     }
 }
 
@@ -160,7 +171,7 @@ impl Viewer {
                     world,
                     rect: cam.rect(&world),
                     outline,
-                    card,
+                    formed: card,
                     code,
                 });
             }
@@ -208,17 +219,16 @@ impl Viewer {
         let cam = self.cams[self.scope];
         let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
         let (lo, hi) = rung.span();
-        let (zoom, middle) = match on {
-            Some(r) => (
+        let (zoom, middle) = if let Some(r) = on {
+            (
                 (below.width() / r.w.max(1.0))
                     .min(below.height() / r.h.max(1.0))
                     .clamp(lo, hi),
                 Vec2::new(r.x + r.w / 2.0, r.y + r.h / 2.0),
-            ),
-            None => {
-                let (x, y) = cam.to_world(below.center());
-                (rung.rest(), Vec2::new(x, y))
-            }
+            )
+        } else {
+            let (x, y) = cam.to_world(below.center());
+            (rung.rest(), Vec2::new(x, y))
         };
         let mut to = cam;
         to.zoom = zoom;
@@ -266,8 +276,8 @@ impl Viewer {
         let clip = painter.clip_rect();
         for c in cards.iter().filter(|c| c.rect.intersects(clip)) {
             let round = CornerRadius::same(6);
-            if c.card > 0.0 || c.code > 0.0 {
-                painter.rect_filled(c.rect, round, t.panel.gamma_multiply(c.card.max(c.code)));
+            if c.formed > 0.0 || c.code > 0.0 {
+                painter.rect_filled(c.rect, round, t.panel.gamma_multiply(c.formed.max(c.code)));
             }
             if c.outline > 0.0 {
                 painter.rect_stroke(
@@ -280,7 +290,7 @@ impl Viewer {
             if c.code > 0.0 {
                 self.paint_code(painter, t, c, cam.zoom);
             }
-            if c.card > 0.0 {
+            if c.formed > 0.0 {
                 let value = self.ladder_value(c, live);
                 paint_title(painter, t, c, value);
             }
@@ -337,7 +347,7 @@ fn paint_title(painter: &egui::Painter, t: &Theme, c: &Card, value: Option<Value
             painter,
             &show(Some(v)),
             font.clone(),
-            color.gamma_multiply(c.card),
+            color.gamma_multiply(c.formed),
             width / 2.0,
         );
         width -= g.size().x + 8.0;
@@ -347,7 +357,7 @@ fn paint_title(painter: &egui::Painter, t: &Theme, c: &Card, value: Option<Value
             Color32::PLACEHOLDER,
         );
     }
-    let g = fitted(painter, &c.title, font, t.fg.gamma_multiply(c.card), width);
+    let g = fitted(painter, &c.title, font, t.fg.gamma_multiply(c.formed), width);
     painter.galley(
         Pos2::new(room.left(), room.center().y - g.size().y / 2.0),
         g,

@@ -2877,6 +2877,7 @@ impl Viewer {
         // Where the view is on the zoom ladder, and a step to any rung.
         let on = self.rung();
         let mut step = None;
+        #[cfg_attr(not(test), allow(unused_variables))]
         let name = row
             .scope(|ui| {
                 ui.set_width(ladder_view::NAME_W);
@@ -2884,13 +2885,13 @@ impl Viewer {
                     egui::RichText::new(on.name()).size(crate::theme::MIN_TEXT),
                     |ui| {
                         for rung in helmsman_diagram::fold::ladder::Rung::ALL {
-                            if ui
+                            let pick = ui
                                 .selectable_label(
                                     rung == on,
                                     egui::RichText::new(rung.name()).size(crate::theme::MIN_TEXT),
                                 )
-                                .clicked()
-                            {
+                                .tip(ladder_view::rung_tip(rung));
+                            if pick.clicked() {
                                 step = Some(rung);
                                 ui.close();
                             }
@@ -2905,7 +2906,6 @@ impl Viewer {
         {
             self.ladder_name = name.rect;
         }
-        let _ = name;
         if let Some(rung) = step {
             let now = ui.input(|i| i.time);
             self.ladder_fly(rung, None, area, now);

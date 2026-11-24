@@ -131,10 +131,10 @@ fn a_fitted_view_is_the_wiring_with_its_statements_faintly_outlined() {
     let h = Harness::new(SRC);
     assert_eq!(h.view.rung(), Rung::Wiring);
     let cards = h.cards();
-    assert!(!cards.is_empty());
+    assert_ne!(cards, []);
     for c in &cards {
         assert_eq!(c.rung, Rung::Statements, "only the next step out: {c:?}");
-        assert!(!c.solid() && c.card <= 0.0 && c.code <= 0.0, "{c:?}");
+        assert!(!c.solid() && c.formed <= 0.0 && c.code <= 0.0, "{c:?}");
         assert!(c.outline > 0.0 && c.outline <= HINT + 0.2, "faint: {c:?}");
     }
     assert!(cards.iter().any(|c| c.title == "level_pct"));
@@ -273,7 +273,7 @@ fn a_click_on_a_card_flies_in_one_rung_and_never_reaches_the_blocks_under_it() {
         .unwrap()
         .rect;
     h.click(cam.rect(&block).center());
-    assert!(!h.view.selection().is_empty(), "a block is picked on the wiring");
+    assert_ne!(h.view.selection(), [], "a block is picked on the wiring");
 }
 
 #[test]
@@ -311,5 +311,5 @@ fn the_corner_names_the_rung() {
     h.zoom_to(Rung::Program.rest(), Harness::centre());
     let at = h.view.ladder_name.center();
     h.click(at);
-    assert!(h.view.selection().is_empty());
+    assert_eq!(h.view.selection(), []);
 }
