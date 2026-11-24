@@ -274,6 +274,7 @@ pub fn view(
             version: helmsman_nodecore::VERSION,
             board,
             io_map,
+            one_block: false,
             firmware: live
                 .fw
                 .available

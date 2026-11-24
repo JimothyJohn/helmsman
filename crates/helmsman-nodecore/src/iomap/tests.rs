@@ -686,3 +686,49 @@ fn the_generator_makes_maps_a_node_takes() {
     let m = parse(&text).unwrap();
     assert_eq!(m.points.len(), 6);
 }
+
+/// The one-block boards (the ESP32 nodes) run a map through
+/// `one_block`: the factory map and any one-device di/coil map pass with
+/// their names in image order, and everything a node-p4 map adds is
+/// refused with a reason.
+#[test]
+fn a_one_block_board_takes_one_modbus_block_of_bits_and_nothing_else() {
+    let f = IoMap::factory([192, 168, 3, 60], "rio").one_block().unwrap();
+    assert_eq!((f.device.as_str(), f.host, f.port, f.unit), ("rio", [192, 168, 3, 60], 502, 1));
+    assert_eq!((f.input_count(), f.coil_count()), (8, 4));
+    assert_eq!(f.inputs[7].as_deref(), Some("di7"));
+    assert_eq!(f.outputs[0].as_deref(), Some("do0"));
+
+    // A hole in the numbering stays a hole; the count runs to the highest.
+    let holes = parse("device b modbus-tcp 10.0.0.9:1502 unit=7\nin jam bool b di:3\nout horn bool b coil:15\n")
+        .unwrap()
+        .one_block()
+        .unwrap();
+    assert_eq!((holes.port, holes.unit), (1502, 7));
+    assert_eq!(holes.inputs, vec![None, None, None, Some("jam".to_string())]);
+    assert_eq!(holes.coil_count(), 16);
+    assert_eq!(holes.outputs[15].as_deref(), Some("horn"));
+
+    let no_points = parse("device b modbus-tcp 10.0.0.9\n").unwrap().one_block().unwrap();
+    assert_eq!((no_points.input_count(), no_points.coil_count()), (0, 0));
+
+    let refused = |text: &str| parse(text).unwrap().one_block().unwrap_err().to_string();
+    assert!(refused(THREE).contains("3 devices"), "{}", refused(THREE));
+    assert!(
+        refused("device e enip-io 10.0.0.2 profile=moxa-e1213\n").contains("not a modbus-tcp device"),
+        "an EtherNet/IP device"
+    );
+    for (text, point) in [
+        ("device b modbus-tcp 10.0.0.9\nin level int b hr:5\n", "level"),
+        ("device b modbus-tcp 10.0.0.9\nin far bool b di:16\n", "far"),
+        ("device b modbus-tcp 10.0.0.9\nout sp int b hr:1\n", "sp"),
+        ("device b modbus-tcp 10.0.0.9\nin raw int b ir:0\n", "raw"),
+    ] {
+        let why = refused(text);
+        assert!(why.contains(&format!("point {point}")), "{text:?}: {why}");
+        assert!(why.contains("one Modbus TCP block"), "{why}");
+    }
+    let long = format!("device b modbus-tcp 10.0.0.9\n{}", "# pad\n".repeat(400));
+    assert!(long.len() > ONE_BLOCK_TEXT && long.len() <= MAX_TEXT);
+    assert!(refused(&long).contains("2048"), "{}", refused(&long));
+}

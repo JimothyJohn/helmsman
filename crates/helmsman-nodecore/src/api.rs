@@ -109,6 +109,9 @@ pub struct NodeView {
     pub board: &'static str,
     /// The I/O map text, for `GET /api/io_map`.
     pub io_map: String,
+    /// The board drives one Modbus TCP block only (the ESP32 nodes): a
+    /// map it is given must pass [`crate::iomap::IoMap::one_block`].
+    pub one_block: bool,
     /// The firmware half (`GET /api/firmware`); `None` on a board that
     /// cannot update itself over the network.
     pub firmware: Option<crate::ota::status::Firmware>,
@@ -673,6 +676,7 @@ pub(crate) fn sample_view() -> NodeView {
         version: "0.1.0",
         board: "ESP32-POE-ISO",
         io_map: "device rio modbus-tcp 192.168.3.60\n".into(),
+        one_block: false,
         firmware: Some(crate::ota::status::Firmware {
             version: "0.1.0",
             build: "",

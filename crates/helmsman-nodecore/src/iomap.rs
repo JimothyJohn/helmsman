@@ -1062,5 +1062,109 @@ pub fn parse(text: &str) -> Result<IoMap, Bad> {
     })
 }
 
+
+/// Points a direction the one-block boards move: indexes `0..16`, two
+/// image bytes.
+pub const ONE_BLOCK_POINTS: u16 = 16;
+/// Map text a one-block board keeps beside its program.
+pub const ONE_BLOCK_TEXT: usize = 2048;
+
+/// A map cut to what the first nodes drive (crates/helmsman-node, the
+/// ESP32 boards): one Modbus TCP block, its discrete inputs and coils
+/// below [`ONE_BLOCK_POINTS`]. [`IoMap::one_block`] makes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OneBlock {
+    /// The block's id (the `device` line's name).
+    pub device: String,
+    pub host: [u8; 4],
+    pub port: u16,
+    pub unit: u8,
+    /// The discrete inputs' names in image order (index `k` is bit
+    /// `k % 8` of byte `k / 8`), `None` where the map names no point,
+    /// up to the highest one named.
+    pub inputs: Vec<Option<String>>,
+    /// The coils' names, the same way.
+    pub outputs: Vec<Option<String>>,
+}
+
+impl OneBlock {
+    /// Discrete inputs to read each round: up to the highest index named.
+    #[must_use]
+    pub fn input_count(&self) -> u16 {
+        u16::try_from(self.inputs.len()).unwrap_or(ONE_BLOCK_POINTS)
+    }
+
+    /// Coils to write each round: up to the highest index named.
+    #[must_use]
+    pub fn coil_count(&self) -> u16 {
+        u16::try_from(self.outputs.len()).unwrap_or(ONE_BLOCK_POINTS)
+    }
+}
+
+impl IoMap {
+    /// This map as a one-block board runs it.
+    ///
+    /// # Errors
+    /// What in the map such a board cannot run: a second device, a device
+    /// that is not Modbus TCP, a point that is not a discrete input or a
+    /// coil below [`ONE_BLOCK_POINTS`], or more text than
+    /// [`ONE_BLOCK_TEXT`].
+    pub fn one_block(&self) -> Result<OneBlock, Bad> {
+        let no = |why: &str| Bad {
+            line: 0,
+            why: alloc::format!("{why}: this board drives one Modbus TCP block's discrete inputs and coils"),
+        };
+        if self.text.len() > ONE_BLOCK_TEXT {
+            return Err(no(&alloc::format!(
+                "the map is {} bytes and this board keeps {ONE_BLOCK_TEXT}",
+                self.text.len()
+            )));
+        }
+        let [device] = self.devices.as_slice() else {
+            return Err(no(&alloc::format!("{} devices", self.devices.len())));
+        };
+        let Link::Modbus { unit } = device.link else {
+            return Err(no(&alloc::format!("{} is not a modbus-tcp device", device.id)));
+        };
+        let mut inputs: Vec<Option<String>> = Vec::new();
+        let mut outputs: Vec<Option<String>> = Vec::new();
+        for p in &self.points {
+            let (list, index) = match (p.dir, p.ty, p.addr) {
+                (
+                    Dir::In,
+                    Ty::Bool,
+                    Addr::Modbus {
+                        table: Table::Discrete,
+                        addr,
+                        ..
+                    },
+                ) if addr < ONE_BLOCK_POINTS => (&mut inputs, usize::from(addr)),
+                (
+                    Dir::Out,
+                    Ty::Bool,
+                    Addr::Modbus {
+                        table: Table::Coil,
+                        addr,
+                        ..
+                    },
+                ) if addr < ONE_BLOCK_POINTS => (&mut outputs, usize::from(addr)),
+                _ => return Err(no(&alloc::format!("point {}", p.name))),
+            };
+            if list.len() <= index {
+                list.resize(index + 1, None);
+            }
+            list[index] = Some(p.name.clone());
+        }
+        Ok(OneBlock {
+            device: device.id.clone(),
+            host: device.host,
+            port: device.port,
+            unit,
+            inputs,
+            outputs,
+        })
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests;
