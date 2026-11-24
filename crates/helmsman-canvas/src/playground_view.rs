@@ -4637,7 +4637,7 @@ impl PlaygroundView {
                     "{}\n{}",
                     name.to_ascii_lowercase(),
                     last.filter(|v| v.is_finite())
-                        .map_or("–".into(), |v| helmsman_iec::shown_real(v))
+                        .map_or("–".into(), helmsman_iec::shown_real)
                 ),
                 FontId::monospace(crate::theme::MIN_TEXT),
                 color,
