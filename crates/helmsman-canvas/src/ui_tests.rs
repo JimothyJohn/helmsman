@@ -2167,6 +2167,55 @@ END_PROGRAM",
         assert_eq!(h.app.sim.as_ref().unwrap().session.running, running);
     }
 
+    /// Nick, 2026-11-24: the last message sent is one key away. Up in the
+    /// empty box brings it back with the caret at its end; in a box with
+    /// text Up is only the caret's.
+    #[test]
+    fn up_in_the_empty_box_brings_back_the_last_message() {
+        use crate::instruct_tests::LAMP;
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(crate::claude::Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.2);
+        h.click(h.rect("agent instruction").center());
+        // The box holds the arrow keys from the frame after it took the
+        // focus (egui sets a text box's key filter once it has it).
+        h.frame(vec![]);
+        h.key(Modifiers::NONE, Key::ArrowUp);
+        assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "", "nothing sent yet");
+        h.frame(vec![Event::Text("latch the lamp".into())]);
+        h.key(Modifiers::NONE, Key::Enter);
+        h.frame(vec![]);
+        assert!(h.has("agent stop"), "sent");
+        h.press("agent stop");
+        h.wait(0.2);
+        let v = h.app.sim.as_mut().unwrap();
+        assert_eq!(v.instruct.draft, "latch the lamp", "stopped: it is back");
+        // Typed over: Up leaves it alone.
+        v.instruct.draft = "run the pump".into();
+        h.click(h.rect("agent instruction").center());
+        // The box holds the arrow keys from the frame after it took the
+        // focus (egui sets a text box's key filter once it has it).
+        h.frame(vec![]);
+        h.key(Modifiers::NONE, Key::ArrowUp);
+        assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "run the pump");
+        // Emptied: Up brings the last one back, to go on typing at its end.
+        h.app.sim.as_mut().unwrap().instruct.draft.clear();
+        h.frame(vec![]);
+        h.key(Modifiers::NONE, Key::ArrowUp);
+        assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "latch the lamp");
+        h.frame(vec![Event::Text(" twice".into())]);
+        assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "latch the lamp twice");
+    }
+
     /// Every outcome the tab can show, with long words, and the tab while
     /// the Agent fixes an answer: the panels keep their width throughout.
     #[test]
