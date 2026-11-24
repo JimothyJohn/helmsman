@@ -15,7 +15,7 @@
 //! GET  /api/devices                       device links: up, down (why), unknown, address; `configurator` (its profile's `configure` name or null, no contact with the unit); for a device by its profile `transport`; `health` (healthy, slow, lost), `poll_ms` and `measured_ms` once the link reports
 //! GET  /api/devices/{id}/config          facts, export, saved configuration and drift of a device with a configurator; PUT/DELETE .../config/password and POST .../config/set|restart|import|password|snapshot need an engineer session (see [`devconf`])
 //! GET  /api/adapter                       the box's EtherNet/IP adapter: {protocol, bind, on}; `bind` is the address it listens on, absent when it is off
-//! POST /api/devices/discover              token or session: one scan of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
+//! POST /api/devices/discover[?address=A]  token or session: one scan (or, with address, one host asked directly) of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
 //! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}

@@ -389,26 +389,134 @@ impl Seen {
     }
 }
 
+/// The IPv4 addresses `text` gives this host: `ifconfig` (`inet A netmask
+/// ...`, or the old Linux `inet addr:A`) or `ip -o -4 addr` (`inet A/24
+/// ...`). Loopback, unspecified, multicast and broadcast addresses are
+/// left out (nothing is on those wires), each address is listed once, in
+/// the order given. Lines without an `inet` token (IPv6-only interfaces,
+/// banners, garbage) give nothing.
+#[must_use]
+pub fn parse_local_addrs(text: &str) -> Vec<Ipv4Addr> {
+    let mut out: Vec<Ipv4Addr> = Vec::new();
+    for line in text.lines() {
+        let mut toks = line.split_whitespace();
+        while let Some(t) = toks.next() {
+            if t != "inet" {
+                continue;
+            }
+            let Some(a) = toks.next() else { break };
+            let a = a.strip_prefix("addr:").unwrap_or(a);
+            let a = a.split_once('/').map_or(a, |(ip, _)| ip);
+            if let Ok(ip) = a.parse::<Ipv4Addr>()
+                && !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && !ip.is_broadcast()
+                && !out.contains(&ip)
+            {
+                out.push(ip);
+            }
+        }
+    }
+    out
+}
+
+/// This host's non-loopback IPv4 addresses, read the way
+/// [`host_arp_table`] reads the ARP table: what `ip -o -4 addr` prints,
+/// else `ifconfig`. Empty when neither runs (Windows, a minimal image):
+/// the sweep then falls back to one unbound send.
+#[must_use]
+pub fn host_local_addrs() -> Vec<Ipv4Addr> {
+    for (cmd, args) in [("ip", &["-o", "-4", "addr"][..]), ("ifconfig", &[][..])] {
+        if let Ok(out) = std::process::Command::new(cmd).args(args).output()
+            && out.status.success()
+        {
+            let found = parse_local_addrs(&String::from_utf8_lossy(&out.stdout));
+            if !found.is_empty() {
+                return found;
+            }
+        }
+    }
+    Vec::new()
+}
+
 /// One `ListIdentity` sweep with `r`'s target and window: every
 /// EtherNet/IP device that answered, in address order, each at most once
 /// (the first reply wins), with its MAC from the ARP table read after the
-/// sweep. Read-only on the network: nothing is sent but the one request.
+/// sweep. Read-only on the network: nothing is sent but the requests.
+/// A sweep to the limited broadcast is asked once from each of the host's
+/// IPv4 addresses ([`host_local_addrs`]), because a broadcast leaves on
+/// the default route's interface only; any other target (a test's, a
+/// unicast) is asked once.
 ///
 /// # Errors
 /// No sweep target, or a socket error.
 pub fn discover(r: &Resolver) -> io::Result<Vec<Seen>> {
+    let sources = r.sweep.map(sources_for).unwrap_or_default();
+    discover_from(r, &sources)
+}
+
+/// The addresses a sweep to `target` is asked from: the host's own for
+/// the limited broadcast, none (one unbound socket) for anything else.
+fn sources_for(target: SocketAddrV4) -> Vec<Ipv4Addr> {
+    if target.ip().is_broadcast() {
+        host_local_addrs()
+    } else {
+        Vec::new()
+    }
+}
+
+/// [`discover`], asking from each of `sources` (a socket bound to each);
+/// none: one unbound socket, the host's default route.
+///
+/// # Errors
+/// No sweep target, or a socket error.
+pub fn discover_from(r: &Resolver, sources: &[Ipv4Addr]) -> io::Result<Vec<Seen>> {
     let Some(target) = r.sweep else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "no ListIdentity sweep target",
         ));
     };
-    let found = sweep(target, r.window)?;
+    let found = sweep(target, r.window, sources)?;
     let table = (r.arp)().unwrap_or_default();
+    Ok(seen_from(found.found, &table, None))
+}
+
+/// One `ListIdentity` to the one host `address` (the encapsulation port
+/// of `r`'s sweep target), for a device that does not answer broadcasts:
+/// what it said itself, if anything.
+///
+/// # Errors
+/// No sweep target, or a socket error; `address` a multicast, broadcast
+/// or unspecified address (nothing is sent).
+pub fn discover_one(r: &Resolver, address: Ipv4Addr) -> io::Result<Option<Seen>> {
+    let Some(target) = r.sweep else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no ListIdentity sweep target",
+        ));
+    };
+    if address.is_multicast() || address.is_broadcast() || address.is_unspecified() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a device address",
+        ));
+    }
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    let to = SocketAddrV4::new(address, target.port());
+    let found = helmsman_proto::discover::sweep(&socket, to, r.window)?;
+    let table = (r.arp)().unwrap_or_default();
+    Ok(seen_from(found.found, &table, Some(address)).into_iter().next())
+}
+
+/// The devices `found` holds, each address once (the first reply wins),
+/// in address order; with `only`, just that address's.
+fn seen_from(found: Vec<helmsman_proto::discover::Found>, table: &str, only: Option<Ipv4Addr>) -> Vec<Seen> {
     let mut out: Vec<Seen> = Vec::new();
-    for f in found.found {
+    for f in found {
         let SocketAddr::V4(from) = f.from else { continue };
-        if out.iter().any(|s| s.address == *from.ip()) {
+        if only.is_some_and(|a| a != *from.ip()) || out.iter().any(|s| s.address == *from.ip()) {
             continue;
         }
         let id = f.identity;
@@ -419,7 +527,7 @@ pub fn discover(r: &Resolver) -> io::Result<Vec<Seen>> {
             .collect();
         out.push(Seen {
             address: *from.ip(),
-            mac: arp_mac_of(&table, *from.ip()),
+            mac: arp_mac_of(table, *from.ip()),
             vendor_id: id.vendor_id,
             product_code: id.product_code,
             device_type: id.device_type,
@@ -429,14 +537,45 @@ pub fn discover(r: &Resolver) -> io::Result<Vec<Seen>> {
         });
     }
     out.sort_by_key(|s| s.address);
-    Ok(out)
+    out
 }
 
-/// One `ListIdentity` to `target`, the replies gathered for `window`.
-fn sweep(target: SocketAddrV4, window: Duration) -> io::Result<helmsman_proto::discover::Sweep> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
-    socket.set_broadcast(true)?;
-    helmsman_proto::discover::sweep(&socket, target, window)
+/// One `ListIdentity` to `target`, the replies gathered for `window`:
+/// from a socket bound to each of `sources` at once (their windows
+/// overlap), the replies joined. A source that cannot be bound or sent
+/// from (an interface that went away) is passed over; with no source, or
+/// none that worked, one unbound socket asks.
+fn sweep(
+    target: SocketAddrV4,
+    window: Duration,
+    sources: &[Ipv4Addr],
+) -> io::Result<helmsman_proto::discover::Sweep> {
+    let ask = |from: Ipv4Addr| -> io::Result<helmsman_proto::discover::Sweep> {
+        let socket = UdpSocket::bind((from, 0))?;
+        socket.set_broadcast(true)?;
+        helmsman_proto::discover::sweep(&socket, target, window)
+    };
+    if sources.is_empty() {
+        return ask(Ipv4Addr::UNSPECIFIED);
+    }
+    let results: Vec<io::Result<helmsman_proto::discover::Sweep>> = std::thread::scope(|s| {
+        let handles: Vec<_> = sources.iter().map(|&a| s.spawn(move || ask(a))).collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(io::Error::other("a sweep thread failed")))
+            })
+            .collect()
+    });
+    let mut all = helmsman_proto::discover::Sweep::default();
+    let mut any = false;
+    for r in results.into_iter().flatten() {
+        any = true;
+        all.found.extend(r.found);
+        all.rejected.extend(r.rejected);
+    }
+    if any { Ok(all) } else { ask(Ipv4Addr::UNSPECIFIED) }
 }
 
 /// The hosts `table` (either format) lists with a complete entry, in
@@ -518,6 +657,37 @@ impl ModbusSeen {
 /// No probe configured, or the ARP table could not be read.
 pub fn probe_modbus(r: &Resolver) -> io::Result<Vec<ModbusSeen>> {
     probe_until(r, None)
+}
+
+/// The Modbus identification probe to the one host `address`, whether or
+/// not the ARP table lists it: what it answered, if anything.
+///
+/// # Errors
+/// No probe configured; `address` a multicast, broadcast or unspecified
+/// address (nothing is sent).
+pub fn probe_modbus_one(r: &Resolver, address: Ipv4Addr) -> io::Result<Option<ModbusSeen>> {
+    let Some(p) = &r.modbus else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no Modbus identification probe",
+        ));
+    };
+    if address.is_multicast() || address.is_broadcast() || address.is_unspecified() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a device address",
+        ));
+    }
+    let addr = SocketAddr::V4(SocketAddrV4::new(address, p.port));
+    let Ok(id) = crate::modbus::identify(addr, p.unit, p.per_host) else {
+        return Ok(None);
+    };
+    let table = (r.arp)().unwrap_or_default();
+    Ok(Some(ModbusSeen {
+        address,
+        mac: arp_mac_of(&table, address),
+        identification: id,
+    }))
 }
 
 /// [`probe_modbus`], starting no further host once one answers as
@@ -689,7 +859,7 @@ pub fn resolve(id: &Identity, port: u16, r: &Resolver) -> io::Result<SocketAddrV
             if let Some(target) = r.sweep {
                 // Every EtherNet/IP device answers a ListIdentity, and
                 // answering puts it in the ARP table.
-                let _ = sweep(target, r.window);
+                let _ = sweep(target, r.window, &sources_for(target));
                 let table = (r.arp)()?;
                 if let Some(ip) = arp_lookup(&table, *mac) {
                     return Ok(SocketAddrV4::new(ip, port));
@@ -711,7 +881,7 @@ pub fn resolve(id: &Identity, port: u16, r: &Resolver) -> io::Result<SocketAddrV
                     format!("{id}: no ListIdentity sweep to find it with"),
                 ));
             };
-            let found = sweep(target, r.window)?;
+            let found = sweep(target, r.window, &sources_for(target))?;
             let hit = found.found.iter().find(|f| {
                 f.identity.vendor_id == *vendor
                     && f.identity.product_code == *product
@@ -883,6 +1053,51 @@ mod tests {
             arp_lookup("00:90:e8:7e:af:be 10.0.0.57\n", E1213),
             Some(Ipv4Addr::new(10, 0, 0, 57))
         );
+    }
+
+    const IFCONFIG: &str = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384\n\tinet 127.0.0.1 netmask 0xff000000\n\tinet6 ::1 prefixlen 128\nen0: flags=8863<UP> mtu 1500\n\tinet 192.168.3.10 netmask 0xffffff00 broadcast 192.168.3.255\n\tinet 192.168.33.10 netmask 0xffffff00 broadcast 192.168.33.255\nen1: flags=8863<UP>\n\tinet6 fe80::1%en1 prefixlen 64\n\tinet 10.0.0.41 netmask 0xffffff00 broadcast 10.0.0.255\n";
+    const IP_ADDR: &str = "1: lo    inet 127.0.0.1/8 scope host lo\n2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n3: eth1    inet 192.168.3.10/24 scope global eth1\n";
+
+    #[test]
+    fn local_addresses_read_from_ifconfig_and_ip_and_skip_loopback() {
+        let a = |x: &str| x.parse::<Ipv4Addr>().unwrap();
+        assert_eq!(
+            parse_local_addrs(IFCONFIG),
+            vec![a("192.168.3.10"), a("192.168.33.10"), a("10.0.0.41")]
+        );
+        assert_eq!(parse_local_addrs(IP_ADDR), vec![a("10.0.0.5"), a("192.168.3.10")]);
+        assert_eq!(
+            parse_local_addrs("\tinet addr:172.16.0.9  Bcast:172.16.0.255  Mask:255.255.255.0\n"),
+            vec![a("172.16.0.9")]
+        );
+        assert_eq!(
+            parse_local_addrs("inet 10.0.0.1\ninet 10.0.0.1/24\n"),
+            vec![a("10.0.0.1")],
+            "each address once"
+        );
+    }
+
+    #[test]
+    fn local_addresses_survive_hostile_text() {
+        for bad in [
+            "",
+            "garbage",
+            "inet",
+            "inet ",
+            "inet 999.1.1.1",
+            "inet 10.0.0",
+            "inet 10.0.0.1.5",
+            "inet /24",
+            "inet 01.2.3.4",
+            "\0\0\0 inet \0",
+            "inet6 fe80::1 prefixlen 64\ninet6 ::1",
+            "inet 127.0.0.1 netmask 0xff000000\ninet 127.5.5.5/8",
+            "inet 0.0.0.0\ninet 255.255.255.255\ninet 224.0.0.1\ninet 239.1.1.1/32",
+        ] {
+            assert_eq!(parse_local_addrs(bad), Vec::<Ipv4Addr>::new(), "{bad:?}");
+        }
+        let big = "inet 10.0.0.1\n".repeat(100_000) + &"x".repeat(1 << 20);
+        assert_eq!(parse_local_addrs(&big).len(), 1);
     }
 
     fn fixed(table: &'static str) -> Resolver {

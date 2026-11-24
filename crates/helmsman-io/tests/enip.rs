@@ -855,6 +855,72 @@ fn a_scan_lists_the_simulated_e1213_once_with_its_identity() {
     assert_eq!(seen[0].mac, None);
 }
 
+fn scan_resolver(encap: std::net::SocketAddrV4) -> helmsman_io::resolve::Resolver {
+    helmsman_io::resolve::Resolver {
+        arp: Box::new(|| Ok(String::new())),
+        sweep: Some(encap),
+        window: Duration::from_millis(300),
+        modbus: None,
+    }
+}
+
+/// `scan-every-interface`: a sweep asked from two local sockets, both
+/// reaching the one device, lists it once; with no local address to ask
+/// from, one unbound socket asks and the device is listed all the same.
+#[test]
+fn a_sweep_from_two_sockets_lists_a_device_once_and_none_falls_back() {
+    let sim = E1213Sim::start().unwrap();
+    let encap: std::net::SocketAddrV4 = sim.endpoint().parse().unwrap();
+    let lo = *encap.ip();
+    let r = scan_resolver(encap);
+    let seen = helmsman_io::resolve::discover_from(&r, &[lo, lo]).unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].address, lo);
+    let seen = helmsman_io::resolve::discover_from(&r, &[]).unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+}
+
+/// A source that cannot be bound (an address this host does not have) is
+/// passed over, and when none works the unbound ask still finds the device.
+#[test]
+fn a_source_that_cannot_be_bound_is_passed_over() {
+    let sim = E1213Sim::start().unwrap();
+    let encap: std::net::SocketAddrV4 = sim.endpoint().parse().unwrap();
+    let gone = std::net::Ipv4Addr::new(192, 0, 2, 77); // TEST-NET-1: never ours
+    let r = scan_resolver(encap);
+    let seen = helmsman_io::resolve::discover_from(&r, &[gone, *encap.ip()]).unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let seen = helmsman_io::resolve::discover_from(&r, &[gone]).unwrap();
+    assert_eq!(seen.len(), 1, "falls back to the unbound ask: {seen:?}");
+}
+
+/// A direct ask finds the device at its address; a group address is
+/// refused before anything is sent, and so is a box with no sweep.
+#[test]
+fn a_direct_ask_finds_the_device_and_refuses_group_addresses() {
+    let sim = E1213Sim::start().unwrap();
+    let encap: std::net::SocketAddrV4 = sim.endpoint().parse().unwrap();
+    let r = scan_resolver(encap);
+    let s = helmsman_io::resolve::discover_one(&r, *encap.ip())
+        .unwrap()
+        .unwrap();
+    assert_eq!((s.vendor_id, s.product_code), (991, 515));
+    for bad in [
+        std::net::Ipv4Addr::BROADCAST,
+        std::net::Ipv4Addr::UNSPECIFIED,
+        std::net::Ipv4Addr::new(224, 0, 0, 1),
+        std::net::Ipv4Addr::new(239, 255, 255, 250),
+    ] {
+        let e = helmsman_io::resolve::discover_one(&r, bad).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{bad}");
+    }
+    let off = helmsman_io::resolve::Resolver {
+        sweep: None,
+        ..scan_resolver(encap)
+    };
+    assert!(helmsman_io::resolve::discover_one(&off, *encap.ip()).is_err());
+}
+
 /// The E1213's layout with a 3-byte configuration assembly: a block that
 /// takes its channel setup from the controller, as the Murrelektronik
 /// IMPACT67 E DIO8 does with its instance 109 out of the box.
