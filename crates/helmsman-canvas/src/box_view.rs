@@ -46,6 +46,9 @@ struct BoxSeen {
     warned: Option<String>,
 }
 
+// Each flag is its own fact (the node's token, watching a node, the
+// Agent's change waiting, ...).
+#[allow(clippy::struct_excessive_bools)]
 pub struct BoxView {
     pub state: BoxState,
     /// The Messages tab's log.
