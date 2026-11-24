@@ -1605,8 +1605,8 @@ impl DevicesUi {
             let f = ui
                 .add(
                     egui::TextEdit::singleline(&mut self.ask_address)
-                        .hint_text("192.168.33.1")
-                        .desired_width(110.0),
+                        .hint_text("IP address")
+                        .desired_width(150.0),
                 )
                 .tip(ask_tip);
             chrome.hit("devices ask address", f.rect);
