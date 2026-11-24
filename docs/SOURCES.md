@@ -380,7 +380,10 @@ into the code.
   packing with zero padding (§6.1 p.11), 0x10 Write Multiple Registers (§6.12
   p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
   application layer runs over RTU (`rtu.rs`), which also takes reply lengths
-  from it.
+  from it. The edge node's plans (`crates/helmsman-nodecore/src/ioplan.rs`)
+  keep to the same limits: 125 registers a read (§6.3 p.15, §6.4 p.16),
+  123 a write (§6.12 p.30), and 0x0F Write Multiple Coils (§6.11 p.29, which
+  `sim.rs` answers since the node's map work).
 - **Gateway exceptions** (card `gateway-unit-down`;
   `helmsman-io` `driver::Error::is_link`): the exception code table (§7
   pp.47-49) lists 0x0A "Gateway Path Unavailable" (the gateway could not
