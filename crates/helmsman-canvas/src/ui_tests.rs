@@ -6081,6 +6081,189 @@ mod boxed {
         kept(&h, "back to the code");
     }
 
+    /// A page that watches a Skipper: the Devices tab has one row for its
+    /// map, at the panel's default width, and its button opens a window
+    /// (the panel does not widen) where the map is edited, checked and,
+    /// once every device answered that exact text, downloaded. The Skipper
+    /// is the real router (`node_map_tests::Skipper`).
+    #[test]
+    fn a_skippers_map_is_checked_and_downloaded_from_a_window_not_the_panel() {
+        use crate::box_projects::PCall;
+        use crate::node_map_tests::{Skipper, TOKEN};
+        use crate::review::Session;
+        use helmsman_nodecore::check::Verdict as Said;
+
+        const MAP: &str = "device rio modbus-tcp 192.168.3.60\ndevice sim modbus-tcp 192.168.3.10:1502\nin estop bool rio di:0\n";
+        let mut sk = Skipper::new();
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        {
+            let b = h.app.boxv.as_mut().unwrap();
+            b.state.io_map = Some(sk.view.io_map.clone());
+            b.state.io_map_node = true;
+        }
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("token".into()),
+            role: "engineer".into(),
+        });
+        // Docked right: a tab on each side, so both panes are measured.
+        h.app.chrome.dock(Pane::Io, true);
+        h.wait(0.3);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(h.has("node map open"), "the row is on a Skipper's Devices tab");
+        let grew = |h: &Harness| {
+            (
+                h.rect("left").right() - left.right(),
+                right.left() - h.rect("right").left(),
+            )
+        };
+        let (l, r) = grew(&h);
+        assert!(
+            (0.0..=8.0).contains(&l) && (0.0..=8.0).contains(&r),
+            "row: {l} {r}"
+        );
+        assert!(
+            h.rect("node map open").right() <= h.rect("left").right(),
+            "the button is inside the panel"
+        );
+        assert!(!h.has("node map window"), "closed until asked for");
+
+        // What the page asks of the Skipper goes through the real router and
+        // its answers come back through the page, a frame at a time.
+        let serve = |h: &mut Harness, sk: &mut Skipper| {
+            let reqs = std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent);
+            for r in reqs {
+                let PCall::NodeMap(op) = r.call else { continue };
+                let (status, body) = sk.call(&r, Some(TOKEN));
+                h.app
+                    .boxv
+                    .as_mut()
+                    .unwrap()
+                    .devices_ui
+                    .node_map
+                    .answer(op, status, &body);
+            }
+            h.wait(0.2);
+        };
+        h.press("node map open");
+        h.wait(0.3);
+        serve(&mut h, &mut sk);
+        for k in ["node map window", "node map text", "node map check"] {
+            assert!(h.has(k), "{k}");
+        }
+        assert!(!h.has("node map download"), "nothing checked yet");
+        let (l, r) = grew(&h);
+        assert!(
+            (0.0..=8.0).contains(&l) && (0.0..=8.0).contains(&r),
+            "window: {l} {r}"
+        );
+
+        // Edit, check: one device answers and one does not.
+        h.app.boxv.as_mut().unwrap().devices_ui.node_map.edit(MAP.into());
+        h.wait(0.2);
+        h.press("node map check");
+        h.wait(0.2);
+        serve(&mut h, &mut sk);
+        sk.says(0, Said::Answered { ms: 4 });
+        sk.says(1, Said::Failed("connect timed out after 3 s <b>x</b>".into()));
+        sk.finish();
+        for _ in 0..4 {
+            h.wait(1.1);
+            serve(&mut h, &mut sk);
+        }
+        assert!(
+            h.has("node map device rio") && h.has("node map device sim"),
+            "every device is listed"
+        );
+        assert!(
+            !h.has("node map download"),
+            "a device that did not answer holds it back"
+        );
+        assert!(h.has("node map discard"), "an edited map can be thrown away");
+        let small = h.small_text();
+        assert!(small.is_empty(), "text below the minimum: {small:?}");
+        let (l, r) = grew(&h);
+        assert!(
+            (0.0..=8.0).contains(&l) && (0.0..=8.0).contains(&r),
+            "failed check: {l} {r}"
+        );
+
+        // Check again; now both answer, and Download appears.
+        h.press("node map check");
+        h.wait(0.2);
+        serve(&mut h, &mut sk);
+        sk.says(0, Said::Answered { ms: 4 });
+        sk.says(1, Said::Answered { ms: 9 });
+        sk.finish();
+        for _ in 0..4 {
+            h.wait(1.1);
+            serve(&mut h, &mut sk);
+        }
+        assert!(h.has("node map download"), "every device answered this text");
+        let small = h.small_text();
+        assert!(small.is_empty(), "text below the minimum: {small:?}");
+        let (l, r) = grew(&h);
+        assert!(
+            (0.0..=8.0).contains(&l) && (0.0..=8.0).contains(&r),
+            "passed check: {l} {r}"
+        );
+
+        // The text changes by one character: Download goes.
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .devices_ui
+            .node_map
+            .edit(format!("{MAP}#"));
+        h.wait(0.3);
+        assert!(!h.has("node map download"));
+        h.app.boxv.as_mut().unwrap().devices_ui.node_map.edit(MAP.into());
+        h.wait(0.3);
+        assert!(h.has("node map download"), "and comes back with the checked text");
+
+        h.press("node map download");
+        h.wait(0.2);
+        serve(&mut h, &mut sk);
+        assert_eq!(sk.view.io_map, MAP, "the Skipper has the map");
+        assert!(!h.has("node map download"));
+        assert!(h.has("node map note"), "it says the Skipper is restarting");
+    }
+
+    /// A page without a token cannot check or download, and says why; a
+    /// box's Devices tab has no Skipper row.
+    #[test]
+    fn without_a_token_the_skipper_window_says_what_is_needed_and_a_box_has_no_row() {
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(!h.has("node map open"), "a box edits its map as a project file");
+        {
+            let b = h.app.boxv.as_mut().unwrap();
+            b.state.io_map = Some("device rio modbus-tcp 192.168.3.60\n".into());
+            b.state.io_map_node = true;
+        }
+        h.wait(0.3);
+        h.press("node map open");
+        h.wait(0.3);
+        assert!(h.has("node map window") && h.has("node map check"));
+        h.press("node map check");
+        h.wait(0.3);
+        assert!(
+            h.app.boxv.as_ref().unwrap().psent.iter().all(|r| !matches!(
+                r.call,
+                crate::box_projects::PCall::NodeMap(crate::node_map::NodeOp::Check)
+            )),
+            "no check is sent that the Skipper would refuse"
+        );
+        let small = h.small_text();
+        assert!(small.is_empty(), "text below the minimum: {small:?}");
+    }
+
     /// The Devices tab on a box: the map the box runs, each device with
     /// the link state the box reports and its points' live values; adding
     /// a device needs a project open and an engineer, so here the menu

@@ -1012,6 +1012,8 @@ pub struct DevicesUi {
     /// The vendor's file for the agent, beside a found device the library
     /// lacks (`device_vendor.rs`).
     pub vendor: crate::device_vendor::VendorUi,
+    /// A Skipper's map, edited and sent from a window (`node_map.rs`).
+    pub node_map: crate::node_map::NodeMapUi,
     /// A found device's address to the profile the project saved for it
     /// (file name and text): the view fills it in each frame, and Add
     /// offers it.

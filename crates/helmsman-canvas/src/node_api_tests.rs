@@ -54,7 +54,7 @@ fn the_canvas_token_header_opens_a_nodes_writes() {
     assert_eq!(r.status, 401);
 }
 
-fn view() -> NodeView {
+pub(crate) fn view() -> NodeView {
     NodeView {
         module: Some(ModuleView {
             name: "chase".into(),

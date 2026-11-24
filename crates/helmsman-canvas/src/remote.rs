@@ -784,6 +784,9 @@ pub struct BoxState {
     /// The map the box runs, as last read (`None` until read, or when the
     /// box runs none).
     pub io_map: Option<String>,
+    /// The map came from a Skipper (its reply says `"snapshot":"node"`; a
+    /// box's has no such field), so the Devices tab can send it a map.
+    pub io_map_node: bool,
     /// The last read of each failed, so what shows is old.
     devices_stale: bool,
     io_map_stale: bool,
@@ -856,6 +859,7 @@ impl BoxState {
             devices: Vec::new(),
             adapter: None,
             io_map: None,
+            io_map_node: false,
             devices_stale: false,
             io_map_stale: false,
             devs: DevicesPoll::Answered(None),
@@ -1277,16 +1281,15 @@ impl BoxState {
                 // failure keeps the map that was read, marked old.
                 if r.as_ref().is_err_and(|e| e == "HTTP 404") {
                     self.io_map = None;
+                    self.io_map_node = false;
                     self.io_map_stale = false;
                 } else {
-                    let text = r
-                        .ok()
-                        .as_deref()
-                        .and_then(parse)
-                        .and_then(|j| j["text"].as_str().map(str::to_string));
+                    let j = r.ok().as_deref().and_then(parse);
+                    let text = j.as_ref().and_then(|j| j["text"].as_str().map(str::to_string));
                     self.io_map_stale = text.is_none();
                     if text.is_some() {
                         self.io_map = text;
+                        self.io_map_node = j.is_some_and(|j| j["snapshot"].as_str() == Some("node"));
                     }
                 }
             }
