@@ -647,7 +647,11 @@ pub fn saying(f: &Front) -> String {
     };
     if happened {
         return match f.fault {
-            Fault::HighStuck => format!("{} Peak {} m of {DEPTH:.0} m.", f.fault.outcome(), helmsman_iec::shown_real(f.peak)),
+            Fault::HighStuck => format!(
+                "{} Peak {} m of {DEPTH:.0} m.",
+                f.fault.outcome(),
+                helmsman_iec::shown_real(f.peak)
+            ),
             _ => f.fault.outcome().to_string(),
         };
     }

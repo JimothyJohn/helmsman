@@ -1555,7 +1555,14 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
 fn chart(ui: &mut egui::Ui, c: &Chart) {
     let t = theme(ui);
     let secs = (c.end_ms.saturating_sub(c.start_ms)) as f64 / 1000.0;
-    ui.label(RichText::new(format!("replay #{} over {} s of recorded inputs", c.id, helmsman_iec::shown_real(secs))).color(t.muted));
+    ui.label(
+        RichText::new(format!(
+            "replay #{} over {} s of recorded inputs",
+            c.id,
+            helmsman_iec::shown_real(secs)
+        ))
+        .color(t.muted),
+    );
     for f in &c.faults {
         ui.colored_label(
             crate::theme::theme(ui).ink(RED),

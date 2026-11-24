@@ -368,7 +368,11 @@ mod tests {
         assert_eq!(Value::Real(49.873_512).shown(), "49.9");
         assert_eq!(Value::Int(12345).shown(), "12345");
         assert_eq!(Value::Bool(true).shown(), "TRUE");
-        assert_eq!(Value::Real(49.873_512_f32 as f64).to_string(), "49.873512", "Display still round-trips");
+        assert_eq!(
+            Value::Real(49.873_512_f32 as f64).to_string(),
+            "49.873512",
+            "Display still round-trips"
+        );
     }
 
     #[test]
