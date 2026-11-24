@@ -6375,6 +6375,160 @@ mod boxed {
         ));
     }
 
+    /// Ask beside Scan: only one device's IPv4 address is sent, as
+    /// `?address=`; what answers joins the list (once per address), and
+    /// no answer or a refusal is said in words.
+    #[test]
+    fn ask_on_a_box_sends_one_address_and_lists_the_answer() {
+        use crate::box_projects::PCall;
+        use crate::review::Answer;
+        use eframe::egui::Event;
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.2);
+        let asks = |h: &mut Harness| -> Vec<(String, String)> {
+            std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
+                .into_iter()
+                .filter_map(|r| match r.call {
+                    PCall::Ask(a) => Some((a, r.url)),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Anything but a device's address leaves the button dead.
+        for bad in [
+            "",
+            "localhost",
+            "10.0.0",
+            "10.0.0.1:44818",
+            "255.255.255.255",
+            "224.0.0.1",
+            "0.0.0.0",
+        ] {
+            h.app.boxv.as_mut().unwrap().devices_ui.ask_address = bad.into();
+            h.frame(vec![]);
+            h.press("devices ask");
+            h.frame(vec![]);
+            assert!(asks(&mut h).is_empty(), "{bad:?} was sent");
+        }
+        h.app.boxv.as_mut().unwrap().devices_ui.ask_address.clear();
+        h.press("devices ask address");
+        h.frame(vec![Event::Text("192.168.33.1".into())]);
+        h.frame(vec![]);
+        h.press("devices ask");
+        h.frame(vec![]);
+        assert_eq!(
+            asks(&mut h),
+            vec![(
+                "192.168.33.1".to_string(),
+                "/api/devices/discover?address=192.168.33.1".to_string()
+            )]
+        );
+        let body = r#"{ "found": [ { "address": "192.168.33.1", "mapped": null, "library": null,
+            "identities": [ { "protocol": "ethernet-ip", "address": "192.168.33.1", "vendor_id": 1, "product_code": 2,
+              "product_name": "MDrive", "identity": "cip=1:2:0x1" } ] } ], "protocols": [] }"#;
+        let ctx = h.ctx.clone();
+        let answer = |h: &mut Harness, status: u16, body: &str| {
+            h.app.boxv.as_mut().unwrap().step_all(
+                &ctx,
+                Vec::new(),
+                vec![(
+                    PCall::Ask("192.168.33.1".into()),
+                    Answer {
+                        status,
+                        retry_after: None,
+                        body: body.into(),
+                    },
+                )],
+                h.time,
+            );
+        };
+        answer(&mut h, 200, body);
+        answer(&mut h, 200, body);
+        h.frame(vec![]);
+        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
+        assert_eq!(ui.found.len(), 1, "an address is listed once");
+        assert_eq!(ui.found[0].product_name, "MDrive");
+        assert_eq!(ui.ask_note, None);
+        assert!(h.has("network 192.168.33.1"));
+        answer(&mut h, 200, r#"{ "found": [] }"#);
+        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
+        assert_eq!(ui.found.len(), 1, "no answer leaves the list");
+        assert_eq!(
+            ui.ask_note.as_deref(),
+            Some("No device answered at 192.168.33.1.")
+        );
+        answer(
+            &mut h,
+            400,
+            r#"{"error":"address must be one IPv4 address\u0007"}"#,
+        );
+        assert_eq!(
+            h.app.boxv.as_ref().unwrap().devices_ui.ask_note.as_deref(),
+            Some("400: address must be one IPv4 address")
+        );
+        answer(&mut h, 200, "[[[");
+        assert!(h.app.boxv.as_ref().unwrap().devices_ui.ask_note.is_some());
+    }
+
+    /// In the simulation there is no network: Ask says so and lists nothing.
+    #[test]
+    fn ask_in_the_simulation_says_there_is_no_network() {
+        use eframe::egui::Event;
+        let mut h = Harness::new(App::sim());
+        h.messages();
+        h.press("pane devices");
+        h.wait(0.2);
+        h.press("devices ask address");
+        h.frame(vec![Event::Text("192.168.33.1".into())]);
+        h.frame(vec![]);
+        h.press("devices ask");
+        h.frame(vec![]);
+        let ui = &h.app.sim.as_ref().unwrap().devices_ui;
+        assert!(ui.found.is_empty(), "{:?}", ui.found);
+        assert!(
+            ui.ask_note.as_deref().is_some_and(|n| n.contains("no network")),
+            "{:?}",
+            ui.ask_note
+        );
+    }
+
+    /// The Ask row at the panel's default width: both controls sit inside
+    /// the panel that holds them, with a note showing as well.
+    #[test]
+    fn the_ask_row_fits_the_panel_at_its_default_width() {
+        let mut h = Harness::new(App::sim());
+        h.messages();
+        h.app.chrome.dock(crate::editor::Pane::Io, true);
+        h.wait(0.3);
+        h.press("pane devices");
+        h.wait(0.3);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        h.app.sim.as_mut().unwrap().devices_ui.ask_note = Some(
+            "400: address must be one device's address, not a multicast, broadcast or unspecified one".into(),
+        );
+        h.app.sim.as_mut().unwrap().devices_ui.ask_address = "192.168.100.100".into();
+        h.wait(0.3);
+        let (field, button) = (h.rect("devices ask address"), h.rect("devices ask"));
+        assert!(
+            field.right() < button.left() + 1.0 || button.top() > field.top(),
+            "side by side or wrapped, never overlapping: {field:?} {button:?}"
+        );
+        assert!(
+            button.right() <= 8.0 + 236.0,
+            "the Ask row reaches {} pt, past the 236 pt default",
+            button.right()
+        );
+        let l = h.rect("left").right() - left.right();
+        let r = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&l), "the left pane grew {l} pt");
+        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
+    }
+
     #[test]
     fn a_live_box_is_drawn_clicked_and_read_only_and_losing_it_offers_the_simulation() {
         let bench = Bench::new();

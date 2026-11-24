@@ -181,7 +181,17 @@ scan; the scheduler bounds how often.
   EtherNet/IP list) and `modbus` stay for one release for the canvas in
   the field. The PROFINET Identify is not run by any test on a wire
   (`resolve::profinet_seen` reads the frames and is tested on built
-  ones).
+  ones). The `ListIdentity` to the limited broadcast leaves on the
+  default route's interface only, so a sweep to it is asked once from a
+  socket bound to each of the host's non-loopback IPv4 addresses
+  (`resolve::host_local_addrs`: what `ip -o -4 addr`, else `ifconfig`,
+  prints; neither runs, as on Windows: one unbound send, as before), the
+  replies gathered over one window and each address listed once
+  (`scan-every-interface`). `POST /api/devices/discover?address=A` asks
+  the one host `A` (IPv4 only; a multicast, broadcast or unspecified
+  address or anything else is a 400): a unicast `ListIdentity` to it and
+  the Modbus probe to it, answered in the same shape and not kept as the
+  last scan. The Devices tab's Ask row sends it.
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`
   (metadata, never converted), an optional per-input `poll` period, and a

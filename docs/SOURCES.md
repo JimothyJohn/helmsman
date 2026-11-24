@@ -317,6 +317,17 @@ What to pull from it, by page:
   3 is explicit; Exclusive Owner / Input Only / Listen Only definitions
   (Listen Only "can only be attached to an existing Exclusive Owner or Input
   Only Connection"). This glossary is your type vocabulary.
+- **`ListIdentity` sent to one address, not only broadcast
+  (`scan-every-interface`, 2026-11-24): no section cited.** The box asks
+  one host with a unicast `ListIdentity` and the whole LAN with the
+  limited broadcast, both to UDP 44818. The Quick Start extract here was
+  not open when this was written, so the claim rests on what was
+  measured instead: a unicast `ListIdentity` to the Novanta MDrive at
+  192.168.33.1 was answered when the broadcast did not reach it from the
+  default-route interface, and the unicast ask is pinned by
+  `crates/helmsman-io/tests/enip.rs` and
+  `crates/helmsman-plc/tests/discover.rs`. Replace this with the spec's
+  section once someone has read it.
 - **p.28–29, Appendix A (EDS):** which sections matter ([Device] matching on
   the first four Identity attributes excluding minor rev; [Connection
   Manager] `ConnectionN` entries; the three application paths config /
