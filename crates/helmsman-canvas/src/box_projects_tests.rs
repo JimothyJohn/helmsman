@@ -5145,3 +5145,45 @@ fn an_engineer_edits_and_deploys_the_running_module_on_a_skipper() {
     let body: Json = serde_json::from_slice(sent[0].body.as_deref().unwrap()).unwrap();
     assert!(body["source"].as_str().unwrap().contains("slew := 5000;"));
 }
+
+/// 2026-11-24, a box-served page watching a Skipper by address: the
+/// project list asked for before anyone signed in was refused (401), and
+/// the live view, being the Skipper's, never unlocked to ask again, so
+/// the box's projects never showed. The first sign-in asks for them.
+#[test]
+fn the_first_sign_in_asks_for_the_projects_a_locked_box_refused() {
+    let ctx = egui::Context::default();
+    let mut bv = BoxView::new();
+    bv.step_all(&ctx, vec![], vec![], 0.0);
+    let asked = |bv: &mut BoxView| {
+        std::mem::take(&mut bv.psent)
+            .iter()
+            .filter(|q| q.url == "/api/projects")
+            .count()
+    };
+    let _ = asked(&mut bv);
+    // Refused while nobody is signed in: nothing learned.
+    bv.step_all(
+        &ctx,
+        vec![],
+        vec![(
+            crate::box_projects::PCall::List,
+            Answer {
+                status: 401,
+                retry_after: None,
+                body: r#"{"error":"sign in"}"#.into(),
+            },
+        )],
+        0.1,
+    );
+    assert_eq!(bv.projects.available, None);
+    let _ = asked(&mut bv);
+    bv.session = Some(Session {
+        user: Some("nick".into()),
+        role: "engineer".into(),
+    });
+    bv.step_all(&ctx, vec![], vec![], 0.2);
+    assert_eq!(asked(&mut bv), 1, "the sign-in asks for the projects once");
+    bv.step_all(&ctx, vec![], vec![], 0.3);
+    assert_eq!(asked(&mut bv), 0, "and not on every step");
+}

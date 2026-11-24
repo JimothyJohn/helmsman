@@ -1157,6 +1157,25 @@ stack each: 41.9 KiB of stack left, against 45.9 with two). A deploy from
 a headless Chromium through a `?box=` page answered 201 and the node ran
 the edited source.
 
+**The agent for a Skipper (2026-11-24, Nick: "Studio box writes").** A
+Skipper has no agent and no projects: the box on the programming side
+has both. A page that box served, opened with `?box=` naming the Skipper,
+signs in to the box (user and password: projects and the agent) and holds
+the Skipper's token (its writes); each call goes where it belongs (reads
+of the live view and a module deploy to the Skipper, everything else to
+the box). The box needs `--site` for its page to reach another origin
+(its `connect-src` names `http:` then). A project for a Skipper carries
+the Skipper's map as its `io.map` (the same text) and a program that
+binds by name; Deploy saves and checks it on the box, refuses what the
+box's lint holds, and sends the program (its function blocks with it, the
+requirement tests and the map not) to the Skipper as
+`PUT /api/modules/{name}`. The box's approval policy is the box's and is
+not asked: the Skipper takes a write on its token. On the bench, through
+a headless Chromium: a sign-in on the box, the Skipper's token, the agent
+asked "keep the drive disabled with slew 0, and set its run current to
+70" wrote that into the project with a requirement test; Deploy sent it,
+the Skipper answered 201, and the drive's `PR RC` read 70.
+
 The node now binds a program's `VAR_INPUT` and `VAR_OUTPUT` to the map's
 points by name, as a box does, so a program the agent wrote on a box runs
 on a Skipper unchanged (`helmsman-node-p4/src/bind.rs`; the matching and the
