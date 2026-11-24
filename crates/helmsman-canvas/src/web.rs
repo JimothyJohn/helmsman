@@ -785,7 +785,10 @@ impl ProjHttp {
                 .as_ref()
                 .map(|b| JsValue::from(web_sys::js_sys::Uint8Array::from(b.as_slice())));
             let ctype = body.as_ref().map(|_| req.ctype);
-            let answer = fetch(req.method, &req.url, body, ctype)
+            // On a `?box=` page the call goes to that box, as the reads
+            // do: relative, it reached the page's own server (a PUT of a
+            // module answered 501 there, 2026-11-24).
+            let answer = fetch(req.method, &absolute(&req.url), body, ctype)
                 .await
                 .unwrap_or_else(|why| Answer {
                     status: 0,
