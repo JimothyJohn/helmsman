@@ -367,7 +367,7 @@ fn an_edited_module_reaches_the_skippers_router_and_becomes_what_runs() {
     assert_eq!(r.status, 401);
     // Pressing again while one is on its way sends nothing more.
     p.deploy_module();
-    assert!(p.poll().is_empty());
+    assert_eq!(p.poll().len(), 0);
 
     let ok = deployed("drive", NEW.len());
     p.answer(
@@ -421,7 +421,7 @@ fn a_refused_module_keeps_the_edits_and_says_why() {
     p.module.as_mut().unwrap().text = "  \n".into();
     p.deploy = Deploy::Idle;
     p.deploy_module();
-    assert!(p.poll().is_empty());
+    assert_eq!(p.poll().len(), 0);
     assert!(matches!(p.deploy, Deploy::Failed(_)));
 }
 

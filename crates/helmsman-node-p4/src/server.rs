@@ -38,7 +38,7 @@ pub const STREAM_POLL: Duration = Duration::from_millis(100);
 
 /// Connections the API port serves at once. Each open canvas page holds
 /// one for its values stream; with two, a second page left no room for
-/// the first page's reads, which the node reset (2026-11-24, the MDrive
+/// the first page's reads, which the node reset (2026-11-24, the drive
 /// bench). Four leave two pages watching and room for their reads; each
 /// costs about 4 KiB of heap and 2 KiB of the main stack (its task in
 /// `.bss`), and six left 37 KiB of stack against 46 KiB with two.

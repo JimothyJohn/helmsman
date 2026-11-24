@@ -2301,7 +2301,6 @@ impl BoxView {
         }
     }
 
-    #[must_use]
     /// Whether the running module may be edited and deployed here: on a
     /// box or Skipper without projects, for an engineer, once its source
     /// came.
@@ -2381,6 +2380,7 @@ impl BoxView {
         editor::st_editor(ui, id, &mut m.text, &[], &[], MAX_FILE, chrome);
     }
 
+    #[must_use]
     pub fn has_projects(&self) -> bool {
         self.projects.available == Some(true)
     }
@@ -3456,8 +3456,10 @@ impl Body for BoxView {
                 .tip(why);
             chrome.hit("read-only", r.rect);
         });
-        if self.view.is_none() {
-            if let Some(src) = self.state.source() {
+        if self.view.is_none()
+            && let Some(src) = self.state.source()
+        {
+            {
                 let mut src: &str = src;
                 editor::st_editor(
                     ui,
