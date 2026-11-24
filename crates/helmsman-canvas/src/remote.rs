@@ -784,6 +784,9 @@ pub struct BoxState {
     /// The map the box runs, as last read (`None` until read, or when the
     /// box runs none).
     pub io_map: Option<String>,
+    /// The map came from a Skipper (its reply says `"snapshot":"node"`; a
+    /// box's has no such field), so the Devices tab can send it a map.
+    pub io_map_node: bool,
     /// The last read of each failed, so what shows is old.
     devices_stale: bool,
     io_map_stale: bool,
@@ -841,6 +844,12 @@ impl Default for BoxState {
 }
 
 impl BoxState {
+    /// The selected module's source, once fetched.
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
     /// Starts watching: the module list and the values stream.
     #[must_use]
     pub fn new() -> Self {
@@ -856,6 +865,7 @@ impl BoxState {
             devices: Vec::new(),
             adapter: None,
             io_map: None,
+            io_map_node: false,
             devices_stale: false,
             io_map_stale: false,
             devs: DevicesPoll::Answered(None),
@@ -1277,16 +1287,15 @@ impl BoxState {
                 // failure keeps the map that was read, marked old.
                 if r.as_ref().is_err_and(|e| e == "HTTP 404") {
                     self.io_map = None;
+                    self.io_map_node = false;
                     self.io_map_stale = false;
                 } else {
-                    let text = r
-                        .ok()
-                        .as_deref()
-                        .and_then(parse)
-                        .and_then(|j| j["text"].as_str().map(str::to_string));
+                    let j = r.ok().as_deref().and_then(parse);
+                    let text = j.as_ref().and_then(|j| j["text"].as_str().map(str::to_string));
                     self.io_map_stale = text.is_none();
                     if text.is_some() {
                         self.io_map = text;
+                        self.io_map_node = j.is_some_and(|j| j["snapshot"].as_str() == Some("node"));
                     }
                 }
             }
@@ -1370,7 +1379,10 @@ impl BoxState {
                     self.values.failed(now);
                 }
             }
-            Msg::Failed(Stream::Trace) => self.trace.failed(now),
+            Msg::Failed(Stream::Trace) => {
+                self.trace.failed(now);
+                self.relower();
+            }
             Msg::Failed(Stream::Traces) => self.traces.failed(now),
             Msg::Event(Stream::Values, name, data) if name == "agent" => {
                 self.agent = parse(&data);
@@ -1434,10 +1446,71 @@ impl BoxState {
         }
     }
 
+    /// The diagram of a module whose box serves no traced scans (a Skipper
+    /// answers the trace stream 404): the source is compiled here for its
+    /// statement table and laid out from that, so the program is drawn
+    /// (Nick, 2026-11-24: "I'm also still not seeing the output visual
+    /// diagram of the program anywhere"). Only once the trace has failed:
+    /// a box that traces draws from its own table. Its wires carry no
+    /// values until a traced scan comes; the signals do.
+    fn lower_untraced(&mut self, name: &str) {
+        if self.trace.failures == 0 {
+            return;
+        }
+        let Some(src) = self.source.clone() else { return };
+        if self.lowered.as_ref().is_some_and(|l| l.src == src) {
+            return;
+        }
+        if src.trim_start().starts_with('<') {
+            self.problem =
+                Some("this module is a PLCopen XML project; the live view draws Structured Text".into());
+            return;
+        }
+        // Room for any image a node has (its map's whole image each way).
+        let sizes = helmsman_iec::ImageSizes {
+            i: 4096,
+            q: 4096,
+            m: 4096,
+        };
+        let module = helmsman_iec::compile(&src, sizes)
+            .map_err(|e| {
+                e.first()
+                    .map_or_else(|| "it does not compile".to_string(), ToString::to_string)
+            })
+            .and_then(|p| helmsman_diagram::lower(&src, &p.trace_map()).map_err(|e| e.to_string()));
+        match module {
+            Ok(module) => {
+                self.generation += 1;
+                self.problem = None;
+                self.lowered = Some(Lowered {
+                    src,
+                    module,
+                    table: Vec::new(),
+                    generation: self.generation,
+                });
+            }
+            Err(e) => {
+                self.lowered = None;
+                self.problem = Some(format!("cannot draw {name}: {e}"));
+            }
+        }
+    }
+
+    /// Reads the chosen module's source again (a deploy from this page
+    /// changed it on a box that sends no traced scans to say so).
+    pub fn reread_source(&mut self) {
+        if let Some(name) = self.selected.clone() {
+            self.queue
+                .push(Cmd::Get(Fetch::Module(name.clone()), module_url(&name)));
+        }
+    }
+
     /// Lowers the source against the newest scan's table, when either is
     /// new; fetches the source again if the table changed under it.
     fn relower(&mut self) {
-        let (Some(name), Some(scan)) = (self.selected.clone(), self.scan.as_ref()) else {
+        let Some(name) = self.selected.clone() else { return };
+        let Some(scan) = self.scan.as_ref() else {
+            self.lower_untraced(&name);
             return;
         };
         if self.lowered.as_ref().is_some_and(|l| l.table != scan.table) {

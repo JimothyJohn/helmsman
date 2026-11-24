@@ -190,6 +190,15 @@ every RPI; Modbus/TCP gives request/reply per point and no ownership.
 
 ## On the bench (2026-11-02)
 
+**Address since 2026-11-24: 192.168.33.60/24, static, no gateway**
+(Nick: devices go onto the Skipper's subnet, beside the MDrive at
+192.168.33.1). Set through the web console's Ethernet Configuration page
+(`04_2.htm`, form code 42: `IPConfig=0`, `IPAddr`, `Netmask`, `Gateway`,
+then Save/Restart `set_ok.htm`), signed in with the bench password; the
+unit answered at the new address about 15 s after the restart, with
+Modbus/TCP 502, EtherNet/IP 44818 and HTTP 80 open. Addresses below
+(192.168.3.60, 10.0.0.57) are the ones it had when each note was written.
+
 The unit on the bench: E1213, serial TAIGB1106222, firmware **V3.1
 Build19110615**, MAC 00-90-e8-7e-af-be, on the office LAN (10.0.0.x) by
 DHCP at 10.0.0.57 when this was written (its web console, "Ethernet

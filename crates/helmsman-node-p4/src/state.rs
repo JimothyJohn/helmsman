@@ -323,7 +323,7 @@ pub fn link_states(shared: &Shared) -> Vec<LinkState> {
 /// The node's signals: the map's points as the I/O tasks move them (an
 /// input from `inputs`, an output from `outputs`), by name, in the
 /// order the map's image gives them, then the program's ports with their
-/// values. A point on a device whose link is down keeps its last value
+/// values (a port bound to a point by name is that point, listed once). A point on a device whose link is down keeps its last value
 /// and says so (`stale`, with the link's error). The runtime does not
 /// list located variables (`AT %IX0.0`), so the points are read here from
 /// the image.
@@ -349,7 +349,9 @@ pub fn signals_of(
             });
         }
     }
-    out.extend(program.ports().iter().map(|p| {
+    // A port bound to a point by name (bind.rs) is that point: listed once.
+    let bound = |name: &str| map.points.iter().any(|pt| pt.name.eq_ignore_ascii_case(name));
+    out.extend(program.ports().iter().filter(|p| !bound(&p.name)).map(|p| {
         let value = match program.get(&p.name) {
             Some(helmsman_iec::Value::Bool(b)) => Some(SignalValue::Bool(b)),
             Some(helmsman_iec::Value::Int(i)) => Some(SignalValue::Int(i64::try_from(i).unwrap_or(i64::MAX))),
