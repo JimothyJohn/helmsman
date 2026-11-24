@@ -37,7 +37,7 @@ use esp_storage::FlashStorage;
 use helmsman_iec::{Image, ImageSizes, Program, compile};
 use helmsman_node_p4::report::parse_endpoint;
 use helmsman_node_p4::state::{self, DeviceLive, IO_BYTES, Pending, Shared};
-use helmsman_node_p4::{beacon, board, ethernet, flash, io, ota, server};
+use helmsman_node_p4::{beacon, board, check, ethernet, flash, io, ota, server};
 use helmsman_nodecore::api::State;
 use helmsman_nodecore::iomap::{self, IoMap};
 use helmsman_nodecore::ioplan::Plan;
@@ -326,6 +326,10 @@ async fn main(spawner: Spawner) -> ! {
     match ota::fetch_task(stack, ctx) {
         Ok(t) => spawner.spawn(t),
         Err(_) => halt("the firmware task would not spawn").await,
+    }
+    match check::check_task(stack, shared, settings) {
+        Ok(t) => spawner.spawn(t),
+        Err(_) => halt("the check task would not spawn").await,
     }
     if on_trial {
         match ota::confirm_task(ctx) {

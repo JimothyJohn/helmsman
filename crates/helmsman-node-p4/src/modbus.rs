@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpEndpoint, Stack};
-use embassy_time::{Duration, Instant, with_timeout};
+use embassy_time::{Timer, Duration, Instant, with_timeout};
 use embedded_io_async::{Read, Write};
 use helmsman_modbus::{MBAP_LEN, READ_DISCRETE_INPUTS, mbap, pdu, reply};
 
@@ -144,6 +144,29 @@ impl<'a> Client<'a> {
     fn drop_link(&mut self) {
         self.socket.abort();
         self.connected = false;
+    }
+
+    /// Connects and asks nothing: for a device the map reads nothing from
+    /// (the comms check).
+    ///
+    /// # Errors
+    /// The link.
+    pub async fn dial(&mut self) -> Result<(), Error> {
+        self.connect().await
+    }
+
+    /// Ends the connection the way the device expects before the client
+    /// is dropped: a FIN, a moment for it to go, then whatever is left is
+    /// reset. Dropping a socket takes it out of the stack at once, and a
+    /// device left with a half-open connection keeps one of its few
+    /// until its own timeout.
+    pub async fn hang_up(&mut self) {
+        if self.connected {
+            self.socket.close();
+            let _ = with_timeout(Duration::from_millis(500), self.socket.flush()).await;
+        }
+        self.drop_link();
+        Timer::after(Duration::from_millis(20)).await;
     }
 
     /// Sends one request PDU and returns the reply PDU.

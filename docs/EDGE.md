@@ -1063,6 +1063,56 @@ sooner**, which the board must be asked about (item 4 below).
 5. The 16 devices at once (a simulated server on the Studio per address
    alias) against the neighbour-lookup rule above, with half of them absent.
 
+### A map is saved once its devices answered the node (2026-11-24, card `node-comms-check`)
+
+Nick, 2026-11-24: "I do like being able to verify that there's not a comms
+issue before downloading the map to the Skipper", and the download is
+blocked until every device answers. The machine that wrote the map reaching
+a device says nothing about the node reaching it (another subnet, another
+switch port, a device holding its one connection for someone else), so the
+node asks, from its own port.
+
+- **`POST /api/io_map/check`** (the token; `{"text"}` or `text/plain`): the
+  map is parsed (422 with its line, as a save), then the node asks each
+  device in turn and answers 202 at once; 409 while a check runs.
+- **`GET /api/io_map/check`**: `state` (`none`, `running`, `done`),
+  `passed`, `may_save`, `age_ms`, the checked `text`, and a `devices` list
+  with each one's `state` (`waiting`, `answered` with `ms`, `failed` with
+  `error`).
+- **`PUT /api/io_map`** saves a text only when the last check was of exactly
+  that text, every device in it answered, and it finished less than ten
+  minutes ago (`check::FRESH_MS`); otherwise 409 with the reason and the
+  check. The page's form is one button: a text that has not passed is
+  checked (the page reloads while it runs and lists who answered), and the
+  same text sent again once it has passed is saved.
+- **What is asked** (`crates/helmsman-node-p4/src/check.rs`): a Modbus TCP
+  device is connected to and asked for the first read the map names on it
+  (the unit id and the address as well as the cable), or only connected to
+  when the map reads nothing from it; an EtherNet/IP device is connected to
+  and a session is registered and dropped. Nothing is written and no I/O
+  connection is opened: a check moves no output and takes no device from
+  its owner, and it runs beside the node's own I/O. So it does not prove an
+  assembly's size or an output's address; the first scan after the save
+  does, in `/api/devices`.
+- **A device on another subnet is not dialled.** With a static address and
+  no gateway the node fails it at once with the address it needs
+  (`check::off_subnet`), which tells a misaddressed device from a silent
+  one.
+- **The record is in RAM.** A restart forgets it, and a map is then checked
+  again before it is saved. The ESP32 nodes (`crates/helmsman-node`) have
+  no check and save a map as they did.
+
+**On the board, 2026-11-24** (the P4, a four-device map): the E1213 on
+`enip-io` answered in 47 ms and the Studio's Modbus server in 45 ms while
+both were being driven by the running map; 192.168.3.99 was `link: connect
+timed out`; the MDrive's line read "192.168.33.1 is not on this node's
+network (192.168.3.56/24, no gateway): give the device an address there".
+`PUT /api/io_map` of that text was 409 before the check ("has not been
+checked") and after it ("gone, drive did not answer this node"), and the
+node kept running its old map. **Not seen:** a check that passes followed
+by the save; the board went off USB during that run (its serial port left
+the Studio, so not a firmware restart) and the run was not repeated.
+
 ### Updating a node without a cable (2026-11-18)
 
 A node in a cabinet takes new firmware over its network connection. You

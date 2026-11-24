@@ -550,6 +550,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-24
   by: worker (feat/node-multi-device)
 
+- [ ] **A Skipper saves a map only after its devices answered it** — Why it matters: the machine that scans and writes the map reaching a device does not mean the Skipper can (the MDrive answers the Studio and is on a subnet the Skipper is not on), and a map with a silent device used to be found out only after the download (Nick, 2026-11-24: "verify that there's not a comms issue before downloading the map"; blocked until all answer). Built on `feat/node-comms-check` (docs/EDGE.md, "A map is saved once its devices answered the node"): `POST /api/io_map/check` and its `GET`, `PUT /api/io_map` and the page's form saving only the text whose check passed in the last ten minutes, the P4's check task (a Modbus read or an EtherNet/IP session, nothing written, no I/O connection), a device on another subnet failed with the address it needs. On the board 2026-11-24: two devices answered, an absent one timed out, the MDrive was named off-subnet, and the save was refused before and after. Left: (1) a passing check followed by the save, on the board (the P4 went off USB mid-run); (2) the programming side: the canvas has no way yet to send a map to a Skipper (it only reads `/api/io_map`), so Check and Download in the Devices tab, and a box project's map flattened for a Skipper, are a design to agree with Nick first.
+  needs: the P4 back on USB or PoE for (1); an interview with Nick for (2)
+  result: from the Devices tab, a map is checked from the Skipper, the answers are shown per device, and Download is offered once all answered
+  est: 1d
+  difficulty: med
+  id: node-comms-check
+  asked: 2026-11-24
+  by: claude-session
+
 - [ ] **The P4's `enip` image after #333: the two runs that were skipped** — Why it matters: #333 moved the node's EtherNet/IP session onto its own task so a slow device cannot make the scan late, and that was checked only for the first connection. The two runs here are the ones a plant sees: the device goes away and comes back, and the node holds the connection as its only owner. #333 moved the EtherNet/IP session into a task of its own and was checked on the board for the first open only (1.1 s after link-up, 0 late scans, was 199). Two runs were left out and are on no card: (1) the close after a lost link, through the task: pull the cable or power the E1213 off mid-run, see the outputs go to their safe state, the session close, and the reopen once the unit is back, with no late scans meanwhile; (2) Exclusive Owner with this change (the 640 of 640 packet run of 2026-11-10 was on the image before it). Write both into docs/EDGE.md Phase 3 "On the board".
   needs: the E1213's one Class 1 connection free: the try box off the unit (`studio-box-no-io`, or `launchctl bootout gui/501/io.advin.helmsman-try` from your terminal until that lands); no other session flashing the P4
   result: the enip task is proven for loss and for ownership, not only for the first open

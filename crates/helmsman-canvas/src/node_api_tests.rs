@@ -116,6 +116,7 @@ fn view() -> NodeView {
         board: "test",
         io_map: "device rio modbus-tcp 192.168.3.60\n".into(),
         one_block: false,
+        check: None,
         firmware: None,
     }
 }
