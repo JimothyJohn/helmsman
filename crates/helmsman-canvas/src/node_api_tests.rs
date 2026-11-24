@@ -879,5 +879,5 @@ fn a_replay_refused_for_a_port_without_a_signal_says_so_plainly() {
         "Not deployed: seen is not in the I/O list. Add it to the I/O list, or declare it under VAR in the program."
     );
     p.tick(100.0);
-    assert!(p.poll().is_empty());
+    assert_eq!(p.poll().len(), 0);
 }
