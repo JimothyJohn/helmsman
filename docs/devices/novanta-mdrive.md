@@ -188,6 +188,22 @@ can supply that stop. Accepted on the bench for now (Nick,
 needs a stop of its own (TODO.md `mdrive-bringup`). A box that stops normally closes its connections, which does stop
 it.
 
+## The device profile
+
+`docs/devices/novanta-mdrive.device` is the library's profile for this
+drive (the same file sits in helmsman-devices beside the entry, which is
+what makes the scan offer Add for it). It is the bench unit's layout, not
+the manual's, and its header says so. Channels: `enabled`, `moving`,
+`position`, `error-code` in; `max-velocity`, `enable`, `run-current`,
+`slew` out. Proven on the unit: every one but `max-velocity` (the field's
+place in the remapped layout; no valid value was tried). Not channels
+because the bench did not prove them: MF, ER out, CF, LG, RD/AS, the
+toggle bits, LL, IN. MA is not a channel and must get no default: it
+moved the shaft at the first `Forward_Open` and later moved nothing.
+`crates/helmsman-io/tests/novanta_mdrive.rs` holds the profile to the map
+the bench ran and to a simulated unit with the bench's identity and
+assemblies, and fails if an output channel reaches any other byte.
+
 ## PROFINET: first run on the bench
 
 Parked (Nick, 2026-11-13: EtherNet/IP and Modbus TCP first). When it is

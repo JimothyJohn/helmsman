@@ -660,4 +660,43 @@ mod tests {
             assert!(e.contains("profile: not a profile file name"), "{bad}: {e}");
         }
     }
+
+    /// The Novanta MDrive's library entry as the library's index will
+    /// carry it (helmsman-devices `devices/novanta/lexium-mdrive-ethernet`,
+    /// with its profile file), and the scan's identity for the bench unit:
+    /// vendor 243, product code 15362, "MDrive", revision 2.36.
+    const MDRIVE: &str = r#"{ "format": "helmsman-devices-index 1", "devices": [
+      { "folder": "devices/novanta/lexium-mdrive-ethernet", "vendor": "Novanta IMS",
+        "model": "Liberty / Lexium MDrive Ethernet (LMD), EtherNet/IP", "kind": "drive",
+        "profile": "novanta-mdrive.device",
+        "identity": { "enip": { "vendor_id": 243, "product_code": 15362 } },
+        "protocols": { "enip": { "driver": "enip-io",
+          "eds": { "name": "SEM_MDrivever1_2.eds", "size": 24813,
+                   "sha256": "b14f0fe268df5b37e9dcee6bd0288a88e59d428dbe6044b49dba8beaaeb86041" } } } },
+      { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io",
+        "identity": { "enip": { "vendor_id": 991, "product_code": 515 } },
+        "protocols": { "enip": { "driver": "enip-io", "profile": "moxa-e1213" } } } ] }"#;
+
+    #[test]
+    fn the_mdrive_is_found_by_its_identity_and_offers_its_profile() {
+        let i = Index::parse(MDRIVE).unwrap();
+        let e = i.lookup(243, 15362, "MDrive").unwrap();
+        assert_eq!(e.folder, "devices/novanta/lexium-mdrive-ethernet");
+        assert_eq!(e.profile.as_deref(), Some("novanta-mdrive.device"));
+        assert_eq!(e.protocol("enip-io").unwrap().driver, "enip-io");
+        assert_eq!(
+            e.file_url("https://x/lib", e.profile.as_deref().unwrap()),
+            "https://x/lib/devices/novanta/lexium-mdrive-ethernet/novanta-mdrive.device"
+        );
+        // The identity is a vendor and a product code, so both units seen
+        // (revision 2.22 by the EDS, 2.36 on the bench) are one entry.
+        assert_eq!(i.by_identity(243, 15362).len(), 1);
+        // Another product code or vendor is another device, by identity.
+        assert!(i.by_identity(243, 15363).is_empty());
+        assert!(i.by_identity(244, 15362).is_empty());
+        assert!(i.by_identity(15362, 243).is_empty());
+        assert_ne!(i.by_identity(991, 515)[0].folder, e.folder);
+        // And an unrelated name does not match by text.
+        assert!(i.lookup(243, 15363, "Something Else").is_none());
+    }
 }
