@@ -516,6 +516,8 @@ fn heap_text(view: &NodeView) -> String {
 /// The comms check as the page shows it: one line a device, and what
 /// happens next.
 fn check_html(c: &crate::check::Check, now_ms: u64) -> String {
+    use core::fmt::Write as _;
+
     use crate::check::Verdict;
     let mut rows = String::new();
     for r in &c.rows {
@@ -524,12 +526,13 @@ fn check_html(c: &crate::check::Check, now_ms: u64) -> String {
             Verdict::Answered { ms } => format!("answered in {ms} ms"),
             Verdict::Failed(why) => format!("<b>no answer</b>: {}", html_escape(why)),
         };
-        rows.push_str(&format!(
+        let _ = write!(
+            rows,
             "<li><b>{}</b> {} ({}): {said}</li>",
             html_escape(&r.name),
             html_escape(&r.address),
             r.driver
-        ));
+        );
     }
     let next = if c.running {
         String::from("Asking the devices; this page reloads until they have all been asked.")
@@ -545,17 +548,9 @@ fn check_html(c: &crate::check::Check, now_ms: u64) -> String {
     format!("<h2>Device check</h2><ul>{rows}</ul><p class=\"notice\">{next}</p>")
 }
 
-/// The node's own page: what it is, how it is, and the settings form.
-/// Plain HTML, no scripts, so it reads on a phone at the panel.
-#[must_use]
-pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>) -> String {
-    let (mode_dhcp, mode_static, ip, prefix, gateway) = match settings.net {
-        Net::Dhcp => ("checked", "", String::new(), String::from("24"), String::new()),
-        Net::Static { ip, prefix, gateway } => {
-            ("", "checked", ip_text(ip), prefix.to_string(), ip_text(gateway))
-        }
-    };
-    let module = view.module.as_ref().map_or_else(
+/// The page's line about the deployed program.
+fn module_html(view: &NodeView) -> String {
+    view.module.as_ref().map_or_else(
         || String::from("<p>No program deployed.</p>"),
         |m| {
             let state = match &m.state {
@@ -573,28 +568,62 @@ pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>)
                 m.overruns
             )
         },
-    );
-    let notice = notice.map_or(String::new(), |n| {
-        format!("<p class=\"notice\">{}</p>", html_escape(n))
-    });
-    // While a check runs, and for as long as its result lets the map be
-    // saved or says why not, the form holds the checked text and the page
-    // lists who answered.
+    )
+}
+
+/// What the page's map form shows.
+struct MapForm<'a> {
+    text: &'a str,
+    /// The tag that reloads the page while a check runs, or nothing.
+    refresh: &'static str,
+    /// The check's result as HTML, or nothing.
+    check: String,
+    button: &'static str,
+}
+
+/// While a check runs, and for as long as its result lets the map be
+/// saved or says why not, the form holds the checked text and the page
+/// lists who answered; otherwise it holds the map the node runs.
+fn map_form(view: &NodeView) -> MapForm<'_> {
     let shown = view.check.as_ref().filter(|c| {
         !c.text.is_empty() && (c.running || view.uptime_ms.saturating_sub(c.done_ms) < crate::check::FRESH_MS)
     });
-    let map_text = shown.map_or(view.io_map.as_str(), |c| c.text.as_str());
-    let refresh = if shown.is_some_and(|c| c.running) {
-        "<meta http-equiv=\"refresh\" content=\"2;url=/settings\">"
-    } else {
-        ""
+    MapForm {
+        text: shown.map_or(view.io_map.as_str(), |c| c.text.as_str()),
+        refresh: if shown.is_some_and(|c| c.running) {
+            "<meta http-equiv=\"refresh\" content=\"2;url=/settings\">"
+        } else {
+            ""
+        },
+        check: shown.map_or_else(String::new, |c| check_html(c, view.uptime_ms)),
+        button: match shown {
+            Some(c) if c.allows(&c.text, view.uptime_ms).is_ok() => "Save this map and restart",
+            _ if view.check.is_some() => "Check the devices",
+            _ => "Save map and restart",
+        },
+    }
+}
+
+/// The node's own page: what it is, how it is, and the settings form.
+/// Plain HTML, no scripts, so it reads on a phone at the panel.
+#[must_use]
+pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>) -> String {
+    let (mode_dhcp, mode_static, ip, prefix, gateway) = match settings.net {
+        Net::Dhcp => ("checked", "", String::new(), String::from("24"), String::new()),
+        Net::Static { ip, prefix, gateway } => {
+            ("", "checked", ip_text(ip), prefix.to_string(), ip_text(gateway))
+        }
     };
-    let check = shown.map_or_else(String::new, |c| check_html(c, view.uptime_ms));
-    let map_button = match shown {
-        Some(c) if c.allows(&c.text, view.uptime_ms).is_ok() => "Save this map and restart",
-        _ if view.check.is_some() => "Check the devices",
-        _ => "Save map and restart",
-    };
+    let module = module_html(view);
+    let notice = notice.map_or(String::new(), |n| {
+        format!("<p class=\"notice\">{}</p>", html_escape(n))
+    });
+    let MapForm {
+        text: map_text,
+        refresh,
+        check,
+        button: map_button,
+    } = map_form(view);
     let sink = settings
         .log_sink
         .map_or(String::new(), |(ip, port)| format!("{}:{port}", ip_text(ip)));
