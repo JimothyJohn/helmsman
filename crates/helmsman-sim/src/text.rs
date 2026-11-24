@@ -7,7 +7,13 @@
 //! sensor pt1 of=oven.temp raw=temp_ma range=0..300 signal=4-20mA
 //! mode temp_c stuck 80
 //! seed 7
+//! off temp_c
 //! ```
+//!
+//! An `off NAME` line switches the simulation off for the port `NAME`:
+//! the device line stays in the file, but no device drives that input or
+//! reads that output. A signal assigned to a real device is kept this
+//! way, so putting it back on simulation turns it on again.
 //!
 //! A key that names a program variable is a **port**: an output the device
 //! reads (`heat=`) or an input it drives (`temp=`). The other keys are
@@ -530,9 +536,29 @@ pub struct Spec {
     pub modes: Vec<ModeLine>,
     /// The noise and random walk's seed (`seed N`; 1 without one).
     pub seed: u64,
+    /// The ports the simulation is off for (`off NAME`), as written.
+    pub off: Vec<String>,
 }
 
 impl Spec {
+    /// Whether the simulation is off for the port `name` (`off NAME`).
+    #[must_use]
+    pub fn is_off(&self, name: &str) -> bool {
+        self.off.iter().any(|o| o.eq_ignore_ascii_case(name))
+    }
+
+    /// Whether some device line names `name` as a port, input or output.
+    #[must_use]
+    pub fn names_port(&self, name: &str) -> bool {
+        self.devices.iter().any(|d| {
+            d.kind
+                .keys()
+                .iter()
+                .filter(|k| k.role.is_port())
+                .any(|k| d.port(k.name).is_some_and(|v| v.eq_ignore_ascii_case(name)))
+        })
+    }
+
     /// The device that drives `input`, and the key it drives it by.
     #[must_use]
     pub fn owner(&self, input: &str) -> Option<(&Device, &'static str, Role)> {
@@ -557,6 +583,38 @@ impl Spec {
             .find(|m| m.input.eq_ignore_ascii_case(input))
             .map_or(Mode::Normal, |m| m.mode)
     }
+}
+
+/// `text` with the simulation switched off (`off`) or on for the port
+/// `name`; the device lines stay as they are. Switching off writes an
+/// `off NAME` line only when some device line names the port, so a port
+/// the file does not simulate gains nothing; switching on takes every
+/// `off NAME` line for it out. `None` when nothing would change.
+#[must_use]
+pub fn set_off(text: &str, name: &str, off: bool) -> Option<String> {
+    let (spec, _) = parse(text);
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    if off {
+        if spec.is_off(name) || !spec.names_port(name) {
+            return None;
+        }
+        let mut out = text.to_string();
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push_str(eol);
+        }
+        out.push_str("off ");
+        out.push_str(name);
+        out.push_str(eol);
+        return Some(out);
+    }
+    if !spec.is_off(name) {
+        return None;
+    }
+    let is_line = |raw: &str| {
+        let w: Vec<&str> = raw.split('#').next().unwrap_or("").split_whitespace().collect();
+        w.len() == 2 && w[0].eq_ignore_ascii_case("off") && w[1].eq_ignore_ascii_case(name)
+    };
+    Some(text.split_inclusive('\n').filter(|l| !is_line(l)).collect())
 }
 
 /// A line the file could not take, and why.
@@ -586,6 +644,14 @@ pub fn parse(text: &str) -> (Spec, Vec<Problem>) {
             "seed" => match words.get(1).and_then(|w| w.parse::<u64>().ok()) {
                 Some(n) if words.len() == 2 => spec.seed = n,
                 _ => say("`seed` takes one whole number".into()),
+            },
+            "off" => match words.get(1) {
+                Some(n) if words.len() == 2 && ident(n) => {
+                    if !spec.is_off(n) {
+                        spec.off.push((*n).to_string());
+                    }
+                }
+                _ => say("`off NAME` takes one variable name".into()),
             },
             "mode" => {
                 let (Some(input), Some(word)) = (words.get(1), words.get(2)) else {

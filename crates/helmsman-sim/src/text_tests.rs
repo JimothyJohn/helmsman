@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use proptest::prelude::*;
 
-use crate::text::{Kind, Mode, number, parse, range, seconds, set_device, set_mode};
+use crate::text::{Kind, Mode, number, parse, range, seconds, set_device, set_mode, set_off};
 
 const OVEN: &str = "\
 # The oven.
@@ -40,6 +40,40 @@ fn a_cylinder_is_a_valve() {
     let (spec, problems) = parse("cylinder c1 open=ext opened=out closed=in travel=1s");
     assert_eq!(problems, []);
     assert_eq!(spec.devices[0].kind, Kind::Valve);
+}
+
+#[test]
+fn an_off_line_keeps_the_device_and_marks_the_port() {
+    let (spec, problems) = parse(&format!("{OVEN}off temp_c\n"));
+    assert_eq!(problems, []);
+    assert_eq!(
+        spec.devices.len(),
+        parse(OVEN).0.devices.len(),
+        "the device lines are kept"
+    );
+    assert!(spec.is_off("TEMP_C"));
+    assert!(!spec.is_off("heat_on"));
+    let (_, bad) = parse("off\noff a b\n");
+    assert_eq!(bad.len(), 2);
+}
+
+#[test]
+fn a_file_without_off_lines_reads_as_it_always_did() {
+    let (spec, problems) = parse(OVEN);
+    assert_eq!(problems, []);
+    assert!(spec.off.is_empty());
+}
+
+#[test]
+fn set_off_writes_and_takes_back_the_line_and_leaves_the_rest() {
+    let off = set_off(OVEN, "temp_c", true).expect("a simulated port");
+    assert!(off.starts_with(OVEN));
+    assert!(off.ends_with("off temp_c\n"));
+    assert_eq!(set_off(&off, "temp_c", true), None, "already off");
+    assert_eq!(set_off(&off, "TEMP_C", false).as_deref(), Some(OVEN));
+    assert_eq!(set_off(OVEN, "temp_c", false), None, "already on");
+    // A port no device names has nothing to switch off.
+    assert_eq!(set_off(OVEN, "other", true), None);
 }
 
 #[test]
