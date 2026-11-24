@@ -768,7 +768,7 @@ impl BoxProjects {
         ));
     }
 
-    fn relist(&mut self) {
+    pub fn relist(&mut self) {
         self.queue.push(PReq::get(PCall::List, "/api/projects".into()));
     }
 

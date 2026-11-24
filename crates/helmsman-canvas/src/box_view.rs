@@ -299,6 +299,13 @@ impl BoxView {
         if was.as_deref() == Some(who.as_str()) {
             return;
         }
+        // The list asked for before anyone signed in was refused (a box
+        // with accounts locks its reads). A page whose live view is the
+        // box's learns it again when the view unlocks; one watching a
+        // Skipper by address never does, so it asks here.
+        if self.projects.available.is_none() {
+            self.projects.relist();
+        }
         // The form's name is the person who just signed in.
         if let Some(u) = self.session.as_ref().and_then(|s| s.user.clone()) {
             self.desk_user = u;
