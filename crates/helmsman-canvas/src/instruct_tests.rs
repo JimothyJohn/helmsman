@@ -645,6 +645,68 @@ fn stop_while_it_is_fixing_an_answer_writes_nothing() {
     assert_eq!(v.proj.files, before);
 }
 
+/// Nick, 2026-11-24: "Losing it when I hit enter makes it hard to
+/// troubleshoot or tweak". An instruction that ended with nothing
+/// written is back in the box, whichever way it ended.
+#[test]
+fn an_instruction_that_changed_nothing_is_back_in_the_box() {
+    // Stopped.
+    let mut v = mine();
+    v.instruct.draft = "  comment it ".into();
+    v.send_instruction(&egui::Context::default());
+    assert_eq!(v.instruct.draft, "", "sent: the box is empty while it works");
+    v.stop_answer();
+    v.tick(&egui::Context::default());
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Failed));
+    assert_eq!(v.instruct.draft, "comment it");
+
+    // Refused: the answer never compiled.
+    let mut v = mine();
+    let broken = st(&commented().replace("lamp := start;", "lamp := start +;"));
+    instruct(&mut v, "say why the lamp is on", &[&broken]);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Refused));
+    assert_eq!(v.instruct.draft, "say why the lamp is on");
+
+    // Sent again as it stands, it is the same instruction.
+    let n = v.link.sent.len();
+    v.send_instruction(&egui::Context::default());
+    assert_eq!(v.link.sent.len(), n + 1);
+    assert!(last_user(&v).contains("say why the lamp is on"));
+}
+
+/// What was typed while it worked is the engineer's: a failure does not
+/// write over it, and the instruction is still one recall away once the
+/// box is empty.
+#[test]
+fn a_failure_keeps_what_was_typed_since_and_recall_brings_the_last_one_back() {
+    let mut v = mine();
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&egui::Context::default());
+    v.instruct.draft = "something else".into();
+    assert!(!v.instruct.recall(), "nothing is recalled while it works");
+    v.stop_answer();
+    v.tick(&egui::Context::default());
+    assert_eq!(v.instruct.draft, "something else");
+    assert!(!v.instruct.recall(), "nor over a draft");
+    assert_eq!(v.instruct.draft, "something else");
+    v.instruct.draft.clear();
+    assert!(v.instruct.recall());
+    assert_eq!(v.instruct.draft, "comment it");
+}
+
+/// A change that was written leaves the box empty for the next one, and
+/// the instruction can still be brought back to change and send again.
+#[test]
+fn a_written_instruction_leaves_the_box_empty_and_can_be_recalled() {
+    let mut v = mine();
+    assert!(!v.instruct.recall(), "nothing was sent yet");
+    instruct(&mut v, "comment it", &[&st(&commented())]);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
+    assert_eq!(v.instruct.draft, "");
+    assert!(v.instruct.recall());
+    assert_eq!(v.instruct.draft, "comment it");
+}
+
 #[test]
 fn undo_restores_the_version_before_the_change_and_keeps_it_in_history() {
     let mut v = mine();
