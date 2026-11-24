@@ -1,5 +1,5 @@
-//! The HTTP server: two connections at a time on the API port (one may be
-//! a canvas's values stream), each request read whole, routed by
+//! The HTTP server: [`CONNECTIONS`] at a time on the API port (each open
+//! canvas holds one for its values stream), each request read whole, routed by
 //! helmsman-nodecore's router against the live state, and the router's
 //! effects carried out here: a deploy compiles and is written to flash
 //! and handed to the scan loop, a control is handed to the scan loop, a
@@ -36,7 +36,15 @@ pub const APPLY_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the values stream looks for a new publication.
 pub const STREAM_POLL: Duration = Duration::from_millis(100);
 
-/// The flash store, shared by the two server connections and the boot.
+/// Connections the API port serves at once. Each open canvas page holds
+/// one for its values stream; with two, a second page left no room for
+/// the first page's reads, which the node reset (2026-11-24, the MDrive
+/// bench). Four leave two pages watching and room for their reads; each
+/// costs about 4 KiB of heap and 2 KiB of the main stack (its task in
+/// `.bss`), and six left 37 KiB of stack against 46 KiB with two.
+pub const CONNECTIONS: usize = 4;
+
+/// The flash store, shared by the server connections and the boot.
 pub type StoreCell = Mutex<CriticalSectionRawMutex, RefCell<Option<Store>>>;
 
 /// What every connection needs.
@@ -57,8 +65,9 @@ impl Ctx {
     }
 }
 
-/// Serves connections on the API port for the life of the node; two run.
-#[embassy_executor::task(pool_size = 2)]
+/// Serves connections on the API port for the life of the node;
+/// [`CONNECTIONS`] run.
+#[embassy_executor::task(pool_size = CONNECTIONS)]
 pub async fn http_task(stack: Stack<'static>, ctx: &'static Ctx) -> ! {
     let mut rx = vec![0u8; 2048];
     let mut tx = vec![0u8; 2048];

@@ -2013,7 +2013,12 @@ impl BoxProjects {
                         self.diags = diags_of(&j);
                     }
                     // A Skipper lists the compiler's lines under `errors`.
-                    let lines: Vec<&str> = j["errors"].as_array().into_iter().flatten().filter_map(Json::as_str).collect();
+                    let lines: Vec<&str> = j["errors"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Json::as_str)
+                        .collect();
                     let why = if lines.is_empty() {
                         error_of(a)
                     } else {

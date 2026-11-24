@@ -302,7 +302,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     // The tasks: a link for each device of the map (and the cyclic task
-    // if one is EtherNet/IP), the server (two connections), the beacon.
+    // if one is EtherNet/IP), the server ([`server::CONNECTIONS`]), the beacon.
     let io_ctx: &'static io::Ctx = IO_CTX.init(io::Ctx {
         shared,
         map,
@@ -337,7 +337,7 @@ async fn main(spawner: Spawner) -> ! {
             Err(_) => halt("the confirm task would not spawn").await,
         }
     }
-    for _ in 0..2 {
+    for _ in 0..server::CONNECTIONS {
         match server::http_task(stack, ctx) {
             Ok(t) => spawner.spawn(t),
             Err(_) => halt("an HTTP task would not spawn").await,

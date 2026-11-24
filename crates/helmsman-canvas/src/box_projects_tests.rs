@@ -5092,14 +5092,19 @@ fn an_engineer_edits_and_deploys_the_running_module_on_a_skipper() {
         bv.state.apply(
             Msg::Got(
                 Fetch::Modules,
-                Ok(r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#.into()),
+                Ok(
+                    r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#
+                        .into(),
+                ),
             ),
             1.0,
         );
         bv.state.select("drive");
         let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
-        bv.state
-            .apply(Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())), 1.1);
+        bv.state.apply(
+            Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+            1.1,
+        );
         assert_eq!(bv.state.source(), Some(SRC));
         bv
     };
@@ -5122,14 +5127,21 @@ fn an_engineer_edits_and_deploys_the_running_module_on_a_skipper() {
     h.app.chrome.show_code();
     h.wait(0.3);
     assert!(h.app.chrome.rect("read-only").is_none());
-    h.bv().projects.module.as_mut().expect("the module is in the editor").text =
-        SRC.replace("slew := 0;", "slew := 5000;");
+    h.bv()
+        .projects
+        .module
+        .as_mut()
+        .expect("the module is in the editor")
+        .text = SRC.replace("slew := 0;", "slew := 5000;");
     h.frame(vec![]);
     assert!(h.app.chrome.rect("module edited").is_some());
     h.press("code deploy");
     let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
     assert_eq!(sent.len(), 1, "{sent:?}");
-    assert_eq!((sent[0].method, sent[0].url.as_str()), ("PUT", "/api/modules/drive"));
+    assert_eq!(
+        (sent[0].method, sent[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
+    );
     let body: Json = serde_json::from_slice(sent[0].body.as_deref().unwrap()).unwrap();
     assert!(body["source"].as_str().unwrap().contains("slew := 5000;"));
 }

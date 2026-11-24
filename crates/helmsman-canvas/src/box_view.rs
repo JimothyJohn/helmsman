@@ -2323,13 +2323,23 @@ impl BoxView {
     /// end: a Skipper, or a box run without projects, takes the program
     /// straight (`PUT /api/modules/{name}`), compiles it and keeps the old
     /// one running if it will not.
-    fn module_editor(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, write: &Result<(), String>) {
+    fn module_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        chrome: &mut Chrome,
+        name: &str,
+        write: &Result<(), String>,
+    ) {
         let deploy = if self.projects.deploy.busy() {
             Err("Deploying…".to_string())
         } else {
             write.clone()
         };
-        let dirty = self.projects.module.as_ref().is_some_and(super::box_projects::ModuleEdit::dirty);
+        let dirty = self
+            .projects
+            .module
+            .as_ref()
+            .is_some_and(super::box_projects::ModuleEdit::dirty);
         let errors = self.projects.diags.iter().filter(|d| !d.is_warning()).count();
         let first = self.projects.diags.first().map(|d| d.message.clone());
         let mut go = false;
@@ -3425,7 +3435,10 @@ impl Body for BoxView {
             .selected
             .clone()
             .unwrap_or_else(|| "Program".to_string());
-        if let (Some(m), Some(src)) = (self.state.selected.clone(), self.state.source().map(str::to_string)) {
+        if let (Some(m), Some(src)) = (
+            self.state.selected.clone(),
+            self.state.source().map(str::to_string),
+        ) {
             self.projects.track_module(&m, &src);
         }
         let write = self.module_writable();

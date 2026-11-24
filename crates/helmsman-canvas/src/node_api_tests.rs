@@ -443,5 +443,8 @@ fn the_module_editor_follows_the_box_without_losing_edits() {
     // Another module is another file.
     p.track_module("chase", "PROGRAM chase\nEND_PROGRAM\n");
     let m = p.module.as_ref().unwrap();
-    assert_eq!((m.name.as_str(), m.text.as_str()), ("chase", "PROGRAM chase\nEND_PROGRAM\n"));
+    assert_eq!(
+        (m.name.as_str(), m.text.as_str()),
+        ("chase", "PROGRAM chase\nEND_PROGRAM\n")
+    );
 }
