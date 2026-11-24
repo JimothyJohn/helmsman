@@ -252,6 +252,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-16
   by: claude-session
 
+- [ ] **helmsman-adapter: `output_comes_back_as_input` read zeros where it had waited for the pattern** — Why it matters: the test waits until the adapter echoes the 32 output bytes back as input and then asserts on what it got, so a failure there is either a wait that returns before the data matches or an adapter that answers a match and hands back another packet; one of the two is wrong, and a scanner relying on that wait would act on stale input. Seen once, on CI's `box (macos-latest)` for #614 (2026-11-24, run 45465568201, crates/helmsman-adapter/tests/bin.rs:60): `left` was 32 zeros, `right` the pattern 1..=32, in 3.06 s. #614 does not touch the adapter or helmsman-proto, the job is not a required check, and the PR merged. Not reproduced locally (the full gate passed on the same commit, twice).
+  needs: nothing
+  result: the cause named (the wait in `IoConnection::wait_for_input_eq` or the adapter's echo), a test that fails on it every time, and the fix
+  est: 2h
+  difficulty: med
+  id: adapter-echo-flake
+  asked: 2026-11-24
+  by: claude-session
+
 - [ ] **helmsman-dhcp: a client moves off its running lease (found by its own property test)** — Why it matters: the DHCP server's promise is that an address handed out in an ACK stays that client's while the lease runs; a block that is moved to another address mid-lease drops its fieldbus connection. On 2026-11-15 `cargo test --workspace` failed once in `crates/helmsman-dhcp/tests/hostile.rs`, `no_request_sequence_breaks_the_invariants`: "00-07-46-00-00-03 moved off its running lease", left 192.168.3.102, right 192.168.3.101. It is rare (the next three runs of that test passed), so CI can fail on it at random on any PR. To reproduce every time, add this line to `crates/helmsman-dhcp/tests/hostile.proptest-regressions`: `cc 32024c1c7cf224596c6941b14f9b5192e7b4dba694ca7a7b2831f9d34cc24c4b`. The shrunk case begins with a DHCPREQUEST from that client with ciaddr 192.168.3.100 and ends with its DHCPDISCOVER. Not fixed here: it was found while gating an unrelated change (the Devices tab's wired line), the crate is another task's, and the seed was left out of that branch so dev stays green until the fix lands with it, regression first.
   needs: nothing
   result: the seed is in the regressions file, the test passes with it, and the lease rule holds
