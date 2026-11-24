@@ -255,7 +255,7 @@ fn hostile_and_broken_check_replies_read_as_nothing_or_clean_text() {
 
     // An empty list, and the fields missing or of the wrong type.
     let empty = Report::parse(&json!({"state": "none", "text": "", "devices": []})).unwrap();
-    assert!(empty.devices.is_empty());
+    assert!(empty.devices.is_empty(), "an empty list is no devices");
     let bare = Report::parse(&json!({"state": "done", "text": MAP})).unwrap();
     assert!(bare.devices.is_empty() && !bare.passed && !bare.may_save && bare.age_ms.is_none());
     let typed = Report::parse(
@@ -446,7 +446,7 @@ fn a_skipper_without_the_check_route_is_told_so_and_offers_neither_button() {
     assert!(ui.no_check(), "the first read of the check answered 404");
     assert!(ui.can_check().unwrap_err().contains("without asking its devices"));
     ui.check();
-    assert!(ui.take_requests().is_empty());
+    assert!(ui.take_requests().is_empty(), "no check is sent");
     assert!(!ui.can_download());
     // Even a window that was handed a pass does not offer Download.
     type_into(&mut ui, MAP);

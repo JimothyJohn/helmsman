@@ -199,8 +199,11 @@ enum Job {
     Saving,
 }
 
-/// The state of the Skipper-map window and its row.
+/// The state of the Skipper-map window and its row. Its five flags are
+/// independent facts (open, a Skipper, a token, no check route, probed),
+/// not the states of one machine, which is what the lint suggests.
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct NodeMapUi {
     /// The window is open.
     pub open: bool,
