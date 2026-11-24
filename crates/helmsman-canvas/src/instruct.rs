@@ -1563,10 +1563,13 @@ fn field(page: &str, key: &str) -> Option<String> {
 /// changes wrote; other entries are skipped. Each is the instruction,
 /// then its reason and its result on lines of their own under it, as the
 /// `<earlier_instructions>` envelope carries them. A [`SUMMARY`] page for
-/// the file takes the place of everything before it.
+/// the file stands for the first [`COVERS`] changes to it, wherever in
+/// History it was written (a summary is saved after changes it does not
+/// cover); of several, the one that covers the most.
 #[must_use]
 pub fn history<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+    let mut all: Vec<String> = Vec::new();
+    let mut summary: Option<(usize, String)> = None;
     for p in pages {
         let mut lines = p.lines();
         let Some(first) = lines.next() else { continue };
@@ -1574,23 +1577,24 @@ pub fn history<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<
             if of.trim() != file {
                 continue;
             }
-            let Some(covers) = lines.next().and_then(|l| l.strip_prefix(COVERS)) else {
+            let Some(covers) = lines
+                .next()
+                .and_then(|l| l.strip_prefix(COVERS))
+                .and_then(|n| n.trim().parse::<usize>().ok())
+            else {
                 continue;
             };
             let text = clean(&lines.collect::<Vec<_>>().join(" "), MAX_SUMMARY);
-            if text.is_empty() {
+            // One that claims more changes than there are covers nothing.
+            if text.is_empty() || covers == 0 || covers > all.len() {
                 continue;
             }
-            out.clear();
-            out.push(format!(
-                "(a summary of the {} earlier changes) {text}",
-                clean(covers, 12)
-            ));
+            if summary.as_ref().is_none_or(|(n, _)| covers >= *n) {
+                summary = Some((covers, text));
+            }
             continue;
         }
-        let Some(i) = first.strip_prefix(INSTRUCTION) else {
-            continue;
-        };
+        let Some(i) = first.strip_prefix(INSTRUCTION) else { continue };
         let Some(f) = lines.next().and_then(|l| l.strip_prefix(FILE)) else {
             continue;
         };
@@ -1604,9 +1608,126 @@ pub fn history<'a>(pages: impl IntoIterator<Item = &'a str>, file: &str) -> Vec<
         if let Some(r) = field(p, "Result: ") {
             let _ = write!(entry, "\n  result: {}", clean(&r, MAX_REASON));
         }
-        out.push(entry);
+        all.push(entry);
     }
-    out
+    match summary {
+        None => all,
+        Some((covers, text)) => {
+            let mut out = vec![format!("{SUMMARISED}{covers} earlier changes) {text}")];
+            out.extend(all.into_iter().skip(covers));
+            out
+        }
+    }
+}
+
+/// `text` between `<tag>` and `</tag>`, for the summary agent's message.
+/// Every closing tag inside it is defanged (`<\\/`), white space after
+/// the `<` included, so nothing an engineer typed or a model wrote ends
+/// an envelope early or opens another.
+fn tagged(tag: &str, text: &str) -> String {
+    let mut safe = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(k) = rest.find('<') {
+        safe.push_str(&rest[..k]);
+        let after = &rest[k + 1..];
+        safe.push('<');
+        if after.trim_start().starts_with('/') {
+            safe.push('\\');
+        }
+        rest = after;
+    }
+    safe.push_str(rest);
+    format!("<{tag}>\n{safe}\n</{tag}>\n")
+}
+
+/// How the entry that is a summary opens, before the count it covers.
+const SUMMARISED: &str = "(a summary of the ";
+
+/// The relay agent that writes a summary.
+pub const SUMMARY_AGENT: &str = "summary";
+/// The most of a history one request to it carries, in tokens: the
+/// oldest changes beyond that wait for the next summary.
+const SUMMARY_INPUT: usize = 48_000;
+
+/// A summary to ask for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compact {
+    pub file: String,
+    /// How many of the file's changes, from its first, the summary will
+    /// stand for.
+    pub covers: usize,
+    /// What goes to [`SUMMARY_AGENT`].
+    pub message: String,
+}
+
+/// The summary to ask for when `earlier` (the file's [`history`]) is past
+/// `budget` tokens: its oldest changes, as many as leave the rest at half
+/// the budget (and no more than one request carries), with the summary
+/// that already stands in front of them. `None` while everything fits,
+/// or when there is nothing but the newest change to give.
+#[must_use]
+pub fn compaction(earlier: &[String], file: &str, budget: usize) -> Option<Compact> {
+    let cost = |e: &String| tokens(e) + 2;
+    let total: usize = earlier.iter().map(cost).sum();
+    if total <= budget {
+        return None;
+    }
+    let (before, was) = match earlier.first().and_then(|e| e.strip_prefix(SUMMARISED)) {
+        Some(rest) => {
+            let (n, text) = rest.split_once(" earlier changes) ")?;
+            (n.parse::<usize>().ok()?, Some(text))
+        }
+        None => (0, None),
+    };
+    let changes = &earlier[usize::from(was.is_some())..];
+    let mut over = total.saturating_sub(budget / 2);
+    let mut given = 0;
+    let mut take = 0;
+    for e in changes.iter().take(changes.len().saturating_sub(1)) {
+        if over == 0 || given + cost(e) > SUMMARY_INPUT {
+            break;
+        }
+        over = over.saturating_sub(cost(e));
+        given += cost(e);
+        take += 1;
+    }
+    if take == 0 {
+        return None;
+    }
+    let mut message = tagged("file", file);
+    if let Some(text) = was {
+        message.push_str(&tagged("earlier_summary", text));
+    }
+    let mut list = String::new();
+    for e in &changes[..take] {
+        for (k, line) in e.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let _ = writeln!(list, "{}{}", if k == 0 { "- " } else { "  " }, line.trim());
+        }
+    }
+    message.push_str(&tagged("changes", list.trim_end()));
+    Some(Compact {
+        file: file.to_string(),
+        covers: before + take,
+        message,
+    })
+}
+
+/// The History page that keeps `answer`, the agent's summary, for `ask`;
+/// `None` when the answer is no summary (empty, or far too long to be
+/// one). An answer of `NONE` is kept as a summary that says so: the
+/// changes it covers held nothing to carry on.
+#[must_use]
+pub fn summary_page(ask: &Compact, answer: &str) -> Option<String> {
+    let text = clean(&prose(answer), MAX_SUMMARY);
+    if text.is_empty() || tokens(&text) > 4_000 {
+        return None;
+    }
+    let text = if text.eq_ignore_ascii_case("none") {
+        "Nothing in these changes needs carrying on.".to_string()
+    } else {
+        text
+    };
+    Some(format!("{SUMMARY}{}\n{COVERS}{}\n{text}\n", ask.file, ask.covers))
 }
 
 /// Longest summary taken from a [`SUMMARY`] page, in characters.
@@ -1625,7 +1746,7 @@ pub fn fit(earlier: &[String], budget: usize) -> Vec<String> {
     }
     // Room for the line that says what is missing.
     let budget = budget.saturating_sub(24);
-    let summary = earlier.first().filter(|e| e.starts_with("(a summary of "));
+    let summary = earlier.first().filter(|e| e.starts_with(SUMMARISED));
     let rest = &earlier[usize::from(summary.is_some())..];
     let mut room = budget.saturating_sub(summary.map_or(0, cost));
     let mut kept = 0;

@@ -244,6 +244,16 @@ pub struct PlaygroundView {
     pub start: crate::start_state::Card,
     pub start_link: Link,
     start_answer: crate::claude::Side,
+    /// A third way to the relay, for the summary of a file's oldest
+    /// changes (`instruct::compaction`): asked beside an instruction once
+    /// the file's history is past what goes with one, never in its way.
+    pub summary_link: Link,
+    summary_answer: crate::claude::Side,
+    /// The summary asked for and not yet answered, with its project.
+    summarising: Option<(String, crate::instruct::Compact)>,
+    /// A summary that came back, as the History page it will be, until it
+    /// can be saved: its project, what it covers, the page.
+    summary_ready: Option<(String, crate::instruct::Compact, String)>,
     /// A change that passed its checks and waits to be compared with the
     /// engineer's answer, and when that was asked (page time, s).
     held: Option<(crate::instruct::Apply, f64)>,
@@ -377,6 +387,10 @@ impl PlaygroundView {
             start: crate::start_state::Card::default(),
             start_link: Link::default(),
             start_answer: crate::claude::Side::default(),
+            summary_link: Link::default(),
+            summary_answer: crate::claude::Side::default(),
+            summarising: None,
+            summary_ready: None,
             held: None,
             big: None,
             fallback: None,
@@ -1012,8 +1026,66 @@ impl PlaygroundView {
                 self.asked_at = ctx.input(|i| i.time);
                 self.send_ask(&ask, ctx);
                 self.ask_question(plan, ctx);
+                self.ask_summary(&earlier, &file, ctx);
             }
             Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// Beside the instruction just sent, when `file`'s history (`earlier`)
+    /// is past what goes with one: asks the relay's `summary` agent to
+    /// write up its oldest changes, once (`instruct::compaction`). The
+    /// instruction itself went with what fits; the summary is for the
+    /// next one.
+    fn ask_summary(&mut self, earlier: &[String], file: &str, ctx: &egui::Context) {
+        use crate::instruct::{HISTORY_TOKENS, SUMMARY_AGENT};
+        if self.summarising.is_some()
+            || self.summary_ready.is_some()
+            || self.proj.is_example()
+            || !self.chat.serves(SUMMARY_AGENT)
+        {
+            return;
+        }
+        let Some(ask) = crate::instruct::compaction(earlier, file, HISTORY_TOKENS) else {
+            return;
+        };
+        let Ok(route) = self.chat.route() else { return };
+        let turn = self.chat.takes.allow(crate::claude::Turn {
+            agent: Some(SUMMARY_AGENT),
+            quick: false,
+        });
+        let req = crate::claude::request_turn(&route, &[], &ask.message, turn);
+        let seq = self.summary_answer.start();
+        self.summary_link.send(seq, req, ctx);
+        self.summarising = Some((self.proj.open.clone(), ask));
+    }
+
+    /// The summary's answer, once it is whole, becomes a History page of
+    /// its project; it is saved as a revision of its own when nothing is
+    /// half done (no unsaved edit, no instruction under way), so it never
+    /// saves someone's typing or lands in the middle of a change. One for
+    /// a project no longer open is dropped: it is asked again there.
+    fn summary_settle(&mut self) {
+        for m in self.summary_link.drain() {
+            self.summary_answer.receive(m);
+        }
+        if let Some(done) = self.summary_answer.take()
+            && let Some((project, ask)) = self.summarising.take()
+            && let Ok(text) = done
+            && let Some(page) = crate::instruct::summary_page(&ask, &text)
+        {
+            self.summary_ready = Some((project, ask, page));
+        }
+        let Some((project, ask, page)) = &self.summary_ready else {
+            return;
+        };
+        if *project != self.proj.open {
+            self.summary_ready = None;
+        } else if !self.proj.dirty() && self.instruct.run.is_none() {
+            let what = format!("Summarised the first {} changes to {}", ask.covers, ask.file);
+            let page = page.clone();
+            self.proj.save_as(&what, Some(&page));
+            self.summary_ready = None;
         }
     }
 
@@ -3318,6 +3390,7 @@ impl PlaygroundView {
         self.drop_run_of_another_project();
         self.side_settle(ctx);
         self.start_settle(ctx);
+        self.summary_settle();
         self.settle(ctx);
         self.design_count();
         self.tidy_question();
