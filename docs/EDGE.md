@@ -1157,6 +1157,16 @@ stack each: 41.9 KiB of stack left, against 45.9 with two). A deploy from
 a headless Chromium through a `?box=` page answered 201 and the node ran
 the edited source.
 
+The node now binds a program's `VAR_INPUT` and `VAR_OUTPUT` to the map's
+points by name, as a box does, so a program the agent wrote on a box runs
+on a Skipper unchanged (`helmsman-node-p4/src/bind.rs`; the matching and the
+image write are `ioplan::bindings` and `put_at`, host-tested). Names compare
+without regard to case; an input binds only to an `in` point and an output
+only to an `out` point; a port with no point is left alone. Located
+variables (`AT %QD18`) work as before. A point written by both a located
+variable and a name-bound output takes the name-bound value, which is
+applied after the scan. Proven on the host only; not yet run on a board.
+
 ### Updating a node without a cable (2026-11-18)
 
 A node in a cabinet takes new firmware over its network connection. You

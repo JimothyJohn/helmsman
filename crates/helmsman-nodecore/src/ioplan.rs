@@ -437,5 +437,80 @@ pub fn value_at(image: &[u8], point: &Point) -> Option<SignalValue> {
     })
 }
 
+/// Writes a value into a point's place in an image: the inverse of
+/// [`value_at`]. A bool sets or clears its bit and touches no other bit;
+/// an integer is clamped to the point's format and stored the way the I/O
+/// tasks read the output image (U8 and I8 as a 16-bit slot, little-endian);
+/// a real is stored as `f32` bits. A value of the wrong kind for the point,
+/// a real into an integer point and so on, changes nothing, and neither
+/// does a point past the image's end.
+pub fn put_at(image: &mut [u8], point: &Point, value: SignalValue) {
+    let Some(fmt) = point.fmt else {
+        if let SignalValue::Bool(on) = value {
+            set_bit(image, point.at, on);
+        }
+        return;
+    };
+    let Some(raw) = slot_mut(image, point.at) else {
+        return;
+    };
+    match (fmt, value) {
+        (Fmt::U8, SignalValue::Int(v)) => raw.copy_from_slice(&u16::from(clamp_u8(v)).to_le_bytes()),
+        (Fmt::I8, SignalValue::Int(v)) => {
+            let v = i16::try_from(v.clamp(-128, 127)).unwrap_or(0);
+            raw.copy_from_slice(&v.to_le_bytes());
+        }
+        (Fmt::U16, SignalValue::Int(v)) => {
+            let v = u16::try_from(v.clamp(0, i64::from(u16::MAX))).unwrap_or(0);
+            raw.copy_from_slice(&v.to_le_bytes());
+        }
+        (Fmt::I16, SignalValue::Int(v)) => {
+            let v = i16::try_from(v.clamp(i64::from(i16::MIN), i64::from(i16::MAX))).unwrap_or(0);
+            raw.copy_from_slice(&v.to_le_bytes());
+        }
+        (Fmt::U32, SignalValue::Int(v)) => {
+            let v = u32::try_from(v.clamp(0, i64::from(u32::MAX))).unwrap_or(0);
+            raw.copy_from_slice(&v.to_le_bytes());
+        }
+        (Fmt::I32, SignalValue::Int(v)) => {
+            let v = i32::try_from(v.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(0);
+            raw.copy_from_slice(&v.to_le_bytes());
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a REAL is held as f32 on the wire"
+        )]
+        (Fmt::F32, SignalValue::Real(v)) => raw.copy_from_slice(&(v as f32).to_bits().to_le_bytes()),
+        _ => {}
+    }
+}
+
+fn clamp_u8(v: i64) -> u8 {
+    u8::try_from(v.clamp(0, 255)).unwrap_or(0)
+}
+
+/// Which program ports bind to which points of the map, by name: each
+/// `(port index, point index)` pairs a port with the point of the same
+/// name, compared case-insensitively (ST names are case-insensitive). An
+/// input port (`is_input`) binds only to an `in` point and an output port
+/// only to an `out` point. Ports with no point are left out, as are points
+/// with no port. Where two points carry one name in one direction, the
+/// first in map order wins, so the answer is the same on every load.
+#[must_use]
+pub fn bindings(map: &IoMap, ports: &[(&str, bool)]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for (pi, (name, is_input)) in ports.iter().enumerate() {
+        let want = if *is_input { Dir::In } else { Dir::Out };
+        if let Some(k) = map
+            .points
+            .iter()
+            .position(|p| p.dir == want && p.name.eq_ignore_ascii_case(name))
+        {
+            out.push((pi, k));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;
