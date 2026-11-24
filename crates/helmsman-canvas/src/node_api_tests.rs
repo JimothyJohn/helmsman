@@ -509,8 +509,22 @@ fn a_checked_project_goes_to_the_watched_skipper_as_one_program() {
             "approval": {"needs": {"replay": true}}
         })),
     );
+    // The box's policy asks a replay for this change: it runs first, on
+    // the box, and nothing has gone to the Skipper yet (Nick, 2026-11-24).
     let reqs = p.poll();
-    assert_eq!(reqs.len(), 1, "no replay or box deploy: {reqs:?}");
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert_eq!(reqs[0].call, PCall::Replay("skipper_drive".into()));
+    assert!(!reqs[0].call.on_node());
+    p.answer(
+        PCall::Replay("skipper_drive".into()),
+        &crate::box_projects::Answer {
+            status: 201,
+            retry_after: None,
+            body: r#"{"replay": 7}"#.into(),
+        },
+    );
+    let reqs = p.poll();
+    assert_eq!(reqs.len(), 1, "the program, and no box deploy: {reqs:?}");
     let q = &reqs[0];
     assert!(q.call.on_node());
     assert_eq!((q.method, q.url.as_str()), ("PUT", "/api/modules/drive"));
@@ -592,4 +606,34 @@ fn a_skipper_refusing_the_token_leaves_the_box_session_alone() {
     assert!(PCall::DeployModule("x".into()).on_node());
     assert!(!PCall::Check("x".into()).on_node());
     assert!(!PCall::List.on_node());
+}
+
+/// A replay the box could not run stops a Skipper deploy: nothing is sent.
+#[test]
+fn a_replay_that_did_not_run_sends_nothing_to_the_skipper() {
+    use crate::box_projects::{Answer, BoxProjects, Deploy, PCall};
+    let mut p = BoxProjects::default();
+    p.available = Some(true);
+    p.open = Some(opened(&[("main.st", NEW)]));
+    p.to_node = true;
+    p.deploy = Deploy::Checking;
+    p.answer(
+        PCall::Check("skipper_drive".into()),
+        &check_answer(&serde_json::json!({"ok": true, "held": [],
+            "modules": [{"name": "drive"}], "approval": {"needs": {"replay": true}}})),
+    );
+    assert_eq!(p.poll().len(), 1, "the replay");
+    p.answer(
+        PCall::Replay("skipper_drive".into()),
+        &Answer {
+            status: 422,
+            retry_after: None,
+            body: r#"{"error":"the replay faulted"}"#.into(),
+        },
+    );
+    assert_eq!(p.poll().len(), 0);
+    let Deploy::Failed(why) = &p.deploy else {
+        panic!("{:?}", p.deploy)
+    };
+    assert!(why.contains("replay"), "{why}");
 }

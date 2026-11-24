@@ -76,6 +76,10 @@ pub struct BoxTrend {
     pub notice: Option<String>,
     /// Why this browser does not keep pins, if it does not.
     pub problem: Option<String>,
+    /// The signals are another node's (a page watching a Skipper by
+    /// address): the box behind the page does not know their names and
+    /// refuses them as pins (422), so this browser keeps them.
+    pub local_pins: bool,
     /// The pins nobody chose, oldest first ([`crate::ekg::pin_auto`]).
     auto: Vec<String>,
     /// The lanes that just joined, popping.
@@ -114,6 +118,7 @@ impl BoxTrend {
             window_ms: crate::playground::TREND_MS,
             notice: None,
             problem: None,
+            local_pins: false,
             auto: Vec::new(),
             flashes: crate::ekg::Flashes::default(),
             expecting: Vec::new(),
@@ -214,7 +219,7 @@ impl BoxTrend {
         if self.loaded.as_deref() != Some(key.as_str()) {
             self.loaded = Some(key);
             self.series.clear();
-            if who.is_some() {
+            if who.is_some() && !self.local_pins {
                 self.queue
                     .push(PReq::get(PCall::TrendPins, "/api/trends/pins".into()));
             } else {
@@ -297,7 +302,7 @@ impl BoxTrend {
     /// Keeps the pins, in order: on the box for a person signed in, in
     /// this browser otherwise.
     fn keep_pins(&mut self, session: Option<&Session>) {
-        if session.is_some() {
+        if session.is_some() && !self.local_pins {
             self.queue.push(PReq::json(
                 PCall::SavePins,
                 "PUT",

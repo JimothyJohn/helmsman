@@ -2150,6 +2150,8 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::take_copies(ui.ctx());
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

@@ -215,7 +215,7 @@ impl PCall {
     /// box's.
     #[must_use]
     pub const fn on_node(&self) -> bool {
-        matches!(self, Self::DeployModule(_) | Self::NodeMap(_))
+        matches!(self, Self::DeployModule(_) | Self::NodeMap(_) | Self::Control(..))
     }
 }
 
@@ -635,12 +635,12 @@ impl BoxProjects {
         }
     }
 
-    /// The checked project, to the watched node: its one program and the
-    /// project's other ST files (function blocks), as one source, under
-    /// the program's name. The box's lint holds still hold it; the box's
-    /// approval policy is the box's own and does not apply to a node,
-    /// which takes a write on its token.
-    fn send_to_node(&mut self, project: &str, check: &Json) {
+    /// The checked project, to the watched node: what the box's lint holds
+    /// stops it here, a project of more than one program too (a Skipper
+    /// runs one); a sim replay comes first when the box's policy asks one
+    /// for the change (Nick, 2026-11-24: "require the replay for Skipper
+    /// deploys"), as it would before running it on the box.
+    fn to_node_after_check(&mut self, project: &str, check: &Json) {
         let held: Vec<&str> = check["held"]
             .as_array()
             .into_iter()
@@ -651,25 +651,37 @@ impl BoxProjects {
             self.deploy = Deploy::Failed(format!("{project} was not sent: {}", held.join("; ")));
             return;
         }
-        let [module] = self.modules.as_slice() else {
+        if self.modules.len() != 1 {
             self.deploy = Deploy::Failed(format!(
                 "A Skipper runs one program; {project} builds {}: {}.",
                 self.modules.len(),
                 self.modules.join(", ")
             ));
             return;
+        }
+        if check["approval"]["needs"]["replay"].as_bool() == Some(true) {
+            self.replay(project);
+        } else {
+            self.send_to_node();
+        }
+    }
+
+    /// The open project's program, its function blocks with it, to the
+    /// watched node under the program's name.
+    fn send_to_node(&mut self) {
+        let Some(module) = self.modules.first().cloned() else {
+            return;
         };
-        let module = module.clone();
         let Some(o) = &self.open else { return };
         let source = node_source(o);
         self.module = Some(ModuleEdit {
-            name: module.clone(),
+            name: module,
             base: String::new(),
-            text: source.clone(),
+            text: source,
             seen: String::new(),
             sent: None,
         });
-        // The check is over; the send is the deploy's last step.
+        // The check (and replay) are over; the send is the deploy's last step.
         self.deploy = Deploy::Idle;
         self.deploy_module();
     }
@@ -2027,7 +2039,7 @@ impl BoxProjects {
                     })
                     .unwrap_or_default();
                 if self.to_node {
-                    self.send_to_node(&name, &j);
+                    self.to_node_after_check(&name, &j);
                 } else if j["approval"]["needs"]["replay"].as_bool() == Some(true) {
                     self.replay(&name);
                 } else {
@@ -2035,6 +2047,7 @@ impl BoxProjects {
                 }
             }
             PCall::Replay(name) => match j["replay"].as_u64().filter(|_| a.status == 201) {
+                Some(_) if self.to_node => self.send_to_node(),
                 Some(n) => self.deploy_now(&name, Some(n)),
                 None => {
                     self.deploy = Deploy::Failed(deploy_words(format!(

@@ -1171,3 +1171,60 @@ impl crate::sim_projects::Storage for LocalProjects {
             .map_err(|e| text(&e))
     }
 }
+
+/// Puts what the page copied on the clipboard where the browser will not
+/// let egui do it: a page served over plain HTTP from a LAN address is not
+/// a secure context, so `navigator.clipboard` is missing and every Copy
+/// button, Ctrl+C and selection copy did nothing (Nick, 2026-11-24: "The
+/// copy buttons don't do shit"). There the frame's copy commands are taken
+/// here and copied the older way, through a hidden text area and
+/// `execCommand("copy")`, while the click that asked is still the page's
+/// user gesture. In a secure context egui's own copy is left alone.
+pub fn take_copies(ctx: &egui::Context) {
+    let Some(window) = web_sys::window() else { return };
+    if window.is_secure_context() {
+        return;
+    }
+    let texts: Vec<String> = ctx.output_mut(|o| {
+        let mut taken = Vec::new();
+        o.commands.retain(|c| match c {
+            egui::OutputCommand::CopyText(t) => {
+                taken.push(t.clone());
+                false
+            }
+            _ => true,
+        });
+        taken
+    });
+    for t in texts {
+        if let Err(why) = copy_by_command(&window, &t) {
+            web_sys::console::warn_1(&JsValue::from_str(&format!("copy failed: {why}")));
+        }
+    }
+}
+
+fn copy_by_command(window: &web_sys::Window, copied_text: &str) -> Result<(), String> {
+    let document = window.document().ok_or("no document")?;
+    let body = document.body().ok_or("no body")?;
+    let area: web_sys::HtmlTextAreaElement = document
+        .create_element("textarea")
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|_| "not a textarea".to_string())?;
+    area.set_value(copied_text);
+    // Off screen, and never scrolls the page or shows a keyboard.
+    let _ = area.set_attribute("readonly", "");
+    let _ = area.set_attribute("style", "position:fixed;top:-1000px;left:-1000px;opacity:0");
+    body.append_child(&area).map_err(|e| text(&e))?;
+    area.select();
+    let html: web_sys::HtmlDocument = document
+        .dyn_into()
+        .map_err(|_| "not an HTML document".to_string())?;
+    let copied = html.exec_command("copy").map_err(|e| text(&e));
+    let _ = body.remove_child(&area);
+    match copied {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("the browser refused the copy".into()),
+        Err(why) => Err(why),
+    }
+}
