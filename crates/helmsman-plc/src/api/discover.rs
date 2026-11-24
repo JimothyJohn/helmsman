@@ -11,7 +11,11 @@
 //!   `profinet-io` when the running map names an interface (`if=`), one
 //!   PROFINET DCP Identify on it. One sweep runs at a time (a second asker
 //!   gets 409), and the last result is answered from memory for [`FRESH`]
-//!   unless `?fresh=1`. (`?modbus=1`, which used to switch the probe on, is
+//!   unless `?fresh=1`. `?address=A` (one IPv4 address, nothing else) asks
+//!   that one host instead, for a device that does not answer broadcasts:
+//!   a `ListIdentity` to it and the Modbus probe to it, answered in the
+//!   same shape and not kept as the last scan; a multicast, broadcast or
+//!   unspecified address, or anything that is not an address, is a 400. (`?modbus=1`, which used to switch the probe on, is
 //!   accepted and ignored.)
 //!
 //!   The answer's `found` is the list to show: one entry per device, the
@@ -461,6 +465,111 @@ fn scan(
     Ok(scan)
 }
 
+/// One direct ask of one host (`?address=`): a `ListIdentity` to it and
+/// the Modbus identification probe to it, when the box has one. Not kept
+/// as the last scan (it is one host's answer, not the network's).
+///
+/// # Errors
+/// The status, the reason and the audit line: 409 while a scan runs, 502
+/// when the `ListIdentity` could not be sent.
+fn ask(st: &State, target: SocketAddrV4, address: Ipv4Addr) -> Result<Scan, (u16, String, &'static str)> {
+    let Ok(_one) = st.running.try_lock() else {
+        return Err((
+            409,
+            "a scan is already running; ask again shortly".into(),
+            "discover: busy",
+        ));
+    };
+    let r = st.cfg.resolver(Some(target));
+    let (said, probed) = std::thread::scope(|s| {
+        let probe = st
+            .cfg
+            .modbus
+            .is_some()
+            .then(|| s.spawn(|| resolve::probe_modbus_one(&r, address)));
+        let said = resolve::discover_one(&r, address);
+        let probed = probe.map(|h| {
+            h.join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("the probe failed")))
+        });
+        (said, probed)
+    });
+    let seen = said.map_err(|e| (502, format!("the ask failed: {e}"), "discover: ask failed"))?;
+    let (modbus, modbus_says) = match probed {
+        Some(Ok(v)) => (Some(v.into_iter().collect::<Vec<_>>()), Ok(())),
+        Some(Err(e)) => (
+            None,
+            Err(format!("Modbus was not looked for: the probe failed: {e}")),
+        ),
+        None => (
+            None,
+            Err("Modbus was not looked for: this box does not probe for Modbus devices".into()),
+        ),
+    };
+    Ok(Scan {
+        at: Instant::now(),
+        seen: seen.into_iter().collect(),
+        modbus,
+        profinet: None,
+        protocols: vec![
+            protocol_json("ethernet-ip", Ok(())),
+            protocol_json("modbus-tcp", modbus_says),
+            protocol_json(
+                "profinet",
+                Err(
+                    "PROFINET was not looked for: a direct ask by address sends only EtherNet/IP and Modbus"
+                        .into(),
+                ),
+            ),
+        ],
+    })
+}
+
+/// The address a direct ask names: one IPv4 address and nothing else (no
+/// port, no name, no list), and not one the box may never send to.
+fn ask_address(text: &str) -> Result<Ipv4Addr, &'static str> {
+    let a: Ipv4Addr = text
+        .parse()
+        .map_err(|_| "address must be one IPv4 address such as 192.168.33.1")?;
+    if a.is_multicast() || a.is_broadcast() || a.is_unspecified() {
+        return Err("address must be one device's address, not a multicast, broadcast or unspecified one");
+    }
+    Ok(a)
+}
+
+/// The result a request answers from: the one host `asked`, else the last
+/// scan while it is fresh (unless `fresh`), else a new scan.
+fn scan_or_ask(
+    st: &State,
+    target: SocketAddrV4,
+    asked: Option<Ipv4Addr>,
+    fresh: bool,
+    interface: Option<&str>,
+) -> Result<Scan, (u16, String, &'static str)> {
+    if let Some(address) = asked {
+        return ask(st, target, address);
+    }
+    let cached = st
+        .last
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+        .filter(|c| !fresh && c.at.elapsed() < FRESH);
+    match cached {
+        Some(c) => Ok(c),
+        None => scan(st, target, interface),
+    }
+}
+
+/// The `?address=` of a request, if it has one.
+fn asked_address(req: &Request) -> Result<Option<Ipv4Addr>, &'static str> {
+    req.query
+        .iter()
+        .find(|(k, _)| k == "address")
+        .map(|(_, v)| ask_address(v))
+        .transpose()
+}
+
 /// One protocol's answer from a scan.
 #[derive(Clone, Copy)]
 enum Item<'a> {
@@ -622,25 +731,20 @@ pub(super) fn post(req: &Request, ctx: &Ctx) -> Response {
         .and_then(|cs| cs.io_map)
         .map(|t| iomap::skim(&t))
         .unwrap_or_default();
-    let cached = st
-        .last
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
-        .filter(|c| !fresh && c.at.elapsed() < FRESH);
+    let asked = match asked_address(req) {
+        Ok(a) => a,
+        Err(why) => return refused(400, why, "discover: refused (bad address)"),
+    };
+    let interface = profinet_interface(&map.devices);
     let Scan {
         at,
         seen,
         modbus,
         profinet,
         protocols,
-    } = if let Some(c) = cached {
-        c
-    } else {
-        match scan(st, target, profinet_interface(&map.devices).as_deref()) {
-            Ok(s) => s,
-            Err((status, why, detail)) => return refused(status, &why, detail),
-        }
+    } = match scan_or_ask(st, target, asked, fresh, interface.as_deref()) {
+        Ok(s) => s,
+        Err((status, why, detail)) => return refused(status, &why, detail),
     };
     let address_of = |name: &str| ctx.box_.devices.address(name);
     let index = st.index();

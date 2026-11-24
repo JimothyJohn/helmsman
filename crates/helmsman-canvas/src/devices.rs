@@ -579,6 +579,9 @@ pub enum DeviceAct {
     /// Scan the network (the box: one `ListIdentity` sweep; the
     /// simulation: its simulated E1213).
     Scan,
+    /// Ask the one device at this address (the box: a `ListIdentity` and
+    /// the Modbus probe to it; the simulation has no network and says so).
+    Ask(std::net::Ipv4Addr),
     /// "Use this device" on a found device: open the form filled in from
     /// it. The view copies a read-only example first (the playground).
     Use(NewDevice),
@@ -976,6 +979,10 @@ pub struct DevicesUi {
     pub import: bool,
     pub found: Vec<Found>,
     pub scan: Scan,
+    /// The address typed beside Scan, for asking one device.
+    pub ask_address: String,
+    /// What the last ask came to, in words.
+    pub ask_note: Option<String>,
     /// Why the box had no library, when it said.
     pub library_note: Option<String>,
     /// The plant model's states (`crate::plant`): the view fills it in
@@ -1048,6 +1055,49 @@ impl DevicesUi {
                 self.scan = Scan::Failed(if s == 0 { why } else { format!("{s}: {why}") });
             }
         }
+    }
+
+    /// Takes in the box's answer to one device's ask
+    /// (`POST /api/devices/discover?address=`): what answered joins the
+    /// list, replacing an entry of the same address; a refusal or no
+    /// answer is said in words. `address` is the one that was asked.
+    pub fn asked(&mut self, address: &str, status: u16, body: &str) {
+        let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
+        match (status, Found::parse_discovery(&j)) {
+            (200..=299, Some((found, note))) => {
+                self.library_note = note.or(self.library_note.take());
+                if found.is_empty() {
+                    self.ask_note = Some(format!("No device answered at {address}."));
+                    return;
+                }
+                self.ask_note = None;
+                for f in found {
+                    if let Some(i) = self.found.iter().position(|o| o.address == f.address) {
+                        self.found[i] = f;
+                    } else if self.found.len() < 256 {
+                        self.found.push(f);
+                    }
+                }
+            }
+            (s, _) => {
+                let why = text(&j["error"]).unwrap_or_else(|| "no answer".to_string());
+                self.ask_note = Some(if s == 0 { why } else { format!("{s}: {why}") });
+            }
+        }
+    }
+
+    /// The simulation has no network to ask.
+    pub fn simulated_ask(&mut self) {
+        self.ask_note =
+            Some("The simulation has no network to ask. A box asks the address you give it.".into());
+    }
+
+    /// The address typed, when it is one device's IPv4 address: what the
+    /// box accepts (not a multicast, broadcast or unspecified one).
+    #[must_use]
+    pub fn ask_target(&self) -> Option<std::net::Ipv4Addr> {
+        let a: std::net::Ipv4Addr = self.ask_address.trim().parse().ok()?;
+        (!a.is_multicast() && !a.is_broadcast() && !a.is_unspecified()).then_some(a)
     }
 
     /// Takes in the box's answer to `GET /api/devices/library?vendor=&product=`
@@ -1548,6 +1598,37 @@ impl DevicesUi {
                 .tip("On: the New device form with its protocols, addresses and typed points, Import device… from an EDS, and Use this device. Off: a device is added by a click on what the scan found. Remembered in this browser.");
             chrome.hit("devices advanced", a.rect);
         });
+        // One address, for a device that does not answer the scan's
+        // broadcast (another subnet, a different interface).
+        ui.horizontal_wrapped(|ui| {
+            let ask_tip = "The address of one device, such as 192.168.33.1. Scan asks every device at once; this asks one directly, for a device Scan does not list.";
+            let f = ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.ask_address)
+                        .hint_text("IP address")
+                        .desired_width(150.0),
+                )
+                .tip(ask_tip);
+            chrome.hit("devices ask address", f.rect);
+            let target = self.ask_target();
+            let b = ui
+                .add_enabled(target.is_some(), egui::Button::new("Ask"))
+                .tip(if target.is_some() {
+                    "Asks the device at this address who it is (EtherNet/IP and Modbus TCP), and lists it with the scan's results."
+                } else {
+                    "Type one IPv4 address first, such as 192.168.33.1."
+                });
+            chrome.hit("devices ask", b.rect);
+            let enter = f.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if let Some(a) = target
+                && (b.clicked() || enter)
+            {
+                act = Some(DeviceAct::Ask(a));
+            }
+        });
+        if let Some(note) = &self.ask_note {
+            ui.add(egui::Label::new(RichText::new(note).small().color(t.muted)).wrap());
+        }
         match &self.scan {
             Scan::Done if self.found.is_empty() => {
                 ui.add(egui::Label::new(RichText::new("No device answered.").small().color(t.muted)).wrap());
