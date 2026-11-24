@@ -2928,6 +2928,41 @@ mod chrome {
         );
     }
 
+    /// Nick, 2026-11-24: "When saving files allow spaces for the user".
+    /// A name typed with spaces is taken, saved with `_` in their place,
+    /// for a project and for a file.
+    #[test]
+    fn a_name_typed_with_spaces_is_saved_with_underscores() {
+        let mut h = Harness::blink();
+        h.press("bar file");
+        h.press("file copy");
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
+        h.press("name");
+        h.key(Modifiers::COMMAND, Key::A);
+        h.frame(vec![Event::Text(" Tank fill  2 ".into())]);
+        h.press("name ok");
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.open, "tank_fill_2");
+        h.press("new file");
+        h.wait(0.2);
+        h.press("name");
+        h.key(Modifiers::COMMAND, Key::A);
+        h.frame(vec![Event::Text("Pump control.st".into())]);
+        h.press("name ok");
+        h.wait(0.3);
+        assert!(h.has("file Pump_control.st"));
+        h.right_click(h.rect("file Pump_control.st").center());
+        h.press("menu rename");
+        h.wait(0.2);
+        h.press("name");
+        h.key(Modifiers::COMMAND, Key::A);
+        h.frame(vec![Event::Text("Drain valve.st".into())]);
+        h.press("name ok");
+        h.wait(0.3);
+        assert!(h.has("file Drain_valve.st") && !h.has("file Pump_control.st"));
+    }
+
     /// Rename and Delete are the right-click menu's and the Delete key's,
     /// not buttons under the lists; the question is asked in the middle
     /// of the screen (Nick, 2026-11-02).
