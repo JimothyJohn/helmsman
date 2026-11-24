@@ -61,7 +61,7 @@ fn an_off_line_keeps_the_device_and_marks_the_port() {
 fn a_file_without_off_lines_reads_as_it_always_did() {
     let (spec, problems) = parse(OVEN);
     assert_eq!(problems, []);
-    assert!(spec.off.is_empty());
+    assert_eq!(spec.off, Vec::<String>::new());
 }
 
 #[test]
