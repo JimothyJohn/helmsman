@@ -1555,7 +1555,7 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
 fn chart(ui: &mut egui::Ui, c: &Chart) {
     let t = theme(ui);
     let secs = (c.end_ms.saturating_sub(c.start_ms)) as f64 / 1000.0;
-    ui.label(RichText::new(format!("replay #{} over {secs:.1} s of recorded inputs", c.id)).color(t.muted));
+    ui.label(RichText::new(format!("replay #{} over {} s of recorded inputs", c.id, helmsman_iec::shown_real(secs))).color(t.muted));
     for f in &c.faults {
         ui.colored_label(
             crate::theme::theme(ui).ink(RED),
@@ -1709,23 +1709,23 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
         p.text(
             inner.left_top(),
             Align2::LEFT_TOP,
-            format!("{:.3}", range.1),
+            helmsman_iec::shown_real(range.1),
             FontId::monospace(crate::theme::MIN_TEXT),
             t.muted,
         );
         p.text(
             inner.left_bottom(),
             Align2::LEFT_BOTTOM,
-            format!("{:.3}", range.0),
+            helmsman_iec::shown_real(range.0),
             FontId::monospace(crate::theme::MIN_TEXT),
             t.muted,
         );
     }
     let on = |ms: u64| ms as f64 / 1000.0;
     response.on_hover_text(format!(
-        "on for {:.1} s now, {:.1} s with the proposal",
-        on(s.on_ms.0),
-        on(s.on_ms.1)
+        "on for {} s now, {} s with the proposal",
+        helmsman_iec::shown_real(on(s.on_ms.0)),
+        helmsman_iec::shown_real(on(s.on_ms.1))
     ));
 }
 

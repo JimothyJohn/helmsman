@@ -647,7 +647,7 @@ pub fn saying(f: &Front) -> String {
     };
     if happened {
         return match f.fault {
-            Fault::HighStuck => format!("{} Peak {:.2} m of {DEPTH:.0} m.", f.fault.outcome(), f.peak),
+            Fault::HighStuck => format!("{} Peak {} m of {DEPTH:.0} m.", f.fault.outcome(), helmsman_iec::shown_real(f.peak)),
             _ => f.fault.outcome().to_string(),
         };
     }
@@ -761,7 +761,7 @@ fn paint_tank(p: &egui::Painter, area: Rect, t: &crate::theme::Theme, f: &Front,
     text(
         Pos2::new(tank.center().x, (water.top() + 6.0).min(tank.bottom() - 22.0)),
         egui::Align2::CENTER_TOP,
-        &format!("{level:.2} m"),
+        &format!("{} m", helmsman_iec::shown_real(level)),
         WHITE,
     );
     text(
@@ -880,7 +880,7 @@ fn seconds(ms: u64) -> String {
     } else {
         #[allow(clippy::cast_precision_loss)]
         let s = ms as f64 / 1000.0;
-        format!("{s:.1} s")
+        format!("{} s", helmsman_iec::shown_real(s))
     }
 }
 

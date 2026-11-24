@@ -3344,7 +3344,7 @@ impl PlaygroundView {
         let secs = s.now_ms as f64 / 1000.0;
         let state = s.state();
         (
-            format!("{} · {secs:.1}s", state.word()),
+            format!("{} · {}s", state.word(), helmsman_iec::shown_real(secs)),
             state == crate::playground::RunState::Running,
         )
     }
@@ -4637,7 +4637,7 @@ impl PlaygroundView {
                     "{}\n{}",
                     name.to_ascii_lowercase(),
                     last.filter(|v| v.is_finite())
-                        .map_or("–".into(), |v| Value::Real(v).to_string())
+                        .map_or("–".into(), |v| helmsman_iec::shown_real(v))
                 ),
                 FontId::monospace(crate::theme::MIN_TEXT),
                 color,
@@ -5867,6 +5867,6 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
 pub fn show(ty: Ty, v: Value) -> String {
     match (ty, v) {
         (Ty::Time, Value::Int(ns)) => format!("{} ms", ns / 1_000_000),
-        _ => v.to_string(),
+        _ => v.shown(),
     }
 }

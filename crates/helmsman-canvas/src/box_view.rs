@@ -2860,7 +2860,7 @@ impl Body for BoxView {
         if let Some(s) = &self.state.scan {
             ui.separator();
             ui.label(
-                RichText::new(format!("t={:.1}s", s.now_ms as f64 / 1000.0))
+                RichText::new(format!("t={}s", helmsman_iec::shown_real(s.now_ms as f64 / 1000.0)))
                     .monospace()
                     .color(t.muted),
             )
