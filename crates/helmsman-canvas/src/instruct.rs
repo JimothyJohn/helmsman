@@ -2712,7 +2712,8 @@ fn box_ui(
         // Up in the empty box: the last message sent, the caret at its end.
         if out.0.has_focus() && ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) && s.recall() {
             use egui::text::{CCursor, CCursorRange};
-            if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), out.0.id) {
+            let state = egui::TextEdit::load_state(ui.ctx(), out.0.id); // tip: exempt, the box's caret, no control
+            if let Some(mut state) = state {
                 let end = CCursor::new(s.draft.chars().count());
                 state.cursor.set_char_range(Some(CCursorRange::one(end)));
                 state.store(ui.ctx(), out.0.id);
