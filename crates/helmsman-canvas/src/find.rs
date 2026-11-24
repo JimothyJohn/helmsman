@@ -217,9 +217,11 @@ pub fn row(
     let mut replace: Option<bool> = None;
     let owned = buf.as_str().to_owned();
     let text = owned.as_str();
-    ui.horizontal_wrapped(|ui| {
-        // The whole row: the count and the buttons wrap under it, so a
-        // narrow pane never crowds the field.
+    // Stacked, each part on a row of its own: the field, then the count
+    // and the buttons. In one wrapping row the buttons were laid over the
+    // field and over the code's first line, their second row given no
+    // height (Nick, 2026-11-23).
+    ui.vertical(|ui| {
         let width = (ui.available_width() - 2.0 * ui.spacing().button_padding.x - 8.0).max(60.0);
         let r = ui
             .add(
@@ -266,6 +268,7 @@ pub fn row(
             0 => "no match".to_string(),
             n => format!("{} of {n}", f.current.min(n - 1) + 1),
         };
+        ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(count).monospace())
             .tip("Which match is selected, of how many.");
         if ui
@@ -298,12 +301,11 @@ pub fn row(
         if ui.button("✕").tip("Closes the find box (Esc).").clicked() {
             close = true;
         }
+        });
     });
     let n = f.all(text).len();
     if editable && let Some(with) = f.replace.as_mut() {
-        ui.horizontal_wrapped(|ui| {
-            // The whole row: the count and the buttons wrap under it, so a
-            // narrow pane never crowds the field.
+        ui.vertical(|ui| {
             let width = (ui.available_width() - 2.0 * ui.spacing().button_padding.x - 8.0).max(60.0);
             ui.add(
                 egui::TextEdit::singleline(with)
@@ -312,20 +314,22 @@ pub fn row(
                     .desired_width(width),
             )
             .tip("What a match is replaced with. Empty takes the match out.");
-            if ui
-                .add_enabled(n > 0, egui::Button::new("Replace"))
-                .tip("Writes this in place of the selected match and goes to the next.")
-                .clicked()
-            {
-                replace = Some(false);
-            }
-            if ui
-                .add_enabled(n > 0, egui::Button::new("Replace all"))
-                .tip("Writes this in place of every match in this file.")
-                .clicked()
-            {
-                replace = Some(true);
-            }
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(n > 0, egui::Button::new("Replace"))
+                    .tip("Writes this in place of the selected match and goes to the next.")
+                    .clicked()
+                {
+                    replace = Some(false);
+                }
+                if ui
+                    .add_enabled(n > 0, egui::Button::new("Replace all"))
+                    .tip("Writes this in place of every match in this file.")
+                    .clicked()
+                {
+                    replace = Some(true);
+                }
+            });
         });
     }
     let after;

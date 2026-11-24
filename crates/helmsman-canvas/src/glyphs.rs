@@ -101,7 +101,16 @@ pub enum Icon {
 /// with black ink, as the worded Send was. The caller tips it with what
 /// it does.
 pub fn action(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool) -> Response {
-    let size = Vec2::new(TAP * 1.5, TAP * 0.75);
+    action_wide(ui, icon, enabled, primary, ACTION_W)
+}
+
+/// How wide an [`action`] button is, points.
+pub const ACTION_W: f32 = TAP * 1.5;
+
+/// [`action`], `width` points wide: a row of several in a narrow pane
+/// shares the pane's width instead of running off it.
+pub fn action_wide(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool, width: f32) -> Response {
+    let size = Vec2::new(width, TAP * 0.75);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, r) = ui.allocate_exact_size(size, sense);
     let t = theme(ui);

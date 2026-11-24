@@ -2402,8 +2402,9 @@ fn box_ui(
     enter
 }
 
-/// One row: Send or Stop, the arrows through the revisions (or Undo),
-/// the clock of the versions' index.
+/// One row, left to right (Nick, 2026-11-23): the clock of the
+/// versions' index, the arrows through the revisions (or Undo), and at
+/// the row's right end Send, or Stop while an answer is under way.
 fn buttons_ui(
     ui: &mut egui::Ui,
     chrome: &mut crate::editor::Chrome,
@@ -2414,24 +2415,30 @@ fn buttons_ui(
     let mut act = None;
     let target = &v.target;
     let why_not = v.blocked.clone().or_else(|| s.refusal());
-    ui.horizontal_wrapped(|ui| {
-        if s.busy() {
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Stop, true, false)
-                .tip("Stop: stops waiting. The file stays as it is.");
-            chrome.hit("agent stop", r.rect);
-            if r.clicked() {
-                act = Some(Act::Stop);
-            }
+    // As many buttons as the row holds share its width, none wider than
+    // an action button is: four of those do not fit the pane's default.
+    let count = 1
+        + usize::from(v.versions.is_some())
+        + if v.steps.is_some() {
+            2
         } else {
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::Send, why_not.is_none(), true)
-                .tip(why_not.clone().unwrap_or_else(|| {
-                format!(
-                    "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
-                )
-            }));
-            chrome.hit("agent send", r.rect);
-            if r.clicked() || (enter && why_not.is_none()) {
-                act = Some(Act::Send);
+            usize::from(s.undo().is_some())
+        };
+    let gap = ui.spacing().item_spacing.x;
+    #[allow(clippy::cast_precision_loss)]
+    let wide = ((ui.available_width() - gap * (count as f32 - 1.0)) / count as f32)
+        .clamp(crate::st_view::TAP, crate::glyphs::ACTION_W);
+    ui.horizontal(|ui| {
+        if v.versions.is_some() {
+            let on = s.versions_open;
+            let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::History, true, on, wide).tip(if on {
+                "Versions: back to the answer."
+            } else {
+                "Versions: every saved version of this project, to search and step to."
+            });
+            chrome.hit("agent versions", r.rect);
+            if r.clicked() {
+                s.versions_open = !on;
             }
         }
         if let Some(steps) = &v.steps {
@@ -2449,7 +2456,7 @@ fn buttons_ui(
                     "Forward: this is the newest revision.",
                 ),
             ] {
-                let r = crate::glyphs::action(ui, icon, to.is_some(), false)
+                let r = crate::glyphs::action_wide(ui, icon, to.is_some(), false, wide)
                     .tip(to.as_ref().map_or(end, |(_, tip)| tip.as_str()));
                 chrome.hit(key, r.rect);
                 if r.clicked()
@@ -2460,29 +2467,39 @@ fn buttons_ui(
             }
         } else if let Some(u) = s.undo() {
             let r = match &v.undo_blocked {
-                None => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, true, false).tip(format!(
+                None => crate::glyphs::action_wide(ui, crate::glyphs::Icon::Undo, true, false, wide).tip(format!(
                     "Undo: puts {} back as it was in revision {}. The change stays in History.",
                     u.file, u.revision
                 )),
-                Some(why) => crate::glyphs::action(ui, crate::glyphs::Icon::Undo, false, false).tip(why),
+                Some(why) => crate::glyphs::action_wide(ui, crate::glyphs::Icon::Undo, false, false, wide).tip(why),
             };
             chrome.hit("agent undo", r.rect);
             if r.clicked() {
                 act = Some(Act::Undo);
             }
         }
-        if v.versions.is_some() {
-            let on = s.versions_open;
-            let r = crate::glyphs::action(ui, crate::glyphs::Icon::History, true, on).tip(if on {
-                "Versions: back to the answer."
+        // Send has the right end of the row, under the box's right edge.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if s.busy() {
+                let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Stop, true, false, wide)
+                    .tip("Stop: stops waiting. The file stays as it is.");
+                chrome.hit("agent stop", r.rect);
+                if r.clicked() {
+                    act = Some(Act::Stop);
+                }
             } else {
-                "Versions: every saved version of this project, to search and step to."
-            });
-            chrome.hit("agent versions", r.rect);
-            if r.clicked() {
-                s.versions_open = !on;
+                let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Send, why_not.is_none(), true, wide)
+                    .tip(why_not.clone().unwrap_or_else(|| {
+                    format!(
+                        "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
+                    )
+                }));
+                chrome.hit("agent send", r.rect);
+                if r.clicked() || (enter && why_not.is_none()) {
+                    act = Some(Act::Send);
+                }
             }
-        }
+        });
     });
     act
 }

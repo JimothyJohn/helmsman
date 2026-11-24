@@ -1795,6 +1795,32 @@ END_PROGRAM",
         assert!(h.drew("Done: it says why the lamp is on."));
         assert!(!h.has("agent details"), "nothing to look up");
         assert!(h.has("agent back") && h.has("agent forward"));
+        // Nick, 2026-11-23: the clock on the left, the arrows between,
+        // Send at the right end, all inside the box's width.
+        {
+            let [clock, back, forward, send, field] = [
+                "agent versions",
+                "agent back",
+                "agent forward",
+                "agent send",
+                "agent instruction",
+            ]
+            .map(|k| h.rect(k));
+            assert!(
+                clock.right() <= back.left() + 1.0
+                    && back.right() <= forward.left() + 1.0
+                    && forward.right() <= send.left() + 1.0,
+                "clock, back, forward, send: {clock:?} {back:?} {forward:?} {send:?}"
+            );
+            assert!(
+                clock.left() >= field.left() - 1.0 && send.right() <= field.right() + 1.0,
+                "inside the box's width: {clock:?} {send:?} in {field:?}"
+            );
+            assert!(
+                (send.right() - field.right()).abs() <= 4.0,
+                "Send at the right end: {send:?} under {field:?}"
+            );
+        }
         assert!(
             !h.drew("Before") && !h.drew("After"),
             "the arrows are glyphs: their words are in the tooltips"
