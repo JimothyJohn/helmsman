@@ -3088,7 +3088,40 @@ fn fixes_ui(
             }
         });
     }
-    if !fixes.is_empty() {
+    // A word of one's own where the program has a name for it (Nick,
+    // 2026-11-24): the names it could be, a click each.
+    let loose = crate::phrasing::loose(&s.draft, io);
+    for (k, l) in loose.iter().enumerate() {
+        ui.horizontal_wrapped(|ui| {
+            let r = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(format!("\u{201c}{}\u{201d}: use the program's name?", l.from))
+                            .color(t.ink(WARN)),
+                    )
+                    .wrap(),
+                )
+                .tip("The program's own name for it says exactly which input or output you mean.");
+            chrome.hit(format!("phrase loose note {k}"), r.rect);
+            for (j, name) in l.to.iter().enumerate() {
+                let b = ui.button(name).tip(format!(
+                    "Puts {name} in the box in place of \u{201c}{}\u{201d}.",
+                    l.from
+                ));
+                chrome.hit(format!("phrase loose {k} {j}"), b.rect);
+                if b.clicked() {
+                    s.draft = crate::phrasing::apply(
+                        &s.draft,
+                        &crate::phrasing::Fix {
+                            from: l.from.clone(),
+                            to: name.clone(),
+                        },
+                    );
+                }
+            }
+        });
+    }
+    if !fixes.is_empty() || !loose.is_empty() {
         ui.add_space(6.0);
     }
 }
