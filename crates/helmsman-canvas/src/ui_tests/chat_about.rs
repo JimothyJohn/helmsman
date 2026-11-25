@@ -208,3 +208,42 @@ fn eight_long_chips_leave_the_panels_their_width() {
         assert!(x.height() >= 18.0, "the x is a real button: {x:?}");
     }
 }
+
+/// Nick, 2026-11-25: a long instruction wrapped at the panel and the box
+/// stayed three lines tall, the first line scrolled out of view. The box
+/// grows with the text to ten lines, then scrolls inside; the panel keeps
+/// its width the whole time.
+#[test]
+fn the_instruction_box_shows_what_was_typed_up_to_ten_lines() {
+    let mut h = Harness::chatting();
+    h.press("tab claude");
+    h.wait(0.3);
+    let left = h.rect("left");
+    let line = 20.0;
+    let one = h.rect("agent instruction").height();
+    h.click(h.rect("agent instruction").center());
+    h.frame(vec![]);
+    let said = "Now, not only should the lamp go high, but the motor should spin at 1rps while it's active";
+    // Twice over: six wrapped lines at the panel's width.
+    let said = format!("{said} {said}");
+    h.frame(vec![Event::Text(said.clone())]);
+    h.wait(0.5);
+    let r = h.rect("agent instruction");
+    assert!(
+        r.height() >= 5.0 * line && r.height() > one + 2.0 * line,
+        "the box grew to hold the sentence at the panel's width: {one} -> {}",
+        r.height()
+    );
+    assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, said);
+    // A long essay: ten lines at most, then it scrolls inside.
+    h.frame(vec![Event::Text(format!(" {said}").repeat(8))]);
+    h.wait(0.5);
+    let big = h.rect("agent instruction");
+    assert!(
+        big.height() >= 9.0 * line && big.height() <= 10.0 * 24.0 + 12.0,
+        "ten lines at most: {}",
+        big.height()
+    );
+    let grew = h.rect("left").right() - left.right();
+    assert!((0.0..=8.0).contains(&grew), "the panel grew: {grew}");
+}

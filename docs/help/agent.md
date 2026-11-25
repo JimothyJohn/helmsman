@@ -51,7 +51,7 @@ On a box nothing runs until you deploy it, as with any edit of your own.
 In the simulation the changed program runs at once.
 
 The instruction box is at the top of the tab, one row tall. It grows as
-you type, to four rows, and scrolls inside after that. Under it are the
+you type, to ten rows, and scrolls inside after that. Under it are the
 buttons, and under those the answer, down to the bottom of the tab. A
 click anywhere on the answer puts the cursor back in the box. The
 answer's text can be selected and copied.
