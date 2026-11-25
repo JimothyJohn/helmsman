@@ -30,10 +30,10 @@ pub enum Icon {
     Download,
     /// ? in a ring.
     Help,
-    /// A hard hat: an operator is signed in (Nick, 2026-11-07).
-    HardHat,
-    /// A wrench: an engineer is signed in.
-    Tools,
+    /// A head and shoulders: who is signed in, whatever the role (Nick,
+    /// 2026-11-25: "the standard user glyph, not a glyph based on the
+    /// role").
+    User,
     /// < > : the Agent changes the program (its mode toggle, Nick,
     /// 2026-11-08); [`Icon::Help`] is the other side.
     Code,
@@ -633,47 +633,22 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             );
             p.line_segment([Pos2::new(l, y3), Pos2::new(l + b.width() * 0.26, y3)], stroke);
         }
-        Icon::HardHat => {
-            // The dome over the brim, a ridge up its middle.
-            let radius = b.width() * 0.4;
-            let base = bt - b.height() * 0.22;
+        Icon::User => {
+            // A round head over rounded shoulders.
+            let head = b.width() * 0.2;
+            p.circle_filled(Pos2::new(c.x, t + b.height() * 0.3), head, color);
+            let radius = b.width() * 0.36;
+            let base = bt - b.height() * 0.04;
             let n = 16;
-            let mut dome: Vec<Pos2> = (0..=n)
+            let mut body: Vec<Pos2> = (0..=n)
                 .map(|k| {
                     #[allow(clippy::cast_precision_loss)]
                     let a = std::f32::consts::PI * (k as f32 / n as f32);
-                    Pos2::new(c.x - radius * a.cos(), base - radius * a.sin())
+                    Pos2::new(c.x - radius * a.cos(), base - radius * 0.9 * a.sin())
                 })
                 .collect();
-            dome.push(Pos2::new(c.x + radius, base));
-            p.add(egui::Shape::convex_polygon(dome, color, Stroke::NONE));
-            let brim = Rect::from_min_max(Pos2::new(l, base), Pos2::new(r, base + w * 1.4));
-            p.rect_filled(brim, CornerRadius::same(1), color);
-            p.line_segment(
-                [Pos2::new(c.x, base - radius), Pos2::new(c.x, base)],
-                Stroke::new(w * 0.7, Color32::from_black_alpha(90)),
-            );
-        }
-        Icon::Tools => {
-            // A wrench from bottom left to top right: a shaft, and an open
-            // jaw at the top whose gap faces up and to the right.
-            let radius = b.width() * 0.24;
-            let jaw = Pos2::new(r - radius - w * 0.6, t + radius + w * 0.6);
-            let foot = Pos2::new(l + w, bt - w);
-            let along = (jaw - foot).normalized();
-            p.line_segment([foot, jaw - along * radius], Stroke::new(w * 1.6, color));
-            p.circle_filled(foot, w * 0.8, color);
-            let n = 14;
-            let ring: Vec<Pos2> = (0..=n)
-                .map(|k| {
-                    #[allow(clippy::cast_precision_loss)]
-                    let ang = std::f32::consts::FRAC_PI_4
-                        + 0.75
-                        + (k as f32 / n as f32) * (std::f32::consts::TAU - 1.5);
-                    Pos2::new(jaw.x + radius * ang.cos(), jaw.y - radius * ang.sin())
-                })
-                .collect();
-            p.add(egui::Shape::line(ring, Stroke::new(w * 1.3, color)));
+            body.push(Pos2::new(c.x + radius, base));
+            p.add(egui::Shape::convex_polygon(body, color, Stroke::NONE));
         }
         Icon::Code => {
             // Two angle brackets, each a chevron a third of the width.

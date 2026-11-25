@@ -22,15 +22,15 @@ fn open_popup(h: &mut Harness) {
 
 #[test]
 fn a_tab_dragged_along_its_row_takes_that_place() {
-    use Pane::{Claude, Code, Devices, Files, History, Io};
+    use Pane::{Claude, Code, Devices, Files, Io};
     let mut h = sim();
-    assert_eq!(h.app.chrome.lefts, [Claude, Code, Io, Devices, Files, History]);
+    assert_eq!(h.app.chrome.lefts, [Claude, Code, Io, Devices, Files]);
     // Onto the left half of the first tab: before it.
     let io = h.rect("tab io").center();
     let first = h.rect("tab claude");
     h.drag(io, first.left_center() + vec2(3.0, 0.0));
     h.wait(0.2);
-    assert_eq!(h.app.chrome.lefts, [Io, Claude, Code, Devices, Files, History]);
+    assert_eq!(h.app.chrome.lefts, [Io, Claude, Code, Devices, Files]);
     assert_eq!(
         h.app.chrome.pane, Claude,
         "a drag is not a click: the Agent still shows"
@@ -40,16 +40,16 @@ fn a_tab_dragged_along_its_row_takes_that_place() {
     assert!(h.rect("tab io").left() < h.rect("tab claude").left());
     // Onto the right half of the last tab: the end.
     let io = h.rect("tab io").center();
-    let last = h.rect("pane history");
+    let last = h.rect("pane files");
     h.drag(io, last.right_center() - vec2(3.0, 0.0));
     h.wait(0.2);
-    assert_eq!(h.app.chrome.lefts, [Claude, Code, Devices, Files, History, Io]);
+    assert_eq!(h.app.chrome.lefts, [Claude, Code, Devices, Files, Io]);
     // Onto the right half of a tab in the middle: after it.
     let files = h.rect("pane files").center();
     let code = h.rect("pane code");
     h.drag(files, code.right_center() - vec2(3.0, 0.0));
     h.wait(0.2);
-    assert_eq!(h.app.chrome.lefts, [Claude, Code, Files, Devices, History, Io]);
+    assert_eq!(h.app.chrome.lefts, [Claude, Code, Files, Devices, Io]);
     // Dropped on itself, or let go over the pane's body: nothing moves.
     let was = h.app.chrome.lefts.clone();
     let code = h.rect("pane code");
@@ -87,12 +87,12 @@ fn a_tab_dragged_into_the_other_panes_row_docks_at_that_place() {
 #[test]
 fn a_tab_hidden_from_its_menu_comes_back_from_the_view_menu() {
     let mut h = sim();
-    let at = h.rect("pane history").center();
+    let at = h.rect("pane files").center();
     h.right_click(at);
-    h.press("hide history");
+    h.press("hide files");
     h.wait(0.2);
-    assert_eq!(h.app.chrome.hidden, [Pane::History]);
-    assert!(!h.has("pane history"), "its button is gone from the row");
+    assert_eq!(h.app.chrome.hidden, [Pane::Files]);
+    assert!(!h.has("pane files"), "its button is gone from the row");
     assert!(
         h.has("tab claude") && h.app.chrome.pane == Pane::Claude,
         "the rest stay"
@@ -104,14 +104,14 @@ fn a_tab_hidden_from_its_menu_comes_back_from_the_view_menu() {
     h.wait(0.2);
     assert_eq!(h.app.chrome.pane, Pane::Code);
     assert!(h.has("pane code") && !h.has("tab claude"));
-    // View › History, View › Agent: back, at the end, shown.
-    h.view_menu("view history");
+    // View › Files, View › Agent: back, at the end, shown.
+    h.view_menu("view files");
     h.wait(0.2);
-    assert!(h.app.chrome.hidden == [Pane::Claude] && h.app.chrome.showing(Pane::History));
+    assert!(h.app.chrome.hidden == [Pane::Claude] && h.app.chrome.showing(Pane::Files));
     h.view_menu("view tab claude");
     h.wait(0.2);
     assert!(h.app.chrome.hidden.is_empty() && h.app.chrome.showing(Pane::Claude));
-    assert_eq!(h.app.chrome.lefts[4..], [Pane::History, Pane::Claude]);
+    assert_eq!(h.app.chrome.lefts[3..], [Pane::Files, Pane::Claude]);
     // Every tab hidden: no pane is drawn, the diagram has the width, and
     // the View menu still opens one.
     for p in Pane::ALL {
@@ -166,10 +166,10 @@ fn a_ready_made_layout_arranges_the_panes_and_sizes_them() {
 #[test]
 fn the_panes_as_they_are_save_by_name_and_come_back() {
     let mut h = sim();
-    // An arrangement of one's own: I/O on the right, History hidden, the
+    // An arrangement of one's own: I/O on the right, Devices hidden, the
     // left pane widened to 400 pt.
     h.app.chrome.dock(Pane::Io, true);
-    h.app.chrome.hide(Pane::History);
+    h.app.chrome.hide(Pane::Devices);
     let mut l = h.app.chrome.layout();
     l.sizes.left = Some(400.0);
     h.app.chrome.apply(&l);

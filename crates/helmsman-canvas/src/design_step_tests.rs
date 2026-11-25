@@ -861,6 +861,7 @@ fn box_turn(session: &str, text: &str, more: bool) -> String {
 #[test]
 fn on_a_box_a_cut_turn_is_continued_by_session_until_done_says_no_more() {
     let mut d = Designer::boxed();
+    d.shelved = false;
     assert!(d.visible() && d.ask_status().is_none());
     let req = d.start_box("  A bottling line.  ", 0.0).unwrap();
     assert_eq!(req.url, "/api/design");
@@ -983,4 +984,14 @@ fn a_box_stream_with_no_done_was_cut_off_and_carrying_on_posts_the_session() {
     );
     let again = d.carry_on(2.0).unwrap();
     assert_eq!(body(&again), json!({"description": "A machine."}));
+}
+
+/// Nick 2026-11-25: "Design a machine and add a spec should be removed for
+/// now". Neither page offers the entry, whatever the box or relay says.
+#[test]
+fn the_design_entry_is_shelved_on_both_pages() {
+    let b = Designer::boxed();
+    assert!(b.shelved && !b.visible(), "a box offers it by default otherwise");
+    let p = Designer::page();
+    assert!(p.shelved && !p.visible());
 }

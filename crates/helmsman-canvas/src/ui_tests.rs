@@ -3463,7 +3463,13 @@ mod chrome {
     fn advanced_hides_the_typed_form_and_is_remembered_and_use_this_device_still_works() {
         use crate::editor::Chrome;
         let mut h = Harness::new(App::sim());
-        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        {
+            // A program with an output to wire (a new project starts empty).
+            let p = &mut h.app.sim.as_mut().unwrap().proj;
+            p.create("mine", None);
+            p.files.insert("main.st".into(), crate::verify_tests::LAMP.into());
+            p.save();
+        }
         h.press("pane devices");
         h.wait(0.3);
         // Off: the blank space's menu offers nothing to type.
@@ -4100,7 +4106,9 @@ mod chrome {
             sim.proj.save_as(long, None);
         }
         let left = h.rect("left");
-        h.press("pane history");
+        // History is the Agent tab's Versions (Nick, 2026-11-25).
+        h.wait(0.3);
+        h.press("agent versions");
         h.wait(0.3);
         let newest = h.app.sim.as_ref().unwrap().proj.revisions().last().unwrap().n;
         let (two, one) = (
@@ -4120,7 +4128,7 @@ mod chrome {
     }
 
     #[test]
-    fn the_history_tab_steps_through_versions_and_runs_each() {
+    fn the_agent_tabs_versions_step_through_and_run_each() {
         let mut h = Harness::new(App::sim());
         let (one, two);
         {
@@ -4136,7 +4144,9 @@ mod chrome {
             sim.proj.save();
             two = sim.proj.files["main.st"].clone();
         }
-        h.press("pane history");
+        // History is the Agent tab's Versions (Nick, 2026-11-25).
+        h.wait(0.3);
+        h.press("agent versions");
         h.wait(0.3);
         let newest = h.app.sim.as_ref().unwrap().proj.revisions().last().unwrap().n;
         let older = newest - 1;
@@ -4553,13 +4563,13 @@ mod chrome {
             "the tab under Code"
         );
         assert_eq!(c.rights, [Pane::Io, Pane::Code]);
-        c.pane = Pane::History;
+        c.pane = Pane::Files;
         c.send_right();
-        assert_eq!(c.pane, Pane::Files, "the last one: the one before");
+        assert_eq!(c.pane, Pane::Devices, "the last one: the one before");
         c.dock(Pane::Io, false);
         assert_eq!(
             (c.pane, c.side),
-            (Pane::Io, Pane::History),
+            (Pane::Io, Pane::Files),
             "back on the left, shown; the right keeps its tab"
         );
         assert_eq!(c.lefts.last(), Some(&Pane::Io), "at the end");
@@ -5286,6 +5296,11 @@ mod simulated {
         {
             let sim = h.app.sim.as_mut().unwrap();
             sim.proj.create("mine", None);
+            // Lines to select (a new project starts empty).
+            sim.proj
+                .files
+                .insert("main.st".into(), crate::verify_tests::LAMP.into());
+            sim.proj.save();
             sim.open_project("mine");
         }
         h.wait(0.3);
@@ -5797,17 +5812,22 @@ mod boxed {
 
     /// Nick 2026-11-07: once someone is signed in the sign-in panel
     /// collapses (the box's answer lands frames after its button), and the
-    /// header shows the role: a hard hat for an operator, a wrench and a
-    /// screwdriver for an engineer.
+    /// header shows who: one user glyph for every role and the name alone
+    /// (Nick, 2026-11-25), the role in the tip.
     #[test]
     fn signing_in_collapses_the_panel_and_the_header_shows_the_role() {
+        // The words painted, to read the header by.
+        fn texts(shape: &eframe::egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                eframe::egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                _ => {}
+            }
+        }
         use crate::review::Session;
         let mut h = Harness::new(App::boxed());
         h.wait(0.2);
-        assert!(
-            !h.has("role operator") && !h.has("role engineer"),
-            "signed out: no role"
-        );
+        assert!(!h.has("user glyph"), "signed out: no one");
         h.press("sign in");
         h.wait(0.2);
         assert!(h.app.login, "the panel opens");
@@ -5819,7 +5839,7 @@ mod boxed {
         });
         h.wait(0.2);
         assert!(!h.app.login, "signed in: the panel collapses");
-        assert!(h.has("role operator") && !h.has("role engineer"), "a hard hat");
+        assert!(h.has("user glyph"), "the user glyph");
         // Opened again while signed in, it stays open (to sign out).
         h.press("sign in");
         h.wait(0.2);
@@ -5830,9 +5850,14 @@ mod boxed {
         });
         h.wait(0.2);
         assert!(!h.app.login, "a different person signed in: collapses");
-        assert!(h.has("role engineer") && !h.has("role operator"), "the tools");
+        assert!(h.has("user glyph"), "the same glyph for an engineer");
+        // The name alone, no "(engineer)".
+        let mut shown = Vec::new();
+        h.shapes.iter().for_each(|c| texts(&c.shape, &mut shown));
+        assert!(shown.iter().any(|t| t == "alice"), "{shown:?}");
+        assert!(!shown.iter().any(|t| t.contains("(engineer)")), "{shown:?}");
         // The glyph opens the panel too.
-        h.press("role engineer");
+        h.press("user glyph");
         h.wait(0.2);
         assert!(h.app.login);
         h.app.review.as_mut().unwrap().state.session = None;
@@ -7890,16 +7915,7 @@ mod glyph_library {
             "dock=2 left=1 right=1 lefts=claude,code,palette pane=palette rights=io,palette side=palette",
         );
         // The tabs it named, less the palette; the rest join the left.
-        assert_eq!(
-            c.lefts,
-            [
-                Pane::Claude,
-                Pane::Code,
-                Pane::Devices,
-                Pane::Files,
-                Pane::History
-            ]
-        );
+        assert_eq!(c.lefts, [Pane::Claude, Pane::Code, Pane::Devices, Pane::Files]);
         assert_eq!(c.rights, [Pane::Io]);
         assert_eq!((c.pane, c.side), (Pane::Claude, Pane::Io));
     }

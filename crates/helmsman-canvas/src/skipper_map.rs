@@ -201,6 +201,18 @@ pub fn for_skipper(
     found: &dyn Fn(&str) -> Option<String>,
 ) -> ForSkipper {
     let mut out = ForSkipper::default();
+    // The Skipper's own list, less its placeholders: those were another
+    // program's (Nick, 2026-11-25: simulated I/O "should also be wiped
+    // when a new file is created"); this project's own come with it.
+    let mut own = String::new();
+    for l in node.lines().filter(|l| {
+        l.trim() != crate::placeholders::HEADER
+            && iomap::skim(l).signals.first().is_none_or(|s| s.device != "sim")
+    }) {
+        own.push_str(l);
+        own.push('\n');
+    }
+    let node = own.as_str();
     let theirs = iomap::skim(node);
     let node_lines: BTreeSet<&str> = node.lines().map(str::trim).collect();
     let mut map = node.trim_end().to_string();

@@ -218,3 +218,24 @@ fn a_placeholder_under_a_name_too_long_is_dropped() {
     assert!(!m.map.contains("liberty"), "{}", m.map);
     assert!(m.map.contains("in  ok bool sim"), "{}", m.map);
 }
+
+/// Nick 2026-11-25: a new project inherited the last program's
+/// placeholders from the Skipper's list. The Skipper's own `sim` points
+/// (and their header) are not part of the base; the project's are.
+#[test]
+fn the_skippers_own_placeholders_are_not_inherited() {
+    let node = format!(
+        "{NODE}{}\nin  start bool sim\nout motor_fwd bool sim\n",
+        crate::placeholders::HEADER
+    );
+    let m = for_skipper(None, &node, &profiles, &nothing);
+    assert_eq!(m.map, NODE.trim_end().to_string() + "\n");
+    let mine = format!("{}\nin  go bool sim\n", crate::placeholders::HEADER);
+    let m = for_skipper(Some(&mine), &node, &profiles, &nothing);
+    assert!(
+        m.map.contains("in  go bool sim") && !m.map.contains("motor_fwd"),
+        "{}",
+        m.map
+    );
+    both_take(&m.map);
+}

@@ -389,6 +389,8 @@ fn boxed() -> Harness {
     });
     let b = h.app.boxv.as_mut().unwrap();
     b.projects.available = Some(true);
+    // The entry is shelved on the page for now; these test it.
+    b.design.shelved = false;
     h.wait(0.3);
     h
 }

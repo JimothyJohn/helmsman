@@ -88,7 +88,7 @@ EXPECTED = ("/__seed", "status of 404", "status of 401", "status of 409", "statu
 
 # Every tab in the left pane, in its first order (2026-11-13: one pane, the
 # Agent first; a tab can be docked in a right pane).
-PANES = ("claude", "code", "io", "devices", "files", "history")
+PANES = ("claude", "code", "io", "devices", "files")
 
 
 def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
@@ -120,7 +120,6 @@ DIAGRAM = (330, 60, 1000, 500)
 TAB_AGENT = (23, 70)
 TAB_CODE = (60, 70)
 TAB_IO = (97, 70)
-TAB_HISTORY = (210, 70)
 # One tab docked on the right: after the pane's chevron.
 TAB_RIGHT_FIRST = (1229, 71)
 # The fold arrow of the Code tab's second line, in the gutter.
@@ -135,8 +134,8 @@ MENU_FILE = (201, 64)
 MENU_EDIT = (202, 92)
 MENU_VIEW = (207, 120)
 MENU_HELP = (206, 148)
-VIEW_PANE_LAYOUTS = (396, 541)
-VIEW_PANE_LAYOUTS_BOX = (396, 615)
+VIEW_PANE_LAYOUTS = (396, 505)
+VIEW_PANE_LAYOUTS_BOX = (396, 578)
 VIEW_PROPOSALS_BOX = (396, 198)
 LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
@@ -224,8 +223,6 @@ def playground(ctx, base, out):
     r.wait(3000)
     r.shot("editor")
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT)
-    # The History tab (2026-11-13): a built-in example has no versions.
-    r.click(*TAB_HISTORY); r.wait(600); r.shot("history-tab")
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT)
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.

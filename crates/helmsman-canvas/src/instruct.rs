@@ -1994,6 +1994,10 @@ pub enum Act {
     RunSteps,
     /// Run this revision of the open project (the arrows).
     Revision(u32),
+    /// This revision's details in the middle of the screen: its
+    /// instruction and answer, each file's change, Restore (a double
+    /// click in Versions, as the History tab had it).
+    Details(u32),
     /// Open this proposal under Proposals (a box).
     Review(u64),
     /// This answer to the question on show (`crate::ask`).
@@ -2033,7 +2037,7 @@ pub struct View {
     /// ([`crate::phrasing`]); `None`: no help (a box).
     pub io: Option<Vec<crate::phrasing::Io>>,
     /// The open project's versions, for the clock's index; `None`: no
-    /// clock (a box, whose versions are in its History tab).
+    /// clock (no project open, or none saved yet).
     pub versions: Option<Versions>,
 }
 
@@ -3047,9 +3051,8 @@ fn versions_ui(
         return None;
     }
     match crate::history_ui::tab_ui(ui, chrome, &rows, versions.at) {
-        Some(crate::history_ui::Pick::Show(n) | crate::history_ui::Pick::Details(n)) => {
-            Some(Act::Revision(n))
-        }
+        Some(crate::history_ui::Pick::Show(n)) => Some(Act::Revision(n)),
+        Some(crate::history_ui::Pick::Details(n)) => Some(Act::Details(n)),
         None => None,
     }
 }

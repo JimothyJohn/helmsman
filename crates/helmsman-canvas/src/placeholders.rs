@@ -59,6 +59,9 @@ pub struct Added {
     /// Ports that cannot have one: a point of that name faces the other
     /// way, or the port's type has no point type. Said, never fixed here.
     pub cannot: Vec<String>,
+    /// Placeholders the program no longer has a port for, taken out (the
+    /// page made them, so the page clears them).
+    pub dropped: Vec<String>,
 }
 
 /// The placeholders `program` (the program as it builds, test files left
@@ -68,11 +71,46 @@ pub struct Added {
 #[must_use]
 pub fn add(program: &str, sizes: helmsman_iec::ImageSizes, list: &str) -> Option<Added> {
     let compiled = helmsman_iec::compile(program, sizes).ok()?;
-    let have = points(list);
+    let ports: Vec<String> = compiled
+        .ports()
+        .iter()
+        .map(|p| p.name.to_ascii_lowercase())
+        .collect();
     let mut added = Added::default();
+    // A placeholder for no port of this program goes.
+    let mut kept: Vec<&str> = Vec::new();
+    for l in list.lines() {
+        let w: Vec<&str> = l.split('#').next().unwrap_or("").split_whitespace().collect();
+        if let ["in" | "out", name, _, "sim", ..] = w.as_slice()
+            && !ports.contains(&name.to_ascii_lowercase())
+        {
+            added.dropped.push((*name).to_string());
+            continue;
+        }
+        kept.push(l);
+    }
+    let any_sim = kept.iter().any(|l| l.split_whitespace().nth(3) == Some("sim"));
+    kept.retain(|l| any_sim || l.trim() != HEADER);
+    let list = kept.join("\n");
+    let have = points(&list);
+    // A port shared with other controllers (`share NAME TYPE TABLE:ADDR`,
+    // the Skipper's Modbus TCP tables) is wired by its share: a
+    // placeholder beside it would be refused (one source per input).
+    let shared: Vec<String> = list
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.split('#').next().unwrap_or("").split_whitespace();
+            (w.next() == Some("share"))
+                .then(|| w.next().map(str::to_ascii_lowercase))
+                .flatten()
+        })
+        .collect();
     for p in compiled.ports() {
         let name = p.name.to_ascii_lowercase();
         let input = p.dir == PortDir::Input;
+        if shared.contains(&name) {
+            continue;
+        }
         match have.iter().find(|(n, _)| *n == name) {
             Some((_, i)) if *i == input => {}
             Some((_, i)) => added.cannot.push(format!(
@@ -90,7 +128,7 @@ pub fn add(program: &str, sizes: helmsman_iec::ImageSizes, list: &str) -> Option
             },
         }
     }
-    if added.lines.is_empty() && added.cannot.is_empty() {
+    if added.lines.is_empty() && added.cannot.is_empty() && added.dropped.is_empty() {
         return None;
     }
     let mut map = list.trim_end().to_string();
@@ -126,6 +164,12 @@ pub fn said(a: &Added) -> Option<String> {
     }
     if !a.cannot.is_empty() {
         parts.push(format!("No placeholder for {}.", a.cannot.join("; ")));
+    }
+    if !a.dropped.is_empty() {
+        parts.push(format!(
+            "Placeholder points the program no longer uses taken out of io.map: {}.",
+            a.dropped.join(", ")
+        ));
     }
     (!parts.is_empty()).then(|| parts.join(" "))
 }

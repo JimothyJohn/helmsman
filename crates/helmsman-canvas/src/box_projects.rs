@@ -399,6 +399,22 @@ impl Deploy {
             Self::Saving | Self::Scanning | Self::Checking | Self::Replaying | Self::Deploying
         )
     }
+
+    /// While busy, what it is doing, for the spinner beside Deploy (Nick,
+    /// 2026-11-25: "During the deployment step you should be shown a
+    /// loading indicator so you know something is happening").
+    #[must_use]
+    pub const fn stage(&self, to_node: bool) -> Option<&'static str> {
+        Some(match self {
+            Self::Saving => "Saving…",
+            Self::Scanning => "Finding the devices…",
+            Self::Checking => "Checking…",
+            Self::Replaying => "Replaying in the simulation…",
+            Self::Deploying if to_node => "Sending to the Skipper…",
+            Self::Deploying => "Deploying…",
+            Self::Idle | Self::Done(_) | Self::Failed(_) => return None,
+        })
+    }
 }
 
 /// An upload the box refused because the name is taken, kept so the page
@@ -436,6 +452,9 @@ pub struct BoxProjects {
     pub pending: Option<Pending>,
     /// A 401 said the box no longer knows this page's session.
     pub ended: bool,
+    /// New project made and opened this project: the view starts it
+    /// afresh (taken once).
+    pub created: Option<String>,
     /// The forces list, when a force call just changed it.
     pub forces: Option<Vec<ForceRow>>,
     /// A deploy changed what runs: the module list should be read again.
@@ -1707,7 +1726,9 @@ impl BoxProjects {
             return Ok(None);
         };
         let map = added.as_ref().map_or(made.map.as_str(), |a| a.map.as_str());
-        let write = added.as_ref().is_some_and(|a| !a.lines.is_empty())
+        let write = added
+            .as_ref()
+            .is_some_and(|a| !a.lines.is_empty() || !a.dropped.is_empty())
             || project.as_deref().is_some_and(|p| p.trim() != map.trim());
         if write {
             let b = o
@@ -2190,6 +2211,7 @@ impl BoxProjects {
                 }
             }
             PCall::Starter(name) => {
+                self.created = Some(name.clone());
                 if ok {
                     self.note(format!("Made project {name}."), false);
                 } else {

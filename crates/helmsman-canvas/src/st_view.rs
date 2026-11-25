@@ -3493,7 +3493,7 @@ fn draw(
                 "skipped".into(),
             ),
             Some(Gate::NotReached) => (t.rule, Color32::TRANSPARENT, "not reached".into()),
-            None => (t.muted, Color32::TRANSPARENT, String::new()),
+            Some(Gate::Unknown) | None => (t.muted, Color32::TRANSPARENT, String::new()),
         };
         let (stroke, fill) = (stroke.gamma_multiply(f), fill.gamma_multiply(f));
         painter.rect_filled(rect, CornerRadius::same(6), fill);

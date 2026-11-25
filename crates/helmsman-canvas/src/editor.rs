@@ -76,20 +76,11 @@ pub enum Pane {
     /// The I/O map's devices and their points (`crate::devices`).
     Devices,
     Files,
-    /// The open project's revisions, to step through (Nick, 2026-11-13).
-    History,
 }
 
 impl Pane {
     /// Every tab, in the left pane's first order.
-    pub const ALL: [Self; 6] = [
-        Self::Claude,
-        Self::Code,
-        Self::Io,
-        Self::Devices,
-        Self::Files,
-        Self::History,
-    ];
+    pub const ALL: [Self; 5] = [Self::Claude, Self::Code, Self::Io, Self::Devices, Self::Files];
 
     /// The view's own tab this is, for the two a view draws through
     /// [`Body::tab`].
@@ -98,7 +89,7 @@ impl Pane {
         match self {
             Self::Claude => Some(Tab::Claude),
             Self::Io => Some(Tab::Io),
-            Self::Code | Self::Devices | Self::Files | Self::History => None,
+            Self::Code | Self::Devices | Self::Files => None,
         }
     }
 
@@ -109,7 +100,6 @@ impl Pane {
             Self::Files => "Alt+Shift+0  Files: the projects and their files.",
             Self::Devices => "Alt+Shift+4  Devices: the I/O map and its modules.",
             Self::Code => "Alt+Shift+1  Code: the open file's Structured Text.",
-            Self::History => "History: every saved version, newest at the top.\nClick one to run it.",
             Self::Claude | Self::Io => match self.tab() {
                 Some(t) => t.tip(),
                 None => "",
@@ -123,7 +113,6 @@ impl Pane {
             Self::Files => Icon::Files,
             Self::Devices => Icon::Devices,
             Self::Code => Icon::Code,
-            Self::History => Icon::History,
             Self::Claude => Icon::Agent,
             Self::Io => Icon::Io,
         }
@@ -136,7 +125,6 @@ impl Pane {
             Self::Files => "Files",
             Self::Devices => "Devices",
             Self::Code => "Structured Text",
-            Self::History => "History",
             Self::Claude => Tab::Claude.label(),
             Self::Io => Tab::Io.label(),
         }
@@ -148,7 +136,6 @@ impl Pane {
             Self::Files => "files",
             Self::Devices => "devices",
             Self::Code => "code",
-            Self::History => "history",
             Self::Claude => "claude",
             Self::Io => "io",
         }
@@ -744,17 +731,6 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
     ) {
         chrome.toggle_devices();
     }
-    let history = chrome.showing(Pane::History);
-    if menu_item(
-        ui,
-        chrome,
-        "view history",
-        "History",
-        history,
-        "Shows or hides the open project's saved versions.",
-    ) {
-        chrome.toggle(Pane::History);
-    }
     if menu_item_keyed(
         ui,
         chrome,
@@ -896,9 +872,6 @@ pub trait Body {
     fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The left pane's Code tab: the ST editor (read-only on a box).
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
-    /// The left pane's History tab: the open project's revisions, newest
-    /// first, each a short description of its change.
-    fn history(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Trend along the bottom: pins and the plot.
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Messages under the left pane's tabs: the view's log (`messages::Log`).
@@ -1028,9 +1001,6 @@ fn pane_body(ui: &mut egui::Ui, p: Pane, body: &mut dyn Body, chrome: &mut Chrom
             scroll("ed-devices-scroll").show(ui, |ui| body.devices(ui, chrome));
         }
         Pane::Code => body.st(ui, chrome),
-        Pane::History => {
-            scroll("ed-history-scroll").show(ui, |ui| body.history(ui, chrome));
-        }
         Pane::Claude => body.tab(ui, Tab::Claude, chrome),
         Pane::Io => body.tab(ui, Tab::Io, chrome),
     }
@@ -1818,6 +1788,22 @@ pub struct Status<'a> {
     /// Whether Deploy may be pressed, or why not.
     pub deploy: &'a Result<(), String>,
     pub deploy_tip: &'a str,
+    /// A deploy under way: what it is doing, beside a spinner.
+    pub busy: Option<&'a str>,
+    /// Back and Forward through the project's revisions (Nick,
+    /// 2026-11-25: History in the Code tab), when there are any.
+    pub steps: Option<&'a crate::instruct::Steps>,
+}
+
+/// A spinner and what a deploy is doing, beside Deploy (in a right-to-left
+/// row, so the words come before the spinner on screen).
+pub fn busy(ui: &mut egui::Ui, chrome: &mut Chrome, stage: &str, hit: &str) {
+    let t = crate::theme::theme(ui);
+    let r = ui
+        .add(egui::Label::new(RichText::new(stage).color(t.muted)).truncate())
+        .tip("Deploy is under way. The Messages say how it ends.");
+    let s = ui.add(egui::Spinner::new().size(crate::glyphs::ROW * 0.8));
+    chrome.hit(hit, r.rect.union(s.rect));
 }
 
 /// What was pressed at the header's right end.
@@ -1826,6 +1812,8 @@ pub struct Pressed {
     pub deploy: bool,
     /// The red ✖: go to the first error.
     pub errors: bool,
+    /// Back or Forward: the revision to show.
+    pub revision: Option<u32>,
 }
 
 /// The header's right end, right to left: Deploy as a filled yellow
@@ -1840,6 +1828,33 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
         let r = crate::glyphs::deploy(ui, s.deploy.is_ok()).tip(tip);
         chrome.hit("code deploy", r.rect);
         out.deploy = r.clicked();
+        if let Some(stage) = s.busy {
+            busy(ui, chrome, stage, "code deploying");
+        }
+        if let Some(steps) = s.steps {
+            // Right to left: Forward, then Back, so they read Back Forward.
+            for (key, icon, to, end) in [
+                (
+                    "code forward",
+                    Icon::Forward,
+                    &steps.forward,
+                    "Forward: this is the newest revision.",
+                ),
+                (
+                    "code back",
+                    Icon::Back,
+                    &steps.back,
+                    "Back: this is the first revision.",
+                ),
+            ] {
+                let tip = to.as_ref().map_or(end, |(_, t)| t.as_str());
+                let r = crate::glyphs::button_sized(ui, icon, crate::glyphs::ROW, to.is_some(), false, tip);
+                chrome.hit(key, r.rect);
+                if r.clicked() {
+                    out.revision = to.as_ref().map(|(n, _)| *n);
+                }
+            }
+        }
         if s.errors > 0 {
             let red = crate::theme::theme(ui).ink(crate::st_view::brand::RED);
             let r = ui

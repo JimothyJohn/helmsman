@@ -42,9 +42,10 @@ fn scan_and_add_puts_every_known_device_in_the_project_without_a_form() {
         sim.proj.files["io.map"].matches("device iologik_e1213").count(),
         1
     );
-    assert_eq!(
-        sim.devices_ui.add_note.as_deref(),
-        Some("Scan and add: nothing was added.")
+    let note = sim.devices_ui.add_note.clone().unwrap();
+    assert!(
+        note.starts_with("Scan and add: nothing new to add; io.map has iologik_e1213 at "),
+        "it says what is there already: {note}"
     );
 }
 
@@ -129,7 +130,7 @@ fn a_device_the_skipper_runs_already_is_passed_over() {
     assert!(d.add_all.is_none(), "nothing to add");
     let note = d.add_note.unwrap();
     assert!(
-        note.contains("ioLogik E1213 at 192.168.33.1, the Skipper's own drive"),
+        note.starts_with("Scan and add: nothing new to add; io.map has drive at 192.168.33.1 already."),
         "{note}"
     );
 }

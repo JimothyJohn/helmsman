@@ -995,13 +995,20 @@ pub struct AddAll {
     pub added: Vec<String>,
     /// What was passed over, and why.
     pub skipped: Vec<String>,
+    /// What the map (or the Skipper) has already: `name at address`.
+    pub present: Vec<String>,
 }
 
 impl AddAll {
     /// The words for what it came to.
     #[must_use]
     pub fn summary(&self) -> String {
-        let mut out = if self.added.is_empty() {
+        let mut out = if self.added.is_empty() && !self.present.is_empty() {
+            format!(
+                "Scan and add: nothing new to add; io.map has {} already. Add their I/O under each device with + Add I/O, or ask the Agent to wire the program to them.",
+                self.present.join(", ")
+            )
+        } else if self.added.is_empty() {
             "Scan and add: nothing was added.".to_string()
         } else {
             format!(
@@ -1137,18 +1144,23 @@ impl DevicesUi {
     pub(crate) fn found_to_add_all(&mut self) {
         let Some(a) = &mut self.add_all else { return };
         for f in &self.found {
-            if mapped_in(&self.map, f).is_some() || f.reported.is_some() {
+            // In the map already, or one of the Skipper's own: said, not added.
+            let have = mapped_in(&self.map, f)
+                .or_else(|| f.reported.clone())
+                .or_else(|| {
+                    self.skipper
+                        .iter()
+                        .find(|(_, h)| *h == f.address)
+                        .map(|(n, _)| n.clone())
+                });
+            if let Some(n) = have {
+                a.present.push(format!("{n} at {}", f.address));
                 continue;
             }
             let shown = f.library.as_ref().filter(|l| !l.model.is_empty()).map_or_else(
                 || f.product_name.clone(),
                 |l| format!("{} {}", l.vendor, l.model).trim().to_string(),
             );
-            if let Some((n, _)) = self.skipper.iter().find(|(_, h)| *h == f.address) {
-                a.skipped
-                    .push(format!("{shown} at {}, the Skipper's own {n}", f.address));
-                continue;
-            }
             if f.library.as_ref().and_then(|l| l.profile_file.as_ref()).is_some() {
                 a.queue.push_back(f.clone());
             } else {
@@ -1452,6 +1464,33 @@ impl DevicesUi {
                 chrome.hit("devices open map", b.rect);
                 if b.clicked() {
                     act = Some(DeviceAct::OpenMap);
+                }
+            }
+            // Remove unused for every device at once (Nick, 2026-11-25:
+            // "a higher level version of that to save some time").
+            let idle: Vec<String> = if self.can_declare {
+                self.map
+                    .devices
+                    .iter()
+                    .flat_map(|d| crate::device_io::unused(&self.map, &d.name, &self.program))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if !idle.is_empty() {
+                let b = ui
+                    .add_enabled(write.is_ok(), egui::Button::new(format!("Clean up {} unused", idle.len())).small())
+                    .tip(write.as_ref().err().map_or(
+                        "Takes every device's points the program has no variable for out of io.map. Asks first.",
+                        String::as_str,
+                    ));
+                chrome.hit("devices clean up", b.rect);
+                if b.clicked() {
+                    self.removing = Some(crate::device_io::Removal {
+                        device: "every device".into(),
+                        signals: idle,
+                        unused: true,
+                    });
                 }
             }
         });

@@ -264,3 +264,35 @@ fn a_device_nobody_knows_takes_a_point_by_its_address() {
     );
     assert!(program(&h).contains("  plc_coil_3 : BOOL;"));
 }
+
+/// Nick 2026-11-25: "another cleanup button on the Devices tab that gets
+/// rid of all unused I/O at the same time for all devices." Two devices
+/// each with points the program does not use: one Clean up asks once and
+/// takes them all out, the program's points and the other lines stay.
+#[test]
+fn clean_up_takes_every_devices_unused_points_out_at_once() {
+    let second = "device rio2 device:moxa-iologik-e1213 cip=991:515:0x00e12131\n";
+    let text = format!(
+        "in  stop bool box di:1\n{DEVICE}in  start bool rio ch:DI-00\nin  rio_di_01 bool rio ch:DI-01\n{second}in  rio2_di_02 bool rio2 ch:DI-02\nout rio2_do_00 bool rio2 ch:DO-00\n"
+    );
+    let mut h = playground(&text);
+    let left = edge(&h);
+    assert!(h.has("devices clean up"), "one button for every device");
+    inside_the_pane(&h, "devices clean up", left);
+    h.press("devices clean up");
+    h.wait(0.2);
+    assert!(h.has("remove io form"), "it asks first");
+    h.press("remove io cancel");
+    h.wait(0.2);
+    assert_eq!(map(&h), text, "Cancel changes nothing");
+    h.press("devices clean up");
+    h.wait(0.2);
+    h.press("remove io ok");
+    h.wait(0.3);
+    assert_eq!(
+        map(&h),
+        format!("in  stop bool box di:1\n{DEVICE}in  start bool rio ch:DI-00\n{second}"),
+        "both devices' unused points go; the program's and the devices stay"
+    );
+    assert!(!h.has("devices clean up"), "nothing unused is left");
+}

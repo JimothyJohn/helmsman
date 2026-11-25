@@ -126,3 +126,51 @@ fn the_words_name_the_points_and_where_to_set_them() {
         "Placeholder points added to io.map for start, stop, speed, running: no device has them yet. Set the inputs on the I/O tab."
     );
 }
+
+/// Nick 2026-11-25: simulated I/O "can't be deleted". The page made the
+/// placeholders, so a placeholder the program has no port for goes at
+/// the next pass, named, and the header with the last of them.
+#[test]
+fn a_placeholder_the_program_no_longer_uses_is_taken_out() {
+    let p = "PROGRAM p\nVAR_INPUT go : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := go;\nEND_PROGRAM\n";
+    let list = format!("{NODE}{HEADER}\nin  go bool sim\nin  motor_fwd bool sim\nout running bool sim\n");
+    let a = add(p, SIZES, &list).unwrap();
+    assert_eq!(a.dropped, ["motor_fwd", "running"]);
+    assert_eq!(a.lines, ["out lamp bool sim"]);
+    assert!(
+        a.map.contains("in  go bool sim") && !a.map.contains("motor_fwd"),
+        "{}",
+        a.map
+    );
+    assert_eq!(a.map.matches(HEADER).count(), 1, "{}", a.map);
+    assert!(
+        said(&a)
+            .unwrap()
+            .contains("no longer uses taken out of io.map: motor_fwd, running")
+    );
+    // Nothing left of them: the header goes too.
+    let none = "PROGRAM p\nVAR_INPUT enabled : BOOL; END_VAR\nVAR_OUTPUT slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let a = add(none, SIZES, &format!("{NODE}{HEADER}\nin  old bool sim\n")).unwrap();
+    assert_eq!(a.dropped, ["old"]);
+    assert!(!a.map.contains(HEADER) && !a.map.contains("sim"), "{}", a.map);
+}
+
+/// A port the map shares with other controllers (`share`, the Skipper's
+/// Modbus TCP tables, #633) is wired by its share: no placeholder, and a
+/// share line is kept as it is.
+#[test]
+fn a_shared_port_gets_no_placeholder() {
+    let p = "PROGRAM p\nVAR_INPUT run_cmd : BOOL; go : BOOL; END_VAR\nVAR_OUTPUT speed : DINT; END_VAR\nspeed := 0;\nEND_PROGRAM\n";
+    let list = format!("{NODE}share run_cmd bool coil:0\nshare speed int hr:0\n");
+    let a = add(p, SIZES, &list).unwrap();
+    assert_eq!(
+        a.lines,
+        ["in  go bool sim"],
+        "only the port no share or point backs"
+    );
+    assert!(
+        a.map.contains("share run_cmd bool coil:0\nshare speed int hr:0"),
+        "{}",
+        a.map
+    );
+}

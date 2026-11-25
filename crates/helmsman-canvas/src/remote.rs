@@ -427,6 +427,57 @@ impl Scan for BoxScan {
     }
 }
 
+/// A Skipper's scan for the diagram (Nick, 2026-11-25: "I'm not seeing
+/// the state on the visual diagram at all, only the trend line"). A
+/// Skipper keeps no trace (`GET /api/modules/{name}/trace/events` is "a
+/// node keeps no traces"), but its values stream carries every I/O
+/// point's value each scan, and a program's ports are its points by name.
+/// So the diagram shows the inputs and outputs and what logic computes
+/// from them; a variable that is no point (a counter, a timer) has no
+/// value, and no statement is drawn as skipped ([`Scan::flow`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NodeValues {
+    values: HashMap<String, Value>,
+}
+
+impl NodeValues {
+    #[must_use]
+    pub fn of(signals: &[SignalRow]) -> Self {
+        Self {
+            values: signals
+                .iter()
+                .filter_map(|s| Some((key(&s.name), s.value?)))
+                .collect(),
+        }
+    }
+}
+
+impl Scan for NodeValues {
+    fn hits(&self, _: StmtId) -> u32 {
+        0
+    }
+
+    fn arm_hits(&self, _: StmtId) -> &[u32] {
+        &[]
+    }
+
+    fn passes(&self, _: StmtId) -> Option<u32> {
+        None
+    }
+
+    fn get(&self, path: &str) -> Option<Value> {
+        self.values.get(&key(path)).copied()
+    }
+
+    fn line(&self, _: StmtId) -> Option<u32> {
+        None
+    }
+
+    fn flow(&self) -> bool {
+        false
+    }
+}
+
 /// A module as the picker lists it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleRow {
@@ -791,6 +842,9 @@ pub struct BoxState {
     /// The map came from a Skipper (its reply says `"snapshot":"node"`; a
     /// box's has no such field), so the Devices tab can send it a map.
     pub io_map_node: bool,
+    /// On a Skipper, which keeps no trace: its I/O points' values as the
+    /// diagram's scan ([`NodeValues`]), from each values event.
+    pub node_values: Option<NodeValues>,
     /// The last read of each failed, so what shows is old.
     devices_stale: bool,
     io_map_stale: bool,
@@ -870,6 +924,7 @@ impl BoxState {
             adapter: None,
             io_map: None,
             io_map_node: false,
+            node_values: None,
             devices_stale: false,
             io_map_stale: false,
             devs: DevicesPoll::Answered(None),
@@ -1409,6 +1464,7 @@ impl BoxState {
                     self.values_at_ms = at_ms;
                     if let Some(s) = rows(&j["signals"], SignalRow::parse) {
                         self.signals = s;
+                        self.node_values = self.io_map_node.then(|| NodeValues::of(&self.signals));
                     }
                     if let Some(m) = rows(&j["modules"], ModuleRow::parse) {
                         self.modules = m;
@@ -1842,5 +1898,28 @@ mod tests {
             1.0,
         );
         assert_eq!(s.selected.as_deref(), Some("b"));
+    }
+
+    /// Nick 2026-11-25: no state on the diagram on a Skipper. A Skipper
+    /// keeps no trace; its values stream (the bench Skipper's own shape)
+    /// becomes the diagram's scan, values alone. A box's does not: it has
+    /// the module's trace.
+    #[test]
+    fn a_skippers_values_are_the_diagrams_scan_and_a_boxs_are_not() {
+        use helmsman_diagram::Scan as _;
+        let event = r#"{"seq":1,"signals":[{"dir":"in","forced":false,"name":"enabled","point_error":null,"quality":"good","sim":false,"value":true},{"dir":"out","forced":false,"name":"slew","point_error":null,"quality":"good","sim":false,"value":-1000},{"dir":"in","forced":false,"name":"start","point_error":null,"quality":"missing","sim":true,"value":null}]}"#;
+        let mut s = BoxState::new();
+        s.io_map_node = true;
+        s.apply(Msg::Event(Stream::Values, "values".into(), event.into()), 1.0);
+        let n = s.node_values.as_ref().expect("a Skipper's values are a scan");
+        assert_eq!(n.get("Enabled"), Some(Value::Bool(true)), "by name, case-blind");
+        assert_eq!(n.get("slew"), Some(Value::Int(-1000)));
+        assert_eq!(n.get("start"), None, "no value is no value");
+        assert_eq!(n.get("step_tmr.Q"), None, "a variable that is no point");
+        assert!(!n.flow(), "it does not say what ran");
+
+        let mut b = BoxState::new();
+        b.apply(Msg::Event(Stream::Values, "values".into(), event.into()), 1.0);
+        assert_eq!(b.node_values, None);
     }
 }

@@ -4724,7 +4724,7 @@ fn a_pane_layout_kept_on_the_box_is_offered_on_another_screen() {
 
     let mut c = Chrome::default();
     c.dock(Pane::Io, true);
-    c.hide(Pane::History);
+    c.hide(Pane::Files);
     c.place(Pane::Devices, false, Some(Pane::Claude));
     c.sizes.left = Some(400.0);
     c.sizes.bottom = Some(200.0);
@@ -5301,7 +5301,30 @@ fn file_new_project_opens_a_saved_starter_program() {
         }
     };
 
+    // What the last project left (Nick, 2026-11-25: "The agent history and
+    // panel should reset when a new file is created, the diagram should
+    // also be cleared and the state reset").
+    h.bv().instruct.draft = "make the lamp blink".into();
+    h.bv().projects.deploy = crate::box_projects::Deploy::Failed("the last one's".into());
+    h.bv().devices_ui.add_note = Some("Scan and add: added rio.".into());
     new_project(&mut h, "fresh");
+    h.wait(0.1);
+    assert_eq!(h.bv().instruct.draft, "", "the Agent starts empty");
+    assert_eq!(h.bv().projects.deploy, crate::box_projects::Deploy::Idle);
+    assert_eq!(h.bv().devices_ui.add_note, None);
+    assert_eq!(
+        h.bv().waiting(),
+        "fresh has not run yet. Deploy it to see it here.",
+        "the diagram waits for it"
+    );
+    // Deployed, the diagram is what runs again.
+    h.bv().projects.deploy = crate::box_projects::Deploy::Done("fresh is running.".into());
+    h.wait(0.1);
+    assert!(
+        !h.bv().waiting().contains("has not run yet"),
+        "{}",
+        h.bv().waiting()
+    );
     let p = &h.bv().projects;
     let o = p.open.as_ref().expect("the new project is open");
     assert_eq!(o.name, "fresh", "{:?}", p.notice);
@@ -5660,4 +5683,87 @@ fn an_agent_answer_on_a_skipper_gets_its_placeholders_saved_with_it() {
         !urls.iter().any(|u| u.ends_with("/files/notes.st")),
         "the other edit stays unsaved: {urls:?}"
     );
+}
+
+/// Nick 2026-11-25: "I'm signed in but the help agent isn't working: Sign
+/// in (top right) to ask for help." The bench box had restarted and no
+/// longer knew the session while the header still showed it. A 401 to
+/// Help signs the header out (`projects.ended`), as any box call's does;
+/// another answer does not.
+#[test]
+fn a_help_request_the_box_refuses_signs_the_page_out() {
+    use crate::box_agent::Incoming;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    v.help.draft = "why is the drive not moving".into();
+    v.ask_help(&ctx);
+    let seq = v.help_sent.last().expect("asked").seq;
+    v.help_answer(Incoming::Status {
+        seq,
+        status: 422,
+        body: "{}".into(),
+    });
+    assert!(!v.projects.ended, "a refusal of the question is not a sign-out");
+    v.ask_help(&ctx);
+    let seq = v.help_sent.last().unwrap().seq;
+    v.help_answer(Incoming::Status {
+        seq,
+        status: 401,
+        body: "{}".into(),
+    });
+    assert!(v.projects.ended, "the header signs out");
+}
+
+/// Nick 2026-11-25: "During the deployment step you should be shown a
+/// loading indicator so you know something is happening." While a deploy
+/// runs, a spinner and what it is doing sit beside Deploy; when it ends
+/// they go.
+#[test]
+fn a_deploy_under_way_shows_a_spinner_and_its_stage_beside_deploy() {
+    use crate::box_projects::Deploy;
+    use crate::remote::Fetch;
+    const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let mut bv = BoxView::new();
+    bv.projects.available = Some(false);
+    bv.state.apply(
+        Msg::Got(
+            Fetch::Modules,
+            Ok(r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#.into()),
+        ),
+        1.0,
+    );
+    bv.state.select("drive");
+    let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
+    bv.state.apply(
+        Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+        1.1,
+    );
+    bv.node_token = true;
+    bv.watches_node = true;
+    bv.projects.track_module("drive", SRC);
+    let mut h = Harness::new(bv, None);
+    let r = h.app.review.as_mut().unwrap();
+    r.token_held = true;
+    r.remote = Some("http://10.0.0.41:8088".into());
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("agent deploying").is_none(),
+        "nothing under way"
+    );
+    for (stage, words) in [
+        (Deploy::Checking, "Checking…"),
+        (Deploy::Replaying, "Replaying in the simulation…"),
+        (Deploy::Deploying, "Sending to the Skipper…"),
+    ] {
+        h.bv().projects.deploy = stage.clone();
+        h.wait(0.1);
+        assert!(h.app.chrome.rect("agent deploying").is_some(), "{stage:?}");
+        assert_eq!(stage.stage(true), Some(words));
+    }
+    h.bv().projects.deploy = Deploy::Done("drive is running.".into());
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploying").is_none(), "it ended");
+    assert_eq!(Deploy::Deploying.stage(false), Some("Deploying…"), "to a box");
 }
