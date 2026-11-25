@@ -8321,6 +8321,7 @@ mod layouts;
 mod multi_select;
 mod outputs;
 mod proposal;
+mod scan_add;
 mod shell;
 mod sim_points;
 mod sim_popup;

@@ -967,6 +967,48 @@ pub fn describe_found(found: &[Found]) -> String {
     out
 }
 
+/// A Scan and add under way: what the scan found that is still to add,
+/// one at a time through the quick form's Add (never drawn meanwhile).
+#[derive(Debug, Default)]
+pub struct AddAll {
+    /// The scan has answered and the queue is filled.
+    pub scanned: bool,
+    pub queue: std::collections::VecDeque<Found>,
+    /// A device's profile is being read into the quick form.
+    pub current: bool,
+    /// The names added, in order.
+    pub added: Vec<String>,
+    /// What was passed over, and why.
+    pub skipped: Vec<String>,
+}
+
+impl AddAll {
+    /// The words for what it came to.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let mut out = if self.added.is_empty() {
+            "Scan and add: nothing was added.".to_string()
+        } else {
+            format!(
+                "Scan and add: added {}. Add their I/O under each device with + Add I/O, or ask the Agent to wire the program to them.",
+                self.added.join(", ")
+            )
+        };
+        if !self.skipped.is_empty() {
+            let _ = write!(out, " Not added: {}.", self.skipped.join("; "));
+        }
+        out
+    }
+}
+
+/// Why Scan and add is off: the map cannot be written.
+fn or_why_scan(write: &Result<(), String>) -> &str {
+    write
+        .as_ref()
+        .err()
+        .map_or("Sign in as an engineer to add devices.", String::as_str)
+}
+
 /// The tab's state: which devices are folded, the form if one is open,
 /// an import asked for, the last scan.
 #[derive(Debug, Default)]
@@ -983,6 +1025,14 @@ pub struct DevicesUi {
     pub ask_address: String,
     /// What the last ask came to, in words.
     pub ask_note: Option<String>,
+    /// Scan and add (Nick, 2026-11-24): from the button until every
+    /// device the scan found has been added or passed over.
+    pub add_all: Option<AddAll>,
+    /// What the last Scan and add came to, in words.
+    pub add_note: Option<String>,
+    /// A Scan and add's next Add, handed to the view by
+    /// [`Self::quick_ui`] as the quick form's Add would be.
+    pub add_next: Option<QuickAdd>,
     /// Why the box had no library, when it said.
     pub library_note: Option<String>,
     /// The plant model's states (`crate::plant`): the view fills it in
@@ -1049,6 +1099,7 @@ impl DevicesUi {
                 self.found = found;
                 self.library_note = note;
                 self.scan = Scan::Done;
+                self.found_to_add_all();
             }
             (409, _) => self.scan = Scan::Failed("a scan is already running; try again shortly".into()),
             (501, _) => self.scan = Scan::Failed("this box does not scan its network".into()),
@@ -1057,6 +1108,111 @@ impl DevicesUi {
                 self.scan = Scan::Failed(if s == 0 { why } else { format!("{s}: {why}") });
             }
         }
+        if matches!(self.scan, Scan::Failed(_)) && self.add_all.take().is_some() {
+            self.add_note = Some("Scan and add: the scan failed, so nothing was added.".into());
+        }
+    }
+
+    /// Fills the Scan and add queue from what the scan found: each device
+    /// no map device binds that the library has a profile for; the rest
+    /// that no map device binds are said as passed over.
+    pub(crate) fn found_to_add_all(&mut self) {
+        let Some(a) = &mut self.add_all else { return };
+        for f in &self.found {
+            if mapped_in(&self.map, f).is_some() || f.reported.is_some() {
+                continue;
+            }
+            let shown = f.library.as_ref().filter(|l| !l.model.is_empty()).map_or_else(
+                || f.product_name.clone(),
+                |l| format!("{} {}", l.vendor, l.model).trim().to_string(),
+            );
+            if f.library.as_ref().and_then(|l| l.profile_file.as_ref()).is_some() {
+                a.queue.push_back(f.clone());
+            } else {
+                a.skipped
+                    .push(format!("{shown} at {}, not in the device library yet", f.address));
+            }
+        }
+        a.scanned = true;
+    }
+
+    /// The next step of a Scan and add, once a frame: the profile of the
+    /// next device asked for, or the one read handed on as the quick
+    /// form's Add ([`Self::add_next`]); at the end, the words for what it
+    /// came to. One Add waits for the view to take the last.
+    pub fn add_all_step(&mut self) -> Option<DeviceAct> {
+        if self.add_next.is_some() {
+            return None;
+        }
+        let a = self.add_all.as_mut()?;
+        if !a.scanned {
+            return None;
+        }
+        if a.current {
+            let Some(q) = &self.quick else {
+                a.current = false;
+                return None;
+            };
+            let what = format!("{} {} at {}", q.vendor, q.model, q.address);
+            match &q.profile {
+                None => return None,
+                Some(Err(why)) => a.skipped.push(format!("{what}: {why}")),
+                Some(Ok(_)) => match crate::device_form_ui::quick_add(q, &self.map) {
+                    Ok(add) => {
+                        a.added.push(q.name.clone());
+                        a.current = false;
+                        self.quick = None;
+                        self.add_next = Some(add);
+                        return None;
+                    }
+                    Err(why) => a.skipped.push(format!("{what}: {why}")),
+                },
+            }
+            a.current = false;
+            self.quick = None;
+        }
+        let Some(f) = a.queue.pop_front() else {
+            self.add_note = Some(a.summary());
+            self.add_all = None;
+            return None;
+        };
+        let (vendor, model) = f
+            .library
+            .as_ref()
+            .map(|l| (l.vendor.clone(), l.model.clone()))
+            .unwrap_or_default();
+        let base = Some(slug(if model.is_empty() { &f.product_name } else { &model }))
+            .filter(|s| iomap::device_name_ok(s))
+            .unwrap_or_else(|| "device".to_string());
+        let taken = |n: &str| {
+            self.map.devices.iter().any(|d| d.name.eq_ignore_ascii_case(n))
+                || a.added.iter().any(|d| d.eq_ignore_ascii_case(n))
+        };
+        let mut name = base.clone();
+        let mut k = 2;
+        while taken(&name) {
+            name = format!("{base}_{k}");
+            k += 1;
+        }
+        a.current = true;
+        self.quick = Some(Quick {
+            address: f.address.clone(),
+            vendor,
+            model,
+            identity: f.identity.clone(),
+            file: f
+                .library
+                .as_ref()
+                .and_then(|l| l.profile_file.clone())
+                .unwrap_or_default(),
+            name,
+            profile: None,
+            error: None,
+        });
+        Some(DeviceAct::Library {
+            vendor: f.vendor_id,
+            product: f.product_code,
+        })
     }
 
     /// Takes in the box's answer to one device's ask
@@ -1595,6 +1751,21 @@ impl DevicesUi {
             if b.clicked() {
                 act = Some(DeviceAct::Scan);
             }
+            let can = write.is_ok() || self.copy_first;
+            let adding = self.add_all.is_some();
+            let b = ui
+                .add_enabled(!busy && !adding && can, egui::Button::new(if adding { "Adding…" } else { "Scan and add" }))
+                .tip(if can {
+                    "Scans, then adds every device that answers and the device library knows to the project, each named after its model. Their I/O you then add under each device, or the Agent wires the program to them."
+                } else {
+                    or_why_scan(write)
+                });
+            chrome.hit("devices scan add", b.rect);
+            if b.clicked() {
+                self.add_all = Some(AddAll::default());
+                self.add_note = None;
+                act = Some(DeviceAct::Scan);
+            }
             let a = ui
                 .checkbox(&mut chrome.advanced, "Advanced")
                 .tip("On: the New device form with its protocols, addresses and typed points, Import device… from an EDS, and Use this device. Off: a device is added by a click on what the scan found. Remembered in this browser.");
@@ -1630,6 +1801,18 @@ impl DevicesUi {
         });
         if let Some(note) = &self.ask_note {
             ui.add(egui::Label::new(RichText::new(note).small().color(t.muted)).wrap());
+        }
+        if let Some(a) = &self.add_all {
+            let left = a.queue.len() + usize::from(a.current);
+            let words = if a.scanned {
+                format!("Adding what the scan found: {left} to go.")
+            } else {
+                "Scanning, then adding what answers.".to_string()
+            };
+            ui.add(egui::Label::new(RichText::new(words).color(t.muted)).wrap());
+        } else if let Some(note) = &self.add_note {
+            let r = ui.add(egui::Label::new(RichText::new(note).color(t.muted)).wrap());
+            chrome.hit("devices add note", r.rect);
         }
         match &self.scan {
             Scan::Done if self.found.is_empty() => {
@@ -1851,6 +2034,11 @@ impl DevicesUi {
                     product: f.product_code,
                 });
             }
+        }
+        // A Scan and add under way takes its next step when nothing else
+        // was asked this frame.
+        if act.is_none() {
+            act = self.add_all_step();
         }
         // The plant model's states, each with its sensor or the one it wants.
         self.plant.show(ui, chrome, write);

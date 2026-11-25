@@ -74,5 +74,5 @@ fn only_an_engineer_has_the_control() {
     let bench = Bench::new();
     let mut h = page(&bench, "operator");
     assert!(h.app.chrome.rect("sim start").is_none());
-    assert!(sets(&mut h).is_empty());
+    assert_eq!(sets(&mut h), []);
 }

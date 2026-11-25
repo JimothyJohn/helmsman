@@ -1627,7 +1627,7 @@ impl BoxProjects {
                     loaded: true,
                     ..Buf::default()
                 });
-            b.text = added.map.clone();
+            b.text.clone_from(&added.map);
         }
         crate::placeholders::said(&added)
     }

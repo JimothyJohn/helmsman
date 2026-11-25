@@ -124,7 +124,7 @@ fn points_reads_in_and_out_lines_only() {
         [("enabled".to_string(), true), ("slew".to_string(), false)]
     );
     // A commented-out point, a word alone, garbage: none of them.
-    assert!(points("# in x bool sim\nin\nout\n\u{0}in y\n").is_empty());
+    assert_eq!(points("# in x bool sim\nin\nout\n\u{0}in y\n"), []);
 }
 
 #[test]
