@@ -305,10 +305,12 @@ impl Drop for Bench {
     }
 }
 
-/// A port nothing listens on: bound, then released.
+/// A loopback port nothing listens on: port 1 (tcpmux), which no test and
+/// no runner serves. A port bound and released here was taken by another
+/// test's stand-in relay on a busy runner, and the box found it online
+/// (CI, ubuntu-24.04-arm, 2026-11-25).
 fn closed_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
+    1
 }
 
 impl Bench {
