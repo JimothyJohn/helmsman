@@ -119,6 +119,9 @@ mod pane_layout;
 #[cfg(test)]
 mod pane_layout_tests;
 mod phrasing;
+mod placeholders;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod placeholders_tests;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -143,6 +146,9 @@ mod sim_popup_tests;
 mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
+mod skipper_map;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod skipper_map_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod slow_link_tests;
 mod st_fold;

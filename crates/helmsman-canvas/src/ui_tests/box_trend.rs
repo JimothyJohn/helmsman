@@ -18,6 +18,7 @@ fn row(name: &str) -> SignalRow {
         quality: "good".into(),
         point_error: None,
         forced: false,
+        sim: false,
     }
 }
 

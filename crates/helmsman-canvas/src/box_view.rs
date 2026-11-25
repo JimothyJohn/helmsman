@@ -440,6 +440,14 @@ impl BoxView {
         self.follow_owner();
         self.trend.local_pins = self.watches_node;
         self.projects.node_map = self.state.io_map.clone().filter(|_| self.state.io_map_node);
+        // Scan and add passes over the Skipper's own devices.
+        self.devices_ui.skipper = self
+            .projects
+            .node_map
+            .as_deref()
+            .filter(|_| self.watches_node)
+            .map(crate::skipper_map::devices)
+            .unwrap_or_default();
         self.projects.tick(now);
         self.on_box.step(self.session.as_ref());
         for m in msgs {
@@ -457,7 +465,11 @@ impl BoxView {
                 call @ (PCall::PaneLayouts | PCall::KeepPaneLayout(_) | PCall::DropPaneLayout(_)) => {
                     self.pane_layouts.answer(&call, &a);
                 }
-                PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
+                PCall::Discover => {
+                    self.devices_ui.discovered(a.status, &a.body);
+                    let found = crate::devices::hosts(&self.devices_ui.found);
+                    self.projects.scanned(found);
+                }
                 PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
@@ -746,11 +758,25 @@ impl BoxView {
         // answer off it goes back to the Agent (Nick, 2026-11-24).
         // Until the page has read the Skipper's list there is none to
         // check by (an empty one would turn every port away).
-        let node = self.projects.node_map.clone().filter(|_| self.watches_node);
-        let devices = node.as_deref().map_or_else(String::new, |n| {
+        let node = self.projects.node_map.as_deref().filter(|_| self.watches_node);
+        let devices = node.map_or_else(String::new, |n| {
+            let made = self
+                .projects
+                .for_skipper()
+                .unwrap_or_else(|| crate::skipper_map::for_skipper(None, n, &|_| None, &|_| None));
+            // The same point under the project's other name: the program
+            // must use the Skipper's (Nick, 2026-11-24: the Agent kept a
+            // 40-character name for the MDrive's `enabled`).
+            let same: Vec<String> = made
+                .same
+                .iter()
+                .map(|(p, sp)| format!("\n- {}.", crate::skipper_map::same_words(p, sp)))
+                .collect();
             format!(
-                "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name; any other variable goes under VAR.\n{}",
-                crate::verify::io_list(&files, n).trim()
+                "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name: use these names for what they are. A VAR_INPUT or VAR_OUTPUT with no point here is fine: the page adds a placeholder (`sim`) point for it, set from the I/O tab, so do not write io.map lines for it. A Skipper takes names of at most {} characters: keep every VAR_INPUT and VAR_OUTPUT name that short.{}\n{}",
+                crate::skipper_map::NAME_MAX,
+                same.concat(),
+                made.map.trim()
             )
         });
         let env = crate::instruct::Env {
@@ -1005,6 +1031,18 @@ impl BoxView {
         ));
         self.projects
             .save_agent(&apply.file, &apply.text, &apply.record, &apply.tests);
+        // On a Skipper a port no point backs gets its placeholder now, so
+        // the answer runs as soon as it is deployed (Nick, 2026-11-24).
+        if self.watches_node {
+            let placed = self.projects.add_placeholders();
+            self.projects.save_file(helmsman_project::IO_MAP);
+            match placed {
+                Ok(Some(words)) => self.projects.note(words, false),
+                Err(crate::box_projects::Unsent::Refused(why)) => self.projects.note(why, true),
+                // Nothing to say, or an address Deploy will scan for.
+                Ok(None) | Err(crate::box_projects::Unsent::MayScan(_)) => {}
+            }
+        }
         // What the change added to the program joins the trend once the
         // box reports it (a change is saved first and deployed after).
         let known = crate::device_form::ports_of(&was);
@@ -2333,9 +2371,24 @@ impl BoxView {
             .find(|m| &m.name == shown && matches!(m.state.as_str(), "stopped" | "faulted"))
     }
 
-    /// Forces input `name` to `v` (an engineer's click on its block).
+    /// Forces input `name` to `v` (an engineer's click on its block); a
+    /// placeholder (`sim`) input is set instead, held until set again.
     pub fn force(&mut self, name: &str, v: Value) {
         if is_engineer(self.session.as_ref()).is_err() {
+            return;
+        }
+        let json_of = |v: Value| match v {
+            Value::Bool(b) => json!(b),
+            Value::Int(n) => i64::try_from(n).map_or_else(|_| json!(n.to_string()), |n| json!(n)),
+            Value::Real(r) => json!(r),
+        };
+        if self
+            .state
+            .signals
+            .iter()
+            .any(|s| s.sim && s.name.eq_ignore_ascii_case(name))
+        {
+            self.projects.set_sim(name, &json_of(v));
             return;
         }
         // A program that is not running reads no input: the force would
@@ -2353,12 +2406,7 @@ impl BoxView {
             );
             return;
         }
-        let value = match v {
-            Value::Bool(b) => json!(b),
-            Value::Int(n) => i64::try_from(n).map_or_else(|_| json!(n.to_string()), |n| json!(n)),
-            Value::Real(r) => json!(r),
-        };
-        self.projects.force(name, &value);
+        self.projects.force(name, &json_of(v));
     }
 
     /// Opens `file` of the open project at `line`.
@@ -2524,6 +2572,34 @@ impl BoxView {
             self.force(&name, v);
         }
     }
+}
+
+/// A placeholder (`sim`) input's control on its I/O card, on a line of
+/// its own (a row beside the value would widen the panel): a BOOL is a
+/// Turn on / Turn off button, a number a field to drag or type. The value
+/// to set it to, if one was asked for.
+fn sim_control(
+    ui: &mut egui::Ui,
+    value: Option<helmsman_iec::Value>,
+) -> Option<(Rect, Option<helmsman_iec::Value>)> {
+    use helmsman_iec::Value as V;
+    let tip = "A placeholder input, no device yet: set it here. It holds until you change it or it restarts.";
+    Some(match value? {
+        V::Bool(on) => {
+            let r = ui.button(if on { "Turn off" } else { "Turn on" }).tip(tip);
+            (r.rect, r.clicked().then_some(V::Bool(!on)))
+        }
+        V::Int(n) => {
+            let mut x = i64::try_from(n).unwrap_or(0);
+            let r = ui.add(egui::DragValue::new(&mut x)).tip(tip);
+            (r.rect, r.changed().then_some(V::Int(i128::from(x))))
+        }
+        V::Real(f) => {
+            let mut x = f;
+            let r = ui.add(egui::DragValue::new(&mut x).speed(0.1)).tip(tip);
+            (r.rect, r.changed().then_some(V::Real(x)))
+        }
+    })
 }
 
 /// An input's force control over its block: a BOOL flips, a number drags.
@@ -2869,6 +2945,9 @@ impl Body for BoxView {
             Deploy::Idle => {}
             Deploy::Saving => {
                 ui.label(RichText::new("saving…").color(t.muted));
+            }
+            Deploy::Scanning => {
+                ui.label(RichText::new("finding the devices on the network…").color(t.muted));
             }
             Deploy::Checking => {
                 ui.label(RichText::new("checking…").color(t.muted));
@@ -3417,6 +3496,10 @@ impl Body for BoxView {
         let is_open = |name: &str| open.iter().any(|o| o.eq_ignore_ascii_case(name));
         let signals = &self.state.signals;
         let mut asked: Vec<(String, bool, crate::io_cards::Asked)> = Vec::new();
+        // A placeholder (`sim`) input's control on its card: an engineer
+        // sets it where it runs (Nick, 2026-11-24).
+        let engineer = is_engineer(self.session.as_ref()).is_ok();
+        let mut sets: Vec<(String, helmsman_iec::Value)> = Vec::new();
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
             use crate::io_cards::{Form, Links, Row};
             // Inputs, then Outputs: the simulation's I/O tab has the same
@@ -3544,7 +3627,8 @@ impl Body for BoxView {
                                 simulate: false,
                                 designation: crate::assign::designate(&map, name, is_port),
                             };
-                            let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
+                            let sim_input = input && engineer && sig.is_some_and(|s| s.sim);
+                            let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
                                 crate::io_cards::value(
                                     ui,
                                     (form != Form::Tile).then_some(glyph),
@@ -3552,7 +3636,14 @@ impl Body for BoxView {
                                     &text,
                                     form != Form::Tile,
                                 );
+                                sim_input.then(|| sim_control(ui, value)).flatten()
                             });
+                            if let Some((rect, set)) = control {
+                                chrome.hit(format!("sim {name}"), rect);
+                                if let Some(v) = set {
+                                    sets.push((name.clone(), v));
+                                }
+                            }
                             crate::assign_ui::row_menu(&card, chrome, &menus, name, &mut asks, &mut chat);
                             asked.push((name.clone(), input, a));
                         },
@@ -3566,6 +3657,9 @@ impl Body for BoxView {
         });
         for (name, input, a) in asked {
             self.io_asked(&name, input, a, chrome);
+        }
+        for (name, v) in sets {
+            self.force(&name, v);
         }
         for name in chat.asked {
             self.chat_about_signal(&name, chrome);

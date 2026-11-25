@@ -120,6 +120,13 @@ impl DevicesUi {
     /// name, the channels it will get once the profile came, Add or
     /// Cancel. Returns what Add writes once the name passes.
     pub fn quick_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
+        // Scan and add fills the form itself: its Add, nothing to show.
+        if let Some(add) = self.add_next.take() {
+            return Some(DeviceAct::Quick(add));
+        }
+        if self.add_all.is_some() {
+            return None;
+        }
         let mut q = self.quick.clone()?;
         let mut out = None;
         let mut done = false;
@@ -180,7 +187,7 @@ impl DevicesUi {
                     .tip("Closes the form. Nothing is added.");
                 chrome.hit("quick cancel", no.rect);
                 if ok.clicked() {
-                    match quick_add(&q, &self.map) {
+                    match quick_add(&q, &self.map, !self.skipper.is_empty()) {
                         Ok(a) => {
                             out = Some(DeviceAct::Quick(a));
                             done = true;
@@ -441,15 +448,18 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
 
 /// What the quick form's Add writes, or why not: the name an identifier
 /// the map does not have yet, the profile as a project file, and the
-/// device line `device NAME device:PROFILE IDENTITY`. No signal: every
-/// channel is in the profile, and joins io.map when it is added under the
-/// device (`device_io.rs`).
+/// device line `device NAME device:PROFILE IDENTITY`, or the address it
+/// answered at when `at_address` (a Skipper's page: a Skipper does not
+/// look a device up by its identity). No signal: every channel is in the
+/// profile, and joins io.map when it is added under the device
+/// (`device_io.rs`).
 ///
 /// # Errors
 /// The name, in words.
 pub fn quick_add(
     q: &crate::devices::Quick,
     map: &helmsman_project::iomap::MapText,
+    at_address: bool,
 ) -> Result<QuickAdd, String> {
     let name = q.name.trim();
     if !helmsman_project::iomap::device_name_ok(name) {
@@ -472,7 +482,10 @@ pub fn quick_add(
         text: text.clone(),
         wiring: device_form::Wiring {
             device: name.to_string(),
-            device_line: format!("device {name} device:{stem} {}", q.identity),
+            device_line: format!(
+                "device {name} device:{stem} {}",
+                if at_address { &q.address } else { &q.identity }
+            ),
             signals: Vec::new(),
             replace: Vec::new(),
             declare: Vec::new(),

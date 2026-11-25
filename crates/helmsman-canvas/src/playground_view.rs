@@ -3734,6 +3734,8 @@ impl Body for PlaygroundView {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.simulated_scan(&map);
                 self.wired_lib.scan(&mut self.devices_ui);
+                // Scan and add queues what the library knows.
+                self.devices_ui.found_to_add_all();
             }
             Some(crate::devices::DeviceAct::Ask(_)) => self.devices_ui.simulated_ask(),
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),

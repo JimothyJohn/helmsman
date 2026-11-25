@@ -603,6 +603,9 @@ pub struct SignalRow {
     pub point_error: Option<String>,
     /// An engineer forced it (the box's `forced`).
     pub forced: bool,
+    /// A placeholder (`sim`) point: no device, held in memory; an input
+    /// is set, not forced (`crate::placeholders`).
+    pub sim: bool,
 }
 
 impl SignalRow {
@@ -615,6 +618,7 @@ impl SignalRow {
             quality: j["quality"].as_str().unwrap_or("?").to_string(),
             point_error: j["point_error"].as_str().map(str::to_string),
             forced: j["forced"].as_bool().unwrap_or(false),
+            sim: j["sim"].as_bool().unwrap_or(false),
         })
     }
 }

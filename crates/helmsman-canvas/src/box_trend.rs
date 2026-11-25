@@ -669,6 +669,7 @@ mod tests {
             quality: "good".into(),
             point_error: None,
             forced: false,
+            sim: false,
         }
     }
 

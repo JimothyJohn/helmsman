@@ -215,6 +215,7 @@ fn on_a_box_the_io_tab_says_what_is_wired_and_the_picker_asks_the_box() {
         quality: "good".into(),
         point_error: None,
         forced: false,
+        sim: false,
     });
     // Recording what is on a point is an edit: an engineer's.
     h.app.review.as_mut().unwrap().state.session = Some(crate::review::Session {

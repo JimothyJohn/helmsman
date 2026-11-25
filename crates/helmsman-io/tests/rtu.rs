@@ -470,12 +470,16 @@ fn noise_before_a_reply_and_a_reply_in_pieces_still_read() {
 
 #[test]
 fn a_late_reply_is_never_taken_for_the_next_answer() {
-    // The reply to hr:0 comes 100 ms after the 200 ms time-out; the next
-    // read, of hr:1 (same function, same length), must get hr:1.
-    let (sim, mut d) = rig(2);
+    // The reply to hr:0 comes 200 ms after a 400 ms time-out, inside the
+    // next read's; that read, of hr:1 (same function, same length), must
+    // get hr:1. 200 ms either side: with the default 200 ms time-out and a
+    // 300 ms delay, a busy CI runner (macOS, 2026-11-25) let the late
+    // reply count as on time.
+    let (sim, line) = RtuSim::start(state(), 2, BAUD);
+    let mut d = ModbusDriver::rtu(line, p(&[("unit", "2"), ("timeout_ms", "400")]));
     sim.state().holding[0] = 111;
     sim.state().holding[1] = 222;
-    sim.inject(Fault::Delay(Duration::from_millis(300)));
+    sim.inject(Fault::Delay(Duration::from_millis(600)));
     assert!(read1(&mut d, "hr:0").unwrap_err().is_link());
     assert_eq!(read1(&mut d, "hr:1").unwrap(), Value::Int(222));
     assert_eq!(read1(&mut d, "hr:0").unwrap(), Value::Int(111));
@@ -600,7 +604,10 @@ proptest! {
         for a in ["hr:0", "hr:0:f32", "coil:1"] {
             let started = Instant::now();
             let _ = read1(&mut d, a);
-            prop_assert!(started.elapsed() < Duration::from_millis(500));
+            // A hang is forever; 2 s is far past the 30 ms time-out and
+            // its drain, and clear of a busy CI runner (500 ms was not, on
+            // macOS, 2026-11-25).
+            prop_assert!(started.elapsed() < Duration::from_secs(2));
         }
         let _ = d.write("hr:1", Value::Int(5));
     }
