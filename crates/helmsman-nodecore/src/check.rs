@@ -162,10 +162,11 @@ impl Check {
             .collect()
     }
 
-    /// Every device answered (and there was one to ask).
+    /// Every device answered, and a map was checked: a map of sim points
+    /// alone has no device to ask and passes at once.
     #[must_use]
     pub fn passed(&self) -> bool {
-        !self.running && !self.rows.is_empty() && self.failed().is_empty()
+        !self.running && !self.text.is_empty() && self.failed().is_empty()
     }
 
     /// Whether `text` may be saved at uptime `now_ms`.
@@ -414,5 +415,20 @@ mod tests {
         );
         assert_eq!(off_subnet(&p(8), [10, 200, 0, 1]), None);
         assert!(off_subnet(&p(16), [10, 2, 0, 1]).is_some());
+    }
+
+    #[test]
+    fn a_map_of_sim_points_has_no_device_to_ask_and_passes_once_finished() {
+        let text = "in go bool sim\nout lamp bool sim\n";
+        let mut c = Check::begin(&parse(text).unwrap());
+        assert!(!c.passed(), "running");
+        assert_eq!(c.allows(text, 0), Err(Refusal::Running));
+        c.finish(100);
+        assert!(c.passed());
+        assert_eq!(c.allows(text, 150), Ok(()));
+        // Only that text, and not a stale or an empty record.
+        assert_eq!(c.allows("in go bool sim\n", 150), Err(Refusal::NotChecked));
+        assert!(c.allows(text, 100 + FRESH_MS).is_err());
+        assert!(!Check::default().passed());
     }
 }

@@ -72,6 +72,8 @@ pub struct SignalView {
     /// `good`, `bad` or `stale`.
     pub quality: &'static str,
     pub point_error: Option<String>,
+    /// A sim point (a placeholder held in memory, on no device).
+    pub sim: bool,
 }
 
 /// One fieldbus link as the canvas lists it.
@@ -212,6 +214,7 @@ pub fn signals(view: &NodeView) -> Json {
                     "quality": s.quality,
                     "point_error": s.point_error,
                     "forced": false,
+                    "sim": s.sim,
                 })
             })
             .collect(),
@@ -735,6 +738,7 @@ pub(crate) fn sample_view() -> NodeView {
                 value: Some(SignalValue::Bool(true)),
                 quality: "good",
                 point_error: None,
+                sim: false,
             },
             SignalView {
                 name: "do0".into(),
@@ -742,6 +746,7 @@ pub(crate) fn sample_view() -> NodeView {
                 value: Some(SignalValue::Bool(false)),
                 quality: "good",
                 point_error: None,
+                sim: false,
             },
         ],
         devices: vec![DeviceView {

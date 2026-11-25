@@ -87,6 +87,7 @@ pub(crate) fn view() -> NodeView {
                 value: Some(SignalValue::Bool(true)),
                 quality: "good",
                 point_error: None,
+                sim: false,
             },
             SignalView {
                 name: "counter".into(),
@@ -94,6 +95,7 @@ pub(crate) fn view() -> NodeView {
                 value: Some(SignalValue::Int(42)),
                 quality: "stale",
                 point_error: Some("link down".into()),
+                sim: false,
             },
         ],
         devices: vec![DeviceView {
@@ -233,6 +235,7 @@ fn several_devices_in_mixed_states_and_numeric_points_read_as_a_boxs_do() {
             value: Some(SignalValue::Bool(true)),
             quality: "good",
             point_error: None,
+            sim: false,
         },
         SignalView {
             name: "pos".into(),
@@ -240,6 +243,7 @@ fn several_devices_in_mixed_states_and_numeric_points_read_as_a_boxs_do() {
             value: Some(SignalValue::Int(-70_000)),
             quality: "stale",
             point_error: Some("refused: 0x0106 ownership conflict".into()),
+            sim: false,
         },
         SignalView {
             name: "level".into(),
@@ -247,6 +251,7 @@ fn several_devices_in_mixed_states_and_numeric_points_read_as_a_boxs_do() {
             value: Some(SignalValue::Real(12.25)),
             quality: "good",
             point_error: None,
+            sim: false,
         },
         SignalView {
             name: "whole".into(),
@@ -254,6 +259,7 @@ fn several_devices_in_mixed_states_and_numeric_points_read_as_a_boxs_do() {
             value: Some(SignalValue::Real(3.0)),
             quality: "good",
             point_error: None,
+            sim: false,
         },
         SignalView {
             name: "nan".into(),
@@ -261,6 +267,7 @@ fn several_devices_in_mixed_states_and_numeric_points_read_as_a_boxs_do() {
             value: Some(SignalValue::Real(f64::NAN)),
             quality: "good",
             point_error: None,
+            sim: false,
         },
     ];
     let mut s = BoxState::new();
