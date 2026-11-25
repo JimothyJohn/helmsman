@@ -120,6 +120,9 @@ pub enum PCall {
     Forces,
     Force,
     Release,
+    /// `PUT /api/signals/{name}`: a placeholder (`sim`) input set, on the
+    /// watched box or Skipper.
+    SetSim(String),
     /// `POST /api/modules/{name}/stop|run|restart` (card
     /// monitor-box-run-stop): the module and the control.
     Control(String, &'static str),
@@ -221,7 +224,11 @@ impl PCall {
     pub const fn on_node(&self) -> bool {
         matches!(
             self,
-            Self::DeployModule(_) | Self::NodeMap(_) | Self::Control(..) | Self::NodeMapSend(_)
+            Self::DeployModule(_)
+                | Self::NodeMap(_)
+                | Self::Control(..)
+                | Self::NodeMapSend(_)
+                | Self::SetSim(_)
         )
     }
 }
@@ -1746,6 +1753,16 @@ impl BoxProjects {
         ));
     }
 
+    /// Sets placeholder (`sim`) input `signal` to `value` where it runs.
+    pub fn set_sim(&mut self, signal: &str, value: &Json) {
+        self.queue.push(PReq::json(
+            PCall::SetSim(signal.to_string()),
+            "PUT",
+            format!("/api/signals/{}", crate::remote::segment(signal)),
+            &json!({ "value": value }),
+        ));
+    }
+
     pub fn force(&mut self, signal: &str, value: &Json) {
         self.queue.push(PReq::json(
             PCall::Force,
@@ -2449,6 +2466,11 @@ impl BoxProjects {
                     self.note(format!("{module} {did}."), false);
                 } else {
                     self.note(format!("{module} was not changed: {}", error_of(a)), true);
+                }
+            }
+            PCall::SetSim(name) => {
+                if !ok {
+                    self.note(format!("{name} was not set: {}", error_of(a)), true);
                 }
             }
             PCall::Force | PCall::Release => {

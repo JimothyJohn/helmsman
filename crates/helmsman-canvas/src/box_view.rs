@@ -2341,9 +2341,24 @@ impl BoxView {
             .find(|m| &m.name == shown && matches!(m.state.as_str(), "stopped" | "faulted"))
     }
 
-    /// Forces input `name` to `v` (an engineer's click on its block).
+    /// Forces input `name` to `v` (an engineer's click on its block); a
+    /// placeholder (`sim`) input is set instead, held until set again.
     pub fn force(&mut self, name: &str, v: Value) {
         if is_engineer(self.session.as_ref()).is_err() {
+            return;
+        }
+        let json_of = |v: Value| match v {
+            Value::Bool(b) => json!(b),
+            Value::Int(n) => i64::try_from(n).map_or_else(|_| json!(n.to_string()), |n| json!(n)),
+            Value::Real(r) => json!(r),
+        };
+        if self
+            .state
+            .signals
+            .iter()
+            .any(|s| s.sim && s.name.eq_ignore_ascii_case(name))
+        {
+            self.projects.set_sim(name, &json_of(v));
             return;
         }
         // A program that is not running reads no input: the force would
@@ -2361,12 +2376,7 @@ impl BoxView {
             );
             return;
         }
-        let value = match v {
-            Value::Bool(b) => json!(b),
-            Value::Int(n) => i64::try_from(n).map_or_else(|_| json!(n.to_string()), |n| json!(n)),
-            Value::Real(r) => json!(r),
-        };
-        self.projects.force(name, &value);
+        self.projects.force(name, &json_of(v));
     }
 
     /// Opens `file` of the open project at `line`.
@@ -2532,6 +2542,34 @@ impl BoxView {
             self.force(&name, v);
         }
     }
+}
+
+/// A placeholder (`sim`) input's control on its I/O card, on a line of
+/// its own (a row beside the value would widen the panel): a BOOL is a
+/// Turn on / Turn off button, a number a field to drag or type. The value
+/// to set it to, if one was asked for.
+fn sim_control(
+    ui: &mut egui::Ui,
+    value: Option<helmsman_iec::Value>,
+) -> Option<(Rect, Option<helmsman_iec::Value>)> {
+    use helmsman_iec::Value as V;
+    let tip = "A placeholder input: no device has this point yet, so you set it here. It holds what you set until you change it or the Skipper restarts.";
+    Some(match value? {
+        V::Bool(on) => {
+            let r = ui.button(if on { "Turn off" } else { "Turn on" }).tip(tip);
+            (r.rect, r.clicked().then_some(V::Bool(!on)))
+        }
+        V::Int(n) => {
+            let mut x = i64::try_from(n).unwrap_or(0);
+            let r = ui.add(egui::DragValue::new(&mut x)).tip(tip);
+            (r.rect, r.changed().then_some(V::Int(i128::from(x))))
+        }
+        V::Real(f) => {
+            let mut x = f;
+            let r = ui.add(egui::DragValue::new(&mut x).speed(0.1)).tip(tip);
+            (r.rect, r.changed().then_some(V::Real(x)))
+        }
+    })
 }
 
 /// An input's force control over its block: a BOOL flips, a number drags.
@@ -3423,6 +3461,10 @@ impl Body for BoxView {
         let is_open = |name: &str| open.iter().any(|o| o.eq_ignore_ascii_case(name));
         let signals = &self.state.signals;
         let mut asked: Vec<(String, bool, crate::io_cards::Asked)> = Vec::new();
+        // A placeholder (`sim`) input's control on its card: an engineer
+        // sets it where it runs (Nick, 2026-11-24).
+        let engineer = is_engineer(self.session.as_ref()).is_ok();
+        let mut sets: Vec<(String, helmsman_iec::Value)> = Vec::new();
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
             use crate::io_cards::{Form, Links, Row};
             // Inputs, then Outputs: the simulation's I/O tab has the same
@@ -3550,7 +3592,8 @@ impl Body for BoxView {
                                 simulate: false,
                                 designation: crate::assign::designate(&map, name, is_port),
                             };
-                            let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
+                            let sim_input = input && engineer && sig.is_some_and(|s| s.sim);
+                            let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
                                 crate::io_cards::value(
                                     ui,
                                     (form != Form::Tile).then_some(glyph),
@@ -3558,7 +3601,14 @@ impl Body for BoxView {
                                     &text,
                                     form != Form::Tile,
                                 );
+                                sim_input.then(|| sim_control(ui, value)).flatten()
                             });
+                            if let Some((rect, set)) = control {
+                                chrome.hit(format!("sim {name}"), rect);
+                                if let Some(v) = set {
+                                    sets.push((name.clone(), v));
+                                }
+                            }
                             crate::assign_ui::row_menu(&card, chrome, &menus, name, &mut asks, &mut chat);
                             asked.push((name.clone(), input, a));
                         },
@@ -3572,6 +3622,9 @@ impl Body for BoxView {
         });
         for (name, input, a) in asked {
             self.io_asked(&name, input, a, chrome);
+        }
+        for (name, v) in sets {
+            self.force(&name, v);
         }
         for name in chat.asked {
             self.chat_about_signal(&name, chrome);

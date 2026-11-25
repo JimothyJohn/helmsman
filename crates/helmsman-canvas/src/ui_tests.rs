@@ -8322,6 +8322,7 @@ mod multi_select;
 mod outputs;
 mod proposal;
 mod shell;
+mod sim_points;
 mod sim_popup;
 mod start_state;
 mod vendor;
