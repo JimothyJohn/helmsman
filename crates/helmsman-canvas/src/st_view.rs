@@ -3184,12 +3184,7 @@ fn ghost_tag_texts(tags: &[(NodeId, Vec<String>)], added: &[NodeId]) -> Vec<(Nod
 }
 
 /// The removed blocks' tags by host block, as [`draw_ghosts`] groups them.
-fn ghost_tags(
-    old: &Diagram,
-    removed: &[NodeId],
-    new: &Diagram,
-    added: &[NodeId],
-) -> Vec<(NodeId, String)> {
+fn ghost_tags(old: &Diagram, removed: &[NodeId], new: &Diagram, added: &[NodeId]) -> Vec<(NodeId, String)> {
     let mut tags: Vec<(NodeId, Vec<String>)> = Vec::new();
     for (id, host) in removed.iter().zip(hosts(old, removed, new, added)) {
         let (Some(h), Some(n)) = (host, old.nodes.get(id.0 as usize)) else {
@@ -3740,7 +3735,10 @@ fn draw(
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
         if let Some(d) = designation {
-            let tag = ghost_texts.iter().find(|(h, _)| *h == n.id).map(|(_, g)| g.as_str());
+            let tag = ghost_texts
+                .iter()
+                .find(|(h, _)| *h == n.id)
+                .map(|(_, g)| g.as_str());
             io_mark(painter, t, r, z, d, tag, text, pick == Some(Pick::Node(n.id)));
         }
         if deeper {
