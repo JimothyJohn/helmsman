@@ -144,7 +144,8 @@ only go down.
   Delete and, on the open one, Paste, on a file Copy, Paste, Duplicate, Rename and
   Delete with an app-wide clipboard so a file pastes into any open
   project, and on the blank space New project and Paste; New project and
-  Copy project are also the File menu's first items; the Delete key
+  Copy project are also the File menu's first items (a new project opens
+  on a saved `main.st` holding the playground's starter, Nick 2026-11-24); the Delete key
   deletes the row last clicked, a double click on a file opens the Code
   tab, every delete is confirmed in a modal at the screen's centre, and
   the earlier iterations of the program, `vN.st`, fold under one

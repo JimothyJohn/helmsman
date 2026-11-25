@@ -18,8 +18,9 @@ shows them.
 
 - **New project** and **Copy project** are in the File menu; a right-click
   on the pane's blank space offers New project too, and a right-click on a
-  project offers Copy, Rename and Delete. A copy of an example is how
-  you begin from one.
+  project offers Copy, Rename and Delete. A new project opens on
+  `main.st`, a small program ready to describe or edit. A copy of an
+  example is how you begin from one.
 - **New file** is the button under the files. A file is Structured Text
   (`.st`), the I/O map, or one of the editor's own. A double click on a
   file opens it on the Code tab.

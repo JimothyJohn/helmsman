@@ -5270,3 +5270,106 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
     assert!(!h.bv().agent_pending);
     assert!(h.app.chrome.rect("agent deploy pending").is_none());
 }
+
+/// Nick 2026-11-24: File › New project makes the project with a program
+/// in it, `main.st` holding the starter, saved on the box and open, so the
+/// Agent has a program to work on at once. A name already taken makes
+/// nothing and writes nothing into the project of that name.
+#[test]
+fn file_new_project_opens_a_saved_starter_program() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    let new_project = |h: &mut Harness, name: &str| {
+        h.press("bar file");
+        h.press("file new");
+        h.wait(0.2);
+        assert!(h.app.chrome.rect("name").is_some(), "the name is asked for");
+        h.bv().files_ui.input = name.to_string();
+        h.press("name ok");
+        // Each answer can queue the next request (create, starter, open).
+        for _ in 0..10 {
+            let reqs = h.sent();
+            if reqs.is_empty() {
+                break;
+            }
+            deliver(&b, &jar, &mut h.bv().projects, reqs);
+            h.wait(0.1);
+        }
+    };
+
+    new_project(&mut h, "fresh");
+    let p = &h.bv().projects;
+    let o = p.open.as_ref().expect("the new project is open");
+    assert_eq!(o.name, "fresh", "{:?}", p.notice);
+    assert_eq!(o.current.as_deref(), Some("main.st"), "{:?}", o.bufs.keys());
+    assert_eq!(text_of(p, "main.st"), crate::sim_projects::STARTER);
+    assert!(!p.dirty(), "saved, not a draft: {:?}", p.notice);
+    assert_eq!(
+        b.json("/api/projects/fresh/files/main.st")["text"],
+        crate::sim_projects::STARTER
+    );
+    let listed: Vec<String> = b.json("/api/projects/fresh")["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(listed, ["main.st"]);
+    assert!(
+        p.notice
+            .as_ref()
+            .is_some_and(|(n, err)| !*err && n == "Made project fresh."),
+        "{:?}",
+        p.notice
+    );
+
+    // Taken: refused, and line's main.st is still its own.
+    new_project(&mut h, "line");
+    let p = &h.bv().projects;
+    assert!(
+        p.notice
+            .as_ref()
+            .is_some_and(|(n, err)| *err && n.contains("was not made")),
+        "{:?}",
+        p.notice
+    );
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], MAIN);
+}
+
+/// Nick 2026-11-24, at "start, stop, running are not in the I/O list":
+/// on a Skipper's page the Agent is given the Skipper's I/O list with the
+/// request, so it can use the points' names.
+#[test]
+fn on_a_skippers_page_the_agent_gets_its_io_list() {
+    use crate::instruct_tests::LAMP;
+
+    fn message(v: &BoxView, k: usize) -> String {
+        let j: Json = serde_json::from_str(&v.chat_sent[k].body).unwrap();
+        j["message"].as_str().unwrap().to_string()
+    }
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    v.watches_node = true;
+    // As the Skipper's `GET /api/io_map` leaves it (each frame copies it
+    // to the deploy's `node_map`).
+    v.state.io_map =
+        Some("device drive enip-io 192.168.33.1 config=1\nin  start bool drive in:0.0\nout lamp bool drive out:0.0\n".into());
+    v.state.io_map_node = true;
+    v.tick(&ctx);
+
+    v.instruct.draft = "latch the lamp with start and stop".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let first = message(&v, 0);
+    assert!(first.contains("<io_devices>\nThe Skipper's I/O list."), "{first}");
+    assert!(first.contains("in  start bool drive in:0.0"), "{first}");
+}
