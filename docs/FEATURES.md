@@ -30,7 +30,7 @@ writes it (query included); `tab:KEY`, the key the tab saves in a layout;
 | Check and deploy | `deploy` | `POST /api/projects/{p}/check`, `POST /api/projects/{p}/replay`, `POST /api/projects/{p}/deploy` |
 | Requirements and tests | `requirements` | `POST /api/projects/{p}/tests`, `POST /api/projects/{p}/requirements`, `profile:tests` |
 | Proposals and approval | `proposals` | `GET /api/proposals`, `GET /api/proposals/{id}`, `POST /api/proposals`, `POST /api/proposals/check`, `POST /api/proposals/replay`, `POST /api/proposals/{id}/replay`, `POST /api/proposals/{id}/apply` |
-| History and rollback | `history` | `GET /api/snapshots`, `GET /api/snapshots/head`, `GET /api/snapshots/{id}`, `GET /api/snapshots/{a}/diff/{b}`, `POST /api/snapshots/{id}/replay`, `POST /api/snapshots/{id}/rollback`, `GET /api/replays/{n}`, `tab:history` |
+| History and rollback | `history` | `GET /api/snapshots`, `GET /api/snapshots/head`, `GET /api/snapshots/{id}`, `GET /api/snapshots/{a}/diff/{b}`, `POST /api/snapshots/{id}/replay`, `POST /api/snapshots/{id}/rollback`, `GET /api/replays/{n}` |
 | Bundles and the marketplace | `bundles` | `GET /api/snapshots/{id}/bundle`, `POST /api/bundles`, `POST /api/market/list`, `POST /api/market/install`, `profile:review` |
 | Audit trail | `audit` | `GET /api/audit?after=N&limit=M`, `tab:messages` |
 | Agent chat | `chat` | `POST /api/chat`, `GET /api/chat/status`, `POST /api/dropins?name=N&kind=K`, `GET /api/dropins`, `GET /api/dropins/{id}?chunk=K`, `GET /api/dropins/{id}/plc?view=V&name=N&offset=O`, `profile:chat`, `tab:claude` |
@@ -40,6 +40,7 @@ writes it (query included); `tab:KEY`, the key the tab saves in a layout;
 | Device settings | `device-config` | `GET /api/devices/{id}/config`, `PUT /api/devices/{id}/config/password`, `DELETE /api/devices/{id}/config/password`, `POST /api/devices/{id}/config/set`, `POST /api/devices/{id}/config/restart`, `POST /api/devices/{id}/config/import`, `POST /api/devices/{id}/config/password`, `POST /api/devices/{id}/config/snapshot` |
 | Device profiles | `device-profile` | `GET /api/device-profile/proposal`, `POST /api/device-profile/proposal`, `POST /api/device-profile/proposal/accept`, `DELETE /api/device-profile/proposal`, `POST /api/device-profile/publish`, `profile:publish` |
 | Forces | `forces` | `GET /api/forces`, `POST /api/forces`, `DELETE /api/forces/{id}`, `DELETE /api/forces` |
+| Placeholder (sim) points | `sim-points` | `PUT /api/signals/{name}` |
 | Trends | `trends` | `GET /api/trends?signals=a,b`, `GET /api/trends/pins`, `PUT /api/trends/pins`, `tab:trend` |
 | Desk and layouts | `layout` | `GET /api/desk`, `PUT /api/desk`, `GET /api/pane-layouts`, `PUT /api/pane-layouts`, `DELETE /api/pane-layouts/{name}` |
 | Drivers | `drivers` | `GET /api/drivers`, `PUT /api/drivers/{name}`, `DELETE /api/drivers/{name}` |

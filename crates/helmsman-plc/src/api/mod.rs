@@ -5,6 +5,7 @@
 //! GET  /api                               this list
 //! GET  /api/signals                       every signal: type, unit, dir, binding, writer, value, quality
 //! GET  /api/signals/{name}
+//! PUT  /api/signals/{name}                engineer session or the box token: {value}: set a sim input (see [`simset`])
 //! GET  /api/modules                       every module: schedule, windows, status, stats
 //! GET  /api/modules/{name}                + ports, source, manifest
 //! GET  /api/modules/{name}/trace          asks for a traced scan; the newest one (200), or 202 until one lands
@@ -15,7 +16,7 @@
 //! GET  /api/devices                       device links: up, down (why), unknown, address; `configurator` (its profile's `configure` name or null, no contact with the unit); for a device by its profile `transport`; `health` (healthy, slow, lost), `poll_ms` and `measured_ms` once the link reports
 //! GET  /api/devices/{id}/config          facts, export, saved configuration and drift of a device with a configurator; PUT/DELETE .../config/password and POST .../config/set|restart|import|password|snapshot need an engineer session (see [`devconf`])
 //! GET  /api/adapter                       the box's EtherNet/IP adapter: {protocol, bind, on}; `bind` is the address it listens on, absent when it is off
-//! POST /api/devices/discover              token or session: one scan of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
+//! POST /api/devices/discover[?address=A]  token or session: one scan (or, with address, one host asked directly) of every protocol (ListIdentity, Modbus identification, PROFINET DCP where built); `found` is one entry per device, mapped or not, with the library's match (see [`discover`])
 //! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
@@ -153,6 +154,7 @@ pub mod render;
 pub mod requirements;
 pub mod review;
 pub mod sim;
+mod simset;
 pub mod store;
 pub mod swap;
 #[cfg(feature = "https")]
@@ -1484,6 +1486,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         (_, ["api", "projects", ..]) => return projects::mutate(req, ctx, &segs[1..]),
         (_, ["api", "forces", ..]) => return forces::mutate(req, ctx, &segs[1..]),
+        ("PUT", ["api", "signals", name]) => return simset::put(req, ctx, name),
         ("POST", ["api", "modules", name, op]) if *op != "trace" => return control::post(req, ctx, name, op),
         (_, ["api", "drivers", ..]) => return drivers::mutate(req, ctx, &segs[1..]),
         (_, ["api", "device-profile", ..]) => return device_profile::mutate(req, ctx, &segs[2..]),
@@ -1543,7 +1546,9 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "drivers" | "trends"] => return Some("GET"),
         ["api", "devices", _, "config", "password"] => return Some("PUT, DELETE, POST"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
-        ["api", "trends", "pins"] | ["api", "desk" | "pane-layouts"] => return Some("GET, PUT"),
+        ["api", "signals", _] | ["api", "trends", "pins"] | ["api", "desk" | "pane-layouts"] => {
+            return Some("GET, PUT");
+        }
         _ => {}
     }
     match path {
@@ -2042,6 +2047,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/login", false, "how to sign in here: {credentials: accounts | pins | unavailable}, nothing else"),
             e("GET", "/api/signals", true, "every signal with its live value and quality"),
             e("GET", "/api/signals/{name}", true, "one signal"),
+            e("PUT", "/api/signals/{name}", true, "engineer session or the box token: {value: true | 12 | 3.5}: set a sim input (an `in` bound to `sim` in the I/O map); 409 for any other signal, 400 for a value of the wrong kind or out of range"),
             e("GET", "/api/modules", true, "every module: schedule, status, stats"),
             e("GET", "/api/modules/{name}", true, "one module with ports, source and manifest"),
             e("GET", "/api/modules/{name}/trace", true, "request a traced scan; 200 with the newest, 202 until one lands"),

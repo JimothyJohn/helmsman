@@ -493,3 +493,59 @@ fn a_block_with_many_inputs_shows_what_the_program_computed() {
         }
     }
 }
+
+/// Values without the statements that ran (a Skipper publishes its I/O
+/// points, not a trace): the values are on the wires, the logic is worked
+/// out from them, and nothing is dimmed or drawn as skipped for want of a
+/// count (Nick, 2026-11-25: no state on the diagram on a Skipper).
+#[test]
+fn a_scan_of_values_alone_lights_everything_and_judges_no_gate() {
+    use helmsman_diagram::Scan;
+    use helmsman_iec::trace::StmtId;
+
+    struct Points;
+    impl Scan for Points {
+        fn hits(&self, _: StmtId) -> u32 {
+            0
+        }
+        fn arm_hits(&self, _: StmtId) -> &[u32] {
+            &[]
+        }
+        fn passes(&self, _: StmtId) -> Option<u32> {
+            None
+        }
+        fn get(&self, path: &str) -> Option<Value> {
+            match path.to_ascii_uppercase().as_str() {
+                "GO" => Some(Value::Bool(true)),
+                "N" => Some(Value::Int(5)),
+                _ => None,
+            }
+        }
+        fn line(&self, _: StmtId) -> Option<u32> {
+            None
+        }
+        fn flow(&self) -> bool {
+            false
+        }
+    }
+
+    let src = prog(
+        "go AT %IX0.0 : BOOL; n : INT; big : BOOL;",
+        "IF go THEN n := n + 5; ELSE n := 0; END_IF;\nbig := n > 3 AND go;\nFOR n := 1 TO 0 DO big := FALSE; END_FOR;\nn := 5;",
+    );
+    let (_, m) = build(&src);
+    let d = &m.program().unwrap().diagram;
+    let live = annotate(d, &Points, "");
+    assert!(live.ran.iter().all(|r| *r), "nothing dimmed: {:?}", live.ran);
+    assert!(live.gates.iter().all(|g| *g == Gate::Unknown), "{:?}", live.gates);
+    let and = d
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Op { op: "AND".into() })
+        .unwrap();
+    assert_eq!(
+        live.values[and.id.0 as usize],
+        [Some(Value::Bool(true))],
+        "worked out from go and n"
+    );
+}

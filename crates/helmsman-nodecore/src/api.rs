@@ -54,15 +54,16 @@ pub struct ModuleView {
     pub source: String,
 }
 
-/// A signal's value: the node's are booleans and integers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A signal's value: a node's points are booleans, integers and reals.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SignalValue {
     Bool(bool),
     Int(i64),
+    Real(f64),
 }
 
 /// One named point as the canvas lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SignalView {
     pub name: String,
     /// `in` or `out`.
@@ -71,6 +72,25 @@ pub struct SignalView {
     /// `good`, `bad` or `stale`.
     pub quality: &'static str,
     pub point_error: Option<String>,
+    /// A sim point (a placeholder held in memory, on no device).
+    pub sim: bool,
+}
+
+/// One shared value (a `share` line of the map) as `GET /api/io_map` lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShareView {
+    pub name: String,
+    /// `bool`, `int` or `real`.
+    pub ty: &'static str,
+    /// Where another controller finds it: `hr:0`, `ir:4:f32`, `coil:0`.
+    pub address: String,
+    /// Another controller may write it: a `VAR_INPUT` of the running
+    /// program, in a coil or holding table.
+    pub writable: bool,
+    /// The program has a variable of that name; a share with none reads
+    /// as 0 or false.
+    pub bound: bool,
+    pub value: Option<SignalValue>,
 }
 
 /// One fieldbus link as the canvas lists it.
@@ -108,6 +128,17 @@ pub struct NodeView {
     pub board: &'static str,
     /// The I/O map text, for `GET /api/io_map`.
     pub io_map: String,
+    /// The map's shared values with their live values, in map order. The
+    /// node serves Modbus TCP ([`crate::modbus_server::PORT`]) while this
+    /// is not empty.
+    pub shares: Vec<ShareView>,
+    /// The board drives one Modbus TCP block only (the ESP32 nodes): a
+    /// map it is given must pass [`crate::iomap::IoMap::one_block`].
+    pub one_block: bool,
+    /// The comms check ([`crate::check`]): the last one run or the one
+    /// running. `None` on a board that does not check, which saves a map
+    /// unasked as it always did.
+    pub check: Option<crate::check::Check>,
     /// The firmware half (`GET /api/firmware`); `None` on a board that
     /// cannot update itself over the network.
     pub firmware: Option<crate::ota::status::Firmware>,
@@ -184,6 +215,8 @@ fn value(v: Option<SignalValue>) -> Json {
     match v {
         Some(SignalValue::Bool(b)) => json!(b),
         Some(SignalValue::Int(i)) => json!(i),
+        // A real that is not finite has no JSON number: null, as a box says it.
+        Some(SignalValue::Real(x)) => json!(x),
         None => Json::Null,
     }
 }
@@ -202,6 +235,7 @@ pub fn signals(view: &NodeView) -> Json {
                     "quality": s.quality,
                     "point_error": s.point_error,
                     "forced": false,
+                    "sim": s.sim,
                 })
             })
             .collect(),
@@ -231,7 +265,41 @@ pub fn devices(view: &NodeView) -> Json {
 /// `GET /api/io_map`.
 #[must_use]
 pub fn io_map(view: &NodeView) -> Json {
-    json!({ "snapshot": "node", "text": view.io_map })
+    let mut j = json!({ "snapshot": "node", "text": view.io_map });
+    // The values this node shares on its own Modbus TCP tables (a box's
+    // reply has none): the server is on exactly when there are some.
+    j["modbus_port"] = if view.shares.is_empty() {
+        Json::Null
+    } else {
+        json!(crate::modbus_server::PORT)
+    };
+    j["shares"] = Json::Array(
+        view.shares
+            .iter()
+            .map(|s| {
+                json!({
+                    "name": s.name,
+                    "type": s.ty,
+                    "address": s.address,
+                    "access": if s.writable { "read/write" } else { "read" },
+                    "bound": s.bound,
+                    "value": value(s.value),
+                })
+            })
+            .collect(),
+    );
+    // Where each point sits in the program's process image (`%IX0.0`,
+    // `%ID16`): a box's reply has no such field and a reader that does
+    // not know it ignores it.
+    if let Ok(map) = crate::iomap::parse(&view.io_map) {
+        j["image"] = Json::Array(
+            map.layout()
+                .into_iter()
+                .map(|(name, dir, address)| json!({ "name": name, "dir": dir.area().to_string(), "address": address }))
+                .collect(),
+        );
+    }
+    j
 }
 
 /// The `values` event the canvas's live view is built from.
@@ -491,17 +559,44 @@ fn heap_text(view: &NodeView) -> String {
     )
 }
 
-/// The node's own page: what it is, how it is, and the settings form.
-/// Plain HTML, no scripts, so it reads on a phone at the panel.
-#[must_use]
-pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>) -> String {
-    let (mode_dhcp, mode_static, ip, prefix, gateway) = match settings.net {
-        Net::Dhcp => ("checked", "", String::new(), String::from("24"), String::new()),
-        Net::Static { ip, prefix, gateway } => {
-            ("", "checked", ip_text(ip), prefix.to_string(), ip_text(gateway))
+/// The comms check as the page shows it: one line a device, and what
+/// happens next.
+fn check_html(c: &crate::check::Check, now_ms: u64) -> String {
+    use core::fmt::Write as _;
+
+    use crate::check::Verdict;
+    let mut rows = String::new();
+    for r in &c.rows {
+        let said = match &r.verdict {
+            Verdict::Waiting => String::from("waiting"),
+            Verdict::Answered { ms } => format!("answered in {ms} ms"),
+            Verdict::Failed(why) => format!("<b>no answer</b>: {}", html_escape(why)),
+        };
+        let _ = write!(
+            rows,
+            "<li><b>{}</b> {} ({}): {said}</li>",
+            html_escape(&r.name),
+            html_escape(&r.address),
+            r.driver
+        );
+    }
+    let next = if c.running {
+        String::from("Asking the devices; this page reloads until they have all been asked.")
+    } else {
+        match c.allows(&c.text, now_ms) {
+            Ok(()) => String::from("Every device answered this node. Save the map above to run it."),
+            Err(why) => format!(
+                "{}. The map is saved once every device in it answers.",
+                html_escape(&why.to_string())
+            ),
         }
     };
-    let module = view.module.as_ref().map_or_else(
+    format!("<h2>Device check</h2><ul>{rows}</ul><p class=\"notice\">{next}</p>")
+}
+
+/// The page's line about the deployed program.
+fn module_html(view: &NodeView) -> String {
+    view.module.as_ref().map_or_else(
         || String::from("<p>No program deployed.</p>"),
         |m| {
             let state = match &m.state {
@@ -519,16 +614,68 @@ pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>)
                 m.overruns
             )
         },
-    );
+    )
+}
+
+/// What the page's map form shows.
+struct MapForm<'a> {
+    text: &'a str,
+    /// The tag that reloads the page while a check runs, or nothing.
+    refresh: &'static str,
+    /// The check's result as HTML, or nothing.
+    check: String,
+    button: &'static str,
+}
+
+/// While a check runs, and for as long as its result lets the map be
+/// saved or says why not, the form holds the checked text and the page
+/// lists who answered; otherwise it holds the map the node runs.
+fn map_form(view: &NodeView) -> MapForm<'_> {
+    let shown = view.check.as_ref().filter(|c| {
+        !c.text.is_empty() && (c.running || view.uptime_ms.saturating_sub(c.done_ms) < crate::check::FRESH_MS)
+    });
+    MapForm {
+        text: shown.map_or(view.io_map.as_str(), |c| c.text.as_str()),
+        refresh: if shown.is_some_and(|c| c.running) {
+            "<meta http-equiv=\"refresh\" content=\"2;url=/settings\">"
+        } else {
+            ""
+        },
+        check: shown.map_or_else(String::new, |c| check_html(c, view.uptime_ms)),
+        button: match shown {
+            Some(c) if c.allows(&c.text, view.uptime_ms).is_ok() => "Save this map and restart",
+            _ if view.check.is_some() => "Check the devices",
+            _ => "Save map and restart",
+        },
+    }
+}
+
+/// The node's own page: what it is, how it is, and the settings form.
+/// Plain HTML, no scripts, so it reads on a phone at the panel.
+#[must_use]
+pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>) -> String {
+    let (mode_dhcp, mode_static, ip, prefix, gateway) = match settings.net {
+        Net::Dhcp => ("checked", "", String::new(), String::from("24"), String::new()),
+        Net::Static { ip, prefix, gateway } => {
+            ("", "checked", ip_text(ip), prefix.to_string(), ip_text(gateway))
+        }
+    };
+    let module = module_html(view);
     let notice = notice.map_or(String::new(), |n| {
         format!("<p class=\"notice\">{}</p>", html_escape(n))
     });
+    let MapForm {
+        text: map_text,
+        refresh,
+        check,
+        button: map_button,
+    } = map_form(view);
     let sink = settings
         .log_sink
         .map_or(String::new(), |(ip, port)| format!("{}:{port}", ip_text(ip)));
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">{refresh}\
 <title>{name} (Helmsman node)</title>\
 <style>body{{font:18px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#222}}\
 label{{display:block;margin:.6rem 0 .2rem}}input[type=text],input[type=password]{{width:100%;font-size:18px;padding:.4rem}}\
@@ -555,12 +702,13 @@ Link {link}{ip}.</p>\
 <button type=\"submit\">Save and restart</button>\
 </form>\
 <h2>I/O map</h2>\
-<p>The block this node drives and the names of its points, in the box's io.map format: one <code>device NAME modbus-tcp IP[:PORT] [unit=N]</code> line, then <code>in NAME bool DEVICE di:N</code> and <code>out NAME bool DEVICE coil:N</code> lines. A program reads and writes them as <code>%IX0.N</code> and <code>%QX0.N</code>. Saving restarts the node.</p>\
+<p>The devices this node drives (up to 16, <code>modbus-tcp</code> or <code>enip-io</code>) and the names of their points, in the box's io.map format: <code>device NAME DRIVER IP</code> lines, then <code>in|out NAME bool|int|real DEVICE ADDRESS</code> lines. The program address of each point is listed by <code>GET /api/io_map</code>. Before a map is saved the node asks every device in it, and saves once each has answered; saving restarts the node.</p>\
 <form method=\"post\" action=\"/io_map\">\
 <label>Map <textarea name=\"map\" rows=\"12\" spellcheck=\"false\">{map}</textarea></label>\
 <label>API token <input type=\"password\" name=\"auth\" value=\"\" maxlength=\"64\" autocomplete=\"off\"></label>\
-<button type=\"submit\">Save map and restart</button>\
+<button type=\"submit\">{map_button}</button>\
 </form>\
+{check}\
 <p>The canvas reads this node at <code>http://{host}:{api_port}/api/</code>; writes need the token as <code>Authorization: Bearer</code>.</p>\
 </body></html>",
         name = html_escape(if settings.name.is_empty() {
@@ -570,7 +718,10 @@ Link {link}{ip}.</p>\
         }),
         name_attr = html_escape(&settings.name),
         site = html_escape(&settings.site),
-        map = html_escape(&view.io_map),
+        map = html_escape(map_text),
+        refresh = refresh,
+        check = check,
+        map_button = map_button,
         version = html_escape(view.version),
         board = html_escape(view.board),
         up = view.uptime_ms / 1000,
@@ -630,6 +781,7 @@ pub(crate) fn sample_view() -> NodeView {
                 value: Some(SignalValue::Bool(true)),
                 quality: "good",
                 point_error: None,
+                sim: false,
             },
             SignalView {
                 name: "do0".into(),
@@ -637,6 +789,7 @@ pub(crate) fn sample_view() -> NodeView {
                 value: Some(SignalValue::Bool(false)),
                 quality: "good",
                 point_error: None,
+                sim: false,
             },
         ],
         devices: vec![DeviceView {
@@ -658,6 +811,9 @@ pub(crate) fn sample_view() -> NodeView {
         version: "0.1.0",
         board: "ESP32-POE-ISO",
         io_map: "device rio modbus-tcp 192.168.3.60\n".into(),
+        shares: Vec::new(),
+        one_block: false,
+        check: None,
         firmware: Some(crate::ota::status::Firmware {
             version: "0.1.0",
             build: "",
@@ -763,9 +919,56 @@ mod tests {
         assert!(!settings_page(&v, &settings(), None).contains("external memory"));
         assert_eq!(n["net"]["mode"], "dhcp");
         assert_eq!(io_map(&v)["text"], "device rio modbus-tcp 192.168.3.60\n");
+        assert_eq!(io_map(&v)["image"], json!([]), "a map with no points lists none");
+        let mut with_points = v.clone();
+        with_points.io_map = crate::iomap::tests::THREE.into();
+        let image = io_map(&with_points)["image"].clone();
+        assert_eq!(
+            image[0],
+            json!({ "name": "estop", "dir": "I", "address": "%IX0.0" })
+        );
+        assert_eq!(image.as_array().unwrap().len(), 7);
+        let mut broken = v.clone();
+        broken.io_map = "not a map".into();
+        assert!(io_map(&broken).get("image").is_none());
         let sj = settings_json(&settings());
         assert_eq!(sj["token_set"], true);
         assert!(sj.get("token").is_none());
+    }
+
+    #[test]
+    fn io_map_lists_what_the_node_shares_and_its_port() {
+        let mut v = sample_view();
+        let off = io_map(&v);
+        assert_eq!(off["shares"], json!([]));
+        assert!(off["modbus_port"].is_null(), "no share, no server");
+        v.shares = vec![
+            ShareView {
+                name: "speed".into(),
+                ty: "int",
+                address: "hr:0".into(),
+                writable: false,
+                bound: true,
+                value: Some(SignalValue::Int(1500)),
+            },
+            ShareView {
+                name: "run_cmd".into(),
+                ty: "bool",
+                address: "coil:0".into(),
+                writable: true,
+                bound: false,
+                value: Some(SignalValue::Bool(false)),
+            },
+        ];
+        let on = io_map(&v);
+        assert_eq!(on["modbus_port"], 502);
+        assert_eq!(
+            on["shares"][0],
+            json!({ "name": "speed", "type": "int", "address": "hr:0", "access": "read", "bound": true, "value": 1500 })
+        );
+        assert_eq!(on["shares"][1]["access"], "read/write");
+        assert_eq!(on["shares"][1]["bound"], false);
+        assert_eq!(on["shares"][1]["value"], false);
     }
 
     #[test]

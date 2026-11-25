@@ -217,6 +217,9 @@ pub fn view(
             version: helmsman_nodecore::VERSION,
             board,
             io_map,
+            shares: Vec::new(),
+            one_block: true,
+            check: None,
             firmware: None,
         }
     })
@@ -234,16 +237,10 @@ pub struct PointNames {
 impl PointNames {
     /// The names a map gives its points.
     #[must_use]
-    pub fn of(map: &helmsman_nodecore::iomap::IoMap) -> Self {
-        let own = |points: &[helmsman_nodecore::iomap::Point]| {
-            helmsman_nodecore::iomap::IoMap::names(points)
-                .into_iter()
-                .map(|n| n.map(String::from))
-                .collect()
-        };
+    pub fn of(block: &helmsman_nodecore::iomap::OneBlock) -> Self {
         Self {
-            inputs: own(&map.inputs),
-            outputs: own(&map.outputs),
+            inputs: block.inputs.clone(),
+            outputs: block.outputs.clone(),
         }
     }
 }
@@ -267,6 +264,7 @@ pub fn signals_of(
             value: Some(SignalValue::Bool(bit(image, k))),
             quality: "good",
             point_error: None,
+            sim: false,
         })
     };
     let mut out: Vec<SignalView> = names
@@ -297,6 +295,7 @@ pub fn signals_of(
             value,
             quality: "good",
             point_error: None,
+            sim: false,
         }
     }));
     out

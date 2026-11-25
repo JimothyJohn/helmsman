@@ -1089,6 +1089,7 @@ name = "helmsman-nodecore"
 version = "0.1.0"
 dependencies = [
  "helmsman-iolink",
+ "helmsman-modbus",
  "serde_json",
  "sha2 0.11.1",
 ]

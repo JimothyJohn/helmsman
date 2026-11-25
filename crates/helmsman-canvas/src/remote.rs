@@ -427,6 +427,57 @@ impl Scan for BoxScan {
     }
 }
 
+/// A Skipper's scan for the diagram (Nick, 2026-11-25: "I'm not seeing
+/// the state on the visual diagram at all, only the trend line"). A
+/// Skipper keeps no trace (`GET /api/modules/{name}/trace/events` is "a
+/// node keeps no traces"), but its values stream carries every I/O
+/// point's value each scan, and a program's ports are its points by name.
+/// So the diagram shows the inputs and outputs and what logic computes
+/// from them; a variable that is no point (a counter, a timer) has no
+/// value, and no statement is drawn as skipped ([`Scan::flow`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NodeValues {
+    values: HashMap<String, Value>,
+}
+
+impl NodeValues {
+    #[must_use]
+    pub fn of(signals: &[SignalRow]) -> Self {
+        Self {
+            values: signals
+                .iter()
+                .filter_map(|s| Some((key(&s.name), s.value?)))
+                .collect(),
+        }
+    }
+}
+
+impl Scan for NodeValues {
+    fn hits(&self, _: StmtId) -> u32 {
+        0
+    }
+
+    fn arm_hits(&self, _: StmtId) -> &[u32] {
+        &[]
+    }
+
+    fn passes(&self, _: StmtId) -> Option<u32> {
+        None
+    }
+
+    fn get(&self, path: &str) -> Option<Value> {
+        self.values.get(&key(path)).copied()
+    }
+
+    fn line(&self, _: StmtId) -> Option<u32> {
+        None
+    }
+
+    fn flow(&self) -> bool {
+        false
+    }
+}
+
 /// A module as the picker lists it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleRow {
@@ -603,6 +654,9 @@ pub struct SignalRow {
     pub point_error: Option<String>,
     /// An engineer forced it (the box's `forced`).
     pub forced: bool,
+    /// A placeholder (`sim`) point: no device, held in memory; an input
+    /// is set, not forced (`crate::placeholders`).
+    pub sim: bool,
 }
 
 impl SignalRow {
@@ -615,6 +669,7 @@ impl SignalRow {
             quality: j["quality"].as_str().unwrap_or("?").to_string(),
             point_error: j["point_error"].as_str().map(str::to_string),
             forced: j["forced"].as_bool().unwrap_or(false),
+            sim: j["sim"].as_bool().unwrap_or(false),
         })
     }
 }
@@ -784,6 +839,12 @@ pub struct BoxState {
     /// The map the box runs, as last read (`None` until read, or when the
     /// box runs none).
     pub io_map: Option<String>,
+    /// The map came from a Skipper (its reply says `"snapshot":"node"`; a
+    /// box's has no such field), so the Devices tab can send it a map.
+    pub io_map_node: bool,
+    /// On a Skipper, which keeps no trace: its I/O points' values as the
+    /// diagram's scan ([`NodeValues`]), from each values event.
+    pub node_values: Option<NodeValues>,
     /// The last read of each failed, so what shows is old.
     devices_stale: bool,
     io_map_stale: bool,
@@ -841,6 +902,12 @@ impl Default for BoxState {
 }
 
 impl BoxState {
+    /// The selected module's source, once fetched.
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
     /// Starts watching: the module list and the values stream.
     #[must_use]
     pub fn new() -> Self {
@@ -856,6 +923,8 @@ impl BoxState {
             devices: Vec::new(),
             adapter: None,
             io_map: None,
+            io_map_node: false,
+            node_values: None,
             devices_stale: false,
             io_map_stale: false,
             devs: DevicesPoll::Answered(None),
@@ -1277,16 +1346,15 @@ impl BoxState {
                 // failure keeps the map that was read, marked old.
                 if r.as_ref().is_err_and(|e| e == "HTTP 404") {
                     self.io_map = None;
+                    self.io_map_node = false;
                     self.io_map_stale = false;
                 } else {
-                    let text = r
-                        .ok()
-                        .as_deref()
-                        .and_then(parse)
-                        .and_then(|j| j["text"].as_str().map(str::to_string));
+                    let j = r.ok().as_deref().and_then(parse);
+                    let text = j.as_ref().and_then(|j| j["text"].as_str().map(str::to_string));
                     self.io_map_stale = text.is_none();
                     if text.is_some() {
                         self.io_map = text;
+                        self.io_map_node = j.is_some_and(|j| j["snapshot"].as_str() == Some("node"));
                     }
                 }
             }
@@ -1370,7 +1438,10 @@ impl BoxState {
                     self.values.failed(now);
                 }
             }
-            Msg::Failed(Stream::Trace) => self.trace.failed(now),
+            Msg::Failed(Stream::Trace) => {
+                self.trace.failed(now);
+                self.relower();
+            }
             Msg::Failed(Stream::Traces) => self.traces.failed(now),
             Msg::Event(Stream::Values, name, data) if name == "agent" => {
                 self.agent = parse(&data);
@@ -1393,6 +1464,7 @@ impl BoxState {
                     self.values_at_ms = at_ms;
                     if let Some(s) = rows(&j["signals"], SignalRow::parse) {
                         self.signals = s;
+                        self.node_values = self.io_map_node.then(|| NodeValues::of(&self.signals));
                     }
                     if let Some(m) = rows(&j["modules"], ModuleRow::parse) {
                         self.modules = m;
@@ -1434,10 +1506,71 @@ impl BoxState {
         }
     }
 
+    /// The diagram of a module whose box serves no traced scans (a Skipper
+    /// answers the trace stream 404): the source is compiled here for its
+    /// statement table and laid out from that, so the program is drawn
+    /// (Nick, 2026-11-24: "I'm also still not seeing the output visual
+    /// diagram of the program anywhere"). Only once the trace has failed:
+    /// a box that traces draws from its own table. Its wires carry no
+    /// values until a traced scan comes; the signals do.
+    fn lower_untraced(&mut self, name: &str) {
+        if self.trace.failures == 0 {
+            return;
+        }
+        let Some(src) = self.source.clone() else { return };
+        if self.lowered.as_ref().is_some_and(|l| l.src == src) {
+            return;
+        }
+        if src.trim_start().starts_with('<') {
+            self.problem =
+                Some("this module is a PLCopen XML project; the live view draws Structured Text".into());
+            return;
+        }
+        // Room for any image a node has (its map's whole image each way).
+        let sizes = helmsman_iec::ImageSizes {
+            i: 4096,
+            q: 4096,
+            m: 4096,
+        };
+        let module = helmsman_iec::compile(&src, sizes)
+            .map_err(|e| {
+                e.first()
+                    .map_or_else(|| "it does not compile".to_string(), ToString::to_string)
+            })
+            .and_then(|p| helmsman_diagram::lower(&src, &p.trace_map()).map_err(|e| e.to_string()));
+        match module {
+            Ok(module) => {
+                self.generation += 1;
+                self.problem = None;
+                self.lowered = Some(Lowered {
+                    src,
+                    module,
+                    table: Vec::new(),
+                    generation: self.generation,
+                });
+            }
+            Err(e) => {
+                self.lowered = None;
+                self.problem = Some(format!("cannot draw {name}: {e}"));
+            }
+        }
+    }
+
+    /// Reads the chosen module's source again (a deploy from this page
+    /// changed it on a box that sends no traced scans to say so).
+    pub fn reread_source(&mut self) {
+        if let Some(name) = self.selected.clone() {
+            self.queue
+                .push(Cmd::Get(Fetch::Module(name.clone()), module_url(&name)));
+        }
+    }
+
     /// Lowers the source against the newest scan's table, when either is
     /// new; fetches the source again if the table changed under it.
     fn relower(&mut self) {
-        let (Some(name), Some(scan)) = (self.selected.clone(), self.scan.as_ref()) else {
+        let Some(name) = self.selected.clone() else { return };
+        let Some(scan) = self.scan.as_ref() else {
+            self.lower_untraced(&name);
             return;
         };
         if self.lowered.as_ref().is_some_and(|l| l.table != scan.table) {
@@ -1765,5 +1898,28 @@ mod tests {
             1.0,
         );
         assert_eq!(s.selected.as_deref(), Some("b"));
+    }
+
+    /// Nick 2026-11-25: no state on the diagram on a Skipper. A Skipper
+    /// keeps no trace; its values stream (the bench Skipper's own shape)
+    /// becomes the diagram's scan, values alone. A box's does not: it has
+    /// the module's trace.
+    #[test]
+    fn a_skippers_values_are_the_diagrams_scan_and_a_boxs_are_not() {
+        use helmsman_diagram::Scan as _;
+        let event = r#"{"seq":1,"signals":[{"dir":"in","forced":false,"name":"enabled","point_error":null,"quality":"good","sim":false,"value":true},{"dir":"out","forced":false,"name":"slew","point_error":null,"quality":"good","sim":false,"value":-1000},{"dir":"in","forced":false,"name":"start","point_error":null,"quality":"missing","sim":true,"value":null}]}"#;
+        let mut s = BoxState::new();
+        s.io_map_node = true;
+        s.apply(Msg::Event(Stream::Values, "values".into(), event.into()), 1.0);
+        let n = s.node_values.as_ref().expect("a Skipper's values are a scan");
+        assert_eq!(n.get("Enabled"), Some(Value::Bool(true)), "by name, case-blind");
+        assert_eq!(n.get("slew"), Some(Value::Int(-1000)));
+        assert_eq!(n.get("start"), None, "no value is no value");
+        assert_eq!(n.get("step_tmr.Q"), None, "a variable that is no point");
+        assert!(!n.flow(), "it does not say what ran");
+
+        let mut b = BoxState::new();
+        b.apply(Msg::Event(Stream::Values, "values".into(), event.into()), 1.0);
+        assert_eq!(b.node_values, None);
     }
 }

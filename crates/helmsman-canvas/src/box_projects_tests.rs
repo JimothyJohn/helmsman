@@ -4724,7 +4724,7 @@ fn a_pane_layout_kept_on_the_box_is_offered_on_another_screen() {
 
     let mut c = Chrome::default();
     c.dock(Pane::Io, true);
-    c.hide(Pane::History);
+    c.hide(Pane::Files);
     c.place(Pane::Devices, false, Some(Pane::Claude));
     c.sizes.left = Some(400.0);
     c.sizes.bottom = Some(200.0);
@@ -5077,4 +5077,693 @@ fn a_box_reads_every_history_page_it_keeps_for_the_next_instruction() {
         .map(|k| format!("step {k}\n  why: reason {k}\n  result: Updated main.st."))
         .collect();
     assert_eq!(got, want, "all {CHANGES}, oldest first");
+}
+
+/// Nick 2026-11-24 ("It's running but I can't make any changes"): on a
+/// Skipper (no projects) an engineer edits the running module in the Code
+/// pane and Deploy sends it; signed out it stays read-only.
+#[test]
+fn an_engineer_edits_and_deploys_the_running_module_on_a_skipper() {
+    use crate::remote::Fetch;
+    const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let skipper = || {
+        let mut bv = BoxView::new();
+        bv.projects.available = Some(false);
+        bv.state.apply(
+            Msg::Got(
+                Fetch::Modules,
+                Ok(
+                    r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#
+                        .into(),
+                ),
+            ),
+            1.0,
+        );
+        bv.state.select("drive");
+        let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
+        bv.state.apply(
+            Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+            1.1,
+        );
+        assert_eq!(bv.state.source(), Some(SRC));
+        bv
+    };
+    // Signed out: read, no Deploy.
+    let mut h = Harness::new(skipper(), None);
+    h.app.chrome.show_code();
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("read-only").is_some());
+    assert!(h.app.chrome.rect("code deploy").is_none());
+    assert!(h.drew("slew := 0;"), "the source shows without a traced scan");
+
+    // An engineer: the text is the editor's, and Deploy sends it.
+    let mut h = Harness::new(
+        skipper(),
+        Some(Session {
+            user: None,
+            role: "engineer".into(),
+        }),
+    );
+    h.app.chrome.show_code();
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("read-only").is_none());
+    h.bv()
+        .projects
+        .module
+        .as_mut()
+        .expect("the module is in the editor")
+        .text = SRC.replace("slew := 0;", "slew := 5000;");
+    h.frame(vec![]);
+    assert!(h.app.chrome.rect("module edited").is_some());
+    h.press("code deploy");
+    let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(
+        (sent[0].method, sent[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
+    );
+    let body: Json = serde_json::from_slice(sent[0].body.as_deref().unwrap()).unwrap();
+    assert!(body["source"].as_str().unwrap().contains("slew := 5000;"));
+}
+
+/// 2026-11-24, a box-served page watching a Skipper by address: the
+/// project list asked for before anyone signed in was refused (401), and
+/// the live view, being the Skipper's, never unlocked to ask again, so
+/// the box's projects never showed. The first sign-in asks for them.
+#[test]
+fn the_first_sign_in_asks_for_the_projects_a_locked_box_refused() {
+    let ctx = egui::Context::default();
+    let mut bv = BoxView::new();
+    bv.step_all(&ctx, vec![], vec![], 0.0);
+    let asked = |bv: &mut BoxView| {
+        std::mem::take(&mut bv.psent)
+            .iter()
+            .filter(|q| q.url == "/api/projects")
+            .count()
+    };
+    let _ = asked(&mut bv);
+    // Refused while nobody is signed in: nothing learned.
+    bv.step_all(
+        &ctx,
+        vec![],
+        vec![(
+            crate::box_projects::PCall::List,
+            Answer {
+                status: 401,
+                retry_after: None,
+                body: r#"{"error":"sign in"}"#.into(),
+            },
+        )],
+        0.1,
+    );
+    assert_eq!(bv.projects.available, None);
+    let _ = asked(&mut bv);
+    bv.session = Some(Session {
+        user: Some("nick".into()),
+        role: "engineer".into(),
+    });
+    bv.step_all(&ctx, vec![], vec![], 0.2);
+    assert_eq!(asked(&mut bv), 1, "the sign-in asks for the projects once");
+    bv.step_all(&ctx, vec![], vec![], 0.3);
+    assert_eq!(asked(&mut bv), 0, "and not on every step");
+}
+
+/// Nick 2026-11-24: "there needs to be a deploy button on the agent tab as
+/// well ... make it pulse or something to indicate that it's required".
+/// The Agent tab has Deploy; it says the program is not running yet while
+/// an edit waits, and pressing it sends the program as the Code tab's does.
+#[test]
+fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
+    use crate::remote::Fetch;
+    const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let mut bv = BoxView::new();
+    bv.projects.available = Some(false);
+    bv.state.apply(
+        Msg::Got(
+            Fetch::Modules,
+            Ok(r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#.into()),
+        ),
+        1.0,
+    );
+    bv.state.select("drive");
+    let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
+    bv.state.apply(
+        Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+        1.1,
+    );
+    bv.node_token = true;
+    bv.watches_node = true;
+    bv.projects.track_module("drive", SRC);
+    let mut h = Harness::new(bv, None);
+    // The Skipper's token, held as the sign-in panel holds it.
+    let r = h.app.review.as_mut().unwrap();
+    r.token_held = true;
+    r.remote = Some("http://10.0.0.41:8088".into());
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("agent deploy").is_some(),
+        "Deploy is on the Agent tab"
+    );
+    assert!(
+        h.app.chrome.rect("agent deploy pending").is_none(),
+        "nothing waits: no pulse"
+    );
+    h.bv().projects.module.as_mut().unwrap().text = SRC.replace("slew := 0;", "slew := 500;");
+    h.wait(0.1);
+    assert!(
+        h.app.chrome.rect("agent deploy pending").is_none(),
+        "an edit by hand does not pulse (Nick: only a successful Agent output)"
+    );
+    // A refusal does not either.
+    let outcome = |kind| crate::instruct::Outcome {
+        kind,
+        status: String::new(),
+        why: None,
+        problems: Vec::new(),
+        undo: None,
+        review: Vec::new(),
+        offers: Vec::new(),
+    };
+    h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Refused));
+    h.bv().log_agent();
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploy pending").is_none());
+    // The Agent's answer was written: it pulses and says so.
+    h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Applied));
+    h.bv().log_agent();
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploy pending").is_some());
+    // Deploy sits at the tab's right edge.
+    let tab = h.rect("agent tab");
+    let deploy = h.rect("agent deploy");
+    assert!(tab.right() - deploy.right() < 24.0, "{deploy:?} in {tab:?}");
+    h.press("agent deploy");
+    let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(
+        (sent[0].method, sent[0].url.as_str()),
+        ("PUT", "/api/modules/drive")
+    );
+    // The deploy ran: the pulse stops.
+    h.bv().projects.deploy = crate::box_projects::Deploy::Done("drive is running".into());
+    h.wait(0.1);
+    assert!(!h.bv().agent_pending);
+    assert!(h.app.chrome.rect("agent deploy pending").is_none());
+}
+
+/// Nick 2026-11-24: File › New project makes the project with a program
+/// in it, `main.st` holding the starter, saved on the box and open, so the
+/// Agent has a program to work on at once. A name already taken makes
+/// nothing and writes nothing into the project of that name.
+#[test]
+fn file_new_project_opens_a_saved_starter_program() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    let new_project = |h: &mut Harness, name: &str| {
+        h.press("bar file");
+        h.press("file new");
+        h.wait(0.2);
+        assert!(h.app.chrome.rect("name").is_some(), "the name is asked for");
+        h.bv().files_ui.input = name.to_string();
+        h.press("name ok");
+        // Each answer can queue the next request (create, starter, open).
+        for _ in 0..10 {
+            let reqs = h.sent();
+            if reqs.is_empty() {
+                break;
+            }
+            deliver(&b, &jar, &mut h.bv().projects, reqs);
+            h.wait(0.1);
+        }
+    };
+
+    // What the last project left (Nick, 2026-11-25: "The agent history and
+    // panel should reset when a new file is created, the diagram should
+    // also be cleared and the state reset").
+    h.bv().instruct.draft = "make the lamp blink".into();
+    h.bv().projects.deploy = crate::box_projects::Deploy::Failed("the last one's".into());
+    h.bv().devices_ui.add_note = Some("Scan and add: added rio.".into());
+    new_project(&mut h, "fresh");
+    h.wait(0.1);
+    assert_eq!(h.bv().instruct.draft, "", "the Agent starts empty");
+    assert_eq!(h.bv().projects.deploy, crate::box_projects::Deploy::Idle);
+    assert_eq!(h.bv().devices_ui.add_note, None);
+    assert_eq!(
+        h.bv().waiting(),
+        "fresh has not run yet. Deploy it to see it here.",
+        "the diagram waits for it"
+    );
+    // Deployed, the diagram is what runs again.
+    h.bv().projects.deploy = crate::box_projects::Deploy::Done("fresh is running.".into());
+    h.wait(0.1);
+    assert!(
+        !h.bv().waiting().contains("has not run yet"),
+        "{}",
+        h.bv().waiting()
+    );
+    let p = &h.bv().projects;
+    let o = p.open.as_ref().expect("the new project is open");
+    assert_eq!(o.name, "fresh", "{:?}", p.notice);
+    assert_eq!(o.current.as_deref(), Some("main.st"), "{:?}", o.bufs.keys());
+    assert_eq!(text_of(p, "main.st"), crate::sim_projects::STARTER);
+    assert!(!p.dirty(), "saved, not a draft: {:?}", p.notice);
+    assert_eq!(
+        b.json("/api/projects/fresh/files/main.st")["text"],
+        crate::sim_projects::STARTER
+    );
+    let listed: Vec<String> = b.json("/api/projects/fresh")["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(listed, ["main.st"]);
+    assert!(
+        p.notice
+            .as_ref()
+            .is_some_and(|(n, err)| !*err && n == "Made project fresh."),
+        "{:?}",
+        p.notice
+    );
+
+    // Taken: refused, and line's main.st is still its own.
+    new_project(&mut h, "line");
+    let p = &h.bv().projects;
+    assert!(
+        p.notice
+            .as_ref()
+            .is_some_and(|(n, err)| *err && n.contains("was not made")),
+        "{:?}",
+        p.notice
+    );
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], MAIN);
+}
+
+/// Nick 2026-11-24, at "start, stop, running are not in the I/O list":
+/// on a Skipper's page the Agent is given the Skipper's I/O list with the
+/// request, so it can use the points' names.
+#[test]
+fn on_a_skippers_page_the_agent_gets_its_io_list() {
+    use crate::instruct_tests::LAMP;
+
+    fn message(v: &BoxView, k: usize) -> String {
+        let j: Json = serde_json::from_str(&v.chat_sent[k].body).unwrap();
+        j["message"].as_str().unwrap().to_string()
+    }
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    v.watches_node = true;
+    // As the Skipper's `GET /api/io_map` leaves it (each frame copies it
+    // to the deploy's `node_map`).
+    v.state.io_map =
+        Some("device drive enip-io 192.168.33.1 config=1\nin  start bool drive in:0.0\nout lamp bool drive out:0.0\n".into());
+    v.state.io_map_node = true;
+    v.tick(&ctx);
+
+    v.instruct.draft = "latch the lamp with start and stop".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let first = message(&v, 0);
+    assert!(first.contains("<io_devices>\nThe Skipper's I/O list."), "{first}");
+    assert!(first.contains("in  start bool drive in:0.0"), "{first}");
+    assert!(first.contains("names of at most 32 characters"), "{first}");
+}
+
+/// The Skipper's list as its `GET /api/io_map` gives it.
+const SKIPPER_LIST: &str =
+    "device drive enip-io 192.168.33.1 config=1\nin  start bool drive in:0.0\nout lamp bool drive out:0.0\n";
+
+/// Nick 2026-11-24: "you really need a way to create simulated, place
+/// holder inputs and outputs". Deploy on a Skipper writes a placeholder
+/// (`sim`) point into the project's io.map for each port no point backs:
+/// the Skipper's list whole, then the placeholders, saved as a new file
+/// before the check, and the Messages name them.
+#[test]
+fn deploying_to_a_skipper_adds_placeholder_points_for_ports_no_point_backs() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let latch = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\n  stop : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\n  running : BOOL;\nEND_VAR\nrunning := (start OR running) AND NOT stop;\nlamp := running;\nEND_PROGRAM\n";
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", latch)]);
+    let p = &mut v.projects;
+    p.node_map = Some(SKIPPER_LIST.into());
+    p.to_node = true;
+    p.deploy();
+    let sent = p.poll();
+    let map = sent
+        .iter()
+        .find(|q| q.method == "PUT" && q.url.ends_with("/files/io.map"))
+        .unwrap_or_else(|| panic!("no io.map save: {sent:?}"));
+    let body: Json = serde_json::from_slice(map.body.as_ref().unwrap()).unwrap();
+    assert_eq!(body["version"], Json::Null, "a new file: {body}");
+    assert_eq!(
+        body["text"],
+        format!(
+            "{}\n{}\nin  stop bool sim\nout running bool sim\n",
+            SKIPPER_LIST.trim_end(),
+            crate::placeholders::HEADER
+        )
+    );
+    assert!(
+        p.notice
+            .as_ref()
+            .is_some_and(|(n, err)| !*err && n.contains("for stop, running")),
+        "{:?}",
+        p.notice
+    );
+
+    // On a box (not a Skipper) nothing is added.
+    let jar2 = Jar::default();
+    let mut w = page(&b, &jar2, Some(("alice", ALICE)));
+    w.projects.open_project("line");
+    settle(&b, &jar2, &mut w.projects);
+    w.projects.node_map = Some(SKIPPER_LIST.into());
+    w.projects.to_node = false;
+    w.projects.deploy();
+    let sent = w.projects.poll();
+    assert!(!sent.iter().any(|q| q.url.ends_with("/files/io.map")), "{sent:?}");
+}
+
+/// Nick 2026-11-24: Deploy failed with `driver "device:moxa-iologik-e1213":
+/// a node drives modbus-tcp and enip-io devices` after Scan and add put the
+/// E1213 in the project by its profile. The deploy now sends the Skipper
+/// its own list with the E1213 on top in the Skipper's form (the profile's
+/// EtherNet/IP transport, the address the scan saw, `di:0` for DI-00).
+#[test]
+fn a_device_added_by_its_profile_goes_to_a_skipper_in_its_form() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let main = "PROGRAM lamp\nVAR_INPUT\n  part : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := part;\nEND_PROGRAM\n";
+    let map = "device iologik_e1213 device:moxa-iologik-e1213 cip=991:515:0x2a629eae\nin  part bool iologik_e1213 ch:DI-00\n";
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", main),
+            ("io.map", map),
+            (
+                "moxa-iologik-e1213.device",
+                include_str!("../../../docs/devices/moxa-iologik-e1213.device"),
+            ),
+        ],
+    );
+    let p = &mut v.projects;
+    p.node_map = Some(SKIPPER_LIST.into());
+    p.to_node = true;
+
+    // No scan yet: the E1213 has no address, so the deploy scans for it
+    // first (Nick: "there was no way to know this ahead of time") and
+    // nothing else goes.
+    p.deploy();
+    assert_eq!(p.deploy, Deploy::Scanning);
+    let sent = p.poll();
+    assert_eq!(
+        sent.iter().map(|q| q.url.as_str()).collect::<Vec<_>>(),
+        ["/api/devices/discover?fresh=1"]
+    );
+
+    // The scan finds it: the deploy goes on, made for the Skipper.
+    p.scanned(vec![("cip=991:515:0x2a629eae".into(), "192.168.33.60".into())]);
+    assert!(p.deploy.busy(), "{:?}", p.deploy);
+    let sent = p.poll();
+    let save = sent
+        .iter()
+        .find(|q| q.method == "PUT" && q.url.ends_with("/files/io.map"))
+        .unwrap_or_else(|| panic!("no io.map save: {sent:?}"));
+    let body: Json = serde_json::from_slice(save.body.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        body["text"],
+        format!(
+            "{}\ndevice iologik_e1213 enip-io 192.168.33.60 profile=moxa-e1213 rpi_ms=100\nin  part bool iologik_e1213 di:0\n",
+            SKIPPER_LIST.trim_end(),
+        )
+    );
+}
+
+/// Nick 2026-11-24: `"liberty_lexium_mdrive_ethernet_lmd_ether": a name is
+/// letters, digits and '_', at most 32` from the Skipper. That port is the
+/// drive's `enabled` channel, which the Skipper has as `enabled`: Deploy
+/// stops before sending and says to use the Skipper's name.
+#[test]
+fn a_port_that_is_a_skipper_point_under_another_name_stops_the_deploy() {
+    let node = "device drive enip-io 192.168.33.1 config=1 o2t=112:36 t2o=100:16 rpi_ms=20\nin  enabled bool drive in:0.0\nout slew int drive out:20:i32\n";
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let long = "liberty_lexium_mdrive_ethernet_lmd_ether";
+    let main = format!(
+        "PROGRAM p\nVAR_INPUT\n  {long} : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := {long};\nEND_PROGRAM\n"
+    );
+    let map = format!(
+        "device liberty_lexium_mdrive_ethernet_lmd_ethernet_ip device:novanta-mdrive cip=243:15362:0x3cad8920\nin  {long} bool liberty_lexium_mdrive_ethernet_lmd_ethernet_ip ch:enabled\n"
+    );
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", main.as_str()),
+            ("io.map", map.as_str()),
+            (
+                "novanta-mdrive.device",
+                include_str!("../../../docs/devices/novanta-mdrive.device"),
+            ),
+        ],
+    );
+    let p = &mut v.projects;
+    p.node_map = Some(node.into());
+    p.to_node = true;
+    p.found_hosts = vec![("cip=243:15362:0x3cad8920".into(), "192.168.33.1".into())];
+    p.deploy();
+    assert!(
+        matches!(&p.deploy, Deploy::Failed(w) if w.contains(&format!("{long} is the Skipper's enabled (the same channel): use enabled, not {long}, in the program"))),
+        "{:?}",
+        p.deploy
+    );
+    assert!(p.poll().is_empty(), "nothing sent");
+}
+
+/// A scan that does not find the device: the deploy stops once, saying
+/// which device and what to look at; it does not scan again.
+#[test]
+fn a_device_the_scan_does_not_find_stops_the_deploy_in_words() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let main = "PROGRAM lamp\nVAR_INPUT\n  part : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := part;\nEND_PROGRAM\n";
+    let map = "device iologik_e1213 device:moxa-iologik-e1213 cip=991:515:0x2a629eae\nin  part bool iologik_e1213 ch:DI-00\n";
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", main),
+            ("io.map", map),
+            (
+                "moxa-iologik-e1213.device",
+                include_str!("../../../docs/devices/moxa-iologik-e1213.device"),
+            ),
+        ],
+    );
+    let p = &mut v.projects;
+    p.node_map = Some(SKIPPER_LIST.into());
+    p.to_node = true;
+    p.deploy();
+    assert_eq!(p.deploy, Deploy::Scanning);
+    p.poll();
+    p.scanned(Vec::new());
+    assert!(
+        matches!(&p.deploy, Deploy::Failed(w) if w.contains("iologik_e1213: the network scan did not find it")),
+        "{:?}",
+        p.deploy
+    );
+    assert!(p.poll().is_empty(), "no second scan, nothing sent");
+    // A scan answer later is not a deploy.
+    p.scanned(Vec::new());
+    assert!(matches!(p.deploy, Deploy::Failed(_)));
+}
+
+/// The same after an Agent answer lands on a Skipper's page: the
+/// placeholder is saved with it (io.map alone, not other edits).
+#[test]
+fn an_agent_answer_on_a_skipper_gets_its_placeholders_saved_with_it() {
+    use crate::box_agent::Incoming;
+    use crate::instruct_tests::LAMP;
+    use serde_json::json;
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", LAMP), ("notes.st", "(* x *)\n")],
+    );
+    v.projects.open_file("notes.st");
+    v.projects.current_mut().unwrap().text = "(* an edit not saved *)\n".into();
+    v.projects.open_file("main.st");
+    // Everything the page sends until it goes quiet, answered by the box.
+    let run = |v: &mut BoxView, seen: &mut Vec<PReq>| {
+        // A request queued during a frame goes out on the next one.
+        for _ in 0..10 {
+            v.tick(&ctx);
+            seen.extend(v.psent.iter().cloned());
+            pump(&b, &jar, v, &ctx, 1.0);
+        }
+    };
+    let mut seen = Vec::new();
+    run(&mut v, &mut seen);
+    v.watches_node = true;
+    v.state.io_map = Some(SKIPPER_LIST.into());
+    v.state.io_map_node = true;
+    v.tick(&ctx);
+
+    v.instruct.draft = "hold the lamp off while jog is on".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let jogged = LAMP
+        .replace("  start : BOOL;\n", "  start : BOOL;\n  jog : BOOL;\n")
+        .replace("lamp := start;", "lamp := start AND NOT jog;");
+    let scenario = "(* The lamp stays off while jog is on. *)\nPROGRAM test_jog\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; jog : BOOL; done : BOOL; END_VAR\nVAR n : INT; off_with_jog : ASSERT; END_VAR\nstart := TRUE;\njog := TRUE;\nn := n + 1;\nIF n > 3 THEN off_with_jog(COND := NOT lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
+    let answer =
+        format!("Why: jog holds the lamp off.\n\n```st\n{jogged}```\n\n```st scenario\n{scenario}```\n");
+    let seq = v.chat_sent[0].seq;
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev("text", json!({ "delta": answer })),
+        ev("done", json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    let mut sent = Vec::new();
+    run(&mut v, &mut sent);
+    let urls: Vec<&str> = sent.iter().map(|q| q.url.as_str()).collect();
+    let map = sent
+        .iter()
+        .find(|q| q.method == "PUT" && q.url.ends_with("/files/io.map"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no io.map save: {urls:?} {:?} chats={} busy={} turns={:?}",
+                v.instruct.outcome,
+                v.chat_sent.len(),
+                v.instruct.busy(),
+                v.agent
+                    .turns
+                    .iter()
+                    .map(|t| t.text.chars().take(80).collect::<String>())
+                    .collect::<Vec<_>>()
+            )
+        });
+    let body: Json = serde_json::from_slice(map.body.as_ref().unwrap()).unwrap();
+    assert!(
+        body["text"].as_str().unwrap().ends_with("\nin  jog bool sim\n"),
+        "{body}"
+    );
+    assert!(urls.iter().any(|u| u.ends_with("/files/main.st")), "{urls:?}");
+    assert!(
+        !urls.iter().any(|u| u.ends_with("/files/notes.st")),
+        "the other edit stays unsaved: {urls:?}"
+    );
+}
+
+/// Nick 2026-11-25: "I'm signed in but the help agent isn't working: Sign
+/// in (top right) to ask for help." The bench box had restarted and no
+/// longer knew the session while the header still showed it. A 401 to
+/// Help signs the header out (`projects.ended`), as any box call's does;
+/// another answer does not.
+#[test]
+fn a_help_request_the_box_refuses_signs_the_page_out() {
+    use crate::box_agent::Incoming;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    v.help.draft = "why is the drive not moving".into();
+    v.ask_help(&ctx);
+    let seq = v.help_sent.last().expect("asked").seq;
+    v.help_answer(Incoming::Status {
+        seq,
+        status: 422,
+        body: "{}".into(),
+    });
+    assert!(!v.projects.ended, "a refusal of the question is not a sign-out");
+    v.ask_help(&ctx);
+    let seq = v.help_sent.last().unwrap().seq;
+    v.help_answer(Incoming::Status {
+        seq,
+        status: 401,
+        body: "{}".into(),
+    });
+    assert!(v.projects.ended, "the header signs out");
+}
+
+/// Nick 2026-11-25: "During the deployment step you should be shown a
+/// loading indicator so you know something is happening." While a deploy
+/// runs, a spinner and what it is doing sit beside Deploy; when it ends
+/// they go.
+#[test]
+fn a_deploy_under_way_shows_a_spinner_and_its_stage_beside_deploy() {
+    use crate::box_projects::Deploy;
+    use crate::remote::Fetch;
+    const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let mut bv = BoxView::new();
+    bv.projects.available = Some(false);
+    bv.state.apply(
+        Msg::Got(
+            Fetch::Modules,
+            Ok(r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#.into()),
+        ),
+        1.0,
+    );
+    bv.state.select("drive");
+    let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
+    bv.state.apply(
+        Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+        1.1,
+    );
+    bv.node_token = true;
+    bv.watches_node = true;
+    bv.projects.track_module("drive", SRC);
+    let mut h = Harness::new(bv, None);
+    let r = h.app.review.as_mut().unwrap();
+    r.token_held = true;
+    r.remote = Some("http://10.0.0.41:8088".into());
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("agent deploying").is_none(),
+        "nothing under way"
+    );
+    for (stage, words) in [
+        (Deploy::Checking, "Checking…"),
+        (Deploy::Replaying, "Replaying in the simulation…"),
+        (Deploy::Deploying, "Sending to the Skipper…"),
+    ] {
+        h.bv().projects.deploy = stage.clone();
+        h.wait(0.1);
+        assert!(h.app.chrome.rect("agent deploying").is_some(), "{stage:?}");
+        assert_eq!(stage.stage(true), Some(words));
+    }
+    h.bv().projects.deploy = Deploy::Done("drive is running.".into());
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploying").is_none(), "it ended");
+    assert_eq!(Deploy::Deploying.stage(false), Some("Deploying…"), "to a box");
 }

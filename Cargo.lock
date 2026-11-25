@@ -1578,7 +1578,6 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
- "sha2 0.11.1",
  "wasm-bindgen-futures",
  "web-sys",
 ]
@@ -1638,6 +1637,7 @@ dependencies = [
  "helmsman-io",
  "helmsman-l2",
  "helmsman-modbus",
+ "helmsman-nodecore",
  "helmsman-profinet",
  "helmsman-proto",
  "i2cdev",
@@ -1673,6 +1673,7 @@ name = "helmsman-nodecore"
 version = "0.1.0"
 dependencies = [
  "helmsman-iolink",
+ "helmsman-modbus",
  "proptest",
  "serde_json",
  "sha2 0.11.1",

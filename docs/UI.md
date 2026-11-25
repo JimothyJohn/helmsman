@@ -144,7 +144,8 @@ only go down.
   Delete and, on the open one, Paste, on a file Copy, Paste, Duplicate, Rename and
   Delete with an app-wide clipboard so a file pastes into any open
   project, and on the blank space New project and Paste; New project and
-  Copy project are also the File menu's first items; the Delete key
+  Copy project are also the File menu's first items (a new project opens
+  on a saved `main.st` holding the playground's starter, Nick 2026-11-24); the Delete key
   deletes the row last clicked, a double click on a file opens the Code
   tab, every delete is confirmed in a modal at the screen's centre, and
   the earlier iterations of the program, `vN.st`, fold under one
@@ -316,17 +317,10 @@ only go down.
   after a described change is on. Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
-  instruction sent, greyed. On a new project (a built-in example
-  open) "From a spec…" opens a window (Nick, 2026-11-15, `crate::spec_mode`):
-  paste a scope of work or add `.md` and `.txt` files, with the total
-  against the one request's cap, and Build; the draft comes back on a
-  review screen (the name, the I/O, each requirement passed or not, the
-  untested ones, the reason) and nothing is made until Accept. On a box
-  (Nick, 2026-11-15; `crate::box_spec`) the Describe tab offers it to an
-  engineer with a project open or not, the window also takes `.pdf`
-  files with the box's caps beside the total, the review lists the
-  inputs that need a device, and Accept sends the project to the box as
-  one zip. "Design a machine…" (`crate::design_step`, `crate::design_ui`;
+  instruction sent, greyed. "Design a machine…" takes the description and, in the same window, pasted
+  text or `.md` and `.txt` files (`crate::documents`, Nick, 2026-11-23: one
+  entry, not a second "From a spec" button), with the total against the cap.
+  "Design a machine…" (`crate::design_step`, `crate::design_ui`;
   card `design-step-canvas`) asks a strong model for a whole machine's
   control system design: a window takes the description, the tab shows
   the elapsed time and the model's thinking summary while the turns come
@@ -406,18 +400,29 @@ only go down.
   longer pans the diagram: Space and a drag, or the middle button, do; the
   arrow keys and W A S D too, and the wheel zooms. Hovering empty space
   says so.
-- **Zoom only scales; corner controls (Nick, 2026-11-23).** The diagram is
-  drawn the same way at every zoom: it no longer swaps to lines of text
-  zoomed out or to the sections' blocks mid-zoom (it looked glitchy and like
-  another interface), and stays at the one level a small program has when
-  first fitted. Folds the reader makes (a double click, the tabs, the CASE
-  and interlock tables) work as before; zooming out will later merge nodes
-  into labelled groups in the same style
-  (`st_zoom::SEMANTIC_ZOOM`). In the diagram's bottom-right corner, left of
-  the lamps: a hand (while on, a drag on empty space moves the view instead
-  of drawing a box; off by default, not saved with the project), zoom in
-  and zoom out (one step about the middle, the wheel's limits). Each is a
-  44 pt glyph with a tooltip.
+- **The zoom ladder (Nick, 2026-11-23).** The closer the camera, the more
+  concrete the diagram, and each step out says less about how and more
+  about what. Five levels, closest first: **Code** (each statement is the
+  Structured Text that wrote it), **Wiring** (the blocks and wires, where
+  a fitted view lands), **Statements** (one card per statement, named by
+  what it sets, with its value), **Sections** (one card per commented
+  section, IF or CASE arm, or leftover statement) and **Program** (the
+  whole program as one card). The first try swapped the drawing at a
+  threshold, text far out and blocks close, which looked glitchy, like
+  another interface, and upside down. So: nothing is laid out again (a
+  card is painted over its own blocks, where they are); how strongly is a
+  continuous function of the zoom, with no state to flip; the groups that
+  will close together are outlined faintly one level before they do, and
+  the outline firms up on the way; and the levels are a factor of 2.2
+  apart, so a turn of the wheel never crosses two. A formed card takes
+  the pointer: a click flies in one level to what it holds. Folds the
+  reader makes (a double click, the tabs, the CASE and interlock tables)
+  work as before. In the diagram's bottom-right corner, left of the lamps:
+  a hand (while on, a drag on empty space moves the view instead of
+  drawing a box; off by default, not saved with the project), zoom in and
+  zoom out (one step about the middle, the wheel's limits), each a 44 pt
+  glyph with a tooltip, and the level's name, which opens the list of
+  levels to step to.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).

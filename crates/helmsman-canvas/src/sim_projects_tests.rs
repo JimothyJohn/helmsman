@@ -1012,10 +1012,6 @@ fn described(v: &PlaygroundView, text: &str) -> crate::instruct::Apply {
         status: String::new(),
         why: None,
         instruction: "add outputs".into(),
-        evidence: Box::new(crate::instruct::Evidence {
-            answer: String::new(),
-            ran: Vec::new(),
-        }),
     }
 }
 

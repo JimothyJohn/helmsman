@@ -181,7 +181,17 @@ scan; the scheduler bounds how often.
   EtherNet/IP list) and `modbus` stay for one release for the canvas in
   the field. The PROFINET Identify is not run by any test on a wire
   (`resolve::profinet_seen` reads the frames and is tested on built
-  ones).
+  ones). The `ListIdentity` to the limited broadcast leaves on the
+  default route's interface only, so a sweep to it is asked once from a
+  socket bound to each of the host's non-loopback IPv4 addresses
+  (`resolve::host_local_addrs`: what `ip -o -4 addr`, else `ifconfig`,
+  prints; neither runs, as on Windows: one unbound send, as before), the
+  replies gathered over one window and each address listed once
+  (`scan-every-interface`). `POST /api/devices/discover?address=A` asks
+  the one host `A` (IPv4 only; a multicast, broadcast or unspecified
+  address or anything else is a 400): a unicast `ListIdentity` to it and
+  the Modbus probe to it, answered in the same shape and not kept as the
+  last scan. The Devices tab's Ask row sends it.
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`
   (metadata, never converted), an optional per-input `poll` period, and a
@@ -3251,17 +3261,33 @@ the end of this section.
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
-  The level does not follow the zoom for now (Nick, 2026-11-23: it looked
-  glitchy and like another interface): `st_zoom::SEMANTIC_ZOOM` is `false`,
-  `ZoomFolds::follows` starts from it, and the view stays at
-  `Level::Near`, the level a small program has at its fitted zoom, so a zoom
-  only scales. The machinery below stays for the later merge of nodes into
-  labelled groups, and its tests turn the field on. The corner of the
-  diagram (`Viewer::corner_controls`, drawn by `canvas` so the page and a
-  box both have it) holds the hand toggle (`Viewer::hand`, view state: a
-  primary drag on empty space pans instead of boxing), zoom in and zoom out
-  (`ZOOM_STEP` about the middle of the area, the wheel's 0.15 to 3 limits),
-  left of the lamp fixture when there is one.
+  What the zoom shows is the zoom ladder (Nick, 2026-11-23):
+  `fold::ladder` (pure) names the rungs, closest first (`Rung::Code`,
+  `Wiring`, `Statements`, `Sections`, `Program`), gives each a band of
+  zoom (`Rung::band`, a factor `STEP` apart), and says how strongly a
+  rung's cards (`card`) and outlines (`outline`) are drawn at a zoom, as
+  continuous functions of the zoom alone. `ladder::groups` gives the
+  blocks each card stands for, from `structure::statements`, `sections`
+  and `arms`, never sharing a block within a rung; a statement keeps its
+  source (`structure::sources`) for the Code rung. On the canvas
+  (`st_ladder.rs`, a child of `st_view`) `Viewer::ladder_cards` is what a
+  frame draws: each group's bounds over its blocks as laid out, so
+  nothing is laid out again and nothing reaches the edit count or
+  `diagram.layout`. `ladder_paint` draws them over the diagram after
+  `draw`; a card at least half formed takes the pointer (`ladder_at`): a
+  click flies in one rung (`ladder_click`, `ladder_fly`, the Q/E glide),
+  a drag pans. The camera's limits are the ladder's (`MIN_ZOOM`,
+  `MAX_ZOOM`).
+  The earlier three-level semantic zoom (`fold::zoom`, `st_zoom.rs`), which
+  closed folds and laid the diagram out again at each level, is off
+  (`st_zoom::SEMANTIC_ZOOM` is `false`, `ZoomFolds::follows` starts from
+  it, the view stays at `Level::Near`) and only its tests turn it on. The
+  corner of the diagram (`Viewer::corner_controls`, drawn by `canvas` so
+  the page and a box both have it) holds the hand toggle (`Viewer::hand`,
+  view state: a primary drag on empty space pans instead of boxing), zoom
+  in and zoom out (`ZOOM_STEP` about the middle of the area) and the
+  rung's name, a menu that steps to any rung, left of the lamp fixture
+  when there is one.
   With `SEMANTIC_ZOOM` on, the zoom picks the level (`st_zoom.rs`, a child of
   `st_view`): each frame
   `follow_zoom` takes the camera's zoom through `zoom::level`, and when the
@@ -3818,70 +3844,44 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   used twice, stops the send and says why. The front door's tank was
   written from such a list. Contracts in `io_names.rs`'s tests and
   `ui_tests/io_names.rs` (the pane keeps its width with long names).
-- **Spec mode** (`spec_mode.rs`; Nick, 2026-11-15): with `Scope::NewProject`
-  the Describe tab offers "From a spec…", a window (`spec_mode::form_ui`)
-  where a specification is pasted or `.md` / `.txt` files are added
-  (`Spec::add_file` holds `helmsman_project::check_text`'s rules and
-  refuses with the reason; the wasm picker is `web::pick_spec_file`, which
-  refuses a file over the cap before it is read). `Spec::message` is the
-  request: `spec_mode::RULES`, then the documents in a `<specification>`
-  envelope (`spec_mode::defang` makes every envelope tag of
-  `scope::ENVELOPES`, open or close, and a forged document line harmless).
-  The page's own prompt (the relay's `playground-v4` on the free route,
-  `claude::SYSTEM` on the others) carries the answer format; the rules say
-  only what differs: names with a comment on each declaration line, a
-  scenario per requirement up to `verify::MAX_SCENARIOS`, and the
-  requirements with no scenario in one ```` ```requirements ```` block
-  (`spec_mode::untested`: at most 40 lines, cut, control characters out).
-  `MAX_SPEC` (120 KiB of request body) is `claude::FREE_MAX_BODY` less the
-  fixed words and two failed answers a retry carries; a compile-time
-  assertion and a test hold it. The run is `Instruct::start_spec`
-  (History's instruction is "From a spec: names", never the spec; a retry
-  adds `spec_mode::RETRY`), checked as any new program. Its `Apply` (which
-  now carries the answer and the scenarios it ran) goes to
-  `PlaygroundView::write`, which, for a spec run, builds a `Draft`
-  (`helmsman_iec::spec::declared_ports` reads each port's declaration
-  comment) and opens `spec_mode::review_ui` instead of the name question.
-  Nothing is written until `accept_spec`, which makes the project in one
-  revision from `Draft::files`: `main.st`, the scenarios that passed,
-  `spec::placeholder` tests for the rest, `io.map` from
-  `sim_projects::example_io_map` and `spec.md` (a kept file, so it is put
-  into the files map, not `add_file`); the project's own size rules are
-  checked before Accept. Discard drops the draft. A scenario that did not
-  pass is not kept as a test, but its requirement is a `spec::placeholder`
-  like those with no scenario (`Draft::placeholders`), listed "not tested
-  yet" with the reason in its tooltip. A spec run into an existing project
-  is not built. Contracts in `spec_mode_tests.rs` and
-  `ui_tests/spec_mode.rs`.
-  - **On a box** (`box_spec.rs`, `box_view.rs`; Nick, 2026-11-15, "in both"):
-    the same window and review with `Spec::on_box`. The Describe tab's "From a
-    spec…" is for an engineer (`BoxView::spec_entry_blocked`) with the
-    agent reachable, a project open or not. `Spec` also takes PDFs
-    (`Pdf`): the box's caps (`BOX_PDF` 2 MiB, `BOX_PDFS` 5, `BOX_HISTORY`
-    3584 KiB less room for two retries, text at most `BOX_MESSAGE` less
-    `BOX_FIXED`) are held when a file is added and again at Build, a test
-    ties them to the box's own constants and base64. Build first keeps each
-    PDF as a drop-in (`POST /api/dropins`, `device_vendor::upload_request`,
-    answered through `PCall::SpecPdf`, the refusal in
-    `device_vendor::refusal_words` beside the document), then sends
-    `instruct::BOX_NEW_RULES` (the answer format `BOX_RULES` shares, for a
-    new project), `spec_mode::RULES` and the text with the drop-in ids, in
-    a new conversation; retries continue it. The run is checked against the
-    sizes and scan period `GET /api/projects` reports for a project made
-    now (`tests`, `BoxProjects::new_runs`). Accept is one
-    `POST /api/projects/{name}/zip` (`PCall::SpecProject`): the zip route is
-    the one atomic write of many files, a taken name is a 409 and nothing is
-    written, and it carries no label, so History shows "uploaded a zip". A
-    PDF is recorded in `spec.md` by name, size and SHA-256 (`sha2`, the
-    box's own version), never stored. `io.map` is `sim_projects::box_io_map`:
-    a number input gets no line (the box refuses a screen tile as an input),
-    so the review lists it as needing a device and a Deploy the box refuses
-    for it (`port X: no signal of that name`) is followed by
-    `box_projects::deploy_words`. Contracts in `box_spec_tests.rs` (the real
-    box API) and `ui_tests/spec_mode.rs`.
+- **Documents in the design window** (`documents.rs`; Nick, 2026-11-15, folded
+  into "Design a machine" on 2026-11-23: one entry, no separate "From a
+  spec" window or review). The design window (`design_ui::ask_window`)
+  takes a description and, beside it (`documents::intake_ui`), pasted text
+  and `.md` / `.txt` files (`Documents::add_file` holds
+  `helmsman_project::check_text`'s rules and refuses with the reason; the
+  wasm picker is `web::pick_document_file`, which refuses a file over the
+  cap before it is read). `Documents::message` is the request's text: the
+  description as typed, with no document exactly as before, and with
+  documents the description (defanged), `documents::INTRO` and the
+  documents in a `<specification>` envelope (`documents::defang` makes
+  every envelope tag of `scope::ENVELOPES`, open or close, and a forged
+  document line harmless; `design::neutralize` does the same for the design
+  request's own blocks). The page puts that text as `design::request`'s
+  description; a box posts it as `{description}` (the box allows 200 000
+  characters, `BOX_MESSAGE`, and neutralises its own blocks). `MAX_TEXT`
+  (120 KiB of request body) leaves the design entry's 1 MiB room for the
+  design coming back in the same request; a box is held to its message cap
+  with room for its own words (`BOX_FIXED`). A PDF is taken in neither
+  page. The design's numbered requirements are the ones the documents
+  state; each step's brief (`Design::step_brief`) asks for a scenario for
+  each and for the ones a scenario cannot show in one
+  ```` ```requirements ```` block (`documents::untested`: at most 40 lines,
+  cut, control characters out; `verify::code_part` and `has_code` do not
+  count it as code). `Plan::keep_unproven` collects those and the
+  requirements whose scenario did not pass, and the batch is written with a
+  `spec::placeholder` test for each (`Plan::placeholders`), said in the
+  status ("N requirements have no scenario and are kept as tests with
+  nothing in them yet"). Keep puts the documents in the project as
+  `documents.md` beside `design.md` (`Read::documents_file`, the text as
+  given, not defanged), in the same revision (on a box, in the same zip).
+  Contracts in `documents_tests.rs`, `design_page_tests.rs`,
+  `box_design_tests.rs` and `ui_tests/design.rs`. A project made by the
+  earlier "From a spec…" keeps its `spec.md` and History entries such as
+  "From a spec: Pasted"; both are only text now.
 - **The design step** (`design.rs`, `design_step.rs`, `design_ui.rs`; Nick,
   2026-11-15, card `design-step-canvas`): "Design a machine…" in the Agent
-  tab, beside "From a spec…", on both pages. `design.rs` is the contract
+  tab, on both pages. `design.rs` is the contract
   with the relay's `helmsman/design-v1` (the request, `Continue`, the
   reader, `Design::problems`, `Design::step_brief`); `design_step.rs` is
   the state and the streams, free of I/O like `box_agent.rs`; `design_ui.rs`
@@ -3910,8 +3910,8 @@ both). No box, no server: everything runs in the page (`playground.rs`,
     off: the tab says so and offers Carry on (the turn is asked again) or
     Discard; Stop leaves no draft. The page transport is `web::ClaudeLink`
     with `claude::json_post` (no key, no other header).
-  - **Kept as `design.md`**, a kept file (`helmsman_project::kept_name`) like
-    `spec.md`: Keep is one revision in the simulation (a built-in example
+  - **Kept as `design.md`**, a kept file (`helmsman_project::kept_name`), as
+    `documents.md` is: Keep is one revision in the simulation (a built-in example
     first becomes a project named for the machine). The box's file route
     writes only the files a project uses, so on a box Keep makes a copy of
     the open project, as the box holds it, with `design.md` in it, through

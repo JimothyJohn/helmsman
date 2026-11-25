@@ -18,6 +18,8 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 # The IO-Link master port a node's `iolink` map lines run on (`no_std`,
 # no dependencies of its own).
 helmsman-iolink = { path = "../helmsman-iolink" }
+# The Modbus TCP header and limits of the Skipper's own server (`modbus_server`).
+helmsman-modbus = { path = "../helmsman-modbus" }
 # The digest of a firmware image, which the node checks as the bytes arrive
 # and again from flash before it boots them. Already in the tree (the box,
 # the agent and the canvas use it); RustCrypto, no_std without default

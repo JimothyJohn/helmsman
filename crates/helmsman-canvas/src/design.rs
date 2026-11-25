@@ -42,6 +42,11 @@ pub const HEADINGS: [&str; 7] = [
     "Open questions",
 ];
 
+/// Added to a step that has requirements: the ones a scenario cannot show
+/// are listed, so each is kept as a test and none is lost
+/// ([`crate::documents::untested`]).
+const REQUIREMENTS_BLOCK: &str = "A requirement that needs hardware, a person, or a time the simulation cannot show gets no scenario: list it, one plain sentence per line with no bullets and nothing else, in one block marked ```requirements, last in your answer. Leave the block out when every requirement above has a scenario.\n";
+
 /// The tags of the request's data blocks.
 const TAGS: [&str; 4] = ["dialect", "project", "io_devices", "requirement_tests"];
 
@@ -465,6 +470,7 @@ impl Design {
             for r in reqs {
                 let _ = writeln!(m, "{}. {}", r.n, r.text);
             }
+            m.push_str(REQUIREMENTS_BLOCK);
         }
         m.push_str(
             "\nDo this step only. The design decides names, types, states and timings: follow it, and leave the later steps for later answers.",

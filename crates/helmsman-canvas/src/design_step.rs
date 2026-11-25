@@ -19,6 +19,12 @@
 //!   blocks exactly as the stream gave them (the thinking block and its
 //!   signature included) and the one word `Continue` (agent-relay
 //!   docs/demo.md, "The design entry").
+//! - **Documents.** The description can be left out or be short when the
+//!   engineer pastes or adds `.md` / `.txt` documents in the same window
+//!   ([`crate::documents`]): [`Designer::docs`] holds them, the request
+//!   carries them inside the defanged `<specification>` envelope after the
+//!   description, and [`Read::documents`] keeps them for the project
+//!   (`documents.md`).
 //! - **A turn is minutes.** The elapsed time and the thinking summary come
 //!   from [`Designer::progress`]; a stream that ends without the relay's
 //!   `relay_usage` (or the box's `done`) was cut off and says so, and the
@@ -37,7 +43,8 @@ use serde_json::{Value as Json, json};
 use crate::claude::{Event, Sse};
 use crate::design::{self, Design};
 
-/// The design in the project, kept like the specification's `spec.md`.
+/// The design in the project, kept beside the documents it was made from
+/// ([`crate::documents::DOCUMENTS_FILE`]).
 pub const DESIGN_FILE: &str = "design.md";
 /// The relay's design entry, set when the page is built
 /// (`HELMSMAN_DESIGN_URL`, no trailing slash). Unset: the simulation has no
@@ -515,7 +522,12 @@ struct Done {
 /// The design under way.
 #[derive(Debug)]
 struct Run {
+    /// What the design is called: the description, or the documents' names.
     description: String,
+    /// The text the box is sent: the description and the documents.
+    message: String,
+    /// The documents the design was asked for with, kept with it.
+    docs: Vec<crate::documents::Doc>,
     /// The page route's first user message.
     first: String,
     /// The box's session.
@@ -556,6 +568,8 @@ pub struct Read {
     pub turns: usize,
     /// What the engineer asked for.
     pub description: String,
+    /// The documents it was asked for with, kept in the project beside it.
+    pub documents: Vec<crate::documents::Doc>,
     /// The section on show in the window (into [`sections`]).
     pub section: usize,
     /// The section on show, read as Markdown: which section and its blocks.
@@ -572,14 +586,38 @@ impl Read {
             text,
             turns,
             description,
+            documents: Vec::new(),
             section: 0,
             shown: None,
         }
     }
 
+    /// The documents the design was asked for with.
+    #[must_use]
+    pub fn with_documents(mut self, documents: Vec<crate::documents::Doc>) -> Self {
+        self.documents = documents;
+        self
+    }
+
+    /// The documents the design was asked for with, as the project's
+    /// [`crate::documents::DOCUMENTS_FILE`]; `None` when there were none.
+    #[must_use]
+    pub fn documents_file(&self) -> Option<String> {
+        (!self.documents.is_empty()).then(|| crate::documents::documents_md(&self.documents))
+    }
+
     /// Why the design cannot be kept as a project file, if it cannot.
     #[must_use]
     pub fn keep_refusal(&self) -> Option<String> {
+        if self
+            .documents_file()
+            .is_some_and(|d| d.len() > helmsman_project::MAX_FILE)
+        {
+            return Some(format!(
+                "The documents are over {} KiB, which a project file is at most, so the design cannot be kept with them.",
+                helmsman_project::MAX_FILE / 1024
+            ));
+        }
         if self.text.len() > helmsman_project::MAX_FILE {
             return Some(format!(
                 "The design is {} KiB and a project file is at most {} KiB, so it cannot be kept.",
@@ -624,6 +662,11 @@ pub fn sections(d: &Design, text: &str) -> Vec<(String, String)> {
 /// The design entry on one page.
 #[derive(Debug)]
 pub struct Designer {
+    /// Off the page for now (Nick, 2026-11-25: "Design a machine and add a
+    /// spec should be removed for now, we really need to get incremental
+    /// progress working"): no entry, whatever the relay offers. Tests that
+    /// exercise the design flow turn it back on ([`Self::set_base`]).
+    pub shelved: bool,
     pub place: Place,
     base: Option<String>,
     pub avail: Avail,
@@ -631,6 +674,8 @@ pub struct Designer {
     pub open: bool,
     /// The description as typed.
     pub description: String,
+    /// The documents added or pasted beside it.
+    pub docs: crate::documents::Documents,
     /// Under the description: why it cannot go.
     pub error: Option<String>,
     /// In the tab: how the last design ended, when it did not come whole.
@@ -665,17 +710,20 @@ impl Designer {
     #[must_use]
     pub fn boxed() -> Self {
         let mut d = Self::new(Place::Box);
+        d.docs.on_box = true;
         d.avail = Avail::Open;
         d
     }
 
     fn new(place: Place) -> Self {
         Self {
+            shelved: true,
             place,
             base: None,
             avail: Avail::Hidden,
             open: false,
             description: String::new(),
+            docs: crate::documents::Documents::default(),
             error: None,
             notice: None,
             wait: None,
@@ -692,6 +740,7 @@ impl Designer {
     pub fn set_base(&mut self, base: &str) {
         self.base = Some(base.trim().trim_end_matches('/').to_string());
         self.avail = Avail::Unknown;
+        self.shelved = false;
     }
 
     /// The address to ask for the status, once: the status is then
@@ -713,7 +762,7 @@ impl Designer {
     /// Whether the tab shows the entry.
     #[must_use]
     pub fn visible(&self) -> bool {
-        matches!(self.avail, Avail::Open | Avail::Closed { .. })
+        !self.shelved && matches!(self.avail, Avail::Open | Avail::Closed { .. })
     }
 
     #[must_use]
@@ -789,8 +838,8 @@ impl Designer {
         }
         let description = description.trim();
         let n = description.chars().count();
-        if n == 0 {
-            return Err("Describe the machine first.".into());
+        if n == 0 && self.docs.is_empty() {
+            return Err("Describe the machine, or add a document, first.".into());
         }
         if n > MAX_DESCRIPTION {
             return Err(format!(
@@ -803,12 +852,22 @@ impl Designer {
         {
             return Err("A description may not carry control characters.".into());
         }
+        if let Some(why) = self.docs.refusal(description) {
+            return Err(why);
+        }
+        let title = if n == 0 {
+            self.docs.title()
+        } else {
+            description.to_string()
+        };
         self.notice = None;
         self.error = None;
         self.read = None;
         self.window = false;
         self.run = Some(Run {
-            description: description.to_string(),
+            description: title,
+            message: self.docs.message(description),
+            docs: self.docs.documents(),
             first,
             session: None,
             done: Vec::new(),
@@ -838,7 +897,7 @@ impl Designer {
             Place::Page => page_body(&r.first, &r.done)?,
             Place::Box => match (&r.session, r.done.is_empty()) {
                 (Some(id), false) => json!({ "session": id }).to_string(),
-                _ => json!({ "description": r.description }).to_string(),
+                _ => json!({ "description": r.message }).to_string(),
             },
         };
         self.seq += 1;
@@ -914,7 +973,7 @@ impl Designer {
         if !more {
             let r = self.run.take()?;
             let text = design::join(r.done.iter().map(|d| d.text.as_str()));
-            self.read = Some(Read::new(text, r.done.len(), r.description));
+            self.read = Some(Read::new(text, r.done.len(), r.description).with_documents(r.docs));
             self.window = true;
             return None;
         }
@@ -1197,6 +1256,20 @@ pub fn kept_view(
         next,
         build_blocked,
     }
+}
+
+/// A project name that is free among `taken`, starting from `want`.
+#[must_use]
+pub(crate) fn free_name(want: &str, taken: &[String]) -> String {
+    let base: String = want.chars().take(44).collect();
+    let is_taken = |n: &str| taken.iter().any(|t| t.eq_ignore_ascii_case(n));
+    if !is_taken(&base) {
+        return base;
+    }
+    (2..=400)
+        .map(|k| format!("{base}-{k}"))
+        .find(|n| !is_taken(n))
+        .unwrap_or(base)
 }
 
 /// A project name for a design described as `description`: its first

@@ -316,7 +316,10 @@ fn calls_of(a: &[Json]) -> Result<Vec<ToolCall>, Error> {
             if id.is_empty() || id.len() > MAX_ID || name.is_empty() || name.len() > MAX_ID {
                 return Err(bad("a tool call with an id or name of the wrong length"));
             }
-            let input = if u["input"].is_object() {
+            // `null` (or none) is the empty object, for a tool with no parameters.
+            let input = if u["input"].is_null() {
+                Ok(json!({}))
+            } else if u["input"].is_object() {
                 Ok(u["input"].clone())
             } else {
                 Err(u["input"].to_string())

@@ -211,6 +211,17 @@ impl Plant {
         self.t_ms = self.t_ms.saturating_add(dt_ms);
         #[allow(clippy::cast_precision_loss)]
         let dt_ms = dt_ms as f64;
+        // A port the file switches off (`off NAME`) is not the plant's: no
+        // device reads that output or drives that input.
+        let off = self.spec.off.clone();
+        let read = |name: &str| {
+            if off.iter().any(|o| o.eq_ignore_ascii_case(name)) {
+                None
+            } else {
+                read(name)
+            }
+        };
+        let read: &dyn Fn(&str) -> Option<Val> = &read;
         // Devices first, then the sensors that read them.
         for pass in [false, true] {
             for i in 0..self.spec.devices.len() {
@@ -233,6 +244,9 @@ impl Plant {
         let mut clean: Vec<(String, Val)> = Vec::new();
         for (d, s) in self.spec.devices.iter().zip(&self.states) {
             for (key, var, role) in d.inputs() {
+                if self.spec.is_off(var) {
+                    continue;
+                }
                 let v = if d.kind.manual() {
                     read(var).unwrap_or(match role {
                         Role::InBool => Val::Bool(false),
@@ -249,6 +263,7 @@ impl Plant {
         // An input with a mode and no device: set by hand, like a button.
         for (name, _) in self.modes.values() {
             if self.spec.owner(name).is_none()
+                && !self.spec.is_off(name)
                 && let Some(v) = read(name)
             {
                 clean.push((name.clone(), v));

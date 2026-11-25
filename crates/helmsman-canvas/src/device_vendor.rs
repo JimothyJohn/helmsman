@@ -133,8 +133,7 @@ pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
 }
 
 /// What the box's refusal of an upload (`status`, its `body`) says, in
-/// words for the engineer, naming `name`: the same sentences for the
-/// vendor's file and for a PDF of a specification.
+/// words for the engineer, naming `name`.
 #[must_use]
 pub fn refusal_words(status: u16, body: &str, name: &str) -> String {
     let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);

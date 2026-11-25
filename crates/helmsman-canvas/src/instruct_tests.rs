@@ -318,7 +318,6 @@ fn the_record_leads_with_the_instruction_and_is_bounded() {
         retries: 1,
         asked_scenarios: false,
         mode: crate::instruct::Mode::Direct,
-        spec: false,
         attempts: vec![instruct::Attempt {
             asked: "a".into(),
             answer: "b".into(),
@@ -643,6 +642,125 @@ fn stop_while_it_is_fixing_an_answer_writes_nothing() {
     assert_eq!(o.kind, Kind::Failed);
     assert_eq!(o.status, "main.st is unchanged: stopped.");
     assert_eq!(v.proj.files, before);
+}
+
+/// Nick, 2026-11-24: "Losing it when I hit enter makes it hard to
+/// troubleshoot or tweak". An instruction that ended with nothing
+/// written is back in the box, whichever way it ended.
+#[test]
+fn an_instruction_that_changed_nothing_is_back_in_the_box() {
+    // Stopped.
+    let mut v = mine();
+    v.instruct.draft = "  comment it ".into();
+    v.send_instruction(&egui::Context::default());
+    assert_eq!(v.instruct.draft, "", "sent: the box is empty while it works");
+    v.stop_answer();
+    v.tick(&egui::Context::default());
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Failed));
+    assert_eq!(v.instruct.draft, "comment it");
+
+    // Refused: the answer never compiled.
+    let mut v = mine();
+    let broken = st(&commented().replace("lamp := start;", "lamp := start +;"));
+    instruct(&mut v, "say why the lamp is on", &[&broken]);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Refused));
+    assert_eq!(v.instruct.draft, "say why the lamp is on");
+
+    // Sent again as it stands, it is the same instruction.
+    let n = v.link.sent.len();
+    v.send_instruction(&egui::Context::default());
+    assert_eq!(v.link.sent.len(), n + 1);
+    assert!(last_user(&v).contains("say why the lamp is on"));
+}
+
+/// What was typed while it worked is the engineer's: a failure does not
+/// write over it, and the instruction is still one recall away once the
+/// box is empty.
+#[test]
+fn a_failure_keeps_what_was_typed_since_and_recall_brings_the_last_one_back() {
+    let mut v = mine();
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&egui::Context::default());
+    v.instruct.draft = "something else".into();
+    assert!(!v.instruct.recall(), "nothing is recalled while it works");
+    v.stop_answer();
+    v.tick(&egui::Context::default());
+    assert_eq!(v.instruct.draft, "something else");
+    assert!(!v.instruct.recall(), "nor over a draft");
+    assert_eq!(v.instruct.draft, "something else");
+    v.instruct.draft.clear();
+    assert!(v.instruct.recall());
+    assert_eq!(v.instruct.draft, "comment it");
+}
+
+/// A change that was written leaves the box empty for the next one, and
+/// the instruction can still be brought back to change and send again.
+#[test]
+fn a_written_instruction_leaves_the_box_empty_and_can_be_recalled() {
+    let mut v = mine();
+    assert!(!v.instruct.recall(), "nothing was sent yet");
+    instruct(&mut v, "comment it", &[&st(&commented())]);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
+    assert_eq!(v.instruct.draft, "");
+    assert!(v.instruct.recall());
+    assert_eq!(v.instruct.draft, "comment it");
+}
+
+/// Nick, 2026-11-24: a reply that asked something "will forget what we
+/// just talked about". A reply without code is kept and goes with the
+/// next instruction, marked as not carried out; a change that lands ends
+/// the talk.
+#[test]
+fn a_reply_without_code_goes_with_the_next_instruction_until_a_change_lands() {
+    let mut v = mine();
+    instruct(
+        &mut v,
+        "make it safer",
+        &["Which do you mean: a stop button, or a timeout on the lamp?"],
+    );
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Said);
+    assert!(instruct::asks(&o.status));
+    assert_eq!(instruct::answer(&o).tone, instruct::Tone::Ask);
+    assert_eq!(v.instruct.talk.len(), 1);
+    assert_eq!(v.instruct.draft, "", "the box is empty for the answer");
+
+    // The answer goes with the question and what it was about.
+    let bodies = instruct(&mut v, "a timeout", &[&st(&commented())]);
+    let sent = &bodies[0];
+    assert!(sent.contains("(not carried out) make it safer"), "{sent}");
+    assert!(
+        sent.contains(
+            "nothing was changed. You answered: Which do you mean: a stop button, or a timeout on the lamp?"
+        ),
+        "{sent}"
+    );
+    assert!(sent.contains("a timeout"));
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
+    assert!(v.instruct.talk.is_empty(), "a change ends the talk");
+
+    // A statement is kept too, and is no question.
+    instruct(&mut v, "what does it do", &["It turns the lamp on with start."]);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert!(!instruct::asks(&o.status));
+    assert_eq!(instruct::answer(&o).tone, instruct::Tone::Note);
+    assert_eq!(v.instruct.talk.len(), 1);
+}
+
+/// The talk is one project's, and only its last few exchanges.
+#[test]
+fn the_talk_is_capped_and_stays_with_its_project() {
+    let mut v = mine();
+    for k in 0..instruct::MAX_TALK + 2 {
+        instruct(&mut v, &format!("question {k}"), &["Why do you ask?"]);
+    }
+    assert_eq!(v.instruct.talk.len(), instruct::MAX_TALK);
+    assert_eq!(v.instruct.talk[0].asked, "question 2", "the oldest went");
+    v.proj.create("other", None);
+    v.open_project("other");
+    v.tick(&egui::Context::default());
+    let bodies = instruct(&mut v, "comment it", &["No."]);
+    assert!(!bodies[0].contains("(not carried out) question"), "{}", bodies[0]);
 }
 
 #[test]

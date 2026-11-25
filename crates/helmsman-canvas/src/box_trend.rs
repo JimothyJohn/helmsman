@@ -39,6 +39,9 @@ pub const RENEW_S: f64 = 600.0;
 /// change is saved first and runs once it is deployed.
 pub const EXPECT_S: f64 = 1800.0;
 
+/// The width of the box column left of the plot.
+const CHECK_W: f32 = 28.0;
+
 /// Whose pins these are: a person signed in (their label), or the browser.
 fn owner(s: Option<&Session>) -> Option<String> {
     s.map(|s| s.user.clone().unwrap_or_else(|| format!("{} (PIN)", s.role)))
@@ -76,6 +79,10 @@ pub struct BoxTrend {
     pub notice: Option<String>,
     /// Why this browser does not keep pins, if it does not.
     pub problem: Option<String>,
+    /// The signals are another node's (a page watching a Skipper by
+    /// address): the box behind the page does not know their names and
+    /// refuses them as pins (422), so this browser keeps them.
+    pub local_pins: bool,
     /// The pins nobody chose, oldest first ([`crate::ekg::pin_auto`]).
     auto: Vec<String>,
     /// The lanes that just joined, popping.
@@ -84,6 +91,10 @@ pub struct BoxTrend {
     /// be pinned once the box reports them (`(name, page time first
     /// looked for)`): a change is saved before it is deployed.
     expecting: Vec<(String, Option<f64>)>,
+    /// The signal groups (a device's name) opened in the picker.
+    pub picker: crate::signal_picker::Picker,
+    /// The pins ticked in the box left of the plot, lower case.
+    pub checked: std::collections::BTreeSet<String>,
     store: Box<dyn Storage>,
     /// The owner the pins were loaded for (`""`: the browser).
     loaded: Option<String>,
@@ -114,9 +125,12 @@ impl BoxTrend {
             window_ms: crate::playground::TREND_MS,
             notice: None,
             problem: None,
+            local_pins: false,
             auto: Vec::new(),
             flashes: crate::ekg::Flashes::default(),
             expecting: Vec::new(),
+            picker: crate::signal_picker::Picker::default(),
+            checked: std::collections::BTreeSet::new(),
             store,
             loaded: None,
             asked: None,
@@ -152,6 +166,14 @@ impl BoxTrend {
         self.asked = Some(now);
         if self.pins.is_empty() {
             self.series.clear();
+            return;
+        }
+        // Another node's signals: the box behind the page has no history
+        // of them, and its answer carries its own clock, which moved the
+        // window off the node's points and froze the line (2026-11-24,
+        // Nick: "The trend line isn't moving even though the values are
+        // updating"). The line is drawn from the values as they come.
+        if self.local_pins {
             return;
         }
         let list: Vec<String> = self.pins.iter().map(|p| segment(p)).collect();
@@ -214,7 +236,7 @@ impl BoxTrend {
         if self.loaded.as_deref() != Some(key.as_str()) {
             self.loaded = Some(key);
             self.series.clear();
-            if who.is_some() {
+            if who.is_some() && !self.local_pins {
                 self.queue
                     .push(PReq::get(PCall::TrendPins, "/api/trends/pins".into()));
             } else {
@@ -294,10 +316,55 @@ impl BoxTrend {
         self.keep_pins(session);
     }
 
+    /// Takes every pin in `names` off the trend, asking for the history
+    /// once.
+    pub fn remove_many(&mut self, names: &[String], session: Option<&Session>, now: f64) {
+        let before = self.pins.len();
+        self.pins.retain(|p| !names.contains(p));
+        if self.pins.len() == before {
+            return;
+        }
+        self.auto.retain(|a| !names.contains(a));
+        self.series.retain(|k, _| !names.contains(k));
+        self.keep_pins(session);
+        self.ask(now);
+    }
+
+    /// Moves the pins in `names` one lane up (or down), keeping their
+    /// order among themselves; a block already at the edge stays.
+    pub fn move_many(&mut self, names: &[String], up: bool, session: Option<&Session>) {
+        let n = self.pins.len();
+        let mut order: Vec<usize> = (0..n).collect();
+        if !up {
+            order.reverse();
+        }
+        let mut moved = false;
+        for k in order {
+            if !names.contains(&self.pins[k]) {
+                continue;
+            }
+            let to = if up {
+                k.checked_sub(1)
+            } else {
+                Some(k + 1).filter(|t| *t < n)
+            };
+            if let Some(to) = to
+                && !names.contains(&self.pins[to])
+            {
+                self.pins.swap(k, to);
+                moved = true;
+            }
+        }
+        if moved {
+            self.auto.retain(|a| !names.contains(a));
+            self.keep_pins(session);
+        }
+    }
+
     /// Keeps the pins, in order: on the box for a person signed in, in
     /// this browser otherwise.
     fn keep_pins(&mut self, session: Option<&Session>) {
-        if session.is_some() {
+        if session.is_some() && !self.local_pins {
             self.queue.push(PReq::json(
                 PCall::SavePins,
                 "PUT",
@@ -369,52 +436,160 @@ impl BoxTrend {
         }
     }
 
-    /// The tab: the signals to pin, then the chart.
+    /// The tab: the devices to open for their signals, the pins' actions,
+    /// then the chart with a box left of each lane.
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         chrome: &mut Chrome,
         state: &BoxState,
+        map: &str,
         session: Option<&Session>,
     ) {
         let now = ui.ctx().input(|i| i.time);
         let who = owner(session).unwrap_or_else(|| "this browser".into());
         let t = theme(ui);
-        let mut flip = None;
-        // The heading shares the signals' row (as in the simulation).
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Signals").strong().color(t.muted))
-                .tip(format!(
-                    "Click a signal to pin it to the trend, up to {PINS}. The pins are kept for {who}."
-                ));
-            for s in &state.signals {
-                let on = self.pins.contains(&s.name);
-                let r =
-                    crate::theme::tab(ui, on, &s.name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(if on {
-                        "On the trend. Click to take it off."
-                    } else {
-                        "Click to pin it to the trend."
-                    });
-                chrome.hit(format!("pin {}", s.name), r.rect);
-                if r.clicked() {
-                    flip = Some(s.name.clone());
-                }
-            }
-        });
+        let groups = crate::signal_picker::signal_groups(&state.signals, map);
+        let pins = self.pins.clone();
+        let flip = self.picker.ui(
+            ui,
+            chrome,
+            "trend",
+            &groups,
+            &|n| pins.iter().any(|p| p == n),
+            &format!(
+                "Open a device to see its signals, then click one to pin it, up to {PINS}. Pins are kept for {who}."
+            ),
+        );
         if let Some(n) = flip {
             self.toggle(&n, session, now);
         }
         for text in [&self.notice, &self.problem].into_iter().flatten() {
             ui.label(RichText::new(text).color(t.muted));
         }
+        self.checked
+            .retain(|c| self.pins.iter().any(|p| p.to_ascii_lowercase() == *c));
+        self.actions(ui, chrome, session, now);
         window_slider(ui, chrome, &mut self.window_ms);
         ui.add_space(6.0);
         if self.flashes.tick(now) {
             ui.ctx().request_repaint();
         }
-        let plot = self.chart(ui, chrome);
+        let full = ui.available_rect_before_wrap();
+        let boxes = egui::Rect::from_min_max(full.min, egui::pos2(full.left() + CHECK_W, full.bottom()));
+        let plot_rect = egui::Rect::from_min_max(egui::pos2(full.left() + CHECK_W, full.top()), full.max);
+        let plot = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(plot_rect), |ui| {
+                self.chart(ui, chrome)
+            })
+            .inner;
+        if !self.pins.is_empty() {
+            #[allow(clippy::cast_precision_loss)]
+            let lane = plot.height() / self.pins.len() as f32;
+            for (k, name) in self.pins.clone().iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let at = egui::Rect::from_center_size(
+                    egui::pos2(boxes.center().x, plot.top() + lane * (k as f32 + 0.5)),
+                    egui::Vec2::splat(CHECK_W.min(lane)),
+                );
+                let key = name.to_ascii_lowercase();
+                let mut on = self.checked.contains(&key);
+                let r = ui
+                    .put(at, egui::Checkbox::without_text(&mut on))
+                    .tip("Tick to move, color or remove this signal with the others ticked.");
+                chrome.hit(format!("trend check {key}"), r.rect);
+                if r.changed() {
+                    if on {
+                        self.checked.insert(key);
+                    } else {
+                        self.checked.remove(&key);
+                    }
+                }
+            }
+        }
         if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.pins) {
             self.move_pin(from, to, session);
+        }
+    }
+
+    /// The row over the plot: select all, and what to do with the ticked.
+    fn actions(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome, session: Option<&Session>, now: f64) {
+        if self.pins.is_empty() {
+            return;
+        }
+        let t = theme(ui);
+        let ticked: Vec<String> = self
+            .pins
+            .iter()
+            .filter(|p| self.checked.contains(&p.to_ascii_lowercase()))
+            .cloned()
+            .collect();
+        let all = ticked.len() == self.pins.len();
+        let mut act = None;
+        let mut pick = None;
+        ui.horizontal_wrapped(|ui| {
+            let mut v = all;
+            let r = ui
+                .checkbox(&mut v, "All")
+                .tip("Tick every signal on the trend, or none.");
+            chrome.hit("trend check all", r.rect);
+            if r.changed() {
+                self.checked = if v {
+                    self.pins.iter().map(|p| p.to_ascii_lowercase()).collect()
+                } else {
+                    std::collections::BTreeSet::new()
+                };
+            }
+            if ticked.is_empty() {
+                return;
+            }
+            ui.label(RichText::new(format!("{} ticked", ticked.len())).color(t.muted));
+            for (key, text, tip) in [
+                ("remove", "Remove", "Take the ticked signals off the trend."),
+                ("up", "Up", "Move the ticked signals up a lane."),
+                ("down", "Down", "Move the ticked signals down a lane."),
+            ] {
+                let r = ui.button(text).tip(tip);
+                chrome.hit(format!("trend {key}"), r.rect);
+                if r.clicked() {
+                    act = Some(key);
+                }
+            }
+            let c = ui.button("Color").tip("Give the ticked signals one color.");
+            chrome.hit("trend color all", c.rect);
+            let mut swatches = Vec::new();
+            egui::Popup::menu(&c).show(|ui| {
+                let t = theme(ui);
+                ui.horizontal(|ui| {
+                    for i in 0..crate::playground_view::TREND.len() {
+                        let (rect, s) = ui.allocate_exact_size(egui::Vec2::splat(30.0), Sense::click());
+                        let s = s.tip("The ticked signals take this color.");
+                        ui.painter().rect_filled(
+                            rect.shrink(4.0),
+                            CornerRadius::same(4),
+                            crate::playground_view::palette_color(&t, i),
+                        );
+                        swatches.push((format!("trend color {i}"), rect));
+                        if s.clicked() {
+                            pick = Some(i);
+                        }
+                    }
+                });
+            });
+            chrome.hits.extend(swatches);
+        });
+        if let Some(i) = pick {
+            for n in &ticked {
+                chrome.set_color(n, i);
+            }
+        }
+        match act {
+            Some("remove") => {
+                self.remove_many(&ticked, session, now);
+                self.checked.clear();
+            }
+            Some(d) => self.move_many(&ticked, d == "up", session),
+            None => {}
         }
     }
 
@@ -494,6 +669,7 @@ mod tests {
             quality: "good".into(),
             point_error: None,
             forced: false,
+            sim: false,
         }
     }
 
@@ -580,6 +756,52 @@ mod tests {
         s.apply(ev(2, 300), 2.1);
         t.step(None, &s, 2.1);
         assert_eq!(t.series["lamp"], [(200, 1.0), (300, 1.0)], "and it extends");
+    }
+
+    /// Nick, 2026-11-24: "The trend line isn't moving even though the
+    /// values are updating". On a page a box served that watches a Skipper,
+    /// the box's history answer set the window to the box's clock, so the
+    /// Skipper's points fell outside it. There the box is not asked, the
+    /// pins stay in this browser, and the window follows the Skipper.
+    #[test]
+    fn a_skipper_page_trends_the_skippers_values_on_the_skippers_clock() {
+        use crate::remote::{Msg, Stream};
+        let me = Session {
+            user: Some("nick".into()),
+            role: "engineer".into(),
+        };
+        let mut t = BoxTrend::new(Box::new(MemStorage(Some(r#"["position"]"#.into()))));
+        t.local_pins = true;
+        let mut s = BoxState::new();
+        t.step(Some(&me), &s, 0.0);
+        assert!(
+            t.poll().is_empty(),
+            "neither the box's pins nor its history are asked"
+        );
+        assert_eq!(t.pins, ["position"], "the browser's pins");
+        let ev = |seq: u64, at: u64, v: i64| {
+            Msg::Event(
+                Stream::Values,
+                "values".into(),
+                json!({ "seq": seq, "at_ms": at, "modules": [],
+                        "signals": [{ "name": "position", "dir": "in", "value": v, "quality": "good" }] })
+                .to_string(),
+            )
+        };
+        for (k, at, v) in [(1, 1_914_892, 10), (2, 1_914_992, 20), (3, 1_915_092, 30)] {
+            s.apply(ev(k, at, v), 1.0);
+            t.step(Some(&me), &s, 1.0);
+        }
+        assert_eq!(
+            t.now_ms, 1_915_092,
+            "the window ends at the Skipper's newest point"
+        );
+        assert_eq!(t.series["position"].len(), 3);
+        t.toggle("slew", Some(&me), 2.0);
+        assert!(
+            t.poll().is_empty(),
+            "a new pin asks the box for nothing (its answer would carry its own clock)"
+        );
     }
 
     #[test]

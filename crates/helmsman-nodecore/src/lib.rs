@@ -25,9 +25,12 @@
 extern crate alloc;
 
 pub mod api;
+pub mod check;
 pub mod http;
 pub mod iolink;
 pub mod iomap;
+pub mod ioplan;
+pub mod modbus_server;
 pub mod ota;
 pub mod program;
 pub mod router;

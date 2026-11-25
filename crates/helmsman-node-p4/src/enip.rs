@@ -101,6 +101,9 @@ pub struct Session<'a> {
     next_context: u64,
     /// Connections opened since start: a reconnect count for the record.
     pub connects: u32,
+    /// Connects failed in a row: a target that keeps failing waits for its
+    /// turn at the stack's one ARP request per second ([`crate::dial`]).
+    failures: u8,
 }
 
 impl<'a> Session<'a> {
@@ -126,6 +129,7 @@ impl<'a> Session<'a> {
             handle: 0,
             next_context: 1,
             connects: 0,
+            failures: 0,
         }
     }
 
@@ -159,6 +163,9 @@ impl<'a> Session<'a> {
         if self.connected {
             return Ok(());
         }
+        if self.failures >= 2 {
+            crate::dial::wait_turn().await;
+        }
         match with_timeout(
             self.timeout.max(CONNECT_TIMEOUT),
             self.socket.connect(self.endpoint),
@@ -168,14 +175,17 @@ impl<'a> Session<'a> {
             Ok(Ok(())) => {
                 self.connected = true;
                 self.connects += 1;
+                self.failures = 0;
                 Ok(())
             }
             Ok(Err(_)) => {
-                self.socket.abort();
+                crate::dial::give_up(&mut self.socket);
+                self.failures = self.failures.saturating_add(1);
                 Err(Error::Link("connect refused"))
             }
             Err(_) => {
-                self.socket.abort();
+                crate::dial::give_up(&mut self.socket);
+                self.failures = self.failures.saturating_add(1);
                 Err(Error::Link("connect timed out"))
             }
         }
@@ -292,6 +302,22 @@ impl<'a> Session<'a> {
         }
         self.drop_link();
     }
+
+    /// `UnregisterSession`, then the connection closed as the target
+    /// expects before the session is dropped (the comms check): a FIN, a
+    /// moment for it to go, and a reset of whatever is left.
+    pub async fn hang_up(&mut self) {
+        if self.connected {
+            if self.is_registered() {
+                let ctx = self.context();
+                let _ = self.write(&explicit::unregister_session(self.handle, ctx)).await;
+            }
+            self.socket.close();
+            let _ = with_timeout(Duration::from_millis(500), self.socket.flush()).await;
+        }
+        self.drop_link();
+        embassy_time::Timer::after(Duration::from_millis(20)).await;
+    }
 }
 
 /// An open Class 1 connection: what to send ([`Self::producer`]), what to
@@ -387,6 +413,39 @@ impl IoConnection {
     /// # Errors
     /// A refused close (the target no longer knows the connection, which
     /// after a timeout is expected) or a session error.
+    pub async fn close(&self, session: &mut Session<'_>) -> Result<ForwardCloseReply, Error> {
+        Closer {
+            open: self.open.clone(),
+        }
+        .close(session)
+        .await
+    }
+
+    /// Takes the connection apart: what the I/O task sends and takes
+    /// every RPI (the producer, the consumer and where O->T goes) and
+    /// what the session task keeps to close it.
+    #[must_use]
+    pub fn split(self) -> (Producer, Consumer, IpEndpoint, Closer) {
+        (
+            self.producer,
+            self.consumer,
+            self.target,
+            Closer { open: self.open },
+        )
+    }
+}
+
+/// What it takes to `Forward_Close` a connection whose packets another
+/// task owns.
+pub struct Closer {
+    open: ForwardOpen,
+}
+
+impl Closer {
+    /// Sends `Forward_Close` over `session`.
+    ///
+    /// # Errors
+    /// As [`IoConnection::close`].
     pub async fn close(&self, session: &mut Session<'_>) -> Result<ForwardCloseReply, Error> {
         let mut w = Writer::default();
         class1::close_for(&self.open).to_request().encode(&mut w);

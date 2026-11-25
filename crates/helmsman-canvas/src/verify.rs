@@ -63,6 +63,16 @@ pub fn is_scenario(info: &str) -> bool {
         .any(|w| w.eq_ignore_ascii_case("scenario"))
 }
 
+/// Whether a fence is the list of requirements with no scenario
+/// (```` ```requirements ````, [`crate::documents::untested`]): words, not
+/// code.
+#[must_use]
+pub fn is_requirements(info: &str) -> bool {
+    info.split_whitespace()
+        .next()
+        .is_some_and(|w| w.eq_ignore_ascii_case("requirements"))
+}
+
 /// The test file a scenario fence replaces (```` ```st scenario
 /// replaces test_lamp ````): `test_lamp.st`.
 #[must_use]
@@ -74,15 +84,15 @@ pub fn replaces(info: &str) -> Option<String> {
     spec::name_ok(bare).then(|| format!("{name}.st"))
 }
 
-/// The answer without its scenario blocks: what the scope rules read as
-/// the code.
+/// The answer without its scenario blocks and its list of requirements:
+/// what the scope rules read as the code.
 #[must_use]
 pub fn code_part(answer: &str) -> String {
     let mut out = Vec::new();
     for s in segments(answer) {
         match s {
             Segment::Prose(p) => out.push(p),
-            Segment::Code { info, .. } if is_scenario(&info) => {}
+            Segment::Code { info, .. } if is_scenario(&info) || is_requirements(&info) => {}
             Segment::Code { info, body, closed } => {
                 out.push(if closed {
                     format!("```{info}\n{body}\n```")
@@ -96,12 +106,12 @@ pub fn code_part(answer: &str) -> String {
 }
 
 /// Whether an answer offers code (a closed, non-empty block that is not
-/// a scenario).
+/// a scenario or a list of requirements).
 #[must_use]
 pub fn has_code(answer: &str) -> bool {
     fences(answer)
         .iter()
-        .any(|f| !is_scenario(&f.info) && !f.body.trim().is_empty())
+        .any(|f| !is_scenario(&f.info) && !is_requirements(&f.info) && !f.body.trim().is_empty())
 }
 
 /// One scenario of an answer, as the test file it becomes.

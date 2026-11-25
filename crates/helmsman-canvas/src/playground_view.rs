@@ -261,13 +261,6 @@ pub struct PlaygroundView {
     pub tests: crate::requirements::Results,
     /// The points named ahead of a new program (`crate::io_names`).
     pub new_io: crate::io_names::IoList,
-    /// The specification being put together (`crate::spec_mode`).
-    pub spec: crate::spec_mode::Spec,
-    /// The documents of the spec run under way, kept for its project.
-    spec_docs: Option<Vec<crate::spec_mode::Doc>>,
-    /// The draft a spec run made, on review: nothing is written until
-    /// Accept.
-    pub spec_review: Option<crate::spec_mode::Review>,
     /// The design step's entry (`crate::design_step`).
     pub design: crate::design_step::Designer,
     /// Its way to the relay's design entry.
@@ -381,9 +374,6 @@ impl PlaygroundView {
             revision: None,
             tests: crate::requirements::Results::default(),
             new_io: crate::io_names::IoList::default(),
-            spec: crate::spec_mode::Spec::default(),
-            spec_docs: None,
-            spec_review: None,
             design: crate::design_step::Designer::page(),
             design_link: Link::default(),
             design_building: None,
@@ -942,7 +932,6 @@ impl PlaygroundView {
             self.instruct.failed(why);
             return;
         }
-        self.spec_docs = None;
         let scope = self.scope();
         // A new program: the points the engineer named go ahead of what
         // was typed, and a bad name stops it here.
@@ -1633,122 +1622,6 @@ impl PlaygroundView {
         }
     }
 
-    /// Why a spec run cannot start now, if it cannot (the window's Build).
-    fn spec_blocked(&self) -> Option<String> {
-        if self.instruct.busy() {
-            return Some("Still working on the last instruction.".into());
-        }
-        if self.scope() != crate::scope::Scope::NewProject {
-            return Some("A spec makes a new project: open a built-in example first.".into());
-        }
-        self.chat.route().err().map(str::to_string)
-    }
-
-    /// Sends the specification as a new project's request: the same run
-    /// as an instruction (retries, checks), whose answer goes to the
-    /// review screen instead of the name question.
-    pub fn send_spec(&mut self, ctx: &egui::Context) {
-        if let Some(why) = self.spec_blocked().or_else(|| self.spec.refusal()) {
-            self.spec.error = Some(why);
-            return;
-        }
-        let (diags, devices, settings) = self.agent_env();
-        let env = crate::instruct::Env {
-            project: &self.proj.open,
-            scope: crate::scope::Scope::NewProject,
-            files: &self.proj.files,
-            source: &self.session.src,
-            diagnostics: &diags,
-            devices: &devices,
-            settings,
-        };
-        match self
-            .instruct
-            .start_spec(&env, &self.spec.label(), &self.spec.message())
-        {
-            Ok(ask) => {
-                self.spec_docs = Some(self.spec.documents());
-                self.spec.open = false;
-                self.spec.error = None;
-                self.asked_at = ctx.input(|i| i.time);
-                // A question belongs to the instruction it was asked
-                // with: none carries over into this run or its History.
-                self.drop_question();
-                self.send_ask(&ask, ctx);
-            }
-            Err(why) => self.spec.error = Some(why),
-        }
-    }
-
-    /// Accept: the project is made in one revision. A name that is not a
-    /// project's, a built-in example's or taken stays on the review with
-    /// the reason beside the field.
-    pub fn accept_spec(&mut self) {
-        let Some(mut r) = self.spec_review.take() else {
-            return;
-        };
-        let name = r.name.trim().to_ascii_lowercase();
-        let refused = if !helmsman_project::project_name(&name) {
-            Some("A project's name is 1 to 48 of a-z 0-9 _ -, starting with a letter or digit.".to_string())
-        } else if self.proj.examples.contains_key(&name) {
-            Some(format!(
-                "{name} is a built-in example and read-only: pick another name."
-            ))
-        } else if self.proj.exists(&name) {
-            Some(format!(
-                "A project named {name} already exists: pick another name."
-            ))
-        } else {
-            None
-        };
-        if let Some(e) = refused {
-            r.error = Some(e);
-            self.spec_review = Some(r);
-            return;
-        }
-        let files = match r.draft.files() {
-            Ok(f) => f,
-            Err(e) => {
-                r.refusal = Some(e);
-                self.spec_review = Some(r);
-                return;
-            }
-        };
-        // Unsaved edits first, as a revision of their own.
-        if self.proj.dirty() {
-            self.proj.save();
-        }
-        self.proj.create(&name, None);
-        self.proj.files = files;
-        self.proj.current = helmsman_project::MAIN.to_string();
-        let apply = self.to_name.take();
-        self.proj
-            .save_as(&r.draft.label, apply.as_ref().map(|a| a.record.as_str()));
-        self.reload();
-        let said = r.draft.summary(&name);
-        if let Some(mut a) = apply {
-            a.status.clone_from(&said);
-            a.why.clone_from(&r.draft.why);
-            self.instruct.applied(&a, None);
-            self.log_outcome();
-        }
-        self.notice = Some(format!("{said} Deploy runs it."));
-        self.spec_docs = None;
-        self.spec = crate::spec_mode::Spec::default();
-    }
-
-    /// Discard: the draft is dropped; nothing was written.
-    pub fn discard_spec(&mut self) {
-        if self.spec_review.take().is_none() {
-            return;
-        }
-        self.to_name = None;
-        self.spec_docs = None;
-        self.instruct
-            .discarded("Discarded the draft from the spec. Nothing was made.");
-        self.log_outcome();
-    }
-
     // ---- the design step (`crate::design_step`) ----
 
     /// Why a design cannot be asked for now, if it cannot: what is not the
@@ -1772,6 +1645,8 @@ impl PlaygroundView {
         }
         let now = ctx.input(|i| i.time);
         let description = self.design.description.clone();
+        // The documents travel with the description, inside their envelope.
+        let message = self.design.docs.message(&description);
         let is_agent = |n: &str| helmsman_project::agent::is_agent_file(n);
         let files: Vec<(String, String)> = self
             .proj
@@ -1793,7 +1668,7 @@ impl PlaygroundView {
             .collect();
         let devices = self.devices_text();
         let first = crate::design::request(&crate::design::Ask {
-            description: &description,
+            description: &message,
             dialect: crate::design_step::PAGE_DIALECT,
             files: &files,
             devices: &devices,
@@ -1852,6 +1727,11 @@ impl PlaygroundView {
         self.proj
             .files
             .insert(crate::design_step::DESIGN_FILE.to_string(), read.text.clone());
+        if let Some(text) = read.documents_file() {
+            self.proj
+                .files
+                .insert(crate::documents::DOCUMENTS_FILE.to_string(), text);
+        }
         let what = if read.design.summary.is_empty() {
             "Kept the design".to_string()
         } else {
@@ -2006,6 +1886,14 @@ impl PlaygroundView {
             Act::CarryOn => self.carry_on_design(ctx),
             Act::Keep => self.keep_design(),
             Act::Build => self.build_design(ctx),
+            Act::AddFile => {
+                #[cfg(target_arch = "wasm32")]
+                crate::web::pick_document_file(ctx);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.design.docs.error = Some("Files are added in the browser page.".into());
+                }
+            }
         }
     }
 
@@ -2013,6 +1901,17 @@ impl PlaygroundView {
     fn design_windows(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
         if !self.design.visible() {
             return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            for e in crate::web::take_document_errors() {
+                self.design.docs.error = Some(e);
+            }
+            for (name, bytes) in crate::web::take_documents_picked() {
+                if let Err(e) = self.design.docs.add_file(&name, &bytes) {
+                    self.design.docs.error = Some(e);
+                }
+            }
         }
         let blocked = self
             .design_blocked()
@@ -2033,44 +1932,6 @@ impl PlaygroundView {
         ));
         for a in acts {
             self.design_act(a, ctx);
-        }
-    }
-
-    /// The specification's window, the files the browser's picker gave it
-    /// and the review screen of a draft.
-    fn spec_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            for e in crate::web::take_spec_errors() {
-                self.spec.error = Some(e);
-            }
-            for (name, bytes) in crate::web::take_spec_picked() {
-                if let Err(e) = self.spec.add_file(&name, &bytes) {
-                    self.spec.error = Some(e);
-                }
-            }
-        }
-        let blocked = self.spec_blocked();
-        match crate::spec_mode::form_ui(ctx, chrome, &mut self.spec, blocked.as_deref()) {
-            Some(crate::spec_mode::FormAct::Build) => self.send_spec(ctx),
-            Some(crate::spec_mode::FormAct::AddFile) => {
-                #[cfg(target_arch = "wasm32")]
-                crate::web::pick_spec_file(ctx, false);
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.spec.error = Some("Files are added in the browser page.".into());
-                }
-            }
-            None => {}
-        }
-        let act = self
-            .spec_review
-            .as_mut()
-            .and_then(|r| crate::spec_mode::review_ui(ctx, chrome, r));
-        match act {
-            Some(crate::spec_mode::ReviewAct::Accept) => self.accept_spec(),
-            Some(crate::spec_mode::ReviewAct::Discard) => self.discard_spec(),
-            None => {}
         }
     }
 
@@ -2115,10 +1976,6 @@ impl PlaygroundView {
     /// [`Self::stop_answer`], saying `why` in the instruction's outcome.
     fn stop_answer_with(&mut self, why: &str) {
         self.drop_question();
-        if self.spec_review.take().is_some() {
-            self.to_name = None;
-        }
-        self.spec_docs = None;
         self.chat.stop();
         self.link.abort();
         if self.instruct.busy() {
@@ -2433,7 +2290,6 @@ impl PlaygroundView {
         if self.to_name.is_some() {
             return Some(crate::instruct::Progress {
                 naming: true,
-                review: self.spec_review.is_some(),
                 ..Default::default()
             });
         }
@@ -2448,7 +2304,6 @@ impl PlaygroundView {
             estimate: Some(crate::instruct::estimate_secs(lines)),
             secs: now - self.asked_at,
             naming: false,
-            review: false,
         })
     }
 
@@ -2626,20 +2481,6 @@ impl PlaygroundView {
     /// instruction's record. A new program from a built-in example goes
     /// the way it always has, into a project named once.
     fn write(&mut self, apply: crate::instruct::Apply) {
-        if apply.scope == crate::scope::Scope::NewProject
-            && let Some(docs) = self.spec_docs.take()
-        {
-            let draft = crate::spec_mode::Draft::read(&apply, docs);
-            let want = answer_name(&apply.text);
-            let name = if self.proj.exists(&want) {
-                self.proj.free(&want)
-            } else {
-                want
-            };
-            self.spec_review = Some(crate::spec_mode::Review::new(draft, name));
-            self.to_name = Some(apply);
-            return;
-        }
         if apply.scope == crate::scope::Scope::NewProject {
             let code = apply.text.clone();
             self.to_name = Some(apply);
@@ -3099,7 +2940,6 @@ impl PlaygroundView {
             self.act(a);
         }
         self.program_name_ui(&ui.ctx().clone(), chrome);
-        self.spec_ui(&ui.ctx().clone(), chrome);
         self.design_windows(&ui.ctx().clone(), chrome);
         self.revision_ui(&ui.ctx().clone(), chrome);
         for (name, r) in std::mem::take(&mut self.input_rects) {
@@ -3229,10 +3069,7 @@ impl PlaygroundView {
             held_by: &held_by,
             tests: &self.tests,
         });
-        let busy = self.pending.is_some()
-            || self.instruct.busy()
-            || self.program_name.is_some()
-            || self.spec_review.is_some();
+        let busy = self.pending.is_some() || self.instruct.busy() || self.program_name.is_some();
         self.noticed = self.watching.say(noticed, busy, t);
     }
 
@@ -3651,6 +3488,8 @@ impl Body for PlaygroundView {
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
         let mut go = false;
+        let steps = self.steps();
+        let mut revision = None;
         let mut to_error: Option<(String, u32)> = None;
         // The header is the open file's name (Nick, 2026-11-08), the
         // magnifier and word wrap; at its right end Deploy, and before it
@@ -3692,15 +3531,21 @@ impl Body for PlaygroundView {
                     first: said.as_deref(),
                     deploy: &Ok(()),
                     deploy_tip: "Ctrl Shift Enter: deploy this version.\nCompiles the open project and runs it in the page.",
+                    busy: None,
+                    steps: steps.as_ref(),
                 },
             );
             go = pressed.deploy;
+            revision = pressed.revision;
             if pressed.errors
                 && let Some(d) = first
             {
                 to_error = Some((d.file, d.line));
             }
         });
+        if let Some(n) = revision {
+            self.show_revision(n);
+        }
         if go {
             self.deploy();
         }
@@ -3817,22 +3662,6 @@ impl Body for PlaygroundView {
         }
     }
 
-    fn history(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        // An edit or a save since the pick: the newest is what shows.
-        if let Some(n) = self.history_at
-            && !self.shows_revision(n)
-        {
-            self.history_at = None;
-        }
-        let rows: Vec<crate::history_ui::RevisionRow> =
-            self.proj.revisions().iter().map(SimRevision::row).collect();
-        match crate::history_ui::tab_ui(ui, chrome, &rows, self.history_at) {
-            Some(crate::history_ui::Pick::Show(n)) => self.show_revision(n),
-            Some(crate::history_ui::Pick::Details(n)) => self.act(Act::ShowRevision(n)),
-            None => {}
-        }
-    }
-
     fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::devices::{LinkState, Live, tree};
         let text = self
@@ -3897,7 +3726,10 @@ impl Body for PlaygroundView {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.simulated_scan(&map);
                 self.wired_lib.scan(&mut self.devices_ui);
+                // Scan and add queues what the library knows.
+                self.devices_ui.found_to_add_all();
             }
+            Some(crate::devices::DeviceAct::Ask(_)) => self.devices_ui.simulated_ask(),
             Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
             Some(crate::devices::DeviceAct::AddIo(device)) => {
                 // A read-only example is copied first; the copy keeps the
@@ -4134,6 +3966,7 @@ impl PlaygroundView {
                             tile: form == Form::Tile,
                             uses: uses(&p.name),
                             simulate: true,
+                            designation: crate::assign::Designation::of(&place),
                         };
                         let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             if form == Form::Detail {
@@ -4210,6 +4043,7 @@ impl PlaygroundView {
                             tile: form == Form::Tile,
                             uses: uses(&p.name),
                             simulate: false,
+                            designation: crate::assign::Designation::of(&place),
                         };
                         let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             output_ui(ui, p, form == Form::Tile);
@@ -4352,6 +4186,14 @@ impl PlaygroundView {
             .chain(self.session.inputs())
             .map(|p| p.name.clone())
             .collect();
+        // Which of them are still simulated: the legend says so.
+        self.assign_context();
+        let simulated: Vec<bool> = points
+            .iter()
+            .map(|n| {
+                crate::assign::designate(&self.devices_ui.map, n, true).is_some_and(|d| d.is_simulated())
+            })
+            .collect();
         // The heading shares the signals' row: on a line of its own it
         // and the slider left the plot the smallest part of the panel.
         // The rows wrap, and scroll past a third of the tab: an Agent's
@@ -4380,16 +4222,25 @@ impl PlaygroundView {
                         .tip(format!(
                             "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
                         ));
-                    for name in &points {
+                    for (name, sim) in points.iter().zip(&simulated) {
                         let on = self.session.trend.signals.contains(name);
-                        let tip = if on {
-                            "On the trend. Click to take it off."
-                        } else {
-                            "Click to pin it to the trend."
+                        let tip = match (on, sim) {
+                            (true, false) => "On the trend. Click to take it off.".to_string(),
+                            (false, false) => "Click to pin it to the trend.".to_string(),
+                            (true, true) => "Simulated. On the trend. Click to take it off.".to_string(),
+                            (false, true) => "Simulated. Click to pin it to the trend.".to_string(),
                         };
-                        let b =
-                            crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(tip);
+                        let label = name.to_ascii_lowercase();
+                        let label = if *sim {
+                            format!("{label} {}", crate::assign::Designation::BADGE)
+                        } else {
+                            label
+                        };
+                        let b = crate::theme::tab(ui, on, &label, egui::Vec2::ZERO).tip(tip);
                         chrome.hit(format!("trend signal {}", name.to_ascii_lowercase()), b.rect);
+                        if *sim {
+                            chrome.hit(format!("trend sim {}", name.to_ascii_lowercase()), b.rect);
+                        }
                         if b.clicked() {
                             self.session.trend.toggle(name);
                         }
@@ -4447,18 +4298,6 @@ impl PlaygroundView {
             // A new program starts from its I/O, named by the engineer.
             if self.scope() == crate::scope::Scope::NewProject {
                 crate::io_names::ui(ui, chrome, &mut self.new_io);
-                ui.horizontal_wrapped(|ui| {
-                    let r = ui
-                        .add_enabled(
-                            !self.instruct.busy(),
-                            egui::Button::new(RichText::new("From a spec…").size(crate::theme::BODY)),
-                        )
-                        .tip("Opens a window to paste a scope of work or product documentation, or add .md and .txt files. The whole project is drafted from it: the inputs and outputs, a test for each requirement, and the program. You review the draft before anything is made.");
-                    chrome.hit("spec open", r.rect);
-                    if r.clicked() {
-                        self.spec.open = true;
-                    }
-                });
             }
             let view = crate::design_ui::EntryView {
                 now: ctx.input(|i| i.time),
@@ -4495,12 +4334,17 @@ impl PlaygroundView {
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
-                Some(crate::instruct::Act::Split) => self.send_instruction_as(&ctx, crate::instruct::Way::Steps),
-                Some(crate::instruct::Act::OneGo) => self.send_instruction_as(&ctx, crate::instruct::Way::OneGo),
+                Some(crate::instruct::Act::Split) => {
+                    self.send_instruction_as(&ctx, crate::instruct::Way::Steps);
+                }
+                Some(crate::instruct::Act::OneGo) => {
+                    self.send_instruction_as(&ctx, crate::instruct::Way::OneGo);
+                }
                 Some(crate::instruct::Act::Stop) => self.stop_answer(),
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
                 Some(crate::instruct::Act::RunSteps) => self.run_steps(&ctx),
                 Some(crate::instruct::Act::Revision(n)) => self.show_revision(n),
+                Some(crate::instruct::Act::Details(n)) => self.act(Act::ShowRevision(n)),
                 Some(crate::instruct::Act::Answer(k)) => self.answer_question(k, &ctx),
                 Some(crate::instruct::Act::Offer(k)) => self.take_offer(k, &ctx),
                 Some(crate::instruct::Act::Review(_)) | None => {}
@@ -5259,8 +5103,26 @@ impl PlaygroundView {
                 }
                 self.proj.note(c.summary, false);
                 self.edited(f64::NEG_INFINITY);
+                self.plant_off(a);
             }
             Err(why) => self.proj.note(why, true),
+        }
+    }
+
+    /// A port that went to a device has its `plant.sim` line switched off
+    /// (kept, not deleted), and back on when it returns to simulated I/O.
+    fn plant_off(&mut self, a: &crate::assign::AssignAct) {
+        let (port, off) = match a {
+            crate::assign::AssignAct::Assign { port, .. } => (port, true),
+            crate::assign::AssignAct::Back { port } => (port, false),
+        };
+        let Some(text) = self.proj.files.get_mut(helmsman_project::PLANT) else {
+            return;
+        };
+        if let Some(new) = helmsman_sim::set_off(text, port, off) {
+            *text = new;
+            let text = text.clone();
+            self.session.set_plant(&text);
         }
     }
 

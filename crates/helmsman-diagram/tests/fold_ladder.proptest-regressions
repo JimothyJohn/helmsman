@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4c9f93c86deb190265fb2dc5c2e0f25f4434de3a711ef073bb679b3db2802edd # shrinks to body = ["x := a > 0;", "REPEAT\na := a + 0;\nUNTIL x\nEND_REPEAT;"]

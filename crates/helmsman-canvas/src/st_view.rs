@@ -121,7 +121,10 @@ impl Cam {
     fn zoom_at(&mut self, screen: Pos2, factor: f32) {
         self.moved = true;
         let (wx, wy) = self.to_world(screen);
-        self.zoom = (self.zoom * factor).clamp(0.15, 3.0);
+        self.zoom = (self.zoom * factor).clamp(
+            helmsman_diagram::fold::ladder::MIN_ZOOM,
+            helmsman_diagram::fold::ladder::MAX_ZOOM,
+        );
         self.offset = screen - self.origin - Vec2::new(wx, wy) * self.zoom;
     }
 
@@ -338,6 +341,11 @@ pub struct Viewer {
     cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
     /// What the zoom closes ([`zoom_fold`]).
     zoom: zoom_fold::ZoomFolds,
+    /// The zoom ladder's groups for each POU ([`ladder_view`]).
+    ladder: Vec<ladder_view::Groups>,
+    /// Where the corner controls drew the rung's name.
+    #[cfg(test)]
+    pub(crate) ladder_name: Rect,
     /// The hand toggle of the corner controls: a primary drag on empty
     /// space pans instead of selecting. View state, never saved.
     hand: bool,
@@ -650,6 +658,11 @@ impl Viewer {
             })
             .collect();
         let views = vec![None; module.pous.len()];
+        let ladder = module
+            .pous
+            .iter()
+            .map(|p| ladder_view::Groups::of(&p.diagram, src))
+            .collect();
         let mut v = Self {
             src: src.to_string(),
             module,
@@ -691,6 +704,9 @@ impl Viewer {
             cards: std::cell::RefCell::new(None),
             jumped: None,
             zoom: zoom_fold::ZoomFolds::new(),
+            ladder,
+            #[cfg(test)]
+            ladder_name: Rect::NOTHING,
             hand: false,
         };
         v.reshow();
@@ -2095,6 +2111,14 @@ impl Viewer {
         }
         let cam = self.cams[self.scope];
         let shown = self.shown();
+        // A card of the zoom ladder that has formed stands for the blocks
+        // under it: no control is put over it.
+        let cards: Vec<Rect> = self
+            .ladder_cards(cam)
+            .into_iter()
+            .filter(ladder_view::Card::solid)
+            .map(|c| c.rect)
+            .collect();
         self.diagram()
             .nodes
             .iter()
@@ -2107,6 +2131,9 @@ impl Viewer {
                         |s| {
                             let mut r = cam.rect(&shown.node(s).rect);
                             r.min.y += HEADER * cam.zoom;
+                            if cards.iter().any(|c| c.contains(r.center())) {
+                                return Rect::NOTHING;
+                            }
                             r
                         },
                     );
@@ -2403,6 +2430,14 @@ impl Viewer {
         // The level follows the zoom the frame ended at; the camera is read
         // again, as a level change keeps the diagram under the pointer.
         let cam = self.follow_zoom(hover.filter(|_| response.hovered()), area);
+        // A card of the zoom ladder that has formed takes the pointer from
+        // the blocks under it: a click flies in, a drag moves the view.
+        let carded = response
+            .interact_pointer_pos()
+            .or(hover.filter(|_| response.hovered()))
+            .filter(|p| !corner.contains(*p))
+            .and_then(|p| self.ladder_at(cam, p));
+        let double = double && carded.is_none();
         // A double click on a block instance opens it; anywhere else it
         // fits the diagram to the view.
         if double
@@ -2472,6 +2507,7 @@ impl Viewer {
                 Some(_) if middle || space => Grab::Pan,
                 Some(p) if corner.contains(p) => Grab::Idle,
                 Some(_) if !primary => Grab::Idle,
+                Some(p) if self.ladder_at(cam, p).is_some() => Grab::Pan,
                 Some(p) => match self.grab_at(cam, p) {
                     Grab::Empty if self.on_pin(cam, p) => Grab::Idle,
                     Grab::Empty if self.hand => Grab::Pan,
@@ -2549,7 +2585,11 @@ impl Viewer {
             .then(|| response.interact_pointer_pos())
             .flatten()
             .and_then(|p| self.chip_at(cam, p));
-        if let Some((key, arm)) = chip {
+        if let Some(card) = carded.as_ref().filter(|_| response.clicked()) {
+            if !additive {
+                self.ladder_click(card, area, now);
+            }
+        } else if let Some((key, arm)) = chip {
             // A tap on a state opens the sequence on that state's arm.
             self.open_arm(&key, arm, area, now);
         } else if response.clicked()
@@ -2598,6 +2638,7 @@ impl Viewer {
             }
         }
         if response.secondary_clicked()
+            && carded.is_none()
             && let Some(p) = response.interact_pointer_pos()
             && let Some(n) = self.hit_at(cam, p)
         {
@@ -2655,7 +2696,14 @@ impl Viewer {
         let tabs = self.opened_tabs(cam);
         let rows = self.state_rows(live.as_ref());
         let tables = self.table_rows(live.as_ref());
-        if response.hovered()
+        if let Some(card) = carded
+            .as_ref()
+            .filter(|c| c.rung != helmsman_diagram::fold::ladder::Rung::Code)
+        {
+            response
+                .clone()
+                .on_hover_text_at_pointer(format!("{}\nClick to look inside.", card.title));
+        } else if response.hovered()
             && let Some(p) = hover
         {
             if let Some(tip) = self.cell_tip(cam, p, &tables) {
@@ -2679,6 +2727,7 @@ impl Viewer {
             }
         }
         if response.hovered()
+            && carded.is_none()
             && let Some(p) = hover
             && self.grab.is_none()
             && !self.on_pin(cam, p)
@@ -2687,6 +2736,7 @@ impl Viewer {
             response.clone().on_hover_text_at_pointer(EMPTY_TIP);
         }
         if response.hovered()
+            && carded.is_none()
             && let Some(p) = hover
             && self.instance_at(cam, p).is_some()
         {
@@ -2694,6 +2744,7 @@ impl Viewer {
                 "This block has a diagram of its own. Double-click opens it (Alt ] with it picked).",
             );
         }
+        let io = self.io_marks();
         let pou = &self.module.pous[self.scopes[self.scope].pou].name;
         let old = self
             .baseline
@@ -2722,8 +2773,10 @@ impl Viewer {
                 rows: &rows,
                 tables: &tables,
                 far: self.zoom_far(),
+                io: &io,
             },
         );
+        self.ladder_paint(&painter, &t, cam, seen.as_ref());
         for (_, title, around, tab) in &tabs {
             let z = cam.zoom;
             painter.rect_stroke(
@@ -2771,7 +2824,7 @@ impl Viewer {
     /// Where the pan, zoom in and zoom out controls sit: the bottom-right
     /// corner of `area`, left of the lamp fixture when there is one.
     fn corner_rect(&self, area: Rect, scan: Option<&dyn Scan>) -> Rect {
-        let w = 3.0 * TAP + 2.0 * CORNER_GAP;
+        let w = 3.0 * TAP + 3.0 * CORNER_GAP + ladder_view::NAME_W;
         let mut right = area.right() - CORNER_GAP;
         if let Some(f) = self.fixture(scan) {
             right = crate::lamps::rect(area, &f).left() - CORNER_GAP;
@@ -2801,7 +2854,7 @@ impl Viewer {
         );
         let hand = button_sized(
             &mut row,
-            Icon::Hand,
+            Icon::Pan,
             TAP,
             true,
             self.hand,
@@ -2823,6 +2876,43 @@ impl Viewer {
             false,
             "Zoom out from the middle of the diagram",
         );
+        // Where the view is on the zoom ladder, and a step to any rung.
+        let on = self.rung();
+        let mut step = None;
+        #[cfg_attr(not(test), allow(unused_variables))]
+        let name = row
+            .scope(|ui| {
+                ui.set_width(ladder_view::NAME_W);
+                ui.menu_button(
+                    egui::RichText::new(on.name()).size(crate::theme::MIN_TEXT),
+                    |ui| {
+                        for rung in helmsman_diagram::fold::ladder::Rung::ALL {
+                            let pick = ui
+                                .selectable_label(
+                                    rung == on,
+                                    egui::RichText::new(rung.name()).size(crate::theme::MIN_TEXT),
+                                )
+                                .tip(ladder_view::rung_tip(rung));
+                            if pick.clicked() {
+                                step = Some(rung);
+                                ui.close();
+                            }
+                        }
+                    },
+                )
+                .response
+            })
+            .inner
+            .tip("How much one block stands for. Zoom in for the code, out for the whole program, or pick a level here.");
+        #[cfg(test)]
+        {
+            self.ladder_name = name.rect;
+        }
+        if let Some(rung) = step {
+            let now = ui.input(|i| i.time);
+            self.ladder_fly(rung, None, area, now);
+            return;
+        }
         if hand.clicked() {
             self.hand = !self.hand;
         }
@@ -3111,6 +3201,9 @@ struct Marks<'a> {
     /// Drawn at the far level: the blocks of the author's structure carry
     /// their title at a fixed size on screen ([`zoom_fold`]).
     far: bool,
+    /// The I/O blocks that are simulated (dashed, a SIM badge) or on a
+    /// device (solid, naming it) ([`Viewer::io_marks`]).
+    io: &'a [(NodeId, crate::assign::Designation)],
 }
 
 /// One row of a table block, as [`draw`] paints it.
@@ -3316,6 +3409,32 @@ fn paused_outline(painter: &egui::Painter, r: Rect, z: f32) {
     );
 }
 
+/// An I/O block's designation: a simulated one is outlined with dashes
+/// and says SIM above its corner; one on a device keeps its solid outline
+/// and names the device and channel there.
+fn io_mark(
+    painter: &egui::Painter,
+    t: &Theme,
+    r: Rect,
+    z: f32,
+    d: &crate::assign::Designation,
+    text: bool,
+    picked: bool,
+) {
+    if d.is_simulated() && !picked {
+        crate::io_cards::dashed_outline(painter, r.expand(0.5 * z), Stroke::new(1.5 * z.max(0.6), t.fg));
+    }
+    if text {
+        painter.text(
+            r.left_top() - Vec2::new(0.0, 2.0 * z),
+            Align2::LEFT_BOTTOM,
+            d.label(),
+            font(9.0 * z.max(0.8)),
+            t.muted,
+        );
+    }
+}
+
 fn draw(
     painter: &egui::Painter,
     t: &Theme,
@@ -3340,6 +3459,7 @@ fn draw(
         rows,
         tables,
         far,
+        io,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -3373,7 +3493,7 @@ fn draw(
                 "skipped".into(),
             ),
             Some(Gate::NotReached) => (t.rule, Color32::TRANSPARENT, "not reached".into()),
-            None => (t.muted, Color32::TRANSPARENT, String::new()),
+            Some(Gate::Unknown) | None => (t.muted, Color32::TRANSPARENT, String::new()),
         };
         let (stroke, fill) = (stroke.gamma_multiply(f), fill.gamma_multiply(f));
         painter.rect_filled(rect, CornerRadius::same(6), fill);
@@ -3542,12 +3662,20 @@ fn draw(
                 StrokeKind::Outside,
             );
         }
+        let designation = io.iter().find(|(id, _)| *id == n.id).map(|(_, d)| d);
+        let simulated = designation.is_some_and(crate::assign::Designation::is_simulated);
         let outline = if pick == Some(Pick::Node(n.id)) {
             Stroke::new(2.5 * z, YELLOW)
+        } else if simulated {
+            // Dashed instead, below.
+            Stroke::NONE
         } else {
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        if let Some(d) = designation {
+            io_mark(painter, t, r, z, d, text, pick == Some(Pick::Node(n.id)));
+        }
         if deeper {
             // A double chevron at the header's right end: go in.
             let c = Pos2::new(r.right() - 9.0 * z, h.center().y);
@@ -3777,6 +3905,9 @@ mod fold_tests;
 
 #[path = "st_zoom.rs"]
 mod zoom_fold;
+
+#[path = "st_ladder.rs"]
+pub mod ladder_view;
 
 #[cfg(test)]
 mod hold_tests {

@@ -189,48 +189,53 @@ async fn main(spawner: Spawner) -> ! {
         .as_ref()
         .and_then(|s| s.program().map(|p| p.map.clone()))
         .unwrap_or_default();
+    // What this board runs of a map: one Modbus TCP block (`one_block`).
+    // A stored map that parses but asks for more (a node-p4 map on this
+    // flash) is not run; the factory map is.
+    let factory = || IoMap::factory(factory_host, "rio");
     let map = if stored_map.trim().is_empty() {
         println!("io map: none on flash; the factory map ({E1213_ADDR}, di0..7, do0..3)");
-        IoMap::factory(factory_host, "rio")
+        factory()
     } else {
-        match iomap::parse(&stored_map) {
-            Ok(m) => {
-                println!(
-                    "io map: {} at {}.{}.{}.{}:{} unit {}, {} inputs, {} coils",
-                    m.device,
-                    m.host[0],
-                    m.host[1],
-                    m.host[2],
-                    m.host[3],
-                    m.port,
-                    m.unit,
-                    m.input_count(),
-                    m.coil_count()
-                );
-                m
-            }
+        match iomap::parse(&stored_map).and_then(|m| m.one_block().map(|_| m)) {
+            Ok(m) => m,
             Err(e) => {
-                println!("io map: the stored map no longer parses ({e}); the factory map");
-                IoMap::factory(factory_host, "rio")
+                println!("io map: the stored map is not one this board runs ({e}); the factory map");
+                factory()
             }
         }
     };
-    let names: &'static PointNames = NAMES.init(PointNames::of(&map));
+    let Ok(block_map) = map.one_block() else {
+        halt("the factory map is not a one-block map").await
+    };
+    println!(
+        "io map: {} at {}.{}.{}.{}:{} unit {}, {} inputs, {} coils",
+        block_map.device,
+        block_map.host[0],
+        block_map.host[1],
+        block_map.host[2],
+        block_map.host[3],
+        block_map.port,
+        block_map.unit,
+        block_map.input_count(),
+        block_map.coil_count()
+    );
+    let names: &'static PointNames = NAMES.init(PointNames::of(&block_map));
     let block = IpEndpoint::new(
         IpAddress::Ipv4(Ipv4Address::new(
-            map.host[0],
-            map.host[1],
-            map.host[2],
-            map.host[3],
+            block_map.host[0],
+            block_map.host[1],
+            block_map.host[2],
+            block_map.host[3],
         )),
-        map.port,
+        block_map.port,
     );
-    let (unit, input_count, coil_count) = (map.unit, map.input_count(), map.coil_count());
+    let (unit, input_count, coil_count) = (block_map.unit, block_map.input_count(), block_map.coil_count());
     let store: &'static server::StoreCell = STORE.init(embassy_sync::mutex::Mutex::new(RefCell::new(store)));
 
     let shared: &'static Shared = SHARED.init(Mutex::new(RefCell::new(state::Live::default())));
     state::with(shared, |live| {
-        live.device.name.clone_from(&map.device);
+        live.device.name.clone_from(&block_map.device);
         live.device.address = alloc::format!("{block}");
         live.io_map.clone_from(&map.text);
         if let Some((name, source, p)) = &program {

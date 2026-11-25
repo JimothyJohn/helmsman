@@ -42,6 +42,14 @@ pub trait Scan {
     fn ran(&self, id: StmtId) -> bool {
         self.hits(id) > 0
     }
+
+    /// Whether this scan knows which statements ran. One that carries
+    /// values alone (an edge node publishes its I/O points, not a trace)
+    /// says `false`: every block is drawn as running and no gate as taken
+    /// or skipped, so nothing is dimmed for want of a count.
+    fn flow(&self) -> bool {
+        true
+    }
 }
 
 impl Scan for Trace {
@@ -75,6 +83,8 @@ pub enum Gate {
     Closed,
     /// Taken this many times (arm hits, or loop passes).
     Open(u32),
+    /// The scan does not say ([`Scan::flow`]).
+    Unknown,
 }
 
 impl Gate {
@@ -133,6 +143,9 @@ pub const fn not(v: Value) -> Option<Value> {
 /// How `r`'s gate did in `t`.
 #[must_use]
 pub fn gate(t: &dyn Scan, r: &Region) -> Gate {
+    if !t.flow() {
+        return Gate::Unknown;
+    }
     if !t.ran(r.stmt) {
         return Gate::NotReached;
     }
@@ -181,7 +194,7 @@ pub fn annotate(d: &Diagram, t: &dyn Scan, prefix: &str) -> Live {
     }
     Live {
         values,
-        ran: d.nodes.iter().map(|n| t.ran(n.stmt)).collect(),
+        ran: d.nodes.iter().map(|n| !t.flow() || t.ran(n.stmt)).collect(),
         gates: d.regions.iter().map(|r| gate(t, r)).collect(),
     }
 }

@@ -288,6 +288,33 @@ fn send(addr: SocketAddr, method: &str, path: &str, bearer: Option<&str>, ctype:
     }
 }
 
+/// Bug 2026-11-24: on a box with accounts and nothing deployed the agent
+/// said its own reads "all return invalid-JSON results". The reads the
+/// tools make must answer (an empty box reads as empty), and a refusal
+/// must reach the model as a refusal with its reason.
+#[test]
+fn the_agents_reads_on_a_box_with_accounts_and_nothing_deployed_answer() {
+    let b = Bench::new();
+    for name in ["list_devices", "list_modules"] {
+        let o = b.tool(name, &json!({}));
+        assert!(o.ok, "{name}: {o:?}");
+    }
+}
+
+#[test]
+fn a_refused_read_tells_the_model_it_was_refused_and_why() {
+    let b = Bench::new();
+    let api = BoxApi::local(b.addr, "f".repeat(64));
+    for name in ["list_devices", "read_io_map", "list_modules"] {
+        let o = tools::run(&api, &mut Drafts::default(), name, &json!({}));
+        assert!(!o.ok, "{name}: {o:?}");
+        let text = format!("{} {}", o.summary, o.data);
+        assert!(text.contains("refused"), "{name}: {text}");
+        assert!(text.contains("wrong token"), "{name}: {text}");
+        assert!(!text.to_lowercase().contains("invalid"), "{name}: {text}");
+    }
+}
+
 /// The E1213's profile with a comment line carrying [`MARK`].
 fn e1213() -> String {
     E1213.replacen("kind   remote-io\n", &format!("kind   remote-io\n# {MARK}\n"), 1)

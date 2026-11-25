@@ -40,7 +40,14 @@ pub enum PCall {
         project: String,
         file: String,
     },
-    Create(String),
+    /// A new project; `starter`: the starter program goes in before it
+    /// opens.
+    Create {
+        name: String,
+        starter: bool,
+    },
+    /// The starter `main.st` of a project just made.
+    Starter(String),
     Rename {
         from: String,
         to: String,
@@ -100,6 +107,12 @@ pub enum PCall {
         replay: Option<u64>,
     },
     Upload(String),
+    /// `PUT /api/modules/{name}`: the edited source of a module, on a box
+    /// or Skipper without projects.
+    DeployModule(String),
+    /// A step of sending a project's I/O list to the watched Skipper
+    /// before its program: check the devices, read the result, save.
+    NodeMapSend(MapStep),
     Import {
         project: String,
         file: String,
@@ -107,6 +120,9 @@ pub enum PCall {
     Forces,
     Force,
     Release,
+    /// `PUT /api/signals/{name}`: a placeholder (`sim`) input set, on the
+    /// watched box or Skipper.
+    SetSim(String),
     /// `POST /api/modules/{name}/stop|run|restart` (card
     /// monitor-box-run-stop): the module and the control.
     Control(String, &'static str),
@@ -127,6 +143,10 @@ pub enum PCall {
     /// `POST /api/devices/discover`: the Devices tab's Scan (answered by
     /// the view, not here).
     Discover,
+    /// `POST /api/devices/discover?address=A`: the Devices tab's Ask, one
+    /// address (the text is the validated IPv4 address, for the answer's
+    /// note).
+    Ask(String),
     /// `GET /api/devices/library?vendor=&product=`: a found device's
     /// profile for the quick form (answered by the view, not here).
     Library,
@@ -153,12 +173,6 @@ pub enum PCall {
     /// `POST /api/dropins`: the vendor's file for the agent
     /// (answered by the Devices tab, `device_vendor.rs`).
     VendorFile,
-    /// `POST /api/dropins`: a PDF of a specification (the name it was
-    /// sent under); answered by the view (`box_spec.rs`).
-    SpecPdf(String),
-    /// `POST /api/projects/{name}/zip`: the project a spec makes, whole;
-    /// answered by the view (`box_spec.rs`).
-    SpecProject(String),
     /// `POST /api/projects/{name}/zip`: the open project with the kept
     /// design in it, as a project of its own; answered by the view
     /// (`box_view.rs`).
@@ -170,6 +184,9 @@ pub enum PCall {
     KeepPaneLayout(String),
     /// `DELETE /api/pane-layouts/{name}`.
     DropPaneLayout(String),
+    /// A Skipper's map: its check, the reading of it and the download
+    /// (answered by the Devices tab, `node_map.rs`).
+    NodeMap(crate::node_map::NodeOp),
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -198,6 +215,23 @@ pub struct PReq {
 /// box keeps of one (`MAX_REVISIONS` in helmsman-plc's project history),
 /// so the whole of what the box has can go with an instruction.
 pub const PAGES: usize = 200;
+
+impl PCall {
+    /// Whether the call is the watched node's (`?box=`): a module deploy
+    /// and the map window's check and download. The rest are the serving
+    /// box's.
+    #[must_use]
+    pub const fn on_node(&self) -> bool {
+        matches!(
+            self,
+            Self::DeployModule(_)
+                | Self::NodeMap(_)
+                | Self::Control(..)
+                | Self::NodeMapSend(_)
+                | Self::SetSim(_)
+        )
+    }
+}
 
 impl fmt::Debug for PReq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -330,6 +364,15 @@ impl Runs {
     }
 }
 
+/// Why the open project's map cannot go to the watched Skipper, in words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unsent {
+    /// A device named by its identity has no address yet: a network scan
+    /// may find it.
+    MayScan(String),
+    Refused(String),
+}
+
 /// Where a Deploy is.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Deploy {
@@ -337,6 +380,9 @@ pub enum Deploy {
     Idle,
     /// Saving the edits first.
     Saving,
+    /// Finding a device named by its identity on the network, for a
+    /// Skipper (which needs its address); the deploy goes on after.
+    Scanning,
     Checking,
     Replaying,
     Deploying,
@@ -350,8 +396,24 @@ impl Deploy {
     pub const fn busy(&self) -> bool {
         matches!(
             self,
-            Self::Saving | Self::Checking | Self::Replaying | Self::Deploying
+            Self::Saving | Self::Scanning | Self::Checking | Self::Replaying | Self::Deploying
         )
+    }
+
+    /// While busy, what it is doing, for the spinner beside Deploy (Nick,
+    /// 2026-11-25: "During the deployment step you should be shown a
+    /// loading indicator so you know something is happening").
+    #[must_use]
+    pub const fn stage(&self, to_node: bool) -> Option<&'static str> {
+        Some(match self {
+            Self::Saving => "Saving…",
+            Self::Scanning => "Finding the devices…",
+            Self::Checking => "Checking…",
+            Self::Replaying => "Replaying in the simulation…",
+            Self::Deploying if to_node => "Sending to the Skipper…",
+            Self::Deploying => "Deploying…",
+            Self::Idle | Self::Done(_) | Self::Failed(_) => return None,
+        })
     }
 }
 
@@ -370,6 +432,8 @@ pub struct Pending {
 
 /// Everything the Editor knows about the box's projects.
 #[derive(Debug, Default)]
+// Each flag is its own fact (available, ended, deployed, to the node).
+#[allow(clippy::struct_excessive_bools)]
 pub struct BoxProjects {
     /// `None` until the box answered; `Some(false)`: no `--projects`.
     pub available: Option<bool>,
@@ -388,6 +452,9 @@ pub struct BoxProjects {
     pub pending: Option<Pending>,
     /// A 401 said the box no longer knows this page's session.
     pub ended: bool,
+    /// New project made and opened this project: the view starts it
+    /// afresh (taken once).
+    pub created: Option<String>,
     /// The forces list, when a force call just changed it.
     pub forces: Option<Vec<ForceRow>>,
     /// A deploy changed what runs: the module list should be read again.
@@ -407,12 +474,24 @@ pub struct BoxProjects {
     pub layout_saved: Option<String>,
     /// The layout being saved.
     saving_layout: Option<String>,
+    /// The running module being edited, on a box or Skipper without
+    /// projects (`PUT /api/modules/{name}`).
+    pub module: Option<ModuleEdit>,
+    /// The watched Skipper's I/O list as the page last read it.
+    pub node_map: Option<String>,
+    /// What the last scan found: an identity (`cip=...`) to the address
+    /// it answered at, so a device by identity can go to a Skipper (the
+    /// view fills it in each frame).
+    pub found_hosts: Vec<(String, String)>,
+    map_send: Option<MapSend>,
+    /// Page time as of the last [`Self::tick`].
+    now: f64,
+    /// Deploy sends the checked project to the watched node (a page a box
+    /// served, watching a Skipper with `?box=`) instead of running it on
+    /// the box.
+    pub to_node: bool,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
-    /// How the box would check a project made now (its image sizes and
-    /// scan period), from the project list: what a spec run is checked
-    /// against before there is a project to ask.
-    pub new_runs: Option<Runs>,
     /// The open project's requirement tests as the box last ran them
     /// (`crate::requirements`): asked when the project opens, after each
     /// save, on Run, and reported by a refused deploy.
@@ -534,7 +613,299 @@ fn short(s: &str) -> &str {
     s.get(..8).unwrap_or(s)
 }
 
+/// The steps of sending an I/O list to a Skipper ([`PCall::NodeMapSend`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapStep {
+    /// `POST /api/io_map/check`: the Skipper asks every device.
+    Check,
+    /// `GET /api/io_map/check`: how the check went.
+    Poll,
+    /// `PUT /api/io_map`: saved; the Skipper restarts on it.
+    Save,
+}
+
+/// A project's I/O list on its way to the Skipper, its program after it.
+#[derive(Debug, Clone, PartialEq)]
+struct MapSend {
+    text: String,
+    /// When to read the check's result again (page time, s).
+    poll_at: Option<f64>,
+    /// When to send the program, once the Skipper restarted on the map.
+    program_at: Option<f64>,
+    /// Reads of the check so far, and sends of the program after a save.
+    polls: u32,
+    program_tries: u32,
+}
+
+/// Seconds a Skipper takes to restart on a saved map before its program
+/// is sent (it answered again within 8 s on the bench, 2026-11-24).
+const MAP_RESTART_S: f64 = 8.0;
+/// Reads of a check's result before giving up (one a second).
+const MAP_POLLS: u32 = 60;
+
+/// What a node is sent for a project: every ST file but the requirement
+/// tests (`test_*.st`), in name order, one after another.
+#[must_use]
+pub fn node_source(o: &OpenProject) -> String {
+    let mut out = String::new();
+    for (name, b) in &o.bufs {
+        let st = std::path::Path::new(name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("st"));
+        if !st || name.to_ascii_lowercase().starts_with("test_") {
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&b.text);
+    }
+    out
+}
+
+/// A running module's source being edited where there are no projects:
+/// a Skipper, or a box run without `--projects`. The box's copy is what it
+/// last said it runs; the edits stay until a deploy of them succeeds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleEdit {
+    pub name: String,
+    /// What the box runs, as far as this page knows: what it sent, or what
+    /// a deploy from here put there.
+    pub base: String,
+    /// The editor's text.
+    pub text: String,
+    /// The box's source as last read, so a re-read that brings nothing new
+    /// never undoes a deploy made from here.
+    seen: String,
+    /// The text on its way in a deploy.
+    sent: Option<String>,
+}
+
+impl ModuleEdit {
+    #[must_use]
+    pub fn dirty(&self) -> bool {
+        self.text != self.base
+    }
+}
+
 impl BoxProjects {
+    /// Keeps the module editor on `name` with the box's `source`: another
+    /// module, or a source changed on the box, replaces the text unless it
+    /// holds edits.
+    pub fn track_module(&mut self, name: &str, source: &str) {
+        match &mut self.module {
+            Some(m) if m.name == name => {
+                if m.seen != source {
+                    m.seen = source.to_string();
+                    if !m.dirty() {
+                        m.text = source.to_string();
+                    }
+                    m.base = source.to_string();
+                }
+            }
+            _ => {
+                self.module = Some(ModuleEdit {
+                    name: name.to_string(),
+                    base: source.to_string(),
+                    text: source.to_string(),
+                    seen: source.to_string(),
+                    sent: None,
+                });
+            }
+        }
+    }
+
+    /// The checked project, to the watched node: what the box's lint holds
+    /// stops it here, a project of more than one program too (a Skipper
+    /// runs one); a sim replay comes first when the box's policy asks one
+    /// for the change (Nick, 2026-11-24: "require the replay for Skipper
+    /// deploys"), as it would before running it on the box.
+    fn after_check_for_node(&mut self, project: &str, check: &Json) {
+        let held: Vec<&str> = check["held"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+            .collect();
+        if !held.is_empty() {
+            self.deploy = Deploy::Failed(format!("{project} was not sent: {}", held.join("; ")));
+            return;
+        }
+        if self.modules.len() != 1 {
+            self.deploy = Deploy::Failed(format!(
+                "A Skipper runs one program; {project} builds {}: {}.",
+                self.modules.len(),
+                self.modules.join(", ")
+            ));
+            return;
+        }
+        if check["approval"]["needs"]["replay"].as_bool() == Some(true) {
+            self.replay(project);
+        } else {
+            self.send_to_node();
+        }
+    }
+
+    /// The open project's program, its function blocks with it, to the
+    /// watched node under the program's name.
+    fn send_to_node(&mut self) {
+        let Some(module) = self.modules.first().cloned() else {
+            return;
+        };
+        let Some(o) = &self.open else { return };
+        let source = node_source(o);
+        self.module = Some(ModuleEdit {
+            name: module,
+            base: String::new(),
+            text: source,
+            seen: String::new(),
+            sent: None,
+        });
+        // The project's I/O list first, when the Skipper runs another one
+        // (Nick, 2026-11-24: an I/O change the Agent made never reached
+        // the Skipper): its devices are checked from the Skipper, it is
+        // saved, the Skipper restarts on it, then the program goes.
+        let map = self
+            .open
+            .as_ref()
+            .and_then(|o| o.bufs.get(helmsman_project::IO_MAP))
+            .map(|b| b.text.clone())
+            .filter(|m| !m.trim().is_empty());
+        if let Some(map) = map.filter(|m| self.node_map.as_deref().is_none_or(|n| n.trim() != m.trim())) {
+            self.deploy = Deploy::Deploying;
+            self.queue.push(PReq::json(
+                PCall::NodeMapSend(MapStep::Check),
+                "POST",
+                "/api/io_map/check".into(),
+                &json!({ "text": map }),
+            ));
+            self.map_send = Some(MapSend {
+                text: map,
+                poll_at: None,
+                program_at: None,
+                polls: 0,
+                program_tries: 0,
+            });
+            return;
+        }
+        // The check (and replay) are over; the send is the deploy's last step.
+        self.deploy = Deploy::Idle;
+        self.deploy_module();
+    }
+
+    /// Page time `now`: reads a check's result and sends the program
+    /// after a map save when they are due.
+    pub fn tick(&mut self, now: f64) {
+        self.now = now;
+        let Some(m) = &mut self.map_send else { return };
+        if m.poll_at.is_some_and(|t| now >= t) {
+            m.poll_at = None;
+            m.polls += 1;
+            self.queue.push(PReq::get(
+                PCall::NodeMapSend(MapStep::Poll),
+                "/api/io_map/check".into(),
+            ));
+        }
+        if m.program_at.is_some_and(|t| now >= t) {
+            m.program_at = None;
+            m.program_tries += 1;
+            self.deploy = Deploy::Idle;
+            self.deploy_module();
+        }
+    }
+
+    fn map_failed(&mut self, why: String) {
+        self.map_send = None;
+        if let Some(m) = &mut self.module {
+            m.sent = None;
+        }
+        self.deploy = Deploy::Failed(why);
+    }
+
+    fn map_answer(&mut self, step: MapStep, a: &Answer, j: &Json) {
+        let ok = (200..300).contains(&a.status);
+        let now = self.now;
+        let Some(m) = self.map_send.as_mut() else { return };
+        match step {
+            MapStep::Check if ok || a.status == 409 => m.poll_at = Some(now + 1.0),
+            MapStep::Check => {
+                self.map_failed(format!(
+                    "The Skipper would not check the I/O list: {}",
+                    error_of(a)
+                ));
+            }
+            MapStep::Poll if !ok || j["state"].as_str() != Some("done") => {
+                if m.polls >= MAP_POLLS {
+                    self.map_failed("The Skipper's check of the devices did not finish.".into());
+                } else {
+                    m.poll_at = Some(now + 1.0);
+                }
+            }
+            MapStep::Poll => {
+                let same = j["text"].as_str().is_some_and(|t| t.trim() == m.text.trim());
+                if !same {
+                    self.map_failed(
+                        "Another I/O list was being checked on the Skipper: deploy again.".into(),
+                    );
+                } else if j["may_save"].as_bool() == Some(true) {
+                    let text = m.text.clone();
+                    self.queue.push(PReq::json(
+                        PCall::NodeMapSend(MapStep::Save),
+                        "PUT",
+                        "/api/io_map".into(),
+                        &json!({ "text": text }),
+                    ));
+                } else {
+                    let silent: Vec<String> = j["devices"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|d| d["state"].as_str() != Some("answered"))
+                        .map(|d| {
+                            format!(
+                                "{} ({}): {}",
+                                d["name"].as_str().unwrap_or("?"),
+                                d["address"].as_str().unwrap_or("?"),
+                                d["error"].as_str().unwrap_or("did not answer")
+                            )
+                        })
+                        .collect();
+                    self.map_failed(format!(
+                        "Not deployed: the Skipper could not reach {}. Its I/O list and program are unchanged.",
+                        if silent.is_empty() { "every device".to_string() } else { silent.join("; ") }
+                    ));
+                }
+            }
+            MapStep::Save if ok => m.program_at = Some(now + MAP_RESTART_S),
+            MapStep::Save => {
+                self.map_failed(format!("The Skipper did not save the I/O list: {}", error_of(a)));
+            }
+        }
+    }
+
+    /// Sends the edited module to the box, which compiles it and runs it
+    /// in place of the old one, or refuses it and keeps the old one.
+    pub fn deploy_module(&mut self) {
+        if self.deploy.busy() {
+            return;
+        }
+        let Some(m) = &mut self.module else { return };
+        if m.text.trim().is_empty() {
+            self.deploy = Deploy::Failed("The program is empty: nothing to deploy.".into());
+            return;
+        }
+        m.sent = Some(m.text.clone());
+        let (name, text) = (m.name.clone(), m.text.clone());
+        self.diags.clear();
+        self.deploy = Deploy::Deploying;
+        self.queue.push(PReq::json(
+            PCall::DeployModule(name.clone()),
+            "PUT",
+            crate::remote::module_url(&name),
+            &json!({ "source": text }),
+        ));
+    }
+
     /// Starts: the project list.
     #[must_use]
     pub fn new() -> Self {
@@ -562,12 +933,33 @@ impl BoxProjects {
         }
     }
 
+    /// A scan has answered (`found`: each device's identity to its
+    /// address): kept, and a deploy that asked for it goes on.
+    pub fn scanned(&mut self, found: Vec<(String, String)>) {
+        self.found_hosts = found;
+        if self.deploy == Deploy::Scanning {
+            self.deploy = Deploy::Idle;
+            self.deploy_with(true);
+        }
+    }
+
     /// Asks the box for a fresh network scan (the Devices tab's Scan).
     pub fn discover(&mut self) {
         self.queue.push(PReq::json(
             PCall::Discover,
             "POST",
             "/api/devices/discover?fresh=1".into(),
+            &json!({}),
+        ));
+    }
+
+    /// Asks the box about the one device at `address` (the Devices tab's
+    /// Ask), for a device that does not answer the scan's broadcast.
+    pub fn ask(&mut self, address: std::net::Ipv4Addr) {
+        self.queue.push(PReq::json(
+            PCall::Ask(address.to_string()),
+            "POST",
+            format!("/api/devices/discover?address={address}"),
             &json!({}),
         ));
     }
@@ -599,7 +991,7 @@ impl BoxProjects {
         ));
     }
 
-    fn relist(&mut self) {
+    pub fn relist(&mut self) {
         self.queue.push(PReq::get(PCall::List, "/api/projects".into()));
     }
 
@@ -908,13 +1300,28 @@ impl BoxProjects {
         }
     }
 
+    /// A new project `name`: empty, or (`from`) a copy of that project.
     pub fn create(&mut self, name: &str, from: Option<&str>) {
+        self.create_with(name, from, false);
+    }
+
+    /// File › New project: a new project holding the starter program in
+    /// `main.st`, opened on it, so the Agent has a program to work on at
+    /// once (Nick, 2026-11-24), as the playground's New project has.
+    pub fn create_started(&mut self, name: &str) {
+        self.create_with(name, None, true);
+    }
+
+    fn create_with(&mut self, name: &str, from: Option<&str>, starter: bool) {
         let body = match from {
             Some(f) => json!({ "name": name, "from": f }),
             None => json!({ "name": name }),
         };
         self.queue.push(PReq::json(
-            PCall::Create(name.into()),
+            PCall::Create {
+                name: name.into(),
+                starter,
+            },
             "POST",
             "/api/projects".into(),
             &body,
@@ -1172,6 +1579,26 @@ impl BoxProjects {
         self.queue.extend(reqs);
     }
 
+    /// Saves `file` alone, if it is edited and no save of it is on its
+    /// way; the other edits stay unsaved.
+    pub fn save_file(&mut self, file: &str) {
+        let Some(o) = &mut self.open else { return };
+        let project = o.name.clone();
+        let Some(b) = o.bufs.get_mut(file).filter(|b| b.dirty() && b.saving.is_none()) else {
+            return;
+        };
+        b.saving = Some(b.text.clone());
+        self.queue.push(PReq::json(
+            PCall::Save {
+                project: project.clone(),
+                file: file.to_string(),
+            },
+            "PUT",
+            file_url(&project, file),
+            &json!({ "text": b.text, "version": b.version }),
+        ));
+    }
+
     /// Reads `file` again from the box, dropping the edits here (after a
     /// 409: someone else saved it).
     pub fn reload(&mut self, file: &str) {
@@ -1190,17 +1617,157 @@ impl BoxProjects {
     /// Saves what is edited, then checks, replays if the policy wants it,
     /// and deploys the open project.
     pub fn deploy(&mut self) {
+        self.deploy_with(false);
+    }
+
+    /// [`Self::deploy`], `scanned` when the network was scanned for it
+    /// already (a second scan would find no more).
+    fn deploy_with(&mut self, scanned: bool) {
         if self.deploy.busy() || self.open.is_none() {
             return;
         }
         self.format();
         self.diags.clear();
+        // The map is made for the Skipper, and a port no point backs gets
+        // its placeholder, before the save, so the check, the replay and
+        // the Skipper all see it. One the Skipper cannot run stops here.
+        let placed = if self.to_node {
+            match self.add_placeholders() {
+                Ok(words) => words,
+                // A device named by its identity and no address for it
+                // yet: the page scans, and the deploy goes on when the
+                // scan answers ([`Self::scanned`]).
+                Err(Unsent::MayScan(_)) if !scanned => {
+                    self.deploy = Deploy::Scanning;
+                    self.discover();
+                    return;
+                }
+                Err(Unsent::MayScan(why) | Unsent::Refused(why)) => {
+                    self.deploy = Deploy::Failed(why);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         if self.dirty() {
             self.deploy = Deploy::Saving;
             self.save();
         } else {
             self.check();
         }
+        // After the save, which clears the notice.
+        if let Some(words) = placed {
+            self.note(words, false);
+        }
+    }
+
+    /// On a Skipper: the project's `io.map` made into the map the Skipper
+    /// runs ([`crate::skipper_map`]: its own list kept, the project's
+    /// devices on top in its form), then a placeholder (`sim`) point for
+    /// every port of the open project's program that no point of it backs
+    /// ([`crate::placeholders`]). Written into the project's `io.map` as an
+    /// edit the next save writes, when the project has a map or needed a
+    /// placeholder. `Ok(None)` when nothing was said, the Skipper's list
+    /// is not read yet, or the program does not build; `Ok(words)` for the
+    /// Messages; `Err` when part of the map cannot go to a Skipper.
+    pub fn add_placeholders(&mut self) -> Result<Option<String>, Unsent> {
+        // A map not read yet is not written over.
+        let Some(o) = self
+            .open
+            .as_ref()
+            .filter(|o| o.bufs.get(helmsman_project::IO_MAP).is_none_or(|b| b.loaded))
+        else {
+            return Ok(None);
+        };
+        let Some(made) = self.for_skipper() else {
+            return Ok(None);
+        };
+        let program = node_source(o);
+        let sizes = o.runs.map_or(crate::playground::SIZES, |r| r.sizes);
+        let project = o
+            .bufs
+            .get(helmsman_project::IO_MAP)
+            .map(|b| b.text.clone())
+            .filter(|t| !t.trim().is_empty());
+        if !made.refused.is_empty() {
+            let why = made.words().unwrap_or_default();
+            return Err(if made.unfound {
+                Unsent::MayScan(why)
+            } else {
+                Unsent::Refused(why)
+            });
+        }
+        let added = crate::placeholders::add(&program, sizes, &made.map);
+        // A port that would be a placeholder but is a Skipper point under
+        // another name, or whose name is too long for a Skipper: the
+        // program has to change (Describe can do it), so it stops here.
+        if let Some(a) = &added {
+            let mut why = Vec::new();
+            for name in a.lines.iter().filter_map(|l| l.split_whitespace().nth(1)) {
+                if let Some((p, sp)) = made.same.iter().find(|(p, _)| p.eq_ignore_ascii_case(name)) {
+                    why.push(crate::skipper_map::same_words(p, sp));
+                } else if name.len() > crate::skipper_map::NAME_MAX {
+                    why.push(format!(
+                        "{name} is {} characters, and a Skipper names a point in at most {}: give it a shorter name in the program",
+                        name.len(),
+                        crate::skipper_map::NAME_MAX
+                    ));
+                }
+            }
+            if !why.is_empty() {
+                return Err(Unsent::Refused(format!(
+                    "Not deployed: {}. Describe can make the change.",
+                    why.join("; ")
+                )));
+            }
+        }
+        let Some(o) = self.open.as_mut() else {
+            return Ok(None);
+        };
+        let map = added.as_ref().map_or(made.map.as_str(), |a| a.map.as_str());
+        let write = added
+            .as_ref()
+            .is_some_and(|a| !a.lines.is_empty() || !a.dropped.is_empty())
+            || project.as_deref().is_some_and(|p| p.trim() != map.trim());
+        if write {
+            let b = o
+                .bufs
+                .entry(helmsman_project::IO_MAP.to_string())
+                .or_insert_with(|| Buf {
+                    loaded: true,
+                    ..Buf::default()
+                });
+            b.text = map.to_string();
+        }
+        let words: Vec<String> = [made.words(), added.as_ref().and_then(crate::placeholders::said)]
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok((!words.is_empty()).then(|| words.join(" ")))
+    }
+
+    /// The map a deploy would send the watched Skipper for the open
+    /// project ([`crate::skipper_map::for_skipper`]); `None` before the
+    /// Skipper's list is read or with no project open.
+    #[must_use]
+    pub fn for_skipper(&self) -> Option<crate::skipper_map::ForSkipper> {
+        let node = self.node_map.as_deref()?;
+        let o = self.open.as_ref()?;
+        let text = |file: &str| o.bufs.get(file).filter(|b| b.loaded).map(|b| b.text.clone());
+        Some(crate::skipper_map::for_skipper(
+            text(helmsman_project::IO_MAP)
+                .filter(|t| !t.trim().is_empty())
+                .as_deref(),
+            node,
+            &|stem| text(&format!("{stem}{}", helmsman_project::DEVICE_EXT)),
+            &|id| {
+                self.found_hosts
+                    .iter()
+                    .find(|(i, _)| i == id)
+                    .map(|(_, a)| a.clone())
+            },
+        ))
     }
 
     fn check(&mut self) {
@@ -1285,22 +1852,9 @@ impl BoxProjects {
         });
     }
 
-    /// The project a spec makes, as one zip (the one atomic write of many
-    /// files): a name the box has is refused (409) and nothing is written.
-    /// The answer goes to the view ([`PCall::SpecProject`]).
-    pub fn spec_project(&mut self, name: &str, zip: Vec<u8>) {
-        self.queue.push(PReq {
-            call: PCall::SpecProject(name.into()),
-            method: "POST",
-            url: format!("{}/zip", project_url(name)),
-            body: Some(zip),
-            ctype: "application/zip",
-        });
-    }
-
-    /// The box made project `name` from a spec: it opens, and the list is
-    /// read again.
-    pub fn spec_made(&mut self, name: &str) {
+    /// The box made project `name` from the kept design: it opens, and the
+    /// list is read again.
+    pub fn design_made(&mut self, name: &str) {
         self.note(format!("Made {name} on the box."), false);
         self.open_keeping_edits(name);
         self.relist();
@@ -1334,6 +1888,16 @@ impl BoxProjects {
             "POST",
             format!("/api/modules/{}/{op}", crate::remote::segment(module)),
             &json!({}),
+        ));
+    }
+
+    /// Sets placeholder (`sim`) input `signal` to `value` where it runs.
+    pub fn set_sim(&mut self, signal: &str, value: &Json) {
+        self.queue.push(PReq::json(
+            PCall::SetSim(signal.to_string()),
+            "PUT",
+            format!("/api/signals/{}", crate::remote::segment(signal)),
+            &json!({ "value": value }),
         ));
     }
 
@@ -1408,7 +1972,20 @@ impl BoxProjects {
     pub fn answer_for(&mut self, call: PCall, a: &Answer, signed_in: bool) {
         let ok = (200..300).contains(&a.status);
         let j: Json = serde_json::from_str(&a.body).unwrap_or(Json::Null);
-        if a.status == 401 {
+        if a.status == 401 && call.on_node() {
+            // The watched node refused its token: the box's session is fine.
+            if let Some(m) = &mut self.module {
+                m.sent = None;
+            }
+            self.map_send = None;
+            if self.deploy.busy() {
+                self.deploy = Deploy::Failed(
+                    "The Skipper refused the token: enter its token under Sign in (top right).".into(),
+                );
+            }
+            return;
+        }
+        if a.status == 401 && !call.on_node() {
             self.ended = true;
             self.saving_layout = None;
             if self.deploy.busy() {
@@ -1450,7 +2027,6 @@ impl BoxProjects {
                     return;
                 }
                 self.available = Some(true);
-                self.new_runs = Runs::parse(&j["tests"]);
                 let current = j["running"]["current"].as_bool() == Some(true);
                 self.running = j["running"]["project"]
                     .as_str()
@@ -1617,14 +2193,35 @@ impl BoxProjects {
                     self.note(msg, false);
                 }
             }
-            PCall::Create(name) => {
-                if ok {
+            PCall::Create { name, starter } => {
+                if !ok {
+                    self.note(format!("{name} was not made: {}", error_of(a)), true);
+                } else if starter {
+                    // Opened once main.st is in, so it opens on it.
+                    self.queue.push(PReq::json(
+                        PCall::Starter(name.clone()),
+                        "PUT",
+                        file_url(&name, "main.st"),
+                        &json!({ "text": crate::sim_projects::STARTER, "version": null }),
+                    ));
+                } else {
                     self.note(format!("Made project {name}."), false);
                     self.open_keeping_edits(&name);
                     self.relist();
-                } else {
-                    self.note(format!("{name} was not made: {}", error_of(a)), true);
                 }
+            }
+            PCall::Starter(name) => {
+                self.created = Some(name.clone());
+                if ok {
+                    self.note(format!("Made project {name}."), false);
+                } else {
+                    self.note(
+                        format!("Made project {name}, without main.st: {}", error_of(a)),
+                        true,
+                    );
+                }
+                self.open_keeping_edits(&name);
+                self.relist();
             }
             PCall::Rename { from, to } => {
                 if ok {
@@ -1841,14 +2438,31 @@ impl BoxProjects {
                             .collect()
                     })
                     .unwrap_or_default();
-                if j["approval"]["needs"]["replay"].as_bool() == Some(true) {
+                if self.to_node {
+                    self.after_check_for_node(&name, &j);
+                } else if j["approval"]["needs"]["replay"].as_bool() == Some(true) {
                     self.replay(&name);
                 } else {
                     self.deploy_now(&name, None);
                 }
             }
             PCall::Replay(name) => match j["replay"].as_u64().filter(|_| a.status == 201) {
+                Some(_) if self.to_node => self.send_to_node(),
                 Some(n) => self.deploy_now(&name, Some(n)),
+                // For a Skipper, in plain words (Nick, 2026-11-24, at "the
+                // replay cannot run: modules do not fit together: drive:
+                // port SEEN: no signal of that name").
+                None if self.to_node && !unbound_ports(&error_of(a)).is_empty() => {
+                    let ports = unbound_ports(&error_of(a));
+                    let (names, verb, them) = (
+                        ports.join(", "),
+                        if ports.len() == 1 { "is" } else { "are" },
+                        if ports.len() == 1 { "it" } else { "them" },
+                    );
+                    self.deploy = Deploy::Failed(format!(
+                        "Not deployed: {names} {verb} not in the I/O list. Add {them} to the I/O list, or declare {them} under VAR in the program."
+                    ));
+                }
                 None => {
                     self.deploy = Deploy::Failed(deploy_words(format!(
                         "the sim replay did not run: {}",
@@ -1898,6 +2512,50 @@ impl BoxProjects {
                     )));
                 }
             }
+            PCall::DeployModule(_)
+                if a.status == 0 && self.map_send.as_ref().is_some_and(|m| m.program_tries < 5) =>
+            {
+                // Still restarting on the new map: try again shortly.
+                if let Some(m) = &mut self.map_send {
+                    m.program_at = Some(self.now + 2.0);
+                }
+                self.deploy = Deploy::Deploying;
+            }
+            PCall::DeployModule(name) => {
+                self.map_send = None;
+                let sent = self
+                    .module
+                    .as_mut()
+                    .filter(|m| m.name == name)
+                    .and_then(|m| m.sent.take().map(|t| (m, t)));
+                if ok {
+                    if let Some((m, t)) = sent {
+                        m.base = t;
+                    }
+                    self.deploy = Deploy::Done(format!("{name} is running the version deployed from here."));
+                    self.deployed = true;
+                } else {
+                    if a.status == 422 {
+                        self.diags = diags_of(&j);
+                    }
+                    // A Skipper lists the compiler's lines under `errors`.
+                    let lines: Vec<&str> = j["errors"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Json::as_str)
+                        .collect();
+                    let why = if lines.is_empty() {
+                        error_of(a)
+                    } else {
+                        format!("{}: {}", error_of(a), lines.join("; "))
+                    };
+                    self.deploy = Deploy::Failed(deploy_words(format!(
+                        "{name} was not deployed (the old version keeps running): {why}"
+                    )));
+                }
+            }
+            PCall::NodeMapSend(step) => self.map_answer(step, a, &j),
             PCall::Upload(project) => {
                 if ok {
                     self.note(format!("Uploaded {project}."), false);
@@ -1949,6 +2607,11 @@ impl BoxProjects {
                     self.note(format!("{module} was not changed: {}", error_of(a)), true);
                 }
             }
+            PCall::SetSim(name) => {
+                if !ok {
+                    self.note(format!("{name} was not set: {}", error_of(a)), true);
+                }
+            }
             PCall::Force | PCall::Release => {
                 if !ok {
                     self.note(error_of(a), true);
@@ -1961,6 +2624,7 @@ impl BoxProjects {
             | PCall::SavePins
             | PCall::Trend
             | PCall::Discover
+            | PCall::Ask(_)
             | PCall::Library
             | PCall::Wired(_)
             | PCall::FindWired
@@ -1970,12 +2634,11 @@ impl BoxProjects {
             | PCall::ProposalDiscard
             | PCall::ProposalPublish
             | PCall::VendorFile
-            | PCall::SpecPdf(_)
-            | PCall::SpecProject(_)
             | PCall::DesignProject(_)
             | PCall::PaneLayouts
             | PCall::KeepPaneLayout(_)
             | PCall::DropPaneLayout(_)
+            | PCall::NodeMap(_)
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {

@@ -176,76 +176,27 @@ in it, even for a few selected lines or a block. Nothing may be left
 out: an answer that skips part of the file, or writes "rest unchanged"
 where code should be, is sent back.
 
-## From a spec
-
-To start a project from a written scope of work or product documentation,
-open the **Describe** tab with a built-in example open and press
-**From a spec…**. A window opens with a box to paste into and
-**Add file…** for `.md` and `.txt` files (up to eight). The window lists
-each file with its size and a × to take it out, and shows the total
-against the most one request takes (120 KiB), because the answer
-and a second try travel in the same request. A file that is empty, is not
-UTF-8 text, or holds control characters is refused with the reason and
-nothing of it is changed. Press **Build**.
-
-Helmsman reads the specification, finds the inputs and outputs, names
-them, writes the program and one check for each requirement it can test.
-Each check runs against the program on a copy, with the same second tries
-as any instruction. What it comes back with is a draft on a review screen:
-the project's name, one row for each input and output (its type and what
-it is, from the comment on its declaration), one row for each requirement
-with **passed** or **not tested yet**, then the requirements the
-specification states that have no check, Helmsman's reason and
-anything that did not pass. Nothing is made until **Accept**; **Discard**
-drops the draft.
-
-Accept makes the project as one version in History, called "From a spec"
-and the names of the documents. It holds `main.st`, a test for each check
-that passed, an empty test for each requirement with no check (shown as
-untested, never red), an `io.map` that puts every input and output on
-simulated I/O, and `spec.md`, your documents under a heading each. A check
-that did not pass is not kept as a test, but its requirement is: it is
-listed as **not tested yet** with the empty test, and the reason it
-failed is in its tooltip. Deploy runs it as for any project.
-
-### From a spec on a box
-
-On a box, sign in as an engineer and press **From a spec…** in the Describe
-tab, with a project open or not; a spec always makes a new project. The
-window also takes `.pdf` files. A PDF is kept on the box and Helmsman
-reads it there, so a scanned manual or a datasheet can be part of the
-specification. A box takes a PDF of at most 2 MiB, five PDFs in a
-conversation, and about 3.5 MiB in all (a PDF counts a third more than
-its size), with room kept for the answer and a second try. The
-window shows each document with its size and the totals against these.
-The box says so beside a PDF it does not keep, and then nothing is sent
-to Helmsman.
-
-The review is the same. Accept sends the whole project to the box in one
-request. A name the box already has is refused beside the name field and
-nothing is written. A PDF is not kept in the project, because a project
-holds text: `spec.md` records it by name, size and SHA-256. History shows
-the one version as an upload.
-
-On a box a number input has no signal until you assign it to a channel of
-a device, so its line is left out of `io.map` and the review lists it
-under **Needs a device**. The project is made and its tests run, but
-Deploy is refused until each such input is assigned: open the project and
-use **Assign to device I/O** in the I/O tab. A true or false input and
-any output start on the box's own channels.
-
 ## Design a machine
 
 For a whole machine, describe it and ask for a design before any code.
-**Design a machine…** is in the Describe tab, under the spec entry. It is
+**Design a machine…** is in the Describe tab. It is
 there when the design entry is served: on a box, for an engineer with a
 project open; in the simulation, only when the relay says it serves it. When it is closed for now, or this
 hour's allowance is used up, the tab says so beside the button, with the
 time to wait, and the chat carries on as before.
 
 A window opens with a box for the description: the stations, the sensors
-and actuators, what must happen when something goes wrong. Press **Ask for
-a design**. A design takes minutes, and the tab shows the time, how much
+and actuators, what must happen when something goes wrong. If you have a
+written scope of work or product documentation, paste it into the second
+box or press **Add file…** for `.md` and `.txt` files (up to eight). The
+window lists each file with its size and a × to take it out, and shows the
+total against the most one request takes (120 KiB in the simulation; a box
+takes much more). A file that is empty, is not UTF-8 text, or holds control
+characters is refused with the reason and nothing of it is changed; a PDF
+is not taken, so paste its text. The
+description can be left out when the documents say what the machine is.
+Whatever the documents state as a requirement becomes a requirement of the
+design. Press **Ask for a design**. A design takes minutes, and the tab shows the time, how much
 has been written and the model's own summary of what it is working out as
 it streams. **Stop** drops it and nothing is kept. If the stream stops
 before the end, the tab says so and offers **Carry on**, which asks for
@@ -261,8 +212,8 @@ design** opens it one section at a time: Machine, Signals, Parts, Faults,
 Requirements, Build order and Open questions. When there is a problem,
 Build is not offered; ask again with the machine described more closely.
 
-**Keep** puts the design in the project as `design.md`, as one version in
-History. With a built-in example open, the simulation makes a project of
+**Keep** puts the design in the project as `design.md`, and the documents
+you gave as `documents.md`, as one version in History. With a built-in example open, the simulation makes a project of
 its own named for the machine. On a box the file route writes only the
 files a project uses, so Keep makes a copy of the open project, as the box
 holds it, with `design.md` in it, in one request; save your edits first.
@@ -270,7 +221,11 @@ The Describe tab then shows this project's design and **Build steps 1 to 6**.
 
 Build hands the design's build order to Helmsman a few steps at a time.
 Each step is asked for with the design's own text: the step, the signal
-table, the parts it names and the requirements it must pass. Anything collected with **Chat about this**
+table, the parts it names and the requirements it must pass, with a check
+for each. A requirement a check cannot show in the simulation, such as one
+that needs hardware or a person, is kept as an empty test, shown as
+untested and never red, and the status says how many. A check that did not
+pass is not kept, but its requirement is, in the same way. Anything collected with **Chat about this**
 goes with every step of the batch, as it does with an instruction. The
 steps run on a copy, each checked like any answer, and the file changes once, when
 the batch has passed. A step that runs out of room pauses the run and is

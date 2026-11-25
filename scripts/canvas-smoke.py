@@ -88,7 +88,7 @@ EXPECTED = ("/__seed", "status of 404", "status of 401", "status of 409", "statu
 
 # Every tab in the left pane, in its first order (2026-11-13: one pane, the
 # Agent first; a tab can be docked in a right pane).
-PANES = ("claude", "code", "io", "devices", "files", "history")
+PANES = ("claude", "code", "io", "devices", "files")
 
 
 def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
@@ -107,11 +107,12 @@ def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
 LEFT = (0, 100, 300, 200)
 # Where a right pane's tabs show once one is docked there.
 RIGHT_TABS = (1180, 56, 210, 30)
-# The trend is the whole bottom strip since 2026-11-23, from the far left.
-BOTTOM_TABS = (0, 545, 1400, 315)
-# The Messages, under the left pane's tab content and above the trend since
-# 2026-11-23 (what a deploy says is there, not in a line under the header).
-MESSAGES = (0, 330, 320, 200)
+# The trend is the bottom strip from the left pane's edge since 2026-11-24
+# (the left pane has the page's whole height).
+BOTTOM_TABS = (330, 545, 1070, 315)
+# The Messages, at the foot of the left pane under its tab content, beside
+# the trend (what a deploy says is there, not in a line under the header).
+MESSAGES = (0, 650, 320, 200)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
@@ -119,7 +120,6 @@ DIAGRAM = (330, 60, 1000, 500)
 TAB_AGENT = (23, 70)
 TAB_CODE = (60, 70)
 TAB_IO = (97, 70)
-TAB_HISTORY = (210, 70)
 # One tab docked on the right: after the pane's chevron.
 TAB_RIGHT_FIRST = (1229, 71)
 # The fold arrow of the Code tab's second line, in the gutter.
@@ -134,8 +134,8 @@ MENU_FILE = (201, 64)
 MENU_EDIT = (202, 92)
 MENU_VIEW = (207, 120)
 MENU_HELP = (206, 148)
-VIEW_PANE_LAYOUTS = (396, 541)
-VIEW_PANE_LAYOUTS_BOX = (396, 615)
+VIEW_PANE_LAYOUTS = (396, 505)
+VIEW_PANE_LAYOUTS_BOX = (396, 578)
 VIEW_PROPOSALS_BOX = (396, 198)
 LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
@@ -169,7 +169,7 @@ class Run:
         """`do`, then a screenshot; `watch` (a region) must have changed,
         or with `stays` must not have: a build without the free chat shows
         "Describing a change is not available in this build." in the tab,
-        with no spec button or window to open, so a click or typing there
+        with no design button or window to open, so a click or typing there
         leaves the pane as it was."""
         before = self.look(watch)
         do()
@@ -197,10 +197,9 @@ class Run:
         ]
 
 
-# "From a spec..." in the Agent tab of a new project, and the box its window
-# draws in the middle of the page, in points.
-AGENT_SPEC = (78, 308)
-SPEC_WINDOW = (380, 285, 640, 330)
+# "Design a machine..." in the Agent tab of a new project (about where the
+# button sits), in points.
+AGENT_DESIGN = (78, 308)
 
 # The front door's "Fail the high switch" and "Open the editor", in points
 # at the smoke's 1400 x 860 window (crates/helmsman-canvas/src/front.rs).
@@ -224,8 +223,6 @@ def playground(ctx, base, out):
     r.wait(3000)
     r.shot("editor")
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT)
-    # The History tab (2026-11-13): a built-in example has no versions.
-    r.click(*TAB_HISTORY); r.wait(600); r.shot("history-tab")
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT)
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.
@@ -243,10 +240,10 @@ def playground(ctx, base, out):
     r.click(*FOLD_LINE_2); r.wait(300)
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
     # This build has no free chat: the tab says so (UNAVAILABLE_TEXT) and a
-    # click or typing on it changes nothing. (With a chat URL: "From a
-    # spec..." opens its window; text typed into it shows.)
-    r.step("spec-window", lambda: r.click(*AGENT_SPEC), LEFT, stays=True)
-    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), LEFT, stays=True)
+    # click or typing on it changes nothing. (With a design entry:
+    # "Design a machine..." opens its window; text typed into it shows.)
+    r.step("design-window", lambda: r.click(*AGENT_DESIGN), LEFT, stays=True)
+    r.step("design-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), LEFT, stays=True)
     r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)

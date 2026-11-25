@@ -131,7 +131,7 @@ pub struct Preset {
 /// The ready-made layouts, the page's first arrangement among them.
 #[must_use]
 pub fn presets() -> Vec<Preset> {
-    use Pane::{Claude, Code, Devices, Files, History, Io};
+    use Pane::{Claude, Code, Devices, Files, Io};
     let base = PaneLayout::default();
     vec![
         Preset {
@@ -143,7 +143,7 @@ pub fn presets() -> Vec<Preset> {
             name: "Programming",
             tip: "The Describe tab on the left and the code on the right, with the trend along the bottom.",
             layout: PaneLayout {
-                lefts: vec![Claude, Files, History],
+                lefts: vec![Claude, Files],
                 rights: vec![Code, Io, Devices],
                 pane: Claude,
                 side: Code,
@@ -159,7 +159,7 @@ pub fn presets() -> Vec<Preset> {
             name: "Commissioning",
             tip: "The devices on the left and the live I/O on the right, with the trend along the bottom.",
             layout: PaneLayout {
-                lefts: vec![Devices, Files, Claude, Code, History],
+                lefts: vec![Devices, Files, Claude, Code],
                 rights: vec![Io],
                 pane: Devices,
                 side: Io,
