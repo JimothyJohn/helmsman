@@ -26,6 +26,10 @@
 //! module may read as a `VAR_INPUT` called NAME. `out NAME TYPE screen
 //! TILE` is a tile of the box's floor screen: an output no device takes,
 //! which the screen layout shows (see `helmsman_plc::screen`).
+//! `in`/`out NAME TYPE sim [unit=U]` is a placeholder point no device backs:
+//! its value lives in memory (an `in` is set through the API, an `out` is
+//! what its module writes), and it takes no address and no option but
+//! `unit=`.
 //!
 //! After the binding, in any order, each at most once:
 //! - `unit=U`: the engineering unit (1..=16 printable characters);
@@ -43,7 +47,7 @@
 //! `#` starts a comment. Tokens are separated by spaces or tabs; nothing is
 //! quoted, so no token contains either. Maps written before units and
 //! poll rates read the same as ever; `box` and `module` are reserved
-//! device ids, as is `screen`.
+//! device ids, as are `screen` and `sim`.
 //!
 //! [`parse`] checks only the syntax; [`crate::IoMap::validate`] checks the
 //! map.
@@ -60,6 +64,9 @@ pub const BOX: &str = "box";
 pub const MODULE: &str = "module";
 /// The device name for the box's floor screen.
 pub const SCREEN: &str = "screen";
+
+/// The device word of a placeholder point no device backs.
+pub const SIM: &str = "sim";
 
 /// A parsed map file: the map, the declared safe values, and what is
 /// wired to which signal.
@@ -150,9 +157,9 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
     }
     match words {
         ["device", id, driver, endpoint, params @ ..] => {
-            if !is_ident(id) || [BOX, MODULE, SCREEN].contains(id) {
+            if !is_ident(id) || [BOX, MODULE, SCREEN, SIM].contains(id) {
                 return Err(format!(
-                    "device id {id:?}: an identifier other than {BOX}, {MODULE} and {SCREEN}"
+                    "device id {id:?}: an identifier other than {BOX}, {MODULE}, {SCREEN} and {SIM}"
                 ));
             }
             let mut map = BTreeMap::new();
@@ -173,6 +180,7 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
             });
             Ok(())
         }
+        [dir @ ("in" | "out"), name, t, SIM, rest @ ..] => sim_point(dir, name, t, rest, out),
         [dir @ ("in" | "out"), name, t, device, point, rest @ ..] => {
             let dir = if *dir == "in" { Dir::In } else { Dir::Out };
             let ty = ty(t).ok_or_else(|| format!("type {t:?}: bool, int or real"))?;
@@ -230,6 +238,40 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
         [w, ..] => Err(format!("{w:?}: expected device, in or out")),
         [] => Ok(()),
     }
+}
+
+/// `in|out NAME TYPE sim [unit=U]`: a placeholder no device backs.
+fn sim_point(dir: &str, name: &str, t: &str, rest: &[&str], out: &mut MapFile) -> Result<(), String> {
+    let dir = if dir == "in" { Dir::In } else { Dir::Out };
+    let ty = ty(t).ok_or_else(|| format!("type {t:?}: bool, int or real"))?;
+    let mut unit = None;
+    for opt in rest {
+        match opt.split_once('=') {
+            Some(("unit", v)) => {
+                if !unit_ok(v) {
+                    return Err(format!("unit={v}: 1..={MAX_UNIT} printable characters"));
+                }
+                once(&mut unit, "unit", v.to_string())?;
+            }
+            Some((k @ ("poll_ms" | "safe" | "wired"), _)) => {
+                return Err(format!("{k}: means nothing on a {SIM} point, no device backs it"));
+            }
+            _ => {
+                return Err(format!(
+                    "{opt:?}: a {SIM} point takes no address; the only option is unit="
+                ));
+            }
+        }
+    }
+    out.map.signals.push(Signal {
+        name: name.into(),
+        ty,
+        dir,
+        binding: Binding::Sim,
+        unit,
+        poll: None,
+    });
+    Ok(())
 }
 
 /// What a signal line's device and point words bind it to.
@@ -290,8 +332,12 @@ pub fn render(file: &MapFile) -> String {
             Binding::Local { channel } => (BOX, channel.as_str()),
             Binding::Module { module } => (MODULE, module.as_str()),
             Binding::Screen { tile } => (SCREEN, tile.as_str()),
+            Binding::Sim => (SIM, ""),
         };
-        let _ = write!(s, "{dir} {} {ty} {dev} {point}", sig.name);
+        let _ = write!(s, "{dir} {} {ty} {dev}", sig.name);
+        if !point.is_empty() {
+            let _ = write!(s, " {point}");
+        }
         match file.safe.get(&sig.name) {
             Some(Value::Bool(b)) => {
                 let _ = write!(s, " safe={b}");

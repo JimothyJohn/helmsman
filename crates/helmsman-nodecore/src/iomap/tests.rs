@@ -559,7 +559,7 @@ fn garbage_and_truncated_lines_are_refused_not_panicked_on() {
 fn a_refusal_reads_with_its_line() {
     assert_eq!(
         refused("").to_string(),
-        "no device line: a node drives at least one device"
+        "no device line: a node drives at least one device (or holds sim points)"
     );
     assert_eq!(
         refused("device rio profinet 1.1.1.1\n")
@@ -738,4 +738,247 @@ fn a_one_block_board_takes_one_modbus_block_of_bits_and_nothing_else() {
     let long = format!("device b modbus-tcp 10.0.0.9\n{}", "# pad\n".repeat(400));
     assert!(long.len() > ONE_BLOCK_TEXT && long.len() <= MAX_TEXT);
     assert!(refused(&long).contains("2048"), "{}", refused(&long));
+}
+
+// Sim points: placeholders on no device (the module header's "Sim points").
+
+fn addresses(m: &IoMap) -> Vec<(String, String)> {
+    m.layout()
+        .into_iter()
+        .map(|(n, d, a)| (n.to_string(), format!("{} {a}", d.word())))
+        .collect()
+}
+
+/// A map's device points with their addresses, in map order, no sims.
+fn device_addresses(m: &IoMap) -> Vec<(String, String)> {
+    m.points
+        .iter()
+        .filter(|p| !p.is_sim())
+        .map(|p| (p.name.clone(), p.at.st(p.dir)))
+        .collect()
+}
+
+#[test]
+fn a_sim_line_parses_to_a_point_on_no_device() {
+    let m = parse("in setpoint real sim\nout lamp bool sim unit=3\nin n int sim\n").unwrap();
+    assert!(
+        m.devices.is_empty(),
+        "a map with sim points and no device is taken"
+    );
+    assert_eq!(m.points.len(), 3);
+    for p in &m.points {
+        assert!(p.is_sim());
+        assert_eq!((p.device, p.addr), (SIM_DEVICE, Addr::Sim));
+    }
+    let by = |n: &str| m.points.iter().find(|p| p.name == n).unwrap();
+    assert_eq!(
+        (by("setpoint").ty, by("setpoint").fmt),
+        (Ty::Real, Some(Fmt::F32))
+    );
+    assert_eq!((by("n").ty, by("n").fmt), (Ty::Int, Some(Fmt::I32)));
+    assert_eq!(
+        (by("lamp").ty, by("lamp").fmt, by("lamp").dir),
+        (Ty::Bool, None, Dir::Out)
+    );
+    // Placed from the top of each area down, in the order written.
+    assert_eq!(at(&m, "setpoint"), "%ID47");
+    assert_eq!(at(&m, "n"), "%ID46");
+    assert_eq!(at(&m, "lamp"), "%QX60.0");
+    // Options other than unit are read and ignored, as for any point.
+    assert!(parse("in a bool sim poll_ms=5 safe=1\n").is_ok());
+}
+
+#[test]
+fn sim_points_never_move_a_device_point() {
+    let base = "device rio modbus-tcp 192.168.3.60\ndevice drive enip-io 192.168.33.1 config=1 o2t=112:36 t2o=100:16\n";
+    let dev = "in estop bool rio di:3\nin pos int drive in:4:i32\nout motor bool rio coil:1\nin level real rio hr:5:f32\nout accel int drive out:4:u32\nin ready bool drive in:0.1\n";
+    let plain = parse(&format!("{base}{dev}")).unwrap();
+    let want = device_addresses(&plain);
+    assert_eq!(
+        want,
+        [
+            ("estop", "%IX0.3"),
+            ("pos", "%ID16"),
+            ("motor", "%QX0.1"),
+            ("level", "%ID17"),
+            ("accel", "%QD16"),
+            ("ready", "%IX4.1"),
+        ]
+        .map(|(n, a)| (n.to_string(), a.to_string()))
+    );
+    let sims = [
+        "in s_b bool sim\n",
+        "in s_i int sim\n",
+        "in s_r real sim\n",
+        "out o_b bool sim\n",
+        "out o_i int sim\n",
+        "out o_r real sim\n",
+    ];
+    let all: String = sims.concat();
+    let device_lines: Vec<&str> = dev.lines().collect();
+    // Before everything, after everything, and between every pair of device lines.
+    let mut texts = vec![
+        format!("{all}{base}{dev}"),
+        format!("{base}{all}{dev}"),
+        format!("{base}{dev}{all}"),
+    ];
+    for cut in 0..=device_lines.len() {
+        let (a, b) = device_lines.split_at(cut);
+        texts.push(format!("{base}{}\n{all}{}\n", a.join("\n"), b.join("\n")));
+    }
+    for text in &texts {
+        let m = parse(text).unwrap();
+        assert_eq!(device_addresses(&m), want, "{text}");
+        assert_eq!(m.devices.len(), 2);
+    }
+    // And each sim is somewhere no device point is.
+    let m = parse(&format!("{base}{dev}{all}")).unwrap();
+    let mut seen = Vec::new();
+    for p in &m.points {
+        let key = (p.dir.index(), p.at.byte, p.at.bit, p.at.bytes);
+        if let Some(bit) = p.at.bit {
+            assert!(
+                !seen.contains(&(key.0, key.1, Some(bit))),
+                "{} shares a bit",
+                p.name
+            );
+            seen.push((key.0, key.1, Some(bit)));
+        } else {
+            for b in key.1..key.1 + u16::from(key.3) {
+                assert!(!seen.contains(&(key.0, b, None)), "{} shares a byte", p.name);
+                seen.push((key.0, b, None));
+            }
+        }
+    }
+    assert_eq!(at(&m, "s_b"), "%IX60.0");
+    assert_eq!(at(&m, "o_b"), "%QX60.0");
+    assert_eq!(at(&m, "s_i"), "%ID47");
+    assert_eq!(at(&m, "s_r"), "%ID46");
+    assert_eq!(at(&m, "o_i"), "%QD47");
+    assert_eq!(at(&m, "o_r"), "%QD46");
+}
+
+#[test]
+fn sim_points_fill_the_windows_no_device_has_and_stop_where_a_device_is() {
+    // 33 sim bools: the second window of them is the next one down.
+    let mut text = String::new();
+    for i in 0..33 {
+        text += &format!("in b{i} bool sim\n");
+    }
+    let m = parse(&text).unwrap();
+    assert_eq!(at(&m, "b0"), "%IX60.0");
+    assert_eq!(at(&m, "b31"), "%IX63.7");
+    assert_eq!(at(&m, "b32"), "%IX56.0");
+    // With 15 devices one window is left: its 32 bits are taken and a 33rd is refused.
+    let mut text = device_lines(15);
+    for i in 0..32 {
+        text += &format!("in b{i} bool sim\n");
+    }
+    assert_eq!(at(&parse(&text).unwrap(), "b31"), "%IX63.7");
+    text += "in b32 bool sim\n";
+    let e = refused(&text);
+    assert!(e.why.contains("no bool window left"), "{e}");
+    assert_eq!(e.line, 48);
+    // The same 16 devices and one sim bool.
+    let e = refused(&format!("{}in b bool sim\n", device_lines(16)));
+    assert!(e.why.contains("no bool window left"), "{e}");
+    // Outputs have windows of their own.
+    let m = parse(&format!("{}in a bool sim\nout a_q bool sim\n", device_lines(15))).unwrap();
+    assert_eq!((at(&m, "a"), at(&m, "a_q")), ("%IX60.0".into(), "%QX60.0".into()));
+}
+
+#[test]
+fn sim_numbers_stop_where_the_device_numbers_end() {
+    // 128 bytes of numeric area, 4 a sim: 32 of them and no device number.
+    let mut text = String::new();
+    for i in 0..32 {
+        text += &format!("in n{i} int sim\n");
+    }
+    let m = parse(&text).unwrap();
+    assert_eq!(at(&m, "n0"), "%ID47");
+    assert_eq!(at(&m, "n31"), "%ID16");
+    let e = refused(&format!("{text}in n32 int sim\n"));
+    assert!(e.why.contains("used up") && e.line == 33, "{e}");
+    // A device point takes its slot first, wherever its line is, and the sims make room.
+    let dev = "device rio modbus-tcp 1.1.1.1\nin x int rio hr:0\nin y real rio hr:1:f32\n";
+    let mut sims = String::new();
+    for i in 0..30 {
+        sims += &format!("in n{i} int sim\n");
+    }
+    let m = parse(&format!("{sims}{dev}")).unwrap();
+    assert_eq!((at(&m, "x"), at(&m, "y")), ("%IW32".into(), "%ID17".into()));
+    assert_eq!(at(&m, "n29"), "%ID18");
+    let e = refused(&format!("{sims}in n30 int sim\nin n31 int sim\n{dev}"));
+    assert!(e.why.contains("used up"), "{e}");
+    // Only the direction that is full is refused.
+    assert!(parse(&format!("{text}out q int sim\n")).is_ok());
+}
+
+#[test]
+fn a_sim_line_that_is_not_one_is_refused_with_its_line() {
+    for (text, line, word) in [
+        ("device sim modbus-tcp 1.1.1.1\n", 1, "reserved"),
+        ("device SIM modbus-tcp 1.1.1.1\n", 1, "reserved"),
+        (
+            "device rio modbus-tcp 1.1.1.1\ndevice sim enip-io 1.1.1.2 profile=moxa-e1213\n",
+            2,
+            "reserved",
+        ),
+        ("in a bool sim di:0\n", 1, "no address"),
+        ("in a bool sim coil:0\n", 1, "no address"),
+        ("out a int sim hr:4:i32\n", 1, "no address"),
+        ("in a real sim 5\n", 1, "no address"),
+        ("in a bool sim unit=1 di:0\n", 1, "no address"),
+        ("in a bool sim unit=1 unit=2\n", 1, "given twice"),
+        ("in a bool sim =3\n", 1, "KEY=VALUE"),
+        ("in a bytes sim\n", 1, "bool, int or real"),
+        ("in 1a bool sim\n", 1, "a name is"),
+        ("in a bool sim\nin A int sim\n", 2, "named twice"),
+        (
+            "device rio modbus-tcp 1.1.1.1\nin a bool rio di:0\nin A bool sim\n",
+            3,
+            "named twice",
+        ),
+        (
+            "device rio modbus-tcp 1.1.1.1\nin a bool sim\nin A bool rio di:0\n",
+            3,
+            "named twice",
+        ),
+        ("in a bool\n", 1, "want in|out"),
+        ("in a bool rio\n", 1, "want in|out"),
+        ("device rio modbus-tcp 1.1.1.1\nin a bool rio\n", 2, "want in|out"),
+    ] {
+        let e = refused(text);
+        assert_eq!(e.line, line, "{text:?}: {e}");
+        assert!(e.why.contains(word), "{text:?}: {e}");
+    }
+    // An empty map, or one of nothing, stays refused.
+    assert!(refused("").why.contains("no device"));
+    assert!(refused("# in a bool sim\n").why.contains("no device"));
+    // 96 points in all, sim or not.
+    let mut text = String::new();
+    for i in 0..MAX_POINTS {
+        text += &format!("in p{i} bool sim\n");
+    }
+    text += "in one_more bool sim\n";
+    assert!(refused(&text).why.contains("at most 96"), "the 97th point");
+}
+
+#[test]
+fn a_sim_point_is_listed_with_its_address_and_a_one_block_board_refuses_it() {
+    let m = parse("device rio modbus-tcp 1.1.1.1\nin a bool rio di:0\nin go bool sim\nout lamp bool sim\nout q bool rio coil:0\n").unwrap();
+    assert_eq!(
+        addresses(&m),
+        [
+            ("a", "in %IX0.0"),
+            ("go", "in %IX60.0"),
+            ("q", "out %QX0.0"),
+            ("lamp", "out %QX60.0"),
+        ]
+        .map(|(n, a)| (n.to_string(), a.to_string()))
+    );
+    assert!(m.one_block().unwrap_err().why.contains("point go"));
+    assert!(parse("in go bool sim\n").unwrap().one_block().is_err());
+    // Re-parsing the text gives the same map: the text is what is kept.
+    assert_eq!(parse(&m.text).unwrap(), m);
 }

@@ -203,6 +203,14 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
                 (router::check_not_started("a check is already running"), false)
             }
         }
+        Effect::SetSim { point, value } => {
+            // The image the scan loop hands the program each scan; no
+            // device task writes a sim point, so the value stays.
+            state::with(ctx.shared, |live| {
+                helmsman_nodecore::ioplan::put_at(&mut live.inputs, &point, value);
+            });
+            (router::sim_set(&point.name, value), false)
+        }
         Effect::SaveIoMap { text, page } => {
             // Beside the program on flash; the restart makes the I/O task
             // drive the block it names.

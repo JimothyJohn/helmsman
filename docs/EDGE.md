@@ -989,6 +989,20 @@ beside the text, and `/api/signals` lists each named point as before (inputs by
 image position, then outputs, then the program's ports), with numbers as JSON
 numbers.
 
+**Sim points** (`in|out NAME bool|int|real sim [unit=..]`) are placeholders
+with no device and no address: a value in the node's memory, FALSE or 0 at boot
+(a deploy keeps it), and a map may hold them with no `device` line at all.
+`sim` is a reserved device id. A sim `in` is set with `PUT /api/signals/{name}`
+(`{"value": true | 12 | 3.5}`, the token; 409 for any other signal, 400 for a
+value of the wrong kind, an integer outside `i32`, or a real that is not a
+finite `f32`) and the program reads it as the `VAR_INPUT` of that name; a sim
+`out` is the program's `VAR_OUTPUT` of that name, read back in `/api/signals`,
+and drives nothing. `/api/signals` carries `"sim": true` on them. They are
+placed after the whole map is read, from the top of each area down (bool
+windows from the last device number, 4-byte numeric slots from the end), so
+a device point's address never changes when one is added; a map in which they
+would meet a device point is refused. The one-block ESP32 boards refuse them.
+
 Limits (constants in `iomap.rs`, tested at and past each): 16 devices, 32 points
 a device, 96 points in all, bool numbers 0 to 31, 128 bytes of numbers each
 direction, assemblies of at most 128 bytes, 4096 bytes of map text. The text

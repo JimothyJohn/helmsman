@@ -151,11 +151,11 @@ impl IoMap {
             Link::Modbus { unit } => {
                 let table = |p: &Point| match p.addr {
                     Addr::Modbus { table, .. } => table,
-                    Addr::Enip { .. } => Table::Coil,
+                    Addr::Enip { .. } | Addr::Sim => Table::Coil,
                 };
                 let addr = |p: &Point| match p.addr {
                     Addr::Modbus { addr, .. } => addr,
-                    Addr::Enip { .. } => 0,
+                    Addr::Enip { .. } | Addr::Sim => 0,
                 };
                 let mut reads = Vec::new();
                 let mut writes = Vec::new();
@@ -230,7 +230,7 @@ impl IoMap {
                                 at: p.at,
                                 fmt: p.fmt,
                             }),
-                            Addr::Modbus { .. } => None,
+                            Addr::Modbus { .. } | Addr::Sim => None,
                         })
                         .collect()
                 };

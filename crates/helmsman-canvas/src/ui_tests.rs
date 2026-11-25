@@ -6299,7 +6299,7 @@ mod boxed {
         use crate::review::Session;
         use helmsman_nodecore::check::Verdict as Said;
 
-        const MAP: &str = "device rio modbus-tcp 192.168.3.60\ndevice sim modbus-tcp 192.168.3.10:1502\nin estop bool rio di:0\n";
+        const MAP: &str = "device rio modbus-tcp 192.168.3.60\ndevice bench modbus-tcp 192.168.3.10:1502\nin estop bool rio di:0\n";
         let mut sk = Skipper::new();
         let mut h = Harness::new(App::boxed());
         h.wait(0.2);
@@ -6381,7 +6381,7 @@ mod boxed {
             serve(&mut h, &mut sk);
         }
         assert!(
-            h.has("node map device rio") && h.has("node map device sim"),
+            h.has("node map device rio") && h.has("node map device bench"),
             "every device is listed"
         );
         assert!(

@@ -16,6 +16,7 @@
 //! PUT  /api/modules/{name}        token: Deploy the body (ST text, or {"source": ...})
 //! POST /api/modules/{name}/run|stop|restart   token: Control
 //! GET  /api/events                the values stream
+//! PUT  /api/signals/{name}        token: SetSim {"value": true | 12 | 3.5}: sets a sim input (409 for any other signal)
 //! GET  /api/signals  /api/devices  /api/io_map  /api/site  /api/node  /api/settings
 //! PUT  /api/settings              token: SaveSettings from JSON
 //! PUT  /api/io_map                token: SaveIoMap from {"text"} or text/plain; 422 names the bad line; 409 until the check of that text passed
@@ -33,13 +34,14 @@ use alloc::vec::Vec;
 
 use serde_json::json;
 
-use crate::api::{self, NodeView};
+use crate::api::{self, NodeView, SignalValue};
 use crate::http::{Request, Response, form_pairs};
+use crate::iomap::{Dir, Point, Ty};
 use crate::ota;
 use crate::settings::Settings;
 
 /// What the firmware must do before the reply.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     /// Compile `source` as module `name`; run it and keep it if it
     /// compiles ([`deployed`]), else [`deploy_refused`].
@@ -64,6 +66,10 @@ pub enum Effect {
     /// result is [`crate::check::Check`], read with `GET
     /// /api/io_map/check` or on the page.
     CheckIoMap { text: String, page: bool },
+    /// Set a sim input's value in the node's input image ([`sim_set`]).
+    /// `point` is the map's sim `in` point; `value` is of its kind and in
+    /// its range, so the image takes it as given.
+    SetSim { point: Point, value: SignalValue },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +91,7 @@ impl Control {
 }
 
 /// How a request is answered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
     /// Send this and close.
     Reply(Response),
@@ -194,6 +200,7 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
         ) => Outcome::Reply(Response::error(404, "a node keeps no traces; watch its values")),
         ("GET", ["api", "events"]) => Outcome::Stream,
         ("GET", ["api", "signals"]) => Outcome::Reply(Response::json(200, &api::signals(view))),
+        ("PUT", ["api", "signals", name]) => sim_put(req, view, settings, name),
         ("GET", ["api", "devices"]) => Outcome::Reply(Response::json(200, &api::devices(view))),
         ("GET", ["api", "io_map"]) => Outcome::Reply(Response::json(200, &api::io_map(view))),
         ("GET", ["api", "site"]) => Outcome::Reply(Response::json(200, &api::site(view, settings))),
@@ -207,6 +214,88 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
         ("GET", _) => Outcome::Reply(Response::error(404, "not found")),
         _ => Outcome::Reply(Response::error(405, "method not allowed")),
     }
+}
+
+/// `PUT /api/signals/{name}`: `{"value": ...}`, a sim input only.
+fn sim_put(req: &Request, view: &NodeView, settings: &Settings, name: &str) -> Outcome {
+    if let Err(e) = authorize(req.bearer(), settings) {
+        return Outcome::Reply(e);
+    }
+    let Ok(map) = crate::iomap::parse(&view.io_map) else {
+        return Outcome::Reply(Response::error(500, "the node's I/O map does not parse"));
+    };
+    let Some(point) = map.points.iter().find(|p| p.name.eq_ignore_ascii_case(name)) else {
+        // A program's own port is a signal, but not one to set.
+        return Outcome::Reply(
+            if view.signals.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
+                not_sim_input()
+            } else {
+                Response::error(404, "no such signal on this node")
+            },
+        );
+    };
+    if !point.is_sim() || point.dir != Dir::In {
+        return Outcome::Reply(not_sim_input());
+    }
+    let value = match sim_value(&req.body, point.ty) {
+        Ok(v) => v,
+        Err(why) => return Outcome::Reply(Response::error(400, why)),
+    };
+    Outcome::Effect(Effect::SetSim {
+        point: point.clone(),
+        value,
+    })
+}
+
+fn not_sim_input() -> Response {
+    Response::error(409, "only a sim input can be set")
+}
+
+/// The `value` of a body `{"value": ...}` as a point of kind `ty` holds it:
+/// a bool for a bool, an integer that fits an `i32` for an int, a number
+/// that is finite as an `f32` for a real.
+fn sim_value(body: &[u8], ty: Ty) -> Result<SignalValue, &'static str> {
+    let Ok(serde_json::Value::Object(mut obj)) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Err("want {\"value\": ...}");
+    };
+    if obj.len() != 1 {
+        return Err("want {\"value\": ...} and nothing else");
+    }
+    let Some(v) = obj.remove("value") else {
+        return Err("want {\"value\": ...}");
+    };
+    match (ty, v) {
+        (Ty::Bool, serde_json::Value::Bool(b)) => Ok(SignalValue::Bool(b)),
+        (Ty::Bool, _) => Err("this point is bool: value is true or false"),
+        (Ty::Int, serde_json::Value::Number(n)) => n
+            .as_i64()
+            .filter(|i| i32::try_from(*i).is_ok())
+            .map(SignalValue::Int)
+            .ok_or("this point is int: value is an integer from -2147483648 to 2147483647"),
+        (Ty::Int, _) => Err("this point is int: value is an integer"),
+        (Ty::Real, serde_json::Value::Number(n)) => n
+            .as_f64()
+            .map(|x| {
+                #[allow(clippy::cast_possible_truncation)] // held as f32, as every real on a node is
+                let held = x as f32;
+                held
+            })
+            .filter(|x| x.is_finite())
+            .map(|x| SignalValue::Real(f64::from(x)))
+            .ok_or("this point is real: value is a finite number that fits 32 bits"),
+        (Ty::Real, _) => Err("this point is real: value is a number"),
+    }
+}
+
+/// The reply to an [`Effect::SetSim`] the firmware has stored.
+#[must_use]
+pub fn sim_set(name: &str, value: SignalValue) -> Response {
+    let v = match value {
+        SignalValue::Bool(b) => json!(b),
+        SignalValue::Int(i) => json!(i),
+        SignalValue::Real(x) => json!(x),
+    };
+    Response::json(200, &json!({ "name": name, "value": v }))
 }
 
 /// `POST /settings`: the page's form.
@@ -674,7 +763,7 @@ mod tests {
         assert_eq!(r.status, 204);
     }
 
-    const CHECKED: &str = "device rio modbus-tcp 192.168.3.60\ndevice sim modbus-tcp 192.168.3.10:1502\nin estop bool rio di:0\n";
+    const CHECKED: &str = "device rio modbus-tcp 192.168.3.60\ndevice bench modbus-tcp 192.168.3.10:1502\nin estop bool rio di:0\n";
 
     /// A view of a board that checks, with the check of [`CHECKED`] in
     /// the state `verdicts` leave it (`None`: still running).
@@ -754,7 +843,10 @@ mod tests {
             10,
         );
         let j = refused(&silent, CHECKED);
-        assert!(j["error"].as_str().unwrap().contains("sim did not answer"), "{j}");
+        assert!(
+            j["error"].as_str().unwrap().contains("bench did not answer"),
+            "{j}"
+        );
         assert_eq!(j["check"]["devices"][1]["error"], "link: connect timed out");
         // Passed: this text, and only this text, while it is fresh.
         let passed = checking(Some(&[ok.clone(), ok.clone()]), 5, 10);
@@ -863,11 +955,11 @@ mod tests {
             page.contains("&lt;b&gt;refused&lt;/b&gt;"),
             "a device's words are escaped"
         );
-        assert!(page.contains("sim did not answer"));
+        assert!(page.contains("bench did not answer"));
         assert!(page.contains(">Check the devices</button>"));
         assert!(!page.contains("http-equiv=\"refresh\""));
         // The form holds the checked text, not the running map.
-        assert!(page.contains("device sim modbus-tcp 192.168.3.10:1502"));
+        assert!(page.contains("device bench modbus-tcp 192.168.3.10:1502"));
         let running = String::from_utf8(
             reply(handle(
                 &req("GET /settings HTTP/1.1\r\n\r\n"),
@@ -1093,6 +1185,208 @@ mod tests {
         let mut none = s.clone();
         none.token.clear();
         assert_eq!(reply(handle(&ok, &v, &none)).status, 403);
+    }
+
+    const SIM_MAP: &str = "device rio modbus-tcp 192.168.3.60\nin estop bool rio di:0\nout motor bool rio coil:0\nin go bool sim\nin speed int sim\nin level real sim\nout lamp bool sim\n";
+
+    fn sim_view() -> NodeView {
+        let mut v = sample_view();
+        v.io_map = SIM_MAP.into();
+        v
+    }
+
+    fn put_sim(name: &str, auth: &str, body: &str) -> Request {
+        req(&format!(
+            "PUT /api/signals/{name} HTTP/1.1\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+    }
+
+    const TOK: &str = "Authorization: Bearer tok\r\n";
+
+    fn sim_status(name: &str, auth: &str, body: &str) -> u16 {
+        reply(handle(&put_sim(name, auth, body), &sim_view(), &settings())).status
+    }
+
+    fn sim_effect(name: &str, body: &str) -> (String, SignalValue) {
+        match handle(&put_sim(name, TOK, body), &sim_view(), &settings()) {
+            Outcome::Effect(Effect::SetSim { point, value }) => (point.name, value),
+            other => panic!("{name} {body}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_sim_input_is_set_with_the_token() {
+        assert_eq!(
+            sim_effect("go", r#"{"value": true}"#),
+            ("go".into(), SignalValue::Bool(true))
+        );
+        assert_eq!(sim_effect("go", r#"{"value":false}"#).1, SignalValue::Bool(false));
+        assert_eq!(sim_effect("speed", r#"{"value": 12}"#).1, SignalValue::Int(12));
+        assert_eq!(
+            sim_effect("speed", r#"{"value": -2147483648}"#).1,
+            SignalValue::Int(i64::from(i32::MIN))
+        );
+        assert_eq!(
+            sim_effect("speed", r#"{"value": 2147483647}"#).1,
+            SignalValue::Int(i64::from(i32::MAX))
+        );
+        assert_eq!(sim_effect("level", r#"{"value": 3.5}"#).1, SignalValue::Real(3.5));
+        assert_eq!(sim_effect("level", r#"{"value": 3}"#).1, SignalValue::Real(3.0));
+        // Names are ST names: any case finds the point, and the point's own spelling is kept.
+        assert_eq!(sim_effect("GO", r#"{"value": true}"#).0, "go");
+        // The point holds an f32; the value the reply and the list show is that one.
+        assert_eq!(
+            sim_effect("level", r#"{"value": 0.1}"#).1,
+            SignalValue::Real(f64::from(0.1f32))
+        );
+        let r = sim_set("level", SignalValue::Real(3.5));
+        assert_eq!(r.status, 200);
+        let j: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!(j, json!({"name": "level", "value": 3.5}));
+    }
+
+    #[test]
+    fn a_sim_write_without_the_right_token_changes_nothing() {
+        assert_eq!(sim_status("go", "", r#"{"value": true}"#), 401);
+        assert_eq!(
+            sim_status("go", "Authorization: Bearer nope\r\n", r#"{"value": true}"#),
+            401
+        );
+        assert_eq!(
+            sim_status("go", "Authorization: Bearer toK\r\n", r#"{"value": true}"#),
+            401
+        );
+        // The token comes before the name: an unknown name does not tell a stranger anything.
+        assert_eq!(sim_status("nothing", "", r#"{"value": true}"#), 401);
+        let mut none = settings();
+        none.token.clear();
+        assert_eq!(
+            reply(handle(
+                &put_sim("go", TOK, r#"{"value": true}"#),
+                &sim_view(),
+                &none
+            ))
+            .status,
+            403
+        );
+    }
+
+    #[test]
+    fn only_a_sim_input_can_be_set() {
+        assert_eq!(sim_status("nothing", TOK, r#"{"value": true}"#), 404);
+        // A device input, a device output, a sim output: 409 and the box's words.
+        for name in ["estop", "motor", "lamp"] {
+            let r = reply(handle(
+                &put_sim(name, TOK, r#"{"value": true}"#),
+                &sim_view(),
+                &settings(),
+            ));
+            assert_eq!(r.status, 409, "{name}");
+            let j: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+            assert_eq!(j["error"], "only a sim input can be set");
+        }
+        // A program's own port is a signal, and not one to set.
+        let mut v = sim_view();
+        v.signals.push(crate::api::SignalView {
+            name: "counter".into(),
+            dir: "out",
+            value: Some(SignalValue::Int(1)),
+            quality: "good",
+            point_error: None,
+            sim: false,
+        });
+        let r = reply(handle(
+            &put_sim("counter", TOK, r#"{"value": 1}"#),
+            &v,
+            &settings(),
+        ));
+        assert_eq!(r.status, 409);
+        // The kind is checked after the name: a bad body on a device input is still a 409.
+        assert_eq!(sim_status("estop", TOK, "junk"), 409);
+        // Other methods and a name with a path under it are not routes.
+        let get = req("GET /api/signals/go HTTP/1.1\r\n\r\n");
+        assert_eq!(reply(handle(&get, &sim_view(), &settings())).status, 404);
+        let post = req(&format!(
+            "POST /api/signals/go HTTP/1.1\r\n{TOK}Content-Length: 0\r\n\r\n"
+        ));
+        assert_eq!(reply(handle(&post, &sim_view(), &settings())).status, 405);
+    }
+
+    #[test]
+    fn a_sim_value_of_the_wrong_kind_or_shape_is_refused() {
+        let refused = [
+            ("go", r#"{"value": 1}"#),
+            ("go", r#"{"value": "true"}"#),
+            ("go", r#"{"value": null}"#),
+            ("speed", r#"{"value": true}"#),
+            ("speed", r#"{"value": 1.5}"#),
+            ("speed", r#"{"value": 2.0}"#),
+            ("speed", r#"{"value": "12"}"#),
+            ("speed", r#"{"value": 2147483648}"#),
+            ("speed", r#"{"value": -2147483649}"#),
+            ("speed", r#"{"value": 18446744073709551615}"#),
+            ("speed", r#"{"value": 1e3}"#),
+            ("level", r#"{"value": true}"#),
+            ("level", r#"{"value": "NaN"}"#),
+            ("level", r#"{"value": "inf"}"#),
+            ("level", r#"{"value": null}"#),
+            // NaN and infinity are not JSON; a number too big for 32 bits is not finite there.
+            ("level", r#"{"value": NaN}"#),
+            ("level", r#"{"value": Infinity}"#),
+            ("level", r#"{"value": 1e999}"#),
+            ("level", r#"{"value": 1e39}"#),
+            ("level", r#"{"value": -1e39}"#),
+            // Not {"value": ...}, or more than it.
+            ("go", r#"{"value": true, "extra": 1}"#),
+            ("go", r#"{"value": true, "value": false, "x": 1}"#),
+            ("go", r#"{"val": true}"#),
+            ("go", r"{}"),
+            ("go", r"true"),
+            ("go", r"[true]"),
+            ("go", r#"{"value": true"#),
+            ("go", "value=true"),
+            ("go", ""),
+            ("go", "\u{0}"),
+        ];
+        for (name, body) in refused {
+            assert_eq!(sim_status(name, TOK, body), 400, "{name} {body:?}");
+        }
+        // The edges that are in.
+        assert_eq!(
+            sim_effect("level", r#"{"value": 3.4028234e38}"#).1,
+            SignalValue::Real(f64::from(f32::MAX))
+        );
+        assert_eq!(sim_effect("speed", r#"{"value": 0}"#).1, SignalValue::Int(0));
+    }
+
+    #[test]
+    fn the_signals_list_says_which_points_are_sim() {
+        let mut v = sample_view();
+        v.signals[1].sim = true;
+        let j = api::signals(&v);
+        assert_eq!(j[0]["sim"], false);
+        assert_eq!(j[1]["sim"], true);
+        // Nothing else in an entry changed.
+        assert_eq!(j[0]["name"], "di0");
+        assert_eq!(j[0]["forced"], false);
+    }
+
+    #[test]
+    fn a_map_of_sim_points_alone_is_saved_through_the_check() {
+        let map = "in go bool sim\nout lamp bool sim\n";
+        let s = settings();
+        let mut v = sample_view();
+        v.check = Some(crate::check::Check::begin(&crate::iomap::parse(map).unwrap()));
+        v.check.as_mut().unwrap().finish(5);
+        v.uptime_ms = 10;
+        assert_eq!(
+            handle(&put_map(TOK, map), &v, &s),
+            Outcome::Effect(Effect::SaveIoMap {
+                text: map.into(),
+                page: false
+            })
+        );
     }
 
     #[test]

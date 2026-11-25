@@ -16,7 +16,7 @@ use crate::node_map::{DeviceCheck, NodeMapUi, NodeOp, Report, Stage, Verdict};
 
 pub(crate) const TOKEN: &str = "bench-token-2026";
 const MAP: &str =
-    "device rio modbus-tcp 192.168.3.60\ndevice sim modbus-tcp 192.168.3.10:1502\nin estop bool rio di:0\n";
+    "device rio modbus-tcp 192.168.3.60\ndevice bench modbus-tcp 192.168.3.10:1502\nin estop bool rio di:0\n";
 
 /// A Skipper: the real router over a node's view, and what the firmware
 /// does with the router's effects (the P4's check task, its save).
@@ -183,7 +183,7 @@ fn a_checks_every_state_is_read_from_the_skipper_itself() {
             .iter()
             .map(|d| (&*d.name, &d.verdict))
             .collect::<Vec<_>>(),
-        [("rio", &Verdict::Waiting), ("sim", &Verdict::Waiting)]
+        [("rio", &Verdict::Waiting), ("bench", &Verdict::Waiting)]
     );
     assert_eq!(r.devices[0].address, "192.168.3.60:502");
     // One answered, one did not.
@@ -388,7 +388,7 @@ fn a_download_the_skipper_refuses_shows_its_reason_and_its_devices() {
     assert_ne!(sk.view.io_map, MAP, "refused: nothing was saved");
     let note = ui.note_text().unwrap();
     assert!(
-        note.contains("sim did not answer this node"),
+        note.contains("bench did not answer this node"),
         "the Skipper's own reason: {note}"
     );
     let r = ui.report().unwrap();
