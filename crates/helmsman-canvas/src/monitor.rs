@@ -756,7 +756,6 @@ impl Monitor {
                 // After the toggle, so a tap shows on the same frame.
                 let mut groups = self.groups(feed, now, engineer && chrome.scan);
                 if let Some(rows) = feed.signals() {
-                    self.signals_ui(ui, chrome, rows, map);
                     if let Some(g) = self.watched_group(rows, trouble.as_deref()) {
                         groups.insert(0, g);
                     }
@@ -787,6 +786,11 @@ impl Monitor {
                                     .size(18.0 * k)
                                     .color(t.muted),
                             );
+                        }
+                        // After the tiles, so the picker never pushes a
+                        // program's tiles off a wall display.
+                        if let Some(rows) = feed.signals() {
+                            self.signals_ui(ui, chrome, rows, map);
                         }
                     });
             });
