@@ -3463,7 +3463,13 @@ mod chrome {
     fn advanced_hides_the_typed_form_and_is_remembered_and_use_this_device_still_works() {
         use crate::editor::Chrome;
         let mut h = Harness::new(App::sim());
-        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        {
+            // A program with an output to wire (a new project starts empty).
+            let p = &mut h.app.sim.as_mut().unwrap().proj;
+            p.create("mine", None);
+            p.files.insert("main.st".into(), crate::verify_tests::LAMP.into());
+            p.save();
+        }
         h.press("pane devices");
         h.wait(0.3);
         // Off: the blank space's menu offers nothing to type.
@@ -5286,6 +5292,11 @@ mod simulated {
         {
             let sim = h.app.sim.as_mut().unwrap();
             sim.proj.create("mine", None);
+            // Lines to select (a new project starts empty).
+            sim.proj
+                .files
+                .insert("main.st".into(), crate::verify_tests::LAMP.into());
+            sim.proj.save();
             sim.open_project("mine");
         }
         h.wait(0.3);
