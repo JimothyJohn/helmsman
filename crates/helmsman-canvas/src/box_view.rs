@@ -740,8 +740,19 @@ impl BoxView {
             .err()
             .map(|d| d.iter().map(ToString::to_string).collect())
             .unwrap_or_default();
-        // The box's agent reads the devices with its own tools.
-        let devices = String::new();
+        // The box's agent reads the devices with its own tools. A
+        // Skipper's I/O list is not among them, and its program's ports
+        // bind to that list by name: it goes with the request, and an
+        // answer off it goes back to the Agent (Nick, 2026-11-24).
+        // Until the page has read the Skipper's list there is none to
+        // check by (an empty one would turn every port away).
+        let node = self.projects.node_map.clone().filter(|_| self.watches_node);
+        let devices = node.as_deref().map_or_else(String::new, |n| {
+            format!(
+                "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name; any other variable goes under VAR.\n{}",
+                crate::verify::io_list(&files, n).trim()
+            )
+        });
         let env = crate::instruct::Env {
             project: &project,
             scope: scope.unwrap_or(open_scope),
@@ -749,6 +760,7 @@ impl BoxView {
             source: &plan.main,
             diagnostics: &diags,
             devices: &devices,
+            io_list: node.as_deref(),
             settings,
         };
         Some(f(&mut self.instruct, &env))

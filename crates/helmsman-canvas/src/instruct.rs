@@ -105,6 +105,12 @@ pub struct Env<'a> {
     pub diagnostics: &'a [String],
     /// The I/O map's devices, as the Devices tab lists them.
     pub devices: &'a str,
+    /// The I/O list a deploy binds the program's ports to, by name, when
+    /// it goes to a Skipper (its `in`/`out` lines): an answer whose
+    /// `VAR_INPUT` or `VAR_OUTPUT` is not on it goes back to the Agent
+    /// (Nick, 2026-11-24, at "start, stop, running are not in the I/O
+    /// list"). `None` on a box, where a port may be any module's signal.
+    pub io_list: Option<&'a str>,
     /// How the requirement tests and the scenarios run.
     pub settings: Settings,
 }
@@ -1024,7 +1030,14 @@ impl Instruct {
         let raw = answer;
         let (answer, check) = match crate::edits::expand(&run.scope, env.files, raw) {
             Ok(whole) => {
-                let check = verify::check(&run.scope, env.files, &whole, env.settings);
+                let mut check = verify::check(&run.scope, env.files, &whole, env.settings);
+                // Only once it builds: a compile error is said first.
+                if check.failures.is_empty()
+                    && let Some(node) = env.io_list
+                    && let Some(why) = verify::off_the_list(&run.scope, env.files, &whole, node, env.settings)
+                {
+                    check.failures.push(why);
+                }
                 (whole, check)
             }
             Err(why) => (
