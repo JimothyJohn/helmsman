@@ -1266,7 +1266,7 @@ fn share_token(ty: Ty, token: &str, n: usize) -> Result<(Table, u16, Option<Fmt>
 
 /// One `share` line, checked against the lines before it.
 fn share_line(t: &[&str], n: usize, taken: &Taken) -> Result<Share, Bad> {
-    let [_, name, type_word, token] = t else {
+    let [_, name, type_word, address_word] = t else {
         return Err(bad(n, "want share NAME bool|int|real TABLE:ADDR[:FMT]"));
     };
     let ty = match *type_word {
@@ -1307,7 +1307,7 @@ fn share_line(t: &[&str], n: usize, taken: &Taken) -> Result<Share, Bad> {
             alloc::format!("{name}: a node shares at most {MAX_SHARES} values"),
         ));
     }
-    let (table, addr, fmt, swapped) = share_token(ty, token, n)?;
+    let (table, addr, fmt, swapped) = share_token(ty, address_word, n)?;
     let words = fmt.map_or(1, |f| u32::from(f.width() / 2));
     if let Some(other) = taken.shares.iter().find(|o| {
         o.table == table
@@ -1317,7 +1317,7 @@ fn share_line(t: &[&str], n: usize, taken: &Taken) -> Result<Share, Bad> {
         return Err(bad(
             n,
             alloc::format!(
-                "{name}: {token} is already shared (it overlaps {} at {})",
+                "{name}: {address_word} is already shared (it overlaps {} at {})",
                 other.name,
                 other.token()
             ),

@@ -302,18 +302,18 @@ fn read_bits(shares: &[Share], bank: &ShareBank, table: Table, start: u16, qty: 
 
 /// A share's registers as they go on the wire: one, or two with the high
 /// word first unless the format is `sw`.
-fn wire_words(s: &Share, image: &[u8]) -> [u16; 2] {
-    let from = usize::from(s.at.byte);
-    let raw = image.get(from..from + usize::from(s.at.bytes)).unwrap_or(&[]);
+fn wire_words(share: &Share, image: &[u8]) -> [u16; 2] {
+    let from = usize::from(share.at.byte);
+    let raw = image.get(from..from + usize::from(share.at.bytes)).unwrap_or(&[]);
     match *raw {
-        [a, b] => [u16::from_le_bytes([a, b]), 0],
-        [a, b, c, d] => {
-            let v = u32::from_le_bytes([a, b, c, d]);
+        [lo, hi] => [u16::from_le_bytes([lo, hi]), 0],
+        [b0, b1, b2, b3] => {
+            let v = u32::from_le_bytes([b0, b1, b2, b3]);
             let (hi, lo) = (
                 u16::try_from(v >> 16).unwrap_or(0),
                 u16::try_from(v & 0xFFFF).unwrap_or(0),
             );
-            if s.swapped { [lo, hi] } else { [hi, lo] }
+            if share.swapped { [lo, hi] } else { [hi, lo] }
         }
         _ => [0, 0],
     }

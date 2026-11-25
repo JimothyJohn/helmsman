@@ -511,7 +511,18 @@ fn a_share_value_goes_through_the_bank_like_a_point_through_the_image() {
         assert_eq!(value_slot(&bank, s.fmt, s.at), Some(v), "{}", s.name);
     }
     // A write clamps to the format, as a point's does, and touches no neighbour.
-    put_slot(&mut bank, m.shares[0].fmt, m.shares[0].at, SignalValue::Int(1 << 20));
-    assert_eq!(value_slot(&bank, m.shares[0].fmt, m.shares[0].at), Some(SignalValue::Int(32767)));
-    assert_eq!(value_slot(&bank, m.shares[1].fmt, m.shares[1].at), Some(SignalValue::Int(4_000_000_000)));
+    put_slot(
+        &mut bank,
+        m.shares[0].fmt,
+        m.shares[0].at,
+        SignalValue::Int(1 << 20),
+    );
+    assert_eq!(
+        value_slot(&bank, m.shares[0].fmt, m.shares[0].at),
+        Some(SignalValue::Int(32767))
+    );
+    assert_eq!(
+        value_slot(&bank, m.shares[1].fmt, m.shares[1].at),
+        Some(SignalValue::Int(4_000_000_000))
+    );
 }

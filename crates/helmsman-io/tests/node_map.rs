@@ -303,13 +303,20 @@ fn a_skipper_answers_the_boxs_modbus_client() {
         writable: (1 << 1) | (1 << 4),
         ..ShareBank::default()
     };
-    for (i, v) in [(0, SignalValue::Int(-123_456)), (2, SignalValue::Bool(true)), (3, SignalValue::Real(-2.5))] {
+    for (i, v) in [
+        (0, SignalValue::Int(-123_456)),
+        (2, SignalValue::Bool(true)),
+        (3, SignalValue::Real(-2.5)),
+    ] {
         put_slot(&mut bank.image, m.shares[i].fmt, m.shares[i].at, v);
     }
     // The box reads a 32-bit register pair the way it reads any Modbus device.
     let r = ask_skipper(&mut bank, &m, &pdu::read(0x03, 0, 2).unwrap()).unwrap();
     let regs = reply::registers(0x03, 2, &r).unwrap();
-    assert_eq!(((u32::from(regs[0]) << 16) | u32::from(regs[1])).cast_signed(), -123_456);
+    assert_eq!(
+        ((u32::from(regs[0]) << 16) | u32::from(regs[1])).cast_signed(),
+        -123_456
+    );
     let r = ask_skipper(&mut bank, &m, &pdu::read(0x04, 4, 2).unwrap()).unwrap();
     let regs = reply::registers(0x04, 2, &r).unwrap();
     let bits = (u32::from(regs[1]) << 16) | u32::from(regs[0]); // f32sw: low word first

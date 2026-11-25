@@ -89,6 +89,24 @@ pub struct Share {
 /// The formats a share's register may have, as a modbus-tcp point's do.
 const SHARE_FMTS: [&str; 8] = ["u16", "i16", "u32", "u32sw", "i32", "i32sw", "f32", "f32sw"];
 
+/// `share NAME TYPE TABLE:ADDR[:FMT]`, kept as written.
+fn share_line(name: &str, t: &str, address: &str, out: &mut MapFile) -> Result<(), String> {
+    if !is_ident(name) {
+        return Err(format!("share name {name:?}: an identifier"));
+    }
+    let ty = ty(t).ok_or_else(|| format!("type {t:?}: bool, int or real"))?;
+    share_address_ok(ty, address)?;
+    if out.shares.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
+        return Err(format!("{name}: shared twice"));
+    }
+    out.shares.push(Share {
+        name: name.into(),
+        ty,
+        address: address.into(),
+    });
+    Ok(())
+}
+
 /// A share's `TABLE:ADDR[:FMT]` for its type: `di` or `coil` for a bool,
 /// `ir` or `hr` for an int or a real; an address 0 to 65535; a format only
 /// on a register, `f32` or `f32sw` exactly when the type is real.
@@ -97,7 +115,11 @@ fn share_address_ok(ty: Ty, address: &str) -> Result<(), String> {
     let table = parts.next().unwrap_or_default();
     let addr = parts.next().unwrap_or_default();
     let fmt = parts.next();
-    let want: &[&str] = if ty == Ty::Bool { &["di", "coil"] } else { &["ir", "hr"] };
+    let want: &[&str] = if ty == Ty::Bool {
+        &["di", "coil"]
+    } else {
+        &["ir", "hr"]
+    };
     if !want.contains(&table) {
         return Err(format!(
             "share {address:?}: a {} goes in {}",
@@ -105,18 +127,22 @@ fn share_address_ok(ty: Ty, address: &str) -> Result<(), String> {
             want.join(" or ")
         ));
     }
-    if addr.is_empty() || addr.len() > 5 || !addr.bytes().all(|b| b.is_ascii_digit()) || addr.parse::<u16>().is_err() {
+    if addr.is_empty()
+        || addr.len() > 5
+        || !addr.bytes().all(|b| b.is_ascii_digit())
+        || addr.parse::<u16>().is_err()
+    {
         return Err(format!("share {address:?}: ADDR is a number, 0 to 65535"));
     }
     if parts.next().is_some() {
         return Err(format!("share {address:?}: too many fields"));
     }
     match (ty, fmt) {
-        (Ty::Bool, None) => Ok(()),
-        (Ty::Bool, Some(_)) => Err(format!("share {address:?}: a coil or discrete input takes no format")),
-        (Ty::Real, Some("f32" | "f32sw")) => Ok(()),
+        (Ty::Bool | Ty::Int, None) | (Ty::Real, Some("f32" | "f32sw")) => Ok(()),
+        (Ty::Bool, Some(_)) => Err(format!(
+            "share {address:?}: a coil or discrete input takes no format"
+        )),
         (Ty::Real, _) => Err(format!("share {address:?}: a real is f32 or f32sw")),
-        (Ty::Int, None) => Ok(()),
         (Ty::Int, Some(f)) if SHARE_FMTS.contains(&f) && !f.starts_with("f32") => Ok(()),
         (Ty::Int, Some(_)) => Err(format!(
             "share {address:?}: an int's format is one of u16 i16 u32 u32sw i32 i32sw"
@@ -238,22 +264,7 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
             });
             Ok(())
         }
-        ["share", name, t, address] => {
-            if !is_ident(name) {
-                return Err(format!("share name {name:?}: an identifier"));
-            }
-            let ty = ty(t).ok_or_else(|| format!("type {t:?}: bool, int or real"))?;
-            share_address_ok(ty, address)?;
-            if out.shares.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
-                return Err(format!("{name}: shared twice"));
-            }
-            out.shares.push(Share {
-                name: (*name).into(),
-                ty,
-                address: (*address).into(),
-            });
-            Ok(())
-        }
+        ["share", name, t, address] => share_line(name, t, address, out),
         [dir @ ("in" | "out"), name, t, SIM, rest @ ..] => sim_point(dir, name, t, rest, out),
         [dir @ ("in" | "out"), name, t, device, point, rest @ ..] => {
             let dir = if *dir == "in" { Dir::In } else { Dir::Out };

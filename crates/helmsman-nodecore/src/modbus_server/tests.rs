@@ -1,3 +1,5 @@
+#![allow(clippy::format_push_string)] // tests build map text a line at a time
+
 use super::*;
 use crate::api::SignalValue;
 use crate::iomap::{self, IoMap};
@@ -28,7 +30,7 @@ fn map() -> IoMap {
     iomap::parse(MAP).unwrap()
 }
 
-/// A bank where `run_cmd`, `pos` and `target` are VAR_INPUTs (writable)
+/// A bank where `run_cmd`, `pos` and `target` are `VAR_INPUT`s (writable)
 /// and the rest are the program's own.
 fn bank(m: &IoMap) -> ShareBank {
     let mut b = ShareBank {
