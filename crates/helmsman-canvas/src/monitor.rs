@@ -755,10 +755,10 @@ impl Monitor {
                 self.top(ui, k, trouble.as_deref(), chrome, engineer, transport);
                 // After the toggle, so a tap shows on the same frame.
                 let mut groups = self.groups(feed, now, engineer && chrome.scan);
-                if let Some(rows) = feed.signals() {
-                    if let Some(g) = self.watched_group(rows, trouble.as_deref()) {
-                        groups.insert(0, g);
-                    }
+                if let Some(rows) = feed.signals()
+                    && let Some(g) = self.watched_group(rows, trouble.as_deref())
+                {
+                    groups.insert(0, g);
                 }
                 ui.add_space(10.0 * k);
                 egui::ScrollArea::vertical()
