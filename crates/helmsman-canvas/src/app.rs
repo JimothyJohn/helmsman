@@ -737,7 +737,9 @@ impl App {
                     },
                     on_box: true,
                 });
-                self.monitor.show(ui, &b.state, &mut self.chrome, engineer, t);
+                let map = b.map_text().0;
+                self.monitor
+                    .show(ui, &b.state, &mut self.chrome, engineer, t, &map);
             }
             (Screen::Monitor, Source::Sim) => {
                 let s = self.sim.get_or_insert_with(PlaygroundView::new);
@@ -747,7 +749,8 @@ impl App {
                     state: s.session.state(),
                     on_box: false,
                 };
-                self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));
+                self.monitor
+                    .show(ui, &*s, &mut self.chrome, engineer, Some(t), "");
             }
         }
         match self.monitor.wish.take() {

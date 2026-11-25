@@ -134,6 +134,7 @@ mod review_view;
 mod scope;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod scope_tests;
+mod signal_picker;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_plant_tests;
 mod sim_popup;
