@@ -29,7 +29,10 @@ fn open(text: &str, query: &str, with: &str) -> Harness {
     let at = text_at(&h, "⇄").expect("the replace toggle is drawn");
     h.click(at);
     h.wait(0.2);
-    assert!(h.app.chrome.find.as_ref().unwrap().replace.is_some(), "the replace row opens");
+    assert!(
+        h.app.chrome.find.as_ref().unwrap().replace.is_some(),
+        "the replace row opens"
+    );
     let id = h.editor_id().with("replace");
     h.ctx.memory_mut(|m| m.request_focus(id));
     h.frame(vec![]);
@@ -45,9 +48,7 @@ fn text_at(h: &Harness, s: &str) -> Option<Pos2> {
     fn walk(shape: &egui::Shape, s: &str) -> Option<Pos2> {
         match shape {
             egui::Shape::Vec(v) => v.iter().find_map(|x| walk(x, s)),
-            egui::Shape::Text(t) if t.galley.job.text == s => {
-                Some(t.pos + t.galley.rect.center().to_vec2())
-            }
+            egui::Shape::Text(t) if t.galley.job.text == s => Some(t.pos + t.galley.rect.center().to_vec2()),
             _ => None,
         }
     }
@@ -74,7 +75,11 @@ fn counter(h: &Harness) -> String {
             }
         }
     }
-    if h.drew("no match") { "no match".into() } else { String::new() }
+    if h.drew("no match") {
+        "no match".into()
+    } else {
+        String::new()
+    }
 }
 
 /// Runs Replace until the query matches nothing (or `cap`), returning

@@ -63,8 +63,16 @@ fn the_continuation_is_two_columns_in_from_the_lines_own_indent() {
     let (g4, _, _) = laid(&format!("    {LONG}"), wrap);
     let d0 = row_x(&g0, 1) - row_x(&g0, 0);
     let d4 = row_x(&g4, 1) - row_x(&g4, 0);
-    assert!((d0 - 2.0 * digit).abs() < 1.0, "unindented: {d0} vs {}", 2.0 * digit);
-    assert!((d4 - 6.0 * digit).abs() < 1.0, "four spaces in: {d4} vs {}", 6.0 * digit);
+    assert!(
+        (d0 - 2.0 * digit).abs() < 1.0,
+        "unindented: {d0} vs {}",
+        2.0 * digit
+    );
+    assert!(
+        (d4 - 6.0 * digit).abs() < 1.0,
+        "four spaces in: {d4} vs {}",
+        6.0 * digit
+    );
     assert!(d4 > d0);
 }
 
@@ -118,7 +126,9 @@ fn a_long_line_in_the_code_tab_lays_out_at_the_default_width() {
     {
         let v = h.app.sim.as_mut().unwrap();
         v.proj.create("mine", None);
-        v.proj.files.insert("main.st".into(), format!("PROGRAM main\n  {LONG}\nEND_PROGRAM\n"));
+        v.proj
+            .files
+            .insert("main.st".into(), format!("PROGRAM main\n  {LONG}\nEND_PROGRAM\n"));
         v.proj.save_as("long", None);
         v.open_project("mine");
     }
@@ -127,6 +137,10 @@ fn a_long_line_in_the_code_tab_lays_out_at_the_default_width() {
     let left = h.rect("left");
     let ed = h.rect("st editor");
     assert!(ed.right() <= left.right() + 1.0, "the editor stays in the pane");
-    assert!(left.width() < crate::editor::LEFT_W + 60.0, "the pane did not widen: {}", left.width());
+    assert!(
+        left.width() < crate::editor::LEFT_W + 60.0,
+        "the pane did not widen: {}",
+        left.width()
+    );
     assert!(h.drew("end_program") || h.drew("END_PROGRAM"));
 }
