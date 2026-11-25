@@ -5270,3 +5270,68 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
     assert!(!h.bv().agent_pending);
     assert!(h.app.chrome.rect("agent deploy pending").is_none());
 }
+
+/// Nick 2026-11-24: File › New project makes the project with a program
+/// in it, `main.st` holding the starter, saved on the box and open, so the
+/// Agent has a program to work on at once. A name already taken makes
+/// nothing and writes nothing into the project of that name.
+#[test]
+fn file_new_project_opens_a_saved_starter_program() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", MAIN)]);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    let new_project = |h: &mut Harness, name: &str| {
+        h.press("bar file");
+        h.press("file new");
+        h.wait(0.2);
+        assert!(h.app.chrome.rect("name").is_some(), "the name is asked for");
+        h.bv().files_ui.input = name.to_string();
+        h.press("name ok");
+        // Each answer can queue the next request (create, starter, open).
+        for _ in 0..10 {
+            let reqs = h.sent();
+            if reqs.is_empty() {
+                break;
+            }
+            deliver(&b, &jar, &mut h.bv().projects, reqs);
+            h.wait(0.1);
+        }
+    };
+
+    new_project(&mut h, "fresh");
+    let p = &h.bv().projects;
+    let o = p.open.as_ref().expect("the new project is open");
+    assert_eq!(o.name, "fresh", "{:?}", p.notice);
+    assert_eq!(o.current.as_deref(), Some("main.st"), "{:?}", o.bufs.keys());
+    assert_eq!(text_of(p, "main.st"), crate::sim_projects::STARTER);
+    assert!(!p.dirty(), "saved, not a draft: {:?}", p.notice);
+    assert_eq!(
+        b.json("/api/projects/fresh/files/main.st")["text"],
+        crate::sim_projects::STARTER
+    );
+    let listed: Vec<String> = b.json("/api/projects/fresh")["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(listed, ["main.st"]);
+    assert!(
+        p.notice.as_ref().is_some_and(|(n, err)| !*err && n == "Made project fresh."),
+        "{:?}",
+        p.notice
+    );
+
+    // Taken: refused, and line's main.st is still its own.
+    new_project(&mut h, "line");
+    let p = &h.bv().projects;
+    assert!(
+        p.notice.as_ref().is_some_and(|(n, err)| *err && n.contains("was not made")),
+        "{:?}",
+        p.notice
+    );
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], MAIN);
+}

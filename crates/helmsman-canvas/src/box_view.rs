@@ -2567,7 +2567,7 @@ impl BoxView {
         match a {
             Act::OpenProject(p) => self.projects.open_project(&p),
             Act::OpenFile(f) => self.projects.open_file(&f),
-            Act::NewProject(p) => self.projects.create(&p, None),
+            Act::NewProject(p) => self.projects.create_started(&p),
             Act::CopyProject { from, to } => self.projects.create(&to, Some(&from)),
             Act::FromStarter { from, to } => self.projects.create_from(&to, &from),
             Act::RenameProject { from, to } => self.projects.rename(&from, &to),

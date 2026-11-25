@@ -40,7 +40,14 @@ pub enum PCall {
         project: String,
         file: String,
     },
-    Create(String),
+    /// A new project; `starter`: the starter program goes in before it
+    /// opens.
+    Create {
+        name: String,
+        starter: bool,
+    },
+    /// The starter `main.st` of a project just made.
+    Starter(String),
     Rename {
         from: String,
         to: String,
@@ -1241,13 +1248,28 @@ impl BoxProjects {
         }
     }
 
+    /// A new project `name`: empty, or (`from`) a copy of that project.
     pub fn create(&mut self, name: &str, from: Option<&str>) {
+        self.create_with(name, from, false);
+    }
+
+    /// File › New project: a new project holding the starter program in
+    /// `main.st`, opened on it, so the Agent has a program to work on at
+    /// once (Nick, 2026-11-24), as the playground's New project has.
+    pub fn create_started(&mut self, name: &str) {
+        self.create_with(name, None, true);
+    }
+
+    fn create_with(&mut self, name: &str, from: Option<&str>, starter: bool) {
         let body = match from {
             Some(f) => json!({ "name": name, "from": f }),
             None => json!({ "name": name }),
         };
         self.queue.push(PReq::json(
-            PCall::Create(name.into()),
+            PCall::Create {
+                name: name.into(),
+                starter,
+            },
             "POST",
             "/api/projects".into(),
             &body,
@@ -1949,14 +1971,34 @@ impl BoxProjects {
                     self.note(msg, false);
                 }
             }
-            PCall::Create(name) => {
-                if ok {
+            PCall::Create { name, starter } => {
+                if !ok {
+                    self.note(format!("{name} was not made: {}", error_of(a)), true);
+                } else if starter {
+                    // Opened once main.st is in, so it opens on it.
+                    self.queue.push(PReq::json(
+                        PCall::Starter(name.clone()),
+                        "PUT",
+                        file_url(&name, "main.st"),
+                        &json!({ "text": crate::sim_projects::STARTER, "version": null }),
+                    ));
+                } else {
                     self.note(format!("Made project {name}."), false);
                     self.open_keeping_edits(&name);
                     self.relist();
-                } else {
-                    self.note(format!("{name} was not made: {}", error_of(a)), true);
                 }
+            }
+            PCall::Starter(name) => {
+                if ok {
+                    self.note(format!("Made project {name}."), false);
+                } else {
+                    self.note(
+                        format!("Made project {name}, without main.st: {}", error_of(a)),
+                        true,
+                    );
+                }
+                self.open_keeping_edits(&name);
+                self.relist();
             }
             PCall::Rename { from, to } => {
                 if ok {
