@@ -9,9 +9,8 @@
 //! a sim input is set from the page). The page adds them to the project's
 //! `io.map` itself, after an Agent answer lands and again at Deploy, so a
 //! program never waits on a point an engineer has not wired yet. The map
-//! it adds to is the one the deploy sends: the project's `io.map` when it
-//! has a point, else the Skipper's list, copied in whole (a deploy sends
-//! the project's map in place of the Skipper's).
+//! it adds to is the one the deploy sends ([`crate::skipper_map`]: the
+//! Skipper's own list, the project's devices on top).
 
 use helmsman_iec::{PortDir, Ty};
 
@@ -108,16 +107,6 @@ pub fn add(program: &str, sizes: helmsman_iec::ImageSizes, list: &str) -> Option
     map.push('\n');
     added.map = map;
     Some(added)
-}
-
-/// The map a deploy to a Skipper sends: the project's `project` when it
-/// has a point, else the Skipper's `node` list.
-#[must_use]
-pub fn base<'a>(project: Option<&'a str>, node: &'a str) -> &'a str {
-    match project {
-        Some(m) if !points(m).is_empty() => m,
-        _ => node,
-    }
 }
 
 /// The words for what [`add`] did, for the Messages.

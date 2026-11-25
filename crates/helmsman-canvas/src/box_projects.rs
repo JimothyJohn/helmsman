@@ -448,6 +448,10 @@ pub struct BoxProjects {
     pub module: Option<ModuleEdit>,
     /// The watched Skipper's I/O list as the page last read it.
     pub node_map: Option<String>,
+    /// What the last scan found: an identity (`cip=...`) to the address
+    /// it answered at, so a device by identity can go to a Skipper (the
+    /// view fills it in each frame).
+    pub found_hosts: Vec<(String, String)>,
     map_send: Option<MapSend>,
     /// Page time as of the last [`Self::tick`].
     now: f64,
@@ -1577,10 +1581,17 @@ impl BoxProjects {
         }
         self.format();
         self.diags.clear();
-        // A port no point backs gets its placeholder before the save, so
-        // the check, the replay and the Skipper all see it.
+        // The map is made for the Skipper, and a port no point backs gets
+        // its placeholder, before the save, so the check, the replay and
+        // the Skipper all see it. One the Skipper cannot run stops here.
         let placed = if self.to_node {
-            self.add_placeholders()
+            match self.add_placeholders() {
+                Ok(words) => words,
+                Err(why) => {
+                    self.deploy = Deploy::Failed(why);
+                    return;
+                }
+            }
         } else {
             None
         };
@@ -1596,30 +1607,53 @@ impl BoxProjects {
         }
     }
 
-    /// On a Skipper: placeholder (`sim`) points for every port of the open
-    /// project's program that no point of the map the deploy sends backs
-    /// ([`crate::placeholders`]), written into the project's `io.map` as an
-    /// edit (made if the project has none, from the Skipper's list) that
-    /// the next save writes. `None` when nothing was needed, the Skipper's
-    /// list is not read yet, or the program does not build; else the words
-    /// for the Messages.
-    pub fn add_placeholders(&mut self) -> Option<String> {
-        let node = self.node_map.clone()?;
-        let o = self.open.as_mut()?;
+    /// On a Skipper: the project's `io.map` made into the map the Skipper
+    /// runs ([`crate::skipper_map`]: its own list kept, the project's
+    /// devices on top in its form), then a placeholder (`sim`) point for
+    /// every port of the open project's program that no point of it backs
+    /// ([`crate::placeholders`]). Written into the project's `io.map` as an
+    /// edit the next save writes, when the project has a map or needed a
+    /// placeholder. `Ok(None)` when nothing was said, the Skipper's list
+    /// is not read yet, or the program does not build; `Ok(words)` for the
+    /// Messages; `Err(words)` when part of the map cannot go to a Skipper.
+    pub fn add_placeholders(&mut self) -> Result<Option<String>, String> {
+        let Some(node) = self.node_map.clone() else {
+            return Ok(None);
+        };
+        let hosts = self.found_hosts.clone();
+        let Some(o) = self.open.as_mut() else {
+            return Ok(None);
+        };
+        // A map not read yet is not written over.
+        if o.bufs.get(helmsman_project::IO_MAP).is_some_and(|b| !b.loaded) {
+            return Ok(None);
+        }
         let program = node_source(o);
         let sizes = o.runs.map_or(crate::playground::SIZES, |r| r.sizes);
         let project = o
             .bufs
             .get(helmsman_project::IO_MAP)
-            .filter(|b| b.loaded)
-            .map(|b| b.text.clone());
-        // A map not read yet is not written over.
-        if o.bufs.get(helmsman_project::IO_MAP).is_some_and(|b| !b.loaded) {
-            return None;
+            .map(|b| b.text.clone())
+            .filter(|t| !t.trim().is_empty());
+        let made = crate::skipper_map::for_skipper(
+            project.as_deref(),
+            &node,
+            &|stem| {
+                o.bufs
+                    .get(&format!("{stem}{}", helmsman_project::DEVICE_EXT))
+                    .filter(|b| b.loaded)
+                    .map(|b| b.text.clone())
+            },
+            &|id| hosts.iter().find(|(i, _)| i == id).map(|(_, a)| a.clone()),
+        );
+        if !made.refused.is_empty() {
+            return Err(made.words().unwrap_or_default());
         }
-        let list = crate::placeholders::base(project.as_deref(), &node);
-        let added = crate::placeholders::add(&program, sizes, list)?;
-        if !added.lines.is_empty() {
+        let added = crate::placeholders::add(&program, sizes, &made.map);
+        let map = added.as_ref().map_or(made.map.as_str(), |a| a.map.as_str());
+        let write = added.as_ref().is_some_and(|a| !a.lines.is_empty())
+            || project.as_deref().is_some_and(|p| p.trim() != map.trim());
+        if write {
             let b = o
                 .bufs
                 .entry(helmsman_project::IO_MAP.to_string())
@@ -1627,9 +1661,13 @@ impl BoxProjects {
                     loaded: true,
                     ..Buf::default()
                 });
-            b.text.clone_from(&added.map);
+            b.text = map.to_string();
         }
-        crate::placeholders::said(&added)
+        let words: Vec<String> = [made.words(), added.as_ref().and_then(crate::placeholders::said)]
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok((!words.is_empty()).then(|| words.join(" ")))
     }
 
     fn check(&mut self) {

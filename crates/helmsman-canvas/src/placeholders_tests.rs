@@ -1,6 +1,6 @@
 //! Placeholder points for a Skipper ([`crate::placeholders`]).
 
-use crate::placeholders::{HEADER, add, base, points, said};
+use crate::placeholders::{HEADER, add, points, said};
 use crate::playground::SIZES;
 
 /// The Skipper's list as its `GET /api/io_map` gives it: a comment, a
@@ -106,15 +106,6 @@ fn an_empty_list_gives_a_map_of_placeholders_alone() {
     let p = "PROGRAM p\nVAR_INPUT go : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := go;\nEND_PROGRAM\n";
     let a = add(p, SIZES, "").unwrap();
     assert_eq!(a.map, format!("{HEADER}\nin  go bool sim\nout lamp bool sim\n"));
-}
-
-#[test]
-fn the_projects_map_is_the_base_once_it_has_a_point() {
-    assert_eq!(base(None, NODE), NODE);
-    assert_eq!(base(Some("# nothing yet\n"), NODE), NODE);
-    assert_eq!(base(Some(""), NODE), NODE);
-    let mine = "device rio modbus-tcp 192.168.3.60\nin start bool rio di:0\n";
-    assert_eq!(base(Some(mine), NODE), mine);
 }
 
 #[test]

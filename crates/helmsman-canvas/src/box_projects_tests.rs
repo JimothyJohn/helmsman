@@ -5429,6 +5429,65 @@ fn deploying_to_a_skipper_adds_placeholder_points_for_ports_no_point_backs() {
     assert!(!sent.iter().any(|q| q.url.ends_with("/files/io.map")), "{sent:?}");
 }
 
+/// Nick 2026-11-24: Deploy failed with `driver "device:moxa-iologik-e1213":
+/// a node drives modbus-tcp and enip-io devices` after Scan and add put the
+/// E1213 in the project by its profile. The deploy now sends the Skipper
+/// its own list with the E1213 on top in the Skipper's form (the profile's
+/// EtherNet/IP transport, the address the scan saw, `di:0` for DI-00).
+#[test]
+fn a_device_added_by_its_profile_goes_to_a_skipper_in_its_form() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let main = "PROGRAM lamp\nVAR_INPUT\n  part : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := part;\nEND_PROGRAM\n";
+    let map = "device iologik_e1213 device:moxa-iologik-e1213 cip=991:515:0x2a629eae\nin  part bool iologik_e1213 ch:DI-00\n";
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", main),
+            ("io.map", map),
+            (
+                "moxa-iologik-e1213.device",
+                include_str!("../../../docs/devices/moxa-iologik-e1213.device"),
+            ),
+        ],
+    );
+    let p = &mut v.projects;
+    p.node_map = Some(SKIPPER_LIST.into());
+    p.to_node = true;
+
+    // No scan yet: the E1213 has no address, so nothing is sent and the
+    // words say what to do.
+    p.deploy();
+    assert!(
+        matches!(&p.deploy, Deploy::Failed(w) if w.contains("iologik_e1213: the Skipper needs its IP address. Press Scan")),
+        "{:?}",
+        p.deploy
+    );
+    assert!(p.poll().is_empty(), "nothing sent");
+
+    // With the scan's answer it goes, made for the Skipper.
+    p.deploy = Deploy::Idle;
+    p.found_hosts = vec![("cip=991:515:0x2a629eae".into(), "192.168.33.60".into())];
+    p.deploy();
+    let sent = p.poll();
+    let save = sent
+        .iter()
+        .find(|q| q.method == "PUT" && q.url.ends_with("/files/io.map"))
+        .unwrap_or_else(|| panic!("no io.map save: {sent:?}"));
+    let body: Json = serde_json::from_slice(save.body.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        body["text"],
+        format!(
+            "{}\ndevice iologik_e1213 enip-io 192.168.33.60 profile=moxa-e1213 rpi_ms=100\nin  part bool iologik_e1213 di:0\n",
+            SKIPPER_LIST.trim_end(),
+        )
+    );
+}
+
 /// The same after an Agent answer lands on a Skipper's page: the
 /// placeholder is saved with it (io.map alone, not other edits).
 #[test]

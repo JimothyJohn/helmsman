@@ -936,6 +936,16 @@ pub enum Scan {
     Failed(String),
 }
 
+/// The address the last scan saw at `identity` (`cip=V:P:S`, or the
+/// identity a device answered by).
+#[must_use]
+pub fn found_at(found: &[Found], identity: &str) -> Option<String> {
+    found
+        .iter()
+        .find(|f| f.cip == identity || f.identity == identity)
+        .map(|f| f.address.clone())
+}
+
 /// The found devices as text, for the agent: one a line.
 #[must_use]
 pub fn describe_found(found: &[Found]) -> String {
@@ -1033,6 +1043,9 @@ pub struct DevicesUi {
     /// A Scan and add's next Add, handed to the view by
     /// [`Self::quick_ui`] as the quick form's Add would be.
     pub add_next: Option<QuickAdd>,
+    /// The watched Skipper's own devices, name and host: Scan and add
+    /// passes them over (the view fills it in each frame).
+    pub skipper: Vec<(String, String)>,
     /// Why the box had no library, when it said.
     pub library_note: Option<String>,
     /// The plant model's states (`crate::plant`): the view fills it in
@@ -1126,6 +1139,11 @@ impl DevicesUi {
                 || f.product_name.clone(),
                 |l| format!("{} {}", l.vendor, l.model).trim().to_string(),
             );
+            if let Some((n, _)) = self.skipper.iter().find(|(_, h)| *h == f.address) {
+                a.skipped
+                    .push(format!("{shown} at {}, the Skipper's own {n}", f.address));
+                continue;
+            }
             if f.library.as_ref().and_then(|l| l.profile_file.as_ref()).is_some() {
                 a.queue.push_back(f.clone());
             } else {

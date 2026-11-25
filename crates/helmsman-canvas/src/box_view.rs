@@ -440,6 +440,26 @@ impl BoxView {
         self.follow_owner();
         self.trend.local_pins = self.watches_node;
         self.projects.node_map = self.state.io_map.clone().filter(|_| self.state.io_map_node);
+        // A device by identity goes to a Skipper at the address the scan
+        // saw; Scan and add passes over the Skipper's own devices.
+        self.projects.found_hosts = self
+            .devices_ui
+            .found
+            .iter()
+            .flat_map(|f| {
+                [
+                    (f.cip.clone(), f.address.clone()),
+                    (f.identity.clone(), f.address.clone()),
+                ]
+            })
+            .collect();
+        self.devices_ui.skipper = self
+            .projects
+            .node_map
+            .as_deref()
+            .filter(|_| self.watches_node)
+            .map(crate::skipper_map::devices)
+            .unwrap_or_default();
         self.projects.tick(now);
         self.on_box.step(self.session.as_ref());
         for m in msgs {
@@ -750,7 +770,14 @@ impl BoxView {
         let devices = node.as_deref().map_or_else(String::new, |n| {
             format!(
                 "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name: use these names for what they are. A VAR_INPUT or VAR_OUTPUT with no point here is fine: the page adds a placeholder (`sim`) point for it, set from the I/O tab, so do not write io.map lines for it.\n{}",
-                crate::placeholders::base(files.get(helmsman_project::IO_MAP).map(String::as_str), n).trim()
+                crate::skipper_map::for_skipper(
+                    files.get(helmsman_project::IO_MAP).map(String::as_str),
+                    n,
+                    &|stem| files.get(&format!("{stem}{}", helmsman_project::DEVICE_EXT)).cloned(),
+                    &|id| crate::devices::found_at(&self.devices_ui.found, id),
+                )
+                .map
+                .trim()
             )
         });
         let env = crate::instruct::Env {
@@ -1007,11 +1034,15 @@ impl BoxView {
             .save_agent(&apply.file, &apply.text, &apply.record, &apply.tests);
         // On a Skipper a port no point backs gets its placeholder now, so
         // the answer runs as soon as it is deployed (Nick, 2026-11-24).
-        if self.watches_node
-            && let Some(words) = self.projects.add_placeholders()
-        {
-            self.projects.save_file(helmsman_project::IO_MAP);
-            self.projects.note(words, false);
+        if self.watches_node {
+            match self.projects.add_placeholders() {
+                Ok(Some(words)) => {
+                    self.projects.save_file(helmsman_project::IO_MAP);
+                    self.projects.note(words, false);
+                }
+                Ok(None) => self.projects.save_file(helmsman_project::IO_MAP),
+                Err(why) => self.projects.note(why, true),
+            }
         }
         // What the change added to the program joins the trend once the
         // box reports it (a change is saved first and deployed after).

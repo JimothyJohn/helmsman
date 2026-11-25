@@ -115,3 +115,21 @@ fn an_unknown_device_is_said_and_a_taken_name_gets_a_number() {
         "{note}"
     );
 }
+
+/// On a Skipper's page a device the Skipper already runs is passed over
+/// (Nick's MDrive was added a second time beside the Skipper's `drive`).
+#[test]
+fn a_device_the_skipper_runs_already_is_passed_over() {
+    let mut d = DevicesUi::default();
+    d.add_all = Some(AddAll::default());
+    d.skipper = vec![("drive".into(), "192.168.33.1".into())];
+    d.found = vec![found("192.168.33.1", 515, Some("moxa-iologik-e1213.device"))];
+    d.found_to_add_all();
+    assert_eq!(d.add_all_step(), None);
+    assert!(d.add_all.is_none(), "nothing to add");
+    let note = d.add_note.unwrap();
+    assert!(
+        note.contains("ioLogik E1213 at 192.168.33.1, the Skipper's own drive"),
+        "{note}"
+    );
+}
