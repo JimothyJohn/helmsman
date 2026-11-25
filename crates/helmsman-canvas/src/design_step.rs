@@ -662,6 +662,11 @@ pub fn sections(d: &Design, text: &str) -> Vec<(String, String)> {
 /// The design entry on one page.
 #[derive(Debug)]
 pub struct Designer {
+    /// Off the page for now (Nick, 2026-11-25: "Design a machine and add a
+    /// spec should be removed for now, we really need to get incremental
+    /// progress working"): no entry, whatever the relay offers. Tests that
+    /// exercise the design flow turn it back on ([`Self::set_base`]).
+    pub shelved: bool,
     pub place: Place,
     base: Option<String>,
     pub avail: Avail,
@@ -712,6 +717,7 @@ impl Designer {
 
     fn new(place: Place) -> Self {
         Self {
+            shelved: true,
             place,
             base: None,
             avail: Avail::Hidden,
@@ -734,6 +740,7 @@ impl Designer {
     pub fn set_base(&mut self, base: &str) {
         self.base = Some(base.trim().trim_end_matches('/').to_string());
         self.avail = Avail::Unknown;
+        self.shelved = false;
     }
 
     /// The address to ask for the status, once: the status is then
@@ -755,7 +762,7 @@ impl Designer {
     /// Whether the tab shows the entry.
     #[must_use]
     pub fn visible(&self) -> bool {
-        matches!(self.avail, Avail::Open | Avail::Closed { .. })
+        !self.shelved && matches!(self.avail, Avail::Open | Avail::Closed { .. })
     }
 
     #[must_use]
