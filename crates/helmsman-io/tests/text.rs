@@ -84,7 +84,9 @@ fn token() -> impl Strategy<Value = String> {
 }
 
 fn ident() -> impl Strategy<Value = String> {
-    "[a-z_][a-z0-9_]{0,8}".prop_filter("box and module are reserved", |s| s != "box" && s != "module")
+    "[a-z_][a-z0-9_]{0,8}".prop_filter("box, module and sim are reserved", |s| {
+        s != "box" && s != "module" && s != "sim"
+    })
 }
 
 fn file() -> impl Strategy<Value = MapFile> {
@@ -104,7 +106,7 @@ fn file() -> impl Strategy<Value = MapFile> {
         ident(),
         0..3u8,
         any::<bool>(),
-        (0..4u8, ident()),
+        (0..5u8, ident()),
         token(),
         any::<i64>(),
         -1e9f64..1e9,
@@ -127,6 +129,7 @@ fn file() -> impl Strategy<Value = MapFile> {
                 let ty = [Ty::Bool, Ty::Int, Ty::Real][usize::from(t)];
                 // A module's output is only ever an `in` signal.
                 // A screen tile only ever an `out` one.
+                // A sim point has no safe value, poll or wired.
                 let kind = if (out && kind == 2) || (!out && kind == 3) {
                     0
                 } else {
@@ -137,10 +140,11 @@ fn file() -> impl Strategy<Value = MapFile> {
                     0 => Binding::Device { device: dev, point },
                     1 => Binding::Local { channel: point },
                     2 => Binding::Module { module: point },
-                    _ => Binding::Screen { tile: point },
+                    3 => Binding::Screen { tile: point },
+                    _ => Binding::Sim,
                 };
                 let poll = poll.filter(|_| !out && kind < 2).map(Duration::from_millis);
-                if out && with_safe {
+                if out && with_safe && kind != 4 {
                     let v = match ty {
                         Ty::Bool => Value::Bool(n % 2 == 0),
                         Ty::Int => Value::Int(n),
@@ -348,4 +352,64 @@ fn screen_tiles_are_outputs_the_map_declares() {
     let f = parse("in a bool screen t1\nout b bool screen 1t\nout c real screen t2\n").unwrap();
     let errs = f.map.validate().unwrap_err();
     assert_eq!(errs.len(), 2, "an in screen signal and a bad tile id: {errs:?}");
+}
+
+#[test]
+fn sim_points_parse_print_and_validate_with_no_device() {
+    let src = "in sw bool sim\nout total int sim unit=mm\nin rate real sim unit=m/s # a comment\n";
+    let f = parse(src).unwrap();
+    assert_eq!(f.map.devices.len(), 0);
+    assert_eq!(f.map.signals.len(), 3);
+    assert!(f.map.signals.iter().all(|s| s.binding == Binding::Sim));
+    assert_eq!(f.map.signals[1].unit.as_deref(), Some("mm"));
+    assert_eq!(f.map.signals[1].dir, Dir::Out);
+    f.map.validate().unwrap();
+    let text = render(&f);
+    assert_eq!(
+        text,
+        "in sw bool sim\nout total int sim unit=mm\nin rate real sim unit=m/s\n"
+    );
+    assert_eq!(parse(&text).unwrap(), f, "print then parse keeps the meaning");
+    // Beside a device, in any order.
+    let mixed =
+        parse("in a bool box di:0\nin b bool sim\ndevice rio modbus-tcp h:502\nout c bool rio coil:0\n")
+            .unwrap();
+    mixed.map.validate().unwrap();
+    assert_eq!(parse(&render(&mixed)).unwrap(), mixed);
+}
+
+#[test]
+fn a_sim_line_takes_no_address_and_no_option_but_a_unit() {
+    let bad = [
+        "in a bool sim 1",
+        "in a bool sim di:0",
+        "in a bool sim poll_ms=5",
+        "out a bool sim safe=true",
+        "in a bool sim wired=ifm/if6123",
+        "in a bool sim unit=",
+        "in a bool sim unit=mm unit=cm",
+        "in a bool sim bogus=1",
+        "in a nope sim",
+        "device sim modbus-tcp h:502",
+        "in a bool sim\nin b bool sim poll_ms=5\n",
+    ];
+    for src in bad {
+        let errs = parse(src).expect_err(src);
+        assert!(
+            !errs.is_empty() && errs.iter().all(|(n, why)| *n >= 1 && !why.is_empty()),
+            "{src}: {errs:?}"
+        );
+    }
+    let errs = parse("in a bool sim\nin b bool sim poll_ms=5\n").unwrap_err();
+    assert_eq!(errs.len(), 1);
+    assert_eq!(errs[0].0, 2, "the line number");
+    assert!(errs[0].1.contains("poll_ms"), "{errs:?}");
+    let errs = parse("device sim modbus-tcp h:502").unwrap_err();
+    assert!(errs[0].1.contains("sim"), "{errs:?}");
+}
+
+#[test]
+fn sim_names_stay_unique_with_the_device_points() {
+    let f = parse("in a bool sim\nin a bool box di:0\n").unwrap();
+    assert!(f.map.validate().is_err());
 }

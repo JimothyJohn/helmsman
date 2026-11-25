@@ -278,3 +278,7 @@ required-features = ["box"]
 [[test]]
 name = "zone"
 required-features = ["box"]
+
+[[test]]
+name = "sim_points"
+required-features = ["box"]

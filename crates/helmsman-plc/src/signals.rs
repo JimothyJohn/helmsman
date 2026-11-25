@@ -16,6 +16,10 @@
 //!   and nothing again while it is held or faulted, so the modules reading
 //!   it are held in turn. Only that module drives it, nothing polls it,
 //!   and a module may not read its own output.
+//! - A signal bound to [`Binding::Sim`] has no device: an input holds the
+//!   value [`SignalTable::set_sim`] last gave it (off / zero from the
+//!   start, never missing), an output is what its module drives, zero
+//!   once that stops.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,6 +38,8 @@ struct Sig {
     /// The module whose output this is ([`Binding::Module`]).
     source: Option<String>,
     unit: Option<String>,
+    /// A placeholder no device backs ([`Binding::Sim`]).
+    sim: bool,
     /// Outputs: what the links write.
     command: Value,
     safe: Value,
@@ -161,7 +167,8 @@ impl SignalTable {
                     name: s.name.clone(),
                     ty: s.ty,
                     dir: s.dir,
-                    value: None,
+                    value: (s.dir == Dir::In && s.binding == Binding::Sim).then(|| zero(s.ty)),
+                    sim: s.binding == Binding::Sim,
                     source: match &s.binding {
                         Binding::Module { module } => Some(module.clone()),
                         _ => None,
@@ -173,7 +180,7 @@ impl SignalTable {
                     point: match &s.binding {
                         Binding::Device { device, point } => Some((device.clone(), point.clone())),
                         Binding::Local { channel } => Some((helmsman_io::text::BOX.into(), channel.clone())),
-                        Binding::Module { .. } => None,
+                        Binding::Module { .. } | Binding::Sim => None,
                         // No link serves `screen` (a reserved device id), so
                         // this only gives a tile an identity: moving a signal
                         // to another tile is a rebind across a map reload.
@@ -253,6 +260,29 @@ impl SignalTable {
         }
     }
 
+    /// Whether signal `i` is a placeholder no device backs.
+    #[must_use]
+    pub fn is_sim(&self, i: usize) -> bool {
+        self.sigs.get(i).is_some_and(|s| s.sim)
+    }
+
+    /// Sets a sim input to `v`. Refused (`false`) for any other signal and
+    /// for a value of the wrong type or a non-finite real.
+    pub fn set_sim(&mut self, i: usize, v: Value) -> bool {
+        match self.sigs.get_mut(i) {
+            Some(s)
+                if s.sim
+                    && s.dir == Dir::In
+                    && v.ty() == s.ty
+                    && !matches!(v, Value::Real(x) if !x.is_finite()) =>
+            {
+                s.value = Some(v);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The last point error the signal's link hit (a write the device or
     /// driver refused, an input it would not read), or `None` once the
     /// point goes through again.
@@ -314,6 +344,7 @@ impl SignalTable {
             safe: zero(ty),
             source: None,
             unit: None,
+            sim: false,
             error: None,
             point: None,
         });
@@ -330,7 +361,7 @@ impl SignalTable {
     /// every output at its safe value. Claims stay.
     pub(crate) fn reset(&mut self) {
         for s in &mut self.sigs {
-            s.value = None;
+            s.value = s.sim.then(|| zero(s.ty)).filter(|_| s.dir == Dir::In);
             s.command = s.safe;
             s.error = None;
         }
@@ -380,7 +411,12 @@ impl SignalTable {
     /// module it carries, or neither) all equal.
     fn same_signal(&self, i: usize, old: &Self, j: usize) -> bool {
         let (a, b) = (&self.sigs[i], &old.sigs[j]);
-        a.name == b.name && a.ty == b.ty && a.dir == b.dir && a.source == b.source && a.point == b.point
+        a.name == b.name
+            && a.ty == b.ty
+            && a.dir == b.dir
+            && a.source == b.source
+            && a.point == b.point
+            && a.sim == b.sim
     }
 
     /// Makes this freshly built table (a new I/O map and calendar) the
@@ -584,7 +620,7 @@ pub(crate) fn by_device(map: &IoMap) -> BTreeMap<Option<String>, Vec<Polled>> {
         let (dev, addr) = match &s.binding {
             Binding::Device { device, point } => (Some(device.clone()), point.clone()),
             Binding::Local { channel } => (None, channel.clone()),
-            Binding::Module { .. } | Binding::Screen { .. } => continue,
+            Binding::Module { .. } | Binding::Screen { .. } | Binding::Sim => continue,
         };
         groups.entry(dev).or_default().push(Polled {
             signal: i,

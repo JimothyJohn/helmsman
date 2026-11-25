@@ -88,7 +88,8 @@ pub struct Event {
 /// How a signal of `table` is recorded, if it is.
 pub(crate) fn kind_of(table: &SignalTable, i: usize) -> Option<Kind> {
     match table.signal(i)? {
-        (Dir::In, _) if table.source(i).is_none() => Some(Kind::Input),
+        // A sim input is memory, not a read: a replay starts it at zero.
+        (Dir::In, _) if table.source(i).is_none() && !table.is_sim(i) => Some(Kind::Input),
         (Dir::Out, _) if table.writer(i).is_some() => Some(Kind::Driven),
         _ => None,
     }

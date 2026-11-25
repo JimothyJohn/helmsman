@@ -40,6 +40,7 @@ writes it (query included); `tab:KEY`, the key the tab saves in a layout;
 | Device settings | `device-config` | `GET /api/devices/{id}/config`, `PUT /api/devices/{id}/config/password`, `DELETE /api/devices/{id}/config/password`, `POST /api/devices/{id}/config/set`, `POST /api/devices/{id}/config/restart`, `POST /api/devices/{id}/config/import`, `POST /api/devices/{id}/config/password`, `POST /api/devices/{id}/config/snapshot` |
 | Device profiles | `device-profile` | `GET /api/device-profile/proposal`, `POST /api/device-profile/proposal`, `POST /api/device-profile/proposal/accept`, `DELETE /api/device-profile/proposal`, `POST /api/device-profile/publish`, `profile:publish` |
 | Forces | `forces` | `GET /api/forces`, `POST /api/forces`, `DELETE /api/forces/{id}`, `DELETE /api/forces` |
+| Placeholder (sim) points | `sim-points` | `PUT /api/signals/{name}` |
 | Trends | `trends` | `GET /api/trends?signals=a,b`, `GET /api/trends/pins`, `PUT /api/trends/pins`, `tab:trend` |
 | Desk and layouts | `layout` | `GET /api/desk`, `PUT /api/desk`, `GET /api/pane-layouts`, `PUT /api/pane-layouts`, `DELETE /api/pane-layouts/{name}` |
 | Drivers | `drivers` | `GET /api/drivers`, `PUT /api/drivers/{name}`, `DELETE /api/drivers/{name}` |

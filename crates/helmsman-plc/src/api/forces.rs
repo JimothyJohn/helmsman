@@ -235,6 +235,15 @@ fn parse(req: &Request, ctx: &Ctx) -> Result<(Point, helmsman_io::Value), (u16, 
             if s.dir != helmsman_io::Dir::In || s.writer.as_deref().is_some_and(|w| w != "calendar") {
                 return Err((409, format!("{} is not an input: only inputs are forced", s.name)));
             }
+            if s.sim {
+                return Err((
+                    409,
+                    format!(
+                        "{} is a sim input: set it with PUT /api/signals/{}",
+                        s.name, s.name
+                    ),
+                ));
+            }
             let value = match (s.ty, value) {
                 (helmsman_io::Ty::Real, helmsman_io::Value::Int(n)) => {
                     #[allow(clippy::cast_precision_loss)] // a typed-in number

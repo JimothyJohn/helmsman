@@ -79,6 +79,10 @@ pub enum Binding {
     /// tile shows it. Several signals may feed one tile (its state, a
     /// count).
     Screen { tile: String },
+    /// A placeholder no device backs: the value lives in memory. An `in`
+    /// is set through the API (starts at off / zero), an `out` is what its
+    /// module writes, read back like any output. Nothing is polled or driven.
+    Sim,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,8 +288,11 @@ impl IoMap {
             if s.unit.as_deref().is_some_and(|u| !unit_ok(u)) {
                 errs.push(MapError::BadUnit(s.name.clone()));
             }
-            let polled =
-                s.dir == Dir::In && !matches!(s.binding, Binding::Module { .. } | Binding::Screen { .. });
+            let polled = s.dir == Dir::In
+                && !matches!(
+                    s.binding,
+                    Binding::Module { .. } | Binding::Screen { .. } | Binding::Sim
+                );
             if let Some(p) = s.poll
                 && (!polled || p < Duration::from_millis(1) || p > MAX_POLL)
             {
@@ -321,6 +328,7 @@ impl IoMap {
                         continue;
                     }
                 },
+                Binding::Sim => continue,
                 Binding::Module { .. } | Binding::Screen { .. } => {
                     if let Some(why) = undriven(s) {
                         errs.push(MapError::BadPoint {
