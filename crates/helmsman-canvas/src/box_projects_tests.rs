@@ -5491,7 +5491,7 @@ fn a_device_added_by_its_profile_goes_to_a_skipper_in_its_form() {
 
 /// Nick 2026-11-24: `"liberty_lexium_mdrive_ethernet_lmd_ether": a name is
 /// letters, digits and '_', at most 32` from the Skipper. That port is the
-/// MDrive's `enabled` channel, which the Skipper has as `enabled`: Deploy
+/// drive's `enabled` channel, which the Skipper has as `enabled`: Deploy
 /// stops before sending and says to use the Skipper's name.
 #[test]
 fn a_port_that_is_a_skipper_point_under_another_name_stops_the_deploy() {

@@ -771,11 +771,10 @@ impl BoxView {
             // The same point under the project's other name: the program
             // must use the Skipper's (Nick, 2026-11-24: the Agent kept a
             // 40-character name for the MDrive's `enabled`).
-            let same: String = made
-                .same
-                .iter()
-                .map(|(p, sp)| format!("\n- {p} is this list's {sp}: use {sp}, not {p}, in the program."))
-                .collect();
+            let mut same = String::new();
+            for (p, sp) in &made.same {
+                let _ = std::fmt::Write::write_fmt(&mut same, format_args!("\n- {p} is this list's {sp}: use {sp}, not {p}, in the program."));
+            }
             format!(
                 "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name: use these names for what they are. A VAR_INPUT or VAR_OUTPUT with no point here is fine: the page adds a placeholder (`sim`) point for it, set from the I/O tab, so do not write io.map lines for it. A Skipper takes names of at most {} characters: keep every VAR_INPUT and VAR_OUTPUT name that short.{same}\n{}",
                 crate::skipper_map::NAME_MAX,
