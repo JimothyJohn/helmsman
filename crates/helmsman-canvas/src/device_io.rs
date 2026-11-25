@@ -171,18 +171,35 @@ pub fn movable(ports: &[Port], map: &MapText) -> Vec<Port> {
 }
 
 /// A name for a new signal on `device`'s channel `label` that neither
-/// the map nor the program has: `rio_di_04`, then `rio_di_04_2`, ...
+/// the map nor the program has: `rio_di_04`, then `rio_di_04_2`, ... At
+/// most [`crate::skipper_map::NAME_MAX`] characters, the longest a Skipper
+/// takes: a long device name is cut, never the channel's
+/// (`liberty_lexium_mdrive_et_enabled`).
 fn fresh_name(device: &str, label: &str, ports: &[Port], map: &MapText) -> String {
-    // An identifier whatever the channel is called: anything else is a
-    // `_`, and never two in a row.
-    let mut base = String::new();
-    for c in helmsman_project::profile_skim::signal_name(device, label).chars() {
-        let c = if c.is_ascii_alphanumeric() { c } else { '_' };
-        if !(c == '_' && base.ends_with('_')) && base.len() < 40 {
-            base.push(c);
+    // Room for a `_N` after it.
+    const ROOM: usize = crate::skipper_map::NAME_MAX - 3;
+    // An identifier whatever it is called: anything else is a `_`, and
+    // never two in a row.
+    let ident = |s: &str| {
+        let mut out = String::new();
+        for c in s.chars() {
+            let c = if c.is_ascii_alphanumeric() { c } else { '_' };
+            if !(c == '_' && out.ends_with('_')) {
+                out.push(c);
+            }
         }
-    }
-    let base = base.trim_end_matches('_').to_string();
+        out.trim_matches('_').to_string()
+    };
+    let channel = ident(&helmsman_project::profile_skim::signal_name("", label));
+    let channel: String = channel.chars().take(ROOM).collect();
+    let keep = ROOM.saturating_sub(channel.len() + 1);
+    let device: String = ident(device).chars().take(keep).collect();
+    let device = device.trim_end_matches('_');
+    let base = if device.is_empty() {
+        channel
+    } else {
+        format!("{device}_{channel}")
+    };
     let taken = |n: &str| {
         map.signals.iter().any(|s| s.name.eq_ignore_ascii_case(n))
             || ports.iter().any(|p| p.name.eq_ignore_ascii_case(n))
@@ -190,7 +207,7 @@ fn fresh_name(device: &str, label: &str, ports: &[Port], map: &MapText) -> Strin
     if !taken(&base) {
         return base;
     }
-    (2..10_000)
+    (2..100)
         .map(|k| format!("{base}_{k}"))
         .find(|n| !taken(n))
         .unwrap_or(base)
@@ -949,5 +966,23 @@ mod tests {
         ui.set_profiles(std::iter::empty());
         assert_eq!(ui.channels_of("rio"), None, "the file left the project");
         assert_eq!(ui.channels_of("ghost"), None);
+    }
+
+    /// Nick 2026-11-24: Add I/O on the drive named a point
+    /// `liberty_lexium_mdrive_ethernet_lmd_ether` (40 characters), which a
+    /// Skipper refuses. A long device name is cut; the channel is kept.
+    #[test]
+    fn a_new_points_name_fits_a_skipper_and_keeps_its_channel() {
+        let map = MapText::default();
+        let long = "liberty_lexium_mdrive_ethernet_lmd_ethernet_ip";
+        let n = fresh_name(long, "enabled", &[], &map);
+        assert!(n.len() <= crate::skipper_map::NAME_MAX, "{n}");
+        assert!(n.ends_with("_enabled") && n.starts_with("liberty_"), "{n}");
+        assert_eq!(fresh_name("rio", "DI-04", &[], &map), "rio_di_04");
+        // A taken name gets a number and still fits.
+        let map = helmsman_project::iomap::skim(&format!("in  {n} bool sim\n"));
+        let second = fresh_name(long, "enabled", &[], &map);
+        assert_eq!(second, format!("{n}_2"));
+        assert!(second.len() <= crate::skipper_map::NAME_MAX, "{second}");
     }
 }
