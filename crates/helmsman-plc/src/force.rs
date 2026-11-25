@@ -177,6 +177,9 @@ pub struct Forces {
     /// What the scan applies; replaced whole on each change.
     published: Mutex<Arc<Vec<Force>>>,
     generation: AtomicU64,
+    /// Sim inputs set through the API and not yet taken by the scan:
+    /// the last value per signal (any case folded to the name as set).
+    sims: Mutex<Vec<(String, Value)>>,
 }
 
 impl fmt::Debug for Forces {
@@ -191,6 +194,17 @@ impl Forces {
     fn publish(&self, list: &[Force]) {
         *self.published.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(list.to_vec());
         self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Queues a value for sim input `name` (`PUT /api/signals/{name}`);
+    /// the scan writes it into the table before its next run. A newer
+    /// value for the same signal replaces an older one not yet taken.
+    pub fn set_sim(&self, name: &str, v: Value) {
+        let mut q = self.sims.lock().unwrap_or_else(PoisonError::into_inner);
+        match q.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+            Some(e) => e.1 = v,
+            None => q.push((name.into(), v)),
+        }
     }
 
     /// Every force, oldest first.
@@ -276,6 +290,13 @@ impl Reader {
     /// addresses into `inputs` (the input image). Picks up a newer set
     /// first if it can without waiting.
     pub fn apply(&mut self, forces: &Forces, inputs: &mut [u8], table: &mut SignalTable) {
+        if let Ok(mut q) = forces.sims.try_lock() {
+            for (name, v) in q.drain(..) {
+                if let Some(i) = table.index(&name) {
+                    table.set_sim(i, v);
+                }
+            }
+        }
         let g = forces.generation.load(Ordering::Acquire);
         if g != self.seen
             && let Ok(p) = forces.published.try_lock()
