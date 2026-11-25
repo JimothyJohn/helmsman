@@ -3473,24 +3473,22 @@ fn io_mark(
     r: Rect,
     z: f32,
     d: &crate::assign::Designation,
-    tag: Option<&str>,
-    text: bool,
+    // The line over the block and its colour, already worded.
+    line: Option<(String, Color32)>,
     picked: bool,
 ) {
     if d.is_simulated() && !picked {
         crate::io_cards::dashed_outline(painter, r.expand(0.5 * z), Stroke::new(1.5 * z.max(0.6), t.fg));
     }
-    if text {
-        // One line over the block's top edge, cut to the block's width; a
-        // diff tag joins it rather than printing over it.
+    if let Some((line, color)) = line {
+        // One line over the block's top edge, cut to the block's width.
         let size = 9.0 * z;
-        let line = tag.map_or_else(|| d.label(), |g| format!("{} · {g}", d.label()));
         painter.text(
             r.left_top() - Vec2::new(0.0, 2.0 * z),
             Align2::LEFT_BOTTOM,
             elide(painter, &line, size, r.width()),
             font(size),
-            if tag.is_some() { brand::RED } else { t.muted },
+            color,
         );
     }
 }
@@ -3739,7 +3737,12 @@ fn draw(
                 .iter()
                 .find(|(h, _)| *h == n.id)
                 .map(|(_, g)| g.as_str());
-            io_mark(painter, t, r, z, d, tag, text, pick == Some(Pick::Node(n.id)));
+            // A diff tag joins the designation's line rather than printing over it.
+            let line = text.then(|| match tag {
+                Some(g) => (format!("{} · {g}", d.label()), brand::RED),
+                None => (d.label(), t.muted),
+            });
+            io_mark(painter, t, r, z, d, line, pick == Some(Pick::Node(n.id)));
         }
         if deeper {
             // A double chevron at the header's right end: go in.
