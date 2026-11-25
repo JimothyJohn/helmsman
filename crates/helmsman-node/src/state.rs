@@ -217,6 +217,7 @@ pub fn view(
             version: helmsman_nodecore::VERSION,
             board,
             io_map,
+            shares: Vec::new(),
             one_block: true,
             check: None,
             firmware: None,

@@ -37,9 +37,9 @@ use esp_storage::FlashStorage;
 use helmsman_iec::{Image, ImageSizes, Program, compile};
 use helmsman_node_p4::report::parse_endpoint;
 use helmsman_node_p4::state::{self, DeviceLive, IO_BYTES, Pending, Shared};
-use helmsman_node_p4::{beacon, bind, board, check, ethernet, flash, io, ota, server};
+use helmsman_node_p4::{beacon, bind, board, check, ethernet, flash, io, ota, server, share_server};
 use helmsman_nodecore::api::State;
-use helmsman_nodecore::iomap::{self, IoMap};
+use helmsman_nodecore::iomap::{self, IoMap, Share};
 use helmsman_nodecore::ioplan::Plan;
 use helmsman_nodecore::router::Control;
 use helmsman_nodecore::settings::{Net, Settings};
@@ -106,6 +106,7 @@ static IO_CTX: StaticCell<io::Ctx> = StaticCell::new();
 static SETTINGS: StaticCell<Settings> = StaticCell::new();
 static STORE: StaticCell<server::StoreCell> = StaticCell::new();
 static CTX: StaticCell<server::Ctx> = StaticCell::new();
+static SHARE_CTX: StaticCell<share_server::Ctx> = StaticCell::new();
 static LOG_RX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
 static LOG_TX_META: StaticCell<[PacketMetadata; 2]> = StaticCell::new();
 static LOG_RX: StaticCell<[u8; 64]> = StaticCell::new();
@@ -208,6 +209,7 @@ async fn main(spawner: Spawner) -> ! {
         }
     };
     let map: &'static IoMap = MAP.init(map);
+    let shares: &'static [Share] = &map.shares;
     let plans: &'static [Plan] = PLANS.init((0..map.devices.len()).map(|k| map.plan(k)).collect());
     let store: &'static server::StoreCell = STORE.init(embassy_sync::mutex::Mutex::new(RefCell::new(store)));
 
@@ -237,6 +239,7 @@ async fn main(spawner: Spawner) -> ! {
             })
             .collect();
         live.io_map.clone_from(&map.text);
+        live.shares.clone_from(&map.shares);
         if let Some((name, source, p)) = &program {
             live.module.name.clone_from(name);
             live.module.source.clone_from(source);
@@ -343,6 +346,23 @@ async fn main(spawner: Spawner) -> ! {
             Err(_) => halt("an HTTP task would not spawn").await,
         }
     }
+    // The node's own Modbus TCP server: only when the map shares something.
+    if shares.is_empty() {
+        println!("modbus server: off (the map has no share line)");
+    } else {
+        let share_ctx: &'static share_server::Ctx = SHARE_CTX.init(share_server::Ctx { shared, shares });
+        for _ in 0..share_server::CONNECTIONS {
+            match share_server::share_task(stack, share_ctx) {
+                Ok(t) => spawner.spawn(t),
+                Err(_) => halt("a Modbus server task would not spawn").await,
+            }
+        }
+        println!(
+            "modbus server: on, port {}, {} shared value(s)",
+            helmsman_nodecore::modbus_server::PORT,
+            shares.len()
+        );
+    }
     if !settings.site.is_empty() {
         match beacon::beacon_task(stack, settings, shared, mac, board::BOARD, ctx.heap_size, 10.0) {
             Ok(t) => spawner.spawn(t),
@@ -377,6 +397,12 @@ async fn main(spawner: Spawner) -> ! {
         .as_ref()
         .map(|p| bind::binds_of(p, map))
         .unwrap_or_default();
+    // The same for the map's shares and the program's ports.
+    let mut share_binds = running
+        .as_ref()
+        .map(|p| bind::share_binds_of(p, map))
+        .unwrap_or_default();
+    publish_share_masks(shared, &share_binds, shares);
     let mut stopped = false;
     let start = Instant::now();
     let mut ticker = Ticker::every(SCAN);
@@ -405,6 +431,8 @@ async fn main(spawner: Spawner) -> ! {
                 let result = match compile(&source, SIZES) {
                     Ok(p) => {
                         binds = bind::binds_of(&p, map);
+                        share_binds = bind::share_binds_of(&p, map);
+                        publish_share_masks(shared, &share_binds, shares);
                         running = Some(p);
                         stopped = false;
                         state::with(shared, |live| {
@@ -431,6 +459,8 @@ async fn main(spawner: Spawner) -> ! {
                             match compile(&old_source, SIZES) {
                                 Ok(p) => {
                                     binds = bind::binds_of(&p, map);
+                                    share_binds = bind::share_binds_of(&p, map);
+                                    publish_share_masks(shared, &share_binds, shares);
                                     running = Some(p);
                                 }
                                 Err(_) => state::with(shared, |live| {
@@ -438,6 +468,7 @@ async fn main(spawner: Spawner) -> ! {
                                         "deploy refused and the previous program could not be restored",
                                     )));
                                     live.outputs = [0; IO_BYTES];
+                                    bind::clear_share_outputs(&share_binds, shares, &mut live.bank.image);
                                 }),
                             }
                         }
@@ -475,6 +506,7 @@ async fn main(spawner: Spawner) -> ! {
                     };
                     if state == "stopped" {
                         live.outputs = [0; IO_BYTES];
+                        bind::clear_share_outputs(&share_binds, shares, &mut live.bank.image);
                     }
                 });
             }
@@ -482,14 +514,20 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         if let Some(p) = running.as_mut().filter(|_| !stopped) {
-            let inputs = state::with(shared, |live| live.inputs);
+            let (inputs, bank_in) = state::with(shared, |live| (live.inputs, live.bank.image));
             image.i[..IO_BYTES].copy_from_slice(&inputs);
             let now = CoreDuration::from_micros(start.elapsed().as_micros());
             bind::apply_inputs(&binds, p, map, &inputs);
+            bind::apply_share_inputs(&share_binds, p, shares, &bank_in);
             let result = p.scan_at(&mut image, now);
+            // The shared outputs are collected outside the lock and moved
+            // into the bank in the same short hold as the rest.
+            let mut bank_out = [0u8; helmsman_nodecore::iomap::SHARE_BYTES];
             if result.is_ok() {
                 bind::apply_outputs(&binds, p, map, &mut image.q[..IO_BYTES]);
+                bind::apply_share_outputs(&share_binds, p, shares, &mut bank_out);
             }
+            let share_ok = result.is_ok();
             let exec_us = u32::try_from(t0.elapsed().as_micros()).unwrap_or(u32::MAX);
             scan_count += 1;
             let outputs: [u8; IO_BYTES] = image.q[..IO_BYTES].try_into().unwrap_or([0; IO_BYTES]);
@@ -514,8 +552,12 @@ async fn main(spawner: Spawner) -> ! {
                     Some(text) => {
                         live.module.state = Some(State::Faulted(text.clone()));
                         live.outputs = [0; IO_BYTES];
+                        bind::clear_share_outputs(&share_binds, shares, &mut live.bank.image);
                     }
                     None => live.outputs = outputs,
+                }
+                if share_ok {
+                    bind::publish_share_outputs(&share_binds, shares, &bank_out, &mut live.bank.image);
                 }
                 if let Some(s) = signals {
                     live.module.signals = s;
@@ -572,6 +614,16 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
     }
+}
+
+/// Tells the Modbus server which shares a program's ports make writable
+/// and which have a variable at all.
+fn publish_share_masks(shared: &Shared, binds: &[bind::ShareBind], list: &[Share]) {
+    let (writable, bound) = bind::share_masks(binds, list);
+    state::with(shared, |live| {
+        live.bank.writable = writable;
+        live.bank.bound = bound;
+    });
 }
 
 /// Prints the reason and stops.
