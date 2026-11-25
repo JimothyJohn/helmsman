@@ -1310,13 +1310,12 @@ fn a_relay_that_hangs_times_out() {
 
 // -------------------------------------------------------------- offline
 
-/// A port nothing listens on (bound, then released).
+/// A loopback port nothing listens on: port 1 (tcpmux), which no test and
+/// no runner serves. A port bound and released here was taken by another
+/// test's stand-in relay on a busy runner, and the box found it online
+/// (CI, ubuntu-24.04-arm, 2026-11-25).
 fn closed_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    1
 }
 
 fn unreachable() -> Opts {
