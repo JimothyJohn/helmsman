@@ -37,7 +37,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-23
   by: worker
 
-- [ ] **Keep the card "Rebuild the try box at the dev tip"?** — The try box stays off unless a task needs it (your rule of 2026-11-14), so a standing card to rebuild it never finishes.
+- [x] **Keep the card "Rebuild the try box at the dev tip"?** — The try box stays off unless a task needs it (your rule of 2026-11-14), so a standing card to rebuild it never finishes.
   options: drop — the card goes; a task that needs the box rebuilds it then (recommended) | keep — it stays in Needs your hands
   recommend: drop — it contradicts the off-unless-needed rule
   stakes: low
@@ -45,8 +45,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: try-box-card
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: drop
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: drop the card
 
-- [ ] **Windows: add a time-zone database, or say --time-zone is not supported there?** — On Windows the box has no time-zone data, so DATE, TOD and DT read UTC whatever --time-zone says. A database is a new dependency compiled into the box.
+- [x] **Windows: add a time-zone database, or say --time-zone is not supported there?** — On Windows the box has no time-zone data, so DATE, TOD and DT read UTC whatever --time-zone says. A database is a new dependency compiled into the box.
   options: document — one line under Platforms, no dependency (recommended) | dependency — a tz crate for Windows only, reviewed as a supply-chain decision
   recommend: document — nobody runs a Windows box in production
   stakes: low
@@ -54,8 +57,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: windows-time-zone
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: document
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: document it, no dependency. Already true: docs/ARCHITECTURE.md "Platforms" lists --time-zone among what is absent on Windows.
 
-- [ ] **Deeply nested ST: rewrite the compiler to be iterative, or lower the nesting limit?** — A program nested 200 deep compiles only when the caller gives a 4 MiB stack; in the browser the stack is 1 MiB. Lowering the limit is a product limit an engineer could meet.
+- [x] **Deeply nested ST: rewrite the compiler to be iterative, or lower the nesting limit?** — A program nested 200 deep compiles only when the caller gives a 4 MiB stack; in the browser the stack is 1 MiB. Lowering the limit is a product limit an engineer could meet.
   options: measure then rewrite — keep 200, measure the browser first, make operator chains iterative (recommended) | lower the limit — smaller change, programs past the new limit are refused with a message
   recommend: measure then rewrite — no real program is refused
   stakes: high
@@ -63,8 +69,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: compiler-nesting-limit
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: measure then rewrite
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: measure, then rewrite; the limit stays 200
 
-- [ ] **Named start states: inputs only, or kept values too?** — A start state sets a machine up before a simulation run. Inputs are simple to name and check. Kept values (a step number, a latch) let a test start mid-cycle but tie the state file to the program's internals.
+- [x] **Named start states: inputs only, or kept values too?** — A start state sets a machine up before a simulation run. Inputs are simple to name and check. Kept values (a step number, a latch) let a test start mid-cycle but tie the state file to the program's internals.
   options: inputs only — a file of input = value lines (recommended) | inputs plus kept values — can start mid-cycle; a renamed variable breaks the state
   recommend: inputs only — add kept values when a test needs them
   stakes: low
@@ -72,8 +81,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: start-states-kept-values
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: inputs only
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: inputs only
 
-- [ ] **Is IO-Link on the Skipper still wanted?** — An IO-Link sensor's data sheet (its IODD) is already used as library metadata without talking IO-Link. Talking it from the Skipper needs a transceiver part and a driver.
+- [x] **Is IO-Link on the Skipper still wanted?** — An IO-Link sensor's data sheet (its IODD) is already used as library metadata without talking IO-Link. Talking it from the Skipper needs a transceiver part and a driver.
   options: park — keep the metadata route, close iolink-node and iolink-transceiver for now (recommended) | build — order the transceiver; the software-only first step can start today
   recommend: park — no customer has asked and the metadata covers naming
   stakes: high
@@ -81,8 +93,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: iolink-still-wanted
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: park
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: park
 
-- [ ] **Device library: how does an entry say what was not proven on a real unit?** — Entries ship with unproven parts flagged (your decision of 2026-11-17). The flag needs a place in device.toml that the index and the site can count.
+- [x] **Device library: how does an entry say what was not proven on a real unit?** — Entries ship with unproven parts flagged (your decision of 2026-11-17). The flag needs a place in device.toml that the index and the site can count.
   options: proof table — a new optional [proof] table per entry (recommended) | reuse questions — put it in the existing [[questions]] list; no schema change, harder to count
   recommend: proof table — "proven 6 of 8" is one lookup
   stakes: low
@@ -90,8 +105,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: library-proof-shape
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: proof table
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: a [proof] table per entry
 
-- [ ] **How should the Agent hand back its answer so the page does not parse prose?** — Today the page reads fenced blocks out of the model's text and guesses when it is cut short. A structured answer needs a new relay profile and your deploy.
+- [x] **How should the Agent hand back its answer so the page does not parse prose?** — Today the page reads fenced blocks out of the model's text and guesses when it is cut short. A structured answer needs a new relay profile and your deploy.
   options: tool call — the answer is a tool call with a schema (recommended) | JSON schema — a structured-output response format; depends on the model the relay runs | keep prose — no relay change, the heuristics stay
   recommend: tool call — every model the relay can run supports it
   stakes: high
@@ -99,8 +117,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: agent-structured-output
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: JSON schema
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: a JSON schema response format (not a tool call)
 
-- [ ] **A box with its device links off: a start flag only, or a switch in the UI as well?** — A Studio box beside the Skipper should not claim the bench devices. A flag is set when the box starts; a switch lets an engineer flip it while it runs.
+- [x] **A box with its device links off: a start flag only, or a switch in the UI as well?** — A Studio box beside the Skipper should not claim the bench devices. A flag is set when the box starts; a switch lets an engineer flip it while it runs.
   options: flag only — --links off at start (recommended) | flag and switch — also an engineer-only switch on the Devices tab
   recommend: flag only — a running switch is a way to drop a machine's I/O by accident
   stakes: low
@@ -108,8 +129,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: links-off-switch
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: flag only
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: flag only
 
-- [ ] **Is a new relay profile for the box worth it, so the box Agent answers with edits and can ask a question?** — The page on the free chat answers a long program with only the changed lines (7 s against 24 s) and can ask one question. The box still gets the whole file back and shows no question. Closing the gap needs a new served profile and your deploy.
+- [x] **Is a new relay profile for the box worth it, so the box Agent answers with edits and can ask a question?** — The page on the free chat answers a long program with only the changed lines (7 s against 24 s) and can ask one question. The box still gets the whole file back and shows no question. Closing the gap needs a new served profile and your deploy.
   options: yes — one new profile id for the box, then the page-side work (recommended) | not now — the box keeps whole-file answers
   recommend: yes — engineers on a box have the long programs
   stakes: high
@@ -117,8 +141,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: box-edits-profile
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: yes
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: yes
 
-- [ ] **Where does an output's safe state live?** — When the Agent names the I/O first it can also ask what each output does on a fault or a lost device. That answer has to be saved with the project.
+- [x] **Where does an output's safe state live?** — When the Agent names the I/O first it can also ask what each output does on a fault or a lost device. That answer has to be saved with the project.
   options: io.map — a safe= word on the output's line (recommended) | new file — a separate safe-state file in the project
   recommend: io.map — it is where the point is already described and what the box loads
   stakes: low
@@ -126,8 +153,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: safe-state-home
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: io.map
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: io.map
 
-- [ ] **A part matched from a drawing: does its draft I/O line carry an address?** — Reading a DXF gives the part and its terminals, not its network address.
+- [x] **A part matched from a drawing: does its draft I/O line carry an address?** — Reading a DXF gives the part and its terminals, not its network address.
   options: leave blank — the line is drafted without an address and the review asks for it (recommended) | default address — the library's default address is filled in and can be changed
   recommend: leave blank — a guessed address that happens to answer is worse than a question
   stakes: low
@@ -135,8 +165,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: drawing-draft-address
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: default address
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: the library's default address is filled in
 
-- [ ] **Where does the first-run setup code come from on a preloaded Skipper?** — A new box with no accounts asks for a one-time code before it makes the first account.
+- [x] **Where does the first-run setup code come from on a preloaded Skipper?** — A new box with no accounts asks for a one-time code before it makes the first account.
   options: file — a file beside the pairing files, also printed on the packing slip (recommended) | label — printed on the device only; needs a step at assembly
   recommend: file — no assembly step, and it can be reissued
   stakes: high
@@ -144,8 +177,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: setup-code-source
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: label
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: a label on the device
 
-- [ ] **Text as a signal: a bounded string of 255 bytes, as in the language?** — STRING ports are skipped today, so a program's text output never reaches the screen, the trend or OPC UA.
+- [x] **Text as a signal: a bounded string of 255 bytes, as in the language?** — STRING ports are skipped today, so a program's text output never reaches the screen, the trend or OPC UA.
   options: yes — one text type, 255 bytes, as STRING is in the language (recommended) | not yet — text stays inside programs
   recommend: yes — it matches the language and bounds memory
   stakes: low
@@ -153,8 +189,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: string-signal-type
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: yes
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: yes, 255 bytes
 
-- [ ] **Git on the controller: which library?** — A project's history as a real git repository on the box needs a git implementation compiled in.
+- [x] **Git on the controller: which library?** — A project's history as a real git repository on the box needs a git implementation compiled in.
   options: gix — pure Rust, no C, a large dependency tree (recommended) | libgit2 — mature, a C library to build and patch | export only — no library; the box writes a bundle an engineer imports elsewhere
   recommend: gix — keeps the box free of C and unsafe
   stakes: high
@@ -162,8 +201,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: version-control-library
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: the box writes a bundle an engineer imports elsewhere
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: no git library: the box writes a bundle an engineer imports elsewhere
 
-- [ ] **Who holds the key that signs Skipper firmware?** — Signed updates mean a Skipper refuses an image that is not yours. The key has to live somewhere.
+- [x] **Who holds the key that signs Skipper firmware?** — Signed updates mean a Skipper refuses an image that is not yours. The key has to live somewhere.
   options: yours — offline, you sign each release (recommended) | relay-held — the relay signs on request; convenient, and a relay compromise signs firmware
   recommend: yours — a firmware key should not sit on an internet service
   stakes: high
@@ -171,8 +213,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: ota-signing-key
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: yours
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: Nick holds it, offline
 
-- [ ] **Where may the Agent keep an engineer's habits between sessions?** — The Agent notices habits (a naming style, a preferred pattern) but forgets them when the page closes.
+- [x] **Where may the Agent keep an engineer's habits between sessions?** — The Agent notices habits (a naming style, a preferred pattern) but forgets them when the page closes.
   options: this browser — nothing leaves the machine (recommended) | the project — travels with the files, seen by everyone on it | the account — follows the person on a box
   recommend: this browser — no question of what is kept about a person
   stakes: high
@@ -180,6 +225,9 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: agent-habits-where
   asked: 2026-11-25
   by: session ab81ec57 (board audit)
+  answer: the account
+  answered: 2026-11-25
+  decided: 2026-11-25 Nick: the account
 
 ## Needs your hands
 
@@ -224,7 +272,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   status: blocked
   audit: 2026-11-25 waits for Nick: the PoE module fitted, a meter, a PoE port.
 
-- [ ] **Rebuild the try box at the dev tip** — it came back when you logged in at the Studio (pid 86028 on 2026-11-13, :8081 answers, the E1213 up), but on the build of 2026-11-08 (e7f1ae2, #300), about 90 merges behind dev: no device profiles, no device configuration, no glyphs. Best done after `studio-box-no-io` lands, so the rebuilt box can be switched off the devices for P4 work.
+- [x] **Rebuild the try box at the dev tip** — it came back when you logged in at the Studio (pid 86028 on 2026-11-13, :8081 answers, the E1213 up), but on the build of 2026-11-08 (e7f1ae2, #300), about 90 merges behind dev: no device profiles, no device configuration, no glyphs. Best done after `studio-box-no-io` lands, so the rebuilt box can be switched off the devices for P4 work.
   needs: `~/github/helmsman-try/scratch/16-rebuild.sh` from your terminal at the Studio (it builds at the dev tip, signs, and restarts the LaunchAgent)
   result: https://10.0.0.41:8081/ at the dev tip with the E1213 up
   notes: check after: `curl -sk -H "Authorization: Bearer $(cat ~/github/helmsman-try/scratch/try-state/api-token)" https://127.0.0.1:8081/api/devices` shows iologik_e1213 up.
@@ -233,8 +281,8 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: try-box-login
   asked: 2026-11-10
   by: claude-session
-  status: blocked
   audit: 2026-11-25 waits for Nick: the rebuild from his terminal. See the question try-box-card.
+  decided: 2026-11-25 Nick: dropped; a task that needs the try box rebuilds it then.
 
 - [x] **A public device library: map a device once, for everyone** — interview 2026-11-02: a public repository (JimothyJohn/helmsman-devices) with one folder per device: the EDS or the Modbus map, the `enip-io` profile or map lines, a doc with the manual's citations, the identity (vendor, product code, model text). The box and the agent look a device up before generating anything: by identity first (ListIdentity's vendor and product code, a Modbus unit's identification), then by vendor/model text; semantic search via the relay only once there are enough entries to need it. An import in the Devices tab offers to publish the result (a PR to the repo from the relay, the engineer confirming).
   needs: Nick creates the public repo (a scratch script); the licence line per vendor file (the Moxa EDS carries no terms: a pointer and a hash, not the file, until Moxa answers)
@@ -355,6 +403,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session 734e70dc
   depends: windows-time-zone
   audit: 2026-11-25 plan: 1) a test that con, nul, aux and com1 are refused as project and file names; 2) a Windows terminate test for RETAIN on exit; 3) a CRLF fixture on every platform; 4) the time-zone answer (question windows-time-zone); 5) points 5 and 6 need a Windows machine.
+  decided: 2026-11-25 Nick: no time-zone database on Windows; point 4 is closed by the Platforms section as it stands.
 
 - [ ] **Windows job: find the remaining intermittent failures** — `box (windows-latest)` still fails now and then for reasons other than the reset #571 fixed (2026-11-23). (1) In run 45194902994 two tests that start the binary timed out and passed in the next run: `a_killed_box_resumes_its_retain_counter_and_says_what_changed` (tests/retain.rs, 20 s waiting for the first save) and `a_module_output_is_published_by_the_core` (tests/sink_bin.rs, 10 s waiting for an event). The cause is unknown and the failures do not print the box's stderr, so start by making both say what the box wrote when they time out, then read the next failure. (2) The 503 a full box sends from the accept loop (api/mod.rs) closes with the request unread, the same reset hazard the 408 had; it cannot read on there without holding up accepts, so it needs another way (hand the refusal to a short-lived thread, or read what has already arrived before closing) and a test like `a_client_cut_off_at_the_deadline_reads_the_408_however_late_it_stops_sending`. (3) 2026-11-23: Windows sometimes refuses the box a socket (`os error 10013`), in different tests each time, while the same commit passes on a parallel run (runs 45288348848, 45289778227); look at the runner's excluded port ranges first.
   needs: nothing; (1) waits on a failure with the box's stderr in it
@@ -376,6 +425,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session 734e70dc
   depends: compiler-nesting-limit
   audit: 2026-11-25 plan: 1) measure the wasm build at the limit; 2) parse and compile chained binary operators iteratively; 3) natively, compile on a thread with a set stack; 4) put the test back on a small stack.
+  decided: 2026-11-25 Nick: keep MAX_NESTING at 200; measure the browser build first, then make operator chains iterative.
 
 - [ ] **Named start states for the simulation: set a machine up once, pick it again** — Nick, 2026-11-16: "the user should be able to rapidly configure the state of the machine for various scenarios manually and with the agent before starting." Built first (#493): an input set by hand while the program is stopped is what it starts with, the values outlive Stop, and a quiet line says nothing reacts yet. Decided by interview that day: this card follows, simulation only; a stopped box only reminds. Left: a start state gets a name ("part seated, guard open") and is saved in the project as a text file the diff shows, one `input = value` a line; the I/O tab lists them above Inputs and a click sets every input of one while the program is stopped (running: asked first, since it moves the machine); the Agent writes one on request, checked against the program's inputs and their types before it is offered. Open in the design: whether a start state also names kept values (a step number, a latch), which the panel cannot set today. The Agent's first half is built (2026-11-17, PR feat/agent-start-state with agent-relay `start-v1`): a field above the Inputs takes the state in words, the Agent proposes input values, and nothing is set until Set these; it works once the relay is deployed with the `start` agent, and it is not yet a saved, named state.
   needs: #492 and #493 in dev; the Agent's part needs a relay profile with the new block (a new id, Nick's deploy)
@@ -387,6 +437,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session 4a05a85d
   depends: start-states-kept-values
   audit: 2026-11-25 plan: 1) a *.state text file, one input = value per line, parsed and checked against the program's inputs; 2) a list above Inputs in the I/O tab, click to set; 3) Save as, in the project's files and diff; 4) the Agent writes one (a relay profile, Nick's deploy).
+  decided: 2026-11-25 Nick: a start state names inputs only; kept values wait for a test that needs them.
 
 - [x] **A spec run into the project that is open** — spec mode (#471, #475) always makes a new project; Nick's ask was to "parse and add it". Left out because a kept file (`spec.md`) cannot be saved one at a time: `Projects::save` on a box and `SimProjects::add_file` in the page take only names `file_name` knows, and a box has no atomic write of several files short of a whole-project zip. Shape: the same window with a project open offers "Add to this project"; the spec goes in as an instruction on the open program file (`Scope::File`), the review shows what changes (I/O added, requirements added or replaced), and Accept writes the file, the tests and the new section of `spec.md` together.
   needs: nothing
@@ -453,23 +504,24 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session (iolink)
   audit: 2026-11-25 partly: (2) and (3) are done (record.json in helmsman-devices, canvas devices.rs). Left: (1) wired.switching per record, (4) the box default relay agent is still v7, (5) and (6).
 
-- [ ] **Order an IO-Link master transceiver board and one sensor** — Parked (Nick, 2026-11-14, later the same day: IO-Link is for the metadata of digital input and output devices more than anything else; see `iodd-metadata`). Nothing to order until a device has to be spoken to over IO-Link. Why it would matter then: the IO-Link master is built and proven against its own simulated device only (helmsman-iolink: wake-up, COM1/2/3 detection, startup, cyclic Process Data, retries, loss). Nothing has been on a wire, and the P4 needs a master transceiver between its pins and the sensor's C/Q line (24 V, the wake-up current pulse). Two candidates, facts from distributor pages on 2026-11-14 (the vendors' own pages timed out, so neither datasheet has been read): (1) Analog Devices MAX14819 / MAX14819A, a dual-channel master transceiver with L+ supply controllers, SPI, "integrated framers" or external UARTs, 9 to 36 V, 48-pin TQFN, evaluation kit MAX14819EVKIT; (2) ST L6360, a single master port (COM1, COM2, COM3), configured over I2C with the data on a USART, 18 to 32.5 V, evaluation board STEVAL-IOM001V1 (Arduino UNO R3 headers). My pick is the MAX14819 kit: two ports on one board and the framer in the chip takes the bit timing off the P4, which runs the scan and the network beside it. Not checked for either part: how the wake-up pulse is made, and the 3.3 V logic levels against the P4. Any IO-Link sensor with a published IODD will do as the first device; one with 16 bits of input or fewer avoids the interleaved mode the master does not have yet.
+- [x] **Order an IO-Link master transceiver board and one sensor** — Parked (Nick, 2026-11-14, later the same day: IO-Link is for the metadata of digital input and output devices more than anything else; see `iodd-metadata`). Nothing to order until a device has to be spoken to over IO-Link. Why it would matter then: the IO-Link master is built and proven against its own simulated device only (helmsman-iolink: wake-up, COM1/2/3 detection, startup, cyclic Process Data, retries, loss). Nothing has been on a wire, and the P4 needs a master transceiver between its pins and the sensor's C/Q line (24 V, the wake-up current pulse). Two candidates, facts from distributor pages on 2026-11-14 (the vendors' own pages timed out, so neither datasheet has been read): (1) Analog Devices MAX14819 / MAX14819A, a dual-channel master transceiver with L+ supply controllers, SPI, "integrated framers" or external UARTs, 9 to 36 V, 48-pin TQFN, evaluation kit MAX14819EVKIT; (2) ST L6360, a single master port (COM1, COM2, COM3), configured over I2C with the data on a USART, 18 to 32.5 V, evaluation board STEVAL-IOM001V1 (Arduino UNO R3 headers). My pick is the MAX14819 kit: two ports on one board and the framer in the chip takes the bit timing off the P4, which runs the scan and the network beside it. Not checked for either part: how the wake-up pulse is made, and the 3.3 V logic levels against the P4. Any IO-Link sensor with a published IODD will do as the first device; one with 16 bits of input or fewer avoids the interleaved mode the master does not have yet.
   needs: a 24 V supply on the bench; the part ordered; its datasheet read by a session before the driver is written (first step of `iolink-p4-line`)
   result: a transceiver board and a sensor on the bench, named on this card with the pins they are wired to
   options: MAX14819EVKIT | STEVAL-IOM001V1 | another part
   id: iolink-transceiver
   asked: 2026-11-14
   by: claude-session (iolink)
-  status: blocked
   audit: 2026-11-25 waits for Nick: a purchase. See the question iolink-still-wanted.
+  decided: 2026-11-25 Nick: parked with iolink-node; nothing is ordered.
 
-- [ ] **IO-Link on the node: IODD import, the `iolink` device line, then the P4's line driver** — Parked behind `iodd-metadata` (Nick, 2026-11-14, later the same day: the sensor is wired to a plain digital channel and its IODD is its metadata; speaking IO-Link to it comes after, if at all). What is built stays on dev, tested, with nothing calling it. Why it mattered: Nick, 2026-11-14: everything should be reachable, IO-Link sensors included, through a master of our own on the edge node. Built so far (docs/ARCHITECTURE.md `helmsman-iolink`): the message codec, one master port and a simulated device as state machines without I/O, with the timing rules and a noisy line as tests. Also built: `iodd` reads a device's IODD file for its vendor and device id and its Process Data layout by name, and `pd` reads a value out of the octets by that layout (all 22 of the community's example IODDs read; no vendor's file tried yet). Also built in helmsman-nodecore's `iolink`: the `device NAME iolink port=N ...` line and its `pd:OFFSET[:uN|iN]` points, a `Port` that runs one on the master and gives the inputs by point and takes the outputs, and `Iodd::map_lines`, which writes those lines from an IODD; proven from an IODD to values on the simulated device. No firmware calls it, and the node's own `iomap::parse` still refuses an `iolink` line, since no node has a port. Left, in order: (1) try the reader on the IODD of the sensor that gets ordered, from IODDfinder; (2) `iolink-node-image`: a place for `int` points in the node's program image (today it is 4 bytes of bool bits a direction, for the Modbus block's points, so an IO-Link number has nowhere to land), and a map with no Modbus block (today a node's map needs exactly one); (3) `iolink-p4-line`: the transceiver driver on the P4 behind `Step` (wake-up, exchange with a timeout), `iomap::parse` taking `iolink` lines on a board with ports, the io task polling each `Port`, after `iolink-transceiver`; (4) the first real sensor, its capture kept as a test, and only then any wording a user reads (`iolink-membership`). Owed before a device with more than 2 octets of Process Data and M-sequence code 0: the interleaved TYPE_1_1 / TYPE_1_2 mode, which a master shall support (Table A.10 NOTE 3). Later cards: ISDUs (parameters, identity strings), Events, data storage, a second port, a box reading a node's ports.
+- [x] **IO-Link on the node: IODD import, the `iolink` device line, then the P4's line driver** — Parked behind `iodd-metadata` (Nick, 2026-11-14, later the same day: the sensor is wired to a plain digital channel and its IODD is its metadata; speaking IO-Link to it comes after, if at all). What is built stays on dev, tested, with nothing calling it. Why it mattered: Nick, 2026-11-14: everything should be reachable, IO-Link sensors included, through a master of our own on the edge node. Built so far (docs/ARCHITECTURE.md `helmsman-iolink`): the message codec, one master port and a simulated device as state machines without I/O, with the timing rules and a noisy line as tests. Also built: `iodd` reads a device's IODD file for its vendor and device id and its Process Data layout by name, and `pd` reads a value out of the octets by that layout (all 22 of the community's example IODDs read; no vendor's file tried yet). Also built in helmsman-nodecore's `iolink`: the `device NAME iolink port=N ...` line and its `pd:OFFSET[:uN|iN]` points, a `Port` that runs one on the master and gives the inputs by point and takes the outputs, and `Iodd::map_lines`, which writes those lines from an IODD; proven from an IODD to values on the simulated device. No firmware calls it, and the node's own `iomap::parse` still refuses an `iolink` line, since no node has a port. Left, in order: (1) try the reader on the IODD of the sensor that gets ordered, from IODDfinder; (2) `iolink-node-image`: a place for `int` points in the node's program image (today it is 4 bytes of bool bits a direction, for the Modbus block's points, so an IO-Link number has nowhere to land), and a map with no Modbus block (today a node's map needs exactly one); (3) `iolink-p4-line`: the transceiver driver on the P4 behind `Step` (wake-up, exchange with a timeout), `iomap::parse` taking `iolink` lines on a board with ports, the io task polling each `Port`, after `iolink-transceiver`; (4) the first real sensor, its capture kept as a test, and only then any wording a user reads (`iolink-membership`). Owed before a device with more than 2 octets of Process Data and M-sequence code 0: the interleaved TYPE_1_1 / TYPE_1_2 mode, which a master shall support (Table A.10 NOTE 3). Later cards: ISDUs (parameters, identity strings), Events, data storage, a second port, a box reading a node's ports.
   needs: nothing for (2); the sensor chosen for (1); `iolink-transceiver` for (3) and (4)
   result: a node's program reads an IO-Link sensor's Process Data by name from a deployed map
   id: iolink-node
   by: claude-session (iolink)
   depends: iolink-still-wanted
   audit: 2026-11-25 plan: 1) int points in the node image and a map with no Modbus block (software only); 2) iolink lines in iomap::parse on a board with ports; 3) the transceiver driver (needs the part); 4) a first real sensor, its capture kept as a test.
+  decided: 2026-11-25 Nick: parked; the IODD-as-metadata route stands. Reopen when a customer asks.
 
 - [ ] **Devices, not protocols: the device profile layer** — Nick, 2026-11-11: "the comms protocol isn't critically important since we can talk to everything. It's most important for the user to easily find, connect, and talk to the I/O on devices"; a simpler, more limited interface, not for power users. Decided in the interview that day: (1) the protocol is never shown or chosen: the box picks from the profile's order and falls back, and names it only in a failure and in details; (2) a device not in the library: the agent builds its profile from the vendor's file or manual, the user checks the channel names and can publish it; (3) channels first (named, typed, with units and a safe value), the standard face per kind (a drive's enable, speed, position, fault) when the MDrive is on the bench; (4) addresses and names: the box suggests, the user confirms (the I/O network may be IT's); (5) today's add-a-device form and typed points stay behind an Advanced switch; (6) timing is fully automatic, from the program's scan period and the profile's limits: the user sees healthy, slow or lost; (7) a profile is copied into the project when the device is added, updates are offered; (8) the Moxa E1213 proves it first: the same channels over Modbus TCP and EtherNet/IP. Sequence: (a) the profile format (identity per protocol, transports in order with their connection settings, channels with an address per transport, kind, limits) and its resolution to today's map lines, E1213 first, in helmsman-io with the library entry; (b) one Scan across protocols (ListIdentity, Modbus identification, PROFINET DCP) into one list; (c) add by click: the device named, its channels there with names, the profile in the project; (d) automatic timing and the healthy / slow / lost status; (e) the agent's build-a-profile path and publish; (f) suggested addressing; (g) kinds, with the MDrive.
   notes: 2026-11-11: the overnight plan for steps (a)..(e), a PR each, is PROTOCOLS.md at the repo root ("Run PROTOCOLS.md").
@@ -505,6 +557,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   depends: library-proof-shape
   audit: 2026-11-25 plan (in helmsman-devices): 1) an optional [proof] table in the schema, checked by build-index.py --check; 2) "proven n of m" and the open list in index.json; 3) build-review.py carries the marks; 4) backfill the entries from what each file says; 5) the site table; 6) AGENTS.md.
+  decided: 2026-11-25 Nick: an optional [proof] table in device.toml.
 
 - [ ] **Configure a device by talking to an agent, not through the vendor's tool** — Nick, 2026-11-17: come up with ways to configure devices agentically in the device library, casually and conversationally, so nobody has to use the vendor's software. What exists: helmsman-devconf reads and writes a Moxa E1200's settings through its web console, with the box's engineer gate as the only way a unit is changed (`devconf-agent-tools` is its read-only agent side). What the bench of 2026-11-16 showed is reachable without any vendor tool: the MDrive answers MCode on TCP 503 beside EtherNet/IP (every register read; `SL 0` stopped it), and its EtherNet/IP assembly mapping, protocol choice and "Halt Motion" setting live behind Novanta's Configuration Utility, which talks to that same port; the IMPACT67 takes its channel setup as configuration data in the Forward_Open (built: `config_data=`), and its address mode and parameterization mode through its web server; every EtherNet/IP device has the TCP/IP Interface object for its address. Shape to explore first, as an interview: a `configure` recipe per library entry (which channel reaches the setting: a CIP attribute, a web form, a vendor text port; what each setting is called in the vendor's words and in plain words; what is safe to change live and what needs a restart), read by one generic agent tool that proposes a change in words, shows the before and after, and applies it only through the engineer gate; settings the recipe cannot reach are listed as "needs the vendor's tool" so the gap is visible. First targets, because the bench has them: the MDrive's mapping page over MCode (capture what the utility sends, a hand-off `tcpdump`), the IMPACT67's parameterization mode, any device's IP address over CIP.
   needs: later (Nick, 2026-11-17); an interview on the shape before anything is built; the MDrive and the IMPACT67 on the bench
@@ -612,6 +665,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   depends: agent-structured-output
   audit: 2026-11-25 plan: 1) a relay profile with a schema (agent-relay); 2) the box and the page parse it; 3) drop the prose heuristics; 4) edits anchored on a base hash, diff shown before the write; 5) a mutation check of scenarios.
+  decided: 2026-11-25 Nick: the answer comes back under a JSON schema (structured output). Step 1 therefore starts by checking that the model the relay runs honours a schema, and names the fallback if it does not.
 
 - [ ] **One agent core for the page and the box; apply and undo as a transaction** — review 2026-11-08. `playground_view` and `box_view` each implement Run, Check, Apply and Undo with different settings and sizes, message caps, pre-save of dirty edits, undo revision source and accepted stop reasons, and they have drifted. `Run` has no base snapshot, file set or per-file hashes, so Undo restores the whole project (other files' later saves included) and the box path overwrites unsaved local edits. Shape: one `AgentRun` owning Run/Check/Apply/Undo; hosts implement `snapshot()`, `settings()`, an atomic multi-file `write_files(base, files)` and `restore(files)`; Apply refuses if a touched file moved since Send; Undo is the exact inverse over those files only.
   result: one code path, tested once against both hosts; Undo never touches a file the Agent did not write
@@ -725,6 +779,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   depends: links-off-switch
   audit: 2026-11-25 plan: 1) --links off, the box opens no links; 2) inputs from the simulation plant model, outputs go nowhere; 3) a banner on the Devices tab and the Monitor; 4) the CLAUDE.md try-box entry.
+  decided: 2026-11-25 Nick: --links off at start, no switch in the UI.
 
 - [ ] **Devices tab: glyph buttons with their names, I/O grouped and collapsed, a search** — your answer to `glyphs-devices-buttons` (2026-11-13): "let the user choose through a subset of icons but still show their names. Collapse the I/O registers by default and group ins, outs, and datatypes so that it's easier for the user to organize. A simple pattern search feature for an input in real-time would be nice as well." Read as: (1) Scan, Edit, Delete and Use this device become `glyphs::action` buttons that keep their word beside the glyph (not glyph only, as the Agent tab's are); (2) a device's points start collapsed, and open grouped as Inputs, Outputs, then by data type inside each (BOOL, INT, REAL, ...), each group with its count; (3) a filter field at the top of the tab that narrows the list as you type, matching point names, channels and devices (plain substring and `*` wildcards). Assumed and to check with you on the PR: "choose through a subset of icons" means the glyph library's existing set, not a picker where the user assigns icons to devices. Panel width rules apply (`every_tab_leaves_the_panels_their_width`, a test at the default width).
   needs: nothing
@@ -839,6 +894,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   status: ready
   audit: 2026-11-25 plan: 1) a ladder rung for ask; 2) a relay profile for the box that speaks edits and ask (Nick's deploy); 3) BOX_RULES rewritten for edits, crate::edits in the box answer path; 4) the question card in box_view; 5) the same for the key path. Part (3) of the card is moot (no streamed draft, 2026-11-22).
+  decided: 2026-11-25 Nick: yes, one new served profile for the box that speaks edits and ask. The profile is a session in ../agent-relay and then Nick's deploy.
 
 - [x] **The box's Agent tab shows its progress too** — the page shows the time, the latest thought and the draft as it streams (feat/agent-progress); the box's Agent tab goes through `POST /api/chat` and still shows only a spinner (`instruct::View::progress` is `None` there). Needs the thinking and text deltas through the box's chat stream to the canvas, then the same `Progress`.
   needs: nothing
@@ -870,6 +926,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   depends: safe-state-home
   audit: 2026-11-25 plan: 1) fill the list from a library device's channels; 2) a safe state per output, carried into the map; 3) a draft plant.sim from the answers; 4) the same list for an existing program and on a box.
+  decided: 2026-11-25 Nick: an output's safe state is a safe= word on its io.map line.
 
 - [ ] **The Agent sees your patterns: across sessions, and beyond compile errors** — Nick, 2026-11-14: "It should be seeing your patterns and fixing them. It should be putting the relevant cognitive load on you and helping you build quickly, not forcing you to take baby steps." Built in the simulation (`crates/helmsman-canvas/src/watch.rs`): the same kind of compile error in several places is said once with one Fix it for all of them, and a kind that comes up three times in a session is said to be a habit; the count lives in the page's memory only. Left: habits that last past a reload (what is kept about an engineer, where and for how long is yours to decide: this browser only, the project, or their account on a box); patterns beyond compile errors (the same edit repeated across a program, a requirement always written without its fault case); a habit turned into a standing fix the Agent applies by itself.
   needs: your decision on what may be kept about an engineer, and where
@@ -879,8 +936,9 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: agent-patterns
   asked: 2026-11-14
   by: claude-session
-  status: blocked
   audit: 2026-11-25 waits for the question agent-habits-where.
+  depends: settings-on-device
+  decided: 2026-11-25 Nick: habits are kept with the person's account on a box. Plan: 1) habits as a section of the per-account settings record (settings-on-device); 2) watch.rs loads and saves them through it; 3) a "what is kept about me" list with a clear button in Settings. On the public page with no account they stay in memory only.
 
 - [ ] **Device configuration follow-ups, from a recovered snapshot** — work that sat uncommitted in a worktree since 2026-11-12, now the branch `wip/recovered-devconf-canvas-20261114` (not built or tested, based on a tree from that day). In it: a failed re-read of a device's configuration keeps the last one on screen beside the error instead of replacing it; a new watchdog draft starts at 60 s and the sentence says seconds; a browser smoke of the Configuration section against the simulated E1200 console (`scripts/canvas-smoke-devconf.py`, `helmsman-devconf/examples/sim_console.rs`). Rebase it on dev, finish its tests, and land it, or delete the branch if the Configuration section has moved on.
   needs: nothing
@@ -966,6 +1024,7 @@ Nick, 2026-11-22, after four rounds of a 3D view in the playground (#549 in dev 
   asked: 2026-11-21
   by: session canvas-overhaul interview
   audit: 2026-11-25 plan: 1) a pure model in the canvas: parts to a review list and decisions, to draft io.map lines; 2) upload and review window on the Devices tab in the playground; 3) the same on a box, with the wasm dependency check; 4) the FEATURES row.
+  decided: 2026-11-25 Nick: a matched part's draft line carries the library's default address, shown in the review and changeable there.
 
 - [ ] **Later inputs: schematics as PDF, then native CAD** — Not first (decision 6). A schematic as PDF or a scan needs a model reading the page, a confirm step for every wire, and a relay profile (Nick's deploy). DWG, EPLAN and STEP need a vendor's library or a converter: a dependency and licence decision to bring to Nick before any code.
   needs: drawing-review in use on real files; a real customer schematic
@@ -1058,6 +1117,7 @@ Nick's list, 2026-11-23: minimal UI, glyphs instead of words, nothing jumpy; pul
   id: first-run-and-accounts
   status: ready
   audit: 2026-11-25 plan (draft PRs, it touches sign-in): 1) the setup-code source and first-run page; 2) add, disable and reset people in the UI; 3) a person changes their own password; 4) the operator's 12 h session.
+  decided: 2026-11-25 Nick: the setup code is printed on a label on the device, so assembly gains a step: the code is made and the label printed per unit.
 - [ ] **The project download carries its history** — Nick, 2026-11-23: a Skipper's revisions (the newest 200 per project, `project/history.rs`) exist only on that device, and the .zip holds the files alone. The download gains the revisions (who, when, what, the recorded instruction), and an upload of such a .zip brings them back, so a backup made by hand is whole. Bounded and checked like any upload; an older .zip without history still loads.
   result: one file is a complete backup of a project
   est: 3d
@@ -1144,6 +1204,7 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   by: claude-session
   depends: string-signal-type
   audit: 2026-11-25 plan: 1) Value::Str through helmsman-io and Program::ports, output only; 2) /api/signals, the values stream and the node's SignalValue; 3) trend and an OPC UA String node; 4) RETAIN; 5) shared STRING ports; 6) sim controls; 7) a relay profile id.
+  decided: 2026-11-25 Nick: one text signal type, bounded at 255 bytes as STRING is in the language.
 
 ## From user feedback: plan for later
 
@@ -1331,7 +1392,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   asked: 2026-11-01
   by: claude-session
   depends: version-control-library
-  audit: 2026-11-25 plan: 1) the dependency review and an empty repository per project written on deploy, behind box; 2) one commit per deploy with author, approver and audit trailers, old versions imported; 3) History and Diff on commits; 4) Revert as a proposal; 5) push (HTTPS deploy key, fast-forward only); 6) pull as a proposal.
+  audit: 2026-11-25 plan (after Nick's decision, export only): 1) settle the bundle format with a spike: a `git bundle` or fast-import stream written without a git library, one commit per deploy with author, approver and audit trailers; 2) GET of the bundle on the box and a Download entry in History; 3) a test that real git imports it and the tree of each commit equals the deployed revision; 4) docs/help page on importing it. Out: push, pull and Revert through git (Revert stays a proposal from History). Overlaps history-in-download: do that first and build the bundle from the same revisions.
+  decided: 2026-11-25 Nick: no git library on the box. The box writes a bundle of a project's history that an engineer imports into git elsewhere.
 
 ## Roadmap M3: tiers, sharing, fleet
 
@@ -1380,6 +1442,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   status: ready
   depends: ota-signing-key
   audit: 2026-11-25 plan: 1) sign node OTA images and check the signature on the node; 2) a Site view that lists nodes from the site beacon; 3) node to relay history uplink.
+  decided: 2026-11-25 Nick: the firmware signing key is his, kept offline; he signs each release.
 
 - [ ] **TLS on a node's data port** — your answer to `node-tls-first-peer` (2026-11-13): needed eventually to push production data out over a second network port, with strict isolation between the control runtime and the data publication; not until there is a board with more than one Ethernet port. The recipe (mbedtls-rs at the fork's main with Homebrew clang) compiles for the P4 (docs/EDGE.md Phase 3) and is all that exists.
   needs: a node board with two Ethernet ports
