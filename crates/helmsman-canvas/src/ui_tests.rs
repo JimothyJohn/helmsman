@@ -8309,6 +8309,7 @@ mod devconf {
 }
 
 mod assign;
+mod box_trend;
 mod chat_about;
 mod design;
 mod device_io;
