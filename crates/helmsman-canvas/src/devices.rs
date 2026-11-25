@@ -1175,7 +1175,8 @@ impl DevicesUi {
             match &q.profile {
                 None => return None,
                 Some(Err(why)) => a.skipped.push(format!("{what}: {why}")),
-                Some(Ok(_)) => match crate::device_form_ui::quick_add(q, &self.map) {
+                Some(Ok(_)) => match crate::device_form_ui::quick_add(q, &self.map, !self.skipper.is_empty())
+                {
                     Ok(add) => {
                         a.added.push(q.name.clone());
                         a.current = false;

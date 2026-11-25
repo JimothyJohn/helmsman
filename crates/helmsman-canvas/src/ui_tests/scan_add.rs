@@ -133,3 +133,24 @@ fn a_device_the_skipper_runs_already_is_passed_over() {
         "{note}"
     );
 }
+
+/// On a Skipper's page Add names the device by the address it answered
+/// at: a Skipper does not look a device up by its identity.
+#[test]
+fn on_a_skippers_page_a_device_is_added_at_its_address() {
+    let mut d = DevicesUi::default();
+    d.add_all = Some(AddAll::default());
+    d.skipper = vec![("drive".into(), "192.168.33.1".into())];
+    d.found = vec![found("192.168.33.60", 515, Some("moxa-iologik-e1213.device"))];
+    d.found_to_add_all();
+    assert!(matches!(d.add_all_step(), Some(DeviceAct::Library { .. })));
+    let text = include_str!("../../../../docs/devices/moxa-iologik-e1213.device").to_string();
+    let skim = helmsman_project::profile_skim::skim(&text).unwrap();
+    d.quick.as_mut().unwrap().profile = Some(Ok((text, skim)));
+    assert_eq!(d.add_all_step(), None);
+    let add = d.add_next.take().expect("handed on as Add");
+    assert_eq!(
+        add.wiring.device_line,
+        "device iologik_e1213 device:moxa-iologik-e1213 192.168.33.60"
+    );
+}
