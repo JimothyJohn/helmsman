@@ -117,7 +117,10 @@ fn host_port(endpoint: &str) -> Option<(&str, &str)> {
 fn device_line(name: &str, driver: &str, at: &str, params: &[(String, String)]) -> String {
     let mut l = format!("device {name} {driver} {at}");
     for (k, v) in params.iter().filter(|(k, _)| param_kept(driver, k)) {
-        l.push_str(&format!(" {k}={v}"));
+        l.push(' ');
+        l.push_str(k);
+        l.push('=');
+        l.push_str(v);
     }
     l
 }

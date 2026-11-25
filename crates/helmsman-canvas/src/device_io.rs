@@ -176,6 +176,8 @@ pub fn movable(ports: &[Port], map: &MapText) -> Vec<Port> {
 /// takes: a long device name is cut, never the channel's
 /// (`liberty_lexium_mdrive_et_enabled`).
 fn fresh_name(device: &str, label: &str, ports: &[Port], map: &MapText) -> String {
+    // Room for a `_N` after it.
+    const ROOM: usize = crate::skipper_map::NAME_MAX - 3;
     // An identifier whatever it is called: anything else is a `_`, and
     // never two in a row.
     let ident = |s: &str| {
@@ -188,8 +190,6 @@ fn fresh_name(device: &str, label: &str, ports: &[Port], map: &MapText) -> Strin
         }
         out.trim_matches('_').to_string()
     };
-    // Room for a `_N` after it.
-    const ROOM: usize = crate::skipper_map::NAME_MAX - 3;
     let channel = ident(&helmsman_project::profile_skim::signal_name("", label));
     let channel: String = channel.chars().take(ROOM).collect();
     let keep = ROOM.saturating_sub(channel.len() + 1);
@@ -968,7 +968,7 @@ mod tests {
         assert_eq!(ui.channels_of("ghost"), None);
     }
 
-    /// Nick 2026-11-24: Add I/O on the MDrive named a point
+    /// Nick 2026-11-24: Add I/O on the drive named a point
     /// `liberty_lexium_mdrive_ethernet_lmd_ether` (40 characters), which a
     /// Skipper refuses. A long device name is cut; the channel is kept.
     #[test]
