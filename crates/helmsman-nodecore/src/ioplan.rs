@@ -424,10 +424,17 @@ impl EnipPlan {
 /// A point's value in an image, as the signals list shows it.
 #[must_use]
 pub fn value_at(image: &[u8], point: &Point) -> Option<SignalValue> {
-    let Some(fmt) = point.fmt else {
-        return Some(SignalValue::Bool(bit_of(image, point.at)));
+    value_slot(image, point.fmt, point.at)
+}
+
+/// A value in an image by its format and place: what [`value_at`] reads
+/// for a point and the shared bank reads for a share.
+#[must_use]
+pub fn value_slot(image: &[u8], fmt: Option<Fmt>, at: At) -> Option<SignalValue> {
+    let Some(fmt) = fmt else {
+        return Some(SignalValue::Bool(bit_of(image, at)));
     };
-    let raw = slot(image, point.at)?;
+    let raw = slot(image, at)?;
     Some(match fmt {
         Fmt::U8 | Fmt::U16 => SignalValue::Int(i64::from(le16(raw)?)),
         Fmt::I8 | Fmt::I16 => SignalValue::Int(i64::from(le16(raw)?.cast_signed())),
@@ -445,13 +452,18 @@ pub fn value_at(image: &[u8], point: &Point) -> Option<SignalValue> {
 /// a real into an integer point and so on, changes nothing, and neither
 /// does a point past the image's end.
 pub fn put_at(image: &mut [u8], point: &Point, value: SignalValue) {
-    let Some(fmt) = point.fmt else {
+    put_slot(image, point.fmt, point.at, value);
+}
+
+/// [`put_at`] by format and place, for a share in the shared bank.
+pub fn put_slot(image: &mut [u8], fmt: Option<Fmt>, at: At, value: SignalValue) {
+    let Some(fmt) = fmt else {
         if let SignalValue::Bool(on) = value {
-            set_bit(image, point.at, on);
+            set_bit(image, at, on);
         }
         return;
     };
-    let Some(raw) = slot_mut(image, point.at) else {
+    let Some(raw) = slot_mut(image, at) else {
         return;
     };
     match (fmt, value) {
@@ -510,6 +522,26 @@ pub fn bindings(map: &IoMap, ports: &[(&str, bool)]) -> Vec<(usize, usize)> {
         }
     }
     out
+}
+
+/// Which program ports bind to which shares of the map, by name, as
+/// [`bindings`] does for points: each `(port index, share index)` pairs a
+/// port with the share of the same name (case-insensitive). A share is a
+/// value the program drives (a `VAR_OUTPUT`) or one another controller
+/// drives (a `VAR_INPUT`), so there is no direction to match: the port's
+/// own says which. Shares with no port are left out (they read 0 or false).
+#[must_use]
+pub fn share_bindings(shares: &[crate::iomap::Share], ports: &[(&str, bool)]) -> Vec<(usize, usize)> {
+    ports
+        .iter()
+        .enumerate()
+        .filter_map(|(pi, (name, _))| {
+            shares
+                .iter()
+                .position(|s| s.name.eq_ignore_ascii_case(name))
+                .map(|k| (pi, k))
+        })
+        .collect()
 }
 
 #[cfg(test)]

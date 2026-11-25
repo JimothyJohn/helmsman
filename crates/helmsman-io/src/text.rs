@@ -44,6 +44,14 @@
 //! - `safe=VALUE` (`out` only): what the output is driven to whenever no
 //!   healthy module drives it (default off / zero).
 //!
+//! `share NAME TYPE TABLE:ADDR[:FMT]` is for a Skipper (the edge node,
+//! docs/EDGE.md "Sharing values"): the program variable NAME is served on
+//! the node's own Modbus TCP tables for other controllers to read, and to
+//! write where the program takes it as an input. A box reads and keeps the
+//! line (it is not refused, so one map file serves a project that has a
+//! Skipper in it) and serves nothing: a box has no Modbus server. The line
+//! is checked for its syntax only ([`Share`]); the node checks the rest.
+//!
 //! `#` starts a comment. Tokens are separated by spaces or tabs; nothing is
 //! quoted, so no token contains either. Maps written before units and
 //! poll rates read the same as ever; `box` and `module` are reserved
@@ -68,6 +76,80 @@ pub const SCREEN: &str = "screen";
 /// The device word of a placeholder point no device backs.
 pub const SIM: &str = "sim";
 
+/// One `share` line: a value a Skipper serves on its Modbus TCP tables.
+/// A box keeps it as written and does nothing with it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Share {
+    pub name: String,
+    pub ty: Ty,
+    /// `TABLE:ADDR[:FMT]` as written: `hr:0`, `coil:3`, `ir:4:f32`.
+    pub address: String,
+}
+
+/// The formats a share's register may have, as a modbus-tcp point's do.
+const SHARE_FMTS: [&str; 8] = ["u16", "i16", "u32", "u32sw", "i32", "i32sw", "f32", "f32sw"];
+
+/// `share NAME TYPE TABLE:ADDR[:FMT]`, kept as written.
+fn share_line(name: &str, t: &str, address: &str, out: &mut MapFile) -> Result<(), String> {
+    if !is_ident(name) {
+        return Err(format!("share name {name:?}: an identifier"));
+    }
+    let ty = ty(t).ok_or_else(|| format!("type {t:?}: bool, int or real"))?;
+    share_address_ok(ty, address)?;
+    if out.shares.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
+        return Err(format!("{name}: shared twice"));
+    }
+    out.shares.push(Share {
+        name: name.into(),
+        ty,
+        address: address.into(),
+    });
+    Ok(())
+}
+
+/// A share's `TABLE:ADDR[:FMT]` for its type: `di` or `coil` for a bool,
+/// `ir` or `hr` for an int or a real; an address 0 to 65535; a format only
+/// on a register, `f32` or `f32sw` exactly when the type is real.
+fn share_address_ok(ty: Ty, address: &str) -> Result<(), String> {
+    let mut parts = address.split(':');
+    let table = parts.next().unwrap_or_default();
+    let addr = parts.next().unwrap_or_default();
+    let fmt = parts.next();
+    let want: &[&str] = if ty == Ty::Bool {
+        &["di", "coil"]
+    } else {
+        &["ir", "hr"]
+    };
+    if !want.contains(&table) {
+        return Err(format!(
+            "share {address:?}: a {} goes in {}",
+            if ty == Ty::Bool { "bool" } else { "int or real" },
+            want.join(" or ")
+        ));
+    }
+    if addr.is_empty()
+        || addr.len() > 5
+        || !addr.bytes().all(|b| b.is_ascii_digit())
+        || addr.parse::<u16>().is_err()
+    {
+        return Err(format!("share {address:?}: ADDR is a number, 0 to 65535"));
+    }
+    if parts.next().is_some() {
+        return Err(format!("share {address:?}: too many fields"));
+    }
+    match (ty, fmt) {
+        (Ty::Bool | Ty::Int, None) | (Ty::Real, Some("f32" | "f32sw")) => Ok(()),
+        (Ty::Bool, Some(_)) => Err(format!(
+            "share {address:?}: a coil or discrete input takes no format"
+        )),
+        (Ty::Real, _) => Err(format!("share {address:?}: a real is f32 or f32sw")),
+        (Ty::Int, Some(f)) if SHARE_FMTS.contains(&f) && !f.starts_with("f32") => Ok(()),
+        (Ty::Int, Some(_)) => Err(format!(
+            "share {address:?}: an int's format is one of u16 i16 u32 u32sw i32 i32sw"
+        )),
+    }
+}
+
 /// A parsed map file: the map, the declared safe values, and what is
 /// wired to which signal.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -76,6 +158,8 @@ pub struct MapFile {
     pub safe: BTreeMap<String, Value>,
     /// Signal name to the `wired=` library folder (`vendor/model`).
     pub wired: BTreeMap<String, String>,
+    /// The `share` lines, in the order written (a Skipper's; see [`Share`]).
+    pub shares: Vec<Share>,
 }
 
 /// Longest part of a `wired=` folder, as the device library names them.
@@ -180,6 +264,7 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
             });
             Ok(())
         }
+        ["share", name, t, address] => share_line(name, t, address, out),
         [dir @ ("in" | "out"), name, t, SIM, rest @ ..] => sim_point(dir, name, t, rest, out),
         [dir @ ("in" | "out"), name, t, device, point, rest @ ..] => {
             let dir = if *dir == "in" { Dir::In } else { Dir::Out };
@@ -235,7 +320,8 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
             Ok(())
         }
         [w, ..] if matches!(*w, "device" | "in" | "out") => Err(format!("{w}: too few words")),
-        [w, ..] => Err(format!("{w:?}: expected device, in or out")),
+        ["share", ..] => Err("share: want share NAME TYPE TABLE:ADDR[:FMT]".into()),
+        [w, ..] => Err(format!("{w:?}: expected device, in, out or share")),
         [] => Ok(()),
     }
 }
@@ -360,6 +446,14 @@ pub fn render(file: &MapFile) -> String {
             let _ = write!(s, " wired={w}");
         }
         s.push('\n');
+    }
+    for sh in &file.shares {
+        let ty = match sh.ty {
+            Ty::Bool => "bool",
+            Ty::Int => "int",
+            Ty::Real => "real",
+        };
+        let _ = writeln!(s, "share {} {ty} {}", sh.name, sh.address);
     }
     s
 }

@@ -1030,6 +1030,37 @@ mod tests {
         ));
     }
 
+    /// A map with `share` lines is saved like any other, a bad one is
+    /// refused with its line, and a board that serves no Modbus says so.
+    #[test]
+    fn a_map_with_shares_is_saved_and_a_bad_share_is_refused_with_its_line() {
+        let s = settings();
+        let good = "device rio modbus-tcp 192.168.3.60\nshare speed int hr:0\nshare run bool coil:0\n";
+        assert_eq!(
+            handle(&put_map(AUTH, good), &sample_view(), &s),
+            Outcome::Effect(Effect::SaveIoMap {
+                text: good.into(),
+                page: false
+            })
+        );
+        let bad = "device rio modbus-tcp 192.168.3.60\nshare speed int hr:0\nshare run bool hr:1\n";
+        let r = reply(handle(&put_map(AUTH, bad), &sample_view(), &s));
+        assert_eq!(r.status, 422);
+        assert!(
+            String::from_utf8_lossy(&r.body).contains("line 3"),
+            "{}",
+            String::from_utf8_lossy(&r.body)
+        );
+        let mut one = sample_view();
+        one.one_block = true;
+        let r = reply(handle(&put_map(AUTH, good), &one, &s));
+        assert_eq!(r.status, 422);
+        assert!(
+            String::from_utf8_lossy(&r.body).contains("share"),
+            "a share line is not for the ESP32 board"
+        );
+    }
+
     /// A one-block board refuses, at the API and at the form, a map that
     /// parses but that it cannot run, and never hands it on to be saved.
     #[test]

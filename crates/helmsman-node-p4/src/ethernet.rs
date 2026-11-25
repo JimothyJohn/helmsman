@@ -36,8 +36,10 @@ pub const TX_FRAMES: usize = 10;
 /// Sockets the stack holds: DHCP, one TCP link a device (16: Modbus or the explicit
 /// session), the UDP I/O socket, the HTTP connections ([`crate::server::CONNECTIONS`]), the
 /// firmware fetch, the beacon, the UDP log, the comms check (1 + 16 + 1 + 4 + 1 + 1 + 1 + 1 = 26,
-/// none spare). smoltcp panics on a socket past this.
-pub const SOCKETS: usize = 22 + crate::server::CONNECTIONS;
+/// none spare), and the Modbus TCP server's connections
+/// ([`crate::share_server::CONNECTIONS`], listening only when the map shares
+/// something). smoltcp panics on a socket past this.
+pub const SOCKETS: usize = 22 + crate::server::CONNECTIONS + crate::share_server::CONNECTIONS;
 /// How often the PHY is asked about the link.
 pub const LINK_POLL: Duration = Duration::from_millis(500);
 

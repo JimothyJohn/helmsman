@@ -1200,6 +1200,107 @@ variables (`AT %QD18`) work as before. A point written by both a located
 variable and a name-bound output takes the name-bound value, which is
 applied after the scan. Proven on the host only; not yet run on a board.
 
+### Sharing values: the Skipper's own Modbus TCP tables (2026-11-25)
+
+Nick, 2026-11-25: "the Skipper should have its own ModbusTCP/EthernetIP/
+Profinet/EtherCAT registers so that it can communicate with other Skippers
+and PLCs on the network. Obviously we can only incorporate ModbusTCP and
+EthernetIP for now." What is decided (his interview answers): values are
+shared by name in io.map; others may read every shared value and write only
+what is marked; Modbus TCP first, the EtherNet/IP adapter later; the listener
+is off until the map shares something. This section is Modbus TCP. Nothing
+here is run on a board yet: the image builds, and the server is held by the
+host tests (helmsman-nodecore `modbus_server`, `iomap`; helmsman-io
+`tests/node_map.rs`, which asks it with the box's own Modbus client codec).
+
+**The grammar.** One line per value, in the map beside the `device`, `in`
+and `out` lines:
+
+```text
+# shared with other controllers
+share speed   int  hr:0        # they read
+share run_cmd bool coil:0      # they write
+share at_home bool di:0
+share level   real ir:4:f32
+share pos     int  hr:10:i32sw
+```
+
+`share NAME TYPE TABLE:ADDR[:FMT]`. `bool` takes `di` (discrete input) or
+`coil`; `int` and `real` take `ir` (input register) or `hr` (holding
+register), with the `FMT` a modbus-tcp point has: `u16` (the default) `i16`
+`u32` `u32sw` `i32` `i32sw` `f32` `f32sw`. A `real` needs `f32` or `f32sw`,
+an `int` any of the others; the `sw` formats send the low word first. A
+32-bit value takes two registers. NAME is a `VAR_INPUT` or `VAR_OUTPUT` of
+the running program and binds by name, as the points do, case-insensitively.
+A map may hold 32 shares, and a map of shares alone (no `device` line) is a
+map. The node refuses a line with its line number: a type the table does not
+hold (`bool` in `hr`, `int` in `coil`), a format on a coil, a format of the
+wrong kind, an address that overlaps another share of the same table
+(`hr:0:u32` and `hr:1`; `hr:0` and `ir:0` do not overlap, the tables are
+separate), a name shared twice, and a name that is also an `in` point (an
+input has one source, a point or another controller; an `out` point of the
+same name is fine). Names are ST identifiers of at most 32 characters, and
+the map text keeps its 4096-byte limit.
+
+**What another controller may do.** Reads of any shared address: function
+codes 1 and 2 (coils, discrete inputs, for bool shares) and 3 and 4 (holding,
+input registers, for int and real shares), from the spec's quantity limits
+(App §6.1 to 6.4). Writes, function codes 5, 6, 15 and 16, only where the
+share is a `VAR_INPUT` of the program in a `coil` or `hr` table: that is the
+variable the other controller drives. The program sees the register's value
+as its input each scan, and the value starts at 0 or false and survives a
+redeploy. A share of a `VAR_OUTPUT` is the program's own: others read it, the
+node publishes it after each scan, and it reads 0 or false while the program
+is stopped or faulted. A share with no variable of its name in the program
+reads 0 or false and is listed `"bound": false`. `di` and `ir` shares are
+read only by the protocol itself (it has no write for them), so share
+outputs there; an input in `di` or `ir` stays 0.
+
+**What it answers** (App §7 p.47). Exception 02, illegal data address: a read
+that touches an address no share holds (the whole request is refused; a
+master reads the ranges the map names); any write to an address that is not
+a writable share, whether unshared or the program's own output. Exception
+03, illegal data value: a quantity of 0 or over the limits, a PDU of the
+wrong length or byte count, a coil value other than 0xFF00 or 0x0000, a write
+that covers only part of a 32-bit share (FC 6 cannot write one; FC 16 must
+write both registers in one request), and a REAL written as NaN or infinity.
+Exception 01 for any other function code. A write is all or nothing: a
+request with one bad address changes nothing. The unit id is not checked: any
+unit answers, and the reply carries the request's (a node is one device).
+A frame that is not Modbus TCP (protocol id not 0, length outside 2 to 254)
+closes the connection.
+
+**The server.** TCP port 502 on the node's address, started only when the map
+has a `share` line (the boot line says `modbus server: off` or `on, port
+502, N shared value(s)`; `GET /api/io_map` says it too). Two connections at
+a time (`share_server::CONNECTIONS`; a third finds nothing listening and is
+refused), each with 512-byte buffers: about 2 KiB of heap in all, and 2
+sockets of the stack's table. A frame has 3 s to complete, a quiet
+connection is closed after 60 s (a master polling more slowly reconnects), a
+reply the peer does not take within 2 s ends the connection, and TCP
+keep-alive drops a peer that vanished. The scan loop never touches a socket:
+it and the server meet at one bank of bytes (132, `Live::bank`), each
+holding it for a copy, and the server answers from a copy it took and
+commits only the writes it approved. A peer that sends without stopping
+yields to the executor after every frame. The ESP32 boards (`helmsman-node`,
+one Modbus block) refuse a map with a share line, and a box (which
+masters devices and serves no Modbus) reads and keeps the lines, so one
+io.map can hold a project's Skipper and its box.
+
+**What it shows.** `GET /api/io_map` gains `"modbus_port"` (502, or null while
+nothing is shared) and `"shares"`: for each, `name`, `type`, `address` (`hr:0`,
+`ir:4:f32`), `access` (`read` or `read/write`, from the running program),
+`bound` and the live `value`. A shared name is a program port, so it is also
+in `GET /api/signals` and the values stream with its value, as any port with
+no point is.
+
+**Not done.** EtherNet/IP (an adapter listening on 44818 and 2222 with an
+assembly built from the same lines) is the next card; PROFINET and EtherCAT
+are not planned. No test against a real PLC or another Skipper yet, and the
+image has not been flashed: the first on-board check is a read of each
+function code from the Studio (`/usr/bin/python3 -I`, a few requests at a
+time) before any other controller is pointed at it.
+
 ### Updating a node without a cable (2026-11-18)
 
 A node in a cabinet takes new firmware over its network connection. You

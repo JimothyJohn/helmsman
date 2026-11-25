@@ -13,8 +13,9 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Instant;
 use helmsman_iec::Program;
 use helmsman_nodecore::api::{self, SignalValue, SignalView, Spread, State, Timing};
-use helmsman_nodecore::iomap::{Dir, IoMap};
+use helmsman_nodecore::iomap::{Dir, IoMap, Share};
 use helmsman_nodecore::ioplan;
+use helmsman_nodecore::modbus_server::ShareBank;
 use helmsman_nodecore::router::Control;
 
 /// Bytes of the process image the I/O tasks move each way: the map's bool
@@ -150,6 +151,12 @@ pub struct Live {
     /// The I/O map text the node runs (card node-io-map): what
     /// `/api/io_map` and the settings page show.
     pub io_map: String,
+    /// The map's `share` lines (what the Modbus TCP server serves), set
+    /// at boot; `bank` holds their values.
+    pub shares: Vec<Share>,
+    /// The shared values, and which another controller may write: the
+    /// scan loop and the Modbus TCP server meet here.
+    pub bank: ShareBank,
     /// Publication count and time, bumped by the scan loop when the
     /// signals were refreshed.
     pub seq: u64,
@@ -175,6 +182,8 @@ impl Default for Live {
             module: ModuleLive::default(),
             devices: Vec::new(),
             io_map: String::new(),
+            shares: Vec::new(),
+            bank: ShareBank::default(),
             seq: 0,
             at: None,
             pending: None,
@@ -260,6 +269,19 @@ pub fn view(
             })
             .collect();
         let io_map = live.io_map.clone();
+        let share_list = live
+            .shares
+            .iter()
+            .enumerate()
+            .map(|(k, s)| api::ShareView {
+                name: s.name.clone(),
+                ty: s.ty.word(),
+                address: s.token(),
+                writable: live.bank.writable >> k & 1 == 1,
+                bound: live.bank.bound >> k & 1 == 1,
+                value: ioplan::value_slot(&live.bank.image, s.fmt, s.at),
+            })
+            .collect();
         api::NodeView {
             module,
             signals: live.module.signals.clone(),
@@ -277,6 +299,7 @@ pub fn view(
             version: helmsman_nodecore::VERSION,
             board,
             io_map,
+            shares: share_list,
             one_block: false,
             check: Some(live.check.clone()),
             firmware: live

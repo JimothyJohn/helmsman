@@ -59,6 +59,28 @@
 //!   - Two points of one direction on one device must not share a bit or
 //!     a register.
 //!
+//! # Shared values
+//!
+//! A `share` line puts a program variable in the node's own Modbus TCP
+//! tables, so other controllers (a PLC, another Skipper) read it from the
+//! node, and write the ones the program takes as inputs (docs/EDGE.md,
+//! "Sharing values"):
+//!
+//! ```text
+//! share speed   int  hr:0        # they read
+//! share run_cmd bool coil:0      # they write
+//! share at_home bool di:0
+//! share level   real ir:4:f32
+//! ```
+//!
+//! `share NAME TYPE TABLE:ADDR[:FMT]`: `bool` takes `di` or `coil`, `int`
+//! and `real` take `ir` or `hr` with the same `FMT` a Modbus point has
+//! (`u16` unless given; `real` needs `f32` or `f32sw`). NAME is a
+//! `VAR_INPUT` or `VAR_OUTPUT` of the program, bound by name as points
+//! are, and no `in` point has it (one source per input). A share lives in
+//! its own bank ([`SHARE_BYTES`]), not in the process image: it moves no
+//! point, and a point moves no share. [`Share::at`] is its place there.
+//!
 //! # The process image
 //!
 //! Each direction (`%I`, `%Q`) is [`IMAGE_BYTES`] bytes: a bool area
@@ -142,6 +164,13 @@ pub const MAX_RPI_MS: u32 = 3_600_000;
 pub const DEFAULT_PORT: u16 = 502;
 /// The EtherNet/IP encapsulation port, the only one a node opens.
 pub const ENIP_PORT: u16 = 44818;
+/// Most shared values of one map.
+pub const MAX_SHARES: usize = 32;
+/// The bool area of the share bank: one bit a bool share.
+pub const SHARE_BOOL_BYTES: usize = MAX_SHARES / 8;
+/// The share bank: the bool area, then a 4-byte slot for each numeric
+/// share at most.
+pub const SHARE_BYTES: usize = SHARE_BOOL_BYTES + MAX_SHARES * 4;
 /// Longest point name (an ST identifier the canvas shows whole).
 pub const NAME_MAX: usize = 32;
 /// Most bytes of `config_data` (the box's own limit).
@@ -156,7 +185,9 @@ pub enum Ty {
 }
 
 impl Ty {
-    fn word(self) -> &'static str {
+    /// The map's spelling: `bool`, `int`, `real`.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
         match self {
             Self::Bool => "bool",
             Self::Int => "int",
@@ -247,6 +278,17 @@ pub enum Table {
 }
 
 impl Table {
+    /// The map's spelling: `di`, `coil`, `ir`, `hr`.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Discrete => "di",
+            Self::Coil => "coil",
+            Self::Input => "ir",
+            Self::Holding => "hr",
+        }
+    }
+
     const fn space(self) -> u8 {
         match self {
             Self::Discrete => 0,
@@ -357,6 +399,58 @@ pub const SIM_DEVICE: usize = usize::MAX;
 /// The device id a sim point stands in for; reserved.
 pub const SIM_ID: &str = "sim";
 
+/// One `share` line: a program variable the node serves on its own Modbus
+/// TCP tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Share {
+    pub name: String,
+    pub ty: Ty,
+    /// `Discrete` or `Coil` for a bool, `Input` or `Holding` otherwise.
+    pub table: Table,
+    /// The 0-based PDU address of its first coil, bit or register.
+    pub addr: u16,
+    /// The numeric format (`None` for a bool).
+    pub fmt: Option<Fmt>,
+    /// The 32-bit formats' `sw` word order.
+    pub swapped: bool,
+    /// Its place in the share bank ([`SHARE_BYTES`]), laid out like the
+    /// process image: bools by bit, numbers in 2 or 4 byte slots.
+    pub at: At,
+}
+
+impl Share {
+    /// Registers it takes on the wire (1 for a coil, a bit or a 16-bit
+    /// register, 2 for a 32-bit format).
+    #[must_use]
+    pub fn words(&self) -> u16 {
+        self.fmt.map_or(1, |f| u16::from(f.width() / 2))
+    }
+
+    /// Whether another controller may write it, as far as the table
+    /// goes: coils and holding registers. The program's side decides the
+    /// rest (only a `VAR_INPUT`, see [`crate::modbus_server`]).
+    #[must_use]
+    pub const fn writable_table(&self) -> bool {
+        matches!(self.table, Table::Coil | Table::Holding)
+    }
+
+    /// `hr:0`, `ir:4:f32`, `coil:0`: the address as the map writes it.
+    #[must_use]
+    pub fn token(&self) -> String {
+        let fmt = match (self.fmt, self.swapped) {
+            (None | Some(Fmt::U16 | Fmt::U8 | Fmt::I8), _) => "",
+            (Some(Fmt::I16), _) => ":i16",
+            (Some(Fmt::U32), false) => ":u32",
+            (Some(Fmt::U32), true) => ":u32sw",
+            (Some(Fmt::I32), false) => ":i32",
+            (Some(Fmt::I32), true) => ":i32sw",
+            (Some(Fmt::F32), false) => ":f32",
+            (Some(Fmt::F32), true) => ":f32sw",
+        };
+        alloc::format!("{}:{}{fmt}", self.table.word(), self.addr)
+    }
+}
+
 /// A node's map, as parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IoMap {
@@ -364,6 +458,9 @@ pub struct IoMap {
     pub devices: Vec<Device>,
     /// In the order the lines are written.
     pub points: Vec<Point>,
+    /// The `share` lines, in the order written. The node serves Modbus
+    /// TCP only when there is one.
+    pub shares: Vec<Share>,
     /// The text as written.
     pub text: String,
 }
@@ -939,6 +1036,7 @@ type Claim = (usize, usize, (u8, u32, u32), String);
 struct Taken {
     devices: Vec<Device>,
     points: Vec<Point>,
+    shares: Vec<Share>,
     /// `(direction, device, space, from, to, name)` of each point.
     claims: Vec<Claim>,
     /// The next free byte of each direction's numeric area.
@@ -1008,6 +1106,14 @@ fn point_line(t: &[&str], n: usize, taken: &Taken) -> Result<Placed, Bad> {
     };
     if taken.points.iter().any(|p| p.name.eq_ignore_ascii_case(name)) {
         return Err(bad(n, alloc::format!("{name}: named twice")));
+    }
+    if dir == Dir::In && taken.shares.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
+        return Err(bad(
+            n,
+            alloc::format!(
+                "{name}: a share of that name is above; an input has one source, a point or another controller"
+            ),
+        ));
     }
     if taken.points.len() == MAX_POINTS {
         return Err(bad(
@@ -1100,6 +1206,165 @@ fn point_line(t: &[&str], n: usize, taken: &Taken) -> Result<Placed, Bad> {
     ))
 }
 
+/// A `share` line's address: `TABLE:ADDR[:FMT]`, the table and format
+/// the type allows.
+fn share_token(ty: Ty, token: &str, n: usize) -> Result<(Table, u16, Option<Fmt>, bool), Bad> {
+    let here = |w: String| bad(n, alloc::format!("share {token:?}: {w}"));
+    let mut parts = token.split(':');
+    let table = match (parts.next(), ty) {
+        (Some("di"), Ty::Bool) => Table::Discrete,
+        (Some("coil"), Ty::Bool) => Table::Coil,
+        (Some("ir"), Ty::Int | Ty::Real) => Table::Input,
+        (Some("hr"), Ty::Int | Ty::Real) => Table::Holding,
+        (Some("di" | "coil"), _) => {
+            return Err(here(
+                "a di or coil holds a bool; an int or a real goes in ir or hr".into(),
+            ));
+        }
+        (Some("ir" | "hr"), _) => {
+            return Err(here(
+                "an ir or hr holds an int or a real; a bool goes in di or coil".into(),
+            ));
+        }
+        _ => return Err(here("TABLE is di, coil, ir or hr".into())),
+    };
+    let addr = parts
+        .next()
+        .and_then(number)
+        .ok_or_else(|| here("ADDR is a number, 0 to 65535".into()))?;
+    let fmt_text = parts.next();
+    if parts.next().is_some() {
+        return Err(here("too many fields".into()));
+    }
+    let (fmt, swapped) = match (ty, fmt_text) {
+        (Ty::Bool, None) => (None, false),
+        (Ty::Bool, Some(_)) => return Err(here("a coil or discrete input takes no format".into())),
+        (_, None | Some("u16")) => (Some(Fmt::U16), false),
+        (_, Some("i16")) => (Some(Fmt::I16), false),
+        (_, Some("u32")) => (Some(Fmt::U32), false),
+        (_, Some("u32sw")) => (Some(Fmt::U32), true),
+        (_, Some("i32")) => (Some(Fmt::I32), false),
+        (_, Some("i32sw")) => (Some(Fmt::I32), true),
+        (_, Some("f32")) => (Some(Fmt::F32), false),
+        (_, Some("f32sw")) => (Some(Fmt::F32), true),
+        _ => return Err(here(alloc::format!("a format is one of {MODBUS_FMTS}"))),
+    };
+    let got = fmt.map_or(Ty::Bool, Fmt::ty);
+    if got != ty {
+        return Err(here(alloc::format!(
+            "it is {}, and the share is {}: a real is f32 or f32sw, an int any other format",
+            got.word(),
+            ty.word()
+        )));
+    }
+    let words = fmt.map_or(1, |f| u32::from(f.width() / 2));
+    if u32::from(addr) + words > 0x1_0000 {
+        return Err(here("a 32-bit format does not fit at the last register".into()));
+    }
+    Ok((table, addr, fmt, swapped))
+}
+
+/// One `share` line, checked against the lines before it.
+fn share_line(t: &[&str], n: usize, taken: &Taken) -> Result<Share, Bad> {
+    let [_, name, type_word, address_word] = t else {
+        return Err(bad(n, "want share NAME bool|int|real TABLE:ADDR[:FMT]"));
+    };
+    let ty = match *type_word {
+        "bool" => Ty::Bool,
+        "int" => Ty::Int,
+        "real" => Ty::Real,
+        other => {
+            return Err(bad(
+                n,
+                alloc::format!("{name}: type {other:?}: bool, int or real"),
+            ));
+        }
+    };
+    if !is_ident(name) {
+        return Err(bad(
+            n,
+            alloc::format!("{name:?}: a name is letters, digits and '_', at most {NAME_MAX}"),
+        ));
+    }
+    if taken.shares.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
+        return Err(bad(n, alloc::format!("{name}: shared twice")));
+    }
+    if taken
+        .points
+        .iter()
+        .any(|p| p.dir == Dir::In && p.name.eq_ignore_ascii_case(name))
+    {
+        return Err(bad(
+            n,
+            alloc::format!(
+                "{name}: an in point has that name; an input has one source, a point or another controller"
+            ),
+        ));
+    }
+    if taken.shares.len() == MAX_SHARES {
+        return Err(bad(
+            n,
+            alloc::format!("{name}: a node shares at most {MAX_SHARES} values"),
+        ));
+    }
+    let (table, addr, fmt, swapped) = share_token(ty, address_word, n)?;
+    let words = fmt.map_or(1, |f| u32::from(f.width() / 2));
+    if let Some(other) = taken.shares.iter().find(|o| {
+        o.table == table
+            && u32::from(o.addr) < u32::from(addr) + words
+            && u32::from(addr) < u32::from(o.addr) + u32::from(o.words())
+    }) {
+        return Err(bad(
+            n,
+            alloc::format!(
+                "{name}: {address_word} is already shared (it overlaps {} at {})",
+                other.name,
+                other.token()
+            ),
+        ));
+    }
+    Ok(Share {
+        name: (*name).to_string(),
+        ty,
+        table,
+        addr,
+        fmt,
+        swapped,
+        // Placed once the map is read (`place_shares`).
+        at: At {
+            byte: 0,
+            bit: None,
+            bytes: 1,
+        },
+    })
+}
+
+/// Gives the shares their places in the bank: bools by bit from bit 0,
+/// numbers in 2 or 4 byte slots from [`SHARE_BOOL_BYTES`], in line order.
+/// At most [`MAX_SHARES`] shares, so the bank always holds them.
+fn place_shares(shares: &mut [Share]) {
+    let (mut bools, mut cursor) = (0usize, SHARE_BOOL_BYTES);
+    for s in shares {
+        if s.ty == Ty::Bool {
+            s.at = At {
+                byte: u16::try_from(bools / 8).unwrap_or(0),
+                bit: Some(u8::try_from(bools % 8).unwrap_or(0)),
+                bytes: 1,
+            };
+            bools += 1;
+        } else {
+            let slot = usize::from(s.fmt.map_or(2, Fmt::slot));
+            let start = cursor.next_multiple_of(slot);
+            s.at = At {
+                byte: u16::try_from(start).unwrap_or(0),
+                bit: None,
+                bytes: u8::try_from(slot).unwrap_or(2),
+            };
+            cursor = start + slot;
+        }
+    }
+}
+
 /// Gives the sim points their places (see "Sim points" in the module
 /// header): after every device point has its own, so none of those moves.
 /// `lines` is each sim point's `(index in points, line)`.
@@ -1173,6 +1438,7 @@ pub fn parse(text: &str) -> Result<IoMap, Bad> {
     let mut taken = Taken {
         devices: Vec::new(),
         points: Vec::new(),
+        shares: Vec::new(),
         claims: Vec::new(),
         cursor: [NUM_BASE; 2],
     };
@@ -1203,25 +1469,31 @@ pub fn parse(text: &str) -> Result<IoMap, Bad> {
                 }
                 taken.points.push(p);
             }
+            Some("share") => {
+                let share = share_line(&t, n, &taken)?;
+                taken.shares.push(share);
+            }
             Some(other) => {
                 return Err(bad(
                     n,
-                    alloc::format!("{other:?}: a node's map has device, in and out lines"),
+                    alloc::format!("{other:?}: a node's map has device, in, out and share lines"),
                 ));
             }
             None => {}
         }
     }
-    if taken.devices.is_empty() && taken.points.is_empty() {
+    if taken.devices.is_empty() && taken.points.is_empty() && taken.shares.is_empty() {
         return Err(bad(
             0,
             "no device line: a node drives at least one device (or holds sim points)",
         ));
     }
     place_sims(&mut taken.points, &sims, taken.devices.len(), taken.cursor)?;
+    place_shares(&mut taken.shares);
     Ok(IoMap {
         devices: taken.devices,
         points: taken.points,
+        shares: taken.shares,
         text: text.to_string(),
     })
 }
@@ -1282,6 +1554,9 @@ impl IoMap {
                 "the map is {} bytes and this board keeps {ONE_BLOCK_TEXT}",
                 self.text.len()
             )));
+        }
+        if !self.shares.is_empty() {
+            return Err(no("a share line"));
         }
         let [device] = self.devices.as_slice() else {
             return Err(no(&alloc::format!("{} devices", self.devices.len())));

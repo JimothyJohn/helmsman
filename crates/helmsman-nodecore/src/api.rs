@@ -76,6 +76,23 @@ pub struct SignalView {
     pub sim: bool,
 }
 
+/// One shared value (a `share` line of the map) as `GET /api/io_map` lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShareView {
+    pub name: String,
+    /// `bool`, `int` or `real`.
+    pub ty: &'static str,
+    /// Where another controller finds it: `hr:0`, `ir:4:f32`, `coil:0`.
+    pub address: String,
+    /// Another controller may write it: a `VAR_INPUT` of the running
+    /// program, in a coil or holding table.
+    pub writable: bool,
+    /// The program has a variable of that name; a share with none reads
+    /// as 0 or false.
+    pub bound: bool,
+    pub value: Option<SignalValue>,
+}
+
 /// One fieldbus link as the canvas lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceView {
@@ -111,6 +128,10 @@ pub struct NodeView {
     pub board: &'static str,
     /// The I/O map text, for `GET /api/io_map`.
     pub io_map: String,
+    /// The map's shared values with their live values, in map order. The
+    /// node serves Modbus TCP ([`crate::modbus_server::PORT`]) while this
+    /// is not empty.
+    pub shares: Vec<ShareView>,
     /// The board drives one Modbus TCP block only (the ESP32 nodes): a
     /// map it is given must pass [`crate::iomap::IoMap::one_block`].
     pub one_block: bool,
@@ -245,6 +266,28 @@ pub fn devices(view: &NodeView) -> Json {
 #[must_use]
 pub fn io_map(view: &NodeView) -> Json {
     let mut j = json!({ "snapshot": "node", "text": view.io_map });
+    // The values this node shares on its own Modbus TCP tables (a box's
+    // reply has none): the server is on exactly when there are some.
+    j["modbus_port"] = if view.shares.is_empty() {
+        Json::Null
+    } else {
+        json!(crate::modbus_server::PORT)
+    };
+    j["shares"] = Json::Array(
+        view.shares
+            .iter()
+            .map(|s| {
+                json!({
+                    "name": s.name,
+                    "type": s.ty,
+                    "address": s.address,
+                    "access": if s.writable { "read/write" } else { "read" },
+                    "bound": s.bound,
+                    "value": value(s.value),
+                })
+            })
+            .collect(),
+    );
     // Where each point sits in the program's process image (`%IX0.0`,
     // `%ID16`): a box's reply has no such field and a reader that does
     // not know it ignores it.
@@ -768,6 +811,7 @@ pub(crate) fn sample_view() -> NodeView {
         version: "0.1.0",
         board: "ESP32-POE-ISO",
         io_map: "device rio modbus-tcp 192.168.3.60\n".into(),
+        shares: Vec::new(),
         one_block: false,
         check: None,
         firmware: Some(crate::ota::status::Firmware {
@@ -890,6 +934,41 @@ mod tests {
         let sj = settings_json(&settings());
         assert_eq!(sj["token_set"], true);
         assert!(sj.get("token").is_none());
+    }
+
+    #[test]
+    fn io_map_lists_what_the_node_shares_and_its_port() {
+        let mut v = sample_view();
+        let off = io_map(&v);
+        assert_eq!(off["shares"], json!([]));
+        assert!(off["modbus_port"].is_null(), "no share, no server");
+        v.shares = vec![
+            ShareView {
+                name: "speed".into(),
+                ty: "int",
+                address: "hr:0".into(),
+                writable: false,
+                bound: true,
+                value: Some(SignalValue::Int(1500)),
+            },
+            ShareView {
+                name: "run_cmd".into(),
+                ty: "bool",
+                address: "coil:0".into(),
+                writable: true,
+                bound: false,
+                value: Some(SignalValue::Bool(false)),
+            },
+        ];
+        let on = io_map(&v);
+        assert_eq!(on["modbus_port"], 502);
+        assert_eq!(
+            on["shares"][0],
+            json!({ "name": "speed", "type": "int", "address": "hr:0", "access": "read", "bound": true, "value": 1500 })
+        );
+        assert_eq!(on["shares"][1]["access"], "read/write");
+        assert_eq!(on["shares"][1]["bound"], false);
+        assert_eq!(on["shares"][1]["value"], false);
     }
 
     #[test]

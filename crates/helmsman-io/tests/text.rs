@@ -413,3 +413,70 @@ fn sim_names_stay_unique_with_the_device_points() {
     let f = parse("in a bool sim\nin a bool box di:0\n").unwrap();
     assert!(f.map.validate().is_err());
 }
+
+// ---- share lines: a Skipper's own Modbus TCP tables (docs/EDGE.md) ----
+
+const SHARES: &str = "\
+device rio modbus-tcp 192.168.3.50
+in  start bool rio di:1
+# shared with other controllers
+share speed   int  hr:0        # they read
+share run_cmd bool coil:0      # they write
+share at_home bool di:0
+share level   real ir:4:f32
+share pos     int  hr:10:i32sw
+";
+
+#[test]
+fn a_box_accepts_the_share_lines_a_skipper_runs() {
+    let f = parse(SHARES).unwrap();
+    assert_eq!(f.map.signals.len(), 1, "a share is no signal");
+    let shares: Vec<(&str, Ty, &str)> = f
+        .shares
+        .iter()
+        .map(|s| (s.name.as_str(), s.ty, s.address.as_str()))
+        .collect();
+    assert_eq!(
+        shares,
+        [
+            ("speed", Ty::Int, "hr:0"),
+            ("run_cmd", Ty::Bool, "coil:0"),
+            ("at_home", Ty::Bool, "di:0"),
+            ("level", Ty::Real, "ir:4:f32"),
+            ("pos", Ty::Int, "hr:10:i32sw"),
+        ]
+    );
+    let again = parse(&render(&f)).unwrap();
+    assert_eq!(again, f, "the lines survive a render");
+    // The box's project check takes the map as it takes any other.
+    f.map.validate().unwrap();
+}
+
+#[test]
+fn a_malformed_share_line_is_reported_with_its_number() {
+    for (text, why) in [
+        ("share\n", "want share"),
+        ("share a int\n", "want share"),
+        ("share a int hr:0 extra\n", "want share"),
+        ("share a float hr:0\n", "bool, int or real"),
+        ("share 1a int hr:0\n", "identifier"),
+        ("share a int xx:0\n", "goes in ir or hr"),
+        ("share a bool hr:0\n", "goes in di or coil"),
+        ("share a int di:0\n", "goes in ir or hr"),
+        ("share a int hr:x\n", "ADDR"),
+        ("share a int hr:65536\n", "ADDR"),
+        ("share a int hr:0:f32\n", "int's format"),
+        ("share a real hr:0:u16\n", "f32 or f32sw"),
+        ("share a real hr:0\n", "f32 or f32sw"),
+        ("share a bool coil:0:u16\n", "no format"),
+        ("share a int hr:0:u16:more\n", "too many"),
+    ] {
+        let errs = parse(&format!("# first\n{text}")).unwrap_err();
+        assert_eq!(errs.len(), 1, "{text:?}: {errs:?}");
+        assert_eq!(errs[0].0, 2, "{text:?}");
+        assert!(errs[0].1.contains(why), "{text:?}: {errs:?}");
+    }
+    let errs = parse("share a int hr:0\nshare A int hr:1\n").unwrap_err();
+    assert_eq!(errs[0].0, 2);
+    assert!(errs[0].1.contains("shared twice"));
+}
