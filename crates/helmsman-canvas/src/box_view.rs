@@ -679,6 +679,11 @@ impl BoxView {
                     }
                 }
                 crate::web::ChatIn::Status(status, body) => {
+                    // The box no longer knows this page's session (a
+                    // restart): the header signs out, as for any box call.
+                    if status == 401 && self.session.is_some() {
+                        self.projects.ended = true;
+                    }
                     self.agent.status_answer(status, &body, self.agent_at);
                 }
             }
@@ -1419,6 +1424,12 @@ impl BoxView {
     /// A piece of the box's answer to the help request under way.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub fn help_answer(&mut self, inc: crate::box_agent::Incoming) {
+        // Nick 2026-11-25: "I'm signed in but the help agent isn't
+        // working": the box had restarted and forgotten the session while
+        // the header still showed it. A 401 here signs the header out too.
+        if matches!(inc, crate::box_agent::Incoming::Status { status: 401, .. }) && self.session.is_some() {
+            self.projects.ended = true;
+        }
         let Some(h) = self.help.helping.as_mut() else {
             return;
         };

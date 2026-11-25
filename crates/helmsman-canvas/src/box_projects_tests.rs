@@ -5661,3 +5661,34 @@ fn an_agent_answer_on_a_skipper_gets_its_placeholders_saved_with_it() {
         "the other edit stays unsaved: {urls:?}"
     );
 }
+
+/// Nick 2026-11-25: "I'm signed in but the help agent isn't working: Sign
+/// in (top right) to ask for help." The bench box had restarted and no
+/// longer knew the session while the header still showed it. A 401 to
+/// Help signs the header out (`projects.ended`), as any box call's does;
+/// another answer does not.
+#[test]
+fn a_help_request_the_box_refuses_signs_the_page_out() {
+    use crate::box_agent::Incoming;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    v.help.draft = "why is the drive not moving".into();
+    v.ask_help(&ctx);
+    let seq = v.help_sent.last().expect("asked").seq;
+    v.help_answer(Incoming::Status {
+        seq,
+        status: 422,
+        body: "{}".into(),
+    });
+    assert!(!v.projects.ended, "a refusal of the question is not a sign-out");
+    v.ask_help(&ctx);
+    let seq = v.help_sent.last().unwrap().seq;
+    v.help_answer(Incoming::Status {
+        seq,
+        status: 401,
+        body: "{}".into(),
+    });
+    assert!(v.projects.ended, "the header signs out");
+}
