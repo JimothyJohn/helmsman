@@ -4,11 +4,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **`make ship` goes round staging: how should it promote?** — `staging` exists in helmsman since 2026-11-25 (dev → staging → master), but scripts/ship.sh still opens its promotion PR from each repository's `dev` straight to its default branch, and agent-relay, helmsman-devices and helmsman-hardware have no `staging`. Recommended: (1) add `staging` to the three siblings with the repo-baseline skill; (2) `make ship` checks the candidate at the `staging` tips and promotes `staging` → default, refusing when `dev` → `staging` has not been merged; (3) scripts/live-state.sh reports dev → staging and staging → master as two rows. Alternative: keep `make ship` as it is and have it fast-forward through `staging` in one run, which keeps the branch but loses the pause to look at it.
-  result: one promotion path; staging always predicts what ship puts live
-  id: ship-through-staging
-  asked: 2026-11-25
-  by: session ab81ec57
 - [x] **Local user settings and sign-in: read the proposal and answer its four questions** — docs/decisions/local-user-settings.md. Short version: a box already has local accounts, sessions and a per-person store on the device, so no new sign-in is needed; what is missing is preferences kept on the device (they are per browser today), one Settings window, and a way to make the first account without a shell. The four questions: a setup code or an open first-run page for the first account; whether signed-out screens may change settings; a longer session for an operator's floor screen; settings first and accounts in the UI second, or together.
   result: the settings card can be written and sized
   decided: Nick, interview 2026-11-23: a setup code for the first account; signed-out screens show the device defaults only; a longer session for operators; settings first, then accounts, back to back (cards settings-on-device, first-run-and-accounts)
