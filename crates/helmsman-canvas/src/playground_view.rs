@@ -988,7 +988,6 @@ impl PlaygroundView {
             source: &self.session.src,
             diagnostics: &diags,
             devices: &devices,
-            io_list: None,
             settings,
         };
         match self.instruct.start_with(&env, &earlier, plan) {
@@ -1109,7 +1108,6 @@ impl PlaygroundView {
             source: &self.session.src,
             diagnostics: &diags,
             devices: &devices,
-            io_list: None,
             settings,
         };
         Some(f(&mut self.instruct, &env))
@@ -1815,7 +1813,6 @@ impl PlaygroundView {
             source: &self.session.src,
             diagnostics: &diags,
             devices: &devices,
-            io_list: None,
             settings,
         };
         self.instruct.edits = self.chat.serves(crate::instruct::AGENT);
@@ -1951,7 +1948,6 @@ impl PlaygroundView {
             source: &self.session.src,
             diagnostics: &diags,
             devices: &devices,
-            io_list: None,
             settings,
         };
         if let Some(ask) = self.instruct.approve(&env) {
@@ -2359,7 +2355,6 @@ impl PlaygroundView {
             source: &self.session.src,
             diagnostics: &diags,
             devices: &devices,
-            io_list: None,
             settings,
         };
         // Out of room: split into steps instead of failing (Nick,

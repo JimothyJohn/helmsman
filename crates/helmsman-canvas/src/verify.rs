@@ -49,8 +49,6 @@ use std::collections::BTreeSet;
 use helmsman_iec::spec::{self, Settings};
 
 use crate::claude::{MAX_PROGRAM, Segment, extract_program, fences, segments};
-use std::fmt::Write as _;
-
 use crate::scope::{Files, Scope, apply, pous};
 
 /// How many times a failing answer goes back to the Agent.
@@ -848,88 +846,12 @@ pub fn next(check: &Check, retries: u8, asked: bool) -> Next {
 #[must_use]
 pub fn io_list<'a>(files: &'a Files, node: &'a str) -> &'a str {
     match files.get(helmsman_project::IO_MAP) {
-        Some(m) if !list_points(m).is_empty() => m,
+        Some(m)
+            if m.lines()
+                .any(|l| matches!(l.split_whitespace().next(), Some("in" | "out"))) =>
+        {
+            m
+        }
         _ => node,
     }
-}
-
-/// The points of an I/O list's `in`/`out` lines: upper-cased name, and
-/// `true` for an `in`.
-fn list_points(list: &str) -> Vec<(String, bool)> {
-    list.lines()
-        .filter_map(|l| {
-            let l = l.split('#').next().unwrap_or("");
-            let mut w = l.split_whitespace();
-            let input = match w.next()? {
-                "in" => true,
-                "out" => false,
-                _ => return None,
-            };
-            Some((w.next()?.to_ascii_uppercase(), input))
-        })
-        .collect()
-}
-
-/// What stops `answer`'s program running on a Skipper whose I/O list is
-/// `node` (the project's `io.map` as the answer leaves it, when it has
-/// points): each `VAR_INPUT` must be an `in` point of that name and each
-/// `VAR_OUTPUT` an `out` point, as the Skipper binds them by name. `None`
-/// when every port is on the list, or when the answer does not apply or
-/// build (those failures are said already).
-#[must_use]
-pub fn off_the_list(
-    scope: &Scope,
-    files: &Files,
-    answer: &str,
-    node: &str,
-    settings: Settings,
-) -> Option<String> {
-    let landed = apply(scope, files, answer).ok()?;
-    let plan = spec::plan(
-        landed
-            .iter()
-            .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
-            .map(|(n, t)| (n.as_str(), t.as_str())),
-    );
-    let program = helmsman_iec::compile(&plan.main, settings.sizes).ok()?;
-    let points = list_points(io_list(&landed, node));
-    let mut missing = Vec::new();
-    let mut turned = Vec::new();
-    for p in program.ports() {
-        let input = p.dir == helmsman_iec::PortDir::Input;
-        let section = if input { "VAR_INPUT" } else { "VAR_OUTPUT" };
-        let name = p.name.to_ascii_lowercase();
-        match points.iter().find(|(n, _)| *n == p.name) {
-            None => missing.push(format!("{name} ({section})")),
-            Some((_, i)) if *i != input => turned.push(format!(
-                "{name} is an {} point on the list, so it is a {}",
-                if *i { "in" } else { "out" },
-                if *i { "VAR_INPUT" } else { "VAR_OUTPUT" }
-            )),
-            Some(_) => {}
-        }
-    }
-    if missing.is_empty() && turned.is_empty() {
-        return None;
-    }
-    let names: Vec<&str> = points.iter().map(|(n, _)| n.as_str()).collect();
-    let mut why = String::from(
-        "This program runs on a Skipper, which binds each VAR_INPUT to an `in` point and each VAR_OUTPUT to an `out` point of its I/O list by name",
-    );
-    if !missing.is_empty() {
-        let _ = write!(why, "; not on the list: {}", missing.join(", "));
-    }
-    if !turned.is_empty() {
-        let _ = write!(why, "; {}", turned.join("; "));
-    }
-    let _ = write!(
-        why,
-        ". The list's points: {}. Use those names, add a point to io.map for a device the list has, or declare the variable under VAR (a requirement test can then not drive or read it).",
-        if names.is_empty() {
-            "none".to_string()
-        } else {
-            names.join(", ").to_ascii_lowercase()
-        }
-    );
-    Some(why)
 }

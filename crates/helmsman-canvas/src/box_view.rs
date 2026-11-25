@@ -760,7 +760,6 @@ impl BoxView {
             source: &plan.main,
             diagnostics: &diags,
             devices: &devices,
-            io_list: node.as_deref(),
             settings,
         };
         Some(f(&mut self.instruct, &env))

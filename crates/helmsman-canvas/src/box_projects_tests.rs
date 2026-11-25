@@ -5342,26 +5342,11 @@ fn file_new_project_opens_a_saved_starter_program() {
 
 /// Nick 2026-11-24, at "start, stop, running are not in the I/O list":
 /// on a Skipper's page the Agent is given the Skipper's I/O list with the
-/// request, and an answer whose ports are not on it goes back to the
-/// Agent in the same conversation instead of failing at Deploy.
+/// request, so it can use the points' names.
 #[test]
-fn on_a_skippers_page_the_agent_gets_its_io_list_and_an_answer_off_it_goes_back() {
-    use crate::box_agent::Incoming;
-    use crate::instruct_tests::{LAMP, st};
-    use serde_json::json;
+fn on_a_skippers_page_the_agent_gets_its_io_list() {
+    use crate::instruct_tests::LAMP;
 
-    fn answer(v: &mut BoxView, text: &str) {
-        let seq = v.chat_sent.last().expect("a message").seq;
-        let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
-        let body = [
-            ev("session", json!({"id": "s1"})),
-            ev("text", json!({ "delta": text })),
-            ev("done", json!({"stop": "end_turn", "why": null})),
-        ]
-        .concat();
-        v.agent.apply(Incoming::Chunk { seq, text: body });
-        v.agent.apply(Incoming::End { seq });
-    }
     fn message(v: &BoxView, k: usize) -> String {
         let j: Json = serde_json::from_str(&v.chat_sent[k].body).unwrap();
         j["message"].as_str().unwrap().to_string()
@@ -5387,18 +5372,4 @@ fn on_a_skippers_page_the_agent_gets_its_io_list_and_an_answer_off_it_goes_back(
     let first = message(&v, 0);
     assert!(first.contains("<io_devices>\nThe Skipper's I/O list."), "{first}");
     assert!(first.contains("in  start bool drive in:0.0"), "{first}");
-
-    let latch = LAMP
-        .replace("  start : BOOL;\n", "  start : BOOL;\n  stop : BOOL;\n")
-        .replace("lamp := start;", "lamp := (start OR lamp) AND NOT stop;");
-    answer(&mut v, &st(&latch));
-    v.tick(&ctx);
-    assert_eq!(v.chat_sent.len(), 2, "sent back: {:?}", v.instruct.outcome);
-    let again = message(&v, 1);
-    assert!(again.contains("not on the list: stop (VAR_INPUT)"), "{again}");
-    assert_eq!(
-        b.json("/api/projects/line/files/main.st")["text"],
-        LAMP,
-        "nothing written while it is off the list"
-    );
 }

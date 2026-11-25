@@ -976,7 +976,6 @@ fn run_rung(setup: &Setup, rung: &Rung, run: u32, log: &mut String) -> Vec<Outco
             source: &source,
             diagnostics: &diags,
             devices: "",
-            io_list: None,
             settings: Settings::new(SIZES),
         };
         let mut ins = Instruct {
@@ -1206,7 +1205,6 @@ fn front_door_recording() {
         source: "",
         diagnostics: &[],
         devices: "",
-        io_list: None,
         settings: Settings::new(SIZES),
     };
     let mut ins = Instruct {
