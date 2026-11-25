@@ -37,6 +37,10 @@
 //!     `eds=` needs a file, `key=` an identity check, and `io_port=`,
 //!     `device_io_port=` and `sweep=` a socket of their own: a node has
 //!     none of those, and says so.
+//! - **Sim points**: `in|out NAME bool|int|real sim [unit=..]`: a
+//!   placeholder with no device and no address (see "Sim points" below).
+//!   `sim` is a reserved device id, like `box`: `device sim ...` is
+//!   refused. A map may hold sim points and no device at all.
 //! - **Points**: `in|out NAME bool|int|real DEVICE ADDRESS [unit=.. wired=..]`;
 //!   names are ST identifiers, unique without regard to case. Further
 //!   `poll_ms=` and `safe=` options are read and ignored, as they always
@@ -77,6 +81,29 @@
 //!
 //! [`Point::at`] gives the place and [`At::st`] the ST address
 //! (`%IX4.3`, `%IW32`, `%QD17`).
+//!
+//! # Sim points
+//!
+//! A sim point is a value held in the node's memory: it starts at FALSE,
+//! 0 or 0.0 at boot, and a program deploy keeps it. A sim `in` is set
+//! with `PUT /api/signals/NAME` (the program reads it as a `VAR_INPUT` of
+//! that name); a sim `out` is written by the program's `VAR_OUTPUT` of that
+//! name and nothing is driven anywhere. It sits in the process image so
+//! the program, the signals list and the values stream treat it as any
+//! point, but it never moves a device point: sim points are placed after
+//! the whole map is read, from the top of each area downwards, in the
+//! order the lines are written, and a map in which they would meet a
+//! device point is refused.
+//!
+//! - **Bool**: from the last bool window (the one of device number
+//!   [`MAX_DEVICES`] - 1) downwards, 32 to a window, so a map of *d*
+//!   devices keeps `MAX_DEVICES - d` windows for them.
+//! - **Numeric**: 4-byte slots from the end of the numeric area downwards.
+//!   An `int` is an `i32` (a value outside `i32` is refused), a `real` an
+//!   `f32`.
+//!
+//! Adding a sim point therefore moves no device point, and no sim point
+//! written before it; one written after it moves up by a slot.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -239,6 +266,8 @@ pub enum Addr {
     /// A bit of an assembly (`bit` is `Some`), or the start of a numeric
     /// value in it.
     Enip { byte: u16, bit: Option<u8> },
+    /// A sim point: no device, no address.
+    Sim,
 }
 
 /// Where a point sits in its direction of the process image.
@@ -273,7 +302,7 @@ pub struct Point {
     pub ty: Ty,
     /// The numeric format (`None` for a bool).
     pub fmt: Option<Fmt>,
-    /// Index into [`IoMap::devices`].
+    /// Index into [`IoMap::devices`]; [`SIM_DEVICE`] for a sim point.
     pub device: usize,
     pub addr: Addr,
     pub at: At,
@@ -314,6 +343,19 @@ pub struct Device {
     pub port: u16,
     pub link: Link,
 }
+
+impl Point {
+    /// A sim point: a value in memory, on no device.
+    #[must_use]
+    pub const fn is_sim(&self) -> bool {
+        matches!(self.addr, Addr::Sim)
+    }
+}
+
+/// A sim point's [`Point::device`]: no device has this index.
+pub const SIM_DEVICE: usize = usize::MAX;
+/// The device id a sim point stands in for; reserved.
+pub const SIM_ID: &str = "sim";
 
 /// A node's map, as parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -624,6 +666,12 @@ fn device_line(t: &[&str], n: usize, have: &[Device]) -> Result<Device, Bad> {
             alloc::format!("device name {name:?} is the box's own; a node has no such device"),
         ));
     }
+    if name.eq_ignore_ascii_case(SIM_ID) {
+        return Err(bad(
+            n,
+            "device name \"sim\" is reserved for placeholder points (in NAME TYPE sim)",
+        ));
+    }
     if have.iter().any(|d| d.id.eq_ignore_ascii_case(name)) {
         return Err(bad(n, alloc::format!("device {name}: named twice")));
     }
@@ -897,9 +945,13 @@ struct Taken {
     cursor: [usize; 2],
 }
 
+/// A point line's checks and place: the point, and what it claims on its
+/// device (a sim point claims nothing).
+type Placed = (Point, Option<(u8, u32, u32)>);
+
 #[allow(clippy::too_many_lines)] // one check after another
-fn point_line(t: &[&str], n: usize, taken: &Taken) -> Result<(Point, (u8, u32, u32)), Bad> {
-    let [direction, name, type_word, device_word, address, _options @ ..] = t else {
+fn point_line(t: &[&str], n: usize, taken: &Taken) -> Result<Placed, Bad> {
+    let [direction, name, type_word, device_word, rest @ ..] = t else {
         return Err(bad(n, "want in|out NAME bool|int|real DEVICE ADDRESS"));
     };
     let dir = if *direction == "in" { Dir::In } else { Dir::Out };
@@ -920,20 +972,39 @@ fn point_line(t: &[&str], n: usize, taken: &Taken) -> Result<(Point, (u8, u32, u
             alloc::format!("{name:?}: a name is letters, digits and '_', at most {NAME_MAX}"),
         ));
     }
-    if taken.devices.is_empty() {
+    let sim = device_word.eq_ignore_ascii_case(SIM_ID);
+    let (address, _options) = match rest {
+        [address, options @ ..] if !sim => (*address, options),
+        _ if sim => ("", rest),
+        _ => return Err(bad(n, "want in|out NAME bool|int|real DEVICE ADDRESS")),
+    };
+    if sim {
+        if let Some(word) = rest.iter().find(|w| !w.contains('=')) {
+            return Err(bad(
+                n,
+                alloc::format!("{name}: sim takes no address ({word:?}); only KEY=VALUE options"),
+            ));
+        }
+        params(rest, n)?;
+    } else if taken.devices.is_empty() {
         return Err(bad(n, "the device line comes before its points"));
     }
-    if ["box", "module", "screen"].contains(device_word) {
+    if !sim && ["box", "module", "screen"].contains(device_word) {
         return Err(bad(
             n,
             alloc::format!("{name}: {device_word:?} is the box's own device; a node has no such channels"),
         ));
     }
-    let Some(device) = taken.devices.iter().position(|d| d.id == *device_word) else {
-        return Err(bad(
-            n,
-            alloc::format!("{name}: device {device_word:?} is not declared above"),
-        ));
+    let device = if sim {
+        SIM_DEVICE
+    } else {
+        let Some(device) = taken.devices.iter().position(|d| d.id == *device_word) else {
+            return Err(bad(
+                n,
+                alloc::format!("{name}: device {device_word:?} is not declared above"),
+            ));
+        };
+        device
     };
     if taken.points.iter().any(|p| p.name.eq_ignore_ascii_case(name)) {
         return Err(bad(n, alloc::format!("{name}: named twice")));
@@ -942,6 +1013,31 @@ fn point_line(t: &[&str], n: usize, taken: &Taken) -> Result<(Point, (u8, u32, u
         return Err(bad(
             n,
             alloc::format!("{name}: a node holds at most {MAX_POINTS} points"),
+        ));
+    }
+    if sim {
+        // Its place in the image is given once the whole map is read.
+        let fmt = match ty {
+            Ty::Bool => None,
+            Ty::Int => Some(Fmt::I32),
+            Ty::Real => Some(Fmt::F32),
+        };
+        let at = At {
+            byte: 0,
+            bit: (ty == Ty::Bool).then_some(0),
+            bytes: if ty == Ty::Bool { 1 } else { 4 },
+        };
+        return Ok((
+            Point {
+                name: (*name).to_string(),
+                dir,
+                ty,
+                fmt,
+                device,
+                addr: Addr::Sim,
+                at,
+            },
+            None,
         ));
     }
     if taken.points.iter().filter(|p| p.device == device).count() == MAX_POINTS_PER_DEVICE {
@@ -1000,8 +1096,67 @@ fn point_line(t: &[&str], n: usize, taken: &Taken) -> Result<(Point, (u8, u32, u
             addr: parsed.addr,
             at,
         },
-        parsed.claim,
+        Some(parsed.claim),
     ))
+}
+
+/// Gives the sim points their places (see "Sim points" in the module
+/// header): after every device point has its own, so none of those moves.
+/// `lines` is each sim point's `(index in points, line)`.
+fn place_sims(
+    points: &mut [Point],
+    lines: &[(usize, usize)],
+    devices: usize,
+    cursor: [usize; 2],
+) -> Result<(), Bad> {
+    let mut bools = [0usize; 2];
+    let mut top = [IMAGE_BYTES; 2];
+    for &(i, line) in lines {
+        let p = &mut points[i];
+        let d = p.dir.index();
+        if p.ty == Ty::Bool {
+            let k = bools[d];
+            bools[d] += 1;
+            let window = (MAX_DEVICES - 1)
+                .checked_sub(k / BOOL_WINDOW_BITS)
+                .filter(|w| *w >= devices);
+            let Some(window) = window else {
+                return Err(bad(
+                    line,
+                    alloc::format!(
+                        "{}: no bool window left: {devices} device(s) and the sim {} points share {MAX_DEVICES}",
+                        p.name,
+                        p.dir.word()
+                    ),
+                ));
+            };
+            let n = k % BOOL_WINDOW_BITS;
+            p.at = At {
+                byte: u16::try_from(window * BOOL_WINDOW_BYTES + n / 8).unwrap_or(0),
+                bit: Some(u8::try_from(n % 8).unwrap_or(0)),
+                bytes: 1,
+            };
+        } else {
+            let start = top[d].saturating_sub(4);
+            if top[d] < 4 || start < cursor[d].next_multiple_of(4) {
+                return Err(bad(
+                    line,
+                    alloc::format!(
+                        "{}: the image holds {NUM_BYTES} bytes of numeric {} and they are used up",
+                        p.name,
+                        p.dir.word()
+                    ),
+                ));
+            }
+            top[d] = start;
+            p.at = At {
+                byte: u16::try_from(start).unwrap_or(0),
+                bit: None,
+                bytes: 4,
+            };
+        }
+    }
+    Ok(())
 }
 
 /// Parses `text` as a node's map.
@@ -1021,6 +1176,7 @@ pub fn parse(text: &str) -> Result<IoMap, Bad> {
         claims: Vec::new(),
         cursor: [NUM_BASE; 2],
     };
+    let mut sims: Vec<(usize, usize)> = Vec::new();
     for (k, raw) in text.lines().enumerate() {
         let n = k + 1;
         let line = raw.split('#').next().unwrap_or("").trim();
@@ -1035,12 +1191,16 @@ pub fn parse(text: &str) -> Result<IoMap, Bad> {
             }
             Some("in" | "out") => {
                 let (p, claim) = point_line(&t, n, &taken)?;
-                if p.at.bit.is_none() {
-                    taken.cursor[p.dir.index()] = usize::from(p.at.byte) + usize::from(p.at.bytes);
+                if let Some(claim) = claim {
+                    if p.at.bit.is_none() {
+                        taken.cursor[p.dir.index()] = usize::from(p.at.byte) + usize::from(p.at.bytes);
+                    }
+                    taken
+                        .claims
+                        .push((p.dir.index(), p.device, claim, p.name.clone()));
+                } else {
+                    sims.push((taken.points.len(), n));
                 }
-                taken
-                    .claims
-                    .push((p.dir.index(), p.device, claim, p.name.clone()));
                 taken.points.push(p);
             }
             Some(other) => {
@@ -1052,9 +1212,13 @@ pub fn parse(text: &str) -> Result<IoMap, Bad> {
             None => {}
         }
     }
-    if taken.devices.is_empty() {
-        return Err(bad(0, "no device line: a node drives at least one device"));
+    if taken.devices.is_empty() && taken.points.is_empty() {
+        return Err(bad(
+            0,
+            "no device line: a node drives at least one device (or holds sim points)",
+        ));
     }
+    place_sims(&mut taken.points, &sims, taken.devices.len(), taken.cursor)?;
     Ok(IoMap {
         devices: taken.devices,
         points: taken.points,

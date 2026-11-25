@@ -178,6 +178,9 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
             Response::error(404, "this board saves a map without asking its devices"),
             false,
         ),
+        // Never asked for here: a one-block board's map takes no sim point
+        // (`IoMap::one_block` refuses it), so the router finds none to set.
+        Effect::SetSim { .. } => (Response::error(409, "this board has no sim points"), false),
         Effect::SaveIoMap { text, page } => {
             // Beside the program on flash; the restart makes the I/O task
             // drive the block it names.

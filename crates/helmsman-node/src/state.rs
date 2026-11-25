@@ -263,6 +263,7 @@ pub fn signals_of(
             value: Some(SignalValue::Bool(bit(image, k))),
             quality: "good",
             point_error: None,
+            sim: false,
         })
     };
     let mut out: Vec<SignalView> = names
@@ -293,6 +294,7 @@ pub fn signals_of(
             value,
             quality: "good",
             point_error: None,
+            sim: false,
         }
     }));
     out

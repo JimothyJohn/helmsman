@@ -440,3 +440,45 @@ fn bindings_with_duplicate_names_take_the_first_point() {
     assert_eq!(bindings(&m, &[("X", true)]), [(0, 0)]);
     assert_eq!(bindings(&m, &[("X", true), ("x", true)]), [(0, 0), (1, 0)]);
 }
+
+/// A sim point is a point of the image: a port of its name binds to it,
+/// values round-trip through its place, and no device plan moves it.
+#[test]
+fn a_sim_point_binds_by_name_holds_its_value_and_is_in_no_device_plan() {
+    let m = parse("device rio modbus-tcp 1.1.1.1\nin estop bool rio di:0\nin go bool sim\nin speed int sim\nin level real sim\nout lamp bool sim\nout count int sim\n").unwrap();
+    let idx = |n: &str| m.points.iter().position(|p| p.name == n).unwrap();
+    let b = bindings(
+        &m,
+        &[
+            ("GO", true),
+            ("lamp", false),
+            ("lamp", true),
+            ("go", false),
+            ("level", true),
+        ],
+    );
+    assert_eq!(b, [(0, idx("go")), (1, idx("lamp")), (4, idx("level"))]);
+    let mut image = [0u8; IMAGE_BYTES];
+    for (name, v) in [
+        ("go", SignalValue::Bool(true)),
+        ("speed", SignalValue::Int(-70_000)),
+        ("level", SignalValue::Real(2.5)),
+    ] {
+        put_at(&mut image, point(&m, name), v);
+        assert_eq!(value_at(&image, point(&m, name)), Some(v), "{name}");
+    }
+    // Setting one leaves the others and the device's bit alone.
+    put_at(&mut image, point(&m, "go"), SignalValue::Bool(false));
+    assert_eq!(
+        value_at(&image, point(&m, "speed")),
+        Some(SignalValue::Int(-70_000))
+    );
+    assert_eq!(
+        value_at(&image, point(&m, "estop")),
+        Some(SignalValue::Bool(false))
+    );
+    assert_eq!(image[0], 0);
+    let plan = modbus(&m, 0);
+    let moved: usize = plan.reads.iter().map(|r| r.items.len()).sum::<usize>() + plan.writes.len();
+    assert_eq!(moved, 1, "the device plan has estop only");
+}
