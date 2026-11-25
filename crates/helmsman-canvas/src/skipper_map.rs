@@ -137,8 +137,13 @@ enum Became {
         driver: String,
         channels: Option<BTreeMap<String, BTreeMap<String, String>>>,
     },
-    /// The Skipper has it already, as this device.
-    Skippers(String),
+    /// The Skipper has it already, as device `name` on `driver`; the
+    /// project's profile's channels for it, when it was by its profile.
+    Skippers {
+        name: String,
+        driver: String,
+        channels: Option<BTreeMap<String, BTreeMap<String, String>>>,
+    },
     /// Not sent (refused above).
     Not,
 }
@@ -155,6 +160,10 @@ pub struct ForSkipper {
     /// The devices among them named by an identity no scan has given an
     /// address for: a scan may find them.
     pub unfound: Vec<String>,
+    /// A project point that is a Skipper point under another name (the
+    /// same channel of the same device): project name, Skipper name. The
+    /// program has to use the Skipper's.
+    pub same: Vec<(String, String)>,
 }
 
 impl ForSkipper {
@@ -171,6 +180,10 @@ impl ForSkipper {
         (!self.notes.is_empty()).then(|| self.notes.join(" "))
     }
 }
+
+/// The longest point or device name a Skipper takes
+/// (`helmsman_nodecore::iomap::NAME_MAX`).
+pub const NAME_MAX: usize = 32;
 
 /// The map a deploy sends a Skipper that runs `node`, for the project's
 /// `project` map ([module docs](self)). `profile` gives a profile's text
@@ -190,6 +203,29 @@ pub fn for_skipper(
         .filter_map(|l| point_name(l.split('#').next().unwrap_or("")))
         .map(str::to_ascii_lowercase)
         .collect();
+    // The Skipper's points: name, `in`, device (lower case), address.
+    let node_at: Vec<(String, bool, String, String)> = node
+        .lines()
+        .filter_map(|l| {
+            let w: Vec<&str> = l.split('#').next().unwrap_or("").split_whitespace().collect();
+            match w.as_slice() {
+                [d @ ("in" | "out"), name, _, dev, addr, ..] => Some((
+                    (*name).to_string(),
+                    *d == "in",
+                    dev.to_ascii_lowercase(),
+                    (*addr).to_string(),
+                )),
+                _ => None,
+            }
+        })
+        .collect();
+    let node_driver = |dev: &str| {
+        node.lines()
+            .filter_map(|l| device_words(l.split('#').next().unwrap_or("")))
+            .find(|(n, ..)| n.eq_ignore_ascii_case(dev))
+            .map(|(_, d, ..)| d.to_string())
+            .unwrap_or_default()
+    };
     let mut map = node.trim_end().to_string();
     let mut added = String::new();
     let mut became: BTreeMap<String, Became> = BTreeMap::new();
@@ -205,7 +241,14 @@ pub fn for_skipper(
         if node.lines().any(|n| n.trim() == code) {
             // The Skipper's own line, copied into the project before.
             if let Some((name, ..)) = device_words(code) {
-                became.insert(name.to_ascii_lowercase(), Became::Skippers(name.to_string()));
+                became.insert(
+                    name.to_ascii_lowercase(),
+                    Became::Skippers {
+                        name: name.to_string(),
+                        driver: node_driver(name),
+                        channels: None,
+                    },
+                );
             }
             continue;
         }
@@ -222,7 +265,18 @@ pub fn for_skipper(
                         host.as_deref().map_or_else(String::new, |h| format!(" ({h})"))
                     ));
                 }
-                became.insert(key, Became::Skippers(n.clone()));
+                let channels = driver
+                    .strip_prefix(BY_PROFILE)
+                    .and_then(profile)
+                    .map(|t| read_profile(&t).channels);
+                became.insert(
+                    key,
+                    Became::Skippers {
+                        name: n.clone(),
+                        driver: node_driver(n),
+                        channels,
+                    },
+                );
                 continue;
             }
             let Some(host) = host else {
@@ -314,6 +368,20 @@ pub fn for_skipper(
             continue;
         }
         let w: Vec<&str> = code.split_whitespace().collect();
+        // A point on a Skipper device, or one not sent, is not sent itself.
+        let on_skippers = w.get(3).is_some_and(|d| {
+            matches!(
+                became.get(&d.to_ascii_lowercase()),
+                Some(Became::Skippers { .. } | Became::Not)
+            )
+        });
+        if pname.len() > NAME_MAX && !on_skippers {
+            out.refused.push(format!(
+                "{pname}: a Skipper names a point in at most {NAME_MAX} characters, and this is {}. Rename it in the program and io.map",
+                pname.len()
+            ));
+            continue;
+        }
         let (dir, ty, dev, addr, rest) = match w.as_slice() {
             [dir, _, ty, dev, addr, rest @ ..] => (*dir, *ty, *dev, *addr, rest),
             [_, _, _, "sim", ..] => {
@@ -353,9 +421,37 @@ pub fn for_skipper(
                 let _ = writeln!(added, "{line}");
                 points.push(pname.to_ascii_lowercase());
             }
-            Some(Became::Skippers(n)) => out.notes.push(format!(
-                "{pname} is left out: its device is the Skipper's {n}, whose points are its own."
-            )),
+            Some(Became::Skippers {
+                name: n,
+                driver,
+                channels,
+            }) => {
+                let at = match (channels, addr.strip_prefix("ch:")) {
+                    (Some(ch), Some(c)) => ch
+                        .get(&c.to_ascii_uppercase())
+                        .and_then(|a| a.get(driver))
+                        .cloned(),
+                    (_, None) => Some(addr.to_string()),
+                    (None, Some(_)) => None,
+                };
+                let input = dir.trim() == "in";
+                let theirs = at.and_then(|at| {
+                    node_at
+                        .iter()
+                        .find(|(_, i, d, a)| *i == input && d.eq_ignore_ascii_case(n) && *a == at)
+                });
+                match theirs {
+                    Some((sp, ..)) => {
+                        out.notes.push(format!(
+                            "{pname} is the Skipper's {sp} (the same channel of {n}): the program should use {sp}."
+                        ));
+                        out.same.push((pname.to_string(), sp.clone()));
+                    }
+                    None => out.notes.push(format!(
+                        "{pname} is left out: its device is the Skipper's {n}, whose points are its own."
+                    )),
+                }
+            }
             Some(Became::Not) => {}
             None => {
                 // On a Skipper device by name, or one not declared: the

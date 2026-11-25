@@ -1677,6 +1677,31 @@ impl BoxProjects {
             return Err((made.words().unwrap_or_default(), !made.unfound.is_empty()));
         }
         let added = crate::placeholders::add(&program, sizes, &made.map);
+        // A port that would be a placeholder but is a Skipper point under
+        // another name, or whose name is too long for a Skipper: the
+        // program has to change (Describe can do it), so it stops here.
+        if let Some(a) = &added {
+            let mut why = Vec::new();
+            for name in a.lines.iter().filter_map(|l| l.split_whitespace().nth(1)) {
+                if let Some((_, sp)) = made.same.iter().find(|(p, _)| p.eq_ignore_ascii_case(name)) {
+                    why.push(format!(
+                        "the program's {name} is the Skipper's {sp} (the same channel): use {sp} in the program"
+                    ));
+                } else if name.len() > crate::skipper_map::NAME_MAX {
+                    why.push(format!(
+                        "{name} is {} characters, and a Skipper names a point in at most {}: give it a shorter name in the program",
+                        name.len(),
+                        crate::skipper_map::NAME_MAX
+                    ));
+                }
+            }
+            if !why.is_empty() {
+                return Err((
+                    format!("Not deployed: {}. Describe can make the change.", why.join("; ")),
+                    false,
+                ));
+            }
+        }
         let map = added.as_ref().map_or(made.map.as_str(), |a| a.map.as_str());
         let write = added.as_ref().is_some_and(|a| !a.lines.is_empty())
             || project.as_deref().is_some_and(|p| p.trim() != map.trim());

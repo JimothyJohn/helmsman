@@ -5372,6 +5372,7 @@ fn on_a_skippers_page_the_agent_gets_its_io_list() {
     let first = message(&v, 0);
     assert!(first.contains("<io_devices>\nThe Skipper's I/O list."), "{first}");
     assert!(first.contains("in  start bool drive in:0.0"), "{first}");
+    assert!(first.contains("names of at most 32 characters"), "{first}");
 }
 
 /// The Skipper's list as its `GET /api/io_map` gives it.
@@ -5486,6 +5487,50 @@ fn a_device_added_by_its_profile_goes_to_a_skipper_in_its_form() {
             SKIPPER_LIST.trim_end(),
         )
     );
+}
+
+/// Nick 2026-11-24: `"liberty_lexium_mdrive_ethernet_lmd_ether": a name is
+/// letters, digits and '_', at most 32` from the Skipper. That port is the
+/// MDrive's `enabled` channel, which the Skipper has as `enabled`: Deploy
+/// stops before sending and says to use the Skipper's name.
+#[test]
+fn a_port_that_is_a_skipper_point_under_another_name_stops_the_deploy() {
+    let node = "device drive enip-io 192.168.33.1 config=1 o2t=112:36 t2o=100:16 rpi_ms=20\nin  enabled bool drive in:0.0\nout slew int drive out:20:i32\n";
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let long = "liberty_lexium_mdrive_ethernet_lmd_ether";
+    let main = format!(
+        "PROGRAM p\nVAR_INPUT\n  {long} : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := {long};\nEND_PROGRAM\n"
+    );
+    let map = format!(
+        "device liberty_lexium_mdrive_ethernet_lmd_ethernet_ip device:novanta-mdrive cip=243:15362:0x3cad8920\nin  {long} bool liberty_lexium_mdrive_ethernet_lmd_ethernet_ip ch:enabled\n"
+    );
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", main.as_str()),
+            ("io.map", map.as_str()),
+            (
+                "novanta-mdrive.device",
+                include_str!("../../../docs/devices/novanta-mdrive.device"),
+            ),
+        ],
+    );
+    let p = &mut v.projects;
+    p.node_map = Some(node.into());
+    p.to_node = true;
+    p.found_hosts = vec![("cip=243:15362:0x3cad8920".into(), "192.168.33.1".into())];
+    p.deploy();
+    assert!(
+        matches!(&p.deploy, Deploy::Failed(w) if w.contains(&format!("the program's {long} is the Skipper's enabled (the same channel): use enabled in the program"))),
+        "{:?}",
+        p.deploy
+    );
+    assert!(p.poll().is_empty(), "nothing sent");
 }
 
 /// A scan that does not find the device: the deploy stops once, saying

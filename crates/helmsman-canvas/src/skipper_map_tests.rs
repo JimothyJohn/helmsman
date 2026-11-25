@@ -87,6 +87,15 @@ fn the_failed_deploy_becomes_a_map_the_skipper_runs() {
         "{:?}",
         m.notes
     );
+    // Its point is the MDrive's `enabled` channel, which the Skipper has
+    // as `enabled` (in:0.0): the program must use that name.
+    assert_eq!(
+        m.same,
+        [(
+            "liberty_lexium_mdrive_ethernet_lmd_ether".to_string(),
+            "enabled".to_string()
+        )]
+    );
     // The placeholders stay, under their one header.
     for p in ["in  start bool sim", "out di0_active bool sim"] {
         assert!(m.map.contains(p), "{p}: {}", m.map);
@@ -191,4 +200,21 @@ fn no_project_map_is_the_skippers_list() {
     let m = for_skipper(None, NODE, &profiles, &nothing);
     assert_eq!(m.map, NODE.trim_end().to_string() + "\n");
     assert_eq!(m.words(), None);
+}
+
+#[test]
+fn a_name_longer_than_a_skipper_takes_is_refused_by_name() {
+    let long = "a_very_long_placeholder_name_of_40_chars";
+    assert_eq!(long.len(), 40);
+    let p = format!("in  {long} bool sim\nin  ok bool sim\n");
+    let m = for_skipper(Some(&p), NODE, &profiles, &nothing);
+    assert_eq!(m.refused.len(), 1, "{:?}", m.refused);
+    assert!(
+        m.refused[0].starts_with(&format!(
+            "{long}: a Skipper names a point in at most 32 characters, and this is 40"
+        )),
+        "{:?}",
+        m.refused
+    );
+    assert!(m.map.contains("in  ok bool sim"), "{}", m.map);
 }
