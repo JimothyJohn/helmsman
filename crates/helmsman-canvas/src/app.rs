@@ -2082,8 +2082,8 @@ impl App {
     }
 
     /// Sign in, or who is signed in: on a box only. Signed in, the role's
-    /// glyph leads the name: a hard hat for an operator, a wrench and a
-    /// screwdriver for an engineer or an integrator (Nick, 2026-11-07).
+    /// user glyph leads the name, the same for every role (Nick,
+    /// 2026-11-25; the role is in the tip).
     fn login_button(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         if self.source != Source::Box {
             return;
@@ -2094,28 +2094,27 @@ impl App {
             self.login = false;
             self.login_seen.clone_from(&who);
         }
-        let icon = session.as_ref().map(|s| match s.role.as_str() {
-            "operator" => (glyphs::Icon::HardHat, YELLOW, "an operator"),
-            _ => (glyphs::Icon::Tools, theme(ui).fg, "an engineer"),
-        });
-        let text = who.clone().unwrap_or_else(|| "Sign in".to_string());
-        let tip = match (&who, icon) {
-            (Some(w), Some((_, _, role))) => {
-                format!("Signed in as {w}, {role}. Click to sign out or change who is signed in.")
-            }
-            _ => "Sign in to edit, deploy, force inputs and approve proposals.".to_string(),
+        // The name alone (Nick, 2026-11-25: "The (engineer) portion should
+        // also be excluded"): a call the role does not allow says so.
+        let name = session
+            .as_ref()
+            .map(|s| s.user.clone().unwrap_or_else(|| s.role.clone()));
+        let text = name.clone().unwrap_or_else(|| "Sign in".to_string());
+        let tip = match &who {
+            Some(w) => format!("Signed in as {w}. Click to sign out or change who is signed in."),
+            None => "Sign in to edit, deploy, force inputs and approve proposals.".to_string(),
         };
         let mut clicked = false;
-        if let Some((icon, color, _)) = icon {
+        if name.is_some() {
             let side = ui.spacing().interact_size.y;
             let (at, r) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::click());
-            glyphs::paint(ui.painter(), at.shrink(side * 0.12), icon, color);
-            let key = if icon == glyphs::Icon::HardHat {
-                "operator"
-            } else {
-                "engineer"
-            };
-            hits.push((format!("role {key}"), at));
+            glyphs::paint(
+                ui.painter(),
+                at.shrink(side * 0.12),
+                glyphs::Icon::User,
+                theme(ui).fg,
+            );
+            hits.push(("user glyph".to_string(), at));
             clicked |= r.tip(&tip).clicked();
         }
         let b = ui
