@@ -988,6 +988,12 @@ impl App {
         let (op, names) = match a {
             Action::RunStop if running.is_empty() => ("run", targets.to_vec()),
             Action::RunStop => ("stop", running),
+            // On a Skipper the machine's program keeps running: Reset puts
+            // the simulated inputs back to off or 0, and nothing else.
+            Action::Restart if b.watches_node => {
+                b.reset_sims();
+                return;
+            }
             Action::Restart => ("restart", targets.to_vec()),
             _ => return,
         };
@@ -1311,6 +1317,12 @@ impl App {
             .as_ref()
             .map(|b| self.monitor.targets(&b.state.modules))
             .unwrap_or_default();
+        // On a Skipper's page: how many simulated inputs Reset would set.
+        let skipper_sims = self
+            .boxv
+            .as_ref()
+            .filter(|b| b.watches_node)
+            .map(crate::box_view::BoxView::sim_inputs);
         let on_box = self
             .boxv
             .as_ref()
@@ -1411,15 +1423,19 @@ impl App {
                                     )
                                 };
                                 g(ui, "run", icon, any, false, tip, Action::RunStop);
-                                g(
-                                    ui,
-                                    "restart",
-                                    glyphs::Icon::Restart,
-                                    any,
-                                    false,
-                                    "Restart on the box: every variable back to its initial value, then run (an engineer's; audited).",
-                                    Action::Restart,
-                                );
+                                // Nick 2026-11-25: on a real device the reset
+                                // is for the simulated I/O only.
+                                let (enabled, tip) = match skipper_sims {
+                                    Some(n) => (
+                                        n > 0,
+                                        "Reset the simulated inputs, each back to off or 0. The program keeps running and the real I/O is not touched.",
+                                    ),
+                                    None => (
+                                        any,
+                                        "Restart on the box: every variable back to its initial value, then run (an engineer's; audited).",
+                                    ),
+                                };
+                                g(ui, "restart", glyphs::Icon::Restart, enabled, false, tip, Action::Restart);
                                 ui.separator();
                             }
                             g(

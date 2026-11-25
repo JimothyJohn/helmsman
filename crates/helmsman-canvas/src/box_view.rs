@@ -1454,6 +1454,51 @@ impl BoxView {
             .then(|| "Sign in (top right) to ask for help.".to_string())
     }
 
+    /// The simulated (`sim`) inputs with a value: what Reset sets on a
+    /// Skipper's page.
+    fn sims(&self) -> impl Iterator<Item = (&str, serde_json::Value)> {
+        self.state
+            .signals
+            .iter()
+            .filter(|s| s.sim && s.dir == "in")
+            .filter_map(|s| {
+                let zero = match s.value? {
+                    Value::Bool(_) => serde_json::json!(false),
+                    Value::Int(_) => serde_json::json!(0),
+                    Value::Real(_) => serde_json::json!(0.0),
+                };
+                Some((s.name.as_str(), zero))
+            })
+    }
+
+    #[must_use]
+    pub fn sim_inputs(&self) -> usize {
+        self.sims().count()
+    }
+
+    /// Reset on a Skipper's page (Nick, 2026-11-25: "The reset state
+    /// button should only be applied to simulated I/O when running on an
+    /// actual device"): every simulated input back to off or 0, the
+    /// program left running and the real points untouched.
+    pub fn reset_sims(&mut self) {
+        let sims: Vec<(String, serde_json::Value)> = self.sims().map(|(n, v)| (n.to_string(), v)).collect();
+        for (name, zero) in &sims {
+            self.projects.set_sim(name, zero);
+        }
+        if !sims.is_empty() {
+            self.projects.note(
+                format!(
+                    "Simulated inputs back to off or 0: {}.",
+                    sims.iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                false,
+            );
+        }
+    }
+
     /// Help mode's Ask: the question and the page's Messages to the box.
     pub fn ask_help(&mut self, ctx: &egui::Context) {
         if self.help_blocked().is_some() || crate::help::refusal(&self.help.draft).is_some() {

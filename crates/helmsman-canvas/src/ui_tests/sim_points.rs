@@ -76,3 +76,33 @@ fn only_an_engineer_has_the_control() {
     assert!(h.app.chrome.rect("sim start").is_none());
     assert_eq!(sets(&mut h), []);
 }
+
+/// Nick 2026-11-25: "The reset state button should only be applied to
+/// simulated I/O when running on an actual device." On a Skipper's page
+/// Reset sets each simulated input back to off or 0 and restarts nothing;
+/// a device's input is not touched.
+#[test]
+fn on_a_skipper_reset_sets_the_simulated_inputs_back_and_restarts_nothing() {
+    let bench = Bench::new();
+    let mut h = page(&bench, "engineer");
+    let v = h.app.boxv.as_mut().unwrap();
+    v.watches_node = true;
+    v.state.signals[0].value = Some(Value::Bool(true)); // start, on
+    assert_eq!(v.sim_inputs(), 2, "start and speed");
+    v.reset_sims();
+    h.wait(0.1);
+    let mut got = sets(&mut h);
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("/api/signals/speed".to_string(), r#"{"value":0}"#.to_string()),
+            ("/api/signals/start".to_string(), r#"{"value":false}"#.to_string()),
+        ]
+    );
+    let restarts: Vec<_> = std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
+        .into_iter()
+        .filter(|r| r.url.ends_with("/restart"))
+        .collect();
+    assert!(restarts.is_empty(), "{restarts:?}");
+}
