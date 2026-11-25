@@ -164,12 +164,16 @@ fn the_monitor_starts_on_devices_and_shows_only_the_points_picked() {
     for g in ["rio", "simulated", "box", "other"] {
         assert!(h.has(&format!("monitor group {g}")), "group {g}");
     }
-    assert!(!h.has("monitor signal a"), "points are folded at first");
+    assert!(
+        h.has("monitor signal a") && h.has("monitor signal c"),
+        "the first device starts open"
+    );
+    assert!(
+        !h.has("monitor signal s1"),
+        "another device's points start folded"
+    );
     assert!(!h.has("watched signals"), "nothing watched yet");
-    h.press("monitor group rio");
-    h.wait(0.2);
-    assert!(h.has("monitor signal a") && h.has("monitor signal c"));
-    assert!(!h.has("monitor signal s1"), "another device's points stay folded");
+    assert_eq!(h.app.monitor.watched, Vec::<String>::new());
     h.press("monitor signal b");
     h.wait(0.2);
     assert!(h.has("watched signals"));
@@ -182,9 +186,77 @@ fn the_monitor_starts_on_devices_and_shows_only_the_points_picked() {
 #[test]
 fn the_monitors_picks_are_not_the_trends() {
     let mut h = monitor();
-    h.press("monitor group rio");
-    h.wait(0.2);
+    assert!(h.has("monitor signal a"), "rio starts open");
     h.press("monitor signal a");
     h.wait(0.2);
     assert!(pins(&h).is_empty(), "watching a point does not trend it");
+}
+
+#[test]
+fn an_empty_monitor_says_what_to_do_and_stops_once_a_point_is_watched() {
+    let mut h = monitor();
+    assert!(h.has("monitor pick hint"), "hint shows with nothing watched");
+    h.press("monitor signal a");
+    h.wait(0.2);
+    assert!(!h.has("monitor pick hint"), "hint goes once a point is watched");
+    h.press("monitor signal a");
+    h.wait(0.2);
+    assert!(
+        h.has("monitor pick hint"),
+        "hint returns when the last is taken off"
+    );
+}
+
+#[test]
+fn the_monitor_opens_its_first_device_with_nothing_watched() {
+    let mut h = monitor();
+    h.wait(0.2);
+    assert!(h.has("monitor signal a") && h.has("monitor signal b") && h.has("monitor signal c"));
+    assert!(!h.has("monitor signal s1"), "other devices stay folded");
+    assert!(!h.has("monitor signal lamp"), "other devices stay folded");
+    assert!(
+        h.app.monitor.watched.is_empty(),
+        "opening a group watches nothing"
+    );
+}
+
+#[test]
+fn a_fold_the_user_made_in_the_monitor_survives_later_frames() {
+    let mut h = monitor();
+    h.press("monitor group rio");
+    h.wait(0.3);
+    assert!(!h.has("monitor signal a"), "the user folded rio");
+    h.wait(0.3);
+    assert!(!h.has("monitor signal a"), "still folded a few frames later");
+    h.press("monitor group rio");
+    h.wait(0.2);
+    assert!(h.has("monitor signal a"), "unfolded again by the user");
+    h.press("monitor signal a");
+    h.wait(0.2);
+    h.press("monitor signal a");
+    h.wait(0.3);
+    assert!(
+        h.has("monitor signal a"),
+        "watching and unwatching keeps their choice"
+    );
+    h.press("monitor group rio");
+    h.wait(0.3);
+    assert!(!h.has("monitor signal a"), "a fold survives later frames");
+}
+
+#[test]
+fn nothing_is_watched_until_a_point_is_clicked() {
+    let mut h = monitor();
+    h.wait(0.5);
+    assert_eq!(h.app.monitor.watched, Vec::<String>::new());
+    assert!(!h.has("watched signals"));
+    h.press("monitor group simulated");
+    h.wait(0.2);
+    assert!(
+        h.app.monitor.watched.is_empty(),
+        "unfolding a group watches nothing"
+    );
+    h.press("monitor signal a");
+    h.wait(0.2);
+    assert_eq!(h.app.monitor.watched, ["a"]);
 }
