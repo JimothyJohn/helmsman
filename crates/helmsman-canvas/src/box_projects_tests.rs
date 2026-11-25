@@ -4724,7 +4724,7 @@ fn a_pane_layout_kept_on_the_box_is_offered_on_another_screen() {
 
     let mut c = Chrome::default();
     c.dock(Pane::Io, true);
-    c.hide(Pane::History);
+    c.hide(Pane::Files);
     c.place(Pane::Devices, false, Some(Pane::Claude));
     c.sizes.left = Some(400.0);
     c.sizes.bottom = Some(200.0);

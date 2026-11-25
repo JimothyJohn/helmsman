@@ -166,6 +166,9 @@ pub struct BoxView {
     /// A project New project made, until it is deployed or another opens:
     /// the diagram (what runs, another program) is not shown for it.
     fresh: Option<String>,
+    /// The revision Back and Forward (the Agent tab, the Code tab) last
+    /// showed; `None`: the newest.
+    history_at: Option<u32>,
 }
 
 impl Default for BoxView {
@@ -292,6 +295,7 @@ impl BoxView {
         self.projects.deploy = Deploy::Idle;
         self.devices_ui.add_note = None;
         self.devices_ui.ask_note = None;
+        self.history_at = None;
         self.fresh = Some(name);
     }
 
@@ -444,6 +448,7 @@ impl BoxView {
             watches_node: false,
             agent_pending: false,
             fresh: None,
+            history_at: None,
         }
     }
 
@@ -1647,7 +1652,7 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
             decided: self.decided.clone(),
-            steps: None,
+            steps: self.revision_steps(),
             room_below: None,
             progress: None,
             // The question card is the page's for now (TODO.md
@@ -1655,7 +1660,12 @@ impl BoxView {
             card: None,
             big: None,
             io: None,
-            versions: None,
+            versions: (!self.projects.history.is_empty()).then(|| crate::instruct::Versions {
+                rows: self.projects.history.clone(),
+                at: self
+                    .history_at
+                    .or_else(|| self.projects.history.last().map(|r| r.n)),
+            }),
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
@@ -1722,8 +1732,45 @@ impl BoxView {
             // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
             Some(Act::Offer(k)) => self.take_offer(k, &ctx),
-            Some(Act::Revision(_) | Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
+            Some(Act::Revision(n) | Act::Details(n)) => self.show_revision(n),
+            Some(Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
+    }
+
+    /// History in the Agent tab and the Code tab (Nick, 2026-11-25: "move
+    /// it to 2 places: agent so that you can easily move anywhere in the
+    /// history to see the prompt and output as well as in the code tab so
+    /// you can do the same thing but with all of the code"): Back and
+    /// Forward from the revision last shown, the newest at first.
+    fn revision_steps(&self) -> Option<crate::instruct::Steps> {
+        let revs = &self.projects.history;
+        let k = match self.history_at {
+            Some(n) => revs.iter().position(|r| r.n == n)?,
+            None => revs.len().checked_sub(1)?,
+        };
+        let tip = |j: usize, way: &str| {
+            revs.get(j).map(|r| {
+                (
+                    r.n,
+                    format!(
+                        "{way}: shows revision {}, {}: its instruction, the answer and the code.",
+                        r.n, r.what
+                    ),
+                )
+            })
+        };
+        Some(crate::instruct::Steps {
+            back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
+            forward: tip(k + 1, "Forward"),
+        })
+    }
+
+    /// Revision `n` in the middle of the screen: its instruction and
+    /// answer (the Agent page), each file against the project now, and
+    /// Restore for an engineer.
+    fn show_revision(&mut self, n: u32) {
+        self.history_at = Some(n);
+        self.project_act(crate::projects::Act::ShowRevision(n));
     }
 
     /// Offer `k` under the last answer, clicked ([`crate::offers`]): an
@@ -2336,6 +2383,7 @@ impl BoxView {
                     deploy: &deploy,
                     deploy_tip: "Ctrl Shift Enter: deploy this version.\nThe box compiles it and runs it in place of the old one.",
                     busy: self.projects.deploy.stage(self.watches_node),
+                    steps: None,
                 },
             )
             .deploy;
@@ -3194,24 +3242,6 @@ impl Body for BoxView {
         }
     }
 
-    fn history(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        if self.projects.open.is_none() {
-            ui.label(
-                RichText::new("Open a project to see its versions.").color(crate::theme::theme(ui).muted),
-            )
-            .tip("Each project keeps every saved version on the box.");
-            return;
-        }
-        // On a box a version runs only once deployed: a pick opens its
-        // details, with Restore for an engineer.
-        let rows = self.projects.history.clone();
-        if let Some(crate::history_ui::Pick::Show(n) | crate::history_ui::Pick::Details(n)) =
-            crate::history_ui::tab_ui(ui, chrome, &rows, None)
-        {
-            self.project_act(crate::projects::Act::ShowRevision(n));
-        }
-    }
-
     fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::devices::{LinkState, Live, tree};
         let (text, source) = self.map_text();
@@ -3390,6 +3420,8 @@ impl Body for BoxView {
                 }
             });
             let mut go = false;
+            let steps = self.revision_steps();
+            let mut revision = None;
             // The header is the open file's name (Nick, 2026-11-08), then
             // word wrap, then the → that deploys this version.
             let name = o.current.clone().unwrap_or_else(|| "Program".to_string());
@@ -3412,7 +3444,7 @@ impl Body for BoxView {
                         chrome.hit("read-only", r.rect);
                     }
                 }
-                go = editor::header_right(
+                let pressed = editor::header_right(
                     ui,
                     chrome,
                     &editor::Status {
@@ -3425,12 +3457,17 @@ impl Body for BoxView {
                             "Ctrl Shift Enter: deploy this version.\nSaves, checks and runs the project on the box."
                         },
                         busy: self.projects.deploy.stage(self.watches_node),
+                        steps: steps.as_ref(),
                     },
-                )
-                .deploy;
+                );
+                go = pressed.deploy;
+                revision = pressed.revision;
             });
             if go {
                 self.deploy();
+            }
+            if let Some(n) = revision {
+                self.show_revision(n);
             }
             let Some(file) = o.current.clone() else {
                 ui.label(RichText::new("No files in this project yet.").color(t.muted));

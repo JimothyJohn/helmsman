@@ -28,21 +28,17 @@ fn whole(l: &PaneLayout) {
 
 #[test]
 fn a_tab_placed_in_its_own_pane_moves_and_the_shown_one_stays() {
-    use Pane::{Claude, Code, Devices, Files, History, Io};
+    use Pane::{Claude, Code, Devices, Files, Io};
     let mut c = Chrome::default();
-    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files, History]);
-    c.place(History, false, Some(Claude));
-    assert_eq!(
-        c.lefts,
-        [History, Claude, Code, Io, Devices, Files],
-        "to the front"
-    );
-    c.place(History, false, None);
-    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files, History], "to the end");
+    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files]);
+    c.place(Files, false, Some(Claude));
+    assert_eq!(c.lefts, [Files, Claude, Code, Io, Devices], "to the front");
+    c.place(Files, false, None);
+    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files], "to the end");
     c.place(Code, false, Some(Files));
-    assert_eq!(c.lefts, [Claude, Io, Devices, Code, Files, History], "rightwards");
+    assert_eq!(c.lefts, [Claude, Io, Devices, Code, Files], "rightwards");
     c.place(Files, false, Some(Io));
-    assert_eq!(c.lefts, [Claude, Files, Io, Devices, Code, History], "leftwards");
+    assert_eq!(c.lefts, [Claude, Files, Io, Devices, Code], "leftwards");
     // Onto itself, or before the tab it is already before: nothing moves.
     let was = c.lefts.clone();
     c.place(Io, false, Some(Io));
@@ -69,7 +65,7 @@ fn a_tab_placed_in_the_other_pane_docks_at_that_place() {
 
 #[test]
 fn a_hidden_tab_leaves_its_pane_and_comes_back_when_shown() {
-    use Pane::{Claude, Code, History};
+    use Pane::{Claude, Code, Files};
     let mut c = Chrome::default();
     c.hide(Claude);
     assert_eq!(c.hidden, [Claude]);
@@ -88,7 +84,7 @@ fn a_hidden_tab_leaves_its_pane_and_comes_back_when_shown() {
     // The last tab of a pane hidden: the one before shows.
     c.pane = Claude;
     c.hide(Claude);
-    assert_eq!(c.pane, History);
+    assert_eq!(c.pane, Files);
     // Every tab hidden: nothing to show, and a toggle still brings one back.
     for p in Pane::ALL {
         c.hide(p);
@@ -103,7 +99,7 @@ fn a_hidden_tab_leaves_its_pane_and_comes_back_when_shown() {
 fn the_browser_keeps_hidden_tabs_and_a_text_from_before_reads_as_none() {
     let mut c = Chrome::default();
     c.dock(Pane::Io, true);
-    c.hide(Pane::History);
+    c.hide(Pane::Code);
     c.hide(Pane::Files);
     c.place(Pane::Devices, false, Some(Pane::Claude));
     let back = Chrome::restored(&c.saved());
@@ -161,7 +157,7 @@ fn every_ready_made_layout_is_whole_and_default_is_the_first_page() {
 fn layouts_go_to_a_file_and_come_back_the_same() {
     let mut c = Chrome::default();
     c.dock(Pane::Io, true);
-    c.hide(Pane::History);
+    c.hide(Pane::Files);
     c.left = false;
     c.msgs = false;
     c.sizes = Sizes {
@@ -271,7 +267,7 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
         r#"{{"format":"{FORMAT}","layouts":[
             7, null, {{}}, {{"name":""}}, {{"name":17}},
             {{"name":"Odd","left":["code","code","../../etc/passwd",5,"io"],"right":"io",
-              "hidden":["io","history"],"left_shows":"nope","right_shows":"files",
+              "hidden":["io","devices"],"left_shows":"nope","right_shows":"files",
               "left_open":"yes","bottom_shows":"cellar","messages_open":"yes",
               "left_width":1e30,"right_width":-5,"bottom_height":"tall"}},
             {{"name":"Default","left":["files"]}},
@@ -296,7 +292,7 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
         [Pane::Code, Pane::Io],
         "a tab once, unknown ones dropped"
     );
-    assert_eq!(odd.hidden, [Pane::History], "io kept its first place");
+    assert_eq!(odd.hidden, [Pane::Devices], "io kept its first place");
     assert!(odd.rights.is_empty(), "a list that is not a list is empty");
     assert_eq!(odd.pane, Pane::Claude, "an unknown shown tab: the first page's");
     assert!(odd.left, "a flag that is not a flag keeps the first page's value");

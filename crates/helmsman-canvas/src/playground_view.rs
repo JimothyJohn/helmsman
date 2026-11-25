@@ -3488,6 +3488,8 @@ impl Body for PlaygroundView {
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
         let mut go = false;
+        let steps = self.steps();
+        let mut revision = None;
         let mut to_error: Option<(String, u32)> = None;
         // The header is the open file's name (Nick, 2026-11-08), the
         // magnifier and word wrap; at its right end Deploy, and before it
@@ -3530,15 +3532,20 @@ impl Body for PlaygroundView {
                     deploy: &Ok(()),
                     deploy_tip: "Ctrl Shift Enter: deploy this version.\nCompiles the open project and runs it in the page.",
                     busy: None,
+                    steps: steps.as_ref(),
                 },
             );
             go = pressed.deploy;
+            revision = pressed.revision;
             if pressed.errors
                 && let Some(d) = first
             {
                 to_error = Some((d.file, d.line));
             }
         });
+        if let Some(n) = revision {
+            self.show_revision(n);
+        }
         if go {
             self.deploy();
         }
@@ -3652,22 +3659,6 @@ impl Body for PlaygroundView {
         // (and a paste into the open one).
         if let Some(a) = self.files_ui.blank_menu(ui, chrome, &Ok(()), true) {
             self.act(a);
-        }
-    }
-
-    fn history(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        // An edit or a save since the pick: the newest is what shows.
-        if let Some(n) = self.history_at
-            && !self.shows_revision(n)
-        {
-            self.history_at = None;
-        }
-        let rows: Vec<crate::history_ui::RevisionRow> =
-            self.proj.revisions().iter().map(SimRevision::row).collect();
-        match crate::history_ui::tab_ui(ui, chrome, &rows, self.history_at) {
-            Some(crate::history_ui::Pick::Show(n)) => self.show_revision(n),
-            Some(crate::history_ui::Pick::Details(n)) => self.act(Act::ShowRevision(n)),
-            None => {}
         }
     }
 
@@ -4353,6 +4344,7 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Undo) => self.undo_change(),
                 Some(crate::instruct::Act::RunSteps) => self.run_steps(&ctx),
                 Some(crate::instruct::Act::Revision(n)) => self.show_revision(n),
+                Some(crate::instruct::Act::Details(n)) => self.act(Act::ShowRevision(n)),
                 Some(crate::instruct::Act::Answer(k)) => self.answer_question(k, &ctx),
                 Some(crate::instruct::Act::Offer(k)) => self.take_offer(k, &ctx),
                 Some(crate::instruct::Act::Review(_)) | None => {}
