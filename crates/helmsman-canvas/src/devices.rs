@@ -1466,6 +1466,33 @@ impl DevicesUi {
                     act = Some(DeviceAct::OpenMap);
                 }
             }
+            // Remove unused for every device at once (Nick, 2026-11-25:
+            // "a higher level version of that to save some time").
+            let idle: Vec<String> = if self.can_declare {
+                self.map
+                    .devices
+                    .iter()
+                    .flat_map(|d| crate::device_io::unused(&self.map, &d.name, &self.program))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if !idle.is_empty() {
+                let b = ui
+                    .add_enabled(write.is_ok(), egui::Button::new(format!("Clean up {} unused", idle.len())).small())
+                    .tip(write.as_ref().err().map_or(
+                        "Takes every device's points the program has no variable for out of io.map. Asks first.",
+                        String::as_str,
+                    ));
+                chrome.hit("devices clean up", b.rect);
+                if b.clicked() {
+                    self.removing = Some(crate::device_io::Removal {
+                        device: "every device".into(),
+                        signals: idle,
+                        unused: true,
+                    });
+                }
+            }
         });
         self.proposal.show(ui, chrome);
         if nodes.is_empty() {
