@@ -40,12 +40,12 @@ fn nothing(_: &str) -> Option<String> {
 /// the parse: the parsers on this branch predate them (the Skipper's and
 /// the box's halves, #630 and #629, add them with their own tests).
 fn both_take(map: &str) {
-    let map: String = map
-        .lines()
-        .filter(|l| l.split_whitespace().nth(3) != Some("sim"))
-        .map(|l| format!("{l}\n"))
-        .collect();
-    let map = map.as_str();
+    let mut kept = String::new();
+    for l in map.lines().filter(|l| l.split_whitespace().nth(3) != Some("sim")) {
+        kept.push_str(l);
+        kept.push('\n');
+    }
+    let map = kept.as_str();
     if let Err(e) = helmsman_nodecore::iomap::parse(map) {
         panic!("the Skipper refuses it: {e:?}\n{map}");
     }

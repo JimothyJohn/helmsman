@@ -332,14 +332,12 @@ pub fn for_skipper(
             Some(Became::Sent { driver, channels }) => {
                 let addr = match (channels, addr.strip_prefix("ch:")) {
                     (Some(ch), Some(c)) => {
-                        match ch.get(&c.to_ascii_uppercase()).and_then(|a| a.get(driver)) {
-                            Some(a) => a.clone(),
-                            None => {
-                                out.refused
-                                    .push(format!("{pname}: {dev} has no channel {c} on {driver}"));
-                                continue;
-                            }
-                        }
+                        let Some(a) = ch.get(&c.to_ascii_uppercase()).and_then(|a| a.get(driver)) else {
+                            out.refused
+                                .push(format!("{pname}: {dev} has no channel {c} on {driver}"));
+                            continue;
+                        };
+                        a.clone()
                     }
                     _ => addr.to_string(),
                 };

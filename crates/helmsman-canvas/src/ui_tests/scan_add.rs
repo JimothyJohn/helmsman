@@ -117,7 +117,7 @@ fn an_unknown_device_is_said_and_a_taken_name_gets_a_number() {
 }
 
 /// On a Skipper's page a device the Skipper already runs is passed over
-/// (Nick's MDrive was added a second time beside the Skipper's `drive`).
+/// (Nick's drive was added a second time beside the Skipper's `drive`).
 #[test]
 fn a_device_the_skipper_runs_already_is_passed_over() {
     let mut d = DevicesUi::default();
