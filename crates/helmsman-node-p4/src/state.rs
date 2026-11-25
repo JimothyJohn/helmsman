@@ -346,6 +346,7 @@ pub fn signals_of(
                 value: ioplan::value_at(image, point),
                 quality: if link.is_some() { "stale" } else { "good" },
                 point_error: link.and_then(|l| l.error.clone()),
+                sim: point.is_sim(),
             });
         }
     }
@@ -366,6 +367,7 @@ pub fn signals_of(
             value,
             quality: "good",
             point_error: None,
+            sim: false,
         }
     }));
     out
