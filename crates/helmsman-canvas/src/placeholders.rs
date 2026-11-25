@@ -93,9 +93,24 @@ pub fn add(program: &str, sizes: helmsman_iec::ImageSizes, list: &str) -> Option
     kept.retain(|l| any_sim || l.trim() != HEADER);
     let list = kept.join("\n");
     let have = points(&list);
+    // A port shared with other controllers (`share NAME TYPE TABLE:ADDR`,
+    // the Skipper's Modbus TCP tables) is wired by its share: a
+    // placeholder beside it would be refused (one source per input).
+    let shared: Vec<String> = list
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.split('#').next().unwrap_or("").split_whitespace();
+            (w.next() == Some("share"))
+                .then(|| w.next().map(str::to_ascii_lowercase))
+                .flatten()
+        })
+        .collect();
     for p in compiled.ports() {
         let name = p.name.to_ascii_lowercase();
         let input = p.dir == PortDir::Input;
+        if shared.contains(&name) {
+            continue;
+        }
         match have.iter().find(|(n, _)| *n == name) {
             Some((_, i)) if *i == input => {}
             Some((_, i)) => added.cannot.push(format!(

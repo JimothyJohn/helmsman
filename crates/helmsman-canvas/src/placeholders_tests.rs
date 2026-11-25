@@ -154,3 +154,23 @@ fn a_placeholder_the_program_no_longer_uses_is_taken_out() {
     assert_eq!(a.dropped, ["old"]);
     assert!(!a.map.contains(HEADER) && !a.map.contains("sim"), "{}", a.map);
 }
+
+/// A port the map shares with other controllers (`share`, the Skipper's
+/// Modbus TCP tables, #633) is wired by its share: no placeholder, and a
+/// share line is kept as it is.
+#[test]
+fn a_shared_port_gets_no_placeholder() {
+    let p = "PROGRAM p\nVAR_INPUT run_cmd : BOOL; go : BOOL; END_VAR\nVAR_OUTPUT speed : DINT; END_VAR\nspeed := 0;\nEND_PROGRAM\n";
+    let list = format!("{NODE}share run_cmd bool coil:0\nshare speed int hr:0\n");
+    let a = add(p, SIZES, &list).unwrap();
+    assert_eq!(
+        a.lines,
+        ["in  go bool sim"],
+        "only the port no share or point backs"
+    );
+    assert!(
+        a.map.contains("share run_cmd bool coil:0\nshare speed int hr:0"),
+        "{}",
+        a.map
+    );
+}
