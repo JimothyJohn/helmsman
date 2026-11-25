@@ -1,16 +1,25 @@
-# Feature parity and `make ship`
+# Feature parity, `make staging` and `make ship`
 
 `make compat` (docs/COMPAT.md) is the horizontal check: the four
 repositories held to each other's contracts. This is the vertical one: every
-feature a user reaches, walked end to end on the candidate (the dev tips) and
-on live, so a promotion is one command and its report says, feature by
-feature, whether live does what dev does.
+feature a user reaches, walked end to end on the candidate and on live, so
+a promotion is one command and its report says, feature by feature, whether
+live does what the candidate does.
+
+The line is `dev` → `staging` → the default branch, in all four
+repositories. `make staging` takes the dev tips to `staging`; `make ship`
+takes the staging tips to production. "The candidate" is the tip being
+promoted: dev's for `make staging`, staging's for `make ship`. `make ship`
+takes nothing from dev: it names what dev holds that staging lacks and
+leaves it there.
 
 ```sh
 make parity                                   # every journey on this checkout's box (no relay: agent journeys not run)
 make parity ARGS="--relay-bin target/compat/build/agent-relay-dev/debug/agent-relay-local"   # agent journeys on the stub (the relay make compat builds at agent-relay dev)
-make ship ARGS=--dry-run                      # the candidate half: contracts, CI, journeys, tabs; nothing promoted
-make ship                                     # check, ask, promote, deploy the relay, wait for live, check live, report
+make staging ARGS=--dry-run                   # check the dev tips: contracts, CI, journeys, tabs; nothing promoted
+make staging                                  # rebuild a stale playground, check the dev tips, promote them to staging
+make ship ARGS=--dry-run                      # check the staging tips the same way; nothing promoted
+make ship                                     # check staging, ask, promote to production, deploy the relay, wait for live, check live, report
 make ship ARGS=--live-only                    # the live half again
 ```
 
@@ -49,37 +58,41 @@ make ship ARGS=--live-only                    # the live half again
   `--dist` serves a build (the candidate), `--site` the public page (live).
   Each tab must draw, look unlike the other tabs of its panel, and log no
   error. Screenshots go to `target/parity-tabs/`.
-- **scripts/ship.sh** (`make ship`) runs the steps below.
+- **scripts/ship.sh** (`make staging`, `make ship`) runs the steps below.
 
-## What `make ship` does
+## What they do
 
-Run it from the main checkout on `dev`, pulled. Ship runs its own scripts and
+Run either from the main checkout on `dev`, pulled. Ship runs its own scripts and
 the checker from that checkout, so it first compares them with `origin/dev`
 and stops, with the command that updates the checkout, if they differ
 (`SHIP_LOCAL_SCRIPTS=1` runs local copies, for changing ship itself).
 
-0. **Playground.** When the canvas code has changed since the commit that
+0. **Playground** (`make staging`). When the canvas code has changed since the commit that
    last wrote dev's `docs/playground`, the page is rebuilt at the dev tip
    (`scripts/build-playground.sh`, with the relay stack's `DemoUrl` and
    `DemoDesignUrl`) and merged into dev by a pull request before anything
    is checked. On 2026-11-21 a ship went out with a page built six days
-   earlier. `--dry-run` only says the page is stale.
+   earlier. `--dry-run` only says the page is stale. `make ship` builds
+   nothing: a stale page on staging stops it, and `make staging` is the fix.
 1. **Candidate.** `scripts/compat.sh --candidate` (contracts and CI of the
-   four dev tips, written to `target/compat/train.txt`), then the journeys on the box compat built at dev, with
-   the relay it built at agent-relay's dev tip, and the tabs on dev's
+   four candidate tips, written to `target/compat/train.txt`), then the journeys on the box compat built there, with
+   the relay it built at agent-relay's candidate, and the tabs on the candidate's
    committed playground, which is what master will serve. Any failure stops
    here with nothing promoted.
-2. **Promote.** It shows how far each dev is ahead, then asks you to type
-   `ship` (`--yes` skips the question). Each repository whose candidate is
+2. **Promote.** It shows how far each candidate is ahead. `make staging`
+   promotes without a question; `make ship` asks you to type `ship`
+   (`--yes` skips the question). Each repository whose candidate is
    ahead gets a `ship/<stamp>` branch at the candidate commit and a pull
-   request from it into the default branch, merged with a merge commit. What
-   merged into dev after the check is not shipped with it. agent-relay is
+   request from it into `staging` (`make staging`) or the default branch
+   (`make ship`), merged with a merge commit once its checks are green. What
+   merged after the check is not promoted with it. `make staging` ends
+   here. For `make ship`, agent-relay is
    then deployed from a throwaway worktree at `main` (`make deploy`, which
    keeps the stack's settings).
 3. **Live.** It waits for `scripts/live-state.sh --at` each candidate commit
    (up to 20 min, for the Pages build) to say every row but the try box is
-   live; commits merged into dev since are not waited for. Then it runs the
-   journeys on a box built at the new master, held to *dev's* features, and
+   live; commits merged since are not waited for. Then it runs the
+   journeys on a box built at the new master, held to *the candidate's* features, and
    with the deployed relay, and the tabs on the public site.
 4. **Report.** `target/ship/report.md` lists every journey and tab with its
    candidate and live outcome. A feature that passed on the candidate and
@@ -87,7 +100,7 @@ and stops, with the command that updates the checkout, if they differ
    request reverting helmsman's promotion merge is opened on master for you
    to merge or close. Nothing is force-pushed or reset.
 
-Exit status: 0 shipped and live matches, 1 a check failed or live
+Exit status: 0 shipped and live matches (`make staging`: promoted), 1 a check failed or live
 regressed, 2 something could not run, 3 you answered no.
 
 ## Adding a feature
