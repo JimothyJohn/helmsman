@@ -55,7 +55,7 @@ remote=()
 while read -r ref; do
     [[ "$ref" == origin/* ]] || continue   # the origin/HEAD pointer prints as "origin"
     b="${ref#origin/}"
-    case "$b" in HEAD|dev|master) continue ;; esac
+    case "$b" in HEAD|dev|staging|master) continue ;; esac
     if grep -qxF "$b" <<<"$open_heads"; then continue; fi
     state="$(gh pr list --state all --head "$b" --json state --jq '.[0].state // empty')"
     case "$state" in
@@ -66,7 +66,7 @@ done < <(git branch -r --format='%(refname:short)')
 
 local=()
 while read -r b track; do
-    case "$b" in dev|master) continue ;; esac
+    case "$b" in dev|staging|master) continue ;; esac
     if grep -qxF "$b" <<<"$checked_out"; then continue; fi
     if [ "$track" = "[gone]" ] \
         || printf '%s\n' ${remote[@]+"${remote[@]}"} | grep -qxF "$b" \

@@ -58,6 +58,14 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   the live view the scan thread publishes every few ms, so they lag a
   control or a deploy by a tick: wait for the new state, never read it
   right after the reply (a stop test did and failed CI on 2026-11-07).
+- **The line is `dev` → `staging` → `master`** (Nick, 2026-11-25).
+  `staging` is protected like `dev` (`gate`, `interop`) and only ever
+  takes a promotion PR from `dev`, merged on green; `staging` → `master`
+  is Nick's merge. `make ship` (scripts/ship.sh) predates it and still
+  promotes each repository's `dev` straight to its default branch, and
+  the three sibling repositories have no `staging` yet (TODO.md
+  `ship-through-staging`). ci.yml's push run covers `master` and `dev`
+  only, so a promotion is gated by its PR's checks.
 - **dev no longer requires branches to be up to date** (turned off
   2026-11-06): a green PR lands without re-running behind each merge; the
   push run on dev catches a clash. .github/workflows/update-branches.yml
