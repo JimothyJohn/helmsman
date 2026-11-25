@@ -172,6 +172,17 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
     on the code requirement: an ad-hoc, linker-signed cargo binary gets a
     new identifier per build and the E1213 came back `No route to host`
     after every rebuild until the Allow was clicked again (2026-11-08).
+  - Reclaim job, LaunchAgent `io.advin.helmsman-reclaim` (Nick,
+    2026-11-25: "limit the dozens of GB of worktree build space"): daily
+    at 04:30 `scripts/reclaim-targets.sh` deletes `target/` in worktrees
+    that are merged or unbuilt for 12 h, never one locked or in use (a
+    process's directory or binary in it). Log
+    `~/Library/Logs/helmsman-reclaim.log`. `make reclaim` runs it now
+    (`DRY_RUN=1` lists). Install `scripts/reclaim-targets.sh --install`,
+    stop for good `--uninstall`. Every worktree keeps its own `target/`:
+    a shared cargo `build-dir` was tried the same day and broke every
+    test that starts a binary (cargo reuses one worktree's compiled test,
+    with another worktree's paths in it), so do not share it.
   - A new service (board, mock-up server) gets its own entry here first.
   - Anything else running is a leftover: `scripts/dev-processes.sh` lists
     every Helmsman process with its port and checkout, `--stop` stops all
