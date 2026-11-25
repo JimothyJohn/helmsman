@@ -236,7 +236,7 @@ pub fn row(
     let owned = buf.as_str().to_owned();
     let text = owned.as_str();
     // The toggle's choice outlives the box, for the session.
-    let pref_id = egui::Id::new("find-whole-words");
+    let pref_id = egui::Id::NULL.with("find-whole-words");
     if f.whole.is_none() {
         f.whole = ui.data(|d| d.get_temp::<bool>(pref_id));
     }
