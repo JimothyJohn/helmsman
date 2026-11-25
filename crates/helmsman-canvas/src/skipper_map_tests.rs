@@ -107,9 +107,14 @@ fn an_identity_the_page_has_no_address_for_is_refused_before_anything_is_sent() 
     let m = for_skipper(Some(ASS), NODE, &profiles, &nothing);
     assert_eq!(m.refused.len(), 2, "{:?}", m.refused);
     assert!(
-        m.refused[0].starts_with("iologik_e1213: the Skipper needs its IP address. Press Scan"),
+        m.refused[0].starts_with("iologik_e1213: the network scan did not find it at cip=991:515:0x2a629eae"),
         "{:?}",
         m.refused
+    );
+    assert_eq!(
+        m.unfound,
+        ["iologik_e1213", "liberty_lexium_mdrive_ethernet_lmd_ethernet_ip"],
+        "a scan may find them"
     );
     let words = m.words().unwrap();
     assert!(

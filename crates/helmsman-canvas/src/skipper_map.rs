@@ -152,6 +152,9 @@ pub struct ForSkipper {
     pub notes: Vec<String>,
     /// What cannot go to a Skipper, in words, one a device or point.
     pub refused: Vec<String>,
+    /// The devices among them named by an identity no scan has given an
+    /// address for: a scan may find them.
+    pub unfound: Vec<String>,
 }
 
 impl ForSkipper {
@@ -224,8 +227,9 @@ pub fn for_skipper(
             }
             let Some(host) = host else {
                 out.refused.push(format!(
-                    "{name}: the Skipper needs its IP address. Press Scan on the Devices tab so the page finds it, then Deploy again"
+                    "{name}: the network scan did not find it at {endpoint}. Check it is powered and on the Skipper's network"
                 ));
+                out.unfound.push(name.to_string());
                 became.insert(key, Became::Not);
                 continue;
             };

@@ -946,6 +946,21 @@ pub fn found_at(found: &[Found], identity: &str) -> Option<String> {
         .map(|f| f.address.clone())
 }
 
+/// Each found device's identities (`cip=`, and the one it answered by)
+/// to its address.
+#[must_use]
+pub fn hosts(found: &[Found]) -> Vec<(String, String)> {
+    found
+        .iter()
+        .flat_map(|f| {
+            [
+                (f.cip.clone(), f.address.clone()),
+                (f.identity.clone(), f.address.clone()),
+            ]
+        })
+        .collect()
+}
+
 /// The found devices as text, for the agent: one a line.
 #[must_use]
 pub fn describe_found(found: &[Found]) -> String {

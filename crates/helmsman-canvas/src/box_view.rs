@@ -442,17 +442,7 @@ impl BoxView {
         self.projects.node_map = self.state.io_map.clone().filter(|_| self.state.io_map_node);
         // A device by identity goes to a Skipper at the address the scan
         // saw; Scan and add passes over the Skipper's own devices.
-        self.projects.found_hosts = self
-            .devices_ui
-            .found
-            .iter()
-            .flat_map(|f| {
-                [
-                    (f.cip.clone(), f.address.clone()),
-                    (f.identity.clone(), f.address.clone()),
-                ]
-            })
-            .collect();
+        self.projects.found_hosts = crate::devices::hosts(&self.devices_ui.found);
         self.devices_ui.skipper = self
             .projects
             .node_map
@@ -477,7 +467,11 @@ impl BoxView {
                 call @ (PCall::PaneLayouts | PCall::KeepPaneLayout(_) | PCall::DropPaneLayout(_)) => {
                     self.pane_layouts.answer(&call, &a);
                 }
-                PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
+                PCall::Discover => {
+                    self.devices_ui.discovered(a.status, &a.body);
+                    let found = crate::devices::hosts(&self.devices_ui.found);
+                    self.projects.scanned(found);
+                }
                 PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
@@ -1041,7 +1035,9 @@ impl BoxView {
                     self.projects.note(words, false);
                 }
                 Ok(None) => self.projects.save_file(helmsman_project::IO_MAP),
-                Err(why) => self.projects.note(why, true),
+                // An address a scan may find: Deploy scans for it.
+                Err((_, true)) => {}
+                Err((why, false)) => self.projects.note(why, true),
             }
         }
         // What the change added to the program joins the trend once the
@@ -2946,6 +2942,9 @@ impl Body for BoxView {
             Deploy::Idle => {}
             Deploy::Saving => {
                 ui.label(RichText::new("saving…").color(t.muted));
+            }
+            Deploy::Scanning => {
+                ui.label(RichText::new("finding the devices on the network…").color(t.muted));
             }
             Deploy::Checking => {
                 ui.label(RichText::new("checking…").color(t.muted));

@@ -371,6 +371,9 @@ pub enum Deploy {
     Idle,
     /// Saving the edits first.
     Saving,
+    /// Finding a device named by its identity on the network, for a
+    /// Skipper (which needs its address); the deploy goes on after.
+    Scanning,
     Checking,
     Replaying,
     Deploying,
@@ -384,7 +387,7 @@ impl Deploy {
     pub const fn busy(&self) -> bool {
         matches!(
             self,
-            Self::Saving | Self::Checking | Self::Replaying | Self::Deploying
+            Self::Saving | Self::Scanning | Self::Checking | Self::Replaying | Self::Deploying
         )
     }
 }
@@ -452,6 +455,8 @@ pub struct BoxProjects {
     /// it answered at, so a device by identity can go to a Skipper (the
     /// view fills it in each frame).
     pub found_hosts: Vec<(String, String)>,
+    /// This deploy has scanned for its devices once already.
+    scanned_for_deploy: bool,
     map_send: Option<MapSend>,
     /// Page time as of the last [`Self::tick`].
     now: f64,
@@ -903,6 +908,16 @@ impl BoxProjects {
     }
 
     /// Asks the box for a fresh network scan (the Devices tab's Scan).
+    /// The scan a deploy asked for has answered (`found` its devices, an
+    /// identity to an address): the deploy goes on.
+    pub fn scanned(&mut self, found: Vec<(String, String)>) {
+        if self.deploy == Deploy::Scanning {
+            self.found_hosts = found;
+            self.deploy = Deploy::Idle;
+            self.deploy();
+        }
+    }
+
     pub fn discover(&mut self) {
         self.queue.push(PReq::json(
             PCall::Discover,
@@ -1587,7 +1602,17 @@ impl BoxProjects {
         let placed = if self.to_node {
             match self.add_placeholders() {
                 Ok(words) => words,
-                Err(why) => {
+                // A device named by its identity and no address for it
+                // yet: the page scans, and the deploy goes on when the
+                // scan answers ([`Self::scanned`]). Once.
+                Err((_, true)) if !self.scanned_for_deploy => {
+                    self.scanned_for_deploy = true;
+                    self.deploy = Deploy::Scanning;
+                    self.discover();
+                    return;
+                }
+                Err((why, _)) => {
+                    self.scanned_for_deploy = false;
                     self.deploy = Deploy::Failed(why);
                     return;
                 }
@@ -1601,6 +1626,7 @@ impl BoxProjects {
         } else {
             self.check();
         }
+        self.scanned_for_deploy = false;
         // After the save, which clears the notice.
         if let Some(words) = placed {
             self.note(words, false);
@@ -1615,8 +1641,9 @@ impl BoxProjects {
     /// edit the next save writes, when the project has a map or needed a
     /// placeholder. `Ok(None)` when nothing was said, the Skipper's list
     /// is not read yet, or the program does not build; `Ok(words)` for the
-    /// Messages; `Err(words)` when part of the map cannot go to a Skipper.
-    pub fn add_placeholders(&mut self) -> Result<Option<String>, String> {
+    /// Messages; `Err((words, scan))` when part of the map cannot go to a
+    /// Skipper, `scan` when a scan may find what is missing.
+    pub fn add_placeholders(&mut self) -> Result<Option<String>, (String, bool)> {
         let Some(node) = self.node_map.clone() else {
             return Ok(None);
         };
@@ -1647,7 +1674,7 @@ impl BoxProjects {
             &|id| hosts.iter().find(|(i, _)| i == id).map(|(_, a)| a.clone()),
         );
         if !made.refused.is_empty() {
-            return Err(made.words().unwrap_or_default());
+            return Err((made.words().unwrap_or_default(), !made.unfound.is_empty()));
         }
         let added = crate::placeholders::add(&program, sizes, &made.map);
         let map = added.as_ref().map_or(made.map.as_str(), |a| a.map.as_str());

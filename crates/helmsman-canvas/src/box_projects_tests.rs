@@ -5459,20 +5459,20 @@ fn a_device_added_by_its_profile_goes_to_a_skipper_in_its_form() {
     p.node_map = Some(SKIPPER_LIST.into());
     p.to_node = true;
 
-    // No scan yet: the E1213 has no address, so nothing is sent and the
-    // words say what to do.
+    // No scan yet: the E1213 has no address, so the deploy scans for it
+    // first (Nick: "there was no way to know this ahead of time") and
+    // nothing else goes.
     p.deploy();
-    assert!(
-        matches!(&p.deploy, Deploy::Failed(w) if w.contains("iologik_e1213: the Skipper needs its IP address. Press Scan")),
-        "{:?}",
-        p.deploy
+    assert_eq!(p.deploy, Deploy::Scanning);
+    let sent = p.poll();
+    assert_eq!(
+        sent.iter().map(|q| q.url.as_str()).collect::<Vec<_>>(),
+        ["/api/devices/discover?fresh=1"]
     );
-    assert!(p.poll().is_empty(), "nothing sent");
 
-    // With the scan's answer it goes, made for the Skipper.
-    p.deploy = Deploy::Idle;
-    p.found_hosts = vec![("cip=991:515:0x2a629eae".into(), "192.168.33.60".into())];
-    p.deploy();
+    // The scan finds it: the deploy goes on, made for the Skipper.
+    p.scanned(vec![("cip=991:515:0x2a629eae".into(), "192.168.33.60".into())]);
+    assert!(p.deploy.busy(), "{:?}", p.deploy);
     let sent = p.poll();
     let save = sent
         .iter()
@@ -5486,6 +5486,47 @@ fn a_device_added_by_its_profile_goes_to_a_skipper_in_its_form() {
             SKIPPER_LIST.trim_end(),
         )
     );
+}
+
+/// A scan that does not find the device: the deploy stops once, saying
+/// which device and what to look at; it does not scan again.
+#[test]
+fn a_device_the_scan_does_not_find_stops_the_deploy_in_words() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let main = "PROGRAM lamp\nVAR_INPUT\n  part : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := part;\nEND_PROGRAM\n";
+    let map = "device iologik_e1213 device:moxa-iologik-e1213 cip=991:515:0x2a629eae\nin  part bool iologik_e1213 ch:DI-00\n";
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("main.st", main),
+            ("io.map", map),
+            (
+                "moxa-iologik-e1213.device",
+                include_str!("../../../docs/devices/moxa-iologik-e1213.device"),
+            ),
+        ],
+    );
+    let p = &mut v.projects;
+    p.node_map = Some(SKIPPER_LIST.into());
+    p.to_node = true;
+    p.deploy();
+    assert_eq!(p.deploy, Deploy::Scanning);
+    p.poll();
+    p.scanned(Vec::new());
+    assert!(
+        matches!(&p.deploy, Deploy::Failed(w) if w.contains("iologik_e1213: the network scan did not find it")),
+        "{:?}",
+        p.deploy
+    );
+    assert!(p.poll().is_empty(), "no second scan, nothing sent");
+    // A scan answer later is not a deploy.
+    p.scanned(Vec::new());
+    assert!(matches!(p.deploy, Deploy::Failed(_)));
 }
 
 /// The same after an Agent answer lands on a Skipper's page: the
