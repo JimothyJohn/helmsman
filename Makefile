@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all live-state live-smoke compat help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
+.PHONY: help install-dev lint fmt test-unit test-integration test-all live-state live-smoke compat help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy reclaim
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -103,3 +103,6 @@ node-build:  ## Build the edge node's firmware: ESP32-POE2 (esp toolchain) or NO
 
 node-clippy:  ## Clippy the edge node's firmware with warnings denied.
 	./scripts/node-build.sh clippy
+
+reclaim:  ## Delete target/ in idle or merged worktrees (DRY_RUN=1 lists; HOURS=12; --install runs it daily).
+	./scripts/reclaim-targets.sh
