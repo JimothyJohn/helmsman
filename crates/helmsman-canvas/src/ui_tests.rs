@@ -5816,6 +5816,14 @@ mod boxed {
     /// (Nick, 2026-11-25), the role in the tip.
     #[test]
     fn signing_in_collapses_the_panel_and_the_header_shows_the_role() {
+        // The words painted, to read the header by.
+        fn texts(shape: &eframe::egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                eframe::egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                _ => {}
+            }
+        }
         use crate::review::Session;
         let mut h = Harness::new(App::boxed());
         h.wait(0.2);
@@ -5844,13 +5852,6 @@ mod boxed {
         assert!(!h.app.login, "a different person signed in: collapses");
         assert!(h.has("user glyph"), "the same glyph for an engineer");
         // The name alone, no "(engineer)".
-        fn texts(shape: &eframe::egui::Shape, out: &mut Vec<String>) {
-            match shape {
-                eframe::egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
-                eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
-                _ => {}
-            }
-        }
         let mut shown = Vec::new();
         h.shapes.iter().for_each(|c| texts(&c.shape, &mut shown));
         assert!(shown.iter().any(|t| t == "alice"), "{shown:?}");
