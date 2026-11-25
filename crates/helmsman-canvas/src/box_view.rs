@@ -196,7 +196,7 @@ impl BoxView {
     /// The map the Devices and I/O tabs show, and where it is from: the
     /// open project's own when it has one (what Add edits), else the map
     /// the box runs.
-    fn map_text(&self) -> (String, String) {
+    pub(crate) fn map_text(&self) -> (String, String) {
         let open = self.projects.open.as_ref();
         let draft = open
             .and_then(|o| o.bufs.get(helmsman_project::IO_MAP))
@@ -3445,7 +3445,9 @@ impl Body for BoxView {
     }
 
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        self.trend.ui(ui, chrome, &self.state, self.session.as_ref());
+        let map = self.map_text().0;
+        self.trend
+            .ui(ui, chrome, &self.state, &map, self.session.as_ref());
     }
 
     fn messages(&mut self) -> &mut crate::messages::Log {
