@@ -3972,6 +3972,7 @@ impl PlaygroundView {
                             tile: form == Form::Tile,
                             uses: uses(&p.name),
                             simulate: true,
+                            designation: crate::assign::Designation::of(&place),
                         };
                         let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             if form == Form::Detail {
@@ -4048,6 +4049,7 @@ impl PlaygroundView {
                             tile: form == Form::Tile,
                             uses: uses(&p.name),
                             simulate: false,
+                            designation: crate::assign::Designation::of(&place),
                         };
                         let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             output_ui(ui, p, form == Form::Tile);
@@ -4190,6 +4192,14 @@ impl PlaygroundView {
             .chain(self.session.inputs())
             .map(|p| p.name.clone())
             .collect();
+        // Which of them are still simulated: the legend says so.
+        self.assign_context();
+        let simulated: Vec<bool> = points
+            .iter()
+            .map(|n| {
+                crate::assign::designate(&self.devices_ui.map, n, true).is_some_and(|d| d.is_simulated())
+            })
+            .collect();
         // The heading shares the signals' row: on a line of its own it
         // and the slider left the plot the smallest part of the panel.
         // The rows wrap, and scroll past a third of the tab: an Agent's
@@ -4218,16 +4228,25 @@ impl PlaygroundView {
                         .tip(format!(
                             "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
                         ));
-                    for name in &points {
+                    for (name, sim) in points.iter().zip(&simulated) {
                         let on = self.session.trend.signals.contains(name);
-                        let tip = if on {
-                            "On the trend. Click to take it off."
-                        } else {
-                            "Click to pin it to the trend."
+                        let tip = match (on, sim) {
+                            (true, false) => "On the trend. Click to take it off.".to_string(),
+                            (false, false) => "Click to pin it to the trend.".to_string(),
+                            (true, true) => "Simulated. On the trend. Click to take it off.".to_string(),
+                            (false, true) => "Simulated. Click to pin it to the trend.".to_string(),
                         };
-                        let b =
-                            crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(tip);
+                        let label = name.to_ascii_lowercase();
+                        let label = if *sim {
+                            format!("{label} {}", crate::assign::Designation::BADGE)
+                        } else {
+                            label
+                        };
+                        let b = crate::theme::tab(ui, on, &label, egui::Vec2::ZERO).tip(tip);
                         chrome.hit(format!("trend signal {}", name.to_ascii_lowercase()), b.rect);
+                        if *sim {
+                            chrome.hit(format!("trend sim {}", name.to_ascii_lowercase()), b.rect);
+                        }
                         if b.clicked() {
                             self.session.trend.toggle(name);
                         }
@@ -5089,8 +5108,26 @@ impl PlaygroundView {
                 }
                 self.proj.note(c.summary, false);
                 self.edited(f64::NEG_INFINITY);
+                self.plant_off(a);
             }
             Err(why) => self.proj.note(why, true),
+        }
+    }
+
+    /// A port that went to a device has its `plant.sim` line switched off
+    /// (kept, not deleted), and back on when it returns to simulated I/O.
+    fn plant_off(&mut self, a: &crate::assign::AssignAct) {
+        let (port, off) = match a {
+            crate::assign::AssignAct::Assign { port, .. } => (port, true),
+            crate::assign::AssignAct::Back { port } => (port, false),
+        };
+        let Some(text) = self.proj.files.get_mut(helmsman_project::PLANT) else {
+            return;
+        };
+        if let Some(new) = helmsman_sim::set_off(text, port, off) {
+            *text = new;
+            let text = text.clone();
+            self.session.set_plant(&text);
         }
     }
 

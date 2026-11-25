@@ -40,6 +40,65 @@ impl Place {
     }
 }
 
+/// Whether a signal is still simulated or is a device's channel: the one
+/// truth the I/O tab's cards, the diagram's I/O blocks and the trend's
+/// legend ask (Nick, 2026-11-24).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Designation {
+    /// Still on the simulation (the box's own channels, the screen, or no
+    /// line): drawn dashed with a SIM badge.
+    Simulated,
+    /// On a device's channel: drawn solid, naming both.
+    Physical { device: String, channel: String },
+}
+
+impl Designation {
+    /// The word of the badge.
+    pub const BADGE: &'static str = "SIM";
+
+    /// What `place` is; `None` for another module's output, which is
+    /// neither a simulation nor a device.
+    #[must_use]
+    pub fn of(place: &Place) -> Option<Self> {
+        match place {
+            Place::Device { device, point } => Some(Self::Physical {
+                device: device.clone(),
+                channel: point_label(point).to_string(),
+            }),
+            Place::Module(_) => None,
+            Place::Simulated => Some(Self::Simulated),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_simulated(&self) -> bool {
+        matches!(self, Self::Simulated)
+    }
+
+    /// `rio DI-04` for a physical signal, else `SIM`.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match self {
+            Self::Simulated => Self::BADGE.to_string(),
+            Self::Physical { device, channel } => format!("{device} {channel}"),
+        }
+    }
+}
+
+/// How the map designates the signal `name` (any case). A signal the map
+/// puts on a device is physical whatever else says it is simulated (a
+/// kept `plant.sim` line is switched off then); one it does not list at
+/// all counts as simulated only when `port` says it is a port of the
+/// program, since a signal nobody knows is not ours to badge.
+#[must_use]
+pub fn designate(map: &MapText, name: &str, port: bool) -> Option<Designation> {
+    let place = place_of(map, name);
+    if place == Place::Simulated && !port && !map.signals.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
+        return None;
+    }
+    Designation::of(&place)
+}
+
 /// A point as a person reads it: `ch:DI-04` is channel DI-04.
 #[must_use]
 pub fn point_label(point: &str) -> &str {
@@ -474,7 +533,7 @@ pub fn assign(
     }
     let dropped = all.iter().filter(|r| is_port_line(r, p)).count();
     let tail = if dropped > 0 {
-        " Its simulated line is gone."
+        " Its simulated line in io.map is gone; a plant.sim line for it is kept and switched off."
     } else {
         ""
     };
@@ -1138,6 +1197,86 @@ device other modbus-tcp 10.0.0.9:502 unit=1
         assert_eq!(
             ro.iter().find(|m| m.port == "start").unwrap().back,
             Some(Err("The examples are read-only.".into()))
+        );
+    }
+
+    #[test]
+    fn a_signal_is_simulated_on_the_box_or_the_screen_and_physical_on_a_device() {
+        let map = iomap::skim(MAP);
+        let d = |n: &str, port| designate(&map, n, port);
+        assert_eq!(d("start", true), Some(Designation::Simulated));
+        assert_eq!(d("speed", true), Some(Designation::Simulated), "a screen line");
+        assert_eq!(
+            d("rio_di_04", false),
+            Some(Designation::Physical {
+                device: "rio".into(),
+                channel: "DI-04".into()
+            })
+        );
+        assert_eq!(d("rio_di_04", false).unwrap().label(), "rio DI-04");
+        assert_eq!(Designation::Simulated.label(), "SIM");
+        // Case does not matter, as the map's own match does not.
+        assert_eq!(d("START", true), Some(Designation::Simulated));
+        assert!(matches!(
+            d("RIO_DI_04", false),
+            Some(Designation::Physical { .. })
+        ));
+    }
+
+    #[test]
+    fn a_name_the_map_does_not_list_is_simulated_only_when_it_is_a_port() {
+        let map = iomap::skim(MAP);
+        assert_eq!(designate(&map, "nope", true), Some(Designation::Simulated));
+        assert_eq!(designate(&map, "nope", false), None);
+        // Hostile names: empty, spaces, a prefix of a real one, markup.
+        for n in [
+            "",
+            " ",
+            "rio_di_0",
+            "rio_di_04 ",
+            "ch:DI-04",
+            "<b>start</b>",
+            "start\n",
+        ] {
+            assert_eq!(designate(&map, n, false), None, "{n:?}");
+        }
+        assert_eq!(
+            designate(&iomap::skim(""), "start", true),
+            Some(Designation::Simulated)
+        );
+    }
+
+    #[test]
+    fn a_signal_on_a_device_and_in_the_simulation_is_physical_and_another_module_is_neither() {
+        // The same name twice: a box line, then a device line. The device wins,
+        // as `place_of` reads it; the plant.sim line has no say here.
+        let map = iomap::skim(
+            "device rio device:x cip=1:2:3\nin start bool box di:0\nin start bool rio ch:DI-04\nin up bool module cell.up\n",
+        );
+        assert_eq!(
+            designate(&map, "start", true),
+            Some(Designation::Physical {
+                device: "rio".into(),
+                channel: "DI-04".into()
+            })
+        );
+        assert_eq!(designate(&map, "up", true), None, "a module's output");
+    }
+
+    #[test]
+    fn assigning_and_going_back_keeps_the_plant_line_and_turns_it_off_and_on() {
+        use helmsman_sim::set_off;
+        const PLANT: &str = "# the line\nbutton b input=start\n";
+        let a = assign(MAP, &ports(), NONE, "start", "rio", "ch:DI-04").unwrap();
+        assert!(a.summary.contains("kept and switched off"), "{}", a.summary);
+        let off = set_off(PLANT, "start", true).expect("b names start");
+        assert!(off.starts_with(PLANT) && off.ends_with("off start\n"), "{off:?}");
+        let back = unassign(&a.text, &ports(), "start").unwrap();
+        assert!(back.text.contains("start bool box di:"));
+        assert_eq!(
+            set_off(&off, "start", false).as_deref(),
+            Some(PLANT),
+            "exactly as it was"
         );
     }
 }

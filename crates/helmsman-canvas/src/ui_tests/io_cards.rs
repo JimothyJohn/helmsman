@@ -26,6 +26,8 @@ END_PROGRAM
 
 fn sim_with(src: &str) -> Harness {
     let mut h = Harness::new(App::sim());
+    // Each simulated card carries a SIM line: room for the outputs too.
+    h.size.y = 1500.0;
     h.app.chrome.dock(Pane::Io, true);
     h.app.sim.as_mut().unwrap().load(src, "test");
     h.wait(0.3);

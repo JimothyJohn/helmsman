@@ -2744,6 +2744,7 @@ impl Viewer {
                 "This block has a diagram of its own. Double-click opens it (Alt ] with it picked).",
             );
         }
+        let io = self.io_marks();
         let pou = &self.module.pous[self.scopes[self.scope].pou].name;
         let old = self
             .baseline
@@ -2772,6 +2773,7 @@ impl Viewer {
                 rows: &rows,
                 tables: &tables,
                 far: self.zoom_far(),
+                io: &io,
             },
         );
         self.ladder_paint(&painter, &t, cam, seen.as_ref());
@@ -3199,6 +3201,9 @@ struct Marks<'a> {
     /// Drawn at the far level: the blocks of the author's structure carry
     /// their title at a fixed size on screen ([`zoom_fold`]).
     far: bool,
+    /// The I/O blocks that are simulated (dashed, a SIM badge) or on a
+    /// device (solid, naming it) ([`Viewer::io_marks`]).
+    io: &'a [(NodeId, crate::assign::Designation)],
 }
 
 /// One row of a table block, as [`draw`] paints it.
@@ -3404,6 +3409,32 @@ fn paused_outline(painter: &egui::Painter, r: Rect, z: f32) {
     );
 }
 
+/// An I/O block's designation: a simulated one is outlined with dashes
+/// and says SIM above its corner; one on a device keeps its solid outline
+/// and names the device and channel there.
+fn io_mark(
+    painter: &egui::Painter,
+    t: &Theme,
+    r: Rect,
+    z: f32,
+    d: &crate::assign::Designation,
+    text: bool,
+    picked: bool,
+) {
+    if d.is_simulated() && !picked {
+        crate::io_cards::dashed_outline(painter, r.expand(0.5 * z), Stroke::new(1.5 * z.max(0.6), t.fg));
+    }
+    if text {
+        painter.text(
+            r.left_top() - Vec2::new(0.0, 2.0 * z),
+            Align2::LEFT_BOTTOM,
+            d.label(),
+            font(9.0 * z.max(0.8)),
+            t.muted,
+        );
+    }
+}
+
 fn draw(
     painter: &egui::Painter,
     t: &Theme,
@@ -3428,6 +3459,7 @@ fn draw(
         rows,
         tables,
         far,
+        io,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -3630,12 +3662,20 @@ fn draw(
                 StrokeKind::Outside,
             );
         }
+        let designation = io.iter().find(|(id, _)| *id == n.id).map(|(_, d)| d);
+        let simulated = designation.is_some_and(crate::assign::Designation::is_simulated);
         let outline = if pick == Some(Pick::Node(n.id)) {
             Stroke::new(2.5 * z, YELLOW)
+        } else if simulated {
+            // Dashed instead, below.
+            Stroke::NONE
         } else {
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        if let Some(d) = designation {
+            io_mark(painter, t, r, z, d, text, pick == Some(Pick::Node(n.id)));
+        }
         if deeper {
             // A double chevron at the header's right end: go in.
             let c = Pos2::new(r.right() - 9.0 * z, h.center().y);
