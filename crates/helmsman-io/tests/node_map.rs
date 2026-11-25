@@ -268,3 +268,74 @@ fn the_nodes_bool_bits_of_an_assembly_are_the_boxs() {
     assert_eq!(bytes, want);
     let _ = Dir::In;
 }
+
+// ---- the Skipper's own Modbus TCP server, asked by the box's client codec ----
+
+/// One request through the box's encoder, the node's server and the box's
+/// reply checks: `Ok(reply PDU)` or the exception the box's codec reads.
+fn ask_skipper(
+    bank: &mut helmsman_nodecore::modbus_server::ShareBank,
+    m: &IoMap,
+    pdu: &[u8],
+) -> Result<Vec<u8>, helmsman_modbus::Error> {
+    use helmsman_modbus::{MBAP_LEN, mbap};
+    let request = mbap::frame(0x1234, 1, pdu).unwrap();
+    let reply = bank.handle(&m.shares, &request).expect("a frame");
+    let head: [u8; MBAP_LEN] = reply[..MBAP_LEN].try_into().unwrap();
+    let body = mbap::check_head(&head, 0x1234, 1).expect("the box accepts the header");
+    assert_eq!(reply.len(), MBAP_LEN + body);
+    let reply_pdu = reply[MBAP_LEN..].to_vec();
+    helmsman_modbus::reply::body(pdu[0], &reply_pdu)?;
+    Ok(reply_pdu)
+}
+
+#[test]
+fn a_skipper_answers_the_boxs_modbus_client() {
+    use helmsman_modbus::{Error, pdu, reply};
+    use helmsman_nodecore::ioplan::put_slot;
+    use helmsman_nodecore::modbus_server::ShareBank;
+
+    let m = iomap::parse(
+        "share speed int hr:0:i32\nshare run_cmd bool coil:0\nshare at_home bool di:0\nshare level real ir:4:f32sw\nshare target real hr:8:f32\n",
+    )
+    .unwrap();
+    let mut bank = ShareBank {
+        writable: (1 << 1) | (1 << 4),
+        ..ShareBank::default()
+    };
+    for (i, v) in [(0, SignalValue::Int(-123_456)), (2, SignalValue::Bool(true)), (3, SignalValue::Real(-2.5))] {
+        put_slot(&mut bank.image, m.shares[i].fmt, m.shares[i].at, v);
+    }
+    // The box reads a 32-bit register pair the way it reads any Modbus device.
+    let r = ask_skipper(&mut bank, &m, &pdu::read(0x03, 0, 2).unwrap()).unwrap();
+    let regs = reply::registers(0x03, 2, &r).unwrap();
+    assert_eq!(((u32::from(regs[0]) << 16) | u32::from(regs[1])).cast_signed(), -123_456);
+    let r = ask_skipper(&mut bank, &m, &pdu::read(0x04, 4, 2).unwrap()).unwrap();
+    let regs = reply::registers(0x04, 2, &r).unwrap();
+    let bits = (u32::from(regs[1]) << 16) | u32::from(regs[0]); // f32sw: low word first
+    assert!((f32::from_bits(bits) + 2.5).abs() < f32::EPSILON);
+    let r = ask_skipper(&mut bank, &m, &pdu::read(0x02, 0, 1).unwrap()).unwrap();
+    assert_eq!(reply::bits(0x02, 1, &r).unwrap(), [true]);
+    // Writing a coil the program takes as input, and reading it back.
+    let w = pdu::write_single(0x05, 0, helmsman_modbus::COIL_ON);
+    let r = ask_skipper(&mut bank, &m, &w).unwrap();
+    reply::echo(&w, &r).unwrap();
+    let r = ask_skipper(&mut bank, &m, &pdu::read(0x01, 0, 1).unwrap()).unwrap();
+    assert_eq!(reply::bits(0x01, 1, &r).unwrap(), [true]);
+    // A register pair written the way the box writes one.
+    let w = pdu::write_registers(8, &[0x3FC0, 0x0000]).unwrap();
+    let r = ask_skipper(&mut bank, &m, &w).unwrap();
+    reply::echo(&w, &r).unwrap();
+    assert_eq!(
+        helmsman_nodecore::ioplan::value_slot(&bank.image, m.shares[4].fmt, m.shares[4].at),
+        Some(SignalValue::Real(1.5))
+    );
+    // What is not writable answers an exception the box's codec reads as one.
+    let w = pdu::write_registers(0, &[0, 1]).unwrap();
+    assert_eq!(ask_skipper(&mut bank, &m, &w), Err(Error::Exception(0x02)));
+    // And a read the box makes past the shared range.
+    assert_eq!(
+        ask_skipper(&mut bank, &m, &pdu::read(0x03, 100, 1).unwrap()),
+        Err(Error::Exception(0x02))
+    );
+}

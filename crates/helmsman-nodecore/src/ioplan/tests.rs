@@ -482,3 +482,36 @@ fn a_sim_point_binds_by_name_holds_its_value_and_is_in_no_device_plan() {
     let moved: usize = plan.reads.iter().map(|r| r.items.len()).sum::<usize>() + plan.writes.len();
     assert_eq!(moved, 1, "the device plan has estop only");
 }
+
+#[test]
+fn shares_bind_to_ports_by_name_whatever_the_direction() {
+    let m = parse("share Speed int hr:0\nshare run_cmd bool coil:0\nshare unused bool di:0\n").unwrap();
+    // A VAR_OUTPUT and a VAR_INPUT of those names, and a port nothing shares.
+    let ports = [("SPEED", false), ("RUN_CMD", true), ("OTHER", true)];
+    assert_eq!(share_bindings(&m.shares, &ports), [(0, 0), (1, 1)]);
+    assert_eq!(share_bindings(&m.shares, &[]), []);
+    assert_eq!(share_bindings(&[], &ports), []);
+}
+
+#[test]
+fn a_share_value_goes_through_the_bank_like_a_point_through_the_image() {
+    let m = parse("share a int hr:0:i16\nshare b int hr:1:u32\nshare c real hr:3:f32\nshare d bool coil:0\nshare e bool di:0\n").unwrap();
+    let mut bank = [0u8; crate::iomap::SHARE_BYTES];
+    let vals = [
+        SignalValue::Int(-5),
+        SignalValue::Int(4_000_000_000),
+        SignalValue::Real(0.25),
+        SignalValue::Bool(true),
+        SignalValue::Bool(false),
+    ];
+    for (s, v) in m.shares.iter().zip(vals) {
+        put_slot(&mut bank, s.fmt, s.at, v);
+    }
+    for (s, v) in m.shares.iter().zip(vals) {
+        assert_eq!(value_slot(&bank, s.fmt, s.at), Some(v), "{}", s.name);
+    }
+    // A write clamps to the format, as a point's does, and touches no neighbour.
+    put_slot(&mut bank, m.shares[0].fmt, m.shares[0].at, SignalValue::Int(1 << 20));
+    assert_eq!(value_slot(&bank, m.shares[0].fmt, m.shares[0].at), Some(SignalValue::Int(32767)));
+    assert_eq!(value_slot(&bank, m.shares[1].fmt, m.shares[1].at), Some(SignalValue::Int(4_000_000_000)));
+}

@@ -355,7 +355,8 @@ fn what_a_node_cannot_run_is_refused_with_its_line() {
     assert!(why("device\n").contains("want device"));
     assert!(why("screen x\n").contains("device, in, out and share"));
     assert!(
-        why("\u{0}device\n").contains("device, in, out and share") || why("\u{0}device\n").contains("in and out")
+        why("\u{0}device\n").contains("device, in, out and share")
+            || why("\u{0}device\n").contains("in and out")
     );
 }
 
@@ -1002,21 +1003,36 @@ fn share<'a>(m: &'a IoMap, name: &str) -> &'a Share {
 fn share_lines_parse_to_tables_addresses_and_places() {
     let m = parse(SHARED).unwrap();
     assert_eq!(m.shares.len(), 5);
-    assert!(m.devices.is_empty() && m.points.is_empty(), "a map of shares alone is a map");
+    assert!(
+        m.devices.is_empty() && m.points.is_empty(),
+        "a map of shares alone is a map"
+    );
     let speed = share(&m, "speed");
-    assert_eq!((speed.ty, speed.table, speed.addr, speed.fmt), (Ty::Int, Table::Holding, 0, Some(Fmt::U16)));
+    assert_eq!(
+        (speed.ty, speed.table, speed.addr, speed.fmt),
+        (Ty::Int, Table::Holding, 0, Some(Fmt::U16))
+    );
     assert!(speed.writable_table());
     let at_home = share(&m, "at_home");
-    assert_eq!((at_home.ty, at_home.table, at_home.fmt), (Ty::Bool, Table::Discrete, None));
+    assert_eq!(
+        (at_home.ty, at_home.table, at_home.fmt),
+        (Ty::Bool, Table::Discrete, None)
+    );
     assert!(!at_home.writable_table());
     let level = share(&m, "level");
-    assert_eq!((level.table, level.fmt, level.words()), (Table::Input, Some(Fmt::F32), 2));
+    assert_eq!(
+        (level.table, level.fmt, level.words()),
+        (Table::Input, Some(Fmt::F32), 2)
+    );
     let pos = share(&m, "pos");
     assert_eq!((pos.fmt, pos.swapped, pos.words()), (Some(Fmt::I32), true, 2));
     let tokens: Vec<String> = m.shares.iter().map(Share::token).collect();
     assert_eq!(tokens, ["hr:0", "coil:0", "di:0", "ir:4:f32", "hr:10:i32sw"]);
     // The bank: bools from bit 0, numbers from byte 4 in slots of their size.
-    assert_eq!((share(&m, "run_cmd").at.byte, share(&m, "run_cmd").at.bit), (0, Some(0)));
+    assert_eq!(
+        (share(&m, "run_cmd").at.byte, share(&m, "run_cmd").at.bit),
+        (0, Some(0))
+    );
     assert_eq!((at_home.at.byte, at_home.at.bit), (0, Some(1)));
     assert_eq!((speed.at.byte, speed.at.bytes), (4, 2));
     assert_eq!((level.at.byte, level.at.bytes), (8, 4), "aligned to its size");
@@ -1083,7 +1099,11 @@ fn a_table_and_a_type_must_agree() {
         assert_eq!(e.line, 2, "{text:?}");
         assert!(e.why.contains("holds a"), "{text:?}: {e}");
     }
-    assert!(refused("share a bool coil:0:u16\n").why.contains("takes no format"));
+    assert!(
+        refused("share a bool coil:0:u16\n")
+            .why
+            .contains("takes no format")
+    );
     assert!(refused("share a bool di:0:f32\n").why.contains("takes no format"));
 }
 
@@ -1099,16 +1119,26 @@ fn shares_of_one_table_may_not_overlap() {
     let e = refused("share a real ir:8:f32\n\nshare b int ir:9\n");
     assert_eq!(e.line, 3);
     // Next to each other is fine, and so is the same address in another table.
-    parse("share a int hr:0:u32\nshare b int hr:2\nshare c int ir:0\nshare d bool coil:0\nshare e bool di:0\n").unwrap();
+    parse(
+        "share a int hr:0:u32\nshare b int hr:2\nshare c int ir:0\nshare d bool coil:0\nshare e bool di:0\n",
+    )
+    .unwrap();
     parse("share a int hr:0:u32\nshare b int hr:65535\n").unwrap();
 }
 
 #[test]
 fn a_name_is_shared_once_and_has_one_source() {
-    assert!(refused("share a int hr:0\nshare a int hr:1\n").why.contains("shared twice"));
+    assert!(
+        refused("share a int hr:0\nshare a int hr:1\n")
+            .why
+            .contains("shared twice")
+    );
     let e = refused("share Speed int hr:0\nshare speed int hr:1\n");
     assert_eq!(e.line, 2);
-    assert!(e.why.contains("shared twice"), "ST names are case-insensitive: {e}");
+    assert!(
+        e.why.contains("shared twice"),
+        "ST names are case-insensitive: {e}"
+    );
     // A share and an `in` point of one name, in either order.
     let after = refused("device rio modbus-tcp 10.0.0.1\nin go bool rio di:0\nshare GO bool coil:0\n");
     assert_eq!(after.line, 3);
@@ -1117,8 +1147,16 @@ fn a_name_is_shared_once_and_has_one_source() {
     assert_eq!(before.line, 3);
     assert!(before.why.contains("a share of that name"), "{before}");
     // A sim in is an input too.
-    assert!(refused("in go bool sim\nshare go bool coil:0\n").why.contains("an in point"));
-    assert!(refused("share go bool coil:0\nin go bool sim\n").why.contains("a share of that name"));
+    assert!(
+        refused("in go bool sim\nshare go bool coil:0\n")
+            .why
+            .contains("an in point")
+    );
+    assert!(
+        refused("share go bool coil:0\nin go bool sim\n")
+            .why
+            .contains("a share of that name")
+    );
 }
 
 #[test]
@@ -1137,7 +1175,9 @@ fn a_map_holds_at_most_32_shares() {
     assert_eq!(e.line, MAX_SHARES + 1);
     assert!(e.why.contains("at most 32"), "{e}");
     // 32 bools take 4 bytes, 32 reals 128: neither spills.
-    let reals = (0..MAX_SHARES).fold(String::new(), |t, i| t + &format!("share r{i} real ir:{}:f32\n", i * 2));
+    let reals = (0..MAX_SHARES).fold(String::new(), |t, i| {
+        t + &format!("share r{i} real ir:{}:f32\n", i * 2)
+    });
     assert!(
         parse(&reals)
             .unwrap()

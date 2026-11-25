@@ -1,7 +1,7 @@
 //! The Skipper's own Modbus TCP server, with no socket in it: what a
 //! request frame asks and what the reply is, over the node's shared
 //! values (the map's `share` lines, [`crate::iomap::Share`]). The firmware
-//! (crates/helmsman-node-p4, `shared.rs`) accepts the connections, cuts
+//! (crates/helmsman-node-p4, `share_server.rs`) accepts the connections, cuts
 //! the byte stream into frames with [`head`] and calls [`serve`]; docs/EDGE.md
 //! "Sharing values" is the user's side of this.
 //!

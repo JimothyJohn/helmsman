@@ -937,6 +937,41 @@ mod tests {
     }
 
     #[test]
+    fn io_map_lists_what_the_node_shares_and_its_port() {
+        let mut v = sample_view();
+        let off = io_map(&v);
+        assert_eq!(off["shares"], json!([]));
+        assert!(off["modbus_port"].is_null(), "no share, no server");
+        v.shares = vec![
+            ShareView {
+                name: "speed".into(),
+                ty: "int",
+                address: "hr:0".into(),
+                writable: false,
+                bound: true,
+                value: Some(SignalValue::Int(1500)),
+            },
+            ShareView {
+                name: "run_cmd".into(),
+                ty: "bool",
+                address: "coil:0".into(),
+                writable: true,
+                bound: false,
+                value: Some(SignalValue::Bool(false)),
+            },
+        ];
+        let on = io_map(&v);
+        assert_eq!(on["modbus_port"], 502);
+        assert_eq!(
+            on["shares"][0],
+            json!({ "name": "speed", "type": "int", "address": "hr:0", "access": "read", "bound": true, "value": 1500 })
+        );
+        assert_eq!(on["shares"][1]["access"], "read/write");
+        assert_eq!(on["shares"][1]["bound"], false);
+        assert_eq!(on["shares"][1]["value"], false);
+    }
+
+    #[test]
     fn beacon_is_the_box_format() {
         let b = beacon(&sample_view(), &settings());
         let lines: Vec<&str> = b.lines().collect();

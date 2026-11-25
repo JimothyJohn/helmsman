@@ -123,6 +123,8 @@ pub fn skim(text: &str) -> MapText {
                     .map(|(_, v)| v),
                 tail: rest.iter().map(|t| (*t).to_string()).collect(),
             }),
+            // A Skipper's shared value: nothing a box or the skim counts.
+            ["share", ..] => {}
             _ => out.odd += 1,
         }
     }
