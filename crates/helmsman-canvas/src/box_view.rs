@@ -3463,7 +3463,7 @@ impl Body for BoxView {
         }
         let t = theme(ui);
         self.assign_context();
-        let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
+        let scan = live_scan(&self.state);
         // What is wired to each signal, from the map and the library.
         self.devices_ui.map = helmsman_project::iomap::skim(&self.map_text().0);
         if let Some(w) = self.devices_ui.wired_wanted() {
@@ -3676,7 +3676,7 @@ impl Body for BoxView {
         let t = theme(ui);
         self.banner(ui, chrome);
         self.assign_context();
-        let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
+        let scan = live_scan(&self.state);
         let mut jump = None;
         let mut reads = Vec::new();
         let mut area = Rect::NOTHING;
@@ -3850,4 +3850,14 @@ fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
         chrome.hit("agent deploy pending", l.rect);
     }
     r.clicked()
+}
+
+/// What the diagram and the I/O tab read values from: the module's trace
+/// on a box, the I/O points' values on a Skipper, which keeps no trace.
+fn live_scan(state: &crate::remote::BoxState) -> Option<&dyn Scan> {
+    state
+        .scan
+        .as_ref()
+        .map(|s| s as &dyn Scan)
+        .or_else(|| state.node_values.as_ref().map(|n| n as &dyn Scan))
 }

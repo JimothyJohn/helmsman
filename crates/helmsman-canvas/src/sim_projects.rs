@@ -246,15 +246,10 @@ const fn group_of(_name: &str) -> Group {
     Group::FirstSteps
 }
 
-/// What a new project starts with.
+/// What a new project starts with: a program and nothing in it (Nick,
+/// 2026-11-25: "Run and lamp always shows up on a new file but it's not
+/// necessary"). Describe or the editor fills it.
 pub const STARTER: &str = "PROGRAM main
-VAR_INPUT
-  run : BOOL;
-END_VAR
-VAR_OUTPUT
-  lamp : BOOL;
-END_VAR
-lamp := run;
 END_PROGRAM
 ";
 
