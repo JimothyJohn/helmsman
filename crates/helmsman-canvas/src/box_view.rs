@@ -3366,7 +3366,9 @@ impl Body for BoxView {
     }
 
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        self.trend.ui(ui, chrome, &self.state, self.session.as_ref());
+        let map = self.map_text().0;
+        self.trend
+            .ui(ui, chrome, &self.state, &map, self.session.as_ref());
     }
 
     fn messages(&mut self) -> &mut crate::messages::Log {
