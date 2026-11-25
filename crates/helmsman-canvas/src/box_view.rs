@@ -2553,7 +2553,7 @@ fn sim_control(
     value: Option<helmsman_iec::Value>,
 ) -> Option<(Rect, Option<helmsman_iec::Value>)> {
     use helmsman_iec::Value as V;
-    let tip = "A placeholder input: no device has this point yet, so you set it here. It holds what you set until you change it or the Skipper restarts.";
+    let tip = "A placeholder input, no device yet: set it here. It holds until you change it or it restarts.";
     Some(match value? {
         V::Bool(on) => {
             let r = ui.button(if on { "Turn off" } else { "Turn on" }).tip(tip);

@@ -1756,7 +1756,7 @@ impl DevicesUi {
             let b = ui
                 .add_enabled(!busy && !adding && can, egui::Button::new(if adding { "Adding…" } else { "Scan and add" }))
                 .tip(if can {
-                    "Scans, then adds every device that answers and the device library knows to the project, each named after its model. Their I/O you then add under each device, or the Agent wires the program to them."
+                    "Scans, then adds each device found that the library knows. Its I/O: + Add I/O, or the Agent."
                 } else {
                     or_why_scan(write)
                 });
