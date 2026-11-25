@@ -196,7 +196,7 @@ impl BoxView {
     /// The map the Devices and I/O tabs show, and where it is from: the
     /// open project's own when it has one (what Add edits), else the map
     /// the box runs.
-    fn map_text(&self) -> (String, String) {
+    pub(crate) fn map_text(&self) -> (String, String) {
         let open = self.projects.open.as_ref();
         let draft = open
             .and_then(|o| o.bufs.get(helmsman_project::IO_MAP))

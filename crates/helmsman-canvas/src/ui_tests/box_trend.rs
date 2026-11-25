@@ -148,3 +148,42 @@ fn the_picker_leaves_the_panels_their_width() {
     assert!((0.0..=8.0).contains(&(h.rect("left").right() - left.right())));
     assert!((0.0..=8.0).contains(&(right.left() - h.rect("right").left())));
 }
+
+fn monitor() -> Harness {
+    let mut h = page();
+    h.press("monitor");
+    h.frame(vec![]);
+    assert_eq!(h.app.screen, crate::app::Screen::Monitor);
+    h
+}
+
+#[test]
+fn the_monitor_starts_on_devices_and_shows_only_the_points_picked() {
+    let mut h = monitor();
+    for g in ["rio", "simulated", "box", "other"] {
+        assert!(h.has(&format!("monitor group {g}")), "group {g}");
+    }
+    assert!(!h.has("monitor signal a"), "points are folded at first");
+    assert!(!h.has("watched signals"), "nothing watched yet");
+    h.press("monitor group rio");
+    h.wait(0.2);
+    assert!(h.has("monitor signal a") && h.has("monitor signal c"));
+    assert!(!h.has("monitor signal s1"), "another device's points stay folded");
+    h.press("monitor signal b");
+    h.wait(0.2);
+    assert!(h.has("watched signals"));
+    assert_eq!(h.app.monitor.watched, ["b"], "only the picked point is watched");
+    h.press("monitor signal b");
+    h.wait(0.2);
+    assert!(!h.has("watched signals"), "taken off again");
+}
+
+#[test]
+fn the_monitors_picks_are_not_the_trends() {
+    let mut h = monitor();
+    h.press("monitor group rio");
+    h.wait(0.2);
+    h.press("monitor signal a");
+    h.wait(0.2);
+    assert!(pins(&h).is_empty(), "watching a point does not trend it");
+}

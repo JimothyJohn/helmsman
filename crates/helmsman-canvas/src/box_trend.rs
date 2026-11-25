@@ -42,44 +42,6 @@ pub const EXPECT_S: f64 = 1800.0;
 /// The width of the box column left of the plot.
 const CHECK_W: f32 = 28.0;
 
-/// The box's signals by where they live: one group a device of the map
-/// (in the map's order), then "Simulated" (the `sim` device) and
-/// "Other" (named in no map line), each with its signals' names.
-#[must_use]
-pub fn signal_groups(signals: &[crate::remote::SignalRow], map: &str) -> Vec<(String, Vec<String>)> {
-    let skim = helmsman_project::iomap::skim(map);
-    let mut out: Vec<(String, Vec<String>)> = Vec::new();
-    let (mut sim, mut other) = (Vec::new(), Vec::new());
-    for s in signals {
-        let dev = skim
-            .signals
-            .iter()
-            .find(|m| m.name.eq_ignore_ascii_case(&s.name))
-            .map(|m| m.device.as_str());
-        match dev {
-            Some("sim") => sim.push(s.name.clone()),
-            None => other.push(s.name.clone()),
-            Some(d) => match out.iter_mut().find(|(g, _)| g == d) {
-                Some((_, v)) => v.push(s.name.clone()),
-                None => out.push((d.to_string(), vec![s.name.clone()])),
-            },
-        }
-    }
-    out.sort_by_key(|(g, _)| {
-        skim.devices
-            .iter()
-            .position(|d| d.name == *g)
-            .unwrap_or(usize::MAX)
-    });
-    if !sim.is_empty() {
-        out.push(("Simulated".into(), sim));
-    }
-    if !other.is_empty() {
-        out.push(("Other".into(), other));
-    }
-    out
-}
-
 /// Whose pins these are: a person signed in (their label), or the browser.
 fn owner(s: Option<&Session>) -> Option<String> {
     s.map(|s| s.user.clone().unwrap_or_else(|| format!("{} (PIN)", s.role)))
@@ -130,7 +92,7 @@ pub struct BoxTrend {
     /// looked for)`): a change is saved before it is deployed.
     expecting: Vec<(String, Option<f64>)>,
     /// The signal groups (a device's name) opened in the picker.
-    pub open: std::collections::BTreeSet<String>,
+    pub picker: crate::signal_picker::Picker,
     /// The pins ticked in the box left of the plot, lower case.
     pub checked: std::collections::BTreeSet<String>,
     store: Box<dyn Storage>,
@@ -167,7 +129,7 @@ impl BoxTrend {
             auto: Vec::new(),
             flashes: crate::ekg::Flashes::default(),
             expecting: Vec::new(),
-            open: std::collections::BTreeSet::new(),
+            picker: crate::signal_picker::Picker::default(),
             checked: std::collections::BTreeSet::new(),
             store,
             loaded: None,
@@ -487,56 +449,18 @@ impl BoxTrend {
         let now = ui.ctx().input(|i| i.time);
         let who = owner(session).unwrap_or_else(|| "this browser".into());
         let t = theme(ui);
-        let groups = signal_groups(&state.signals, map);
-        let mut flip = None;
-        // The heading shares the devices' row (as in the simulation).
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Signals").strong().color(t.muted))
-                .tip(format!(
-                    "Open a device to see its signals, then click one to pin it, up to {PINS}. Pins are kept for {who}."
-                ));
-            for (g, names) in &groups {
-                let open = self.open.contains(g);
-                let pinned = names.iter().filter(|n| self.pins.contains(n)).count();
-                let label = if pinned > 0 {
-                    format!("{} {} ({pinned} on)", g.to_ascii_lowercase(), names.len())
-                } else {
-                    format!("{} {}", g.to_ascii_lowercase(), names.len())
-                };
-                let r = crate::theme::tab(ui, open, &label, egui::Vec2::ZERO).tip(if open {
-                    "Click to fold this device's signals away."
-                } else {
-                    "Click to see this device's signals."
-                });
-                chrome.hit(format!("trend group {}", g.to_ascii_lowercase()), r.rect);
-                if r.clicked() && !self.open.remove(g) {
-                    self.open.insert(g.clone());
-                }
-            }
-        });
-        self.open.retain(|g| groups.iter().any(|(n, _)| n == g));
-        let shown: Vec<&String> = groups
-            .iter()
-            .filter(|(g, _)| self.open.contains(g))
-            .flat_map(|(_, names)| names)
-            .collect();
-        if !shown.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                for name in shown {
-                    let on = self.pins.contains(name);
-                    let r =
-                        crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(if on {
-                            "On the trend. Click to take it off."
-                        } else {
-                            "Click to pin it to the trend."
-                        });
-                    chrome.hit(format!("pin {name}"), r.rect);
-                    if r.clicked() {
-                        flip = Some(name.clone());
-                    }
-                }
-            });
-        }
+        let groups = crate::signal_picker::signal_groups(&state.signals, map);
+        let pins = self.pins.clone();
+        let flip = self.picker.ui(
+            ui,
+            chrome,
+            "trend",
+            &groups,
+            &|n| pins.iter().any(|p| p == n),
+            &format!(
+                "Open a device to see its signals, then click one to pin it, up to {PINS}. Pins are kept for {who}."
+            ),
+        );
         if let Some(n) = flip {
             self.toggle(&n, session, now);
         }

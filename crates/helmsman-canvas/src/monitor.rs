@@ -120,9 +120,18 @@ pub trait Feed {
     /// Why the source as a whole cannot be trusted now (the box out of
     /// reach, or silent); `None` when it can.
     fn trouble(&self, now: f64) -> Option<String>;
+    /// The I/O points and their values, when the source has a map to pick
+    /// from (a box); the Monitor then offers the signal picker.
+    fn signals(&self) -> Option<&[crate::remote::SignalRow]> {
+        None
+    }
 }
 
 impl Feed for BoxState {
+    fn signals(&self) -> Option<&[crate::remote::SignalRow]> {
+        Some(&self.signals)
+    }
+
     fn programs(&self, now: f64) -> Vec<Program<'_>> {
         self.modules
             .iter()
@@ -446,6 +455,10 @@ pub struct Monitor {
     shapes: HashMap<String, (String, Shape)>,
     /// What the last frame asked the app for.
     pub wish: Option<Wish>,
+    /// The I/O picker (its own, apart from the Trend's pins).
+    pub picker: crate::signal_picker::Picker,
+    /// The I/O points picked to watch, in the order picked.
+    pub watched: Vec<String>,
 }
 
 /// "12 s", "3 min", "2 h".
@@ -726,6 +739,7 @@ impl Monitor {
         chrome: &mut Chrome,
         engineer: bool,
         transport: Option<Transport>,
+        map: &str,
     ) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
@@ -740,7 +754,13 @@ impl Monitor {
             .show(ui, |ui| {
                 self.top(ui, k, trouble.as_deref(), chrome, engineer, transport);
                 // After the toggle, so a tap shows on the same frame.
-                let groups = self.groups(feed, now, engineer && chrome.scan);
+                let mut groups = self.groups(feed, now, engineer && chrome.scan);
+                if let Some(rows) = feed.signals() {
+                    self.signals_ui(ui, chrome, rows, map);
+                    if let Some(g) = self.watched_group(rows, trouble.as_deref()) {
+                        groups.insert(0, g);
+                    }
+                }
                 ui.add_space(10.0 * k);
                 egui::ScrollArea::vertical()
                     .id_salt("monitor-scroll")
@@ -770,6 +790,66 @@ impl Monitor {
                         }
                     });
             });
+    }
+
+    /// The picker over the tiles: devices first, a click opens one, a
+    /// click on a point watches it.
+    fn signals_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        chrome: &mut Chrome,
+        rows: &[crate::remote::SignalRow],
+        map: &str,
+    ) {
+        let groups = crate::signal_picker::signal_groups(rows, map);
+        let watched = self.watched.clone();
+        let flip = self.picker.ui(
+            ui,
+            chrome,
+            "monitor",
+            &groups,
+            &|n| watched.iter().any(|w| w == n),
+            "Open a device, then click the points to show below. Others stay hidden. Kept until you leave the page.",
+        );
+        if let Some(n) = flip {
+            match self.watched.iter().position(|w| *w == n) {
+                Some(k) => {
+                    self.watched.remove(k);
+                }
+                None => self.watched.push(n),
+            }
+        }
+    }
+
+    /// One tile of the points picked, with their values.
+    fn watched_group(&self, rows: &[crate::remote::SignalRow], trouble: Option<&str>) -> Option<Group> {
+        let lamps: Vec<Lamp> = self
+            .watched
+            .iter()
+            .filter_map(|n| rows.iter().find(|r| r.name == *n))
+            .map(|r| Lamp {
+                name: r.name.clone(),
+                path: r.name.clone(),
+                value: r.value,
+            })
+            .collect();
+        if lamps.is_empty() {
+            return None;
+        }
+        Some(Group {
+            program: "Watched".into(),
+            tiles: vec![Tile {
+                key: "watched signals".into(),
+                title: "Watched signals".into(),
+                sub: format!("{} picked", lamps.len()),
+                kind: TileKind::Outputs,
+                lamps,
+                stale: trouble.map(|t| format!("stale · {t}")),
+                into: None,
+                lines: Vec::new(),
+            }],
+            note: None,
+        })
     }
 
     /// Back, the crumbs, the simulation's transport, "Open diagram", an
