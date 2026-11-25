@@ -3412,7 +3412,15 @@ fn paused_outline(painter: &egui::Painter, r: Rect, z: f32) {
 /// An I/O block's designation: a simulated one is outlined with dashes
 /// and says SIM above its corner; one on a device keeps its solid outline
 /// and names the device and channel there.
-fn io_mark(painter: &egui::Painter, t: &Theme, r: Rect, z: f32, d: &crate::assign::Designation, text: bool, picked: bool) {
+fn io_mark(
+    painter: &egui::Painter,
+    t: &Theme,
+    r: Rect,
+    z: f32,
+    d: &crate::assign::Designation,
+    text: bool,
+    picked: bool,
+) {
     if d.is_simulated() && !picked {
         crate::io_cards::dashed_outline(painter, r.expand(0.5 * z), Stroke::new(1.5 * z.max(0.6), t.fg));
     }

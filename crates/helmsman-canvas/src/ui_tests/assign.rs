@@ -48,6 +48,9 @@ out speed int screen speed safe=0
 /// saved and running, the I/O tab docked in the right panel.
 fn project(map: &str) -> Harness {
     let mut h = Harness::code();
+    // Every simulated card carries its SIM line now: tall enough that the
+    // outputs are on screen under the four inputs.
+    h.size.y = 1500.0;
     {
         let v = h.app.sim.as_mut().unwrap();
         v.proj.create("line", None);
@@ -510,4 +513,141 @@ fn a_device_added_alone_is_offered_to_the_diagram_and_the_io_tab_and_not_called_
     let got = map(&h);
     assert!(got.contains(" spare bool rio ch:DI-03"), "{got}");
     crate::assign::testing::loads_with(&got, PROFILE);
+}
+
+// ---- simulated or physical, per signal (Nick, 2026-11-24) ----
+
+/// `project(map)` with a plant.sim.
+fn with_plant(map: &str, plant: &str) -> Harness {
+    let mut h = project(map);
+    {
+        let v = h.app.sim.as_mut().unwrap();
+        v.proj.add_file(helmsman_project::PLANT, plant.into());
+        v.proj.save();
+    }
+    h.wait(0.3);
+    h
+}
+
+fn plant(h: &Harness) -> String {
+    h.app.sim.as_ref().unwrap().proj.files[helmsman_project::PLANT].clone()
+}
+
+#[test]
+fn a_simulated_card_has_the_badge_and_a_dashed_outline_and_a_physical_one_is_solid() {
+    let mut h = project(MAP);
+    for name in ["start", "stop", "spare", "motor", "speed"] {
+        assert!(h.has(&format!("io sim {name}")), "{name} says SIM");
+        assert!(h.has(&format!("io dashed {name}")), "{name} is dashed");
+        assert!(!h.has(&format!("io solid {name}")), "{name} is not solid");
+    }
+    assert!(h.drew("SIM"));
+    menu(&mut h, "io row spare", "menu assign port");
+    h.press("assign channel rio ch:DI-05");
+    h.wait(0.3);
+    assert!(
+        !h.has("io sim spare") && !h.has("io dashed spare"),
+        "no badge once physical"
+    );
+    assert!(h.has("io solid spare"), "solid");
+    assert!(h.has("io sim stop"), "the others stay simulated");
+    // And back: the badge returns.
+    h.right_click(h.rect("io row spare").center());
+    h.press("menu back to simulated");
+    h.wait(0.3);
+    assert!(h.has("io sim spare") && h.has("io dashed spare") && !h.has("io solid spare"));
+}
+
+#[test]
+fn a_tile_names_its_device_and_channel_at_the_panels_default_width() {
+    let mut h = project(MAP);
+    h.app.chrome.io_grid = true;
+    h.wait(0.3);
+    menu(&mut h, "io row spare", "menu assign port");
+    h.press("assign channel rio ch:DI-05");
+    h.wait(0.3);
+    assert!(h.has("io phys spare"), "the tile names where it is");
+    assert!(h.drew("rio DI-05"));
+    assert!(h.has("io sim stop"), "a simulated tile says SIM");
+    let edge = h.size.x - crate::editor::RIGHT_W;
+    for key in ["io card spare", "io card stop", "io card motor"] {
+        let r = h.rect(key);
+        assert!(
+            r.left() >= edge - 8.0 && r.right() <= h.size.x,
+            "{key} {r:?} stays in the pane's {} pt default width",
+            crate::editor::RIGHT_W
+        );
+    }
+    assert!(h.rect("io phys spare").right() <= h.rect("io card spare").right() + 0.5);
+}
+
+#[test]
+fn the_plant_line_is_kept_and_switched_off_on_assign_and_back_on_with_the_way_back() {
+    const PLANT: &str = "# the bench\nbutton b input=spare\n";
+    let mut h = with_plant(MAP, PLANT);
+    menu(&mut h, "io row spare", "menu assign port");
+    h.press("assign channel rio ch:DI-05");
+    h.wait(0.3);
+    assert_eq!(plant(&h), format!("{PLANT}off spare\n"), "kept, with an off line");
+    let (spec, problems) = helmsman_sim::parse(&plant(&h));
+    assert!(problems.is_empty() && spec.is_off("spare") && spec.devices.len() == 1);
+    h.right_click(h.rect("io row spare").center());
+    h.press("menu back to simulated");
+    h.wait(0.3);
+    assert_eq!(plant(&h), PLANT, "exactly as it was");
+    // A port no plant line names gains nothing.
+    menu(&mut h, "io row stop", "menu assign port");
+    h.press("assign channel rio ch:DI-04");
+    h.wait(0.3);
+    assert_eq!(plant(&h), PLANT);
+}
+
+#[test]
+fn the_diagram_marks_a_simulated_block_and_a_physical_one_differently() {
+    use crate::assign::Designation;
+    let mut h = project(MAP);
+    let marks = |h: &Harness| {
+        let v = sim_view(h);
+        let name_of = |id| match &v.shown().node(id).kind {
+            NodeKind::Read { path } | NodeKind::Write { path } => path.to_ascii_lowercase(),
+            _ => unreachable!(),
+        };
+        v.io_marks()
+            .into_iter()
+            .map(|(id, d)| (name_of(id), d))
+            .collect::<Vec<_>>()
+    };
+    let m = marks(&h);
+    assert!(m.len() >= 3, "{m:?}");
+    assert!(m.iter().all(|(_, d)| d.is_simulated()), "{m:?}");
+    h.right_click(block(&h, "start"));
+    h.press("diagram menu assign");
+    h.wait(0.2);
+    h.press("assign channel rio ch:DI-04");
+    h.wait(0.3);
+    let m = marks(&h);
+    let start = m.iter().find(|(n, _)| n == "start").expect("start");
+    assert_eq!(
+        start.1,
+        Designation::Physical {
+            device: "rio".into(),
+            channel: "DI-04".into()
+        }
+    );
+    assert!(m.iter().find(|(n, _)| n == "stop").unwrap().1.is_simulated());
+}
+
+#[test]
+fn the_trend_legend_marks_a_simulated_signal() {
+    let mut h = project(MAP);
+    assert!(h.has("trend sim spare"), "spare is simulated");
+    assert!(h.drew("spare SIM"));
+    menu(&mut h, "io row spare", "menu assign port");
+    h.press("assign channel rio ch:DI-05");
+    h.wait(0.3);
+    assert!(
+        h.has("trend signal spare") && !h.has("trend sim spare"),
+        "physical: no mark"
+    );
+    assert!(h.has("trend sim stop"));
 }

@@ -1217,7 +1217,10 @@ device other modbus-tcp 10.0.0.9:502 unit=1
         assert_eq!(Designation::Simulated.label(), "SIM");
         // Case does not matter, as the map's own match does not.
         assert_eq!(d("START", true), Some(Designation::Simulated));
-        assert!(matches!(d("RIO_DI_04", false), Some(Designation::Physical { .. })));
+        assert!(matches!(
+            d("RIO_DI_04", false),
+            Some(Designation::Physical { .. })
+        ));
     }
 
     #[test]
@@ -1226,10 +1229,21 @@ device other modbus-tcp 10.0.0.9:502 unit=1
         assert_eq!(designate(&map, "nope", true), Some(Designation::Simulated));
         assert_eq!(designate(&map, "nope", false), None);
         // Hostile names: empty, spaces, a prefix of a real one, markup.
-        for n in ["", " ", "rio_di_0", "rio_di_04 ", "ch:DI-04", "<b>start</b>", "start\n"] {
+        for n in [
+            "",
+            " ",
+            "rio_di_0",
+            "rio_di_04 ",
+            "ch:DI-04",
+            "<b>start</b>",
+            "start\n",
+        ] {
             assert_eq!(designate(&map, n, false), None, "{n:?}");
         }
-        assert_eq!(designate(&iomap::skim(""), "start", true), Some(Designation::Simulated));
+        assert_eq!(
+            designate(&iomap::skim(""), "start", true),
+            Some(Designation::Simulated)
+        );
     }
 
     #[test]
@@ -1259,6 +1273,10 @@ device other modbus-tcp 10.0.0.9:502 unit=1
         assert!(off.starts_with(PLANT) && off.ends_with("off start\n"), "{off:?}");
         let back = unassign(&a.text, &ports(), "start").unwrap();
         assert!(back.text.contains("start bool box di:"));
-        assert_eq!(set_off(&off, "start", false).as_deref(), Some(PLANT), "exactly as it was");
+        assert_eq!(
+            set_off(&off, "start", false).as_deref(),
+            Some(PLANT),
+            "exactly as it was"
+        );
     }
 }

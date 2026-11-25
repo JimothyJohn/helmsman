@@ -4360,8 +4360,7 @@ impl PlaygroundView {
         let simulated: Vec<bool> = points
             .iter()
             .map(|n| {
-                crate::assign::designate(&self.devices_ui.map, n, true)
-                    .is_some_and(|d| d.is_simulated())
+                crate::assign::designate(&self.devices_ui.map, n, true).is_some_and(|d| d.is_simulated())
             })
             .collect();
         // The heading shares the signals' row: on a line of its own it

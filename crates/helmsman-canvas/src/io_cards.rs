@@ -416,7 +416,7 @@ pub fn show<R>(
                 v.expansion = 0.0;
             }
             let r = head(ui);
-            designation_line(ui, chrome, row, true);
+            designation_line(ui, chrome, row);
             return r;
         }
         let side = crate::glyphs::ROW;
@@ -454,7 +454,9 @@ pub fn show<R>(
                 r
             })
             .inner;
-        designation_line(ui, chrome, row, false);
+        if sim {
+            badge(ui, chrome, row);
+        }
         if let Some((text, tip)) = &row.real {
             let label = egui::Label::new(RichText::new(text).size(BODY).color(t.muted)).wrap();
             let l = ui.add(label).tip(tip.clone());
@@ -539,30 +541,37 @@ pub fn dashed_outline(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
     painter.extend(egui::Shape::dashed_line(&corners, stroke, 5.0, 3.0));
 }
 
-/// The line that says a point is simulated (the word SIM) or where it is
-/// (a tile's one line: its device and channel; a row says that in its
-/// line of the real world). `tile` is the one-line form.
-fn designation_line(ui: &mut egui::Ui, chrome: &mut Chrome, row: &Row, tile: bool) {
-    let t = theme(ui);
+/// The word SIM as a card shows it.
+fn badge_text(ui: &egui::Ui) -> RichText {
+    RichText::new(Designation::BADGE)
+        .strong()
+        .size(BODY)
+        .color(theme(ui).muted)
+}
+
+/// A simulated card's badge: its own line under the first.
+fn badge(ui: &mut egui::Ui, chrome: &mut Chrome, row: &Row) {
     let name = row.key.to_ascii_lowercase();
+    let r = ui
+        .add(egui::Label::new(badge_text(ui)).selectable(false))
+        .tip(format!("{name} is simulated: no device is wired to it."));
+    chrome.hit(format!("io sim {name}"), r.rect);
+}
+
+/// A tile's one line under its value: SIM, or the device and channel.
+fn designation_line(ui: &mut egui::Ui, chrome: &mut Chrome, row: &Row) {
+    let t = theme(ui);
     match &row.designation {
-        Some(Designation::Simulated) => {
-            let badge = RichText::new(Designation::BADGE).strong().size(BODY).color(t.muted);
-            let r = ui
-                .add(egui::Label::new(badge).selectable(false))
-                .tip(format!(
-                    "{name} is simulated: the simulation drives it and no device is wired to it. Right-click to assign it to a device channel."
-                ));
-            chrome.hit(format!("io sim {name}"), r.rect);
-        }
-        Some(d @ Designation::Physical { .. }) if tile => {
+        Some(Designation::Simulated) => badge(ui, chrome, row),
+        Some(d @ Designation::Physical { .. }) => {
+            let name = row.key.to_ascii_lowercase();
             let text = RichText::new(d.label()).size(BODY).color(t.muted);
             let r = ui
                 .add(egui::Label::new(text).truncate().selectable(false))
                 .tip(format!("{name} is on {}.", d.label()));
             chrome.hit(format!("io phys {name}"), r.rect);
         }
-        _ => {}
+        None => {}
     }
 }
 
