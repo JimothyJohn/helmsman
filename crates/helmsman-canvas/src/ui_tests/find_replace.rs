@@ -55,6 +55,14 @@ fn text_at(h: &Harness, s: &str) -> Option<Pos2> {
     h.shapes.iter().find_map(|c| walk(&c.shape, s))
 }
 
+/// Sets the find bar's whole-words toggle (the "ab" button) to `on`.
+fn whole_words(h: &mut Harness, on: bool) {
+    if h.app.chrome.find.as_ref().unwrap().whole_words() != on {
+        press_text(h, "ab");
+    }
+    assert_eq!(h.app.chrome.find.as_ref().unwrap().whole_words(), on);
+}
+
 fn text_of(h: &Harness) -> String {
     let p = &h.app.sim.as_ref().unwrap().proj;
     p.files[&p.current].clone()
@@ -113,6 +121,7 @@ fn the_counter_stays_truthful_after_each_replace() {
     // current match walks 2, 3, then wraps.
     let src = "slew := 1;\nx := slew + slew;\n";
     let mut h = open(src, "slew", "slews");
+    whole_words(&mut h, false);
     let steps = walk(&mut h, 3);
     assert_eq!(steps[0].1, "2 of 3");
     assert_eq!(steps[1].1, "3 of 3");
@@ -189,6 +198,7 @@ fn replacing_the_last_match_wraps_to_the_first_remaining() {
 fn replace_all_writes_each_original_match_once() {
     let src = "slew := 1;\nx := slew + slew;\n";
     let mut h = open(src, "slew", "slews");
+    whole_words(&mut h, false);
     press_text(&mut h, "Replace all");
     assert_eq!(text_of(&h), "slews := 1;\nx := slews + slews;\n");
     // The query still matches the output; the count says so truthfully.
@@ -199,6 +209,7 @@ fn replace_all_writes_each_original_match_once() {
 fn replace_all_with_a_replacement_holding_the_query_does_not_grow() {
     let src = "aa a";
     let mut h = open(src, "a", "aa");
+    whole_words(&mut h, false);
     press_text(&mut h, "Replace all");
     assert_eq!(text_of(&h), "aaaa aa");
 }
@@ -241,4 +252,87 @@ fn replace_after_the_editor_had_the_keyboard_and_a_caret_inside_a_match() {
         press_text(&mut h, "Replace");
     }
     assert_eq!(text_of(&h), "slews := 1;\nx := slews + slews;\n");
+}
+
+const WORDS: &str = "slew := 1;\nslews := 2;\nmy_slew := 3;\nx := slew;\nslew";
+
+#[test]
+fn whole_words_are_on_for_a_name_and_skip_longer_names() {
+    let mut h = open(WORDS, "slew", "");
+    assert!(
+        h.app.chrome.find.as_ref().unwrap().whole_words(),
+        "on by default for a name"
+    );
+    // slew at the start, in `x := slew;` and at the end of the text.
+    assert_eq!(counter(&h), "1 of 3");
+    whole_words(&mut h, false);
+    assert_eq!(counter(&h), "1 of 5", "off: slews and my_slew match too");
+    whole_words(&mut h, true);
+    assert_eq!(counter(&h), "1 of 3");
+}
+
+#[test]
+fn replace_all_with_whole_words_leaves_longer_names_alone() {
+    let mut h = open(WORDS, "slew", "slews");
+    press_text(&mut h, "Replace all");
+    assert_eq!(
+        text_of(&h),
+        "slews := 1;\nslews := 2;\nmy_slew := 3;\nx := slews;\nslews"
+    );
+    assert!(!text_of(&h).contains("slewss"));
+}
+
+#[test]
+fn replace_one_with_whole_words_walks_only_whole_matches() {
+    let mut h = open(WORDS, "slew", "pump");
+    for _ in 0..3 {
+        press_text(&mut h, "Replace");
+    }
+    assert_eq!(
+        text_of(&h),
+        "pump := 1;\nslews := 2;\nmy_slew := 3;\nx := pump;\npump"
+    );
+    assert_eq!(counter(&h), "no match");
+}
+
+#[test]
+fn a_query_that_is_not_a_name_defaults_to_substring() {
+    for q in [":=", "%IX0.1"] {
+        let h = open("a := 1; b := 2; %IX0.1 %IX0.10", q, "");
+        assert!(!h.app.chrome.find.as_ref().unwrap().whole_words(), "{q}");
+    }
+    let h = open("a := 1; b := 2; %IX0.1 %IX0.10", "%IX0.1", "");
+    assert_eq!(counter(&h), "1 of 2", "the longer address matches too");
+}
+
+#[test]
+fn the_choice_survives_closing_and_reopening_the_box() {
+    let mut h = open(WORDS, "slew", "");
+    whole_words(&mut h, false);
+    h.key(Modifiers::NONE, Key::Escape);
+    h.frame(vec![]);
+    if h.app.chrome.find.is_some() {
+        press_text(&mut h, "✕");
+    }
+    assert!(h.app.chrome.find.is_none(), "closed");
+    h.key(Modifiers::COMMAND, Key::F);
+    h.frame(vec![]);
+    h.frame(vec![Event::Text("slew".into())]);
+    h.frame(vec![]);
+    h.frame(vec![]);
+    assert!(
+        !h.app.chrome.find.as_ref().unwrap().whole_words(),
+        "off is remembered"
+    );
+    assert_eq!(counter(&h), "1 of 5");
+}
+
+#[test]
+fn every_find_bar_button_lies_inside_the_left_pane() {
+    let h = open(WORDS, "slew", "x");
+    let pane = egui::Rect::from_min_max(Pos2::ZERO, egui::pos2(crate::editor::LEFT_W + 4.0, 10_000.0));
+    for s in ["ab", "⇄", "✕", "▲", "▼", "Replace", "Replace all"] {
+        let at = text_at(&h, s).unwrap_or_else(|| panic!("no {s} drawn"));
+        assert!(pane.contains(at), "{s} at {at:?} is outside {pane:?}");
+    }
 }

@@ -245,7 +245,8 @@ redrawn.
   Structured Text editor, headed by the open file's name. Beside the
   name, the magnifier (<kbd>Ctrl</kbd> <kbd>F</kbd>, wherever the
   keyboard is) opens Find over the code; its ⇄ button opens a second row
-  to Replace the selected match or Replace all. At the header's right
+  to Replace the selected match or Replace all, and the <u>ab</u> button
+limits matches to whole words. At the header's right
   end is Deploy, the green button with the arrow. While the code
   compiles the header says nothing about it; when it does not, a red ✖
   with the number of errors stands before Deploy, the first error in its
