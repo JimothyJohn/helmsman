@@ -936,16 +936,6 @@ pub enum Scan {
     Failed(String),
 }
 
-/// The address the last scan saw at `identity` (`cip=V:P:S`, or the
-/// identity a device answered by).
-#[must_use]
-pub fn found_at(found: &[Found], identity: &str) -> Option<String> {
-    found
-        .iter()
-        .find(|f| f.cip == identity || f.identity == identity)
-        .map(|f| f.address.clone())
-}
-
 /// Each found device's identities (`cip=`, and the one it answered by)
 /// to its address.
 #[must_use]

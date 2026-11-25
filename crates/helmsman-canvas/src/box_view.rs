@@ -440,9 +440,7 @@ impl BoxView {
         self.follow_owner();
         self.trend.local_pins = self.watches_node;
         self.projects.node_map = self.state.io_map.clone().filter(|_| self.state.io_map_node);
-        // A device by identity goes to a Skipper at the address the scan
-        // saw; Scan and add passes over the Skipper's own devices.
-        self.projects.found_hosts = crate::devices::hosts(&self.devices_ui.found);
+        // Scan and add passes over the Skipper's own devices.
         self.devices_ui.skipper = self
             .projects
             .node_map
@@ -760,24 +758,24 @@ impl BoxView {
         // answer off it goes back to the Agent (Nick, 2026-11-24).
         // Until the page has read the Skipper's list there is none to
         // check by (an empty one would turn every port away).
-        let node = self.projects.node_map.clone().filter(|_| self.watches_node);
-        let devices = node.as_deref().map_or_else(String::new, |n| {
-            let made = crate::skipper_map::for_skipper(
-                files.get(helmsman_project::IO_MAP).map(String::as_str),
-                n,
-                &|stem| files.get(&format!("{stem}{}", helmsman_project::DEVICE_EXT)).cloned(),
-                &|id| crate::devices::found_at(&self.devices_ui.found, id),
-            );
+        let node = self.projects.node_map.as_deref().filter(|_| self.watches_node);
+        let devices = node.map_or_else(String::new, |n| {
+            let made = self
+                .projects
+                .for_skipper()
+                .unwrap_or_else(|| crate::skipper_map::for_skipper(None, n, &|_| None, &|_| None));
             // The same point under the project's other name: the program
             // must use the Skipper's (Nick, 2026-11-24: the Agent kept a
             // 40-character name for the MDrive's `enabled`).
-            let mut same = String::new();
-            for (p, sp) in &made.same {
-                let _ = std::fmt::Write::write_fmt(&mut same, format_args!("\n- {p} is this list's {sp}: use {sp}, not {p}, in the program."));
-            }
+            let same: Vec<String> = made
+                .same
+                .iter()
+                .map(|(p, sp)| format!("\n- {}.", crate::skipper_map::same_words(p, sp)))
+                .collect();
             format!(
-                "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name: use these names for what they are. A VAR_INPUT or VAR_OUTPUT with no point here is fine: the page adds a placeholder (`sim`) point for it, set from the I/O tab, so do not write io.map lines for it. A Skipper takes names of at most {} characters: keep every VAR_INPUT and VAR_OUTPUT name that short.{same}\n{}",
+                "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name: use these names for what they are. A VAR_INPUT or VAR_OUTPUT with no point here is fine: the page adds a placeholder (`sim`) point for it, set from the I/O tab, so do not write io.map lines for it. A Skipper takes names of at most {} characters: keep every VAR_INPUT and VAR_OUTPUT name that short.{}\n{}",
                 crate::skipper_map::NAME_MAX,
+                same.concat(),
                 made.map.trim()
             )
         });
@@ -1036,15 +1034,13 @@ impl BoxView {
         // On a Skipper a port no point backs gets its placeholder now, so
         // the answer runs as soon as it is deployed (Nick, 2026-11-24).
         if self.watches_node {
-            match self.projects.add_placeholders() {
-                Ok(Some(words)) => {
-                    self.projects.save_file(helmsman_project::IO_MAP);
-                    self.projects.note(words, false);
-                }
-                Ok(None) => self.projects.save_file(helmsman_project::IO_MAP),
-                // An address a scan may find: Deploy scans for it.
-                Err((_, true)) => {}
-                Err((why, false)) => self.projects.note(why, true),
+            let placed = self.projects.add_placeholders();
+            self.projects.save_file(helmsman_project::IO_MAP);
+            match placed {
+                Ok(Some(words)) => self.projects.note(words, false),
+                Err(crate::box_projects::Unsent::Refused(why)) => self.projects.note(why, true),
+                // Nothing to say, or an address Deploy will scan for.
+                Ok(None) | Err(crate::box_projects::Unsent::MayScan(_)) => {}
             }
         }
         // What the change added to the program joins the trend once the

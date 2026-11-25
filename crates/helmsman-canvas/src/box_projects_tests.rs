@@ -5526,7 +5526,7 @@ fn a_port_that_is_a_skipper_point_under_another_name_stops_the_deploy() {
     p.found_hosts = vec![("cip=243:15362:0x3cad8920".into(), "192.168.33.1".into())];
     p.deploy();
     assert!(
-        matches!(&p.deploy, Deploy::Failed(w) if w.contains(&format!("the program's {long} is the Skipper's enabled (the same channel): use enabled in the program"))),
+        matches!(&p.deploy, Deploy::Failed(w) if w.contains(&format!("{long} is the Skipper's enabled (the same channel): use enabled, not {long}, in the program"))),
         "{:?}",
         p.deploy
     );
