@@ -375,9 +375,15 @@ pub fn for_skipper(
                 Some(Became::Skippers { .. } | Became::Not)
             )
         });
+        // A placeholder the page wrote under a name a Skipper cannot take
+        // goes: the program's port is what has to change, and the deploy
+        // says so by the port ([`crate::box_projects`]).
+        if pname.len() > NAME_MAX && w.get(3) == Some(&"sim") {
+            continue;
+        }
         if pname.len() > NAME_MAX && !on_skippers {
             out.refused.push(format!(
-                "{pname}: a Skipper names a point in at most {NAME_MAX} characters, and this is {}. Rename it in the program and io.map",
+                "{pname}: a Skipper names a point in at most {NAME_MAX} characters, and this is {}. Give it a shorter name",
                 pname.len()
             ));
             continue;

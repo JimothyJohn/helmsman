@@ -204,17 +204,29 @@ fn no_project_map_is_the_skippers_list() {
 
 #[test]
 fn a_name_longer_than_a_skipper_takes_is_refused_by_name() {
-    let long = "a_very_long_placeholder_name_of_40_chars";
+    let long = "a_very_long_device_point_name_of_40_char";
     assert_eq!(long.len(), 40);
-    let p = format!("in  {long} bool sim\nin  ok bool sim\n");
+    let p = format!("device rio modbus-tcp 192.168.33.60\nin  {long} bool rio di:0\nin  ok bool sim\n");
     let m = for_skipper(Some(&p), NODE, &profiles, &nothing);
     assert_eq!(m.refused.len(), 1, "{:?}", m.refused);
     assert!(
         m.refused[0].starts_with(&format!(
-            "{long}: a Skipper names a point in at most 32 characters, and this is 40"
+            "{long}: a Skipper names a point in at most 32 characters, and this is 40. Give it a shorter name"
         )),
         "{:?}",
         m.refused
     );
+    assert!(m.map.contains("in  ok bool sim"), "{}", m.map);
+}
+
+/// A placeholder the page saved before under a name too long for a
+/// Skipper (Nick's `ass`, 2026-11-24) is dropped, not refused: the port
+/// in the program is what changes, and the deploy says that.
+#[test]
+fn a_placeholder_under_a_name_too_long_is_dropped() {
+    let p = "in  liberty_lexium_mdrive_ethernet_lmd_ether bool sim\nin  ok bool sim\n";
+    let m = for_skipper(Some(p), NODE, &profiles, &nothing);
+    assert!(m.refused.is_empty(), "{:?}", m.refused);
+    assert!(!m.map.contains("liberty"), "{}", m.map);
     assert!(m.map.contains("in  ok bool sim"), "{}", m.map);
 }
