@@ -44,7 +44,6 @@ mod box_popup;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_projects_tests;
-mod box_spec;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_tests;
 mod box_trend;
@@ -72,6 +71,7 @@ mod device_vendor;
 mod devices;
 mod diagram_menu;
 mod diff_ui;
+mod documents;
 mod editor;
 mod edits;
 #[cfg(test)]
@@ -144,7 +144,6 @@ mod sim_projects;
 mod sim_projects_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod slow_link_tests;
-mod spec_mode;
 mod st_fold;
 mod st_hints;
 mod st_syntax;

@@ -143,7 +143,7 @@ fn the_entry_at_the_default_width_leaves_the_pane_its_width() {
         assert!(h.has(k), "{k}");
     }
     assert!(
-        h.drew("Describe the machine first"),
+        h.drew("Describe the machine, or add a document, first"),
         "nothing typed: Send says why"
     );
     in_panel(&h, left, &["design open"]);
@@ -499,5 +499,138 @@ fn no_section_of_the_design_shows_a_raw_marker_and_a_wide_table_stays_in_the_win
         assert!(!h.drew("**"), "section {k}: a bold mark is showing");
         assert!(!h.drew("|---"), "section {k}: a table separator is showing");
         inside_page(&h, &["design read window", "design body"]);
+    }
+}
+// ---- documents in the description window ----
+
+#[test]
+fn the_window_takes_documents_and_there_is_no_second_entry_for_them() {
+    let mut h = page();
+    let left = h.rect("left");
+    served(&mut h, OPEN);
+    assert!(h.has("design open"));
+    assert!(
+        !h.has("spec open") && !h.has("documents open"),
+        "one entry: Design a machine"
+    );
+    h.press("design open");
+    h.wait(0.3);
+    for k in [
+        "design form",
+        "design text",
+        "documents text",
+        "documents add file",
+    ] {
+        assert!(h.has(k), "{k}");
+    }
+    assert!(!h.has("documents total"), "no meter before there is a document");
+    in_panel(&h, left, &["design open"]);
+    // Files are listed with a size and a remove control, and the total is
+    // against the cap.
+    sim(&mut h)
+        .design
+        .docs
+        .add_file("plant.md", &vec![b'a'; 3000])
+        .unwrap();
+    sim(&mut h).design.docs.add_file("scope.txt", b"Scope.").unwrap();
+    h.wait(0.3);
+    assert!(h.has("documents doc 1") && h.has("documents doc 2") && h.has("documents remove 2"));
+    assert!(h.drew("plant.md") && h.drew("2.9 KiB"), "name and size");
+    assert!(h.drew("of 120.0 KiB used"), "the total against the cap");
+    // Documents alone are enough to ask: no complaint about the description.
+    assert!(!h.drew("Describe the machine, or add a document, first"));
+    h.press("documents remove 1");
+    h.wait(0.2);
+    assert_eq!(sim(&mut h).design.docs.docs.len(), 1);
+    assert_eq!(sim(&mut h).design.docs.docs[0].name, "scope.txt");
+    // Over the cap the window says so and asking sends nothing.
+    sim(&mut h).design.docs.pasted = "a".repeat(crate::documents::MAX_TEXT + 10);
+    h.wait(0.3);
+    assert!(h.drew("one design request takes at most 120 KiB"));
+    let before = sim(&mut h).design_link.sent.len();
+    h.press("design send");
+    h.wait(0.2);
+    assert_eq!(sim(&mut h).design_link.sent.len(), before, "nothing was sent");
+    in_panel(&h, left, &["design open"]);
+}
+
+#[test]
+fn add_file_asks_the_picker_and_says_so_natively() {
+    let mut h = page();
+    served(&mut h, OPEN);
+    sim(&mut h).design.open = true;
+    h.wait(0.3);
+    h.press("documents add file");
+    h.wait(0.2);
+    assert!(h.drew("Files are added in the browser page."));
+}
+
+#[test]
+fn the_window_with_documents_stays_inside_a_narrow_page_and_draws_no_small_text() {
+    for (w, hgt) in [(1400.0, 860.0), (760.0, 640.0), (360.0, 640.0), (1400.0, 500.0)] {
+        let mut h = page();
+        h.size = Vec2::new(w, hgt);
+        served(&mut h, OPEN);
+        let d = &mut sim(&mut h).design;
+        d.open = true;
+        d.description = "line\n".repeat(50);
+        d.docs.pasted = "line\n".repeat(200);
+        d.docs.add_file(&format!("{}.md", "n".repeat(100)), b"x").unwrap();
+        h.wait(0.4);
+        inside_page(
+            &h,
+            &[
+                "design form",
+                "design text",
+                "documents text",
+                "documents add file",
+                "design send",
+                "design close",
+            ],
+        );
+        assert!(h.rect("design form").width() <= w, "{w}");
+        assert!(h.small_text().is_empty(), "{w}: {:?}", h.small_text());
+        let r = h.rect("documents doc 1");
+        assert!(r.left() >= 0.0 && r.right() <= w + 0.5, "{w}: {r:?}");
+    }
+}
+
+#[test]
+fn on_a_box_the_window_takes_documents_with_the_boxs_caps() {
+    let mut h = boxed();
+    h.press("tab claude");
+    h.wait(0.3);
+    open_project(&mut h, None);
+    let left = h.rect("left");
+    assert!(!h.has("spec open"), "one entry on a box too: Design a machine");
+    h.press("design open");
+    h.wait(0.3);
+    for k in ["design form", "documents text", "documents add file"] {
+        assert!(h.has(k), "{k}");
+    }
+    assert!(h.app.boxv.as_ref().unwrap().design.docs.on_box);
+    let d = &mut h.app.boxv.as_mut().unwrap().design;
+    d.docs.pasted = "line\n".repeat(200);
+    d.docs.add_file("plant.md", b"# Plant").unwrap();
+    h.wait(0.3);
+    assert!(h.drew("characters"), "the box's total is in characters");
+    in_panel(&h, left, &["design open"]);
+    assert!(h.small_text().is_empty(), "{:?}", h.small_text());
+    h.press("documents add file");
+    h.wait(0.2);
+    assert!(h.drew("Files are added in the browser page."));
+    for (w, hgt) in [(760.0, 640.0), (360.0, 640.0)] {
+        h.size = Vec2::new(w, hgt);
+        h.wait(0.4);
+        inside_page(
+            &h,
+            &[
+                "design form",
+                "documents text",
+                "documents add file",
+                "design close",
+            ],
+        );
+        assert!(h.small_text().is_empty(), "{w}: {:?}", h.small_text());
     }
 }

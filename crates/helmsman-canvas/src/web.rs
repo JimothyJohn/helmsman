@@ -886,10 +886,10 @@ thread_local! {
     static VENDOR_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// Why that file was not read, said beside its button.
     static VENDOR_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    /// A file picked for a specification (`spec_mode.rs`).
-    static SPEC_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
-    /// Why that file was not read, said in the specification's window.
-    static SPEC_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// A file picked for the design's documents (`documents.rs`).
+    static DOCUMENTS_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why that file was not read, said in the design window.
+    static DOCUMENT_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The pane layout file picked for View › Pane layouts… › Import.
     static LAYOUTS_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// Why that file was not read, said in the popup.
@@ -918,38 +918,28 @@ pub fn pick_vendor_file(ctx: &egui::Context) {
     );
 }
 
-/// Opens the picker for a specification's `.md` or `.txt` file; a file
-/// too large is refused before it is read ([`crate::spec_mode::pick_refusal`]).
-pub fn pick_spec_file(ctx: &egui::Context, pdf: bool) {
-    if pdf {
-        pick_into(
-            crate::spec_mode::ACCEPT_BOX,
-            ctx,
-            crate::spec_mode::pick_refusal_box,
-            &SPEC_PICKED,
-            &SPEC_ERRORS,
-        );
-    } else {
-        pick_into(
-            crate::spec_mode::ACCEPT,
-            ctx,
-            crate::spec_mode::pick_refusal,
-            &SPEC_PICKED,
-            &SPEC_ERRORS,
-        );
-    }
+/// Opens the picker for a document's `.md` or `.txt` file; a file too
+/// large is refused before it is read ([`crate::documents::pick_refusal`]).
+pub fn pick_document_file(ctx: &egui::Context) {
+    pick_into(
+        crate::documents::ACCEPT,
+        ctx,
+        crate::documents::pick_refusal,
+        &DOCUMENTS_PICKED,
+        &DOCUMENT_ERRORS,
+    );
 }
 
-/// The specification's files picked since the last call: name and bytes.
+/// The documents' files picked since the last call: name and bytes.
 #[must_use]
-pub fn take_spec_picked() -> Vec<(String, Vec<u8>)> {
-    SPEC_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+pub fn take_documents_picked() -> Vec<(String, Vec<u8>)> {
+    DOCUMENTS_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
-/// Why the specification's files picked since the last call were not read.
+/// Why the documents' files picked since the last call were not read.
 #[must_use]
-pub fn take_spec_errors() -> Vec<String> {
-    SPEC_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
+pub fn take_document_errors() -> Vec<String> {
+    DOCUMENT_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
 /// Opens the picker for a pane layout file (`crate::pane_layout`); the

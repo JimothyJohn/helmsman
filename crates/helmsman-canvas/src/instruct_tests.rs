@@ -318,7 +318,6 @@ fn the_record_leads_with_the_instruction_and_is_bounded() {
         retries: 1,
         asked_scenarios: false,
         mode: crate::instruct::Mode::Direct,
-        spec: false,
         attempts: vec![instruct::Attempt {
             asked: "a".into(),
             answer: "b".into(),
