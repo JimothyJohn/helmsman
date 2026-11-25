@@ -1527,6 +1527,26 @@ impl BoxProjects {
         self.queue.extend(reqs);
     }
 
+    /// Saves `file` alone, if it is edited and no save of it is on its
+    /// way; the other edits stay unsaved.
+    pub fn save_file(&mut self, file: &str) {
+        let Some(o) = &mut self.open else { return };
+        let project = o.name.clone();
+        let Some(b) = o.bufs.get_mut(file).filter(|b| b.dirty() && b.saving.is_none()) else {
+            return;
+        };
+        b.saving = Some(b.text.clone());
+        self.queue.push(PReq::json(
+            PCall::Save {
+                project: project.clone(),
+                file: file.to_string(),
+            },
+            "PUT",
+            file_url(&project, file),
+            &json!({ "text": b.text, "version": b.version }),
+        ));
+    }
+
     /// Reads `file` again from the box, dropping the edits here (after a
     /// 409: someone else saved it).
     pub fn reload(&mut self, file: &str) {
@@ -1550,12 +1570,59 @@ impl BoxProjects {
         }
         self.format();
         self.diags.clear();
+        // A port no point backs gets its placeholder before the save, so
+        // the check, the replay and the Skipper all see it.
+        let placed = if self.to_node {
+            self.add_placeholders()
+        } else {
+            None
+        };
         if self.dirty() {
             self.deploy = Deploy::Saving;
             self.save();
         } else {
             self.check();
         }
+        // After the save, which clears the notice.
+        if let Some(words) = placed {
+            self.note(words, false);
+        }
+    }
+
+    /// On a Skipper: placeholder (`sim`) points for every port of the open
+    /// project's program that no point of the map the deploy sends backs
+    /// ([`crate::placeholders`]), written into the project's `io.map` as an
+    /// edit (made if the project has none, from the Skipper's list) that
+    /// the next save writes. `None` when nothing was needed, the Skipper's
+    /// list is not read yet, or the program does not build; else the words
+    /// for the Messages.
+    pub fn add_placeholders(&mut self) -> Option<String> {
+        let node = self.node_map.clone()?;
+        let o = self.open.as_mut()?;
+        let program = node_source(o);
+        let sizes = o.runs.map_or(crate::playground::SIZES, |r| r.sizes);
+        let project = o
+            .bufs
+            .get(helmsman_project::IO_MAP)
+            .filter(|b| b.loaded)
+            .map(|b| b.text.clone());
+        // A map not read yet is not written over.
+        if o.bufs.get(helmsman_project::IO_MAP).is_some_and(|b| !b.loaded) {
+            return None;
+        }
+        let list = crate::placeholders::base(project.as_deref(), &node);
+        let added = crate::placeholders::add(&program, sizes, list)?;
+        if !added.lines.is_empty() {
+            let b = o
+                .bufs
+                .entry(helmsman_project::IO_MAP.to_string())
+                .or_insert_with(|| Buf {
+                    loaded: true,
+                    ..Buf::default()
+                });
+            b.text = added.map.clone();
+        }
+        crate::placeholders::said(&added)
     }
 
     fn check(&mut self) {

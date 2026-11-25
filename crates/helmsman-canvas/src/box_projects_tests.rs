@@ -5373,3 +5373,146 @@ fn on_a_skippers_page_the_agent_gets_its_io_list() {
     assert!(first.contains("<io_devices>\nThe Skipper's I/O list."), "{first}");
     assert!(first.contains("in  start bool drive in:0.0"), "{first}");
 }
+
+/// The Skipper's list as its `GET /api/io_map` gives it.
+const SKIPPER_LIST: &str =
+    "device drive enip-io 192.168.33.1 config=1\nin  start bool drive in:0.0\nout lamp bool drive out:0.0\n";
+
+/// Nick 2026-11-24: "you really need a way to create simulated, place
+/// holder inputs and outputs". Deploy on a Skipper writes a placeholder
+/// (`sim`) point into the project's io.map for each port no point backs:
+/// the Skipper's list whole, then the placeholders, saved as a new file
+/// before the check, and the Messages name them.
+#[test]
+fn deploying_to_a_skipper_adds_placeholder_points_for_ports_no_point_backs() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let latch = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\n  stop : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\n  running : BOOL;\nEND_VAR\nrunning := (start OR running) AND NOT stop;\nlamp := running;\nEND_PROGRAM\n";
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", latch)]);
+    let p = &mut v.projects;
+    p.node_map = Some(SKIPPER_LIST.into());
+    p.to_node = true;
+    p.deploy();
+    let sent = p.poll();
+    let map = sent
+        .iter()
+        .find(|q| q.method == "PUT" && q.url.ends_with("/files/io.map"))
+        .unwrap_or_else(|| panic!("no io.map save: {sent:?}"));
+    let body: Json = serde_json::from_slice(map.body.as_ref().unwrap()).unwrap();
+    assert_eq!(body["version"], Json::Null, "a new file: {body}");
+    assert_eq!(
+        body["text"],
+        format!(
+            "{}\n{}\nin  stop bool sim\nout running bool sim\n",
+            SKIPPER_LIST.trim_end(),
+            crate::placeholders::HEADER
+        )
+    );
+    assert!(
+        p.notice
+            .as_ref()
+            .is_some_and(|(n, err)| !*err && n.contains("for stop, running")),
+        "{:?}",
+        p.notice
+    );
+
+    // On a box (not a Skipper) nothing is added.
+    let jar2 = Jar::default();
+    let mut w = page(&b, &jar2, Some(("alice", ALICE)));
+    w.projects.open_project("line");
+    settle(&b, &jar2, &mut w.projects);
+    w.projects.node_map = Some(SKIPPER_LIST.into());
+    w.projects.to_node = false;
+    w.projects.deploy();
+    let sent = w.projects.poll();
+    assert!(!sent.iter().any(|q| q.url.ends_with("/files/io.map")), "{sent:?}");
+}
+
+/// The same after an Agent answer lands on a Skipper's page: the
+/// placeholder is saved with it (io.map alone, not other edits).
+#[test]
+fn an_agent_answer_on_a_skipper_gets_its_placeholders_saved_with_it() {
+    use crate::box_agent::Incoming;
+    use crate::instruct_tests::LAMP;
+    use serde_json::json;
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", LAMP), ("notes.st", "(* x *)\n")],
+    );
+    v.projects.open_file("notes.st");
+    v.projects.current_mut().unwrap().text = "(* an edit not saved *)\n".into();
+    v.projects.open_file("main.st");
+    // Everything the page sends until it goes quiet, answered by the box.
+    let run = |v: &mut BoxView, seen: &mut Vec<PReq>| {
+        // A request queued during a frame goes out on the next one.
+        for _ in 0..10 {
+            v.tick(&ctx);
+            seen.extend(v.psent.iter().cloned());
+            pump(&b, &jar, v, &ctx, 1.0);
+        }
+    };
+    let mut seen = Vec::new();
+    run(&mut v, &mut seen);
+    v.watches_node = true;
+    v.state.io_map = Some(SKIPPER_LIST.into());
+    v.state.io_map_node = true;
+    v.tick(&ctx);
+
+    v.instruct.draft = "hold the lamp off while jog is on".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let jogged = LAMP
+        .replace("  start : BOOL;\n", "  start : BOOL;\n  jog : BOOL;\n")
+        .replace("lamp := start;", "lamp := start AND NOT jog;");
+    let scenario = "(* The lamp stays off while jog is on. *)\nPROGRAM test_jog\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; jog : BOOL; done : BOOL; END_VAR\nVAR n : INT; off_with_jog : ASSERT; END_VAR\nstart := TRUE;\njog := TRUE;\nn := n + 1;\nIF n > 3 THEN off_with_jog(COND := NOT lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
+    let answer =
+        format!("Why: jog holds the lamp off.\n\n```st\n{jogged}```\n\n```st scenario\n{scenario}```\n");
+    let seq = v.chat_sent[0].seq;
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev("text", json!({ "delta": answer })),
+        ev("done", json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    let mut sent = Vec::new();
+    run(&mut v, &mut sent);
+    let urls: Vec<&str> = sent.iter().map(|q| q.url.as_str()).collect();
+    let map = sent
+        .iter()
+        .find(|q| q.method == "PUT" && q.url.ends_with("/files/io.map"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no io.map save: {urls:?} {:?} chats={} busy={} turns={:?}",
+                v.instruct.outcome,
+                v.chat_sent.len(),
+                v.instruct.busy(),
+                v.agent
+                    .turns
+                    .iter()
+                    .map(|t| t.text.chars().take(80).collect::<String>())
+                    .collect::<Vec<_>>()
+            )
+        });
+    let body: Json = serde_json::from_slice(map.body.as_ref().unwrap()).unwrap();
+    assert!(
+        body["text"].as_str().unwrap().ends_with("\nin  jog bool sim\n"),
+        "{body}"
+    );
+    assert!(urls.iter().any(|u| u.ends_with("/files/main.st")), "{urls:?}");
+    assert!(
+        !urls.iter().any(|u| u.ends_with("/files/notes.st")),
+        "the other edit stays unsaved: {urls:?}"
+    );
+}

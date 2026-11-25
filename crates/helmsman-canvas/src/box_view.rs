@@ -749,8 +749,8 @@ impl BoxView {
         let node = self.projects.node_map.clone().filter(|_| self.watches_node);
         let devices = node.as_deref().map_or_else(String::new, |n| {
             format!(
-                "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name; any other variable goes under VAR.\n{}",
-                crate::verify::io_list(&files, n).trim()
+                "The Skipper's I/O list. The program's VAR_INPUTs and VAR_OUTPUTs bind to its `in` and `out` points by name: use these names for what they are. A VAR_INPUT or VAR_OUTPUT with no point here is fine: the page adds a placeholder (`sim`) point for it, set from the I/O tab, so do not write io.map lines for it.\n{}",
+                crate::placeholders::base(files.get(helmsman_project::IO_MAP).map(String::as_str), n).trim()
             )
         });
         let env = crate::instruct::Env {
@@ -1005,6 +1005,14 @@ impl BoxView {
         ));
         self.projects
             .save_agent(&apply.file, &apply.text, &apply.record, &apply.tests);
+        // On a Skipper a port no point backs gets its placeholder now, so
+        // the answer runs as soon as it is deployed (Nick, 2026-11-24).
+        if self.watches_node
+            && let Some(words) = self.projects.add_placeholders()
+        {
+            self.projects.save_file(helmsman_project::IO_MAP);
+            self.projects.note(words, false);
+        }
         // What the change added to the program joins the trend once the
         // box reports it (a change is saved first and deployed after).
         let known = crate::device_form::ports_of(&was);

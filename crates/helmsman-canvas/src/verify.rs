@@ -839,19 +839,3 @@ pub fn next(check: &Check, retries: u8, asked: bool) -> Next {
     }
     Next::Show
 }
-
-/// The I/O list a deploy to a Skipper binds the program's ports to: the
-/// project's `io.map` when it has a point (the deploy sends it first and
-/// the Skipper restarts on it), else `node`, the one the Skipper runs.
-#[must_use]
-pub fn io_list<'a>(files: &'a Files, node: &'a str) -> &'a str {
-    match files.get(helmsman_project::IO_MAP) {
-        Some(m)
-            if m.lines()
-                .any(|l| matches!(l.split_whitespace().next(), Some("in" | "out"))) =>
-        {
-            m
-        }
-        _ => node,
-    }
-}

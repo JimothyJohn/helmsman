@@ -119,6 +119,9 @@ mod pane_layout;
 #[cfg(test)]
 mod pane_layout_tests;
 mod phrasing;
+mod placeholders;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod placeholders_tests;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
