@@ -1727,9 +1727,7 @@ impl BoxView {
             // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
             Some(Act::Offer(k)) => self.take_offer(k, &ctx),
-            Some(crate::instruct::Act::Revision(n) | crate::instruct::Act::Details(n)) => {
-                self.show_revision(n)
-            }
+            Some(Act::Revision(n) | Act::Details(n)) => self.show_revision(n),
             Some(Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
     }
