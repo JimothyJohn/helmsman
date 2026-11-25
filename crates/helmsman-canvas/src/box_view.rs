@@ -2263,6 +2263,7 @@ impl BoxView {
                     first: first.as_deref(),
                     deploy: &deploy,
                     deploy_tip: "Ctrl Shift Enter: deploy this version.\nThe box compiles it and runs it in place of the old one.",
+                    busy: self.projects.deploy.stage(self.watches_node),
                 },
             )
             .deploy;
@@ -2297,6 +2298,7 @@ impl BoxView {
             ready,
             pending,
             to_node: self.watches_node,
+            busy: self.projects.deploy.stage(self.watches_node),
         }
     }
 
@@ -3347,6 +3349,7 @@ impl Body for BoxView {
                         } else {
                             "Ctrl Shift Enter: deploy this version.\nSaves, checks and runs the project on the box."
                         },
+                        busy: self.projects.deploy.stage(self.watches_node),
                     },
                 )
                 .deploy;
@@ -3805,6 +3808,8 @@ struct AgentDeploy {
     pending: bool,
     /// Deploy sends to the Skipper this page watches.
     to_node: bool,
+    /// A deploy under way: what it is doing.
+    busy: Option<&'static str>,
 }
 
 /// The Agent tab's Deploy (Nick, 2026-11-24: "there needs to be a deploy
@@ -3830,7 +3835,13 @@ fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
         .allocate_ui_with_layout(
             Vec2::new(ui.available_width(), crate::glyphs::ROW),
             egui::Layout::right_to_left(egui::Align::Center),
-            |ui| crate::glyphs::deploy(ui, s.ready.is_ok()).tip(tip),
+            |ui| {
+                let r = crate::glyphs::deploy(ui, s.ready.is_ok()).tip(tip);
+                if let Some(stage) = s.busy {
+                    crate::editor::busy(ui, chrome, stage, "agent deploying");
+                }
+                r
+            },
         )
         .inner;
     chrome.hit("agent deploy", r.rect);

@@ -1818,6 +1818,19 @@ pub struct Status<'a> {
     /// Whether Deploy may be pressed, or why not.
     pub deploy: &'a Result<(), String>,
     pub deploy_tip: &'a str,
+    /// A deploy under way: what it is doing, beside a spinner.
+    pub busy: Option<&'a str>,
+}
+
+/// A spinner and what a deploy is doing, beside Deploy (in a right-to-left
+/// row, so the words come before the spinner on screen).
+pub fn busy(ui: &mut egui::Ui, chrome: &mut Chrome, stage: &str, hit: &str) {
+    let t = crate::theme::theme(ui);
+    let r = ui
+        .add(egui::Label::new(RichText::new(stage).color(t.muted)).truncate())
+        .tip("Deploy is under way. The Messages say how it ends.");
+    let s = ui.add(egui::Spinner::new().size(crate::glyphs::ROW * 0.8));
+    chrome.hit(hit, r.rect.union(s.rect));
 }
 
 /// What was pressed at the header's right end.
@@ -1840,6 +1853,9 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
         let r = crate::glyphs::deploy(ui, s.deploy.is_ok()).tip(tip);
         chrome.hit("code deploy", r.rect);
         out.deploy = r.clicked();
+        if let Some(stage) = s.busy {
+            busy(ui, chrome, stage, "code deploying");
+        }
         if s.errors > 0 {
             let red = crate::theme::theme(ui).ink(crate::st_view::brand::RED);
             let r = ui

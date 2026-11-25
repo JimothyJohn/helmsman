@@ -5692,3 +5692,55 @@ fn a_help_request_the_box_refuses_signs_the_page_out() {
     });
     assert!(v.projects.ended, "the header signs out");
 }
+
+/// Nick 2026-11-25: "During the deployment step you should be shown a
+/// loading indicator so you know something is happening." While a deploy
+/// runs, a spinner and what it is doing sit beside Deploy; when it ends
+/// they go.
+#[test]
+fn a_deploy_under_way_shows_a_spinner_and_its_stage_beside_deploy() {
+    use crate::box_projects::Deploy;
+    use crate::remote::Fetch;
+    const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
+    let mut bv = BoxView::new();
+    bv.projects.available = Some(false);
+    bv.state.apply(
+        Msg::Got(
+            Fetch::Modules,
+            Ok(r#"[{"name":"drive","origin":"node","scan_ms":10.0,"status":{"state":"running"}}]"#.into()),
+        ),
+        1.0,
+    );
+    bv.state.select("drive");
+    let detail = serde_json::json!({ "name": "drive", "status": {"state": "running"}, "source": SRC });
+    bv.state.apply(
+        Msg::Got(Fetch::Module("drive".into()), Ok(detail.to_string())),
+        1.1,
+    );
+    bv.node_token = true;
+    bv.watches_node = true;
+    bv.projects.track_module("drive", SRC);
+    let mut h = Harness::new(bv, None);
+    let r = h.app.review.as_mut().unwrap();
+    r.token_held = true;
+    r.remote = Some("http://10.0.0.41:8088".into());
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("agent deploying").is_none(),
+        "nothing under way"
+    );
+    for (stage, words) in [
+        (Deploy::Checking, "Checking…"),
+        (Deploy::Replaying, "Replaying in the simulation…"),
+        (Deploy::Deploying, "Sending to the Skipper…"),
+    ] {
+        h.bv().projects.deploy = stage.clone();
+        h.wait(0.1);
+        assert!(h.app.chrome.rect("agent deploying").is_some(), "{stage:?}");
+        assert_eq!(stage.stage(true), Some(words));
+    }
+    h.bv().projects.deploy = Deploy::Done("drive is running.".into());
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("agent deploying").is_none(), "it ended");
+    assert_eq!(Deploy::Deploying.stage(false), Some("Deploying…"), "to a box");
+}

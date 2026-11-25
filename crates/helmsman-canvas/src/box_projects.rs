@@ -399,6 +399,22 @@ impl Deploy {
             Self::Saving | Self::Scanning | Self::Checking | Self::Replaying | Self::Deploying
         )
     }
+
+    /// While busy, what it is doing, for the spinner beside Deploy (Nick,
+    /// 2026-11-25: "During the deployment step you should be shown a
+    /// loading indicator so you know something is happening").
+    #[must_use]
+    pub const fn stage(&self, to_node: bool) -> Option<&'static str> {
+        Some(match self {
+            Self::Saving => "Saving…",
+            Self::Scanning => "Finding the devices…",
+            Self::Checking => "Checking…",
+            Self::Replaying => "Replaying in the simulation…",
+            Self::Deploying if to_node => "Sending to the Skipper…",
+            Self::Deploying => "Deploying…",
+            Self::Idle | Self::Done(_) | Self::Failed(_) => return None,
+        })
+    }
 }
 
 /// An upload the box refused because the name is taken, kept so the page

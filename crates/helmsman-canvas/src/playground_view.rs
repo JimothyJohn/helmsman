@@ -3529,6 +3529,7 @@ impl Body for PlaygroundView {
                     first: said.as_deref(),
                     deploy: &Ok(()),
                     deploy_tip: "Ctrl Shift Enter: deploy this version.\nCompiles the open project and runs it in the page.",
+                    busy: None,
                 },
             );
             go = pressed.deploy;
