@@ -1660,12 +1660,7 @@ impl BoxView {
             card: None,
             big: None,
             io: None,
-            versions: (!self.projects.history.is_empty()).then(|| crate::instruct::Versions {
-                rows: self.projects.history.clone(),
-                at: self
-                    .history_at
-                    .or_else(|| self.projects.history.last().map(|r| r.n)),
-            }),
+            versions: self.versions(),
         };
         let help_view = crate::help::View {
             blocked: self.help_blocked(),
@@ -1732,7 +1727,9 @@ impl BoxView {
             // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
             Some(Act::Offer(k)) => self.take_offer(k, &ctx),
-            Some(Act::Revision(n) | Act::Details(n)) => self.show_revision(n),
+            Some(crate::instruct::Act::Revision(n) | crate::instruct::Act::Details(n)) => {
+                self.show_revision(n)
+            }
             Some(Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
     }
@@ -1762,6 +1759,17 @@ impl BoxView {
         Some(crate::instruct::Steps {
             back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
             forward: tip(k + 1, "Forward"),
+        })
+    }
+
+    /// The project's versions for the clock's list, in the Agent tab and
+    /// the Code tab alike; `None` while there are none.
+    fn versions(&self) -> Option<crate::instruct::Versions> {
+        (!self.projects.history.is_empty()).then(|| crate::instruct::Versions {
+            rows: self.projects.history.clone(),
+            at: self
+                .history_at
+                .or_else(|| self.projects.history.last().map(|r| r.n)),
         })
     }
 
@@ -2384,6 +2392,7 @@ impl BoxView {
                     deploy_tip: "Ctrl Shift Enter: deploy this version.\nThe box compiles it and runs it in place of the old one.",
                     busy: self.projects.deploy.stage(self.watches_node),
                     steps: None,
+                    history: false,
                 },
             )
             .deploy;
@@ -3421,6 +3430,7 @@ impl Body for BoxView {
             });
             let mut go = false;
             let steps = self.revision_steps();
+            let versions = self.versions();
             let mut revision = None;
             // The header is the open file's name (Nick, 2026-11-08), then
             // word wrap, then the → that deploys this version.
@@ -3458,6 +3468,7 @@ impl Body for BoxView {
                         },
                         busy: self.projects.deploy.stage(self.watches_node),
                         steps: steps.as_ref(),
+                        history: versions.is_some(),
                     },
                 );
                 go = pressed.deploy;
@@ -3467,6 +3478,13 @@ impl Body for BoxView {
                 self.deploy();
             }
             if let Some(n) = revision {
+                self.show_revision(n);
+            }
+            if chrome.history
+                && let Some(v) = &versions
+                && let Some(crate::instruct::Act::Revision(n) | crate::instruct::Act::Details(n)) =
+                    editor::versions_panel(ui, chrome, &mut self.instruct, v)
+            {
                 self.show_revision(n);
             }
             let Some(file) = o.current.clone() else {
