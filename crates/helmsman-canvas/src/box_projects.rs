@@ -1723,7 +1723,9 @@ impl BoxProjects {
             return Ok(None);
         };
         let map = added.as_ref().map_or(made.map.as_str(), |a| a.map.as_str());
-        let write = added.as_ref().is_some_and(|a| !a.lines.is_empty())
+        let write = added
+            .as_ref()
+            .is_some_and(|a| !a.lines.is_empty() || !a.dropped.is_empty())
             || project.as_deref().is_some_and(|p| p.trim() != map.trim());
         if write {
             let b = o
