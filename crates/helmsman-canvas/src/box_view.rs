@@ -163,6 +163,9 @@ pub struct BoxView {
     /// The Agent's last answer was written and has not been deployed: the
     /// Agent tab's Deploy pulses.
     pub(crate) agent_pending: bool,
+    /// A project New project made, until it is deployed or another opens:
+    /// the diagram (what runs, another program) is not shown for it.
+    fresh: Option<String>,
 }
 
 impl Default for BoxView {
@@ -274,6 +277,22 @@ impl BoxView {
         self.desk.adopt(&d);
         self.projects.adopt(restore_of(&d));
         self.put_back(d, edited_here);
+    }
+
+    /// A project New project made (Nick, 2026-11-25: "The agent history
+    /// and panel should reset when a new file is created, the diagram
+    /// should also be cleared and the state reset"): the Agent's turns,
+    /// history and draft, the last deploy's outcome and the Devices notes
+    /// go, and the diagram waits for this project to be deployed.
+    fn start_afresh(&mut self, name: String) {
+        self.agent.stop();
+        self.agent.turns.clear();
+        self.instruct = crate::instruct::Instruct::default();
+        self.agent_pending = false;
+        self.projects.deploy = Deploy::Idle;
+        self.devices_ui.add_note = None;
+        self.devices_ui.ask_note = None;
+        self.fresh = Some(name);
     }
 
     /// Another person signed in on this page: the last one's open project,
@@ -424,6 +443,7 @@ impl BoxView {
             node_token: false,
             watches_node: false,
             agent_pending: false,
+            fresh: None,
         }
     }
 
@@ -440,6 +460,13 @@ impl BoxView {
         self.follow_owner();
         self.trend.local_pins = self.watches_node;
         self.projects.node_map = self.state.io_map.clone().filter(|_| self.state.io_map_node);
+        if let Some(name) = self.projects.created.take() {
+            self.start_afresh(name);
+        }
+        let open = self.projects.open.as_ref().map(|o| o.name.as_str());
+        if self.fresh.as_deref() != open || matches!(self.projects.deploy, Deploy::Done(_)) {
+            self.fresh = None;
+        }
         // Scan and add passes over the Skipper's own devices.
         self.devices_ui.skipper = self
             .projects
@@ -2364,6 +2391,9 @@ impl BoxView {
     /// What the empty canvas says.
     #[must_use]
     pub fn waiting(&self) -> String {
+        if let Some(name) = &self.fresh {
+            return format!("{name} has not run yet. Deploy it to see it here.");
+        }
         let s = &self.state;
         if let Some(p) = &s.problem {
             return p.clone();
@@ -3748,7 +3778,7 @@ impl Body for BoxView {
             .map(|b| b.text.clone());
         let menus = self.devices_ui.port_menus(&self.assign_write());
         match &mut self.view {
-            Some(v) if v.drawable() => {
+            Some(v) if v.drawable() && self.fresh.is_none() => {
                 v.icons.update(icons.as_deref());
                 v.assign = menus;
                 v.menu_open = self.dmenu.is_open();

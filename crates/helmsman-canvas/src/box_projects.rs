@@ -452,6 +452,9 @@ pub struct BoxProjects {
     pub pending: Option<Pending>,
     /// A 401 said the box no longer knows this page's session.
     pub ended: bool,
+    /// New project made and opened this project: the view starts it
+    /// afresh (taken once).
+    pub created: Option<String>,
     /// The forces list, when a force call just changed it.
     pub forces: Option<Vec<ForceRow>>,
     /// A deploy changed what runs: the module list should be read again.
@@ -2208,6 +2211,7 @@ impl BoxProjects {
                 }
             }
             PCall::Starter(name) => {
+                self.created = Some(name.clone());
                 if ok {
                     self.note(format!("Made project {name}."), false);
                 } else {

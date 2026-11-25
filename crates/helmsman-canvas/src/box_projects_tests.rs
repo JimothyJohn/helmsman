@@ -5301,7 +5301,30 @@ fn file_new_project_opens_a_saved_starter_program() {
         }
     };
 
+    // What the last project left (Nick, 2026-11-25: "The agent history and
+    // panel should reset when a new file is created, the diagram should
+    // also be cleared and the state reset").
+    h.bv().instruct.draft = "make the lamp blink".into();
+    h.bv().projects.deploy = crate::box_projects::Deploy::Failed("the last one's".into());
+    h.bv().devices_ui.add_note = Some("Scan and add: added rio.".into());
     new_project(&mut h, "fresh");
+    h.wait(0.1);
+    assert_eq!(h.bv().instruct.draft, "", "the Agent starts empty");
+    assert_eq!(h.bv().projects.deploy, crate::box_projects::Deploy::Idle);
+    assert_eq!(h.bv().devices_ui.add_note, None);
+    assert_eq!(
+        h.bv().waiting(),
+        "fresh has not run yet. Deploy it to see it here.",
+        "the diagram waits for it"
+    );
+    // Deployed, the diagram is what runs again.
+    h.bv().projects.deploy = crate::box_projects::Deploy::Done("fresh is running.".into());
+    h.wait(0.1);
+    assert!(
+        !h.bv().waiting().contains("has not run yet"),
+        "{}",
+        h.bv().waiting()
+    );
     let p = &h.bv().projects;
     let o = p.open.as_ref().expect("the new project is open");
     assert_eq!(o.name, "fresh", "{:?}", p.notice);
