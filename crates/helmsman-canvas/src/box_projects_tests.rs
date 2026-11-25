@@ -5320,7 +5320,9 @@ fn file_new_project_opens_a_saved_starter_program() {
         .collect();
     assert_eq!(listed, ["main.st"]);
     assert!(
-        p.notice.as_ref().is_some_and(|(n, err)| !*err && n == "Made project fresh."),
+        p.notice
+            .as_ref()
+            .is_some_and(|(n, err)| !*err && n == "Made project fresh."),
         "{:?}",
         p.notice
     );
@@ -5329,7 +5331,9 @@ fn file_new_project_opens_a_saved_starter_program() {
     new_project(&mut h, "line");
     let p = &h.bv().projects;
     assert!(
-        p.notice.as_ref().is_some_and(|(n, err)| *err && n.contains("was not made")),
+        p.notice
+            .as_ref()
+            .is_some_and(|(n, err)| *err && n.contains("was not made")),
         "{:?}",
         p.notice
     );
