@@ -93,6 +93,9 @@ pub enum Icon {
     ZoomIn,
     /// A magnifier with a minus: zoom out.
     ZoomOut,
+    /// A magnifier with a frame in it: fit the diagram, or the blocks
+    /// selected, to the view.
+    ZoomFit,
     /// A line that rises and falls: the bottom panel's Trend tab.
     Trend,
     /// ↑ : move up (the Trend's ticked signals, a lane).
@@ -752,6 +755,24 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 Vec2::new(dir, 0.0),
                 b.width() * 0.36,
                 stroke,
+            );
+        }
+        Icon::ZoomFit => {
+            // The lens and handle of Find, a small frame in the lens.
+            let rad = b.width() * 0.32;
+            let at = Pos2::new(l + rad + w * 0.5, t + rad + w * 0.5);
+            p.circle_stroke(at, rad, stroke);
+            let d = rad * std::f32::consts::FRAC_1_SQRT_2;
+            p.line_segment(
+                [Pos2::new(at.x + d, at.y + d), Pos2::new(r, bt)],
+                Stroke::new(w * 1.3, color),
+            );
+            let side = rad * 0.95;
+            p.rect_stroke(
+                Rect::from_center_size(at, Vec2::splat(side)),
+                CornerRadius::same(1),
+                Stroke::new(w * 0.8, color),
+                egui::StrokeKind::Middle,
             );
         }
         Icon::Find => {

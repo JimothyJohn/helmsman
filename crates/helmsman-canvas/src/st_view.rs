@@ -2120,10 +2120,16 @@ impl Viewer {
     /// Eases the view to frame `rect` (diagram units) in `area`, at the
     /// zoom it has unless that does not fit.
     fn frame_rect(&mut self, rect: &helmsman_diagram::Rect, area: Rect, now: f64) {
+        let max = self.cams[self.scope].zoom.min(FOCUS_MAX);
+        self.glide_to(rect, area, now, max);
+    }
+
+    /// Eases the view to frame `rect`, as close as `max_zoom`.
+    fn glide_to(&mut self, rect: &helmsman_diagram::Rect, area: Rect, now: f64, max_zoom: f32) {
         let cam = self.cams[self.scope];
         let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
         let mut to = cam;
-        to.frame_within(below, rect, cam.zoom.min(FOCUS_MAX));
+        to.frame_within(below, rect, max_zoom);
         to.clamp(area, self.shown().size);
         self.cams[self.scope].moved = true;
         self.glide = Some(Glide {
@@ -2133,6 +2139,29 @@ impl Viewer {
             t0: now,
         });
         self.jumped = None;
+    }
+
+    /// The fit glyph: the whole diagram in view, or with blocks selected,
+    /// those blocks centred and as large as the view takes them (up to
+    /// [`FOCUS_MAX`]).
+    fn fit_view(&mut self, area: Rect, now: f64) {
+        let shown: Vec<NodeId> = self.selected.iter().filter_map(|&n| self.to_shown(n)).collect();
+        let d = self.shown();
+        let bounds = shown.iter().map(|&n| d.node(n).rect).reduce(|a, b| {
+            let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+            helmsman_diagram::Rect {
+                x,
+                y,
+                w: a.right().max(b.right()) - x,
+                h: a.bottom().max(b.bottom()) - y,
+            }
+        });
+        if let Some(r) = bounds {
+            self.glide_to(&r, area, now, FOCUS_MAX);
+        } else {
+            self.glide = None;
+            self.refit();
+        }
     }
 
     /// The box around the blocks of the diagram shown that `on` lights.
@@ -2895,10 +2924,10 @@ impl Viewer {
         crate::lamps::fixture(outs.iter().map(|p| (p.as_str(), scan.get(p))))
     }
 
-    /// Where the pan, zoom in and zoom out controls sit: the bottom-right
+    /// Where the pan, zoom in, zoom out and fit controls sit: the bottom-right
     /// corner of `area`, left of the lamp fixture when there is one.
     fn corner_rect(&self, area: Rect, scan: Option<&dyn Scan>) -> Rect {
-        let w = 3.0 * TAP + 3.0 * CORNER_GAP + ladder_view::NAME_W;
+        let w = 4.0 * TAP + 4.0 * CORNER_GAP + ladder_view::NAME_W;
         let mut right = area.right() - CORNER_GAP;
         if let Some(f) = self.fixture(scan) {
             right = crate::lamps::rect(area, &f).left() - CORNER_GAP;
@@ -2910,7 +2939,7 @@ impl Viewer {
     }
 
     /// The corner controls: the hand (a drag on empty space pans), zoom in
-    /// and zoom out about the middle of `area`.
+    /// and zoom out about the middle of `area`, and fit.
     fn corner_controls(&mut self, ui: &mut egui::Ui, area: Rect, at: Rect) {
         use crate::glyphs::{Icon, button_sized};
         let mut row = ui.new_child(
@@ -2949,6 +2978,19 @@ impl Viewer {
             true,
             false,
             "Zoom out from the middle of the diagram",
+        );
+        // Nick, 2026-11-26: fit the whole diagram, or the blocks picked.
+        let fit = button_sized(
+            &mut row,
+            Icon::ZoomFit,
+            TAP,
+            true,
+            false,
+            if self.selected.is_empty() {
+                "Fit: the whole diagram in view"
+            } else {
+                "Fit: the blocks selected, centred and filling the view"
+            },
         );
         // Where the view is on the zoom ladder, and a step to any rung.
         let on = self.rung();
@@ -2989,6 +3031,10 @@ impl Viewer {
         }
         if hand.clicked() {
             self.hand = !self.hand;
+        }
+        if fit.clicked() {
+            self.fit_view(area, ui.input(|i| i.time));
+            return;
         }
         let factor = if inn.clicked() {
             ZOOM_STEP
