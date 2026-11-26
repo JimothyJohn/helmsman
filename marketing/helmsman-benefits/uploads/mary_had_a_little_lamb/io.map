@@ -1,0 +1,14 @@
+# bench 2026-11-24: the Novanta MDrive on EtherNet/IP, by the unit's own mapping (docs/devices/novanta-mdrive.md)
+device drive enip-io 192.168.33.1 config=1 o2t=112:36 t2o=100:16 rpi_ms=20
+in  enabled  bool drive in:0.0
+in  moving   bool drive in:0.1
+in  position int  drive in:4:i32
+in  fault    int  drive in:8:i32
+out vmax     int  drive out:8:u32
+out enable   int  drive out:17:u8
+out current  int  drive out:18:u8
+out slew     int  drive out:20:i32
+device iologik_e1213 enip-io 192.168.33.60 profile=moxa-e1213 rpi_ms=100
+in  iologik_e1213_di_00 bool iologik_e1213 di:0
+# placeholders: no device has these points yet (set the inputs on the I/O tab)
+out lamp bool sim
