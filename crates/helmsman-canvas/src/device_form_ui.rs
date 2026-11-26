@@ -118,13 +118,6 @@ impl DevicesUi {
     /// name, the channels it will get once the profile came, Add or
     /// Cancel. Returns what Add writes once the name passes.
     pub fn quick_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
-        // Scan and add fills the form itself: its Add, nothing to show.
-        if let Some(add) = self.add_next.take() {
-            return Some(DeviceAct::Quick(add));
-        }
-        if self.add_all.is_some() {
-            return None;
-        }
         let mut q = self.quick.clone()?;
         let mut out = None;
         let mut done = false;

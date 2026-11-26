@@ -567,7 +567,6 @@ pub fn slug(s: &str) -> String {
 }
 
 /// What the tab asked for.
-#[cfg_attr(not(test), allow(dead_code))] // off the page 2026-11-26 (Scan and add, Ask); goes with its tests
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceAct {
     /// The form's Add: the device and its signals into the map (`io.map`,
@@ -577,10 +576,6 @@ pub enum DeviceAct {
     Rename(RenamePlan),
     /// Take a device and its signals out of the map.
     Delete(String),
-    /// Add on a found device the library knows: fetch its profile (the
-    /// box's `GET /api/devices/library?vendor=&product=`; the simulation
-    /// answers with its own E1213's) into the quick form that just opened.
-    Library { vendor: u16, product: u16 },
     /// The quick form's Add: the profile file into the project, then the
     /// device into io.map.
     Quick(QuickAdd),
@@ -684,39 +679,6 @@ pub struct Found {
 }
 
 impl Found {
-    /// The simulation's E1213 (`helmsman_adapter::DeviceConfig::moxa_e1213`'s
-    /// identity, at Moxa's factory address), `mapped` against `map`, with
-    /// the library's entry on it as a browser would fetch it: the
-    /// simulation carries the E1213's profile, so Add works offline.
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))] // off the page 2026-11-26; its tests remain
-    pub fn simulated_e1213(map: &MapText) -> Self {
-        let mut f = Self {
-            address: "192.168.127.254".into(),
-            mac: None,
-            vendor_id: 991,
-            product_code: 515,
-            revision: "4.1".into(),
-            serial: "0x00e12130".into(),
-            product_name: "E1213".into(),
-            cip: "cip=991:515:0x00e12130".into(),
-            identity: "cip=991:515:0x00e12130".into(),
-            mapped: None,
-            library: Some(LibraryHit {
-                folder: "devices/moxa/iologik-e1213".into(),
-                vendor: "Moxa".into(),
-                model: "ioLogik E1213".into(),
-                driver: Some("enip-io".into()),
-                profile: Some("moxa-e1213".into()),
-                profile_file: Some("moxa-iologik-e1213.device".into()),
-            }),
-            simulated: true,
-            reported: None,
-        };
-        f.mapped = mapped_in(map, &f);
-        f
-    }
-
     /// Reads a `POST /api/devices/discover` body; `None` if it is not one.
     /// `found` (one entry per device, every identity it answered with,
     /// since 2026-11-11) when the box has it, else the older EtherNet/IP
@@ -876,55 +838,13 @@ pub fn mapped_in(map: &MapText, f: &Found) -> Option<String> {
         .map(|d| d.name.clone())
 }
 
-impl NewDevice {
-    /// The form for a device found on the network: EtherNet/IP, named by
-    /// its identity (`cip=V:P:S`, so a lease change never loses it), the
-    /// name and profile from the library's match when there is one.
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))] // off the page 2026-11-26 (Scan and add, Ask); goes with its tests
-    pub fn from_found(f: &Found) -> Self {
-        let model = f
-            .library
-            .as_ref()
-            .map(|l| l.model.as_str())
-            .filter(|m| !m.is_empty())
-            .unwrap_or(f.product_name.as_str());
-        let name = Some(slug(model))
-            .filter(|s| iomap::device_name_ok(s))
-            .unwrap_or_else(|| format!("device_{}_{}", f.vendor_id, f.product_code));
-        // An E1213 (the simulation's too: helmsman-adapter's) has the
-        // controller's `moxa-e1213` profile.
-        let catalog = Catalog::identify(f.vendor_id, f.product_code, &f.product_name);
-        let profile = f
-            .library
-            .as_ref()
-            .and_then(|l| l.profile.as_deref())
-            .or(catalog.map(|Catalog::E1213| "moxa-e1213"));
-        let params = match profile {
-            Some(p) => format!("profile={p} rpi_ms=100 poll_ms=20"),
-            None => "rpi_ms=100 poll_ms=20".to_string(),
-        };
-        Self {
-            name,
-            protocol: 1,
-            endpoint: f.cip.clone(),
-            params,
-            error: None,
-            eds: None,
-            points: Vec::new(),
-            catalog,
-            editing: None,
-        }
-    }
-}
+impl NewDevice {}
 
 /// The scan's state.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Scan {
     #[default]
     Idle,
-    #[cfg_attr(not(test), allow(dead_code))]
-    Running,
     Done,
     Failed(String),
 }
@@ -975,49 +895,6 @@ pub fn describe_found(found: &[Found]) -> String {
     out
 }
 
-/// A Scan and add under way: what the scan found that is still to add,
-/// one at a time through the quick form's Add (never drawn meanwhile).
-#[cfg_attr(not(test), allow(dead_code))] // off the page 2026-11-26 (Scan and add, Ask); goes with its tests
-#[derive(Debug, Default)]
-pub struct AddAll {
-    /// The scan has answered and the queue is filled.
-    pub scanned: bool,
-    pub queue: std::collections::VecDeque<Found>,
-    /// A device's profile is being read into the quick form.
-    pub current: bool,
-    /// The names added, in order.
-    pub added: Vec<String>,
-    /// What was passed over, and why.
-    pub skipped: Vec<String>,
-    /// What the map (or the Skipper) has already: `name at address`.
-    pub present: Vec<String>,
-}
-
-impl AddAll {
-    /// The words for what it came to.
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))] // off the page 2026-11-26 (Scan and add, Ask); goes with its tests
-    pub fn summary(&self) -> String {
-        let mut out = if self.added.is_empty() && !self.present.is_empty() {
-            format!(
-                "Scan and add: nothing new to add; io.map has {} already. Add their I/O under each device with + Add I/O, or ask the Agent to wire the program to them.",
-                self.present.join(", ")
-            )
-        } else if self.added.is_empty() {
-            "Scan and add: nothing was added.".to_string()
-        } else {
-            format!(
-                "Scan and add: added {}. Add their I/O under each device with + Add I/O, or ask the Agent to wire the program to them.",
-                self.added.join(", ")
-            )
-        };
-        if !self.skipped.is_empty() {
-            let _ = write!(out, " Not added: {}.", self.skipped.join("; "));
-        }
-        out
-    }
-}
-
 /// The tab's state: which devices are folded, the form if one is open,
 /// an import asked for, the last scan.
 #[derive(Debug, Default)]
@@ -1030,20 +907,6 @@ pub struct DevicesUi {
     pub import: bool,
     pub found: Vec<Found>,
     pub scan: Scan,
-    /// The address typed beside Scan, for asking one device.
-    #[cfg_attr(not(test), allow(dead_code))]
-    // off the page 2026-11-26 (Scan and add, Ask); goes with its tests
-    pub ask_address: String,
-    /// What the last ask came to, in words.
-    pub ask_note: Option<String>,
-    /// Scan and add (Nick, 2026-11-24): from the button until every
-    /// device the scan found has been added or passed over.
-    pub add_all: Option<AddAll>,
-    /// What the last Scan and add came to, in words.
-    pub add_note: Option<String>,
-    /// A Scan and add's next Add, handed to the view by
-    /// [`Self::quick_ui`] as the quick form's Add would be.
-    pub add_next: Option<QuickAdd>,
     /// The watched Skipper's own devices, name and host: Scan and add
     /// passes them over (the view fills it in each frame).
     pub skipper: Vec<(String, String)>,
@@ -1115,7 +978,6 @@ impl DevicesUi {
                 self.found = found;
                 self.library_note = note;
                 self.scan = Scan::Done;
-                self.found_to_add_all();
             }
             (409, _) => self.scan = Scan::Failed("a scan is already running; try again shortly".into()),
             (501, _) => self.scan = Scan::Failed("this box does not scan its network".into()),
@@ -1124,172 +986,6 @@ impl DevicesUi {
                 self.scan = Scan::Failed(if s == 0 { why } else { format!("{s}: {why}") });
             }
         }
-        if matches!(self.scan, Scan::Failed(_)) && self.add_all.take().is_some() {
-            self.add_note = Some("Scan and add: the scan failed, so nothing was added.".into());
-        }
-    }
-
-    /// Fills the Scan and add queue from what the scan found: each device
-    /// no map device binds that the library has a profile for; the rest
-    /// that no map device binds are said as passed over.
-    pub(crate) fn found_to_add_all(&mut self) {
-        let Some(a) = &mut self.add_all else { return };
-        for f in &self.found {
-            // In the map already, or one of the Skipper's own: said, not added.
-            let have = mapped_in(&self.map, f)
-                .or_else(|| f.reported.clone())
-                .or_else(|| {
-                    self.skipper
-                        .iter()
-                        .find(|(_, h)| *h == f.address)
-                        .map(|(n, _)| n.clone())
-                });
-            if let Some(n) = have {
-                a.present.push(format!("{n} at {}", f.address));
-                continue;
-            }
-            let shown = f.library.as_ref().filter(|l| !l.model.is_empty()).map_or_else(
-                || f.product_name.clone(),
-                |l| format!("{} {}", l.vendor, l.model).trim().to_string(),
-            );
-            if f.library.as_ref().and_then(|l| l.profile_file.as_ref()).is_some() {
-                a.queue.push_back(f.clone());
-            } else {
-                a.skipped
-                    .push(format!("{shown} at {}, not in the device library yet", f.address));
-            }
-        }
-        a.scanned = true;
-    }
-
-    /// The next step of a Scan and add, once a frame: the profile of the
-    /// next device asked for, or the one read handed on as the quick
-    /// form's Add ([`Self::add_next`]); at the end, the words for what it
-    /// came to. One Add waits for the view to take the last.
-    #[cfg_attr(not(test), allow(dead_code))] // off the page 2026-11-26 (Scan and add, Ask); goes with its tests
-    pub fn add_all_step(&mut self) -> Option<DeviceAct> {
-        if self.add_next.is_some() {
-            return None;
-        }
-        let a = self.add_all.as_mut()?;
-        if !a.scanned {
-            return None;
-        }
-        if a.current {
-            let Some(q) = &self.quick else {
-                a.current = false;
-                return None;
-            };
-            let what = format!("{} {} at {}", q.vendor, q.model, q.address);
-            match &q.profile {
-                None => return None,
-                Some(Err(why)) => a.skipped.push(format!("{what}: {why}")),
-                Some(Ok(_)) => match crate::device_form_ui::quick_add(q, &self.map, !self.skipper.is_empty())
-                {
-                    Ok(add) => {
-                        a.added.push(q.name.clone());
-                        a.current = false;
-                        self.quick = None;
-                        self.add_next = Some(add);
-                        return None;
-                    }
-                    Err(why) => a.skipped.push(format!("{what}: {why}")),
-                },
-            }
-            a.current = false;
-            self.quick = None;
-        }
-        let Some(f) = a.queue.pop_front() else {
-            self.add_note = Some(a.summary());
-            self.add_all = None;
-            return None;
-        };
-        let (vendor, model) = f
-            .library
-            .as_ref()
-            .map(|l| (l.vendor.clone(), l.model.clone()))
-            .unwrap_or_default();
-        let base = Some(slug(if model.is_empty() { &f.product_name } else { &model }))
-            .filter(|s| iomap::device_name_ok(s))
-            .unwrap_or_else(|| "device".to_string());
-        let taken = |n: &str| {
-            self.map.devices.iter().any(|d| d.name.eq_ignore_ascii_case(n))
-                || a.added.iter().any(|d| d.eq_ignore_ascii_case(n))
-        };
-        let mut name = base.clone();
-        let mut k = 2;
-        while taken(&name) {
-            name = format!("{base}_{k}");
-            k += 1;
-        }
-        a.current = true;
-        self.quick = Some(Quick {
-            address: f.address.clone(),
-            vendor,
-            model,
-            identity: f.identity.clone(),
-            file: f
-                .library
-                .as_ref()
-                .and_then(|l| l.profile_file.clone())
-                .unwrap_or_default(),
-            name,
-            profile: None,
-            error: None,
-        });
-        Some(DeviceAct::Library {
-            vendor: f.vendor_id,
-            product: f.product_code,
-        })
-    }
-
-    /// Takes in the box's answer to one device's ask
-    /// (`POST /api/devices/discover?address=`): what answered joins the
-    /// list, replacing an entry of the same address; a refusal or no
-    /// answer is said in words. `address` is the one that was asked.
-    pub fn asked(&mut self, address: &str, status: u16, body: &str) {
-        let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
-        match (status, Found::parse_discovery(&j)) {
-            (200..=299, Some((found, note))) => {
-                self.library_note = note.or(self.library_note.take());
-                if found.is_empty() {
-                    self.ask_note = Some(format!("No device answered at {address}."));
-                    return;
-                }
-                self.ask_note = None;
-                for f in found {
-                    if let Some(i) = self.found.iter().position(|o| o.address == f.address) {
-                        self.found[i] = f;
-                    } else if self.found.len() < 256 {
-                        self.found.push(f);
-                    }
-                }
-            }
-            (s, _) => {
-                let why = text(&j["error"]).unwrap_or_else(|| "no answer".to_string());
-                self.ask_note = Some(if s == 0 { why } else { format!("{s}: {why}") });
-            }
-        }
-    }
-
-    /// Takes in the box's answer to `GET /api/devices/library?vendor=&product=`
-    /// for the quick form: the profile's text, listed, or why not.
-    pub fn library_answer(&mut self, status: u16, body: &str) {
-        let Some(q) = &mut self.quick else { return };
-        let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
-        let m = &j["matches"][0];
-        q.profile = Some(match (status, m.get("profile_text").and_then(Json::as_str)) {
-            (200..=299, Some(t)) => helmsman_project::profile_skim::skim(t)
-                .map(|s| (t.to_string(), s))
-                .map_err(|e| format!("{}: {e}", q.file)),
-            (200..=299, None) => Err(m["profile_unavailable"]
-                .as_str()
-                .map_or_else(|| "the library has no profile for it".to_string(), str::to_string)),
-            (s, _) => Err(format!(
-                "the box could not read the library ({s}): {}",
-                j["error"].as_str().unwrap_or("no answer")
-            )),
-        });
     }
 
     /// The next `wired=` value of the map nobody has asked the library
@@ -1335,18 +1031,6 @@ impl DevicesUi {
             )),
         };
         self.wired.insert(wired.to_string(), got);
-    }
-
-    /// The simulation's answer for the quick form: its own E1213's
-    /// profile, the one the library carries.
-    pub fn simulated_library_answer(&mut self) {
-        const E1213: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
-        let Some(q) = &mut self.quick else { return };
-        q.profile = Some(
-            helmsman_project::profile_skim::skim(E1213)
-                .map(|s| (E1213.to_string(), s))
-                .map_err(|e| format!("{}: {e}", q.file)),
-        );
     }
 
     /// Fills in the library's matches from `index` for the found devices

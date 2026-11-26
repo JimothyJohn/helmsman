@@ -293,8 +293,6 @@ impl BoxView {
         self.instruct = crate::instruct::Instruct::default();
         self.agent_pending = false;
         self.projects.deploy = Deploy::Idle;
-        self.devices_ui.add_note = None;
-        self.devices_ui.ask_note = None;
         self.history_at = None;
         self.fresh = Some(name);
     }
@@ -502,7 +500,6 @@ impl BoxView {
                     let found = crate::devices::hosts(&self.devices_ui.found);
                     self.projects.scanned(found);
                 }
-                PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
                 PCall::Wiring(device) => self.devices_ui.wiring_answer(&device, a.status, &a.body),
                 PCall::FindWired => {
@@ -518,7 +515,6 @@ impl BoxView {
                     self.devices_ui.proposal.answer(&call, a.status, &a.body);
                 }
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
-                PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::NodeMap(op) => self.devices_ui.node_map.answer(op, a.status, &a.body),
                 PCall::DesignProject(name) => self.design_project_answer(&name, &a),
                 call => self.projects.answer_for(call, &a, signed_in),
@@ -3389,9 +3385,6 @@ impl Body for BoxView {
         );
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),
-            Some(crate::devices::DeviceAct::Library { vendor, product }) => {
-                self.projects.library(vendor, product);
-            }
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)

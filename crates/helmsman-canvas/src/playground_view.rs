@@ -3753,7 +3753,6 @@ impl Body for PlaygroundView {
                     self.devices_ui.open_add_io(&device);
                 }
             }
-            Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)

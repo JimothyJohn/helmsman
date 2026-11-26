@@ -103,3 +103,38 @@ fn long_names_leave_the_panel_its_default_width() {
         assert!((0.0..=8.0).contains(&grew), "after {key} the pane grew {grew} pt");
     }
 }
+
+/// Nick, 2026-11-26: on a box with projects the Files tab is the
+/// project's, with no Running section; a box without projects still lists
+/// the modules it runs, since that is all the tab holds there.
+#[test]
+fn a_box_with_projects_lists_no_running_modules_and_one_without_still_does() {
+    use crate::remote::{Fetch, Msg};
+    for projects in [true, false] {
+        let mut h = Harness::new(App::boxed());
+        {
+            let b = h.app.boxv.as_mut().unwrap();
+            b.projects.available = Some(projects);
+            b.state.apply(
+                Msg::Got(
+                    Fetch::Modules,
+                    Ok(
+                        r#"[{"name":"conveyor","origin":"box","scan_ms":10.0,"status":{"state":"running"}}]"#
+                            .into(),
+                    ),
+                ),
+                1.0,
+            );
+        }
+        h.app.chrome.show_files();
+        h.wait(0.3);
+        assert_eq!(
+            h.has("module conveyor"),
+            !projects,
+            "projects={projects}: the running module is listed only without projects"
+        );
+        if projects {
+            assert!(!h.drew("Running"), "no Running section on a box with projects");
+        }
+    }
+}
