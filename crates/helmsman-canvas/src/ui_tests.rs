@@ -8337,6 +8337,7 @@ mod find_replace;
 mod front;
 mod io_cards;
 mod io_names;
+mod label_overlap;
 mod layouts;
 mod multi_select;
 mod outputs;
