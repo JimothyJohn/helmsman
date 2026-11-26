@@ -308,7 +308,7 @@ fn the_diagram_under_the_pointer_stays_under_it_when_the_level_changes() {
 }
 
 #[test]
-fn q_and_e_still_step_through_stops_at_each_level_without_changing_it() {
+fn period_and_comma_still_step_through_stops_at_each_level_without_changing_it() {
     let mut h = Harness::new(SRC);
     let at = Harness::centre();
     for (z, level) in [(1.0, Level::Near), (0.5, Level::Middle), (0.2, Level::Far)] {
@@ -320,7 +320,7 @@ fn q_and_e_still_step_through_stops_at_each_level_without_changing_it() {
             h.frame(vec![
                 Event::PointerMoved(at),
                 Event::Key {
-                    key: egui::Key::E,
+                    key: egui::Key::Period,
                     physical_key: None,
                     pressed: true,
                     repeat: false,

@@ -1315,8 +1315,10 @@ impl Viewer {
         true
     }
 
-    /// The reads and writes of `head` on this diagram, with the wires
-    /// between them.
+    /// The reads and writes of `head` on this diagram, every wire that
+    /// leaves or enters one of them, and the block at its other end: a
+    /// variable is drawn once and wired to each use, so each use shows
+    /// (Nick, 2026-11-26: an input lit one leg, not all its places).
     fn references(&self, head: &str) -> Drivers {
         let d = self.diagram();
         let of = |n: &helmsman_diagram::Node| match &n.kind {
@@ -1331,12 +1333,19 @@ impl Viewer {
             NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
             _ => false,
         };
-        let nodes: Vec<bool> = d.nodes.iter().map(of).collect();
-        let wires = d
+        let named: Vec<bool> = d.nodes.iter().map(of).collect();
+        let wires: Vec<bool> = d
             .wires
             .iter()
-            .map(|w| nodes[w.from.0 as usize] && nodes[w.to.0 as usize])
+            .map(|w| named[w.from.0 as usize] || named[w.to.0 as usize])
             .collect();
+        let mut nodes = named;
+        for (w, &on) in d.wires.iter().zip(&wires) {
+            if on {
+                nodes[w.from.0 as usize] = true;
+                nodes[w.to.0 as usize] = true;
+            }
+        }
         Drivers {
             nodes,
             wires,
@@ -2360,18 +2369,19 @@ impl Viewer {
         // a pinch does; a drag on empty space or the arrow keys move the
         // view (Nick, 2026-11-14: scroll moved it up and down; 2026-11-26:
         // no W A S D, those letters are the views' keys).
-        // Q and E jump to the previous and the next stop.
+        // , and . jump to the previous and the next stop (E and Q until
+        // 2026-11-26: E is the Editor's key).
         let (hover, scroll, zoom, keys, jump, dt) = ui.ctx().input(|i| {
             use egui::Key;
             let held = |k: Key| f32::from(u8::from(i.key_down(k)));
-            // The key's own modifiers: a chord with E or Q is not a jump.
+            // The key's own modifiers: a chord with . or , is not a jump.
             let jump = i.events.iter().find_map(|e| match e {
                 egui::Event::Key {
-                    key: key @ (Key::E | Key::Q),
+                    key: key @ (Key::Period | Key::Comma),
                     pressed: true,
                     modifiers,
                     ..
-                } if modifiers.is_none() => Some(*key == Key::E),
+                } if modifiers.is_none() => Some(*key == Key::Period),
                 _ => None,
             });
             let keys = if i.modifiers.any() {

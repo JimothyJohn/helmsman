@@ -110,11 +110,15 @@ RIGHT_TABS = (1180, 56, 210, 30)
 # The trend is the bottom strip from the left pane's edge since 2026-11-24
 # (the left pane has the page's whole height).
 BOTTOM_TABS = (330, 545, 1070, 315)
-# The Messages, at the foot of the left pane under its tab content, beside
-# the trend (what a deploy says is there, not in a line under the header).
-MESSAGES = (0, 650, 320, 200)
+# The Messages: a tab of the bottom panel since 2026-11-26, its list to the
+# right of the panel's tab strip (the strip at x 384..434 with the left pane
+# at 384 pt); layout()'s msgs=1 shows it. What a deploy says is there, not
+# in a line under the header.
+MESSAGES = (440, 575, 950, 280)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
+# The Devices tab's "Scan and add", beside Scan.
+SCAN_AND_ADD = (286, 195)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt).
 TAB_AGENT = (23, 70)
@@ -224,14 +228,6 @@ def playground(ctx, base, out):
     r.shot("editor")
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT)
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT)
-    # The simulated E1213 is added, and its Wire it window opens
-    # (wire_it.rs): a checklist, as there is no hardware.
-    r.step("sim-scan", lambda: r.click(178, 195), LEFT, 900)
-    r.step("sim-device-added", lambda: r.click(80, 231), LEFT, 1500)
-    r.shot("sim-device-rows")
-    r.step("wire-it", lambda: r.click(176, 178), LEFT, 900)
-    r.shot("wire-it-window")
-    r.step("wire-it-closed", lambda: r.key("Escape"), LEFT, 600)
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.
     r.step("code", lambda: r.click(*TAB_CODE), LEFT)
@@ -243,7 +239,8 @@ def playground(ctx, base, out):
         r.key(f"{MOD}+f")
     r.step("find-off-canvas", find_off_canvas, LEFT)
     r.step("find-closed", lambda: r.key("Escape"), LEFT, 400)
-    # Fold the VAR_OUTPUT section by its gutter arrow (line 2), then open it.
+    # Fold the section on line 2 (traffic.st's VAR_INPUT) by its gutter arrow,
+    # then open it.
     r.step("folded", lambda: r.click(*FOLD_LINE_2), LEFT)
     r.click(*FOLD_LINE_2); r.wait(300)
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
@@ -334,6 +331,20 @@ def playground(ctx, base, out):
         "lmap := go;\nEND_PROGRAM\n"
     )
     r.wait(3500); r.shot("agent-noticed")
+    # Last on this page: the simulated E1213 is added, and its Wire it
+    # window opens (wire_it.rs): a checklist, as there is no hardware.
+    # After the program's own steps, because adding the device copies its
+    # profile into the project and the Code tab opens on that file: the
+    # fold, the typed comment and the two programs above would land in it.
+    r.step("devices-again", lambda: r.key("Alt+Shift+Digit4"), LEFT)
+    r.step("sim-scan", lambda: r.click(178, 195), LEFT, 900)
+    # "Scan and add" on the first row beside Scan since the left pane is
+    # 384 pt wide (2026-11-26); (80, 231) is the Advanced box now.
+    r.step("sim-device-added", lambda: r.click(*SCAN_AND_ADD), LEFT, 1500)
+    r.shot("sim-device-rows")
+    r.step("wire-it", lambda: r.click(176, 178), LEFT, 900)
+    r.shot("wire-it-window")
+    r.step("wire-it-closed", lambda: r.key("Escape"), LEFT, 600)
     problems = r.problems()
     r.page.close()
     # No layout kept: the page opens on the Agent, every tab on the left.

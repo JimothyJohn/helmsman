@@ -1082,8 +1082,8 @@ popup, a note, a modal or a field with focus has it (`Viewer::menu_open`,
 set by the host, plus egui's own state at this and the last frame, since
 panels drawn before the diagram let go of their focus first). The view no
 longer pans by dragging empty space: a middle-button drag, or any drag
-with Space held, does, and the arrow keys and W A S D as before (the wheel
-zooms). The selection is the Agent's focus: each frame the host makes
+with Space held, does, and the arrow keys as before (the wheel zooms; W A S
+D panned until 2026-11-26). The selection is the Agent's focus: each frame the host makes
 `Instruct::focus` (`chat_about::focus_of`, kept while the selection, the
 collected chips and the diagram text are what it was made for) one chip
 per selected statement, none that is collected already, as many as
@@ -2129,7 +2129,7 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `DELETE /api/projects/{p}` | engineer | 409 for the running project |
 | `POST /api/projects/{p}/rename` | engineer | `{to}` |
 | `GET /api/projects/{p}/files/{f}` | session | `{name, text, version}` |
-| `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
+| `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?, page?, what?}` (a draft; `page`: the Describe change's History entry, `what`: what was asked, the revision's description); `{name, version, bytes}` |
 | `DELETE /api/projects/{p}/files/{f}` | engineer | |
 | `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval, diagnostics: [], warnings: [{file, line, col, message, severity: "warning"}]}`, or 422 `{diagnostics: [{file, line, col, message, severity: "error"}], warnings: [...]}`. `warnings` never stop a check, a save or a deploy |
 | `POST /api/projects/{p}/tests` | token or session | `{ok, red: [line], untested, tests: [{file, requirement, state, passed, why, scans, elapsed_ms}]}`; `state` is `passed`, `failed` or `untested` (never red) |

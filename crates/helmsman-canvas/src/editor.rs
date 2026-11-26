@@ -183,8 +183,9 @@ impl Pane {
 /// the hide chevron must fit the row, or the pane grows every frame); 240
 /// since 2026-11-05 (Nick: "just a bit wider"); 320 since 2026-11-10 (at
 /// 240 the Code tab held 19 characters a row and wrapped a 14-line
-/// program to 24 rows; at 320 it holds 27).
-pub const LEFT_W: f32 = 320.0;
+/// program to 24 rows; at 320 it holds 27); 384 since 2026-11-26 (Nick:
+/// "20% wider").
+pub const LEFT_W: f32 = 384.0;
 /// The right panel's width when first opened, points: 236 since
 /// 2026-11-05 (the tab buttons and the hide chevron must fit the row, or
 /// the panel grows every frame; the Requirements tab is archived since
@@ -195,9 +196,6 @@ pub const RIGHT_W: f32 = 236.0;
 /// slider take about 80 pt, which leaves six lanes about 40 pt each, and
 /// at 1280x800 the diagram keeps about 430 pt above it.
 pub const BOTTOM_H: f32 = 320.0;
-/// The Messages' height under the left pane's tab when first opened,
-/// points: their header and about four rows.
-pub const MESSAGES_H: f32 = 170.0;
 /// How many trend colour picks a browser keeps.
 pub const MAX_COLORS: usize = 64;
 
@@ -234,8 +232,8 @@ pub struct Chrome {
     /// its whole height, so the strip is the whole bottom only while
     /// that pane is shut).
     pub trend: bool,
-    /// The Messages under the left pane's tab are open, not folded to
-    /// their header (Nick, 2026-11-23). Remembered.
+    /// The bottom panel shows its Messages tab, not the Trend (Nick,
+    /// 2026-11-26). Remembered.
     pub msgs: bool,
     /// The Monitor's status tiles show the scan period and counts: an
     /// engineer's choice, and only shown while one is signed in.
@@ -312,7 +310,7 @@ impl Default for Chrome {
             pane: Pane::Claude,
             side: Pane::Claude,
             trend: true,
-            msgs: true,
+            msgs: false,
             scan: false,
             light: false,
             line: None,
@@ -476,14 +474,30 @@ impl Chrome {
         }
     }
 
-    /// Unfolds the Messages and opens the pane they sit in: the left one,
-    /// or the right one when every tab is docked there.
+    /// Opens the bottom panel on its Messages tab.
     pub fn show_messages(&mut self) {
         self.msgs = true;
-        if self.lefts.is_empty() && !self.rights.is_empty() {
-            self.right = true;
+        self.trend = true;
+    }
+
+    /// The Messages' key and menu item: shuts the bottom panel when it
+    /// shows them, else opens it on them.
+    pub fn toggle_messages(&mut self) {
+        if self.trend && self.msgs {
+            self.trend = false;
         } else {
-            self.left = true;
+            self.show_messages();
+        }
+    }
+
+    /// The Trend's key and menu item: shuts the bottom panel when it
+    /// shows the Trend, else opens it on the Trend.
+    pub fn toggle_trend(&mut self) {
+        if self.trend && !self.msgs {
+            self.trend = false;
+        } else {
+            self.trend = true;
+            self.msgs = false;
         }
     }
 
@@ -917,7 +931,7 @@ pub trait Body {
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Trend along the bottom: pins and the plot.
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
-    /// The Messages under the left pane's tabs: the view's log (`messages::Log`).
+    /// The Messages, a tab of the bottom panel: the view's log (`messages::Log`).
     fn messages(&mut self) -> &mut crate::messages::Log;
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
@@ -1058,73 +1072,21 @@ struct Cue {
     errors: usize,
 }
 
-/// The Messages under a side pane's tab: a header that folds them (red
-/// while an error stands or one came in while they were folded, with the
-/// count of errors beside it), and when open, the notices and the log.
-/// The hits are `messages fold` and `messages error count`.
-fn messages_panel(
-    ui: &mut egui::Ui,
-    body: &mut dyn Body,
-    chrome: &mut Chrome,
-    cue: &Cue,
-    hits: &mut Vec<(String, Rect)>,
-) {
-    let header = |ui: &mut egui::Ui, chrome: &mut Chrome, hits: &mut Vec<(String, Rect)>| {
-        ui.horizontal_wrapped(|ui| {
-            let r = crate::glyphs::tab(ui, Icon::Messages, TAB, chrome.msgs, cue.alarm).tip(if chrome.msgs {
-                "Messages: what happened, newest last.\nClick to fold them away."
-            } else {
-                "Messages: what happened, newest last.\nClick to show them."
+/// The notices that stand (a fault, a deploy under way or refused, a
+/// browser that cannot keep the work), above either tab of the bottom
+/// panel: they are what is true now, so the Trend does not hide them.
+fn notices_row(ui: &mut egui::Ui, body: &mut dyn Body, chrome: &mut Chrome) {
+    if body.has_notices() {
+        // They scroll in at most 40% of the panel, and the log keeps the
+        // rest.
+        egui::ScrollArea::vertical()
+            .id_salt("ed-msgs-notices")
+            .max_height(ui.available_height() * 0.4)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
             });
-            hits.push(("messages fold".to_string(), r.rect));
-            if r.clicked() {
-                chrome.msgs = !chrome.msgs;
-            }
-            ui.label(RichText::new("Messages").strong().color(theme(ui).muted));
-            if cue.errors > 0 {
-                let red = theme(ui).ink(crate::st_view::brand::RED);
-                let r = ui
-                    .label(RichText::new(cue.errors.to_string()).strong().color(red))
-                    .tip(if cue.errors == 1 {
-                        "One error in the Messages.".to_string()
-                    } else {
-                        format!("{} errors in the Messages.", cue.errors)
-                    });
-                hits.push(("messages error count".to_string(), r.rect));
-            }
-        });
-    };
-    if !chrome.msgs {
-        egui::Panel::bottom("ed-msgs-fold")
-            .exact_size(TAB + 12.0)
-            .resizable(false)
-            .show(ui, |ui| header(ui, chrome, hits));
-        return;
+        ui.separator();
     }
-    // One fixed height, never resized by what is in it (Nick, 2026-11-24:
-    // "I want the messages box to be a fixed height"): a resizable panel
-    // grows to any row that overflows it, and a long deploy error pushed
-    // the Messages up over the tab above. Everything in it scrolls.
-    let most = (ui.available_height() - 120.0).max(80.0);
-    egui::Panel::bottom("ed-msgs")
-        .resizable(false)
-        .exact_size(MESSAGES_H.min(most))
-        .show(ui, |ui| {
-            header(ui, chrome, hits);
-            ui.separator();
-            if body.has_notices() {
-                // Long, in a narrow pane: they scroll in at most 40% of the
-                // panel, and the log keeps the rest.
-                egui::ScrollArea::vertical()
-                    .id_salt("ed-msgs-notices")
-                    .max_height(ui.available_height() * 0.4)
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
-                    });
-                ui.separator();
-            }
-            body.messages().ui(ui, chrome);
-        });
 }
 
 /// A side pane as drawn: where, and its tabs' buttons along the top
@@ -1144,7 +1106,6 @@ fn side_pane(
     body: &mut dyn Body,
     chrome: &mut Chrome,
     hits: &mut Vec<(String, Rect)>,
-    cue: Option<&Cue>,
 ) -> Side {
     let mut row_tabs = Vec::new();
     let mut hidden = None;
@@ -1170,6 +1131,10 @@ fn side_pane(
             egui::Panel::left(LEFT_ID)
                 .resizable(true)
                 .default_size(LEFT_W)
+                // Never past the page less 40 pt, every frame: opened at
+                // 384 on a wide page, it overfilled one narrowed to a
+                // phone's 360 (what 320 happened to leave, it leaves).
+                .max_size((ui.ctx().content_rect().width() - 40.0).max(120.0))
                 .min_size(120.0),
         )
     };
@@ -1248,9 +1213,6 @@ fn side_pane(
                 }
             });
             ui.separator();
-            if let Some(cue) = cue {
-                messages_panel(ui, body, chrome, cue, hits);
-            }
             pane_body(ui, on, body, chrome);
             t
         } else {
@@ -1452,22 +1414,70 @@ fn drag_ghost(ctx: &egui::Context, at: Option<Pos2>, p: Pane, t: &Theme) {
     crate::glyphs::paint(&painter, r.shrink(TAB * 0.24), p.icon(), t.fg);
 }
 
-/// The Trend, a bottom panel across whatever width is left when it is
-/// drawn; its height is kept.
-fn trend_panel(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
-    let mut trend = chrome.trend;
+/// The bottom panel across whatever width is left when it is drawn: the
+/// Trend and the Messages, a tab each (Nick, 2026-11-26: the Messages are
+/// historic and run long, so they sit with the Trend, not under the left
+/// pane). Its height is kept. The Messages tab is red while an error
+/// stands or came in unseen, with the count of errors beside it. The hits
+/// are `bottom trend`, `bottom messages` and `messages error count`.
+fn trend_panel(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    body: &mut dyn Body,
+    cue: &Cue,
+    hits: &mut Vec<(String, Rect)>,
+) {
+    let mut open = chrome.trend;
     egui::Panel::bottom(BOTTOM_ID)
         .resizable(true)
         .default_size(BOTTOM_H)
-        .show_collapsible(ui, &mut trend, |ui| body.trend(ui, chrome));
-    if trend
+        .show_collapsible(ui, &mut open, |ui| {
+            // The two tabs stacked in a strip at the left: a row of them
+            // over the plot took the height the Trend's signal rows need
+            // (a long time axis beats a tall one, Nick 2026-11-01).
+            egui::Panel::left("ed-bottom-tabs")
+                .exact_size(TAB + 8.0)
+                .resizable(false)
+                .show(ui, |ui| {
+                    let r = crate::glyphs::tab(ui, Icon::Trend, TAB, !chrome.msgs, None)
+                        .tip("Trend: the signals you pin, over time.");
+                    hits.push(("bottom trend".to_string(), r.rect));
+                    if r.clicked() {
+                        chrome.msgs = false;
+                    }
+                    let r = crate::glyphs::tab(ui, Icon::Messages, TAB, chrome.msgs, cue.alarm)
+                        .tip("Messages: what happened, newest last.");
+                    hits.push(("bottom messages".to_string(), r.rect));
+                    if r.clicked() {
+                        chrome.msgs = true;
+                    }
+                    if cue.errors > 0 {
+                        let red = theme(ui).ink(crate::st_view::brand::RED);
+                        let r = ui
+                            .label(RichText::new(cue.errors.to_string()).strong().color(red))
+                            .tip(if cue.errors == 1 {
+                                "One error in the Messages.".to_string()
+                            } else {
+                                format!("{} errors in the Messages.", cue.errors)
+                            });
+                        hits.push(("messages error count".to_string(), r.rect));
+                    }
+                });
+            notices_row(ui, body, chrome);
+            if chrome.msgs {
+                body.messages().ui(ui, chrome);
+            } else {
+                body.trend(ui, chrome);
+            }
+        });
+    if open
         && chrome.trend
         && let Some(state) =
             egui::containers::panel::PanelState::load(ui.ctx(), ui.scope_id().with(BOTTOM_ID))
     {
         chrome.sizes.bottom = Some(state.size().y.round());
     }
-    chrome.trend = trend;
+    chrome.trend = open;
 }
 
 /// One frame of the Editor.
@@ -1493,18 +1503,14 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     }
     // The Messages are where every notice and error is (Nick,
     // 2026-11-11): red while an error stands or has come in unread, and
-    // pulsing for a few seconds after a new one. A new error unfolds them
-    // and opens the pane they sit in, so it is never out of sight. They
-    // sit under the left pane's tabs (Nick, 2026-11-23: they are part of
-    // the user feedback), or under the right pane's when every tab is
-    // docked there.
+    // pulsing for a few seconds after a new one. They are a tab of the
+    // bottom panel (Nick, 2026-11-26). A new error opens the panel on
+    // them when it is shut; an open panel keeps its tab (the Messages
+    // tab goes red).
     let now = ui.input(|i| i.time);
     let standing = body.alarm();
     let alarm = body.messages().alarm(now, standing);
-    let host_right = lefts.is_empty() && !rights.is_empty();
-    // A pane that is open keeps the Messages as they are (folded, the
-    // header goes red); a shut one opens on them.
-    if body.messages().take_fresh() && !(if host_right { chrome.right } else { chrome.left }) {
+    if body.messages().take_fresh() && !chrome.trend {
         chrome.show_messages();
     }
     if body.messages().flashing(now) {
@@ -1522,33 +1528,13 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     // there the Trend keeps the whole bottom, under both panes.
     let phone = ui.ctx().content_rect().width() < crate::monitor::NARROW;
     if phone {
-        trend_panel(ui, chrome, body);
+        trend_panel(ui, chrome, body, &cue, &mut hits);
     }
-    let left = (!lefts.is_empty()).then(|| {
-        side_pane(
-            ui,
-            false,
-            &lefts,
-            body,
-            chrome,
-            &mut hits,
-            (!host_right).then_some(&cue),
-        )
-    });
+    let left = (!lefts.is_empty()).then(|| side_pane(ui, false, &lefts, body, chrome, &mut hits));
     if !phone {
-        trend_panel(ui, chrome, body);
+        trend_panel(ui, chrome, body, &cue, &mut hits);
     }
-    let right = (!rights.is_empty()).then(|| {
-        side_pane(
-            ui,
-            true,
-            &rights,
-            body,
-            chrome,
-            &mut hits,
-            host_right.then_some(&cue),
-        )
-    });
+    let right = (!rights.is_empty()).then(|| side_pane(ui, true, &rights, body, chrome, &mut hits));
     chrome.hits.extend(hits);
     dock_drop(ui, chrome, left.as_ref(), right.as_ref());
 

@@ -85,15 +85,16 @@ only go down.
   and their lanes pop for a second and a half; at the cap of six the
   oldest pin nobody chose makes room, and the engineer's own stay. It
   opens 320 pt tall (the diagram keeps about 430 pt at 1280x800).
-- **Messages**, under the left pane's tabs and above the trend, with a
-  fold on their header that is kept per browser (Nick, 2026-11-23: they
-  are part of the user feedback). They hold the last 200 things the page
-  had to say, filtered by level
+- **Messages**, the bottom panel's second tab beside the trend (Nick,
+  2026-11-26: they are historic and run long; under the left pane's tabs
+  from 2026-11-23), the two tab glyphs stacked at the panel's left, the
+  tab shown kept per browser. The standing notices sit above either tab.
+  They hold the last 200 things the page had to say, filtered by level
   with the counts on the filters: info, warnings,
-  errors, with the error count on the header; errors are listed to start and
-  a click on info or warnings lists them too (Nick, 2026-11-23). The
-  header goes red while an error stands or one came in unread, folded or
-  not, and a shut left pane opens on them when an error arrives; so a
+  errors, with the error count beside the tab; every level is listed to
+  start (2026-11-26; errors only before, which left Nick with counts and
+  no rows). The tab goes red while an error stands or one came in unread,
+  and a shut bottom panel opens on them when an error arrives; so a
   fault or a refused deploy is still there to read after the line under
   the header has gone. An Agent outcome is one short line there, its
   whole text on hover and in Copy all; Copy all and Clear are icons
@@ -398,8 +399,8 @@ only go down.
   deselects), go with the next instruction, and say how many more are
   selected than the eight an instruction carries. Dragging empty space no
   longer pans the diagram: Space and a drag, or the middle button, do; the
-  arrow keys and W A S D too, and the wheel zooms. Hovering empty space
-  says so.
+  arrow keys too, and the wheel zooms (no W A S D since 2026-11-26: those
+  letters are view keys). Hovering empty space says nothing.
 - **The zoom ladder (Nick, 2026-11-23).** The closer the camera, the more
   concrete the diagram, and each step out says less about how and more
   about what. Five levels, closest first: **Code** (each statement is the
@@ -642,7 +643,7 @@ focused text field alone, never to the editor's history as well
 | Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
 | Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |
-| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (pointer over the diagram, nothing typed in) | (keys of our own, beside W A S D) |
+| . , | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (pointer over the diagram, nothing typed in) | (keys of our own; E and Q until 2026-11-26) |
 
 Each menu item prints its key. Reserved, not built (TODO card
 `hotkey-agent-reserved`): F2 / Shift F2 the Agent.

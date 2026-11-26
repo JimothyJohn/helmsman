@@ -93,6 +93,14 @@ pub enum Icon {
     ZoomIn,
     /// A magnifier with a minus: zoom out.
     ZoomOut,
+    /// A line that rises and falls: the bottom panel's Trend tab.
+    Trend,
+    /// ↑ : move up (the Trend's ticked signals, a lane).
+    Up,
+    /// ↓ : move down.
+    Down,
+    /// A painter's palette: pick a color.
+    Palette,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -319,6 +327,7 @@ const fn tab_action(icon: Icon) -> Option<Action> {
         Icon::Io => Some(Action::Io),
         Icon::Help => Some(Action::HelpTab),
         Icon::Messages => Some(Action::Messages),
+        Icon::Trend => Some(Action::Trend),
         _ => None,
     }
 }
@@ -644,6 +653,20 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             ));
         }
+        Icon::Trend => {
+            let at = |x: f32, y: f32| Pos2::new(l + (r - l) * x, t + (bt - t) * y);
+            let line = [
+                at(0.0, 0.7),
+                at(0.25, 0.3),
+                at(0.5, 0.6),
+                at(0.75, 0.15),
+                at(1.0, 0.45),
+            ];
+            for w in line.windows(2) {
+                p.line_segment([w[0], w[1]], stroke);
+            }
+            p.line_segment([at(0.0, 1.0), at(1.0, 1.0)], stroke);
+        }
         Icon::List => {
             for k in [0.14, 0.5, 0.86] {
                 let y = t + b.height() * k;
@@ -680,6 +703,40 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             if icon == Icon::ZoomIn {
                 p.line_segment([lens - Vec2::new(0.0, bar), lens + Vec2::new(0.0, bar)], stroke);
             }
+        }
+        Icon::Up | Icon::Down => {
+            // A shaft down the middle, an open arrowhead at one end.
+            let inset = w * 0.7;
+            let (from, to, dir) = if icon == Icon::Up {
+                (bt, t + inset, -1.0)
+            } else {
+                (t, bt - inset, 1.0)
+            };
+            p.line_segment([Pos2::new(c.x, from), Pos2::new(c.x, to)], stroke);
+            head(
+                p,
+                Pos2::new(c.x, to),
+                Vec2::new(0.0, dir),
+                b.height() * 0.36,
+                stroke,
+            );
+        }
+        Icon::Palette => {
+            // The board, and three wells of paint on it.
+            let rad = b.width() * 0.46;
+            p.circle_stroke(c, rad, stroke);
+            for (dx, dy) in [(-0.2, -0.16), (0.12, -0.24), (0.24, 0.06)] {
+                p.circle_filled(
+                    Pos2::new(c.x + b.width() * dx, c.y + b.height() * dy),
+                    w * 0.9,
+                    color,
+                );
+            }
+            p.circle_stroke(
+                Pos2::new(c.x - b.width() * 0.12, c.y + b.height() * 0.2),
+                w * 1.1,
+                stroke,
+            );
         }
         Icon::Back | Icon::Forward => {
             // A shaft across the middle, an open arrowhead at one end.

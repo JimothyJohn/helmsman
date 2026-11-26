@@ -39,7 +39,7 @@
 //! | Find in the Structured Text | Ctrl/⌘ F | (a key of our own) |
 //! | Next / previous match | Ctrl/⌘ G, Ctrl/⌘ Shift G | (a key of our own) |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
-//! | Next / previous function block call, IF, CASE or loop, framed | E, Q | (`jump`; keys of our own, read by the diagram while the pointer is over it and nothing is typed in) |
+//! | Next / previous function block call, IF, CASE or loop, framed | . , | (`jump`; keys of our own, read by the diagram while the pointer is over it and nothing is typed in) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
 //! has had its say: a text editor with the focus keeps its own Ctrl+Z.
@@ -89,7 +89,7 @@ pub enum Action {
     HelpTab,
     /// The I/O tab.
     Io,
-    /// The Messages under the left pane's tab.
+    /// The Messages, a tab of the bottom panel beside the Trend.
     Messages,
     /// The Editor screen.
     Editor,
@@ -518,7 +518,7 @@ const fn does(action: Action) -> &'static str {
         Action::Describe => "The Describe tab",
         Action::HelpTab => "The Help tab",
         Action::Io => "The I/O tab",
-        Action::Messages => "The Messages under the left pane's tab",
+        Action::Messages => "The Messages, the bottom panel's tab beside the Trend",
         Action::Editor => "The Editor screen; on the Editor it flips to the Monitor",
         Action::Monitor => "The Monitor screen; on the Monitor it flips to the Editor",
         Action::Proposals => "The box's Proposals screen",
@@ -565,7 +565,7 @@ pub fn markdown() -> String {
          web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. \
          Every view has a key of one letter, the first of its name; it works whenever you are \
          not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, \
-         E and Q stay the diagram's own. Help › Show hotkeys writes each key beside its \
+         . and , jump along it. Help › Show hotkeys writes each key beside its \
          button.\n\n\
          | key | does | CODESYS command on that key |\n|---|---|---|\n",
     );
@@ -584,7 +584,7 @@ pub fn markdown() -> String {
     }
     out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
     out.push_str(
-        "| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, \
+        "| . , | The next or the previous function block call, IF, CASE or loop on the diagram, \
          zoomed in and framed (with the pointer over the diagram) | |\n",
     );
     out.push_str("\nReserved, not built yet: F2 / Shift F2 for the Describe tab.\n");
@@ -628,7 +628,7 @@ fn compact(label: &str) -> String {
 /// is returned while a widget has the keyboard (a text field, the code
 /// editor, the find bar), and a letter with any modifier held is left to
 /// the browser and the chords. `diagram`: the pointer is over the diagram,
-/// whose E and Q jump along it; those keys stay its.
+/// whose . and , jump along it; those keys stay its.
 pub fn pressed_views(ctx: &egui::Context, diagram: bool) -> Vec<Action> {
     if ctx.egui_wants_keyboard_input() {
         return Vec::new();
@@ -646,7 +646,7 @@ pub fn pressed_views(ctx: &egui::Context, diagram: bool) -> Vec<Action> {
             else {
                 return true;
             };
-            let diagram_key = matches!(key, Key::E | Key::Q);
+            let diagram_key = matches!(key, Key::Period | Key::Comma);
             if !modifiers.is_none() || (diagram && diagram_key) {
                 return true;
             }
@@ -1177,25 +1177,35 @@ mod tests {
 
     #[test]
     fn over_the_diagram_the_diagrams_keys_are_left_alone() {
-        for key in [Key::W, Key::A, Key::S, Key::D, Key::E, Key::Q] {
+        // Nick, 2026-11-26: . and , jump along the diagram; W A S D no
+        // longer pan it, so no letter is the diagram's any more.
+        for key in [Key::Period, Key::Comma] {
             assert_eq!(
                 views_in(vec![down(Modifiers::NONE, key)], true),
                 (vec![], 1),
-                "{key:?}"
+                "{key:?} over the diagram stays the diagram's"
+            );
+            assert_eq!(
+                views_in(vec![down(Modifiers::NONE, key)], false),
+                (vec![], 1),
+                "{key:?} is no view anywhere"
             );
         }
-        for (a, key) in [
-            (Action::Files, Key::F),
-            (Action::Io, Key::I),
-            (Action::Trend, Key::T),
-            (Action::Monitor, Key::M),
-            (Action::Devices, Key::V),
-            (Action::Proposals, Key::P),
-        ] {
+        // Every view letter works over the diagram as off it, E (once a
+        // jump key) and A, S, D (once a pan) among them.
+        for (a, _) in VIEWS {
+            let key = plain_keys(*a)[0];
             assert_eq!(
                 views_in(vec![down(Modifiers::NONE, key)], true),
-                (vec![a], 0),
-                "{key:?}"
+                (vec![*a], 0),
+                "{key:?} over the diagram"
+            );
+        }
+        for key in [Key::W, Key::Q] {
+            assert_eq!(
+                views_in(vec![down(Modifiers::NONE, key)], true),
+                (vec![], 1),
+                "{key:?} is nobody's"
             );
         }
     }
@@ -1328,5 +1338,23 @@ mod tests {
                 "no row for {name}'s {letter}:\n{md}"
             );
         }
+    }
+
+    /// docs/help/keyboard.md is what scripts/build-help.sh writes from
+    /// [`super::markdown`]: the page a user reads says what the keys do
+    /// (it said E and Q after they moved to . and , on 2026-11-26).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_shipped_keyboard_page_is_the_generated_one() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/help/keyboard.md");
+        let shipped = std::fs::read_to_string(&path).unwrap();
+        let md = super::markdown();
+        assert_eq!(
+            shipped.trim_end(),
+            md.trim_end(),
+            "docs/help/keyboard.md is stale: run scripts/build-help.sh"
+        );
+        assert!(md.contains("| . , |"), "the jump keys' row:\n{md}");
+        assert!(!md.contains("| E, Q |"), "E and Q no longer jump:\n{md}");
     }
 }

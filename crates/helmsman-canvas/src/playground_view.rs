@@ -4230,7 +4230,13 @@ impl PlaygroundView {
             (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).ceil(),
             ui.spacing().item_spacing.y,
         );
-        let cap = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
+        // Three rows while they take no more than half the tab: a handful
+        // of signals all show (Nick, 2026-11-23) at the width the wider
+        // left pane leaves (2026-11-26), where a third held two.
+        let three = 3.0 * (row + gap) - gap;
+        let cap = (ui.available_height() * SIGNAL_ROWS_SHARE)
+            .max(three.min(ui.available_height() * 0.5))
+            .max(SIGNAL_ROWS_MIN);
         let rows = ((cap + gap) / (row + gap)).floor().max(1.0);
         let rows_h = rows * (row + gap) - gap;
         let legend = egui::ScrollArea::vertical()

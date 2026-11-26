@@ -351,12 +351,48 @@ fn the_record_leads_with_the_instruction_and_is_bounded() {
         assert!(r.contains(part), "{part}: {r}");
     }
     assert!(!r.contains("PROGRAM p"), "the code is the revision's files");
+    // Nick, 2026-11-26: the save says what was asked, read off the record.
+    assert_eq!(instruct::asked(&r), Some("latch it"));
     let read = history([r.as_str()], "main.st");
     assert_eq!(read.len(), 1, "{read:?}");
     assert!(read[0].starts_with("latch it\n  why: "), "{read:?}");
     let huge = format!("Why: x\n\n{}", "é".repeat(20_000));
     let r = record(&run, "main.st", None, "s", &c, &huge);
     assert!(r.len() <= instruct::MAX_RECORD);
+}
+
+/// `asked` is what the History row and the box's revision say was asked
+/// (Nick, 2026-11-26): the record's first line after "Instruction: ",
+/// trimmed; nothing for a record that does not start so or asks nothing.
+#[test]
+fn asked_reads_the_instruction_off_the_first_line_only() {
+    use instruct::asked;
+    assert_eq!(
+        asked("Instruction: make it blink\nFile: main.st\n"),
+        Some("make it blink")
+    );
+    assert_eq!(asked("Instruction:   spaced out   \n"), Some("spaced out"));
+    assert_eq!(asked("Instruction: no newline at all"), Some("no newline at all"));
+    assert_eq!(asked("Instruction: crlf\r\nFile: main.st"), Some("crlf"));
+    for none in [
+        "",
+        "\n",
+        "Instruction: \nFile: main.st",
+        "Instruction:    ",
+        "instruction: lower case is no record",
+        " Instruction: indented",
+        "File: main.st\nInstruction: on the second line",
+        "Summary for: main.st\n",
+    ] {
+        assert_eq!(asked(none), None, "{none:?}");
+    }
+    // Hostile text stays on its one line and is returned as it is.
+    assert_eq!(
+        asked("Instruction: <script>alert(1)</script>\nWhy: x"),
+        Some("<script>alert(1)</script>")
+    );
+    let long = format!("Instruction: {}\n", "é".repeat(5000));
+    assert_eq!(asked(&long).map(|a| a.chars().count()), Some(5000));
 }
 
 #[test]

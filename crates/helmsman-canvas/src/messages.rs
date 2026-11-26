@@ -1,5 +1,6 @@
-//! The Messages, under the left pane's tabs (Nick, 2026-11-01 along the
-//! bottom beside the Trend; 2026-11-23 on the left, as user feedback):
+//! The Messages, a tab of the bottom panel beside the Trend (Nick,
+//! 2026-11-01; 2026-11-23 under the left pane; 2026-11-26 back beside the
+//! Trend, since they are historic and run long):
 //! what the page had to say recently, as info, warnings and errors, so a
 //! fault or a refused deploy is still there to read after the notice line
 //! under the header has gone. Bounded ([`KEEP`]); newest last.
@@ -48,8 +49,9 @@ impl Message {
 #[derive(Debug)]
 pub struct Log {
     items: VecDeque<Message>,
-    /// Which levels the tab shows: info, warning, error (errors only, to
-    /// start: Nick, 2026-11-23). Hidden levels are still kept and counted.
+    /// Which levels the tab shows: info, warning, error (all of them
+    /// since 2026-11-26: Nick saw counts and no rows with errors only).
+    /// Hidden levels are still kept and counted.
     pub show: [bool; 3],
     /// When the newest error came in, page time.
     error_at: Option<f64>,
@@ -70,7 +72,7 @@ impl Default for Log {
     fn default() -> Self {
         Self {
             items: VecDeque::new(),
-            show: [false, false, true],
+            show: [true, true, true],
             error_at: None,
             unseen: 0,
             fresh: false,
@@ -558,10 +560,8 @@ mod tests {
         l.error(3.0, "c");
         l.error(4.0, "d");
         assert_eq!(l.counts(), [1, 1, 2]);
-        assert_eq!(l.show, [false, false, true], "errors only to start");
-        let shown: Vec<&str> = l.shown().map(|m| m.text.as_str()).collect();
-        assert_eq!(shown, ["c", "d"]);
-        l.show = [true; 3];
+        // Nick, 2026-11-26: every level shows to start.
+        assert_eq!(l.show, [true; 3], "all three levels to start");
         assert_eq!(l.shown().count(), 4);
         l.show = [false, false, true];
         let shown: Vec<&str> = l.shown().map(|m| m.text.as_str()).collect();
@@ -593,10 +593,11 @@ mod tests {
         assert!(full.contains(&"x".repeat(500)), "nothing cut from the whole");
         assert!(l.text().contains("third"), "Copy all has the whole");
         // Hidden levels still reach the box's Help request.
+        l.show = [false, false, true];
         let mut a = Outcome::new(Kind::Applied, "Updated main.st.");
         a.why = Some("Because.".into());
         l.outcome(2.0, &a);
-        assert_eq!(l.shown().count(), 1, "info is not shown");
+        assert_eq!(l.shown().count(), 1, "info is hidden");
         assert!(l.full_text().contains("Updated main.st. Why: Because."));
         assert_eq!(l.counts(), [1, 0, 1]);
     }

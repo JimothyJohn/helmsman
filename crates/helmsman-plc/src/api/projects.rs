@@ -8,7 +8,7 @@
 //! DELETE /api/projects/{p}                    engineer: delete it (never the running one)
 //! POST   /api/projects/{p}/rename             engineer: {to}
 //! GET    /api/projects/{p}/files/{f}          {name, text, version}
-//! PUT    /api/projects/{p}/files/{f}          engineer: {text, version?}: save (a draft); version = what was read, null = new
+//! PUT    /api/projects/{p}/files/{f}          engineer: {text, version?, page?, what?}: save (a draft); version = what was read, null = new; what = what was asked (the revision's description)
 //! DELETE /api/projects/{p}/files/{f}          engineer
 //! POST   /api/projects/{p}/check              token or session: build it as a deploy would; nothing changes
 //! POST   /api/projects/{p}/tests              token or session: run its requirement tests (test_*.st) in the simulation; nothing changes
@@ -390,7 +390,7 @@ fn save(
         Ok(m) => m,
         Err(e) => return done(400, json!({ "error": e }), format!("{what}: malformed save")),
     };
-    if let Err(e) = keys(&m, &["text", "version", "page"]) {
+    if let Err(e) = keys(&m, &["text", "version", "page", "what"]) {
         return done(400, json!({ "error": e }), format!("{what}: malformed save"));
     }
     let page = m.get("page").and_then(Json::as_str);
@@ -404,9 +404,16 @@ fn save(
     let if_match = m.get("version").map(Json::as_str);
     match p.save(name, file, text.as_bytes(), if_match) {
         Ok(version) => {
-            let event = match page {
-                Some(_) => format!("took the described change into {file}"),
-                None => format!("saved {file}"),
+            // What was asked, when the page says (Nick, 2026-11-26); the
+            // history makes it one line and cuts it.
+            let asked = m
+                .get("what")
+                .and_then(Json::as_str)
+                .filter(|w| !w.trim().is_empty());
+            let event = match (page, asked) {
+                (Some(_), Some(w)) => format!("Described: {w}"),
+                (Some(_), None) => format!("took the described change into {file}"),
+                (None, _) => format!("saved {file}"),
             };
             let revision = p.record_revision(name, &by(req), &event, page).ok();
             done(
