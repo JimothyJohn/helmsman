@@ -202,7 +202,11 @@ redrawn.
   device (name, protocol, address, settings) as a line of the map; a
   right-click on the blank space offers the same, and Import device…
   takes the vendor's EDS file, keeps it in the project and fills the form
-  in from it. On a read-only example, adding copies the project first.
+  in from it. For a device the library does not have, the form's **From
+  the vendor's file…** takes an EDS, an IODD or a manual (a PDF up to 2 MB,
+  text up to 1 MB) and Helmsman proposes a profile with the channel names
+  from it, to check on this tab before anything is saved; it needs an
+  engineer or an integrator signed in to a box. On a read-only example, adding copies the project first.
   The form has a field
   for each of the protocol's settings, filled in with the usual values
   and checked against the driver's ranges, with the device's io.map line
@@ -234,7 +238,7 @@ redrawn.
   each step yourself. **Tick** and **Skip** work on a box too, and the
   window says which steps were seen and which you ticked. It only
   reads: nothing is written to the project or the device, and the
-  ticks last until the page is reloaded. **Edit** beside a device opens its name; Save keeps its points
+  ticks last until the page is reloaded. **Edit** beside a device opens its name and its address, so a device that moved can be fixed; Save keeps its points
   as they are. **Delete** asks, then takes the device and its inputs
   and outputs out (the program's variables stay). Double-click or
   right-click a wired signal to rename it:
