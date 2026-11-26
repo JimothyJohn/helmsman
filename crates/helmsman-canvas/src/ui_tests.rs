@@ -3685,12 +3685,9 @@ mod chrome {
             let map = &sim.proj.files["io.map"];
             assert!(!map.contains(" box di:0"), "start moved off the box: {map}");
             assert!(map.contains("in  start bool iologik_e1213 di:0\n"), "{map}");
-            assert!(
-                map.contains("in  iologik_e1213_di5 bool iologik_e1213 di:5\n"),
-                "{map}"
-            );
+            assert!(map.contains("in  di5 bool iologik_e1213 di:5\n"), "{map}");
             let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
-            assert!(st.contains("  iologik_e1213_di5 : BOOL;"), "{st}");
+            assert!(st.contains("  di5 : BOOL;"), "{st}");
             assert!(helmsman_iec::ast::parse(st).is_ok(), "{st}");
         }
         // The I/O wiring link opens the file in the editor.

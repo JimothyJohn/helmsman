@@ -534,7 +534,7 @@ fn a_profile_saved_after_the_request_is_offered_by_the_devices_add() {
     let o = h.app.boxv.as_ref().unwrap().projects.open.as_ref().unwrap();
     let map = &o.bufs["io.map"].text;
     assert!(
-        map.contains("out acme_rio_do_00 bool acme_rio ch:DO-00 safe=false\n"),
+        map.contains("out do_00 bool acme_rio ch:DO-00 safe=false\n"),
         "{map}"
     );
     assert_eq!(map.matches(" acme_rio ch:").count(), 1, "{map}");

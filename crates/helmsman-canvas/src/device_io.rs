@@ -777,12 +777,12 @@ mod tests {
         let all = channels(&map.devices[0], Some(E1213)).unwrap();
         let w = add(&map.devices[0], ch(&all, "DO-00"), None, true, &ports, &map).unwrap();
         assert!(w.extend);
-        assert_eq!(w.signals, ["out rio_do_00 bool rio ch:DO-00 safe=false"]);
-        assert_eq!(w.declare, [(Dir::Out, "rio_do_00".to_string(), SigTy::Bool)]);
-        assert_eq!(w.summary(), "rio_do_00 added to rio; new variable(s) rio_do_00.");
+        assert_eq!(w.signals, ["out do_00 bool rio ch:DO-00 safe=false"]);
+        assert_eq!(w.declare, [(Dir::Out, "do_00".to_string(), SigTy::Bool)]);
+        assert_eq!(w.summary(), "do_00 added to rio; new variable(s) do_00.");
         let out = apply_map(MAP, &w);
         assert!(
-            out.contains("device rio device:moxa-iologik-e1213 cip=991:515:0x00e12130  # the block\nin  part bool rio ch:DI-04\nout rio_do_00 bool rio ch:DO-00 safe=false\n\ndevice other"),
+            out.contains("device rio device:moxa-iologik-e1213 cip=991:515:0x00e12130  # the block\nin  part bool rio ch:DI-04\nout do_00 bool rio ch:DO-00 safe=false\n\ndevice other"),
             "{out}"
         );
         assert_eq!(
@@ -794,7 +794,7 @@ mod tests {
         assert_eq!(skim(&out).odd, 0, "{out}");
         // Without a program to declare in, it is wiring only.
         let w = add(&map.devices[0], ch(&all, "DI-00-count"), None, false, &[], &map).unwrap();
-        assert_eq!(w.signals, ["in  rio_di_00_count int rio ch:DI-00-count"]);
+        assert_eq!(w.signals, ["in  di_00_count int rio ch:DI-00-count"]);
         assert_eq!(w.declare, []);
         // A device with no line after it, and a map with no final newline.
         let bare = "device rio device:moxa-iologik-e1213 cip=1:2";
@@ -809,7 +809,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             apply_map(bare, &w),
-            "device rio device:moxa-iologik-e1213 cip=1:2\nin  rio_di_00 bool rio ch:DI-00\n"
+            "device rio device:moxa-iologik-e1213 cip=1:2\nin  di_00 bool rio ch:DI-00\n"
         );
     }
 
@@ -866,22 +866,68 @@ mod tests {
 
     #[test]
     fn a_name_that_is_taken_gets_a_number_and_a_removed_point_comes_back_to_its_variable() {
-        // rio_di_00 is another device's signal already.
+        // Only rio_di_00 is taken: the channel's own name is free.
         let text = "device rio device:moxa-iologik-e1213 cip=1:2\nin rio_di_00 bool box di:0\n";
         let map = skim(text);
         let all = channels(&map.devices[0], Some(E1213)).unwrap();
         let w = add(&map.devices[0], ch(&all, "DI-00"), None, false, &[], &map).unwrap();
+        assert_eq!(w.signals, ["in  di_00 bool rio ch:DI-00"]);
+        // The short name taken (whatever its case) puts the device in
+        // front; that taken too gives a number after it.
+        let text = "device rio device:moxa-iologik-e1213 cip=1:2\nin DI_00 bool box di:0\n";
+        let map = skim(text);
+        let w = add(&map.devices[0], ch(&all, "DI-00"), None, false, &[], &map).unwrap();
+        assert_eq!(w.signals, ["in  rio_di_00 bool rio ch:DI-00"]);
+        let text = "device rio device:moxa-iologik-e1213 cip=1:2\nin DI_00 bool box di:0\nin Rio_Di_00 bool box di:1\n";
+        let map = skim(text);
+        let w = add(&map.devices[0], ch(&all, "DI-00"), None, false, &[], &map).unwrap();
         assert_eq!(w.signals, ["in  rio_di_00_2 bool rio ch:DI-00"]);
+        let text = "device rio device:moxa-iologik-e1213 cip=1:2\nin di_00 bool box di:0\nin rio_di_00 bool box di:1\nin rio_di_00_2 bool box di:2\n";
+        let w = add(
+            &skim(text).devices[0],
+            ch(&all, "DI-00"),
+            None,
+            false,
+            &[],
+            &skim(text),
+        )
+        .unwrap();
+        assert_eq!(w.signals, ["in  rio_di_00_3 bool rio ch:DI-00"]);
+        // A program port of the short name takes it too, even one whose
+        // type does not match the channel.
+        let map = skim("device rio device:moxa-iologik-e1213 cip=1:2\n");
+        let ports = ports_of("PROGRAM p\nVAR_INPUT\n  DI_03 : INT;\nEND_VAR\nEND_PROGRAM\n");
+        let w = add(&map.devices[0], ch(&all, "DI-03"), None, true, &ports, &map).unwrap();
+        assert_eq!(w.signals, ["in  rio_di_03 bool rio ch:DI-03"]);
+        assert_eq!(w.declare.len(), 1, "a new variable, the INT left alone");
         // The program kept rio_di_01 after its point was removed: adding
         // the channel again wires that variable, and declares nothing.
-        let st = "PROGRAM p\nVAR_INPUT\n  rio_di_01 : BOOL;\n  rio_di_02 : INT;\nEND_VAR\nEND_PROGRAM\n";
+        // The same for a variable under the short name (di_05).
+        let map = skim(text);
+        let st = "PROGRAM p\nVAR_INPUT\n  rio_di_01 : BOOL;\n  rio_di_02 : INT;\n  di_05 : BOOL;\nEND_VAR\nVAR_OUTPUT\n  do_01 : BOOL;\n  rio_do_02 : BOOL;\nEND_VAR\nEND_PROGRAM\n";
         let ports = ports_of(st);
         let w = add(&map.devices[0], ch(&all, "DI-01"), None, true, &ports, &map).unwrap();
         assert_eq!(w.signals, ["in  rio_di_01 bool rio ch:DI-01"]);
         assert_eq!(w.declare, []);
-        // A variable of that name but another type is left alone.
+        let w = add(&map.devices[0], ch(&all, "DI-05"), None, true, &ports, &map).unwrap();
+        assert_eq!(w.signals, ["in  di_05 bool rio ch:DI-05"]);
+        assert_eq!(w.declare, []);
+        let w = add(&map.devices[0], ch(&all, "DO-01"), None, true, &ports, &map).unwrap();
+        assert_eq!(w.signals, ["out do_01 bool rio ch:DO-01 safe=false"]);
+        assert_eq!(w.declare, []);
+        let w = add(&map.devices[0], ch(&all, "DO-02"), None, true, &ports, &map).unwrap();
+        assert_eq!(w.signals, ["out rio_do_02 bool rio ch:DO-02 safe=false"]);
+        assert_eq!(w.declare, []);
+        // A variable of that name but another type is left alone: the
+        // short name is free, so the point takes it.
         let w = add(&map.devices[0], ch(&all, "DI-02"), None, true, &ports, &map).unwrap();
-        assert_eq!(w.signals, ["in  rio_di_02_2 bool rio ch:DI-02"]);
+        assert_eq!(w.signals, ["in  di_02 bool rio ch:DI-02"]);
+        assert_eq!(w.declare.len(), 1);
+        // Another direction is left alone too: an output di_06 is no
+        // input's variable.
+        let ports = ports_of("PROGRAM p\nVAR_OUTPUT\n  di_06 : BOOL;\nEND_VAR\nEND_PROGRAM\n");
+        let w = add(&map.devices[0], ch(&all, "DI-06"), None, true, &ports, &map).unwrap();
+        assert_eq!(w.signals, ["in  rio_di_06 bool rio ch:DI-06"]);
         assert_eq!(w.declare.len(), 1);
     }
 
@@ -907,7 +953,7 @@ mod tests {
             assert!(add(dev, &typed(bad), None, false, &[], &map).is_err(), "{bad:?}");
         }
         let w = add(dev, &typed("hr:5:i16"), None, false, &[], &map).unwrap();
-        assert_eq!(w.signals, ["in  m_hr_5_i16 bool m hr:5:i16"]);
+        assert_eq!(w.signals, ["in  hr_5_i16 bool m hr:5:i16"]);
         // A channel name from a profile with odd characters still gives
         // an identifier, and a long one is cut.
         let odd = Channel {
@@ -1001,14 +1047,21 @@ mod tests {
     fn a_new_points_name_fits_a_skipper_and_keeps_its_channel() {
         let map = MapText::default();
         let long = "liberty_lexium_mdrive_ethernet_lmd_ethernet_ip";
+        // Nick 2026-11-26: the channel's own name, nothing in front.
+        assert_eq!(fresh_name(long, "enabled", &[], &map), "enabled");
+        assert_eq!(fresh_name("rio", "DI-04", &[], &map), "di_04");
+        // Taken: the device goes in front, cut to fit; the channel is kept.
+        let map = helmsman_project::iomap::skim("in  enabled bool sim\n");
         let n = fresh_name(long, "enabled", &[], &map);
         assert!(n.len() <= crate::skipper_map::NAME_MAX, "{n}");
         assert!(n.ends_with("_enabled") && n.starts_with("liberty_"), "{n}");
-        assert_eq!(fresh_name("rio", "DI-04", &[], &map), "rio_di_04");
-        // A taken name gets a number and still fits.
-        let map = helmsman_project::iomap::skim(&format!("in  {n} bool sim\n"));
+        // A taken prefixed name gets a number and still fits.
+        let map = helmsman_project::iomap::skim(&format!("in  enabled bool sim\nin  {n} bool sim\n"));
         let second = fresh_name(long, "enabled", &[], &map);
-        assert_eq!(second, format!("{n}_2"));
         assert!(second.len() <= crate::skipper_map::NAME_MAX, "{second}");
+        assert!(
+            second.ends_with("_enabled_2") && second.starts_with("liberty_"),
+            "{second}"
+        );
     }
 }
