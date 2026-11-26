@@ -3004,8 +3004,14 @@ mod chrome {
         assert!(h.app.chrome.code_open(), "the Code tab shown");
         let code = h.rect("pane code");
         let files = h.rect("pane files");
-        // Every tab in the one pane (Nick, 2026-11-13), the Agent first.
-        let xs: Vec<f32> = Pane::ALL.iter().map(|p| h.rect(&p.hit()).left()).collect();
+        // Every tab in the one pane (Nick, 2026-11-13), the Agent first;
+        // Help is a box's tab, not the simulation's (2026-11-26).
+        assert!(!h.has(&Pane::Help.hit()), "no Help tab in the simulation");
+        let xs: Vec<f32> = Pane::ALL
+            .iter()
+            .filter(|p| **p != Pane::Help)
+            .map(|p| h.rect(&p.hit()).left())
+            .collect();
         assert!(
             xs.windows(2).all(|w| w[0] < w[1]),
             "Agent | Code | I/O | Devices | Files | History, left to right: {xs:?}"
@@ -4653,13 +4659,14 @@ mod chrome {
             "the tab under Code"
         );
         assert_eq!(c.rights, [Pane::Io, Pane::Code]);
-        c.pane = Pane::Files;
+        // Help is the last of the defaults (2026-11-26).
+        c.pane = Pane::Help;
         c.send_right();
-        assert_eq!(c.pane, Pane::Devices, "the last one: the one before");
+        assert_eq!(c.pane, Pane::Files, "the last one: the one before");
         c.dock(Pane::Io, false);
         assert_eq!(
             (c.pane, c.side),
-            (Pane::Io, Pane::Files),
+            (Pane::Io, Pane::Help),
             "back on the left, shown; the right keeps its tab"
         );
         assert_eq!(c.lefts.last(), Some(&Pane::Io), "at the end");
@@ -6318,19 +6325,14 @@ mod boxed {
         assert!(asked.iter().any(|u| u == "/api/proposals/3"), "{asked:?}");
     }
 
-    /// Help mode on a box's Agent tab (card `help-mode-box`): signed out,
-    /// Ask stays off; signed in as anyone, the question goes to
+    /// Help on a box (card `help-mode-box`; a tab of its own since Nick,
+    /// 2026-11-26, ? glyph, key L, no longer a mode of the Agent tab):
+    /// signed out, Ask stays off; signed in as anyone, the question goes to
     /// `POST /api/help` with the page's Messages; the answer shows the
     /// diagnosis and the issue, whose Copy puts the whole Markdown on the
     /// clipboard; and the panels keep their width throughout.
-    ///
-    /// Parked for the help-tab branch: on this branch (Nick, 2026-11-26)
-    /// the Agent tab lost its mode toggle and Help mode has no way in;
-    /// the help-tab branch gives Help a tab of its own and should drive
-    /// this through it and drop the `ignore`.
     #[test]
-    #[ignore = "help-tab branch: Help mode has no way in until Help gets its own tab (Nick, 2026-11-26)"]
-    fn help_mode_on_a_box_asks_and_shows_a_copyable_issue() {
+    fn help_on_a_box_asks_and_shows_a_copyable_issue() {
         use crate::box_agent::Incoming;
         use crate::review::Session;
         use serde_json::{Value as Json, json};
@@ -6338,8 +6340,8 @@ mod boxed {
         let bench = Bench::new();
         let (state, _) = watch(&bench);
         let mut h = Harness::new(App::boxed());
-        // Docked right: the Agent at the right pane's default width, its narrowest place.
-        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        // Docked right: Help at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Help, true);
         h.app.boxv.as_mut().unwrap().state = state;
         h.wait(0.3);
         let left = h.rect("left");
@@ -6350,31 +6352,37 @@ mod boxed {
             assert!((0.0..=8.0).contains(&l), "{when}: the left pane grew {l} pt");
             assert!((0.0..=8.0).contains(&r), "{when}: the right panel grew {r} pt");
         };
+        // The Describe tab has no Help in it any more.
         h.press("tab claude");
         h.frame(vec![]);
-        assert!(h.has("agent mode code") && h.has("agent mode help"));
-        assert!(h.has("agent instruction") && !h.has("help question"));
-        // Nick, 2026-11-08: the heading names the mode, the agent's state
-        // is a dot beside it, and the glyph toggle sits at the top right.
-        assert!(h.drew("Change the program") && !h.drew("Get help"));
-        assert!(!h.drew("Agent on this box") && !h.drew("Agent online"));
-        let (dot, code, help) = (
-            h.rect("agent status"),
-            h.rect("agent mode code"),
-            h.rect("agent mode help"),
-        );
         assert!(
-            dot.left() < code.left() && code.right() <= help.left(),
-            "{dot:?} {code:?} {help:?}"
+            !h.has("agent mode code") && !h.has("agent mode help"),
+            "no mode toggle"
         );
+        // Describe on the left and Help docked right: each its own field.
+        assert!(h.has("agent instruction") && h.has("help question"));
         assert!(
-            help.right() >= h.rect("right").right() - 40.0,
-            "at the right: {help:?}"
+            h.rect("agent instruction").right() <= h.rect("left").right() + 1.0
+                && h.rect("help question").left() >= h.rect("right").left() - 1.0,
+            "Describe's field on the left, Help's on the right"
         );
-        h.press("agent mode help");
+        // The ? tab, wherever it is docked, is the Help.
+        let tab = if h.has("tab help") {
+            "tab help"
+        } else {
+            "pane help"
+        };
+        h.press(tab);
         h.frame(vec![]);
-        assert!(h.has("help question") && h.has("help ask") && !h.has("agent instruction"));
-        assert!(h.drew("Get help") && !h.drew("Change the program"));
+        assert!(h.app.chrome.showing(crate::editor::Pane::Help));
+        assert!(h.has("help question") && h.has("help ask"));
+        assert!(
+            h.rect("help question").left() >= h.rect("right").left() - 1.0,
+            "in the pane it is docked in"
+        );
+        for word in ["Agent", "agent"] {
+            assert!(!h.drew(&format!("{word} ")), "no {word:?} on the Help tab");
+        }
 
         h.app
             .boxv
@@ -6450,10 +6458,14 @@ mod boxed {
                 .contains("Help: an issue was written (Conveyor stops when rio drops)."),
             "in Messages"
         );
-        h.press("agent mode code");
+        assert!(
+            boxed(&h).chat_sent.is_empty(),
+            "nothing went to the Describe agent"
+        );
+        h.press("tab claude");
         h.frame(vec![]);
         assert!(h.has("agent instruction"));
-        kept(&h, "back to the code");
+        kept(&h, "back to Describe");
     }
 
     /// Nick, 2026-11-26: on a box the Agent (Describe) tab's heading is
@@ -8097,7 +8109,10 @@ mod glyph_library {
             "dock=2 left=1 right=1 lefts=claude,code,palette pane=palette rights=io,palette side=palette",
         );
         // The tabs it named, less the palette; the rest join the left.
-        assert_eq!(c.lefts, [Pane::Claude, Pane::Code, Pane::Devices, Pane::Files]);
+        assert_eq!(
+            c.lefts,
+            [Pane::Claude, Pane::Code, Pane::Devices, Pane::Files, Pane::Help]
+        );
         assert_eq!(c.rights, [Pane::Io]);
         assert_eq!((c.pane, c.side), (Pane::Claude, Pane::Io));
     }
@@ -8517,6 +8532,7 @@ mod diagram_menu;
 mod files_tab;
 mod find_replace;
 mod front;
+mod help_tab;
 mod hotkeys;
 mod io_cards;
 mod io_names;
