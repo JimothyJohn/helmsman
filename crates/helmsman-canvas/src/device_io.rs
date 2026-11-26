@@ -171,11 +171,34 @@ pub fn movable(ports: &[Port], map: &MapText) -> Vec<Port> {
 }
 
 /// A name for a new signal on `device`'s channel `label` that neither
-/// the map nor the program has: `rio_di_04`, then `rio_di_04_2`, ... At
-/// most [`crate::skipper_map::NAME_MAX`] characters, the longest a Skipper
-/// takes: a long device name is cut, never the channel's
-/// (`liberty_lexium_mdrive_et_enabled`).
+/// the map nor the program has: the channel's own, `di_04` (Nick,
+/// 2026-11-26: short names; the map line already says which device),
+/// then with the device in front when that is taken, `rio_di_04`, then
+/// `rio_di_04_2`, ... At most [`crate::skipper_map::NAME_MAX`]
+/// characters, the longest a Skipper takes: a long device name is cut,
+/// never the channel's (`liberty_lexium_mdrive_et_enabled`).
 fn fresh_name(device: &str, label: &str, ports: &[Port], map: &MapText) -> String {
+    names(device, label)
+        .into_iter()
+        .find(|n| !taken(n, ports, map))
+        .unwrap_or_else(|| {
+            let base = names(device, label).pop().unwrap_or_default();
+            (2..100)
+                .map(|k| format!("{base}_{k}"))
+                .find(|n| !taken(n, ports, map))
+                .unwrap_or(base)
+        })
+}
+
+/// Whether the map or the program has a signal called `n`.
+fn taken(n: &str, ports: &[Port], map: &MapText) -> bool {
+    map.signals.iter().any(|s| s.name.eq_ignore_ascii_case(n))
+        || ports.iter().any(|p| p.name.eq_ignore_ascii_case(n))
+}
+
+/// The names [`fresh_name`] tries for `device`'s channel `label`, in
+/// order: the channel's own, then with the device in front.
+fn names(device: &str, label: &str) -> Vec<String> {
     // Room for a `_N` after it.
     const ROOM: usize = crate::skipper_map::NAME_MAX - 3;
     // An identifier whatever it is called: anything else is a `_`, and
@@ -195,22 +218,15 @@ fn fresh_name(device: &str, label: &str, ports: &[Port], map: &MapText) -> Strin
     let keep = ROOM.saturating_sub(channel.len() + 1);
     let device: String = ident(device).chars().take(keep).collect();
     let device = device.trim_end_matches('_');
-    let base = if device.is_empty() {
-        channel
-    } else {
-        format!("{device}_{channel}")
-    };
-    let taken = |n: &str| {
-        map.signals.iter().any(|s| s.name.eq_ignore_ascii_case(n))
-            || ports.iter().any(|p| p.name.eq_ignore_ascii_case(n))
-    };
-    if !taken(&base) {
-        return base;
+    if device.is_empty() || channel.is_empty() {
+        return vec![if device.is_empty() {
+            channel
+        } else {
+            device.to_string()
+        }];
     }
-    (2..100)
-        .map(|k| format!("{base}_{k}"))
-        .find(|n| !taken(n))
-        .unwrap_or(base)
+    let long = format!("{device}_{channel}");
+    vec![channel, long]
 }
 
 /// What a click on channel `c` of `dev` writes: its signal after the
@@ -230,10 +246,13 @@ pub fn add(
     ports: &[Port],
     map: &MapText,
 ) -> Result<Wiring, String> {
-    let own = helmsman_project::profile_skim::signal_name(&dev.name, &c.label);
+    // Either name a point of this channel was given: the short one or,
+    // before 2026-11-26 or on a clash, the one with the device in front.
+    let mut own = names(&dev.name, &c.label);
+    own.push(helmsman_project::profile_skim::signal_name(&dev.name, &c.label));
     let back = movable(ports, map)
         .into_iter()
-        .find(|p| p.name.eq_ignore_ascii_case(&own) && p.dir == c.dir && p.ty == c.ty);
+        .find(|p| own.iter().any(|o| p.name.eq_ignore_ascii_case(o)) && p.dir == c.dir && p.ty == c.ty);
     let (name, use_) = match (for_var, back) {
         (Some(v), _) => (v.to_string(), Use::Existing(v.to_string())),
         (None, Some(p)) => (p.name.clone(), Use::Existing(p.name)),
