@@ -1038,9 +1038,10 @@ struct Cue {
     errors: usize,
 }
 
-/// The Messages tab of the bottom panel: the notices that stand, then
-/// the log. Everything in it scrolls.
-fn messages_body(ui: &mut egui::Ui, body: &mut dyn Body, chrome: &mut Chrome) {
+/// The notices that stand (a fault, a deploy under way or refused, a
+/// browser that cannot keep the work), above either tab of the bottom
+/// panel: they are what is true now, so the Trend does not hide them.
+fn notices_row(ui: &mut egui::Ui, body: &mut dyn Body, chrome: &mut Chrome) {
     if body.has_notices() {
         // They scroll in at most 40% of the panel, and the log keeps the
         // rest.
@@ -1052,7 +1053,6 @@ fn messages_body(ui: &mut egui::Ui, body: &mut dyn Body, chrome: &mut Chrome) {
             });
         ui.separator();
     }
-    body.messages().ui(ui, chrome);
 }
 
 /// A side pane as drawn: where, and its tabs' buttons along the top
@@ -1096,7 +1096,9 @@ fn side_pane(
                 .resizable(false),
             egui::Panel::left(LEFT_ID)
                 .resizable(true)
-                .default_size(LEFT_W)
+                // On a phone the default would fill the page: what 320
+                // left beside it at 360 pt wide, it still leaves.
+                .default_size(LEFT_W.min(ui.ctx().content_rect().width() - 40.0).max(120.0))
                 .min_size(120.0),
         )
     };
@@ -1394,34 +1396,40 @@ fn trend_panel(
         .resizable(true)
         .default_size(BOTTOM_H)
         .show_collapsible(ui, &mut open, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let r = crate::glyphs::tab(ui, Icon::Trend, TAB, !chrome.msgs, None)
-                    .tip("Trend: the signals you pin, over time.");
-                hits.push(("bottom trend".to_string(), r.rect));
-                if r.clicked() {
-                    chrome.msgs = false;
-                }
-                let r = crate::glyphs::tab(ui, Icon::Messages, TAB, chrome.msgs, cue.alarm)
-                    .tip("Messages: what happened, newest last.");
-                hits.push(("bottom messages".to_string(), r.rect));
-                if r.clicked() {
-                    chrome.msgs = true;
-                }
-                if cue.errors > 0 {
-                    let red = theme(ui).ink(crate::st_view::brand::RED);
-                    let r = ui
-                        .label(RichText::new(cue.errors.to_string()).strong().color(red))
-                        .tip(if cue.errors == 1 {
-                            "One error in the Messages.".to_string()
-                        } else {
-                            format!("{} errors in the Messages.", cue.errors)
-                        });
-                    hits.push(("messages error count".to_string(), r.rect));
-                }
-            });
-            ui.separator();
+            // The two tabs stacked in a strip at the left: a row of them
+            // over the plot took the height the Trend's signal rows need
+            // (a long time axis beats a tall one, Nick 2026-11-01).
+            egui::Panel::left("ed-bottom-tabs")
+                .exact_size(TAB + 8.0)
+                .resizable(false)
+                .show(ui, |ui| {
+                    let r = crate::glyphs::tab(ui, Icon::Trend, TAB, !chrome.msgs, None)
+                        .tip("Trend: the signals you pin, over time.");
+                    hits.push(("bottom trend".to_string(), r.rect));
+                    if r.clicked() {
+                        chrome.msgs = false;
+                    }
+                    let r = crate::glyphs::tab(ui, Icon::Messages, TAB, chrome.msgs, cue.alarm)
+                        .tip("Messages: what happened, newest last.");
+                    hits.push(("bottom messages".to_string(), r.rect));
+                    if r.clicked() {
+                        chrome.msgs = true;
+                    }
+                    if cue.errors > 0 {
+                        let red = theme(ui).ink(crate::st_view::brand::RED);
+                        let r = ui
+                            .label(RichText::new(cue.errors.to_string()).strong().color(red))
+                            .tip(if cue.errors == 1 {
+                                "One error in the Messages.".to_string()
+                            } else {
+                                format!("{} errors in the Messages.", cue.errors)
+                            });
+                        hits.push(("messages error count".to_string(), r.rect));
+                    }
+                });
+            notices_row(ui, body, chrome);
             if chrome.msgs {
-                messages_body(ui, body, chrome);
+                body.messages().ui(ui, chrome);
             } else {
                 body.trend(ui, chrome);
             }

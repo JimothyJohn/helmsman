@@ -336,12 +336,19 @@ pub enum Act {
 /// title; the dot alone says the agent is online.
 pub fn heading(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, dot: egui::Color32, dot_tip: &str) {
     use crate::glyphs;
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let (rect, r) = ui.allocate_exact_size(Vec2::splat(glyphs::ROW * 0.6), egui::Sense::hover());
-        ui.painter().circle_filled(rect.center(), rect.width() * 0.3, dot);
-        let r = r.tip(dot_tip.to_string());
-        chrome.hit("agent status", r.rect);
-    });
+    // One row of the dot's height: a bare right-to-left layout takes all
+    // the height below it and pushed the tab's controls off the page.
+    let side = glyphs::ROW * 0.6;
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), side),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let (rect, r) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::hover());
+            ui.painter().circle_filled(rect.center(), rect.width() * 0.3, dot);
+            let r = r.tip(dot_tip.to_string());
+            chrome.hit("agent status", r.rect);
+        },
+    );
 }
 
 /// The question, Ask or Stop, and the answer: the diagnosis and the issue

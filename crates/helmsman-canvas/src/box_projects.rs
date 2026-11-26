@@ -2524,6 +2524,17 @@ impl BoxProjects {
                         "{project} is running: {mods} (snapshot {}){red}",
                         short(snap)
                     ));
+                    // The popup under the save glyph and the log's line;
+                    // a red requirement test is said in the line.
+                    self.flash = Some(Flash {
+                        word: "Deployed",
+                        line: if red.is_empty() {
+                            format!("Deployed {project}.")
+                        } else {
+                            format!("Deployed {project}{red}.")
+                        },
+                        at: self.now,
+                    });
                     self.running = Some(project);
                     self.deployed = true;
                     self.relist();
