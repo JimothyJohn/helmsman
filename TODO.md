@@ -4,6 +4,13 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
+- [ ] **Add a "no video in git" line to the global CLAUDE.md?** — You said 2026-11-26 "I don't want to commit videos of any kind anywhere, they'll be stored on a file server somewhere". Today that rule lives only in Claude's memory and storyboard's CLAUDE.md (generated media), so a session in another repo can miss it. Proposed line under Code and tests: "Media (video especially) never goes in git; it lives on the file server, ~/Movies/<project> until that exists." Related: helmsman render.sh depends on untracked assets (assets/product/plug.mp4, assets/bench/tune.wav, assets/app/*.mp4) whose sources are only in .claude/handoff.md; say if you want them listed in marketing/helmsman-benefits/README.md too.
+  options: add the line | memory is enough | add it and list the assets
+  result: the rule holds in every repo and session
+  id: global-no-video-line
+  asked: 2026-11-26
+  by: claude-session
+
 - [x] **Local user settings and sign-in: read the proposal and answer its four questions** — docs/decisions/local-user-settings.md. Short version: a box already has local accounts, sessions and a per-person store on the device, so no new sign-in is needed; what is missing is preferences kept on the device (they are per browser today), one Settings window, and a way to make the first account without a shell. The four questions: a setup code or an open first-run page for the first account; whether signed-out screens may change settings; a longer session for an operator's floor screen; settings first and accounts in the UI second, or together.
   result: the settings card can be written and sized
   decided: Nick, interview 2026-11-23: a setup code for the first account; signed-out screens show the device defaults only; a longer session for operators; settings first, then accounts, back to back (cards settings-on-device, first-run-and-accounts)
@@ -230,6 +237,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   decided: 2026-11-25 Nick: the account
 
 ## Needs your hands
+
+- [ ] **Film the Skipper and the motor it controls for the benefits reel** — Why: reel v5 (~/Movies/helmsman-benefits-reel-v5.mp4, 34.5 s, PR #646, you said "Way better") shows one device at a time, so a viewer can't tell what controls what. Shots, landscape 1080p or higher, into ~/Movies/helmsman-benefits/footage/: (1) Skipper and motor in one frame, the cable going in, the LED turning green (replaces the H3 plug-in shot); (2) the motor playing the song with the Skipper in view, with sound (step 3, Control devices); (3) optional: an idle shot of both for step 2, Scan (otherwise the current scan take stays, per your answer). Files only, never committed.
+  needs: the Skipper, the bench motor, a phone or camera
+  result: a session cuts the footage into plug / control (and scan), re-renders, runs the gate, pushes #646 for your approval
+  est: 20m
+  difficulty: low
+  id: reel-device-footage
+  asked: 2026-11-26
+  by: claude-session
+  status: blocked
 
 - [ ] **Watch the IMPACT67's LEDs while a session switches it, and wire one output to one input** — Why it matters: the block was driven on 2026-11-16 with nothing on its ports and nobody looking, so no channel is confirmed and nobody knows what its outputs do when the controller goes away (after a Forward_Close its output assembly still read the last values written). Steps: (1) put an M12 jumper from pin 4 of port 0 to pin 4 of port 1 (or tell the session which channels you joined); (2) tell a session "watch the Murr with me": it sets port 0 pin 4 as an output, switches it, and asks what the channel LEDs do, then closes the connection and stops sending in turn and asks again.
   needs: the block powered at its DHCP address (10.0.0.73 on 2026-11-16; a session finds it by ListIdentity)
