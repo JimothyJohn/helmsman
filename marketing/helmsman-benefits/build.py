@@ -459,39 +459,45 @@ FACTS = [
 
 
 def reel() -> Film:
-    # Revised 2026-11-26 from Nick's notes: the name first, the demo second, four complaints
-    # (down from the site's list), no diagram, typo, bench-motor or break-the-tank beats.
-    f = Film("reel", "Helmsman: the benefits, shown in the app itself", 41.0)
-    f.open(2.5)
-    f.claim(2.5, 2.5, ["Say", "what", "it", "/", "should", "do"], "Say", "See it work")
-    # Describe: the prompt typed and sent, the program it writes, then the input and the trend.
-    f.app(5.0, 4.0, "describe", 2.0, views=[(0, 1.9, 0, 40)])
-    f.caps(5.0, 4.0, [(0.1, "Describe it", "y")], right=True)
-    f.app(9.0, 2.0, "describe", 8.6, views=[(0, 1.25, 0, 60)])
-    f.app(11.0, 3.0, "describe", 42.8, views=[(0, 1.25, 400, 160)])
-    f.caps(9.0, 5.0, [(0.1, "It writes the program", "w"), (2.4, "The lamp follows", "y")])
-    f.gripes(14.0, 4.0, "What engineers are tired of", [
+    # Revised 2026-11-26 from Nick's notes, then his second pass: slower, the app less cropped, built
+    # on three moments that make people sit up: SAY it (one sentence becomes the song program), RUN it
+    # (it plays Mary had a little lamb with no machine), PLUG it in (scan, and a device is wired).
+    f = Film("reel", "Helmsman: the benefits, shown in the app itself", 55.0)
+    f.open(3.0)
+    f.claim(3.0, 3.0, ["Say", "what", "it", "/", "should", "do"], "Say", "See it work")
+    # 1. Say it: Nick's sentence from the end of the demo, typed and sent (take 1.0-8.2)...
+    f.app(6.0, 7.2, "song", 1.0, views=[(0, *FULL), (0.6, 1.2, 0, 0)])
+    f.caps(6.0, 7.2, [(0.4, "Describe it in your own words", "w")], right=True)
+    # ...then the program it wrote, already running (the answer lands at take 19.0).
+    f.app(13.2, 5.3, "song", 19.6, views=[(0, 1.2, 0, 0)])
+    f.later(13.2, 1.5, "11 s later")
+    f.caps(13.2, 5.3, [(0.3, "It writes the program", "y"), (1.4, "and draws the diagram", "w")], right=True)
+    f.sfx(13.25, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
+    # 2. Run it: the input on (take 26.6), the speed steps through the notes, in Hz.
+    f.app(18.5, 10.0, "song", 25.4, views=[(0, 1.2, 0, 0), (1.9, 1.12, 120, 130)])
+    f.caps(18.5, 10.0, [(0.5, "Flip the input", "w"), (2.4, "It plays Mary had a little lamb", "y"),
+                        (5.0, "No machine connected", "w")], right=True)
+    f.sfx(20.75, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
+    f.gripes(28.5, 4.5, "What engineers are tired of", [
         "Programming is hard",
         "Crappy interfaces",
         "Can't test without hardware",
         "No version control",
     ])
-    # Test with no machine
-    f.app(18.0, 4.5, "mary", 2.8, views=[(0, *FULL), (1.6, 1.4, 460, 300)])
-    f.caps(18.0, 4.5, [(0.1, "Test with no machine", "y")], right=True)
-    # History
-    f.app(22.5, 4.0, "history", 29.9, views=[(0, 1.25, 0, 60)])
-    f.caps(22.5, 4.0, [(0.1, "Version control, built in", "y"), (1.0, "See what changed", "w")], right=True)
-    # The controller: a render of the Skipper case stands in until Nick's mockups exist.
-    f.bench(26.5, 1.5, "skipper", folder="product")
-    f.caps(26.5, 1.5, [(0, "Low-cost controller", "y")], kicker="The Skipper")
-    f.app(28.0, 3.0, "scan", 2.9, views=[(0, 1.4, 0, 150)])
-    f.caps(28.0, 3.0, [(0.1, "Plug in and go", "y")], right=True)
-    f.stack(31.0, 4.5, "What is built", FACTS)
-    f.end(35.5)
-    # The bed is 32.5 s with its first beat on frame 0: it starts again on bar 14, where the device is added.
-    f.bed(0, 28.0, 0, 0.8)
-    f.bed(28.0, 13.0, 0, 0.8, fade=1.2)
+    # Version control
+    f.app(33.0, 6.0, "history", 29.6, views=[(0, 1.12, 0, 0)])
+    f.caps(33.0, 6.0, [(0.3, "Version control, built in", "y"), (1.4, "Step back, see what changed", "w")], right=True)
+    # 3. Plug it in: the controller (a render of the Skipper case until Nick's mockups exist), then the scan.
+    f.bench(39.0, 2.0, "skipper", folder="product")
+    f.caps(39.0, 2.0, [(0.1, "Low-cost controller", "y")], kicker="The Skipper")
+    f.app(41.0, 6.5, "scan", 0.5, views=[(0, 1.12, 0, 0)])
+    f.caps(41.0, 6.5, [(0.3, "Scan the network", "w"), (2.9, "It knows the device", "w"), (4.4, "Wired in one click", "y")], right=True)
+    f.sfx(45.4, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
+    f.stack(47.5, 4.0, "What is built", FACTS)
+    f.end(51.5)
+    # The bed is 32.5 s with its first beat on frame 0: it starts again on bar 15 (28.0), under the complaints.
+    f.bed(0, 28.5, 0, 0.8)
+    f.bed(28.5, 26.5, 0, 0.8, fade=1.2)
     return f
 
 

@@ -65,6 +65,8 @@ DOWNLOAD = (1250, 83)
 RUN = (975, 83)
 DESCRIBE_FIELD = (154, 125)  # a new project: no "Name the I/O first" fold above it
 DESCRIBE_SEND = (266, 166)
+SONG_FIELD = DESCRIBE_FIELD  # the uploaded bench map has no "Name the I/O first" fold either
+SONG_SWITCH = (363, 188)  # the PLAY input's switch, top left of the diagram the answer drew
 # Under the Describe field once a project has versions: the clock (the list), back, forward.
 VERSIONS = (40, 166)
 BACK = (115, 166)
@@ -111,6 +113,8 @@ def mary_running():
             ("click", MARY_SWITCH), ("move", REST), ("wait", 2000)]
 
 
+# Nick's words in the 2026-11-25 demo (the song: 8:40 of the first recording, his "speed o the mot" typo fixed).
+SONG_SPEC = "While the input is high, play Mary had a little lamb by adjusting the speed of the motor."
 # Nick's words in the 2026-11-25 demo.
 LAMP_SPEC = "When the input goes high, a virtual lamp should turn on."
 MOTOR_SPEC = "Now, not only should the lamp go high, the motor should spin at one revolution a second while it's active."
@@ -140,6 +144,27 @@ SCENES = {
             (9.8, "move", REST),
         ],
         length=17.0,
+    ),
+    # The song, from words: the bench's I/O map with an empty program, Nick's sentence from the end of
+    # the demo, the answer, then run and the input switched on so the notes step across the trend.
+    "song": dict(
+        query="?editor",
+        layout=LAYOUT,
+        setup=[("click", FILES_TAB)] + new_project("bench") + [("click", EXAMPLES), ("move", UPLOAD), ("wait", 300),
+               ("upload", UPLOAD, "mary_from_words"), ("wait", 2500), ("click", DESCRIBE_TAB), ("move", REST)],
+        take=[
+            (0.6, "move", SONG_FIELD),
+            (1.0, "click", SONG_FIELD),
+            (1.4, "type", SONG_SPEC, 22),
+            (7.6, "key", "Enter"),
+            (8.0, "move", REST),
+            # It may ask a question first and carries on with its own guess; the program is written
+            # and already running about 12 s after Enter (take 2026-11-26). Then the PLAY input on.
+            (26.0, "move", SONG_SWITCH),
+            (26.6, "click", SONG_SWITCH),
+            (27.2, "move", REST),
+        ],
+        length=48.0,
     ),
     # Describe: Nick's own sentence from the 2026-11-25 demo, sent to the live free chat.
     "describe": dict(

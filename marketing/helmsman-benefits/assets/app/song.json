@@ -1,0 +1,75 @@
+{
+ "scene": "song",
+ "frames": 1273,
+ "seconds": 48.016,
+ "points": [
+  1280,
+  720
+ ],
+ "events": [
+  {
+   "t": 0.583,
+   "action": "move",
+   "x": 154,
+   "y": 125,
+   "text": null,
+   "end": 0.835
+  },
+  {
+   "t": 0.985,
+   "action": "click",
+   "x": 154,
+   "y": 125,
+   "text": null,
+   "end": 1.241
+  },
+  {
+   "t": 1.383,
+   "action": "type",
+   "x": null,
+   "y": null,
+   "text": "While the input is high, play Mary had a little lamb by adjusting the speed of the motor.",
+   "end": 6.841
+  },
+  {
+   "t": 7.591,
+   "action": "key",
+   "x": null,
+   "y": null,
+   "text": "Enter",
+   "end": 7.897
+  },
+  {
+   "t": 7.986,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 8.222
+  },
+  {
+   "t": 25.983,
+   "action": "move",
+   "x": 363,
+   "y": 188,
+   "text": null,
+   "end": 26.27
+  },
+  {
+   "t": 26.587,
+   "action": "click",
+   "x": 363,
+   "y": 188,
+   "text": null,
+   "end": 26.872
+  },
+  {
+   "t": 27.189,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 27.481
+  }
+ ]
+}
