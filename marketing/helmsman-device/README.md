@@ -58,8 +58,9 @@ Replicate's URLs for a still die after about two hours. Set
 
 The takes that are kept:
 
-- `footage/clips/<name>.mp4`: 768P drafts, committed (9.5 MB), so the film
-  builds from a clone.
+- `footage/clips/<name>.mp4`: 768P drafts (9.5 MB), not committed: no video
+  goes in git. Nick's copy is `~/Movies/helmsman-marketing/marketing/helmsman-device/footage/clips/`
+  until the file server exists; put them in `footage/clips/` to build.
 - `footage/finals/<name>.mp4`: the 2K takes (2560x1440, 77 MB), not
   committed. Nick's copy is `~/Movies/helmsman-device/finals-2k/` on the
   Studio; put them in `footage/finals/` to build the film from them.
@@ -92,4 +93,4 @@ in your hand", "clip it on the rail" and "one cable" describe the design.
 ## Third-party files
 
 Fonts, effects and the bed as in `../helmsman-ad-v2/README.md`.
-`assets/app-latch.mp4` is that ad's recording of the real playground.
+`assets/app-latch.mp4` is that ad's recording of the real playground. It is not committed (no video goes in git); Nick's copy is under `~/Movies/helmsman-marketing/`, laid out like this repo, until the file server exists.
