@@ -807,6 +807,29 @@ impl Monitor {
     ) {
         let groups = crate::signal_picker::signal_groups(rows, map);
         let watched = self.watched.clone();
+        // Nothing watched yet: say what to do, and open the first device
+        // that has points so they are on screen without a click. Once, so
+        // a fold afterwards stays folded.
+        if watched.is_empty() && !groups.is_empty() {
+            let t = theme(ui);
+            let r = ui.add(
+                egui::Label::new(
+                    egui::RichText::new("Pick a device below to choose what to watch.")
+                        .size(crate::theme::BODY)
+                        .color(t.muted),
+                )
+                .wrap(),
+            );
+            chrome.hit("monitor pick hint", r.rect);
+        }
+        if !self.picker.seeded
+            && let Some((g, _)) = groups.iter().find(|(_, names)| !names.is_empty())
+        {
+            self.picker.seeded = true;
+            if watched.is_empty() {
+                self.picker.open.insert(g.clone());
+            }
+        }
         let flip = self.picker.ui(
             ui,
             chrome,
