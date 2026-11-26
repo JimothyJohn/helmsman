@@ -16,3 +16,6 @@ helmsman-device/footage/finals/
 helmsman-benefits/loop-*/
 helmsman-benefits/reel/
 helmsman-benefits/assets/bench/
+# The benefit films' app takes, recorded by tools/record.py: not committed.
+# Nick's copy is ~/Movies/helmsman-benefits/takes/ on the Studio; put them in assets/app/ to build.
+helmsman-benefits/assets/app/*.mp4
