@@ -1187,6 +1187,9 @@ impl App {
         let menu_at = panel.inner;
         if self.login {
             self.login_ui(ui.ctx(), menu_at, &mut hits);
+        } else {
+            #[cfg(target_arch = "wasm32")]
+            crate::web::hide_login_form();
         }
         if self.about {
             self.about_ui(ui.ctx(), &mut hits);
@@ -2201,6 +2204,25 @@ impl App {
         let Some(r) = &mut self.review else { return };
         let was = r.state.session.is_some();
         r.rects.clear();
+        // In the browser a box with accounts signs in through a real HTML
+        // form, so the browser's password manager can save and fill it.
+        // Signed in, the egui panel (Sign out) is drawn as before.
+        #[cfg(target_arch = "wasm32")]
+        {
+            if r.state.accounts() && !was {
+                if let Some((user, password)) = crate::web::take_login() {
+                    r.state.login(&user, password);
+                }
+                let t = crate::theme::Theme::for_mode(ctx.global_style().visuals.dark_mode);
+                crate::web::show_login_form(ctx, &t, r.state.login_problem.as_deref(), r.state.logging_in);
+                if crate::web::take_login_closed() {
+                    self.login = false;
+                    crate::web::hide_login_form();
+                }
+                return;
+            }
+            crate::web::hide_login_form();
+        }
         let panel = egui::Area::new(egui::Id::unique("header-login"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)

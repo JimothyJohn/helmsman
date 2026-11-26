@@ -35,6 +35,8 @@ wasm-bindgen-futures = "0.4"
 # asked to remember, Element for the page's mode.
 # Projects: HtmlInputElement, File and FileList for Upload's file picker;
 # Blob, BlobPropertyBag, Url and HtmlAnchorElement for Download.
+# The sign-in as a real form the browser can fill: HtmlButtonElement,
+# HtmlElement (focus), KeyboardEvent (Esc) and Node (text).
 # CustomEvent(Init) to tell the page's loading screen how starting went.
 web-sys = { version = "0.3", features = [
     "AbortController",
@@ -53,12 +55,16 @@ web-sys = { version = "0.3", features = [
     "FileList",
     "Headers",
     "HtmlAnchorElement",
+    "HtmlButtonElement",
     "HtmlCanvasElement",
+    "HtmlElement",
     "HtmlDocument",
     "HtmlInputElement",
     "HtmlTextAreaElement",
+    "KeyboardEvent",
     "Location",
     "MessageEvent",
+    "Node",
     "ReadableStream",
     "ReadableStreamDefaultReader",
     "ReferrerPolicy",
