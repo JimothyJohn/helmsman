@@ -419,6 +419,8 @@ pub fn near_pointer(ctx: &egui::Context, key: &str) -> egui::Modal {
         .kind(egui::UiKind::Modal)
         .sense(egui::Sense::hover())
         .order(egui::Order::Foreground)
+        // No fade-in: the question is readable from the first frame it is up.
+        .fade_in(false)
         .interactable(true)
         .pivot(egui::Align2::CENTER_TOP)
         .fixed_pos(at + egui::vec2(0.0, 14.0))
