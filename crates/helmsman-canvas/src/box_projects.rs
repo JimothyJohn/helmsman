@@ -123,6 +123,10 @@ pub enum PCall {
     /// `PUT /api/signals/{name}`: a placeholder (`sim`) input set, on the
     /// watched box or Skipper.
     SetSim(String),
+    /// `GET /api/node` of the watched Skipper: its uptime and wall time.
+    NodeInfo,
+    /// `PUT /api/time` to the watched Skipper: the browser's time.
+    SetTime,
     /// `POST /api/modules/{name}/stop|run|restart` (card
     /// monitor-box-run-stop): the module and the control.
     Control(String, &'static str),
@@ -232,6 +236,8 @@ impl PCall {
                 | Self::Control(..)
                 | Self::NodeMapSend(_)
                 | Self::SetSim(_)
+                | Self::NodeInfo
+                | Self::SetTime
         )
     }
 }
@@ -2652,6 +2658,8 @@ impl BoxProjects {
             | PCall::KeepPaneLayout(_)
             | PCall::DropPaneLayout(_)
             | PCall::NodeMap(_)
+            | PCall::NodeInfo
+            | PCall::SetTime
             | PCall::Desk
             | PCall::SaveDesk => {}
             PCall::Layout(p) => {

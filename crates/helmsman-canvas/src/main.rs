@@ -146,6 +146,7 @@ mod sim_popup_tests;
 mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
+mod skipper_clock;
 mod skipper_map;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod skipper_map_tests;

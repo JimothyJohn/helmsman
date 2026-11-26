@@ -211,6 +211,11 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
             });
             (router::sim_set(&point.name, value), false)
         }
+        Effect::SetTime { unix_ms } => {
+            let up = embassy_time::Instant::now().as_millis();
+            state::with(ctx.shared, |live| live.clock_offset_ms = Some(unix_ms.saturating_sub(up)));
+            (router::time_set(unix_ms), false)
+        }
         Effect::SaveIoMap { text, page } => {
             // Beside the program on flash; the restart makes the I/O task
             // drive the block it names.

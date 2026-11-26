@@ -113,6 +113,9 @@ pub struct NodeView {
     pub seq: u64,
     pub at_ms: u64,
     pub uptime_ms: u64,
+    /// Wall clock minus uptime, in ms: set by `PUT /api/time`, `None`
+    /// from boot until a client sets it. Held in RAM only.
+    pub clock_offset_ms: Option<u64>,
     pub heap_used: usize,
     pub heap_peak: usize,
     pub heap_size: usize,
@@ -145,6 +148,12 @@ pub struct NodeView {
 }
 
 impl NodeView {
+    /// Unix time in ms at node uptime `at_ms`, once the clock is set.
+    #[must_use]
+    pub fn unix_ms_at(&self, at_ms: u64) -> Option<u64> {
+        self.clock_offset_ms.map(|o| o.saturating_add(at_ms))
+    }
+
     /// The node's id: the MAC's hex, which is stable and already public
     /// on the LAN.
     #[must_use]
@@ -308,6 +317,7 @@ pub fn values_event(view: &NodeView) -> Json {
     json!({
         "seq": view.seq,
         "at_ms": view.at_ms,
+        "at_unix_ms": view.unix_ms_at(view.at_ms),
         "signals": signals(view),
         "modules": modules(view),
         "outputs": [],
@@ -388,6 +398,7 @@ pub fn node(view: &NodeView, settings: &Settings) -> Json {
         "board": view.board,
         "version": view.version,
         "uptime_ms": view.uptime_ms,
+        "unix_ms": view.unix_ms_at(view.uptime_ms),
         "heap": heap,
         "mac": format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5]),
         "ip": view.ip.map(ip_text),
@@ -801,6 +812,7 @@ pub(crate) fn sample_view() -> NodeView {
         seq: 42,
         at_ms: 123_456,
         uptime_ms: 600_000,
+        clock_offset_ms: None,
         heap_used: 50_000,
         heap_peak: 60_000,
         heap_size: 112 * 1024,

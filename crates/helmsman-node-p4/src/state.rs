@@ -171,6 +171,8 @@ pub struct Live {
     pub fw: FwLive,
     /// The comms check: the last one, or the one running.
     pub check: helmsman_nodecore::check::Check,
+    /// Wall clock minus uptime in ms, set by `PUT /api/time`; RAM only.
+    pub clock_offset_ms: Option<u64>,
 }
 
 impl Default for Live {
@@ -193,6 +195,7 @@ impl Default for Live {
             ip: None,
             fw: FwLive::default(),
             check: helmsman_nodecore::check::Check::default(),
+            clock_offset_ms: None,
         }
     }
 }
@@ -289,6 +292,7 @@ pub fn view(
             seq: live.seq,
             at_ms: live.at.map_or(0, |t| t.as_millis()),
             uptime_ms: now.as_millis(),
+            clock_offset_ms: live.clock_offset_ms,
             heap_used: heap().0,
             heap_peak: esp_alloc::HEAP.stats().max_usage,
             heap_size,

@@ -989,6 +989,18 @@ beside the text, and `/api/signals` lists each named point as before (inputs by
 image position, then outputs, then the program's ports), with numbers as JSON
 numbers.
 
+**The clock.** A node has no RTC or NTP: it counts `uptime_ms` from boot and
+holds no wall time until a client sets it with `PUT /api/time`
+(`{"unix_ms": <ms since 1970>}`, the token; 400 for a non-number, 0 or a time
+outside 2020..2100). The node keeps `unix_ms` minus its uptime in RAM (not
+flash: it is gone at a restart, and the page sets it again), and `GET
+/api/node` then carries `unix_ms` beside `uptime_ms` (null while unset) and
+each `values` event `at_unix_ms` beside `at_ms`. The canvas, watching a Skipper
+with its token, reads `/api/node` every 10 s and sets the clock when it is unset
+or more than 2 s off the browser's, at most once per 30 s; the time it shows
+is the Skipper's `unix_ms` when set, else the browser's clock less the uptime
+difference, in the browser's time zone.
+
 **Sim points** (`in|out NAME bool|int|real sim [unit=..]`) are placeholders
 with no device and no address: a value in the node's memory, FALSE or 0 at boot
 (a deploy keeps it), and a map may hold them with no `device` line at all.
