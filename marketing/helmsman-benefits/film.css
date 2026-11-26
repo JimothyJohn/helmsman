@@ -1,0 +1,299 @@
+/* The site's own palette and faces (docs/index.html), as in ../helmsman-ad-v2
+   and ../helmsman-device, laid out at 1920 x 1080. */
+@font-face {
+  font-family: "Saira Stencil One";
+  src: url("assets/fonts/SairaStencilOne-400.woff2") format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("assets/fonts/BarlowCondensed-700.woff2") format("woff2");
+  font-weight: 700;
+}
+:root {
+  --yellow: #ffc20e;
+  --black: #141414;
+  --graphite: #3a3a3a;
+  --ink: #f2f2f2;
+  --stencil: "Saira Stencil One", sans-serif;
+  --cond: "Barlow Condensed", sans-serif;
+  --mono: "IBM Plex Mono", monospace;
+}
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--black);
+}
+#root {
+  position: relative;
+}
+#shake,
+.full,
+.wrap {
+  position: absolute;
+  inset: 0;
+}
+.stencil {
+  font-family: var(--stencil);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  line-height: 0.95;
+}
+.cond {
+  font-family: var(--cond);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.w {
+  display: inline-block;
+}
+
+/* The real app: the recording fills the frame; the camera is the wrapper. */
+.cam {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: 0 0;
+}
+.app {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+}
+.cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 54px;
+  height: 54px;
+  transform-origin: 12% 6%;
+}
+.ring {
+  position: absolute;
+  left: -40px;
+  top: -40px;
+  width: 80px;
+  height: 80px;
+  border: 6px solid var(--yellow);
+  border-radius: 50%;
+  opacity: 0;
+}
+
+/* Bench footage, square, filling the frame. */
+.shot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  object-fit: cover;
+}
+
+/* Copy on label tape: flat blocks, so it reads over any picture. */
+.kicker {
+  position: absolute;
+  left: 96px;
+  top: 80px;
+  background: var(--yellow);
+  color: var(--black);
+  font-size: 40px;
+  line-height: 1;
+  letter-spacing: 0.3em;
+  padding: 14px 22px 14px 28px;
+}
+.lines {
+  position: absolute;
+  left: 96px;
+  bottom: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.line {
+  background: var(--black);
+  color: var(--ink);
+  font-size: 84px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  padding: 10px 28px 14px;
+}
+.line.y {
+  background: var(--yellow);
+  color: var(--black);
+}
+/* A cut in real time, said where it happens. */
+.later {
+  position: absolute;
+  right: 96px;
+  top: 80px;
+  background: var(--graphite);
+  color: #fff;
+  font: 600 38px/1 var(--mono);
+  padding: 14px 22px;
+}
+
+/* Before: the complaint, from the site's "From the field". */
+.before {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-left: 160px;
+}
+.before .tag {
+  color: var(--yellow);
+  font-size: 44px;
+  letter-spacing: 0.32em;
+  margin-bottom: 28px;
+}
+.before .gripe {
+  color: var(--ink);
+  font-size: 150px;
+  line-height: 0.95;
+}
+
+/* The slash that turns the old way into the new. */
+.slash-wrap {
+  position: absolute;
+  left: -240px;
+  top: 504px;
+  width: 2400px;
+  height: 72px;
+}
+.slash {
+  width: 2400px;
+  height: 72px;
+  background: var(--yellow);
+}
+.flood {
+  position: absolute;
+  inset: 0;
+  background: var(--yellow);
+}
+
+/* The claim, on yellow. */
+.claim {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-left: 160px;
+  background: var(--yellow);
+  color: var(--black);
+}
+.claim h1 {
+  font-size: 220px;
+}
+.claim h1 .hot {
+  background: var(--black);
+  color: var(--yellow);
+  padding: 0 28px;
+}
+.claim .sub {
+  margin-top: 48px;
+  font-size: 50px;
+  letter-spacing: 0.12em;
+}
+
+/* What is built, a line a beat. */
+.stack {
+  background: var(--black);
+}
+.built {
+  position: absolute;
+  left: 160px;
+  top: 110px;
+  color: var(--yellow);
+  font-size: 44px;
+  letter-spacing: 0.32em;
+}
+.fact {
+  position: absolute;
+  left: 160px;
+  display: flex;
+  align-items: center;
+  gap: 40px;
+  color: var(--ink);
+  font-size: 92px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.fact i {
+  display: block;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  background: var(--yellow);
+}
+
+/* End card */
+.end {
+  background: var(--yellow);
+  color: var(--black);
+}
+.lockup {
+  position: absolute;
+  left: 0;
+  top: 250px;
+  width: 1920px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 56px;
+}
+.mark,
+.mark img {
+  display: block;
+  width: 260px;
+  height: 260px;
+  flex: none;
+}
+.wordmark {
+  font-size: 190px;
+  line-height: 0.85;
+}
+.descriptor {
+  font-size: 44px;
+  letter-spacing: 0.46em;
+  margin-top: 22px;
+}
+.cta {
+  position: absolute;
+  left: 0;
+  top: 640px;
+  width: 1920px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 48px;
+}
+.cta-btn {
+  background: var(--black);
+  color: var(--yellow);
+  font: 600 44px/1 var(--mono);
+  padding: 34px 44px;
+}
+.cta-url {
+  font: 600 48px/1 var(--mono);
+}
+.licence {
+  position: absolute;
+  left: 0;
+  top: 830px;
+  width: 1920px;
+  text-align: center;
+  font: 400 36px/1 var(--mono);
+}

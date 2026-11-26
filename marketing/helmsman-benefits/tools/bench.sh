@@ -21,3 +21,6 @@ cut() { # name start seconds [audio]
 cut skipper 218.9 1.8         # the controller board in hand, 3:39
 cut spin 505.0 4.0            # the motor turning at one revolution a second, 8:25
 cut tune 589.8 10.4 audio     # the motor playing the tune, 9:50
+# The tune's sound on its own, for the films' audio track.
+ffmpeg -v error -y -i assets/bench/tune.mp4 -vn -c:a pcm_s16le assets/bench/tune.wav
+echo assets/bench/tune.wav
