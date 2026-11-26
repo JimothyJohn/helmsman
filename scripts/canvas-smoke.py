@@ -229,7 +229,7 @@ def playground(ctx, base, out):
     r.step("sim-scan", lambda: r.click(178, 195), LEFT, 900)
     r.step("sim-device-added", lambda: r.click(80, 231), LEFT, 1500)
     r.shot("sim-device-rows")
-    r.step("wire-it", lambda: r.click(176, 178), LEFT, 900, stays=True)
+    r.step("wire-it", lambda: r.click(176, 178), LEFT, 900)
     r.shot("wire-it-window")
     r.step("wire-it-closed", lambda: r.key("Escape"), LEFT, 600)
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
