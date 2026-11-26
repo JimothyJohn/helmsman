@@ -1096,9 +1096,11 @@ fn side_pane(
                 .resizable(false),
             egui::Panel::left(LEFT_ID)
                 .resizable(true)
-                // On a phone the default would fill the page: what 320
-                // left beside it at 360 pt wide, it still leaves.
-                .default_size(LEFT_W.min(ui.ctx().content_rect().width() - 40.0).max(120.0))
+                .default_size(LEFT_W)
+                // Never past the page less 40 pt, every frame: opened at
+                // 384 on a wide page, it overfilled one narrowed to a
+                // phone's 360 (what 320 happened to leave, it leaves).
+                .max_size((ui.ctx().content_rect().width() - 40.0).max(120.0))
                 .min_size(120.0),
         )
     };
