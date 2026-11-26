@@ -1,6 +1,7 @@
-//! The diagram's Q and E keys: the view jumps to the previous or next
+//! The diagram's , and . keys: the view jumps to the previous or next
 //! part of the program that carries the logic, framed with some room
-//! around it (Nick, 2026-11-15).
+//! around it (Nick, 2026-11-15; E and Q until 2026-11-26, when E became
+//! the Editor's key).
 //!
 //! A stop is a function block call with the blocks that feed it (a timer,
 //! a counter, an instance of a block of the project's own) or a top-level
@@ -10,14 +11,14 @@
 //!
 //! Where a key goes: from the stop the last jump framed, to its neighbour
 //! in that order, round the ends. Once the view has been moved by hand,
-//! to the nearest stop right (E) or left (Q) of the view's centre, and
+//! to the nearest stop right (.) or left (,) of the view's centre, and
 //! round to the first or last when there is none on that side.
 
 use helmsman_diagram::{Diagram, NodeKind, Rect};
 
 use crate::st_view::Pick;
 
-/// One place Q and E go to.
+/// One place , and . go to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stop {
     /// What the jump picks: the function block's block, or the first arm

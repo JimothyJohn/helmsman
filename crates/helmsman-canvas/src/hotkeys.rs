@@ -39,7 +39,7 @@
 //! | Find in the Structured Text | Ctrl/⌘ F | (a key of our own) |
 //! | Next / previous match | Ctrl/⌘ G, Ctrl/⌘ Shift G | (a key of our own) |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
-//! | Next / previous function block call, IF, CASE or loop, framed | E, Q | (`jump`; keys of our own, read by the diagram while the pointer is over it and nothing is typed in) |
+//! | Next / previous function block call, IF, CASE or loop, framed | . , | (`jump`; keys of our own, read by the diagram while the pointer is over it and nothing is typed in) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
 //! has had its say: a text editor with the focus keeps its own Ctrl+Z.
@@ -560,7 +560,7 @@ pub fn markdown() -> String {
          web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. \
          Every view has a key of one letter, the first of its name; it works whenever you are \
          not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, \
-         E and Q stay the diagram's own. Help › Show hotkeys writes each key beside its \
+         . and , jump along it. Help › Show hotkeys writes each key beside its \
          button.\n\n\
          | key | does | CODESYS command on that key |\n|---|---|---|\n",
     );
@@ -579,7 +579,7 @@ pub fn markdown() -> String {
     }
     out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
     out.push_str(
-        "| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, \
+        "| . , | The next or the previous function block call, IF, CASE or loop on the diagram, \
          zoomed in and framed (with the pointer over the diagram) | |\n",
     );
     out.push_str("\nReserved, not built yet: F2 / Shift F2 for the Describe tab.\n");
@@ -623,7 +623,7 @@ fn compact(label: &str) -> String {
 /// is returned while a widget has the keyboard (a text field, the code
 /// editor, the find bar), and a letter with any modifier held is left to
 /// the browser and the chords. `diagram`: the pointer is over the diagram,
-/// whose E and Q jump along it; those keys stay its.
+/// whose . and , jump along it; those keys stay its.
 pub fn pressed_views(ctx: &egui::Context, diagram: bool) -> Vec<Action> {
     if ctx.egui_wants_keyboard_input() {
         return Vec::new();
@@ -641,7 +641,7 @@ pub fn pressed_views(ctx: &egui::Context, diagram: bool) -> Vec<Action> {
             else {
                 return true;
             };
-            let diagram_key = matches!(key, Key::E | Key::Q);
+            let diagram_key = matches!(key, Key::Period | Key::Comma);
             if !modifiers.is_none() || (diagram && diagram_key) {
                 return true;
             }

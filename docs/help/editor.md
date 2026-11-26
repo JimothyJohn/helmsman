@@ -132,13 +132,13 @@ switch its inputs. What you can do:
   moves it), with Space and a drag, the middle button, or the arrow keys
   while the pointer is over the diagram. The diagram never leaves the view, and a
   double-click on empty space fits it again.
-- **Jump.** With the pointer over the diagram, <kbd>E</kbd> goes to the
-  next function block call, IF, CASE or loop and <kbd>Q</kbd> to the
+- **Jump.** With the pointer over the diagram, <kbd>.</kbd> goes to the
+  next function block call, IF, CASE or loop and <kbd>,</kbd> to the
   previous one. The view zooms in to frame it with its inputs and picks
   it, so a long program is a few key presses from one end to the other.
   The keys follow the program's order and carry on round from the last
   to the first. After you move the view yourself, the next press starts
-  from what is right (<kbd>E</kbd>) or left (<kbd>Q</kbd>) of its centre.
+  from what is right (<kbd>.</kbd>) or left (<kbd>,</kbd>) of its centre.
 
 ![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs.](img/diagram-why.png)
 

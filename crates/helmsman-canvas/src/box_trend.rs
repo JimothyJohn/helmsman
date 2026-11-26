@@ -18,6 +18,7 @@ use serde_json::{Value as Json, json};
 
 use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::Chrome;
+use crate::glyphs::Icon;
 use crate::playground::nice_range;
 use crate::playground_view::{lane_handles, window_slider};
 use crate::remote::{BoxState, segment};
@@ -544,18 +545,27 @@ impl BoxTrend {
                 return;
             }
             ui.label(RichText::new(format!("{} ticked", ticked.len())).color(t.muted));
-            for (key, text, tip) in [
-                ("remove", "Remove", "Take the ticked signals off the trend."),
-                ("up", "Up", "Move the ticked signals up a lane."),
-                ("down", "Down", "Move the ticked signals down a lane."),
+            // Glyphs, not words (Nick, 2026-11-26).
+            let side = crate::glyphs::ROW;
+            for (key, icon, tip) in [
+                ("remove", Icon::Clear, "Remove: takes the ticked signals off the trend."),
+                ("up", Icon::Up, "Up: moves the ticked signals up a lane."),
+                ("down", Icon::Down, "Down: moves the ticked signals down a lane."),
             ] {
-                let r = ui.button(text).tip(tip);
+                let r = crate::glyphs::button_sized(ui, icon, side, true, false, tip);
                 chrome.hit(format!("trend {key}"), r.rect);
                 if r.clicked() {
                     act = Some(key);
                 }
             }
-            let c = ui.button("Color").tip("Give the ticked signals one color.");
+            let c = crate::glyphs::button_sized(
+                ui,
+                Icon::Palette,
+                side,
+                true,
+                false,
+                "Color: gives the ticked signals one color.",
+            );
             chrome.hit("trend color all", c.rect);
             let mut swatches = Vec::new();
             egui::Popup::menu(&c).show(|ui| {

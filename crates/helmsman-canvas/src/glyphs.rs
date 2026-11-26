@@ -95,6 +95,12 @@ pub enum Icon {
     ZoomOut,
     /// A line that rises and falls: the bottom panel's Trend tab.
     Trend,
+    /// ↑ : move up (the Trend's ticked signals, a lane).
+    Up,
+    /// ↓ : move down.
+    Down,
+    /// A painter's palette: pick a color.
+    Palette,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -690,6 +696,32 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             if icon == Icon::ZoomIn {
                 p.line_segment([lens - Vec2::new(0.0, bar), lens + Vec2::new(0.0, bar)], stroke);
             }
+        }
+        Icon::Up | Icon::Down => {
+            // A shaft down the middle, an open arrowhead at one end.
+            let inset = w * 0.7;
+            let (from, to, dir) = if icon == Icon::Up {
+                (bt, t + inset, -1.0)
+            } else {
+                (t, bt - inset, 1.0)
+            };
+            p.line_segment([Pos2::new(c.x, from), Pos2::new(c.x, to)], stroke);
+            head(
+                p,
+                Pos2::new(c.x, to),
+                Vec2::new(0.0, dir),
+                b.height() * 0.36,
+                stroke,
+            );
+        }
+        Icon::Palette => {
+            // The board, and three wells of paint on it.
+            let rad = b.width() * 0.46;
+            p.circle_stroke(c, rad, stroke);
+            for (dx, dy) in [(-0.2, -0.16), (0.12, -0.24), (0.24, 0.06)] {
+                p.circle_filled(Pos2::new(c.x + b.width() * dx, c.y + b.height() * dy), w * 0.9, color);
+            }
+            p.circle_stroke(Pos2::new(c.x - b.width() * 0.12, c.y + b.height() * 0.2), w * 1.1, stroke);
         }
         Icon::Back | Icon::Forward => {
             // A shaft across the middle, an open arrowhead at one end.

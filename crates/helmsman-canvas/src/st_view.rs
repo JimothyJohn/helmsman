@@ -2369,18 +2369,19 @@ impl Viewer {
         // a pinch does; a drag on empty space or the arrow keys move the
         // view (Nick, 2026-11-14: scroll moved it up and down; 2026-11-26:
         // no W A S D, those letters are the views' keys).
-        // Q and E jump to the previous and the next stop.
+        // , and . jump to the previous and the next stop (E and Q until
+        // 2026-11-26: E is the Editor's key).
         let (hover, scroll, zoom, keys, jump, dt) = ui.ctx().input(|i| {
             use egui::Key;
             let held = |k: Key| f32::from(u8::from(i.key_down(k)));
-            // The key's own modifiers: a chord with E or Q is not a jump.
+            // The key's own modifiers: a chord with . or , is not a jump.
             let jump = i.events.iter().find_map(|e| match e {
                 egui::Event::Key {
-                    key: key @ (Key::E | Key::Q),
+                    key: key @ (Key::Period | Key::Comma),
                     pressed: true,
                     modifiers,
                     ..
-                } if modifiers.is_none() => Some(*key == Key::E),
+                } if modifiers.is_none() => Some(*key == Key::Period),
                 _ => None,
             });
             let keys = if i.modifiers.any() {
