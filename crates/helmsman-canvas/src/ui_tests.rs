@@ -646,6 +646,8 @@ mod glyphs_and_help {
     /// pane; with the left pane shut it is the whole bottom. Nick,
     /// 2026-11-26: the Messages left the side pane for a tab of the bottom
     /// panel beside the Trend, the Trend first; the tab shown is kept.
+    /// The two tabs are a strip at the panel's left, the Trend on top and
+    /// the Messages under it, the content to the strip's right.
     #[test]
     fn the_bottom_panel_beside_the_full_height_left_pane_has_the_trend_and_the_messages_as_tabs() {
         let mut h = Harness::new(App::sim());
@@ -656,12 +658,12 @@ mod glyphs_and_help {
         let left = h.rect("left");
         let (tt, tm) = (h.rect("bottom trend"), h.rect("bottom messages"));
         assert!(
-            tt.right() <= tm.left() + 1.0,
-            "Trend, then Messages: {tt:?} {tm:?}"
+            tt.bottom() <= tm.top() + 1.0,
+            "Trend on top, Messages under it: {tt:?} {tm:?}"
         );
         assert!(
-            (tt.center().y - tm.center().y).abs() < 1.0,
-            "one row of tabs: {tt:?} {tm:?}"
+            (tt.center().x - tm.center().x).abs() < 1.0,
+            "one column of tabs: {tt:?} {tm:?}"
         );
         assert!(
             tt.left() >= left.right() - 1.0,
@@ -671,6 +673,10 @@ mod glyphs_and_help {
         assert!(
             trend.left() >= left.right() - 1.0 && trend.left() < left.right() + 40.0,
             "from the left pane's edge: {trend:?} {left:?}"
+        );
+        assert!(
+            tt.left() >= trend.left() - 1.0 && tm.bottom() <= trend.bottom() + 1.0,
+            "the strip is inside the bottom panel: {tt:?} {tm:?} {trend:?}"
         );
         assert!(trend.right() > h.size.x - 12.0, "to the far right: {trend:?}");
         assert!(trend.height() >= 200.0, "taller than it was: {trend:?}");
@@ -687,12 +693,12 @@ mod glyphs_and_help {
         ] {
             let r = h.rect(k);
             assert!(
-                r.left() >= left.right() - 1.0,
-                "{k} is out of the left pane: {r:?}"
+                r.left() >= tm.right() - 1.0,
+                "{k} is right of the strip, out of the left pane: {r:?} {tm:?}"
             );
             assert!(
-                r.top() >= tm.top() - 1.0,
-                "{k} is in the bottom panel: {r:?} {tm:?}"
+                r.top() >= trend.top() - 1.0 && r.bottom() <= trend.bottom() + 1.0,
+                "{k} is in the bottom panel: {r:?} {trend:?}"
             );
             assert!(
                 r.top() >= h.app.chrome.diagram.bottom() - 1.0,
@@ -710,11 +716,17 @@ mod glyphs_and_help {
         let back = crate::editor::Chrome::restored(&h.app.chrome.saved());
         assert!(back.msgs, "the tab shown is kept per browser");
         // The left pane shut: the bottom panel has the whole bottom.
+        let open_at = h.rect("bottom trend").left();
         h.app.chrome.left = false;
         h.wait(0.3);
+        let (rail, strip) = (h.rect("left"), h.rect("bottom trend"));
         assert!(
-            h.rect("bottom trend").left() < 60.0,
-            "from the strip at the far left"
+            strip.left() >= rail.right() - 1.0 && strip.left() <= rail.right() + 40.0,
+            "the tab strip next to the shut pane's rail: {strip:?} {rail:?}"
+        );
+        assert!(
+            strip.left() < open_at - 200.0,
+            "the panel took the bottom the pane left: {strip:?}, {open_at} open"
         );
         h.app.chrome.left = true;
         h.wait(0.3);
@@ -2896,7 +2908,9 @@ mod chrome {
     /// (pulsing at first) and stays red while the error stands or is
     /// unread. Nick, 2026-11-26: the Messages are a tab of the bottom
     /// panel beside the Trend; a new error opens the panel on the Messages
-    /// when it is shut, and an open panel keeps the tab it shows.
+    /// when it is shut, and an open panel keeps the tab it shows. The tabs
+    /// are a strip at the panel's left: Trend, Messages, the error count
+    /// under them; the content is to the strip's right.
     #[test]
     fn an_error_is_in_the_messages_which_go_red_and_open_a_shut_bottom_panel() {
         use crate::messages::FLASH;
@@ -2920,7 +2934,15 @@ mod chrome {
             "the bottom panel opened on the Messages"
         );
         assert!(h.has("fault"), "the fault is in the Messages");
-        assert!(h.rect("fault").top() > h.rect("bottom messages").bottom());
+        let (fault, tm) = (h.rect("fault"), h.rect("bottom messages"));
+        assert!(
+            fault.left() >= tm.right() - 1.0,
+            "the fault is right of the strip: {fault:?} {tm:?}"
+        );
+        assert!(
+            fault.top() >= h.rect("bottom trend").top() - 4.0 && fault.bottom() <= h.size.y,
+            "inside the bottom panel, at the top of its content: {fault:?}"
+        );
         assert!(
             h.rect("fault").top() > h.app.chrome.diagram.bottom() - 0.5,
             "in the bottom panel, under the diagram"
@@ -2954,12 +2976,12 @@ mod chrome {
         );
         assert!(
             h.has("messages error count"),
-            "and the error count shows beside the Messages tab"
+            "and the error count shows by the Messages tab"
         );
         let (count, tab) = (h.rect("messages error count"), h.rect("bottom messages"));
         assert!(
-            (count.center().y - tab.center().y).abs() < tab.height() && count.left() >= tab.left(),
-            "the count {count:?} beside the tab {tab:?}"
+            count.top() >= tab.bottom() - 1.0 && (count.center().x - tab.center().x).abs() < tab.width(),
+            "the count {count:?} under the tab {tab:?}"
         );
         h.press("bottom messages");
         h.wait(0.2);
