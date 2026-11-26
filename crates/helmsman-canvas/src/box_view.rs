@@ -505,6 +505,7 @@ impl BoxView {
                 PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
+                PCall::Wiring(device) => self.devices_ui.wiring_answer(&device, a.status, &a.body),
                 PCall::FindWired => {
                     if let Some(p) = &mut self.devices_ui.picking {
                         p.answer(a.status, &a.body);
@@ -1977,6 +1978,7 @@ impl BoxView {
         {
             self.apply_wiring(&w);
         }
+        self.devices_ui.wire_it_ui(&ui.ctx().clone(), chrome);
         if let Some(crate::devices::DeviceAct::Remove(names)) =
             self.devices_ui.remove_ui(&ui.ctx().clone(), chrome)
             && let Some(b) = self
@@ -3401,6 +3403,9 @@ impl Body for BoxView {
         }
         if let Some(wired) = wanted {
             self.projects.wired(&wired);
+        }
+        if let Some((device, query)) = self.devices_ui.wiring_wanted() {
+            self.projects.wiring(&device, &query);
         }
     }
 

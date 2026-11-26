@@ -54,6 +54,20 @@ pub const MAX_DEVICES: usize = 10_000;
 pub const MAX_TEXT: usize = 120;
 /// Most order numbers one record lists.
 pub const MAX_PRODUCTS: usize = 128;
+/// Longest wiring note or its source, characters (review.json's own limit).
+pub const MAX_NOTE: usize = 600;
+/// Largest review.json read, bytes.
+pub const MAX_REVIEW_BYTES: usize = 2 << 20;
+/// The format line a review.json must carry.
+pub const REVIEW_FORMAT: &str = "helmsman-devices-review 1";
+
+/// What the library says about wiring a device: its `[wiring]` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wiring {
+    pub note: String,
+    /// Where the library read it (a manual and page, or a bench day).
+    pub source: Option<String>,
+}
 
 /// A vendor's file the entry points at, by reference only.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +114,8 @@ pub struct Entry {
     /// The folder has a `record.json` ([`crate::devrecord`]): a wired
     /// sensor's or actuator's detail.
     pub record: bool,
+    /// The device's `[wiring]` note, when the index carries it.
+    pub wiring: Option<Wiring>,
 }
 
 impl Entry {
@@ -146,6 +162,61 @@ fn text(j: &Json, key: &str) -> Result<String, String> {
         return Err(format!("{key}: too long or has control characters"));
     }
     Ok(s.to_string())
+}
+
+fn long(j: &Json, key: &str, what: &str) -> Result<Option<String>, String> {
+    let Some(v) = j.get(key) else {
+        return Ok(None);
+    };
+    let s = v.as_str().ok_or_else(|| format!("{what}.{key}: not text"))?;
+    if s.is_empty() || s.chars().count() > MAX_NOTE || s.chars().any(char::is_control) {
+        return Err(format!(
+            "{what}.{key}: a printable text of 1..={MAX_NOTE} characters"
+        ));
+    }
+    Ok(Some(s.to_string()))
+}
+
+/// A `wiring` table (`note`, optional `source`); `None` when absent.
+fn wiring(j: &Json, what: &str) -> Result<Option<Wiring>, String> {
+    let Some(w) = j.get("wiring") else {
+        return Ok(None);
+    };
+    let note = long(w, "note", what)?.ok_or_else(|| format!("{what}.note: missing"))?;
+    Ok(Some(Wiring {
+        note,
+        source: long(w, "source", what)?,
+    }))
+}
+
+/// The wiring note of `folder` in a `review.json` (the library's file for
+/// people to check claims against), `None` when the folder is not in it
+/// or has no note.
+///
+/// # Errors
+/// Why the file is not one this reader takes: over [`MAX_REVIEW_BYTES`],
+/// not JSON, another format, or a note that is not bounded printable text.
+pub fn review_wiring(text: &str, folder: &str) -> Result<Option<Wiring>, String> {
+    if text.len() > MAX_REVIEW_BYTES {
+        return Err(format!(
+            "review.json is {} bytes, more than {MAX_REVIEW_BYTES}",
+            text.len()
+        ));
+    }
+    let j: Json = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
+    if j.get("format").and_then(Json::as_str) != Some(REVIEW_FORMAT) {
+        return Err(format!("not a {REVIEW_FORMAT:?} file"));
+    }
+    let list = j
+        .get("devices")
+        .and_then(Json::as_array)
+        .ok_or("devices: not a list")?;
+    if list.len() > MAX_DEVICES {
+        return Err(format!("{} devices, more than {MAX_DEVICES}", list.len()));
+    }
+    list.iter()
+        .find(|d| d.get("folder").and_then(Json::as_str) == Some(folder))
+        .map_or(Ok(None), |d| wiring(d, folder))
 }
 
 fn folder_ok(f: &str) -> bool {
@@ -293,6 +364,7 @@ fn entry(j: &Json) -> Result<Entry, String> {
         Some(r) if r.as_str() == Some(crate::devrecord::FILE) => true,
         Some(_) => return Err(format!("{folder}: record: not {}", crate::devrecord::FILE)),
     };
+    let wiring = wiring(j, &folder)?;
     Ok(Entry {
         folder,
         vendor,
@@ -305,6 +377,7 @@ fn entry(j: &Json) -> Result<Entry, String> {
         iolink,
         products,
         record,
+        wiring,
     })
 }
 
@@ -698,5 +771,118 @@ mod tests {
         assert_ne!(i.by_identity(991, 515)[0].folder, e.folder);
         // And an unrelated name does not match by text.
         assert!(i.lookup(243, 15363, "Something Else").is_none());
+    }
+    /// The E1213's `[wiring]` as the library's index and review.json carry it.
+    const WIRING: &str = "The DO are source type and need EXT field power (12-36 V on the EXT terminals, jumper JP10 default) before an output drives anything; the console's overview says 'No External Power' until then.";
+
+    fn with_wiring(note: &str, source: &str) -> String {
+        GOOD.replacen(
+            r#""kind": "remote-io","#,
+            &format!(
+                r#""kind": "remote-io", "wiring": {{ "note": {}, "source": {} }},"#,
+                Json::from(note),
+                Json::from(source)
+            ),
+            1,
+        )
+    }
+
+    #[test]
+    fn an_entrys_wiring_note_and_source_are_read_and_absent_means_none() {
+        let i = Index::parse(&with_wiring(
+            WIRING,
+            "E1200 manual v15.10 p. 2-6, p. 1-4; bench 2026-11-02",
+        ))
+        .unwrap();
+        let w = i.devices[0].wiring.as_ref().unwrap();
+        assert_eq!(w.note, WIRING);
+        assert_eq!(
+            w.source.as_deref(),
+            Some("E1200 manual v15.10 p. 2-6, p. 1-4; bench 2026-11-02")
+        );
+        // An index without the field (every one built so far) still parses.
+        let old = Index::parse(GOOD).unwrap();
+        assert!(old.devices.iter().all(|e| e.wiring.is_none()));
+    }
+
+    #[test]
+    fn a_hostile_wiring_note_fails_the_index() {
+        let long = "x".repeat(MAX_NOTE + 1);
+        assert!(Index::parse(&with_wiring(&long, "s")).is_err(), "too long");
+        assert!(
+            Index::parse(&with_wiring("a\u{1b}[31mb", "s")).is_err(),
+            "control characters"
+        );
+        assert!(Index::parse(&with_wiring("", "s")).is_err(), "empty note");
+        assert!(
+            Index::parse(&with_wiring("ok", &"y".repeat(MAX_NOTE + 1))).is_err(),
+            "long source"
+        );
+        let not_text = GOOD.replacen(
+            r#""kind": "remote-io","#,
+            r#""kind": "remote-io", "wiring": { "note": 7 },"#,
+            1,
+        );
+        assert!(Index::parse(&not_text).is_err());
+        let at_limit = "x".repeat(MAX_NOTE);
+        assert!(Index::parse(&with_wiring(&at_limit, "s")).is_ok());
+    }
+
+    /// review.json, as `scripts/build-review.py` writes it (one real entry, trimmed).
+    fn review(wiring: &str) -> String {
+        format!(
+            r#"{{ "format": "helmsman-devices-review 1", "devices": [
+              {{ "folder": "devices/acme/relay-8", "vendor": "Acme", "model": "Relay 8" }},
+              {{ "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213",
+                 "points": [ {{ "name": "DI-00..DI-11", "meaning": "digital input state, 1 = on" }} ]{wiring} }} ] }}"#
+        )
+    }
+
+    #[test]
+    fn review_json_gives_a_folders_wiring_note_when_it_has_one() {
+        let with = review(&format!(
+            r#", "wiring": {{ "note": {}, "source": "E1200 manual v15.10 p. 2-6" }}"#,
+            Json::from(WIRING)
+        ));
+        let w = review_wiring(&with, "devices/moxa/iologik-e1213")
+            .unwrap()
+            .unwrap();
+        assert_eq!(w.note, WIRING);
+        assert_eq!(w.source.as_deref(), Some("E1200 manual v15.10 p. 2-6"));
+        assert_eq!(
+            review_wiring(&with, "devices/acme/relay-8"),
+            Ok(None),
+            "no wiring table"
+        );
+        assert_eq!(
+            review_wiring(&with, "devices/nobody/none"),
+            Ok(None),
+            "not in the file"
+        );
+        let w = review_wiring(
+            &review(r#", "wiring": { "note": "n" }"#),
+            "devices/moxa/iologik-e1213",
+        );
+        assert_eq!(w.unwrap().unwrap().source, None, "source is optional");
+    }
+
+    #[test]
+    fn a_hostile_review_file_is_refused_not_trusted() {
+        let f = "devices/moxa/iologik-e1213";
+        assert!(review_wiring("not json", f).is_err());
+        assert!(review_wiring(r#"{ "format": "other 1", "devices": [] }"#, f).is_err());
+        assert!(
+            review_wiring(&" ".repeat(MAX_REVIEW_BYTES + 1), f).is_err(),
+            "over the size limit"
+        );
+        let long = review(&format!(
+            r#", "wiring": {{ "note": "{}" }}"#,
+            "x".repeat(MAX_NOTE + 1)
+        ));
+        assert!(review_wiring(&long, f).is_err());
+        let ctl = review(r#", "wiring": { "note": "a\u0007b" }"#);
+        assert!(review_wiring(&ctl, f).is_err());
+        let list = r#"{ "format": "helmsman-devices-review 1", "devices": 5 }"#;
+        assert!(review_wiring(list, f).is_err());
     }
 }

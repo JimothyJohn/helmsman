@@ -1110,6 +1110,8 @@ pub struct DevicesUi {
     pub adding_io: Option<crate::device_io::AddIo>,
     /// The Remove question on a point, or on a device's unused points.
     pub removing: Option<crate::device_io::Removal>,
+    /// The wiring walkthrough (`wire_it.rs`).
+    pub wire: crate::wire_it::WireIt,
 }
 
 /// Most `wired=` values one tab looks up.
@@ -1338,7 +1340,13 @@ impl DevicesUi {
         let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
         let m = &j["matches"][0];
         let got = match (status, WiredBrief::of(&m["device"])) {
-            (200..=299, Some(brief)) => Wired::Known(brief),
+            (200..=299, Some(brief)) => {
+                self.wire.sensors.insert(
+                    wired.to_string(),
+                    crate::wire_it::Connector::of_brief(&m["device"]),
+                );
+                Wired::Known(brief)
+            }
             (200..=299, None) => Wired::Unavailable(
                 text(&m["device_unavailable"])
                     .or_else(|| text(&j["unavailable"]))
@@ -1442,6 +1450,7 @@ impl DevicesUi {
         let t = theme(ui);
         let mut act = None;
         ui.set_max_width(ui.available_width());
+        self.wire_feed(nodes);
         // Whether the map wires each found device, against the map as it is
         // now, not as it was at the scan (an Add or a Delete changes it).
         for f in &mut self.found {

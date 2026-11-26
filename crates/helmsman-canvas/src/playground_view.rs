@@ -2875,6 +2875,7 @@ impl PlaygroundView {
         {
             self.apply_wiring(&w);
         }
+        self.devices_ui.wire_it_ui(&ui.ctx().clone(), chrome);
         if let Some(crate::devices::DeviceAct::Remove(names)) =
             self.devices_ui.remove_ui(&ui.ctx().clone(), chrome)
             && let Some(t) = self.proj.files.get_mut(helmsman_project::IO_MAP)
@@ -5170,6 +5171,13 @@ impl PlaygroundView {
     /// Every `wired=` value of the map not looked up yet, queued for the
     /// library (the Devices and I/O tabs' line under a point).
     fn want_wired(&mut self) {
+        // The walkthrough's note comes from the index read in the page.
+        if self.devices_ui.wiring_wanted().is_some() {
+            self.wired_lib.want_index();
+        }
+        if let Some(index) = &self.wired_lib.index {
+            self.devices_ui.wiring_from_index(index);
+        }
         while let Some(w) = self.devices_ui.wired_wanted() {
             self.wired_lib.want(w);
         }
