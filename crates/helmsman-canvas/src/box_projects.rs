@@ -157,6 +157,9 @@ pub enum PCall {
     /// `GET /api/devices/library?q=`: the picker's search by the number
     /// on a label (answered by the view, not here).
     FindWired,
+    /// `GET /api/devices/library?...&wiring=1` for a device's wiring note
+    /// (the walkthrough, `wire_it.rs`; answered by the view).
+    Wiring(String),
     /// A device's own configuration (`/api/devices/{id}/config...`),
     /// answered by the Devices tab (`device_config.rs`).
     Config(String, crate::device_config::ConfigOp),
@@ -980,6 +983,15 @@ impl BoxProjects {
         self.queue.push(PReq::get(
             PCall::Wired(wired.to_string()),
             format!("/api/devices/library?wired={wired}"),
+        ));
+    }
+
+    /// Asks the box what the library says about wiring `device`
+    /// (`query`: [`crate::wire_it::Key::query`]); the walkthrough's note.
+    pub fn wiring(&mut self, device: &str, query: &str) {
+        self.queue.push(PReq::get(
+            PCall::Wiring(device.to_string()),
+            format!("/api/devices/library?{query}"),
         ));
     }
 
@@ -2628,6 +2640,7 @@ impl BoxProjects {
             | PCall::Library
             | PCall::Wired(_)
             | PCall::FindWired
+            | PCall::Wiring(_)
             | PCall::Config(..)
             | PCall::Proposal
             | PCall::ProposalAccept

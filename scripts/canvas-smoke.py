@@ -224,6 +224,14 @@ def playground(ctx, base, out):
     r.shot("editor")
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT)
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT)
+    # The simulated E1213 is added, and its Wire it window opens
+    # (wire_it.rs): a checklist, as there is no hardware.
+    r.step("sim-scan", lambda: r.click(178, 195), LEFT, 900)
+    r.step("sim-device-added", lambda: r.click(80, 231), LEFT, 1500)
+    r.shot("sim-device-rows")
+    r.step("wire-it", lambda: r.click(176, 178), LEFT, 900)
+    r.shot("wire-it-window")
+    r.step("wire-it-closed", lambda: r.key("Escape"), LEFT, 600)
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.
     r.step("code", lambda: r.click(*TAB_CODE), LEFT)

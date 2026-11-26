@@ -8352,4 +8352,5 @@ mod sim_popup;
 mod start_state;
 mod vendor;
 mod versions;
+mod wire_it;
 mod wired;

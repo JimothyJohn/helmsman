@@ -27,7 +27,10 @@
 //!   for and, when not, why in words. The per-protocol lists stay for one
 //!   release: `devices` (EtherNet/IP) and `modbus`.
 //! - `GET /api/devices/library?vendor=V&product=P[&address=A]`,
-//!   `?q=text` or `?wired=VENDOR/MODEL` (the sensor or actuator a map
+//!   `?q=text` (add `&wiring=1` and each match carries `wiring`, the
+//!   device's `note` and `source` from the library, or `wiring_unavailable`
+//!   when the library could not be read; none when it has no note) or
+//!   `?wired=VENDOR/MODEL` (the sensor or actuator a map
 //!   line names with `wired=`; its match carries `device`, the record's
 //!   brief: what it is, its on/off signals and what their states are
 //!   called, its factory settings): the library's matches, each with the map lines of its
@@ -195,13 +198,18 @@ impl State {
 
     /// A map file of the library, fetched when missing or stale.
     fn map_text(&self, url: &str) -> Result<String, String> {
+        self.text_capped(url, MAX_MAP)
+    }
+
+    /// A text file of the library of at most `cap` bytes, kept like a map.
+    fn text_capped(&self, url: &str, cap: usize) -> Result<String, String> {
         let mut maps = self.maps.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((_, at, text)) = maps.iter().find(|(u, _, _)| u == url)
             && at.elapsed() < INDEX_FRESH
         {
             return Ok(text.clone());
         }
-        let text = fetch_text(url, MAX_MAP)?;
+        let text = fetch_text(url, cap)?;
         maps.retain(|(u, _, _)| u != url);
         if maps.len() >= 64 {
             maps.remove(0);
@@ -848,6 +856,27 @@ pub(super) fn library(req: &Request, ctx: &Ctx) -> Response {
                         j["lines"] = json!(lines);
                     }
                     Err(why) => j["lines_unavailable"] = json!(why),
+                }
+            }
+            // The device's wiring note, for the I/O tab's walkthrough: from
+            // the index when it carries one, else from review.json, which
+            // is large, so only when asked (`wiring=1`).
+            if q("wiring") == Some("1") {
+                let found = match &e.wiring {
+                    Some(w) => Ok(Some(w.clone())),
+                    None => st
+                        .text_capped(
+                            &format!("{}/review.json", base.trim_end_matches('/')),
+                            devlib::MAX_REVIEW_BYTES,
+                        )
+                        .and_then(|t| devlib::review_wiring(&t, &e.folder)),
+                };
+                match found {
+                    Ok(Some(w)) => j["wiring"] = json!({ "note": w.note, "source": w.source }),
+                    Ok(None) => {}
+                    // A library without a review.json has no note to give.
+                    Err(why) if why.ends_with("HTTP 404") => {}
+                    Err(why) => j["wiring_unavailable"] = json!(why),
                 }
             }
             // A wired sensor's or actuator's record, held to the record's
