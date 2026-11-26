@@ -574,12 +574,6 @@ impl NodeMapUi {
         }
     }
 
-    /// Whether this is a Skipper: Edit › Edit map… is on only then.
-    #[must_use]
-    pub fn is_skipper(&self) -> bool {
-        self.skipper
-    }
-
     /// Edit › Edit map…: opens the map's window.
     pub fn open_window(&mut self) {
         if self.skipper {

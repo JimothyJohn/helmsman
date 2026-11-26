@@ -1944,6 +1944,24 @@ impl BoxView {
         }
     }
 
+    /// Whether Edit › Edit map… is on: the box reports a Skipper's I/O
+    /// map, with or without projects, whether or not the Devices tab has
+    /// been drawn.
+    #[must_use]
+    pub const fn can_edit_map(&self) -> bool {
+        self.state.io_map_node
+    }
+
+    /// Edit › Edit map…: the Skipper's I/O map in its window.
+    pub fn edit_map(&mut self) {
+        self.devices_ui.node_map.set_context(
+            self.state.io_map_node,
+            self.session.is_some(),
+            self.state.io_map.as_deref(),
+        );
+        self.devices_ui.node_map.open_window();
+    }
+
     /// One frame of the Editor.
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
@@ -2958,14 +2976,6 @@ impl Workspace for BoxView {
         }
         self.projects.release(None);
         true
-    }
-
-    fn can_edit_map(&self) -> bool {
-        self.devices_ui.node_map.is_skipper()
-    }
-
-    fn edit_map(&mut self) {
-        self.devices_ui.node_map.open_window();
     }
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {

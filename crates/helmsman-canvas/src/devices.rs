@@ -11,26 +11,13 @@
 //! loads; `device-import`). One map mixes protocols (`modbus-tcp`,
 //! `enip-io`, `logix-tag`); the box runs every link at once.
 //!
-//! Under the map's devices, "On the network" (`devices-repo`): Scan asks
-//! the box for one `ListIdentity` sweep (`POST /api/devices/discover`; the
-//! simulation answers with its simulated E1213) and lists every device
-//! that answered, with whether a map device already binds it and what the
-//! public device library knows of it (identity first, then vendor and
-//! model text; `helmsman_project::devlib`). Since 2026-11-11 the box's
-//! scan asks every protocol and answers `found`, one entry per device.
-//!
-//! Add by click (PROTOCOLS.md step 3): a found device the library knows
-//! (its entry names a profile, `NAME.device`) is listed by vendor and
-//! model and offers **Add**: one field, the device's name; Add copies
-//! the profile into the project and writes `device NAME device:PROFILE
-//! IDENTITY`. The protocol, the address and the points are the profile's
-//! business. No channel is written: each device's row offers + Add I/O,
-//! and a point is in the map and under the device once it is added
-//! there (`device_io.rs`; Nick, 2026-11-15).
-//! A device the library does not know says so and offers Advanced: the
-//! New device form with its protocols and typed points, which, with
-//! Import device… and Use this device, sits behind the **Advanced**
-//! switch (`Chrome::advanced`, off by default, remembered).
+//! Under the devices, a **+** opens the New device form (Nick, 2026-11-26:
+//! "On the network", Scan, Scan and add, the IP address Ask and the
+//! Advanced switch are gone from the tab). The form's "From the vendor's
+//! file..." hands an EDS or a manual to the box to build a profile
+//! (`device_vendor.rs`). No channel is written with a device: each
+//! device's row offers + Add I/O, and a point is in the map and under the
+//! device once it is added there (`device_io.rs`; Nick, 2026-11-15).
 //!
 //! What is wired to a point (TODO.md `iodd-metadata`): a map line's
 //! `wired=VENDOR/MODEL` names the sensor or actuator on the point by its
