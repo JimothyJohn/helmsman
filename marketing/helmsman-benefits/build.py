@@ -333,7 +333,7 @@ class Film:
 #   describe: typing 1.39-4.98, Enter 5.99, a question at 7.0, "Done" at 9.0; input on 43.15, off 46.37
 #   visualize: LAMP picked 0.99, cleared 4.39, zoom 5.39 and 6.19
 #   mary: upload 1.2, run 3.4, input on 5.0, trend window dragged 9.0-10.2
-#   history: typing 1.42-8.61, Enter 8.61, the answer lands at 18; back 30.41, forward 33.41, the list 36.42
+#   history: typing 1.39-9.56, Enter 9.56, the answer lands by 17.5; back 30.40, the list 33.39
 #   code: INT picked 1.0, "IT" typed 1.6, Deploy 4.6
 #   scan: Scan 1.0, Add 3.83, Add in the box 5.2
 #   front: loaded at 0.5, the program written by 5, all five proofs by 15; high switch failed 18.0; editor 29.5
@@ -379,18 +379,18 @@ def loop_test() -> Film:
 
 
 def loop_history() -> Film:
-    f = Film("loop-history", "Helmsman: every change, kept", 20.0)
+    f = Film("loop-history", "Helmsman: every change, kept", 18.0)
     f.before(0, "Project files you can't compare")
     f.app(1.5, 2.5, "history", 6.3, views=[(0, 1.9, 0, 40)])
     f.caps(1.5, 2.5, [(0.2, "Describe a change", "w")], right=True)
     f.app(4.0, 3.5, "history", 17.5, views=[(0, 1.25, 0, 60)])
     f.later(4.0, 1.5, "9 s later")
     f.caps(4.0, 3.5, [(0.5, "A new version", "y")], right=True)
-    f.app(7.5, 9.0, "history", 29.6, views=[(0, 1.25, 0, 60), (6.4, 1.9, 0, 40)])
+    # Back at 7.9 (take 30.4), the list opens at 11.3 (take 33.4).
+    f.app(7.5, 7.0, "history", 29.6, views=[(0, 1.25, 0, 60), (3.6, 1.9, 0, 40)])
     f.caps(7.9, 3.3, [(0.3, "Step back a version", "w"), (1.0, "See what changed", "y")], right=True)
-    f.caps(11.3, 2.9, [(0.1, "Step forward again", "w")], right=True)
-    f.caps(14.3, 2.2, [(0.1, "Every version, listed", "y")], right=True)
-    f.end(16.5)
+    f.caps(11.3, 3.2, [(0.1, "Every version, listed", "y")], right=True)
+    f.end(14.5)
     return f
 
 
