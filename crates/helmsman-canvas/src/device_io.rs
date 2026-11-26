@@ -178,11 +178,11 @@ pub fn movable(ports: &[Port], map: &MapText) -> Vec<Port> {
 /// characters, the longest a Skipper takes: a long device name is cut,
 /// never the channel's (`liberty_lexium_mdrive_et_enabled`).
 fn fresh_name(device: &str, label: &str, ports: &[Port], map: &MapText) -> String {
-    names(device, label)
+    let (tries, base) = names(device, label);
+    tries
         .into_iter()
         .find(|n| !taken(n, ports, map))
         .unwrap_or_else(|| {
-            let base = names(device, label).pop().unwrap_or_default();
             (2..100)
                 .map(|k| format!("{base}_{k}"))
                 .find(|n| !taken(n, ports, map))
@@ -197,8 +197,10 @@ fn taken(n: &str, ports: &[Port], map: &MapText) -> bool {
 }
 
 /// The names [`fresh_name`] tries for `device`'s channel `label`, in
-/// order: the channel's own, then with the device in front.
-fn names(device: &str, label: &str) -> Vec<String> {
+/// order: the channel's own (up to [`crate::skipper_map::NAME_MAX`]),
+/// then with the device in front; and the base a `_N` goes after, short
+/// enough that it fits too.
+fn names(device: &str, label: &str) -> (Vec<String>, String) {
     // Room for a `_N` after it.
     const ROOM: usize = crate::skipper_map::NAME_MAX - 3;
     // An identifier whatever it is called: anything else is a `_`, and
@@ -213,20 +215,21 @@ fn names(device: &str, label: &str) -> Vec<String> {
         }
         out.trim_matches('_').to_string()
     };
-    let channel = ident(&helmsman_project::profile_skim::signal_name("", label));
-    let channel: String = channel.chars().take(ROOM).collect();
+    let full = ident(&helmsman_project::profile_skim::signal_name("", label));
+    let own: String = full.chars().take(crate::skipper_map::NAME_MAX).collect();
+    let channel: String = full.chars().take(ROOM).collect();
     let keep = ROOM.saturating_sub(channel.len() + 1);
     let device: String = ident(device).chars().take(keep).collect();
     let device = device.trim_end_matches('_');
-    if device.is_empty() || channel.is_empty() {
-        return vec![if device.is_empty() {
-            channel
-        } else {
-            device.to_string()
-        }];
+    if channel.is_empty() {
+        let device = device.to_string();
+        return (vec![device.clone()], device);
+    }
+    if device.is_empty() {
+        return (vec![own], channel);
     }
     let long = format!("{device}_{channel}");
-    vec![channel, long]
+    (vec![own, long.clone()], long)
 }
 
 /// What a click on channel `c` of `dev` writes: its signal after the
@@ -248,7 +251,7 @@ pub fn add(
 ) -> Result<Wiring, String> {
     // Either name a point of this channel was given: the short one or,
     // before 2026-11-26 or on a clash, the one with the device in front.
-    let mut own = names(&dev.name, &c.label);
+    let mut own = names(&dev.name, &c.label).0;
     own.push(helmsman_project::profile_skim::signal_name(&dev.name, &c.label));
     let back = movable(ports, map)
         .into_iter()
