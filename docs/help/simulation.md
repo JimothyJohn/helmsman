@@ -74,7 +74,9 @@ scrolls to it; the box counts them. <kbd>Enter</kbd> or
 <kbd>Ctrl</kbd> <kbd>G</kbd> goes to the next match,
 <kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Shift</kbd>
 <kbd>G</kbd> to the previous one, and letters match in either case, as
-Structured Text does. <kbd>Esc</kbd> closes the box and leaves the match
+Structured Text does. The <u>ab</u> button, Whole words only, is on
+while you search for a name, so `slew` does not find the `slew` inside
+`slews`; press it to find text wherever it occurs. <kbd>Esc</kbd> closes the box and leaves the match
 selected in the editor. It works the same on a box's code.
 
 ## Inputs

@@ -3024,7 +3024,7 @@ fn area_ui(
 /// history clock belongs here): a box to search what each one says, then
 /// the versions that match, newest first; a click runs one, as the
 /// arrows do.
-fn versions_ui(
+pub fn versions_ui(
     ui: &mut egui::Ui,
     chrome: &mut crate::editor::Chrome,
     s: &mut Instruct,

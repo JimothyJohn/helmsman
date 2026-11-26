@@ -2439,6 +2439,19 @@ impl PlaygroundView {
         }
     }
 
+    /// The project's versions for the clock's list, in the Describe tab
+    /// and the Code tab alike.
+    fn versions(&self) -> crate::instruct::Versions {
+        crate::instruct::Versions {
+            rows: self.proj.revisions().iter().map(SimRevision::row).collect(),
+            // By number, so a searched list knows which is on show.
+            at: self
+                .history_at
+                .filter(|n| self.shows_revision(*n))
+                .or_else(|| self.proj.revisions().last().map(|r| r.n)),
+        }
+    }
+
     /// The arrows' steps: while the Agent's change still shows in its
     /// file, or a revision picked with them (or in History) still shows,
     /// the revisions either side of the one shown, each tipped with what
@@ -3489,6 +3502,7 @@ impl Body for PlaygroundView {
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
         let mut go = false;
         let steps = self.steps();
+        let versions = self.versions();
         let mut revision = None;
         let mut to_error: Option<(String, u32)> = None;
         // The header is the open file's name (Nick, 2026-11-08), the
@@ -3533,6 +3547,7 @@ impl Body for PlaygroundView {
                     deploy_tip: "Ctrl Shift Enter: deploy this version.\nCompiles the open project and runs it in the page.",
                     busy: None,
                     steps: steps.as_ref(),
+                    history: !versions.rows.is_empty(),
                 },
             );
             go = pressed.deploy;
@@ -3545,6 +3560,13 @@ impl Body for PlaygroundView {
         });
         if let Some(n) = revision {
             self.show_revision(n);
+        }
+        if chrome.history && !versions.rows.is_empty() {
+            match editor::versions_panel(ui, chrome, &mut self.instruct, &versions) {
+                Some(crate::instruct::Act::Revision(n)) => self.show_revision(n),
+                Some(crate::instruct::Act::Details(n)) => self.act(Act::ShowRevision(n)),
+                _ => {}
+            }
         }
         if go {
             self.deploy();
@@ -4323,14 +4345,7 @@ impl PlaygroundView {
                     .filter(|b| b.0 == self.instruct.draft)
                     .map(|b| b.1),
                 io: Some(self.phrasing_io()),
-                versions: Some(crate::instruct::Versions {
-                    rows: self.proj.revisions().iter().map(SimRevision::row).collect(),
-                    // By number, so a searched list knows which is on show.
-                    at: self
-                        .history_at
-                        .filter(|n| self.shows_revision(*n))
-                        .or_else(|| self.proj.revisions().last().map(|r| r.n)),
-                }),
+                versions: Some(self.versions()),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),

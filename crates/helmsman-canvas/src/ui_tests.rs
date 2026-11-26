@@ -8327,10 +8327,13 @@ mod devconf {
 mod assign;
 mod box_trend;
 mod chat_about;
+mod code_history;
+mod code_wrap;
 mod design;
 mod device_io;
 mod diagram_menu;
 mod files_tab;
+mod find_replace;
 mod front;
 mod io_cards;
 mod io_names;
