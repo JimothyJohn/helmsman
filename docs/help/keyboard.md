@@ -1,6 +1,6 @@
 # Keyboard
 
-CODESYS's default keys where no browser uses them, and nothing on a key a browser owns (Ctrl D bookmarks the page, Alt 1 is Firefox's first tab, F10 the toolbar), checked against Chrome, Edge, Firefox and Safari. The editor's own conventions stay: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F and Ctrl G, as in every editor on the web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. Every view has a key of one letter, the first of its name; it works whenever you are not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, W A S D and E, Q stay the diagram's own. Help › Show hotkeys writes each key beside its button.
+CODESYS's default keys where no browser uses them, and nothing on a key a browser owns (Ctrl D bookmarks the page, Alt 1 is Firefox's first tab, F10 the toolbar), checked against Chrome, Edge, Firefox and Safari. The editor's own conventions stay: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F and Ctrl G, as in every editor on the web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. Every view has a key of one letter, the first of its name; it works whenever you are not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, E and Q stay the diagram's own. Help › Show hotkeys writes each key beside its button.
 
 | key | does | CODESYS command on that key |
 |---|---|---|
@@ -38,6 +38,7 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | I | The I/O tab |  |
 | V | The Devices tab (the I/O map's devices and points) |  |
 | F | The Files tab |  |
+| L | The Help tab |  |
 | A | The Messages under the left pane's tab |  |
 | T | The trend along the bottom |  |
 | Alt ↑ | Up one level in the diagram | |

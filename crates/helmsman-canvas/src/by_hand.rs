@@ -237,7 +237,13 @@ impl ValueAsk {
                 && self.text.trim() != self.lit.text
             {
                 ui.add_space(6.0);
-                ui.add(egui::Label::new(RichText::new(why).color(t.ink(crate::st_view::brand::RED))).wrap());
+                crate::messages::error_link(
+                    ui,
+                    chrome,
+                    "by hand error",
+                    why,
+                    t.ink(crate::st_view::brand::RED),
+                );
             }
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {

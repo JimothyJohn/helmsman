@@ -1,6 +1,8 @@
-//! Help mode on a box's Agent tab, beside changing the program (Nick,
-//! 2026-11-07, interview): for someone in trouble who did not write the
-//! program. They say what went wrong; the page sends it to the box with
+//! The Help tab of a box (Nick, 2026-11-07, interview: a mode of the Describe
+//! tab; 2026-11-26: a tab of its own, the `?`, so that errors, small accidents,
+//! never mix into the program's conversation, and every error shown is a link
+//! that asks it, [`crate::messages::error_link`]): for someone in trouble who
+//! did not write the program. They say what went wrong; the page sends it to the box with
 //! its recent Messages (`messages::Log::text`), and the box attaches the
 //! rest itself (its build, the project it runs, its devices and their
 //! errors), leaving out every password, PIN and token
@@ -41,14 +43,6 @@ pub const MAX_MESSAGES: usize = 16 * 1024;
 const MAX_SAID: usize = 4096;
 /// Longest issue kept, bytes (the box's is far shorter).
 const MAX_ISSUE: usize = 128 * 1024;
-
-/// What the Agent tab does: change the program, or help.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Mode {
-    #[default]
-    Code,
-    Help,
-}
 
 /// The issue the box sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,10 +125,9 @@ fn links(d: &Json) -> Vec<PageLink> {
     out
 }
 
-/// The tab's Help side: the mode, the question, the request.
+/// The Help tab: the question, the request.
 #[derive(Debug, Default)]
 pub struct HelpUi {
-    pub mode: Mode,
     pub draft: String,
     pub helping: Option<Helping>,
 }

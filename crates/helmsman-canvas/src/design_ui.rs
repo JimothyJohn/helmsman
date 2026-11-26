@@ -101,10 +101,14 @@ pub fn entry_ui(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut Designer, v: &En
         chrome.hit("design closed", r.rect);
     }
     if let Some(n) = &d.notice {
-        let r = ui
-            .add(egui::Label::new(RichText::new(n).size(size).color(t.ink(RED))).wrap())
-            .tip("How the last design ended. Nothing was kept.");
-        chrome.hit("design notice", r.rect);
+        crate::messages::error_link_rich(
+            ui,
+            chrome,
+            "design notice",
+            RichText::new(n).size(size).color(t.ink(RED)),
+            n,
+            "How the last design ended. Nothing was kept.",
+        );
     }
     if let Some(p) = d.progress(v.now) {
         progress_ui(ui, chrome, &p, &mut act);
@@ -129,10 +133,14 @@ fn progress_ui(
     let size = crate::theme::BODY;
     let t = crate::theme::theme(ui);
     if let Some(why) = &p.cut {
-        let r = ui
-            .add(egui::Label::new(RichText::new(why).size(size).color(t.ink(RED))).wrap())
-            .tip("The turn stopped before the end marker, so what came is not a whole turn. Carry on asks for this turn again; Discard drops the design.");
-        chrome.hit("design cut", r.rect);
+        crate::messages::error_link_rich(
+            ui,
+            chrome,
+            "design cut",
+            RichText::new(why).size(size).color(t.ink(RED)),
+            why,
+            "The turn stopped before the end marker, so what came is not a whole turn. Carry on asks for this turn again; Discard drops the design.",
+        );
         ui.horizontal_wrapped(|ui| {
             let r = ui
                 .button(RichText::new("Carry on").size(size))
@@ -244,10 +252,14 @@ fn problems_ui(ui: &mut egui::Ui, chrome: &mut Chrome, problems: &[String], key:
     let size = crate::theme::BODY;
     let t = crate::theme::theme(ui);
     for (k, p) in problems.iter().enumerate() {
-        let r = ui
-            .add(egui::Label::new(RichText::new(p).size(size).color(t.ink(RED))).wrap())
-            .tip("Something in the design that cannot be built from. Build is not offered until the design has none: ask again, with the machine described more closely.");
-        chrome.hit(format!("{key} {}", k + 1), r.rect);
+        crate::messages::error_link_rich(
+            ui,
+            chrome,
+            &format!("{key} {}", k + 1),
+            RichText::new(p).size(size).color(t.ink(RED)),
+            p,
+            "Something in the design that cannot be built from. Build is not offered until the design has none: ask again, with the machine described more closely.",
+        );
     }
 }
 
@@ -377,10 +389,14 @@ pub fn ask_window(
             }
         });
         if let Some(e) = d.error.as_ref().or(why.as_ref()) {
-            let r = ui
-                .add(egui::Label::new(RichText::new(e).size(size).color(t.ink(RED))).wrap())
-                .tip("Why the design cannot be asked for yet.");
-            chrome.hit("design error", r.rect);
+            crate::messages::error_link_rich(
+                ui,
+                chrome,
+                "design error",
+                RichText::new(e).size(size).color(t.ink(RED)),
+                e,
+                "Why the design cannot be asked for yet.",
+            );
         }
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {

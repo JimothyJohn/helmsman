@@ -267,12 +267,14 @@ policy.
 
 ## Get help
 
-On a box the Describe tab has a second mode, for someone who did not write
-the program and has a machine that does not do what it should. The
-toggle at the top right of the tab switches it: **< >** is **Change the
-program**, **?** is **Get help**.
+On a box the **?** tab (<kbd>L</kbd>) is for someone who did not write
+the program and has a machine that does not do what it should. It keeps
+its own conversation, apart from the Describe tab's. Every error the page
+shows (in the Messages, a refused deploy, a device form that will not
+save) is underlined: click it and the **?** tab opens and asks about that
+error, with the Messages. Drag over the text to select it instead.
 
-<img src="img/get-help.png" alt="Get help in the Describe tab: the question, Ask for help, and the issue with its Copy button." width="326">
+<img src="img/get-help.png" alt="Get help in the ? tab: the question, Ask for help, and the issue with its Copy button." width="326">
 
 Sign in (any role), say what you saw or what you want to do in your own
 words, and press **Ask for help**, the yellow paper plane (<kbd>Enter</kbd> works too;

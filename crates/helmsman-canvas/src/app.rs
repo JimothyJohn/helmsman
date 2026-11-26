@@ -804,6 +804,7 @@ impl App {
             Action::St => self.chrome.show(crate::editor::Pane::Code),
             Action::Describe => self.chrome.show(crate::editor::Pane::Claude),
             Action::Io => self.chrome.show(crate::editor::Pane::Io),
+            Action::HelpTab => self.chrome.show(crate::editor::Pane::Help),
             Action::Messages => self.chrome.msgs = !self.chrome.msgs,
             Action::Trend => self.chrome.trend = !self.chrome.trend,
             _ => {}
@@ -1002,6 +1003,7 @@ impl App {
             Action::DockRight => self.chrome.send_right(),
             Action::Trend => self.chrome.trend = !self.chrome.trend,
             Action::Describe
+            | Action::HelpTab
             | Action::Io
             | Action::Messages
             | Action::Editor

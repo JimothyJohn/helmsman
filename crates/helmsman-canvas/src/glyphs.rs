@@ -317,6 +317,7 @@ const fn tab_action(icon: Icon) -> Option<Action> {
         Icon::Code => Some(Action::St),
         Icon::Agent => Some(Action::Describe),
         Icon::Io => Some(Action::Io),
+        Icon::Help => Some(Action::HelpTab),
         Icon::Messages => Some(Action::Messages),
         _ => None,
     }

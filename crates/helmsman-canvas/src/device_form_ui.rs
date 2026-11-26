@@ -57,7 +57,7 @@ impl DevicesUi {
             }
             if let Some(err) = &d.error {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(err).color(crate::theme::theme(ui).ink(RED))).wrap());
+                crate::messages::error_link(ui, chrome, "device error", err, crate::theme::theme(ui).ink(RED));
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -149,7 +149,7 @@ impl DevicesUi {
                     ui.label(RichText::new("Reading its channels from the device library…").color(theme(ui).muted));
                 }
                 Some(Err(why)) => {
-                    ui.add(egui::Label::new(RichText::new(why).color(theme(ui).ink(RED))).wrap());
+                    crate::messages::error_link(ui, chrome, "device error", why, theme(ui).ink(RED));
                 }
                 Some(Ok((_, skim))) => {
                     let n = skim.channels.len();
@@ -172,7 +172,7 @@ impl DevicesUi {
             }
             if let Some(err) = &q.error {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(err).color(theme(ui).ink(RED))).wrap());
+                crate::messages::error_link(ui, chrome, "device error", err, theme(ui).ink(RED));
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -236,8 +236,12 @@ impl DevicesUi {
                     true
                 }
                 Some(Err(why)) if text != old => {
-                    ui.add(
-                        egui::Label::new(RichText::new(why).color(crate::theme::theme(ui).ink(RED))).wrap(),
+                    crate::messages::error_link(
+                        ui,
+                        chrome,
+                        "device error",
+                        why,
+                        crate::theme::theme(ui).ink(RED),
                     );
                     false
                 }
@@ -433,7 +437,7 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
         return;
     }
     if let Err(e) = check_settings(d.driver(), &d.params) {
-        ui.add(egui::Label::new(RichText::new(e).color(crate::theme::theme(ui).ink(RED))).wrap());
+        crate::messages::error_link(ui, chrome, "device error", &e, crate::theme::theme(ui).ink(RED));
     }
     // The line io.map gets, read-only.
     // One line, cut at the edge: a wrap would change the centred form's
