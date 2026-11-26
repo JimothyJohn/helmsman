@@ -1,5 +1,12 @@
 # How big a machine can one Skipper run?
 
+> **Overnight Saturday 2026-11-28: Fable works on this.** A one-time cloud
+> run on claude-fable-5-2 starts at 23:00 CT (05:00 UTC Sunday 11-29):
+> https://claude.ai/code/routines/trig_01XKVQnwAr2SURLndDm25hnG . It
+> reads this file, checks it against the code, appends "The plan" below
+> and the build cards to TODO.md (card `node-capacity`), and opens a
+> DRAFT pull request into `dev` for Nick by Sunday morning.
+
 A problem statement, written 2026-11-26 from a question of Nick's: "How many
 devices could this unit realistically run? Are we talking about 16 servo
 axes with 32 sensors and 25 valves? Where's the realistic ceiling? Is it the
