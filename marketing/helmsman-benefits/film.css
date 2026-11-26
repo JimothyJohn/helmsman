@@ -231,6 +231,11 @@ body,
   line-height: 1;
   white-space: nowrap;
 }
+.fact small {
+  color: var(--yellow);
+  font-size: 44px;
+  letter-spacing: 0.16em;
+}
 .fact i {
   display: block;
   width: 34px;

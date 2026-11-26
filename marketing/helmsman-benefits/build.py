@@ -130,14 +130,14 @@ class Film:
             elif kind == "key":
                 self.sfx(root(t), "sfx/click.mp3", 0.36, 0.7)
 
-    def bench(self, at, dur, clip, media=0.0, sound=0.0, zoom=(1.0, 1.08)):
-        """Nick's bench footage, full frame, a slow push in."""
+    def bench(self, at, dur, clip, media=0.0, sound=0.0, zoom=(1.0, 1.08), folder="bench"):
+        """Full-frame footage with a slow push in: Nick's bench shots, or a product picture from assets/product."""
         i = self._id("b")
         self.app_track = 1 - self.app_track
         vt = 1 + 2 * self.app_track
         self.body.append(
             f'<div class="wrap" id="w{i}"><video id="{i}" class="clip shot" data-start="{at}" data-duration="{dur}" '
-            f'data-media-start="{media}" data-track-index="{vt}" src="assets/bench/{clip}.mp4" muted playsinline></video></div>'
+            f'data-media-start="{media}" data-track-index="{vt}" src="assets/{folder}/{clip}.mp4" muted playsinline></video></div>'
         )
         self.js.append(f'tl.fromTo("#w{i}", {{scale: {zoom[0]}}}, {{scale: {zoom[1]}, duration: {dur}, ease: "none"}}, {at});')
         if sound:
@@ -199,7 +199,7 @@ class Film:
             f"{html.escape(label)}</p>{rows}</div>"
         )
         self.js.append(f'gsap.set("#{g} .gripe", {{transformOrigin: "0% 50%"}});')
-        for k in range(1, len(lines)):
+        for k in range(0 if at > 0 else 1, len(lines)):  # frame 0 is the thumbnail: its first line is already there
             t = round(at + 0.5 * k, 2)
             self.js.append(f'slam("#{g} .gripe:nth-of-type({k + 2})", {t}, 1.25); jolt({t}, 5);')
         self.js.append(f'tl.to("#{g} p", {{opacity: 0.45, duration: 0.15}}, {at + dur - 0.7});')
@@ -251,7 +251,11 @@ class Film:
 
     def stack(self, at, dur, label, facts):
         g = self._id("f")
-        rows = "".join(f'<p class="fact cond" style="top: {230 + 125 * i}px"><i></i>{html.escape(f)}</p>' for i, f in enumerate(facts))
+        rows = ""
+        for i, fact in enumerate(facts):  # a fact is a line, or (line, the small print beside it)
+            text, note = fact if isinstance(fact, tuple) else (fact, "")
+            small = f"<small>{html.escape(note)}</small>" if note else ""
+            rows += f'<p class="fact cond" style="top: {230 + 125 * i}px"><i></i><span>{html.escape(text)}</span>{small}</p>'
         self.body.append(
             f'<div id="{g}" class="clip full stack" data-start="{at}" data-duration="{dur}" data-track-index="8" '
             f'data-track-kind="graphics"><p class="built cond">{html.escape(label)}</p>{rows}</div>'
@@ -261,6 +265,20 @@ class Film:
             t = round(at + 0.25 + i * 0.5, 2)
             # nth-of-type counts the label's <p> too: the first fact is the second <p>.
             self.js.append(f'slam("#{g} .fact:nth-of-type({i + 2})", {t}, 1.25); jolt({t}, 4);')
+
+    def open(self, dur):
+        """The first thing on screen: whose film this is. The lockup of the end card, alone; frame 0 is the thumbnail."""
+        g = self._id("o")
+        self.body.append(
+            f'<div id="{g}" class="clip full end" data-start="0" data-duration="{dur}" data-track-index="9" '
+            'data-track-kind="graphics"><div class="lockup" style="top:410px"><div class="mark"><img src="assets/helmsman-mark-black.svg" alt="" /></div>'
+            '<div><p class="wordmark stencil">Helmsman</p><p class="descriptor cond">Factory automation</p></div></div></div>'
+        )
+        self.js += [
+            f'tl.fromTo("#{g} .mark", {{rotation: -90}}, {{rotation: 0, duration: 0.6, ease: land}}, 0.1);',
+            f'tl.to("#{g} .lockup", {{x: -260, opacity: 0, filter: "blur(14px)", duration: 0.2, ease: "power3.in"}}, {round(dur - 0.2, 2)});',
+        ]
+        self.sfx(round(dur - 0.3, 2), "sfx/whoosh-short.mp3", 0.5, 0.45)
 
     def end(self, at):
         g = self._id("e")
@@ -432,59 +450,48 @@ def loop_install() -> Film:
 
 FACTS = [
     "No licence fees",
-    "A $30 controller",
+    "Low-cost controller",
     "Nothing to install",
-    "IEC 61131-3 Structured Text",
-    "EtherNet/IP and Modbus TCP",
-    "Every change recorded",
+    ("Standardized PLC programming", "IEC 61131-3"),
+    "Common industrial protocols",
+    "Version control",
 ]
 
 
 def reel() -> Film:
-    f = Film("reel", "Helmsman: the benefits, shown in the app itself", 55.0)
-    f.gripes(0, 4.2, "What engineers are tired of", [
-        "A virtual machine per version",
-        "Testing needs the machine",
-        "One typo, twenty errors",
-        "Project files you can't compare",
+    # Revised 2026-11-26 from Nick's notes: the name first, the demo second, four complaints
+    # (down from the site's list), no diagram, typo, bench-motor or break-the-tank beats.
+    f = Film("reel", "Helmsman: the benefits, shown in the app itself", 41.0)
+    f.open(2.5)
+    f.claim(2.5, 2.5, ["Say", "what", "it", "/", "should", "do"], "Say", "See it work")
+    # Describe: the prompt typed and sent, the program it writes, then the input and the trend.
+    f.app(5.0, 4.0, "describe", 2.0, views=[(0, 1.9, 0, 40)])
+    f.caps(5.0, 4.0, [(0.1, "Describe it", "y")], right=True)
+    f.app(9.0, 2.0, "describe", 8.6, views=[(0, 1.25, 0, 60)])
+    f.app(11.0, 3.0, "describe", 42.8, views=[(0, 1.25, 400, 160)])
+    f.caps(9.0, 5.0, [(0.1, "It writes the program", "w"), (2.4, "The lamp follows", "y")])
+    f.gripes(14.0, 4.0, "What engineers are tired of", [
+        "Programming is hard",
+        "Crappy interfaces",
+        "Can't test without hardware",
+        "No version control",
     ])
-    f.claim(4.2, 2.8, ["Say", "what", "it", "/", "should", "do"], "Say", "See it work")
-    # Describe: the last words typed, the answer, then the input.
-    f.app(7.0, 3.0, "describe", 3.0, views=[(0, 1.9, 0, 40)])
-    f.caps(7.0, 3.0, [(0.1, "Describe it", "y")], right=True)
-    f.app(10.0, 2.0, "describe", 8.6, views=[(0, 1.25, 0, 60)])
-    f.app(12.0, 2.5, "describe", 42.8, views=[(0, 1.25, 400, 160)])
-    f.caps(10.0, 4.5, [(0.1, "It writes the program", "w"), (2.4, "The lamp follows", "y")])
-    # Visualize
-    f.app(14.5, 4.0, "visualize", 0.5, views=[(0, 1.6, 470, 110)])
-    f.caps(14.5, 4.0, [(0.1, "Watch it run", "y"), (1.0, "See what drives it", "w")])
-    # Test with no machine, then the bench
-    f.app(18.5, 4.5, "mary", 2.8, views=[(0, *FULL), (1.6, 1.4, 460, 300)])
-    f.caps(18.5, 4.5, [(0.1, "Test with no machine", "y")], right=True)
-    f.bench(23.0, 4.5, "tune", media=0.4, sound=1.0)
-    f.caps(23.0, 4.5, [(0.3, "Then the real motor plays it", "y")], kicker="On the bench")
+    # Test with no machine
+    f.app(18.0, 4.5, "mary", 2.8, views=[(0, *FULL), (1.6, 1.4, 460, 300)])
+    f.caps(18.0, 4.5, [(0.1, "Test with no machine", "y")], right=True)
     # History
-    f.app(27.5, 4.0, "history", 29.9, views=[(0, 1.25, 0, 60)])
-    f.caps(27.5, 4.0, [(0.1, "Every change, kept", "y"), (1.0, "See what changed", "w")], right=True)
-    # Typo
-    f.app(31.5, 5.0, "code", 1.4, views=[(0, 1.45, 0, 250), (3.1, 1.3, 0, 0)])
-    f.caps(31.5, 5.0, [(0.3, "A typo is one error", "w"), (3.3, "Deploy refuses it", "y")], right=True)
-    # Connect
-    f.bench(36.5, 1.0, "skipper", media=0.2)
-    f.caps(36.5, 1.0, [(0, "A $30 controller", "y")])
-    f.app(37.5, 3.0, "scan", 2.9, views=[(0, 1.4, 0, 150)])
-    f.caps(37.5, 3.0, [(0.1, "Plug in and go", "y")], right=True)
-    # Proofs
-    f.app(40.5, 1.5, "front", 12.5, views=[(0, 1.6, 720, 220)])
-    f.app(42.0, 3.0, "front", 17.7, views=[(0, 1.35, 380, 280)])
-    f.caps(40.5, 4.5, [(0.1, "It proves itself first", "y"), (1.6, "Break it on purpose", "w")], right=True)
-    f.stack(45.0, 4.5, "What is built", FACTS)
-    f.end(49.5)
-    # The bed is 32.5 s with its first beat on frame 0: it ducks under the motor and starts again on bar 14.
-    f.bed(0, 23.0, 0, 0.8)
-    f.bed(23.0, 4.5, 23.0, 0.18)
-    f.bed(27.5, 0.5, 27.5, 0.8)
-    f.bed(28.0, 27.0, 0, 0.8, fade=1.2)
+    f.app(22.5, 4.0, "history", 29.9, views=[(0, 1.25, 0, 60)])
+    f.caps(22.5, 4.0, [(0.1, "Version control, built in", "y"), (1.0, "See what changed", "w")], right=True)
+    # The controller: a render of the Skipper case stands in until Nick's mockups exist.
+    f.bench(26.5, 1.5, "skipper", folder="product")
+    f.caps(26.5, 1.5, [(0, "Low-cost controller", "y")], kicker="The Skipper")
+    f.app(28.0, 3.0, "scan", 2.9, views=[(0, 1.4, 0, 150)])
+    f.caps(28.0, 3.0, [(0.1, "Plug in and go", "y")], right=True)
+    f.stack(31.0, 4.5, "What is built", FACTS)
+    f.end(35.5)
+    # The bed is 32.5 s with its first beat on frame 0: it starts again on bar 14, where the device is added.
+    f.bed(0, 28.0, 0, 0.8)
+    f.bed(28.0, 13.0, 0, 0.8, fade=1.2)
     return f
 
 
