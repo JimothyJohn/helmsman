@@ -2625,7 +2625,14 @@ impl BoxView {
     }
 
     /// What a card of the I/O tab asked for.
-    fn io_asked(&mut self, name: &str, input: bool, a: crate::io_cards::Asked, chrome: &mut Chrome) {
+    fn io_asked(
+        &mut self,
+        name: &str,
+        input: bool,
+        a: crate::io_cards::Asked,
+        chrome: &mut Chrome,
+        now: f64,
+    ) {
         if a.details {
             let key = name.to_ascii_lowercase();
             if !self.io_open.remove(&key) {
@@ -2634,6 +2641,22 @@ impl BoxView {
         }
         if a.code {
             self.find_in_code(name, chrome);
+        }
+        if a.trend {
+            // The pin as the Trend names it, whatever case the card has.
+            let pin = self
+                .trend
+                .pins
+                .iter()
+                .find(|p| p.eq_ignore_ascii_case(name))
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            let added = !self.trend.pins.contains(&pin);
+            self.trend.toggle(&pin, self.session.as_ref(), now);
+            if added {
+                chrome.trend = true;
+                chrome.msgs = false;
+            }
         }
         if let Some(v) = &mut self.view {
             if a.diagram {
@@ -3631,6 +3654,8 @@ impl Body for BoxView {
         let known = &self.devices_ui.wired;
         // What the diagram says of each point; nothing while there is none.
         let cards = self.view.as_ref().map(Viewer::output_cards);
+        // What is on the Trend: its cards show their trend glyph on.
+        let pinned = self.trend.pins.clone();
         let lit = self
             .view
             .as_ref()
@@ -3771,6 +3796,7 @@ impl Body for BoxView {
                                 uses: src.as_ref().map(|c| crate::find::names(c, name).len()),
                                 simulate: false,
                                 designation: crate::assign::designate(&map, name, is_port),
+                                trended: pinned.iter().any(|p| p.eq_ignore_ascii_case(name)),
                             };
                             let sim_input = input && engineer && sig.is_some_and(|s| s.sim);
                             let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
@@ -3800,8 +3826,9 @@ impl Body for BoxView {
                 ui.add_space(6.0);
             }
         });
+        let now = ui.input(|i| i.time);
         for (name, input, a) in asked {
-            self.io_asked(&name, input, a, chrome);
+            self.io_asked(&name, input, a, chrome, now);
         }
         for (name, v) in sets {
             self.force(&name, v);

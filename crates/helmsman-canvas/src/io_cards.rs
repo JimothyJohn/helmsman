@@ -197,6 +197,8 @@ pub struct Row<'a> {
     /// Still simulated (a SIM badge and a dashed outline) or on a device
     /// (solid, naming it); `None` when the point is neither.
     pub designation: Option<Designation>,
+    /// It is on the Trend: its trend glyph shows on.
+    pub trended: bool,
 }
 
 /// What was asked of a card this frame.
@@ -213,6 +215,8 @@ pub struct Asked {
     pub diagram: bool,
     /// Simulate the input as a device.
     pub simulate: bool,
+    /// Put it on the Trend, or take it off.
+    pub trend: bool,
 }
 
 /// An output's first line, or an input's where it has no control: its
@@ -421,7 +425,7 @@ pub fn show<R>(
         }
         let side = crate::glyphs::ROW;
         let gap = ui.spacing().item_spacing.x;
-        let room = (inner - 2.0 * side - 2.0 * gap).max(1.0);
+        let room = (inner - 3.0 * side - 3.0 * gap).max(1.0);
         let r = ui
             .horizontal_top(|ui| {
                 let r = ui
@@ -450,7 +454,23 @@ pub fn show<R>(
                 );
                 chrome.hit(format!("io diagram {name}"), diagram.rect);
                 asked.diagram = diagram.clicked();
-                glyphs = code.rect.union(diagram.rect);
+                // Nick, 2026-11-26: a graph glyph puts the point on the
+                // Trend at the bottom (on while it is there).
+                let trend = crate::glyphs::button_sized(
+                    ui,
+                    Icon::Trend,
+                    side,
+                    true,
+                    row.trended,
+                    &if row.trended {
+                        format!("Takes {name} off the Trend.")
+                    } else {
+                        format!("Adds {name} to the Trend at the bottom.")
+                    },
+                );
+                chrome.hit(format!("io trend {name}"), trend.rect);
+                asked.trend = trend.clicked();
+                glyphs = code.rect.union(diagram.rect).union(trend.rect);
                 r
             })
             .inner;

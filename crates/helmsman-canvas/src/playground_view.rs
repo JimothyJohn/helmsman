@@ -3934,6 +3934,8 @@ impl PlaygroundView {
         };
         // What the diagram says of each point; nothing while there is none.
         let cards = self.viewer.as_ref().map(crate::st_view::Viewer::output_cards);
+        // What is on the Trend: its cards show their trend glyph on.
+        let pinned = self.session.trend.signals.clone();
         let lit = self
             .viewer
             .as_ref()
@@ -3990,6 +3992,7 @@ impl PlaygroundView {
                             uses: uses(&p.name),
                             simulate: true,
                             designation: crate::assign::Designation::of(&place),
+                            trended: pinned.iter().any(|t| t.eq_ignore_ascii_case(&p.name)),
                         };
                         let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             if form == Form::Detail {
@@ -4067,6 +4070,7 @@ impl PlaygroundView {
                             uses: uses(&p.name),
                             simulate: false,
                             designation: crate::assign::Designation::of(&place),
+                            trended: pinned.iter().any(|t| t.eq_ignore_ascii_case(&p.name)),
                         };
                         let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             output_ui(ui, p, form == Form::Tile);
@@ -4166,6 +4170,22 @@ impl PlaygroundView {
         }
         if a.code {
             self.find_in_code(name, chrome);
+        }
+        if a.trend {
+            let pin = self
+                .session
+                .trend
+                .signals
+                .iter()
+                .find(|t| t.eq_ignore_ascii_case(name))
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            let added = !self.session.trend.signals.contains(&pin);
+            self.session.trend.toggle(&pin);
+            if added {
+                chrome.trend = true;
+                chrome.msgs = false;
+            }
         }
         if a.diagram
             && let Some(v) = &mut self.viewer
