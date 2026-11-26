@@ -502,7 +502,6 @@ impl BoxView {
                     let found = crate::devices::hosts(&self.devices_ui.found);
                     self.projects.scanned(found);
                 }
-                PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
                 PCall::Wiring(device) => self.devices_ui.wiring_answer(&device, a.status, &a.body),
@@ -519,6 +518,7 @@ impl BoxView {
                     self.devices_ui.proposal.answer(&call, a.status, &a.body);
                 }
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
+                PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::NodeMap(op) => self.devices_ui.node_map.answer(op, a.status, &a.body),
                 PCall::DesignProject(name) => self.design_project_answer(&name, &a),
                 call => self.projects.answer_for(call, &a, signed_in),
@@ -2964,6 +2964,14 @@ impl Workspace for BoxView {
         true
     }
 
+    fn can_edit_map(&self) -> bool {
+        self.devices_ui.node_map.is_skipper()
+    }
+
+    fn edit_map(&mut self) {
+        self.devices_ui.node_map.open_window();
+    }
+
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
         if self.writable().is_err() {
             return false;
@@ -3205,40 +3213,40 @@ impl Body for BoxView {
             if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
                 self.project_act(a);
             }
-            ui.separator();
-            ui.label(RichText::new("Running").strong().color(t.muted))
-                .tip("The modules the box runs now, each a program. Click one to see it live.");
         }
-        let mut chosen = None;
-        let modules = self.state.modules.clone();
-        if modules.is_empty() {
-            ui.label(RichText::new(self.waiting()).color(t.muted));
-        }
-        for m in &modules {
-            let selected = self.state.selected.as_deref() == Some(m.name.as_str());
-            let arrow = if selected { "▾" } else { "▸" };
-            let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans)).color(
-                if m.state == "faulted" {
-                    crate::theme::theme(ui).ink(RED)
-                } else {
-                    t.fg
-                },
-            );
-            let r = ui.selectable_label(selected, text);
-            chrome.hit(format!("module {}", m.name), r.rect);
-            let r = match &m.fault {
-                Some(f) => r.tip(format!("Faulted: {f}")),
-                None => r.tip("A module: its state and scans so far. Click to open its diagram."),
-            };
-            if r.clicked() {
-                chosen = Some(m.name.clone());
+        // A box with projects lists no modules here: its Files tab is the
+        // project's (Nick, 2026-11-26: the Running section went).
+        if !self.has_projects() {
+            let mut chosen = None;
+            let modules = self.state.modules.clone();
+            if modules.is_empty() {
+                ui.label(RichText::new(self.waiting()).color(t.muted));
             }
-            if selected && let Some(v) = &mut self.view {
-                ui.indent(("box-tree", &m.name), |ui| v.tree_ui(ui));
+            for m in &modules {
+                let selected = self.state.selected.as_deref() == Some(m.name.as_str());
+                let arrow = if selected { "▾" } else { "▸" };
+                let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
+                    .color(if m.state == "faulted" {
+                        crate::theme::theme(ui).ink(RED)
+                    } else {
+                        t.fg
+                    });
+                let r = ui.selectable_label(selected, text);
+                chrome.hit(format!("module {}", m.name), r.rect);
+                let r = match &m.fault {
+                    Some(f) => r.tip(format!("Faulted: {f}")),
+                    None => r.tip("A module: its state and scans so far. Click to open its diagram."),
+                };
+                if r.clicked() {
+                    chosen = Some(m.name.clone());
+                }
+                if selected && let Some(v) = &mut self.view {
+                    ui.indent(("box-tree", &m.name), |ui| v.tree_ui(ui));
+                }
             }
-        }
-        if let Some(name) = chosen {
-            self.state.select(&name);
+            if let Some(name) = chosen {
+                self.state.select(&name);
+            }
         }
         // The blank space under it all: a right-click offers a new project
         // (and a paste into the open one).
@@ -3379,22 +3387,8 @@ impl Body for BoxView {
             self.session.is_some(),
             self.state.io_map.as_deref(),
         );
-        self.devices_ui.node_map.row(ui, chrome);
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
-            Some(crate::devices::DeviceAct::Scan) => {
-                self.devices_ui.scan = crate::devices::Scan::Running;
-                self.projects.discover();
-            }
-            Some(crate::devices::DeviceAct::Ask(address)) => {
-                self.devices_ui.ask_note = Some(format!("Asking {address}…"));
-                self.projects.ask(address);
-            }
-            Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.open(d),
             Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),
-            Some(crate::devices::DeviceAct::OpenMap) => {
-                self.projects.open_file(helmsman_project::IO_MAP);
-                chrome.show_code();
-            }
             Some(crate::devices::DeviceAct::Library { vendor, product }) => {
                 self.projects.library(vendor, product);
             }

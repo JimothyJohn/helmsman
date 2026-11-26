@@ -1103,6 +1103,12 @@ pub trait Workspace {
     fn release_all(&mut self) -> bool {
         false
     }
+    /// Whether Edit › Edit map… is on: the page watches a Skipper.
+    fn can_edit_map(&self) -> bool {
+        false
+    }
+    /// Opens the Skipper's I/O map in its window.
+    fn edit_map(&mut self) {}
 }
 
 /// The file and line a line of a project build is from: the build is every

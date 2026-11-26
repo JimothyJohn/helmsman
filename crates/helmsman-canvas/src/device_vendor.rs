@@ -21,7 +21,7 @@
 //!   proposal; everyone else is told why there is no button.
 
 // Natively only the tests carry a pick and an answer in.
-#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#![allow(dead_code)] // its row served the found list, off the Devices tab 2026-11-26; its tests remain
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

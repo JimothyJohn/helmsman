@@ -146,6 +146,7 @@ pub enum PCall {
     /// `POST /api/devices/discover?address=A`: the Devices tab's Ask, one
     /// address (the text is the validated IPv4 address, for the answer's
     /// note).
+    #[cfg_attr(not(test), allow(dead_code))]
     Ask(String),
     /// `GET /api/devices/library?vendor=&product=`: a found device's
     /// profile for the quick form (answered by the view, not here).
@@ -952,17 +953,6 @@ impl BoxProjects {
             PCall::Discover,
             "POST",
             "/api/devices/discover?fresh=1".into(),
-            &json!({}),
-        ));
-    }
-
-    /// Asks the box about the one device at `address` (the Devices tab's
-    /// Ask), for a device that does not answer the scan's broadcast.
-    pub fn ask(&mut self, address: std::net::Ipv4Addr) {
-        self.queue.push(PReq::json(
-            PCall::Ask(address.to_string()),
-            "POST",
-            format!("/api/devices/discover?address={address}"),
             &json!({}),
         ));
     }

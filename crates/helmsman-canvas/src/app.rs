@@ -1826,6 +1826,22 @@ impl App {
                 {
                     w.undo(&ctx, true);
                 }
+                let map = self.workspace().is_some_and(|w| w.can_edit_map());
+                if map {
+                    ui.separator();
+                    if menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "edit map",
+                        "Edit map…",
+                        false,
+                        "",
+                        "Opens the I/O map this Skipper runs in a window: edit it, check its devices, download it.",
+                    ) && let Some(w) = self.workspace()
+                    {
+                        w.edit_map();
+                    }
+                }
                 ui.separator();
                 if menu_item_keyed(
                     ui,

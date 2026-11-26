@@ -196,20 +196,14 @@ redrawn.
   the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
-  next. **Devices** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): at the top, **I/O
-  wiring** links to the project's `io.map`, the file that says which
-  program variable is wired to which device point; then the devices it
-  names, each with its points under it, their live
-  values, and whether the link is up; a right-click on the blank space
-  adds a device (name, protocol, address, settings) as a line of the
-  map; Import device… takes the vendor's EDS file, keeps it in the
-  project and fills the form in from it. Under the map's devices, **On
-  the network**: Scan lists every EtherNet/IP device that answers on the
-  LAN, says whether the map already has it, and shows what the public
-  device library knows of it (in the simulation, one simulated E1213).
-  **Use this device** under one opens the form filled in, the device
-  named by its identity so a changed address never loses it; on a
-  read-only example it copies the project first. The form has a field
+  next. **Devices** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): the devices
+  the project's `io.map` names, each with its points under it, their live
+  values, and whether the link is up. The **+** under the list adds a
+  device (name, protocol, address, settings) as a line of the map; a
+  right-click on the blank space offers the same, and Import device…
+  takes the vendor's EDS file, keeps it in the project and fills the form
+  in from it. On a read-only example, adding copies the project first.
+  The form has a field
   for each of the protocol's settings, filled in with the usual values
   and checked against the driver's ranges, with the device's io.map line
   under them. Adding a device adds the device alone. Every channel it
@@ -240,15 +234,13 @@ redrawn.
   each step yourself. **Tick** and **Skip** work on a box too, and the
   window says which steps were seen and which you ticked. It only
   reads: nothing is written to the project or the device, and the
-  ticks last until the page is reloaded. **Edit** beside a device opens its name, and with
-  Advanced on its protocol, address and timing; Save keeps its points
+  ticks last until the page is reloaded. **Edit** beside a device opens its name; Save keeps its points
   as they are. **Delete** asks, then takes the device and its inputs
   and outputs out (the program's variables stay). Double-click or
   right-click a wired signal to rename it:
   the io.map line and every use in the program change together, listed
   before you confirm. One map may mix Modbus
-  TCP and EtherNet/IP devices. Helmsman reads the same listing, network
-  included. Under that, **Plant states**: the quantities a project's
+  TCP and EtherNet/IP devices. Under that, **Plant states**: the quantities a project's
   plant model keeps for the machine it stands in for (mark a variable
   with `{state unit=m}` on its line), each with the simulation's value
   and the sensor that measures it on the real machine, or the kind of

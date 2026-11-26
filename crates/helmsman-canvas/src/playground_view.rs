@@ -3746,14 +3746,6 @@ impl Body for PlaygroundView {
             .collect();
         self.want_wired();
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
-            Some(crate::devices::DeviceAct::Scan) => {
-                self.devices_ui.simulated_scan(&map);
-                self.wired_lib.scan(&mut self.devices_ui);
-                // Scan and add queues what the library knows.
-                self.devices_ui.found_to_add_all();
-            }
-            Some(crate::devices::DeviceAct::Ask(_)) => self.devices_ui.simulated_ask(),
-            Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
             Some(crate::devices::DeviceAct::AddIo(device)) => {
                 // A read-only example is copied first; the copy keeps the
                 // device's name.
@@ -3762,10 +3754,6 @@ impl Body for PlaygroundView {
                 }
             }
             Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
-            Some(crate::devices::DeviceAct::OpenMap) => {
-                self.proj.open_file(helmsman_project::IO_MAP);
-                chrome.show_code();
-            }
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
@@ -5010,22 +4998,6 @@ impl PlaygroundView {
             self.proj.add_file(helmsman_project::IO_MAP, map);
         }
         true
-    }
-
-    fn use_device(&mut self, d: crate::devices::NewDevice) {
-        if !self.own_project() {
-            return;
-        }
-        // The copy's program and map, for the form's channels.
-        let map = self
-            .proj
-            .files
-            .get(helmsman_project::IO_MAP)
-            .cloned()
-            .unwrap_or_default();
-        self.devices_ui.map = helmsman_project::iomap::skim(&map);
-        self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
-        self.devices_ui.open(d);
     }
 
     /// The form's Add: new variables into the program file (refused, with

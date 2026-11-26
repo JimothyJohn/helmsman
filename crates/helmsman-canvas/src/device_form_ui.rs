@@ -19,11 +19,6 @@ const RED: egui::Color32 = egui::Color32::from_rgb(255, 110, 100);
 const WIDTH: f32 = 520.0;
 
 impl DevicesUi {
-    /// Opens the form on `d`.
-    pub fn open(&mut self, d: NewDevice) {
-        self.adding = Some(d);
-    }
-
     /// The form. Returns the wiring once Add is pressed with rows that pass.
     pub fn form_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
         let mut d = self.adding.clone()?;
