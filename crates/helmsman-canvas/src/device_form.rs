@@ -378,7 +378,21 @@ pub fn set_param(params: &str, key: &str, value: &str) -> String {
 /// # Errors
 /// The first setting out of range, an unknown profile, or EtherNet/IP
 /// with neither (or both) of a profile and an EDS.
+#[cfg(test)]
 pub fn check_settings(driver: &str, params: &str) -> Result<(), String> {
+    check_settings_for(driver, params, false)
+}
+
+/// [`check_settings`] for a device being edited (`editing`) or a new one.
+/// An edit keeps the line it was read from: a device in the map with
+/// neither a profile nor an EDS (a Skipper's EtherNet/IP device, set by
+/// `config=`, `o2t=` and `t2o=`) stays as it is, so a rename is not
+/// refused for what the form never changed. Both at once is refused
+/// either way.
+///
+/// # Errors
+/// As [`check_settings`].
+pub fn check_settings_for(driver: &str, params: &str, editing: bool) -> Result<(), String> {
     for s in schema(driver) {
         let Some(v) = param(params, s.key) else { continue };
         match s.kind {
@@ -401,7 +415,9 @@ pub fn check_settings(driver: &str, params: &str) -> Result<(), String> {
     }
     if driver == "enip-io" {
         match (param(params, "profile"), param(params, "eds")) {
-            (None, None) => return Err("EtherNet/IP needs a profile or the device's EDS file.".into()),
+            (None, None) if !editing => {
+                return Err("EtherNet/IP needs a profile or the device's EDS file.".into());
+            }
             (Some(_), Some(_)) => return Err("A profile or an EDS file, not both.".into()),
             _ => {}
         }
