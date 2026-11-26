@@ -1185,6 +1185,11 @@ impl App {
         });
         hits.push(("header".to_string(), panel.response.rect));
         let menu_at = panel.inner;
+        if let Some(r) = &mut self.review
+            && std::mem::take(&mut r.open_login)
+        {
+            self.login = true;
+        }
         if self.login {
             self.login_ui(ui.ctx(), menu_at, &mut hits);
         } else {
