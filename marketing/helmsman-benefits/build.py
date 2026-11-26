@@ -259,7 +259,8 @@ class Film:
         self.js.append(f'gsap.set("#{g} .fact", {{transformOrigin: "0% 50%"}});')
         for i in range(len(facts)):
             t = round(at + 0.25 + i * 0.5, 2)
-            self.js.append(f'slam("#{g} .fact:nth-of-type({i + 1})", {t}, 1.25); jolt({t}, 4);')
+            # nth-of-type counts the label's <p> too: the first fact is the second <p>.
+            self.js.append(f'slam("#{g} .fact:nth-of-type({i + 2})", {t}, 1.25); jolt({t}, 4);')
 
     def end(self, at):
         g = self._id("e")

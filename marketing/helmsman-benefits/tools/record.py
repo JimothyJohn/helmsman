@@ -68,7 +68,8 @@ DESCRIBE_SEND = (266, 166)
 # Under the Describe field once a project has versions: the clock (the list), back, forward.
 VERSIONS = (40, 166)
 BACK = (115, 166)
-FORWARD = (189, 166)
+# Stepping back puts the version's instruction in the field, two lines tall: the row drops.
+VERSIONS_AFTER_BACK = (40, 187)
 MARY_SWITCH = (400, 188)  # iologik_e1213_di_00 on the diagram, top left
 LAMP_INPUT = (413, 237)  # the input's switch in the answer the probes got (one INPUT, one LAMP)
 SCAN = (177, 193)  # Devices tab: Scan, beside "On the network"
@@ -178,12 +179,12 @@ SCENES = {
             (7.4, "move", REST),
             (30.0, "move", BACK),
             (30.4, "click", BACK),
-            (33.4, "click", FORWARD),
-            (36.0, "move", VERSIONS),
-            (36.4, "click", VERSIONS),
-            (37.0, "move", REST),
+            # The list from the version stepped back to: forward would refill the field and move the row again.
+            (33.0, "move", VERSIONS_AFTER_BACK),
+            (33.4, "click", VERSIONS_AFTER_BACK),
+            (34.0, "move", REST),
         ],
-        length=41.0,
+        length=38.0,
     ),
     # Visualize: ask the diagram why the lamp is on, then zoom into the tune.
     "visualize": dict(
@@ -193,7 +194,7 @@ SCENES = {
         take=[
             (0.6, "move", LAMP_BLOCK),
             (1.0, "click", LAMP_BLOCK),
-            (1.4, "move", (700, 120)),
+            (1.4, "move", REST),  # off the diagram: no help tooltip
             (4.0, "move", EMPTY_DIAGRAM),
             (4.4, "click", EMPTY_DIAGRAM),
             (5.0, "move", ZOOM_IN),
