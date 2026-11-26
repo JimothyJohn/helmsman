@@ -373,25 +373,16 @@ pub fn set_param(params: &str, key: &str, value: &str) -> String {
     out.join(" ")
 }
 
-/// Why `params` will not do for `driver`, if they will not.
-///
-/// # Errors
-/// The first setting out of range, an unknown profile, or EtherNet/IP
-/// with neither (or both) of a profile and an EDS.
-#[cfg(test)]
-pub fn check_settings(driver: &str, params: &str) -> Result<(), String> {
-    check_settings_for(driver, params, false)
-}
-
-/// [`check_settings`] for a device being edited (`editing`) or a new one.
-/// An edit keeps the line it was read from: a device in the map with
+/// Why `params` will not do for `driver`, if they will not, for a device
+/// being edited (`editing`) or a new one. An edit keeps the line it was read from: a device in the map with
 /// neither a profile nor an EDS (a Skipper's EtherNet/IP device, set by
 /// `config=`, `o2t=` and `t2o=`) stays as it is, so a rename is not
 /// refused for what the form never changed. Both at once is refused
 /// either way.
 ///
 /// # Errors
-/// As [`check_settings`].
+/// The first setting out of range, an unknown profile, or EtherNet/IP
+/// with neither (or both) of a profile and an EDS.
 pub fn check_settings_for(driver: &str, params: &str, editing: bool) -> Result<(), String> {
     for s in schema(driver) {
         let Some(v) = param(params, s.key) else { continue };
@@ -1091,27 +1082,30 @@ mod tests {
             set_param(p, "new", "a b"),
             "unit=1 timeout_ms=300 poll_ms=20 extra=x new=ab"
         );
-        assert_eq!(check_settings("modbus-tcp", p), Ok(()));
+        assert_eq!(check_settings_for("modbus-tcp", p, false), Ok(()));
         assert!(
-            check_settings("modbus-tcp", "unit=0")
+            check_settings_for("modbus-tcp", "unit=0", false)
                 .unwrap_err()
                 .contains("1 to 247")
         );
-        assert!(check_settings("modbus-tcp", "poll_ms=abc").is_err());
-        assert!(check_settings("modbus-tcp", "timeout_ms=60001").is_err());
-        assert_eq!(check_settings("enip-io", "profile=moxa-e1213 rpi_ms=100"), Ok(()));
+        assert!(check_settings_for("modbus-tcp", "poll_ms=abc", false).is_err());
+        assert!(check_settings_for("modbus-tcp", "timeout_ms=60001", false).is_err());
+        assert_eq!(
+            check_settings_for("enip-io", "profile=moxa-e1213 rpi_ms=100", false),
+            Ok(())
+        );
         assert!(
-            check_settings("enip-io", "rpi_ms=100")
+            check_settings_for("enip-io", "rpi_ms=100", false)
                 .unwrap_err()
                 .contains("profile or")
         );
         assert!(
-            check_settings("enip-io", "profile=moxa-e1213 eds=a.eds")
+            check_settings_for("enip-io", "profile=moxa-e1213 eds=a.eds", false)
                 .unwrap_err()
                 .contains("not both")
         );
-        assert!(check_settings("enip-io", "profile=other").is_err());
-        assert_eq!(check_settings("enip-io", "eds=moxa.eds"), Ok(()));
+        assert!(check_settings_for("enip-io", "profile=other", false).is_err());
+        assert_eq!(check_settings_for("enip-io", "eds=moxa.eds", false), Ok(()));
     }
 
     #[test]
@@ -1251,7 +1245,7 @@ mod tests {
             d.params, "rpi_ms=100 poll_ms=20 profile=moxa-e1213",
             "the profile it lacked"
         );
-        assert_eq!(check_settings(d.driver(), &d.params), Ok(()));
+        assert_eq!(check_settings_for(d.driver(), &d.params, false), Ok(()));
         let on: Vec<(&str, &str)> = d
             .points
             .iter()
