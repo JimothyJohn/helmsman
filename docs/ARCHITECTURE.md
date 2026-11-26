@@ -2129,7 +2129,7 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `DELETE /api/projects/{p}` | engineer | 409 for the running project |
 | `POST /api/projects/{p}/rename` | engineer | `{to}` |
 | `GET /api/projects/{p}/files/{f}` | session | `{name, text, version}` |
-| `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
+| `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?, page?, what?}` (a draft; `page`: the Describe change's History entry, `what`: what was asked, the revision's description); `{name, version, bytes}` |
 | `DELETE /api/projects/{p}/files/{f}` | engineer | |
 | `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval, diagnostics: [], warnings: [{file, line, col, message, severity: "warning"}]}`, or 422 `{diagnostics: [{file, line, col, message, severity: "error"}], warnings: [...]}`. `warnings` never stop a check, a save or a deploy |
 | `POST /api/projects/{p}/tests` | token or session | `{ok, red: [line], untested, tests: [{file, requirement, state, passed, why, scans, elapsed_ms}]}`; `state` is `passed`, `failed` or `untested` (never red) |

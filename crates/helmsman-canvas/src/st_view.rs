@@ -1315,8 +1315,10 @@ impl Viewer {
         true
     }
 
-    /// The reads and writes of `head` on this diagram, with the wires
-    /// between them.
+    /// The reads and writes of `head` on this diagram, every wire that
+    /// leaves or enters one of them, and the block at its other end: a
+    /// variable is drawn once and wired to each use, so each use shows
+    /// (Nick, 2026-11-26: an input lit one leg, not all its places).
     fn references(&self, head: &str) -> Drivers {
         let d = self.diagram();
         let of = |n: &helmsman_diagram::Node| match &n.kind {
@@ -1331,12 +1333,19 @@ impl Viewer {
             NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
             _ => false,
         };
-        let nodes: Vec<bool> = d.nodes.iter().map(of).collect();
-        let wires = d
+        let named: Vec<bool> = d.nodes.iter().map(of).collect();
+        let wires: Vec<bool> = d
             .wires
             .iter()
-            .map(|w| nodes[w.from.0 as usize] && nodes[w.to.0 as usize])
+            .map(|w| named[w.from.0 as usize] || named[w.to.0 as usize])
             .collect();
+        let mut nodes = named;
+        for (w, &on) in d.wires.iter().zip(&wires) {
+            if on {
+                nodes[w.from.0 as usize] = true;
+                nodes[w.to.0 as usize] = true;
+            }
+        }
         Drivers {
             nodes,
             wires,

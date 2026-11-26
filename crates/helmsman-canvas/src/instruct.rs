@@ -1617,6 +1617,15 @@ fn said(prose: &str) -> String {
 const INSTRUCTION: &str = "Instruction: ";
 const FILE: &str = "File: ";
 
+/// What was asked, from a change's History entry ([`record`]): its
+/// instruction, the revision's description on the box (Nick, 2026-11-26:
+/// History says what was requested, not what mechanically changed).
+#[must_use]
+pub fn asked(record: &str) -> Option<&str> {
+    let i = record.lines().next()?.strip_prefix(INSTRUCTION)?.trim();
+    (!i.is_empty()).then_some(i)
+}
+
 /// The History entry of a change: the instruction and the file first
 /// (what [`recent`] reads back), then the reason, the result, the
 /// scenarios, the attempts that failed and the Agent's words. Bounded

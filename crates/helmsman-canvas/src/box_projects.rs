@@ -1522,7 +1522,7 @@ impl BoxProjects {
             },
             "PUT",
             file_url(&project, file),
-            &json!({ "text": text, "version": version, "page": page }),
+            &json!({ "text": text, "version": version, "page": page, "what": crate::instruct::asked(page) }),
         ));
         o.current = Some(file.to_string());
         // Each scenario a new file (`version: null`: only if no file of
