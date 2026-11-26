@@ -278,6 +278,9 @@ pub struct Viewer {
     /// The variable (upper-cased head name in this scope) whose reads and
     /// writes are lit instead of the "because" path: Cross references.
     xref: Option<String>,
+    /// Which of [`Self::xref`]'s uses the diagram glyph framed last: each
+    /// click on it again frames the next (Nick, 2026-11-26).
+    xref_at: usize,
     /// Instances folded in the tree (their prefixes).
     folded: Vec<String>,
     /// How far the operator moved each block from where the layout put it,
@@ -677,6 +680,7 @@ impl Viewer {
             ran_at: std::collections::HashMap::new(),
             taken_at: std::collections::HashMap::new(),
             xref: None,
+            xref_at: 0,
             folded: Vec::new(),
             moved,
             edits: 0,
@@ -1315,11 +1319,9 @@ impl Viewer {
         true
     }
 
-    /// The reads and writes of `head` on this diagram, every wire that
-    /// leaves or enters one of them, and the block at its other end: a
-    /// variable is drawn once and wired to each use, so each use shows
-    /// (Nick, 2026-11-26: an input lit one leg, not all its places).
-    fn references(&self, head: &str) -> Drivers {
+    /// The blocks that read or write `head` (or are its instance), lit
+    /// alone: no wires.
+    fn named(&self, head: &str) -> Drivers {
         let d = self.diagram();
         let of = |n: &helmsman_diagram::Node| match &n.kind {
             NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
@@ -1333,7 +1335,60 @@ impl Viewer {
             NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
             _ => false,
         };
-        let named: Vec<bool> = d.nodes.iter().map(of).collect();
+        Drivers {
+            nodes: d.nodes.iter().map(of).collect(),
+            wires: vec![false; d.wires.len()],
+            regions: vec![false; d.regions.len()],
+        }
+    }
+
+    /// Use `k` (round the end) of `head` on the diagram as drawn, top to
+    /// bottom then left to right, with the blocks wired to it: what the
+    /// diagram glyph frames on its `k`th click.
+    fn use_at(&self, head: &str, k: usize) -> Option<helmsman_diagram::Rect> {
+        let named = self.named(head);
+        let around = self.references(head);
+        let (named, around) = match self.view() {
+            Some(v) => (v.drivers(&named), v.drivers(&around)),
+            None => (named, around),
+        };
+        let shown = self.shown();
+        let mut uses: Vec<&helmsman_diagram::Node> =
+            shown.nodes.iter().filter(|n| named.node(n.id)).collect();
+        if uses.is_empty() {
+            return None;
+        }
+        uses.sort_by(|a, b| a.rect.y.total_cmp(&b.rect.y).then(a.rect.x.total_cmp(&b.rect.x)));
+        let at = uses[k % uses.len()];
+        // The use and what it is wired to directly, so the frame says what
+        // the point does there.
+        let near = shown.wires.iter().filter_map(|w| {
+            if w.from == at.id && around.node(w.to) {
+                Some(shown.node(w.to).rect)
+            } else if w.to == at.id && around.node(w.from) {
+                Some(shown.node(w.from).rect)
+            } else {
+                None
+            }
+        });
+        Some(std::iter::once(at.rect).chain(near).fold(at.rect, |a, b| {
+            let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+            helmsman_diagram::Rect {
+                x,
+                y,
+                w: a.right().max(b.right()) - x,
+                h: a.bottom().max(b.bottom()) - y,
+            }
+        }))
+    }
+
+    /// The reads and writes of `head` on this diagram, every wire that
+    /// leaves or enters one of them, and the block at its other end: a
+    /// variable is drawn once and wired to each use, so each use shows
+    /// (Nick, 2026-11-26: an input lit one leg, not all its places).
+    fn references(&self, head: &str) -> Drivers {
+        let d = self.diagram();
+        let named = self.named(head).nodes;
         let wires: Vec<bool> = d
             .wires
             .iter()
@@ -2023,8 +2078,15 @@ impl Viewer {
         }
         let head = name.split(['.', '[']).next().unwrap_or(name);
         let head = if name.starts_with('%') { name } else { head };
+        let key = head.to_ascii_uppercase();
+        // Again on the same point: its next use (Nick, 2026-11-26).
+        self.xref_at = if self.xref.as_deref() == Some(key.as_str()) {
+            self.xref_at + 1
+        } else {
+            0
+        };
         self.because = None;
-        self.xref = Some(head.to_ascii_uppercase());
+        self.xref = Some(key);
         self.frame_lit = true;
     }
 
@@ -2052,10 +2114,16 @@ impl Viewer {
         let Some(rect) = self.lit_bounds(on) else {
             return;
         };
+        self.frame_rect(&rect, area, now);
+    }
+
+    /// Eases the view to frame `rect` (diagram units) in `area`, at the
+    /// zoom it has unless that does not fit.
+    fn frame_rect(&mut self, rect: &helmsman_diagram::Rect, area: Rect, now: f64) {
         let cam = self.cams[self.scope];
         let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
         let mut to = cam;
-        to.frame_within(below, &rect, cam.zoom.min(FOCUS_MAX));
+        to.frame_within(below, rect, cam.zoom.min(FOCUS_MAX));
         to.clamp(area, self.shown().size);
         self.cams[self.scope].moved = true;
         self.glide = Some(Glide {
@@ -2673,7 +2741,14 @@ impl Viewer {
             (_, on) => on.clone(),
         };
         if self.frame_lit {
-            self.frame_output(lit.as_ref(), scan.is_some(), area, ui.input(|i| i.time));
+            let now = ui.input(|i| i.time);
+            match self.xref.clone().and_then(|h| self.use_at(&h, self.xref_at)) {
+                Some(rect) => {
+                    self.frame_lit = false;
+                    self.frame_rect(&rect, area, now);
+                }
+                None => self.frame_output(lit.as_ref(), scan.is_some(), area, now),
+            }
             ui.ctx().request_repaint();
         }
         let selected = self.selected_live(cam, area, additive);

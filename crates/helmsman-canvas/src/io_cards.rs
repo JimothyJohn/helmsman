@@ -6,16 +6,18 @@
 //! with no scan needed: the first output an input affects, the first
 //! signal that drives an output, and "…" when there are more.
 //!
-//! Everything else is one gesture away. A double-click on the card (or a
-//! click on the "…") opens its details in place: every source in three
-//! groups that tell apart at a glance (signals read from outside, state
-//! the program keeps from one scan to the next, the function blocks it
-//! reads), the wiring in full and how often the name is in the code. The
-//! two glyphs at the card's right go to the point: `< >` finds it in the
-//! code, and again steps to its next use ([`crate::find::Find::name`]);
-//! the diagram glyph lights every block that reads or writes it and
-//! frames them ([`crate::st_view::Viewer::show_signal`]). A tap on an
-//! output's card lights the path that sets it, as before.
+//! Everything else is one gesture away. A click on the card (or on the
+//! "…") opens its details in place, and another closes them (Nick,
+//! 2026-11-26; a double-click before): every source in three groups that
+//! tell apart at a glance (signals read from outside, state the program
+//! keeps from one scan to the next, the function blocks it reads), the
+//! wiring in full and how often the name is in the code. The three glyphs
+//! at the card's right go to the point: `< >` finds it in the code, and
+//! again steps to its next use ([`crate::find::Find::name`]); the diagram
+//! glyph lights every block that reads or writes it, frames the first
+//! use, and again the next ([`crate::st_view::Viewer::show_signal`]); the
+//! graph glyph puts it on the Trend. A click on an output's card also
+//! lights the path that sets it, and on an input's, where it is.
 //!
 //! The tab shows its cards one to a row, or as tiles (the list and grid
 //! glyphs at its top), and Inputs and Outputs each fold away behind the
@@ -402,7 +404,6 @@ pub fn show<R>(
     let was: Option<Rect> = ui.data(|d| d.get_temp(id));
     let resp = ui.interact(was.unwrap_or(Rect::NOTHING), id, Sense::click());
     let mut asked = Asked::default();
-    let mut glyphs = Rect::NOTHING;
     let (fill, stroke) = look(row.tile, row.selected, &t);
     let sim = row.designation.as_ref().is_some_and(Designation::is_simulated);
     // A simulated card's outline is dashed, drawn over the frame below.
@@ -470,7 +471,6 @@ pub fn show<R>(
                 );
                 chrome.hit(format!("io trend {name}"), trend.rect);
                 asked.trend = trend.clicked();
-                glyphs = code.rect.union(diagram.rect).union(trend.rect);
                 r
             })
             .inner;
@@ -522,22 +522,18 @@ pub fn show<R>(
     } else if row.designation.is_some() {
         chrome.hit(format!("io solid {name}"), rect);
     }
-    // A double-click anywhere on the card but its two glyphs, its control
-    // included (a switch flipped twice is where it was).
-    let double = ui.rect_contains_pointer(rect)
-        && ui.input(|i| {
-            i.pointer.button_double_clicked(egui::PointerButton::Primary)
-                && i.pointer.interact_pos().is_some_and(|p| !glyphs.contains(p))
-        });
-    asked.details |= double;
+    // One click on the card (not on its glyphs or its control, which are
+    // in front of it) opens or closes its details: its dependencies and
+    // its device (Nick, 2026-11-26; a double-click before).
     asked.tapped = resp.clicked();
+    asked.details |= asked.tapped;
     let what = if row.open {
-        "Double-click to close its details."
+        "Click to close its details."
     } else {
-        "Double-click for its details."
+        "Click for its details: what it drives and its device."
     };
     let tip = if row.input {
-        format!("{name}: {what}\n{}", row.place)
+        format!("{name}: shows where it is on the diagram. {what}\n{}", row.place)
     } else {
         format!(
             "Click to light what drives {name} on the diagram. {what}\n{}",

@@ -4000,7 +4000,7 @@ impl PlaygroundView {
                                 let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
                                 let text =
                                     format!("{} = {}", p.name.to_ascii_lowercase(), show(p.ty, p.value));
-                                crate::io_cards::value(ui, Some(glyph), t.fg, &text, true);
+                                crate::io_cards::value(ui, Some(glyph), state_ink(&t, p.value), &text, true);
                                 return None;
                             }
                             let r = ui.scope(|ui| input_ui(ui, p, &said, form == Form::Tile));
@@ -4194,6 +4194,14 @@ impl PlaygroundView {
         }
         if a.tapped && !input {
             self.pick(name);
+        }
+        // An input's card goes to where it is, as an output's does
+        // (Nick, 2026-11-26).
+        if a.tapped
+            && input
+            && let Some(v) = &mut self.viewer
+        {
+            v.show_signal(name);
         }
     }
 
@@ -5622,6 +5630,16 @@ impl Default for PlaygroundView {
 
 /// One input: its control, and the response a right-click on its row
 /// opens a menu from. `place` is where the point is now, in its tooltip.
+/// An input's glyph says its state: green on, red off (Nick, 2026-11-26);
+/// a number's is plain.
+fn state_ink(t: &crate::theme::Theme, v: Value) -> egui::Color32 {
+    match v {
+        Value::Bool(true) => t.ink(crate::st_view::brand::GREEN),
+        Value::Bool(false) => t.ink(crate::st_view::brand::RED),
+        _ => t.fg,
+    }
+}
+
 fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Value>, egui::Response) {
     let t = theme(ui);
     let label = match p.address() {
@@ -5641,7 +5659,13 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
     let slider = ui.available_width() >= 150.0;
     let boxed = Vec2::new((ui.available_width() - 2.0).clamp(40.0, 84.0), TAP * 0.6);
     ui.horizontal_wrapped(|ui| {
-        crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, t.fg, crate::glyph_lib::tip(glyph));
+        crate::glyph_lib::show(
+            ui,
+            glyph,
+            crate::glyphs::ROW,
+            state_ink(&t, p.value),
+            crate::glyph_lib::tip(glyph),
+        );
         match p.widget {
             Some(Widget::Push) => {
                 let on = p.value == Value::Bool(true);
@@ -5654,7 +5678,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                     .fill(if on { YELLOW } else { t.rule })
                     .sense(Sense::click_and_drag());
                 let r = control_button(ui, b, size, tile).tip(format!(
-                    "Push button: on while held. Double-click for its details.\n{place}"
+                    "Push button: on while held. Click the card for its details.\n{place}"
                 ));
                 out = Some(Value::Bool(r.is_pointer_button_down_on()));
                 anchor = Some(r);
@@ -5668,7 +5692,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                 )
                 .fill(if on { YELLOW } else { t.rule });
                 let r = control_button(ui, b, size, tile).tip(format!(
-                    "Switch: click to flip. Double-click for its details.\n{place}"
+                    "Switch: click to flip. Click the card for its details.\n{place}"
                 ));
                 if r.clicked() {
                     out = Some(Value::Bool(!on));

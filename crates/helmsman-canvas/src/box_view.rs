@@ -2665,6 +2665,11 @@ impl BoxView {
             if a.tapped && !input {
                 v.show_output(name);
             }
+            // An input's card goes to where it is, as an output's does
+            // (Nick, 2026-11-26).
+            if a.tapped && input {
+                v.show_signal(name);
+            }
         }
     }
 
@@ -3739,11 +3744,15 @@ impl Body for BoxView {
                             let forced = if is_forced { "  FORCED" } else { "" };
                             let text = format!("{name} = {}{unit}{forced}", show(value));
                             let on = value == Some(helmsman_iec::Value::Bool(true));
+                            // An input's BOOL says its state: green on, red
+                            // off (Nick, 2026-11-26).
+                            let off = input && value == Some(helmsman_iec::Value::Bool(false));
                             let color = match sig.map(|s| s.quality.as_str()) {
                                 _ if is_forced => t.ink(WARN),
                                 Some("missing") => t.ink(RED),
                                 _ if on && !input => t.ink(crate::lamps::colour(name).unwrap_or(GREEN)),
                                 _ if on => t.ink(GREEN),
+                                _ if off => t.ink(RED),
                                 _ => t.fg,
                             };
                             let bool_ty = matches!(value, Some(helmsman_iec::Value::Bool(_)));
