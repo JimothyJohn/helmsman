@@ -408,6 +408,9 @@ fn replace_writes_one_match_then_all_of_them() {
     let mut find = crate::find::Find::default();
     find.query = "lamp".into();
     find.replace = Some("beacon".into());
+    // Whole words are on for a name since 2026-11-25; this test pins the
+    // substring replace (`lamp_ok` too), so it turns them off.
+    find.whole = Some(false);
     h.app.chrome.find = Some(find);
     h.wait(0.3);
     let file = |h: &Harness| h.app.sim.as_ref().unwrap().proj.files[&cur].clone();

@@ -55,6 +55,9 @@ pub fn signal_groups(signals: &[SignalRow], map: &str) -> Vec<(String, Vec<Strin
 #[derive(Debug, Default, Clone)]
 pub struct Picker {
     pub open: BTreeSet<String>,
+    /// Whether a first group was already offered open (the Monitor does
+    /// it once); after that the user's folds and unfolds are all there is.
+    pub seeded: bool,
 }
 
 impl Picker {
@@ -85,11 +88,17 @@ impl Picker {
                 } else {
                     format!("{} {}", g.to_ascii_lowercase(), names.len())
                 };
-                let r = crate::theme::tab(ui, open, &label, egui::Vec2::ZERO).tip(if open {
-                    "Click to fold this device's signals away."
-                } else {
-                    "Click to see this device's signals."
-                });
+                // A framed button with a fold arrow, so it reads as
+                // something to press, not as a caption.
+                let arrow = if open { "▾" } else { "▸" };
+                let text = RichText::new(format!("{arrow} {label}")).color(t.fg);
+                let r = ui
+                    .add(egui::Button::new(text).selected(open)) // tip: given below
+                    .tip(if open {
+                        "Click to fold this device's signals away."
+                    } else {
+                        "Click to see this device's signals."
+                    });
                 chrome.hit(format!("{key} group {}", g.to_ascii_lowercase()), r.rect);
                 if r.clicked() && !self.open.remove(g) {
                     self.open.insert(g.clone());

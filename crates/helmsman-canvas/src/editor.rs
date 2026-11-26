@@ -241,6 +241,9 @@ pub struct Chrome {
     /// (on, the default) or run on behind a sideways scroll bar (Nick,
     /// 2026-11-08). The toggle sits in the Code header.
     pub wrap: bool,
+    /// The Code tab's versions list is open under its header (the clock
+    /// beside the arrows; Nick, 2026-11-25).
+    pub history: bool,
     /// The colours picked for trend signals (Nick, 2026-11-11): a
     /// signal's name, lower-cased, and its place in the trend's palette.
     /// A signal not here takes its lane's colour.
@@ -265,6 +268,9 @@ pub struct Chrome {
     pub files_fold_mine: bool,
     /// The Files tab's Examples section is folded away. Remembered.
     pub files_fold_examples: bool,
+    /// Help › Show hotkeys: every control with a shortcut wears it as a
+    /// superscript, to teach it. Remembered.
+    pub hotkeys: bool,
 }
 
 impl Default for Chrome {
@@ -290,6 +296,7 @@ impl Default for Chrome {
             find: None,
             st_marks: None,
             wrap: true,
+            history: false,
             colors: Vec::new(),
             hints: crate::st_hints::Hints::default(),
             folds: crate::st_fold::Folds::default(),
@@ -299,6 +306,7 @@ impl Default for Chrome {
             io_fold_out: false,
             files_fold_mine: false,
             files_fold_examples: false,
+            hotkeys: false,
         }
     }
 }
@@ -343,7 +351,7 @@ impl Chrome {
             format!(" hidden={}", list(&self.hidden))
         };
         format!(
-            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} msgs={} light={} wrap={} advanced={} iogrid={} iofold={}{} filefold={}{}{colors}",
+            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} msgs={} light={} wrap={} advanced={} iogrid={} iofold={}{} filefold={}{} hotkeys={}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             list(&self.lefts),
@@ -358,7 +366,8 @@ impl Chrome {
             u8::from(self.io_fold_in),
             u8::from(self.io_fold_out),
             u8::from(self.files_fold_mine),
-            u8::from(self.files_fold_examples)
+            u8::from(self.files_fold_examples),
+            u8::from(self.hotkeys)
         )
     }
 
@@ -382,6 +391,7 @@ impl Chrome {
                 Some(("light", v)) => c.light = v == "1",
                 Some(("wrap", v)) => c.wrap = v == "1",
                 Some(("advanced", v)) => c.advanced = v == "1",
+                Some(("hotkeys", v)) => c.hotkeys = v == "1",
                 Some(("iogrid", v)) => c.io_grid = v == "1",
                 Some(("iofold", v)) => {
                     c.io_fold_in = v.starts_with('1');
@@ -1660,7 +1670,7 @@ pub fn st_editor(
                 // numbered on its first row, its wrapped rows blank.
                 let mut job = highlight(text.as_str(), &lines, at, &added, &font, edit_wrap, &t);
                 crate::find::mark(&mut job, &marks);
-                let galley = ui.fonts_mut(|f| f.layout_job(job));
+                let galley = hang(ui, job, digit);
                 let mut gutter = LayoutJob::default();
                 for (n, number) in numbering(galley.rows.iter().map(|r| r.ends_with_newline)) {
                     if crate::st_fold::hidden(&folded, u32::try_from(n).unwrap_or(u32::MAX)) {
@@ -1701,7 +1711,7 @@ pub fn st_editor(
                     ui.data_mut(|d| d.insert_temp(wrap_key, wrap));
                     let mut job = highlight(buf.as_str(), &lines, at, &added, &font, wrap, &t);
                     crate::find::mark(&mut job, &marks);
-                    ui.fonts_mut(|f| f.layout_job(job))
+                    hang(ui, job, digit)
                 };
                 // A tooltip would sit over the code under the pointer while
                 // the engineer types; the pane's tab button has one.
@@ -1730,6 +1740,100 @@ pub fn st_editor(
             .inner
         })
         .inner
+}
+
+/// `job` laid out so that a wrapped line continues under its own
+/// indentation plus one step (two columns), not at column 0 (Nick,
+/// 2026-11-25: `MOD NOTE_COUNT;` flush left read as a new statement).
+/// egui wraps every row of a job at one width and has no hanging indent,
+/// so each source line is laid out as a galley of its own, the way egui
+/// splits paragraphs itself, and the galleys are joined with
+/// `Galley::concat` over the whole job: the text edit still gets one
+/// galley of the whole text. In a line's job the first section starts
+/// `indent` to the left (the row gets that much more room) and the wrap
+/// width is `indent` less; every row of the line is then moved right by
+/// `indent`, which puts the first row back at column 0 and the rest
+/// `indent` in. `digit` is a glyph's width. With wrapping off the job is
+/// laid out as it is.
+pub(crate) fn hang(ui: &egui::Ui, job: LayoutJob, digit: f32) -> std::sync::Arc<egui::Galley> {
+    use egui::text::{ByteIndex, LayoutSection, TextWrapping};
+
+    let wrap = job.wrap.max_width;
+    if !wrap.is_finite() || job.text.is_empty() {
+        return ui.fonts_mut(|f| f.layout_job(job));
+    }
+    let job = std::sync::Arc::new(job);
+    let len = job.text.len();
+    let mut galleys = Vec::new();
+    let (mut start, mut first) = (0, 0);
+    while start < len {
+        let mut end = job.text[start..].find('\n').map_or(len, |i| start + i);
+        if end + 1 == len && job.text.ends_with('\n') {
+            end += 1;
+        }
+        let line = &job.text[start..end];
+        #[allow(clippy::cast_precision_loss)]
+        let columns = line
+            .chars()
+            .take_while(|c| matches!(c, ' ' | '\t'))
+            .map(|c| if c == '\t' { 2 } else { 1 })
+            .sum::<usize>() as f32;
+        let indent = if line.trim().is_empty() {
+            0.0
+        } else {
+            ((columns + 2.0) * digit).min(wrap / 2.0).round()
+        };
+        let mut sections = Vec::new();
+        for (k, section) in job.sections.iter().enumerate().skip(first) {
+            let r = &section.byte_range;
+            if r.end <= ByteIndex(start) {
+                first = k + 1;
+            } else if ByteIndex(end) < r.start {
+                break;
+            } else {
+                sections.push(LayoutSection {
+                    leading_space: if ByteIndex(start) <= r.start {
+                        section.leading_space
+                    } else {
+                        0.0
+                    },
+                    byte_range: r.start.saturating_sub(start)
+                        ..r.end.min(ByteIndex(end)).saturating_sub(start),
+                    format: section.format.clone(),
+                });
+            }
+        }
+        if indent > 0.0
+            && let Some(s) = sections.first_mut()
+        {
+            s.leading_space = -indent;
+        }
+        let paragraph = LayoutJob {
+            text: line.to_owned(),
+            wrap: TextWrapping {
+                max_width: wrap - indent,
+                ..job.wrap.clone()
+            },
+            sections,
+            break_on_newline: job.break_on_newline,
+            halign: job.halign,
+            justify: job.justify,
+            first_row_min_height: if start == 0 { job.first_row_min_height } else { 0.0 },
+            round_output_to_gui: job.round_output_to_gui,
+            keep_trailing_whitespace: job.keep_trailing_whitespace,
+        };
+        let mut galley = std::sync::Arc::unwrap_or_clone(ui.fonts_mut(|f| f.layout_job(paragraph)));
+        if indent > 0.0 {
+            for row in &mut galley.rows {
+                row.pos.x += indent;
+            }
+        }
+        galleys.push(std::sync::Arc::new(galley));
+        start = end + 1;
+    }
+    let mut galley = egui::Galley::concat(job, &galleys, ui.pixels_per_point());
+    galley.rect.min.x = 0.0;
+    std::sync::Arc::new(galley)
 }
 
 /// The Code header's word-wrap toggle, drawn as "code wrap" for the
@@ -1793,6 +1897,8 @@ pub struct Status<'a> {
     /// Back and Forward through the project's revisions (Nick,
     /// 2026-11-25: History in the Code tab), when there are any.
     pub steps: Option<&'a crate::instruct::Steps>,
+    /// There are versions to list: the clock is drawn before the arrows.
+    pub history: bool,
 }
 
 /// A spinner and what a deploy is doing, beside Deploy (in a right-to-left
@@ -1855,6 +1961,25 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
                 }
             }
         }
+        if s.history {
+            let on = chrome.history;
+            let r = crate::glyphs::button_sized(
+                ui,
+                Icon::History,
+                crate::glyphs::ROW,
+                true,
+                on,
+                if on {
+                    "Versions: shut the list of this project's versions."
+                } else {
+                    "Versions: every saved version of this project, to search and step to."
+                },
+            );
+            chrome.hit("code versions", r.rect);
+            if r.clicked() {
+                chrome.history = !on;
+            }
+        }
         if s.errors > 0 {
             let red = crate::theme::theme(ui).ink(crate::st_view::brand::RED);
             let r = ui
@@ -1874,13 +1999,47 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
     out
 }
 
+/// The Code tab's list of versions, under its header while the clock is
+/// on: the Agent tab's own list ([`crate::instruct::versions_ui`], search
+/// box and all), in a frame that scrolls. A click is the revision to show.
+pub fn versions_panel(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    s: &mut crate::instruct::Instruct,
+    versions: &crate::instruct::Versions,
+) -> Option<crate::instruct::Act> {
+    let t = theme(ui);
+    let max = (ui.available_height() * 0.45).clamp(120.0, 260.0);
+    let mut act = None;
+    let r = egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(Stroke::new(1.0, t.muted.gamma_multiply(0.4)))
+        .corner_radius(4.0)
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            act = egui::ScrollArea::vertical()
+                .id_salt("code-versions-scroll")
+                .max_height(max)
+                .show(ui, |ui| {
+                    // Room for the scroll bar.
+                    ui.set_max_width(ui.available_width() - 12.0);
+                    crate::instruct::versions_ui(ui, chrome, s, versions)
+                })
+                .inner;
+        })
+        .response;
+    chrome.hit("code versions list", r.rect);
+    act
+}
+
 /// The Code header's name: the open file, truncated to leave the row's
 /// glyphs and notes their room, drawn as "code file" for the tests.
 pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str) {
-    // Two glyphs, their spacing, the errors' count and Deploy stay on
-    // the row.
+    // Three glyphs (find, wrap, versions), their spacing, the errors'
+    // count and Deploy stay on the row.
     let room =
-        (ui.available_width() - 2.0 * (crate::glyphs::ROW + 6.0) - crate::glyphs::DEPLOY_W - 80.0).max(60.0);
+        (ui.available_width() - 3.0 * (crate::glyphs::ROW + 6.0) - crate::glyphs::DEPLOY_W - 80.0).max(60.0);
     let r = ui
         .scope(|ui| {
             ui.set_max_width(room);

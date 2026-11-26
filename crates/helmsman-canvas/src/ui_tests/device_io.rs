@@ -296,3 +296,51 @@ fn clean_up_takes_every_devices_unused_points_out_at_once() {
     );
     assert!(!h.has("devices clean up"), "nothing unused is left");
 }
+
+/// Nick, 2026-11-25: "Remove N unused point(s)" was drawn over the list
+/// with the rows showing through. The question is opaque from the first
+/// frame it is painted (no fade-in), and the pane keeps its width.
+#[test]
+fn the_remove_question_is_opaque_over_the_list() {
+    use eframe::egui::{Rect, Shape};
+    /// (the question's background, if painted; whether its text is faded)
+    fn painted(s: &Shape, form: Rect, out: &mut (Option<u8>, bool)) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| painted(s, form, out)),
+            Shape::Rect(r)
+                if r.rect.width() > 300.0
+                    && r.rect.width() <= form.width() + 1.0
+                    && r.rect.intersects(form)
+                    && r.fill.a() > 0 =>
+            {
+                out.0 = Some(r.fill.a());
+            }
+            Shape::Text(t) if form.contains(t.pos) && t.opacity_factor < 1.0 => out.1 = true,
+            _ => {}
+        }
+    }
+    let mut h = playground(&format!("{DEVICE}in  part bool rio ch:DI-04\n"));
+    let left = edge(&h);
+    let at = h.rect("remove unused rio").center();
+    h.frame(vec![Event::PointerMoved(at)]);
+    h.frame(vec![Harness::button(at, true)]);
+    h.frame(vec![Harness::button(at, false)]);
+    // The first frame it is painted (the one before it only measures).
+    let mut seen = (None, false);
+    for _ in 0..8 {
+        h.frame(vec![]);
+        if h.has("remove io form") {
+            let form = h.rect("remove io form");
+            seen = (None, false);
+            for c in &h.shapes {
+                painted(&c.shape, form, &mut seen);
+            }
+            if seen.0.is_some() {
+                break;
+            }
+        }
+    }
+    assert_eq!(seen.0, Some(255), "an opaque background behind the question");
+    assert!(!seen.1, "its text is not faded over the rows");
+    inside_the_pane(&h, "remove unused rio", left);
+}

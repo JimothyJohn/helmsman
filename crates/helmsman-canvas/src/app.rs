@@ -539,6 +539,7 @@ impl App {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         hotkeys::swallow_text(&ctx);
+        glyphs::set_hotkeys(&ctx, self.chrome.hotkeys);
         let now = ctx.input(|i| i.time);
         theme::apply(&ctx, self.chrome.light);
         // The front door is the whole page until the visitor goes on.
@@ -772,9 +773,50 @@ impl App {
         for a in hotkeys::pressed(&ctx) {
             self.act(a, &ctx);
         }
+        let over_diagram = self.screen == Screen::Editor
+            && ctx
+                .input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| self.chrome.diagram.contains(p));
+        for a in hotkeys::pressed_views(&ctx, over_diagram) {
+            self.view_key(a);
+        }
         self.tour_ui(&ctx);
         self.box_popup(&ctx, now);
         theme::pointer_cursor(&ctx);
+    }
+
+    /// A view's plain letter (`hotkeys::pressed_views`): what a click on
+    /// its tab or screen glyph does. On the Monitor only the screens' keys
+    /// act (it is watch only), and Proposals only where the header has it.
+    fn view_key(&mut self, a: Action) {
+        match a {
+            Action::Editor | Action::Monitor => self.flip_screen(),
+            Action::Proposals => {
+                if self.waiting().is_some() {
+                    self.screen = Screen::Proposals;
+                }
+            }
+            _ if self.screen != Screen::Editor => {}
+            // A click on a tab shows it and keeps it open when it is the
+            // one showing, so the letter does the same.
+            Action::Files => self.chrome.show(crate::editor::Pane::Files),
+            Action::Devices => self.chrome.show(crate::editor::Pane::Devices),
+            Action::St => self.chrome.show(crate::editor::Pane::Code),
+            Action::Describe => self.chrome.show(crate::editor::Pane::Claude),
+            Action::Io => self.chrome.show(crate::editor::Pane::Io),
+            Action::Messages => self.chrome.msgs = !self.chrome.msgs,
+            Action::Trend => self.chrome.trend = !self.chrome.trend,
+            _ => {}
+        }
+    }
+
+    /// A click on either side of the screen switch: the Editor goes to the
+    /// Monitor, anything else to the Editor.
+    fn flip_screen(&mut self) {
+        self.screen = match self.screen {
+            Screen::Editor => Screen::Monitor,
+            Screen::Monitor | Screen::Proposals => Screen::Editor,
+        };
     }
 
     /// What the page is doing about the box, as a popup
@@ -959,6 +1001,12 @@ impl App {
             Action::Panel => self.chrome.right = !self.chrome.right,
             Action::DockRight => self.chrome.send_right(),
             Action::Trend => self.chrome.trend = !self.chrome.trend,
+            Action::Describe
+            | Action::Io
+            | Action::Messages
+            | Action::Editor
+            | Action::Monitor
+            | Action::Proposals => self.view_key(a),
         }
     }
 
@@ -1234,14 +1282,18 @@ impl App {
                 if on { BLACK } else { t.fg },
             );
             hits.push((key.to_string(), r));
+            crate::glyphs::badge(
+                ui,
+                r,
+                Some(match screen {
+                    Screen::Editor => Action::Editor,
+                    _ => Action::Monitor,
+                }),
+            );
             // A click on either side flips (Nick, 2026-11-01), so from the
             // active side too; from Proposals either side goes to the Editor.
             if resp.clicked() {
-                self.screen = match self.screen {
-                    Screen::Editor => Screen::Monitor,
-                    Screen::Monitor | Screen::Proposals => Screen::Editor,
-                };
-                let _ = screen;
+                self.flip_screen();
             }
         }
     }
@@ -1355,7 +1407,10 @@ impl App {
                             }
                             let mut g =
                                 |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {
-                                    let r = glyphs::button(ui, icon, enabled, on, tip);
+                                    // A box takes no key for its run or restart.
+                                    let shown = (!(on_box.is_some() && matches!(a, Action::RunStop | Action::Restart)))
+                                        .then_some(a);
+                                    let r = glyphs::button_keyed(ui, icon, enabled, on, tip, shown);
                                     hits.push((key.to_string(), r.rect));
                                     if r.clicked() {
                                         act.push(a);
@@ -2004,6 +2059,17 @@ impl App {
                     self.front = Some(crate::front::Front::new());
                 }
                 ui.separator();
+                let shown = chrome.hotkeys;
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "help hotkeys",
+                    "Show hotkeys",
+                    shown,
+                    "Writes each shortcut over its button, small, to learn them. Kept in this browser.",
+                ) {
+                    chrome.hotkeys = !shown;
+                }
                 if menu_item(
                     ui,
                     &mut chrome,

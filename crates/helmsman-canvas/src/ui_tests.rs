@@ -1864,12 +1864,14 @@ END_PROGRAM",
         assert!(area.bottom() <= h.size.y, "on screen: {area:?}");
         assert!(field.height() < 2.0 * 24.0, "one row to start: {field:?}");
         h.click(field.center());
-        h.frame(vec![Event::Text("one\ntwo\nthree\nfour\nfive\nsix".into())]);
+        h.frame(vec![Event::Text(
+            "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve".into(),
+        )]);
         h.wait(0.5);
         let (grown, over) = (h.rect("agent instruction"), h.rect("agent answer area"));
         assert!(
-            grown.height() >= 3.5 * 24.0 && grown.height() <= 5.0 * 24.0,
-            "four rows of six, the rest scrolls inside: {grown:?}"
+            grown.height() >= 9.0 * 24.0 && grown.height() <= 11.0 * 24.0,
+            "ten rows of twelve (Nick, 2026-11-25), the rest scrolls inside: {grown:?}"
         );
         assert!((grown.top() - field.top()).abs() <= 1.0, "its top edge stays");
         assert!(
@@ -8327,13 +8329,18 @@ mod devconf {
 mod assign;
 mod box_trend;
 mod chat_about;
+mod code_history;
+mod code_wrap;
 mod design;
 mod device_io;
 mod diagram_menu;
 mod files_tab;
+mod find_replace;
 mod front;
+mod hotkeys;
 mod io_cards;
 mod io_names;
+mod label_overlap;
 mod layouts;
 mod multi_select;
 mod outputs;

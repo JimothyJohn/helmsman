@@ -2674,7 +2674,7 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
 }
 
 /// The most rows the instruction box grows to before it scrolls inside.
-pub const BOX_ROWS: usize = 4;
+pub const BOX_ROWS: usize = 10;
 /// How long the box takes to change its height, s.
 const BOX_EASE: f32 = 0.1;
 
@@ -2712,8 +2712,8 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     // The chips take their rows first (the selection can fill several).
     chips_ui(ui, chrome, s);
     let Some(below) = v.room_below else {
-        let row = ui.spacing().interact_size.y;
-        let enter = box_ui(ui, chrome, s, v, Some(3.0 * row));
+        let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
+        let enter = box_ui(ui, chrome, s, v, Some(box_height(ui, empty)));
         let mut act = buttons_ui(ui, chrome, s, v, enter);
         if let Some(estimate) = v.big
             && !s.busy()
@@ -3024,7 +3024,7 @@ fn area_ui(
 /// history clock belongs here): a box to search what each one says, then
 /// the versions that match, newest first; a click runs one, as the
 /// arrows do.
-fn versions_ui(
+pub fn versions_ui(
     ui: &mut egui::Ui,
     chrome: &mut crate::editor::Chrome,
     s: &mut Instruct,

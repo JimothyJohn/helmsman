@@ -33,6 +33,9 @@ pub const WRAP_W: f32 = 1000.0;
 const PAD: f32 = 12.0;
 /// Room for a region's label above its statements.
 pub const LABEL_H: f32 = 22.0;
+/// Room under a group's title for the small label a block's top edge may
+/// carry (a wiring or SIM mark, a diff tag), so it never meets the title.
+pub const TAG_H: f32 = 14.0;
 const MIN_BOX_W: f32 = 120.0;
 
 /// Vertical padding of a headerless block, above and below its port rows.
@@ -182,9 +185,9 @@ pub fn refit(d: &mut Diagram) {
         let label_w = d.regions[i].label.chars().count() as f32 * CHAR_W + 2.0 * PAD;
         d.regions[i].rect = Rect {
             x: x0 - PAD,
-            y: y0 - LABEL_H,
+            y: y0 - LABEL_H - TAG_H,
             w: (x1 - x0 + 2.0 * PAD).max(MIN_BOX_W).max(label_w),
-            h: y1 - y0 + LABEL_H + PAD,
+            h: y1 - y0 + LABEL_H + TAG_H + PAD,
         };
     }
     let all = d
@@ -267,13 +270,13 @@ impl Layout<'_> {
                 y += ROW_GAP;
             }
             let body = self.d.region(r).body.clone();
-            let (iw, ih) = self.block(&body, bx + PAD, y + LABEL_H);
+            let (iw, ih) = self.block(&body, bx + PAD, y + LABEL_H + TAG_H);
             let label_w = self.d.region(r).label.chars().count() as f32 * CHAR_W + 2.0 * PAD;
             let rect = Rect {
                 x: bx,
                 y,
                 w: (iw + 2.0 * PAD).max(MIN_BOX_W).max(label_w),
-                h: LABEL_H + ih + PAD,
+                h: LABEL_H + TAG_H + ih + PAD,
             };
             self.d.regions[r.0 as usize].rect = rect;
             self.touched.push(r.0 as usize);

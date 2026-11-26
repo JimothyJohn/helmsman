@@ -3087,6 +3087,7 @@ fn draw_ghosts(
     removed: &[NodeId],
     new: &Diagram,
     added: &[NodeId],
+    io: &[(NodeId, crate::assign::Designation)],
 ) {
     let z = cam.zoom;
     let red = brand::RED;
@@ -3147,24 +3148,78 @@ fn draw_ghosts(
     if z <= 0.35 {
         return;
     }
-    for (host, names) in tags {
+    for (host, text) in ghost_tag_texts(&tags, added) {
+        // A block with an I/O label carries the tag on that label's line.
+        if io.iter().any(|(id, _)| *id == host) {
+            continue;
+        }
         let r = cam.rect(&new.node(host).rect);
-        let word = if added.contains(&host) { "was" } else { "removed" };
-        let more = names.len().saturating_sub(2);
-        let shown = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
-        let text = if more > 0 {
-            format!("{word} {shown} +{more}")
-        } else {
-            format!("{word} {shown}")
-        };
+        let size = 9.5 * z;
         painter.text(
             Pos2::new(r.max.x, r.min.y - 3.0 * z),
             Align2::RIGHT_BOTTOM,
-            text,
-            font(9.5 * z),
+            elide(painter, &text, size, r.width()),
+            font(size),
             red,
         );
     }
+}
+
+/// The tag each host of removed blocks carries: `was = 1` on a block the
+/// change added, `removed = 1` on one it did not.
+fn ghost_tag_texts(tags: &[(NodeId, Vec<String>)], added: &[NodeId]) -> Vec<(NodeId, String)> {
+    tags.iter()
+        .map(|(host, names)| {
+            let word = if added.contains(host) { "was" } else { "removed" };
+            let more = names.len().saturating_sub(2);
+            let shown = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+            let text = if more > 0 {
+                format!("{word} {shown} +{more}")
+            } else {
+                format!("{word} {shown}")
+            };
+            (*host, text)
+        })
+        .collect()
+}
+
+/// The removed blocks' tags by host block, as [`draw_ghosts`] groups them.
+fn ghost_tags(old: &Diagram, removed: &[NodeId], new: &Diagram, added: &[NodeId]) -> Vec<(NodeId, String)> {
+    let mut tags: Vec<(NodeId, Vec<String>)> = Vec::new();
+    for (id, host) in removed.iter().zip(hosts(old, removed, new, added)) {
+        let (Some(h), Some(n)) = (host, old.nodes.get(id.0 as usize)) else {
+            continue;
+        };
+        let name = ghost_name(&n.label);
+        match tags.iter_mut().find(|(t, _)| *t == h) {
+            Some((_, names)) => names.push(name),
+            None => tags.push((h, vec![name])),
+        }
+    }
+    ghost_tag_texts(&tags, added)
+}
+
+/// `text` cut with an ellipsis to fit `max_w` on screen at `size`.
+fn elide(painter: &egui::Painter, text: &str, size: f32, max_w: f32) -> String {
+    let wide = |s: &str| {
+        painter
+            .layout_no_wrap(s.to_owned(), font(size), Color32::WHITE)
+            .size()
+            .x
+    };
+    if wide(text) <= max_w {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut n = chars.len();
+    while n > 0 {
+        n -= 1;
+        let cut: String = chars[..n].iter().collect::<String>() + "…";
+        if wide(&cut) <= max_w {
+            return cut;
+        }
+    }
+    String::new()
 }
 
 /// What [`draw`] marks on the diagram beside the scan.
@@ -3418,19 +3473,22 @@ fn io_mark(
     r: Rect,
     z: f32,
     d: &crate::assign::Designation,
-    text: bool,
+    // The line over the block and its colour, already worded.
+    line: Option<(String, Color32)>,
     picked: bool,
 ) {
     if d.is_simulated() && !picked {
         crate::io_cards::dashed_outline(painter, r.expand(0.5 * z), Stroke::new(1.5 * z.max(0.6), t.fg));
     }
-    if text {
+    if let Some((line, color)) = line {
+        // One line over the block's top edge, cut to the block's width.
+        let size = 9.0 * z;
         painter.text(
             r.left_top() - Vec2::new(0.0, 2.0 * z),
             Align2::LEFT_BOTTOM,
-            d.label(),
-            font(9.0 * z.max(0.8)),
-            t.muted,
+            elide(painter, &line, size, r.width()),
+            font(size),
+            color,
         );
     }
 }
@@ -3480,6 +3538,7 @@ fn draw(
         .collect();
     painter.rect_filled(area, CornerRadius::ZERO, t.bg);
     let text = z > 0.35;
+    let ghost_texts = ghosts.map_or_else(Vec::new, |(old, removed)| ghost_tags(old, removed, d, added));
     // Regions, outermost first.
     for r in &d.regions {
         let gate = live.map(|l| l.gates[r.id.0 as usize]);
@@ -3674,7 +3733,16 @@ fn draw(
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
         if let Some(d) = designation {
-            io_mark(painter, t, r, z, d, text, pick == Some(Pick::Node(n.id)));
+            let tag = ghost_texts
+                .iter()
+                .find(|(h, _)| *h == n.id)
+                .map(|(_, g)| g.as_str());
+            // A diff tag joins the designation's line rather than printing over it.
+            let line = text.then(|| match tag {
+                Some(g) => (format!("{} · {g}", d.label()), brand::RED),
+                None => (d.label(), t.muted),
+            });
+            io_mark(painter, t, r, z, d, line, pick == Some(Pick::Node(n.id)));
         }
         if deeper {
             // A double chevron at the header's right end: go in.
@@ -3894,7 +3962,7 @@ fn draw(
     }
     // Last, so what the Agent removed shows over the blocks drawn now.
     if let Some((old, removed)) = ghosts {
-        draw_ghosts(painter, cam, old, removed, d, added);
+        draw_ghosts(painter, cam, old, removed, d, added, io);
     }
 }
 
