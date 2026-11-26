@@ -243,12 +243,20 @@ def playground(ctx, base, out):
     # click or typing on it changes nothing. (With a design entry:
     # "Design a machine..." opens its window; text typed into it shows.)
     r.step("design-window", lambda: r.click(*AGENT_DESIGN), LEFT, stays=True)
-    r.step("design-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), LEFT, stays=True)
+    # (Typing here is no longer a no-op: with no field focused a letter is a
+    # view's key, so the page switches views; the tests cover the keys.)
     r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
     for sub, name in ((MENU_FILE, "file-menu"), (MENU_EDIT, "edit-menu"), (MENU_VIEW, "view-menu"), (MENU_HELP, "help-menu")):
         r.click(*MENU); r.wait(300); r.click(*sub); r.wait(500); r.shot(name); r.key("Escape"); r.key("Escape")
+    # Help > Show hotkeys writes each shortcut over its button; one more
+    # click puts the page back as it was.
+    HELP_HOTKEYS = (322, 311)
+    def hotkeys_menu():
+        r.click(*MENU); r.wait(300); r.click(*MENU_HELP); r.wait(500); r.click(*HELP_HOTKEYS)
+    r.step("hotkeys-on", hotkeys_menu, LEFT, 700)
+    r.step("hotkeys-off", hotkeys_menu, LEFT, 700)
     # Type a comment into the program, then deploy it.
     def edit():
         # A comment typed where the caret lands (egui's End chord moves

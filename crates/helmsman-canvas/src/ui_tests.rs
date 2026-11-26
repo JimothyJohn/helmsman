@@ -8332,6 +8332,7 @@ mod device_io;
 mod diagram_menu;
 mod files_tab;
 mod front;
+mod hotkeys;
 mod io_cards;
 mod io_names;
 mod layouts;
