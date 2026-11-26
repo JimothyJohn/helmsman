@@ -1382,7 +1382,13 @@ fn drag_ghost(ctx: &egui::Context, at: Option<Pos2>, p: Pane, t: &Theme) {
 /// pane). Its height is kept. The Messages tab is red while an error
 /// stands or came in unseen, with the count of errors beside it. The hits
 /// are `bottom trend`, `bottom messages` and `messages error count`.
-fn trend_panel(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body, cue: &Cue, hits: &mut Vec<(String, Rect)>) {
+fn trend_panel(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    body: &mut dyn Body,
+    cue: &Cue,
+    hits: &mut Vec<(String, Rect)>,
+) {
     let mut open = chrome.trend;
     egui::Panel::bottom(BOTTOM_ID)
         .resizable(true)

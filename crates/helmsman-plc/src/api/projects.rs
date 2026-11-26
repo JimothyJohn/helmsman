@@ -406,7 +406,10 @@ fn save(
         Ok(version) => {
             // What was asked, when the page says (Nick, 2026-11-26); the
             // history makes it one line and cuts it.
-            let asked = m.get("what").and_then(Json::as_str).filter(|w| !w.trim().is_empty());
+            let asked = m
+                .get("what")
+                .and_then(Json::as_str)
+                .filter(|w| !w.trim().is_empty());
             let event = match (page, asked) {
                 (Some(_), Some(w)) => format!("Described: {w}"),
                 (Some(_), None) => format!("took the described change into {file}"),

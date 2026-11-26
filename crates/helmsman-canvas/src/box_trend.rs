@@ -548,7 +548,11 @@ impl BoxTrend {
             // Glyphs, not words (Nick, 2026-11-26).
             let side = crate::glyphs::ROW;
             for (key, icon, tip) in [
-                ("remove", Icon::Clear, "Remove: takes the ticked signals off the trend."),
+                (
+                    "remove",
+                    Icon::Clear,
+                    "Remove: takes the ticked signals off the trend.",
+                ),
                 ("up", Icon::Up, "Up: moves the ticked signals up a lane."),
                 ("down", Icon::Down, "Down: moves the ticked signals down a lane."),
             ] {

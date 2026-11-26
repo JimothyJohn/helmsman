@@ -654,7 +654,13 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
         }
         Icon::Trend => {
             let at = |x: f32, y: f32| Pos2::new(l + (r - l) * x, t + (bt - t) * y);
-            let line = [at(0.0, 0.7), at(0.25, 0.3), at(0.5, 0.6), at(0.75, 0.15), at(1.0, 0.45)];
+            let line = [
+                at(0.0, 0.7),
+                at(0.25, 0.3),
+                at(0.5, 0.6),
+                at(0.75, 0.15),
+                at(1.0, 0.45),
+            ];
             for w in line.windows(2) {
                 p.line_segment([w[0], w[1]], stroke);
             }
@@ -719,9 +725,17 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             let rad = b.width() * 0.46;
             p.circle_stroke(c, rad, stroke);
             for (dx, dy) in [(-0.2, -0.16), (0.12, -0.24), (0.24, 0.06)] {
-                p.circle_filled(Pos2::new(c.x + b.width() * dx, c.y + b.height() * dy), w * 0.9, color);
+                p.circle_filled(
+                    Pos2::new(c.x + b.width() * dx, c.y + b.height() * dy),
+                    w * 0.9,
+                    color,
+                );
             }
-            p.circle_stroke(Pos2::new(c.x - b.width() * 0.12, c.y + b.height() * 0.2), w * 1.1, stroke);
+            p.circle_stroke(
+                Pos2::new(c.x - b.width() * 0.12, c.y + b.height() * 0.2),
+                w * 1.1,
+                stroke,
+            );
         }
         Icon::Back | Icon::Forward => {
             // A shaft across the middle, an open arrowhead at one end.
