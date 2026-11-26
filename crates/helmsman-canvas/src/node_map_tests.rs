@@ -80,6 +80,11 @@ impl Skipper {
                 self.view.check = Some(Check::default());
                 io_map_saved(false, true)
             }
+            // What both firmwares do: the wall time less the uptime, in RAM.
+            Outcome::Effect(Effect::SetTime { unix_ms }) => {
+                self.view.clock_offset_ms = Some(unix_ms - self.view.uptime_ms);
+                helmsman_nodecore::router::time_set(unix_ms)
+            }
             other => panic!("not a map call: {other:?}"),
         };
         (reply.status, String::from_utf8(reply.body).unwrap())

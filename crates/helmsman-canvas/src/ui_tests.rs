@@ -8349,6 +8349,7 @@ mod scan_add;
 mod shell;
 mod sim_points;
 mod sim_popup;
+mod skipper_clock;
 mod start_state;
 mod vendor;
 mod versions;
