@@ -87,7 +87,7 @@ pub enum Action {
     Describe,
     /// The I/O tab.
     Io,
-    /// The Messages under the left pane's tab.
+    /// The Messages, a tab of the bottom panel beside the Trend.
     Messages,
     /// The Editor screen.
     Editor,
@@ -513,7 +513,7 @@ const fn does(action: Action) -> &'static str {
         Action::FindPrevious => "The previous match",
         Action::Describe => "The Describe tab",
         Action::Io => "The I/O tab",
-        Action::Messages => "The Messages under the left pane's tab",
+        Action::Messages => "The Messages, the bottom panel's tab beside the Trend",
         Action::Editor => "The Editor screen; on the Editor it flips to the Monitor",
         Action::Monitor => "The Monitor screen; on the Monitor it flips to the Editor",
         Action::Proposals => "The box's Proposals screen",

@@ -93,6 +93,8 @@ pub enum Icon {
     ZoomIn,
     /// A magnifier with a minus: zoom out.
     ZoomOut,
+    /// A line that rises and falls: the bottom panel's Trend tab.
+    Trend,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -318,6 +320,7 @@ const fn tab_action(icon: Icon) -> Option<Action> {
         Icon::Agent => Some(Action::Describe),
         Icon::Io => Some(Action::Io),
         Icon::Messages => Some(Action::Messages),
+        Icon::Trend => Some(Action::Trend),
         _ => None,
     }
 }
@@ -642,6 +645,14 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 ],
                 stroke,
             ));
+        }
+        Icon::Trend => {
+            let at = |x: f32, y: f32| Pos2::new(l + (r - l) * x, t + (bt - t) * y);
+            let line = [at(0.0, 0.7), at(0.25, 0.3), at(0.5, 0.6), at(0.75, 0.15), at(1.0, 0.45)];
+            for w in line.windows(2) {
+                p.line_segment([w[0], w[1]], stroke);
+            }
+            p.line_segment([at(0.0, 1.0), at(1.0, 1.0)], stroke);
         }
         Icon::List => {
             for k in [0.14, 0.5, 0.86] {

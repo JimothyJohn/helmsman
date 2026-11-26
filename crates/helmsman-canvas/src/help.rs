@@ -47,6 +47,9 @@ const MAX_ISSUE: usize = 128 * 1024;
 pub enum Mode {
     #[default]
     Code,
+    // No way into it since the Agent tab lost its toggle (2026-11-26);
+    // feat/help-tab gives it a tab of its own and drops this allow.
+    #[allow(dead_code)]
     Help,
 }
 

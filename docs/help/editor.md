@@ -308,11 +308,11 @@ limits matches to whole words. At the header's right
 - **The trend** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>) runs along the whole
   bottom of the window, under both side panes: the signals you pin, each
   drawn as a pulse that sweeps from left to right.
-- **Messages** sit in the left pane under the tab's content: what needs
-  saying now, then the last two hundred things the page had to say, with
-  the error count beside their header. Click the header to fold them
-  away; it stays red while an error is unread. Tick or untick info,
-  warnings and errors to list or leave out each.
+- **Messages** are the bottom panel's other tab, beside the trend: what
+  needs saying now, then the last two hundred things the page had to say,
+  with the error count beside the tab. The tab stays red while an error
+  is unread. Tick or untick info, warnings and errors to list or leave out
+  each.
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 

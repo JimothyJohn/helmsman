@@ -804,8 +804,8 @@ impl App {
             Action::St => self.chrome.show(crate::editor::Pane::Code),
             Action::Describe => self.chrome.show(crate::editor::Pane::Claude),
             Action::Io => self.chrome.show(crate::editor::Pane::Io),
-            Action::Messages => self.chrome.msgs = !self.chrome.msgs,
-            Action::Trend => self.chrome.trend = !self.chrome.trend,
+            Action::Messages => self.chrome.toggle_messages(),
+            Action::Trend => self.chrome.toggle_trend(),
             _ => {}
         }
     }
@@ -1000,7 +1000,7 @@ impl App {
             Action::St => self.chrome.toggle_code(),
             Action::Panel => self.chrome.right = !self.chrome.right,
             Action::DockRight => self.chrome.send_right(),
-            Action::Trend => self.chrome.trend = !self.chrome.trend,
+            Action::Trend => self.chrome.toggle_trend(),
             Action::Describe
             | Action::Io
             | Action::Messages
