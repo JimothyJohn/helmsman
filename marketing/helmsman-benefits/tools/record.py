@@ -63,11 +63,26 @@ DEVICES_TAB = (147, 71)
 UPLOAD = (1207, 83)
 DOWNLOAD = (1250, 83)
 RUN = (975, 83)
-DESCRIBE_FIELD = (154, 159)
-DESCRIBE_SEND = (266, 200)
-MARY_SWITCH = (400, 188)
+DESCRIBE_FIELD = (154, 125)  # a new project: no "Name the I/O first" fold above it
+DESCRIBE_SEND = (266, 166)
+# Under the Describe field once a project has versions: the clock (the list), back, forward.
+VERSIONS = (40, 166)
+BACK = (115, 166)
+FORWARD = (189, 166)
+MARY_SWITCH = (400, 188)  # iologik_e1213_di_00 on the diagram, top left
+LAMP_INPUT = (413, 237)  # the input's switch in the answer the probes got (one INPUT, one LAMP)
+SCAN = (177, 193)  # Devices tab: Scan, beside "On the network"
+ADD_FOUND = (58, 330)  # Add, under the first device the scan found
+ADD_CONFIRM = (36, 554)  # Add, in the "Add Moxa ioLogik E1213" box it opens
+LAMP_BLOCK = (512, 170)  # the uploaded program's LAMP := on the diagram
+EMPTY_DIAGRAM = (1100, 140)
+ZOOM_IN = (975, 370)
+INT_WORD = (183, 285)  # Code tab, pane widened: INT in "enable : INT;", line 7
+PANE_EDGE = (316, 400)  # the left pane's right edge
+FAIL_HIGH = (544, 687)  # front door, under Break it: "Fail the high switch"
+OPEN_EDITOR = (1184, 32)  # front door, top right
 EXAMPLES = (61, 285)  # the Examples heading, with one project of mine open
-WINDOW_KNOB = (927, 450)  # the trend window slider at 30 s, while running  # iologik_e1213_di_00 on the diagram, top left
+WINDOW_KNOB = (927, 450)  # the trend window slider at 30 s, while running
 
 
 def new_project(name):
@@ -82,6 +97,22 @@ def new_project(name):
         ("key", "Enter"),
         ("wait", 1000),
     ]
+
+
+def describe(text, ms):
+    """An instruction sent from the Describe tab, and time for the answer."""
+    return [("click", DESCRIBE_FIELD), ("type", text, 0), ("key", "Enter"), ("move", REST), ("wait", ms)]
+
+
+def mary_running():
+    """The bench's program uploaded, run, and its input switched on."""
+    return [("move", UPLOAD), ("wait", 300), ("upload", UPLOAD, "mary_had_a_little_lamb"), ("wait", 2000), ("click", RUN), ("wait", 500),
+            ("click", MARY_SWITCH), ("move", REST), ("wait", 2000)]
+
+
+# Nick's words in the 2026-11-25 demo.
+LAMP_SPEC = "When the input goes high, a virtual lamp should turn on."
+MOTOR_SPEC = "Now, not only should the lamp go high, the motor should spin at one revolution a second while it's active."
 
 
 # A scene: query, layout, setup steps (off camera), take [(seconds, step...)], length.
@@ -109,6 +140,119 @@ SCENES = {
         ],
         length=17.0,
     ),
+    # Describe: Nick's own sentence from the 2026-11-25 demo, sent to the live free chat.
+    "describe": dict(
+        query="?editor",
+        layout=LAYOUT,
+        setup=[("click", FILES_TAB)] + new_project("lamp") + [("click", DESCRIBE_TAB)],
+        take=[
+            (0.6, "move", DESCRIBE_FIELD),
+            (1.0, "click", DESCRIBE_FIELD),
+            # Typing costs about 55 ms a key on top of the delay.
+            (1.4, "type", LAMP_SPEC, 20),
+            (6.0, "key", "Enter"),
+            (6.4, "move", REST),
+            # The answer took 15 to 40 s in probes; the films cut the wait.
+            (42.0, "move", LAMP_INPUT),
+            (42.6, "click", LAMP_INPUT),
+            (43.2, "move", REST),
+            (45.4, "move", LAMP_INPUT),
+            (45.8, "click", LAMP_INPUT),
+            (46.2, "move", REST),
+            (47.6, "move", LAMP_INPUT),
+            (48.0, "click", LAMP_INPUT),
+            (48.4, "move", REST),
+        ],
+        length=52.0,
+    ),
+    # Every change, kept: Nick's second instruction from the demo, then back and forward through the versions.
+    "history": dict(
+        query="?editor",
+        layout=LAYOUT,
+        setup=[("click", FILES_TAB)] + new_project("lamp") + [("click", DESCRIBE_TAB)] + describe(LAMP_SPEC, 25000),
+        take=[
+            (0.6, "move", DESCRIBE_FIELD),
+            (1.0, "click", DESCRIBE_FIELD),
+            (1.4, "type", MOTOR_SPEC, 15),
+            (7.0, "key", "Enter"),
+            (7.4, "move", REST),
+            (30.0, "move", BACK),
+            (30.4, "click", BACK),
+            (33.4, "click", FORWARD),
+            (36.0, "move", VERSIONS),
+            (36.4, "click", VERSIONS),
+            (37.0, "move", REST),
+        ],
+        length=41.0,
+    ),
+    # Visualize: ask the diagram why the lamp is on, then zoom into the tune.
+    "visualize": dict(
+        query="?editor",
+        layout=LAYOUT,
+        setup=[("click", FILES_TAB)] + new_project("bench") + [("click", EXAMPLES)] + mary_running(),
+        take=[
+            (0.6, "move", LAMP_BLOCK),
+            (1.0, "click", LAMP_BLOCK),
+            (1.4, "move", (700, 120)),
+            (4.0, "move", EMPTY_DIAGRAM),
+            (4.4, "click", EMPTY_DIAGRAM),
+            (5.0, "move", ZOOM_IN),
+            (5.4, "click", ZOOM_IN),
+            (6.2, "click", ZOOM_IN),
+            (7.0, "move", REST),
+        ],
+        length=11.0,
+    ),
+    # One typo, one error: Nick's own slip from the demo (INT to IT), then Deploy refuses it.
+    "code": dict(
+        query="?editor",
+        layout=LAYOUT,
+        setup=[("click", FILES_TAB)] + new_project("bench") + [("click", EXAMPLES)] + mary_running()
+        + [("click", CODE_TAB), ("down", PANE_EDGE), ("move", (560, PANE_EDGE[1])), ("up",), ("move", REST)],
+        take=[
+            (0.6, "move", INT_WORD),
+            (1.0, "dbl", INT_WORD),
+            (1.6, "type", "IT", 120),
+            (2.2, "move", REST),
+            (4.6, "key", "Shift+Meta+Enter"),
+        ],
+        length=9.0,
+    ),
+    # Plug in and go: scan the network, add what answers.
+    "scan": dict(
+        query="?editor",
+        layout=LAYOUT,
+        setup=[("click", FILES_TAB)] + new_project("cell") + [("click", DEVICES_TAB)],
+        take=[
+            (0.6, "move", SCAN),
+            (1.0, "click", SCAN),
+            (1.4, "move", REST),
+            (3.4, "move", ADD_FOUND),
+            (3.8, "click", ADD_FOUND),
+            (4.6, "move", ADD_CONFIRM),
+            (5.2, "click", ADD_CONFIRM),
+            (5.6, "move", REST),
+        ],
+        length=9.0,
+    ),
+    # Nothing to install: the page from a cold load, the tank's proofs, one broken on purpose, then the editor.
+    "front": dict(
+        query="?front",
+        layout=LAYOUT,
+        cold=True,
+        setup=[],
+        # The page replays the writing of the program, then runs the proofs: the break comes after.
+        take=[
+            (0.5, "goto", "?front"),
+            (17.5, "move", FAIL_HIGH),
+            (18.0, "click", FAIL_HIGH),
+            (18.5, "move", REST),
+            (29.0, "move", OPEN_EDITOR),
+            (29.5, "click", OPEN_EDITOR),
+            (30.0, "move", REST),
+        ],
+        length=34.0,
+    ),
 }
 
 
@@ -130,6 +274,8 @@ def act(page, step):
     kind = step[0]
     if kind == "click":
         page.mouse.click(*step[1])
+    elif kind == "dbl":
+        page.mouse.dblclick(*step[1])
     elif kind == "move":
         page.mouse.move(*step[1], steps=8)
     elif kind == "down":
@@ -146,13 +292,15 @@ def act(page, step):
     elif kind == "wheel":
         page.mouse.move(*step[1])
         page.mouse.wheel(0, step[2])
+    elif kind == "goto":
+        page.goto(f"http://127.0.0.1:{PORT}/playground/{step[1]}", wait_until="commit")
     elif kind == "upload":
         path = zipped(step[2])
         page.once("filechooser", lambda fc: fc.set_files(path))
         page.mouse.click(*step[1])
     else:
         raise ValueError(f"unknown step {step!r}")
-    if kind in ("click", "key"):
+    if kind in ("click", "dbl", "key"):
         page.wait_for_timeout(250)
 
 
@@ -182,6 +330,10 @@ def open_page(browser, scene):
     page.on("pageerror", lambda e: print("  page error:", str(e)[:200]))
     page.goto(f"http://127.0.0.1:{PORT}/nothing-here.txt")
     page.evaluate("([k, v]) => localStorage.setItem(k, v)", [KEY, scene["layout"]])
+    if scene.get("cold"):
+        # The take loads the page itself (a "goto" step), on camera.
+        page.goto("about:blank")
+        return ctx, page
     page.goto(f"http://127.0.0.1:{PORT}/playground/{scene['query']}")
     page.wait_for_timeout(4000)
     page.mouse.move(*REST)
@@ -241,9 +393,10 @@ def record(browser, name, scene, work):
             events.append({"t": at, "action": step[0], "x": pt[0] if pt else None, "y": pt[1] if pt else None,
                            "text": step[1] if step[0] in ("key", "type") else None, "end": time.time()})
         page.wait_for_timeout(10)
+    stopped = time.time()  # a still page paints nothing: the last frame holds until the take ends
     cdp.send("Page.stopScreencast")
     ctx.close()
-    end = stamps[-1] + 1 / 30
+    end = max(stamps[-1] + 1 / 30, stopped)
     first = stamps[0]
     with open(os.path.join(base, "frames.txt"), "w") as f:
         for i, at in enumerate(stamps):

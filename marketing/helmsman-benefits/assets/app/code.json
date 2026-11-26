@@ -1,0 +1,51 @@
+{
+ "scene": "code",
+ "frames": 205,
+ "seconds": 9.035,
+ "points": [
+  1280,
+  720
+ ],
+ "events": [
+  {
+   "t": 0.592,
+   "action": "move",
+   "x": 183,
+   "y": 285,
+   "text": null,
+   "end": 0.935
+  },
+  {
+   "t": 1.001,
+   "action": "dbl",
+   "x": 183,
+   "y": 285,
+   "text": null,
+   "end": 1.276
+  },
+  {
+   "t": 1.601,
+   "action": "type",
+   "x": null,
+   "y": null,
+   "text": "IT",
+   "end": 1.92
+  },
+  {
+   "t": 2.204,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 2.543
+  },
+  {
+   "t": 4.598,
+   "action": "key",
+   "x": null,
+   "y": null,
+   "text": "Shift+Meta+Enter",
+   "end": 4.914
+  }
+ ]
+}

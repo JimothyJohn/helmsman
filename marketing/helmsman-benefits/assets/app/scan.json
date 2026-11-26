@@ -1,0 +1,75 @@
+{
+ "scene": "scan",
+ "frames": 66,
+ "seconds": 8.993,
+ "points": [
+  1280,
+  720
+ ],
+ "events": [
+  {
+   "t": 0.598,
+   "action": "move",
+   "x": 177,
+   "y": 193,
+   "text": null,
+   "end": 0.92
+  },
+  {
+   "t": 0.998,
+   "action": "click",
+   "x": 177,
+   "y": 193,
+   "text": null,
+   "end": 1.272
+  },
+  {
+   "t": 1.396,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 1.678
+  },
+  {
+   "t": 3.403,
+   "action": "move",
+   "x": 58,
+   "y": 330,
+   "text": null,
+   "end": 3.831
+  },
+  {
+   "t": 3.831,
+   "action": "click",
+   "x": 58,
+   "y": 330,
+   "text": null,
+   "end": 4.178
+  },
+  {
+   "t": 4.597,
+   "action": "move",
+   "x": 36,
+   "y": 554,
+   "text": null,
+   "end": 4.929
+  },
+  {
+   "t": 5.199,
+   "action": "click",
+   "x": 36,
+   "y": 554,
+   "text": null,
+   "end": 5.455
+  },
+  {
+   "t": 5.598,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 5.83
+  }
+ ]
+}

@@ -1,0 +1,123 @@
+{
+ "scene": "describe",
+ "frames": 896,
+ "seconds": 51.873,
+ "points": [
+  1280,
+  720
+ ],
+ "events": [
+  {
+   "t": 0.599,
+   "action": "move",
+   "x": 154,
+   "y": 125,
+   "text": null,
+   "end": 0.849
+  },
+  {
+   "t": 0.994,
+   "action": "click",
+   "x": 154,
+   "y": 125,
+   "text": null,
+   "end": 1.265
+  },
+  {
+   "t": 1.39,
+   "action": "type",
+   "x": null,
+   "y": null,
+   "text": "When the input goes high, a virtual lamp should turn on.",
+   "end": 4.981
+  },
+  {
+   "t": 5.994,
+   "action": "key",
+   "x": null,
+   "y": null,
+   "text": "Enter",
+   "end": 6.3
+  },
+  {
+   "t": 6.393,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 6.618
+  },
+  {
+   "t": 42.0,
+   "action": "move",
+   "x": 413,
+   "y": 237,
+   "text": null,
+   "end": 43.146
+  },
+  {
+   "t": 43.146,
+   "action": "click",
+   "x": 413,
+   "y": 237,
+   "text": null,
+   "end": 43.508
+  },
+  {
+   "t": 43.508,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 44.589
+  },
+  {
+   "t": 45.402,
+   "action": "move",
+   "x": 413,
+   "y": 237,
+   "text": null,
+   "end": 46.374
+  },
+  {
+   "t": 46.374,
+   "action": "click",
+   "x": 413,
+   "y": 237,
+   "text": null,
+   "end": 46.808
+  },
+  {
+   "t": 46.808,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 47.911
+  },
+  {
+   "t": 47.911,
+   "action": "move",
+   "x": 413,
+   "y": 237,
+   "text": null,
+   "end": 49.141
+  },
+  {
+   "t": 49.141,
+   "action": "click",
+   "x": 413,
+   "y": 237,
+   "text": null,
+   "end": 49.589
+  },
+  {
+   "t": 49.589,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 50.86
+  }
+ ]
+}

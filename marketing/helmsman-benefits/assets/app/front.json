@@ -1,0 +1,67 @@
+{
+ "scene": "front",
+ "frames": 887,
+ "seconds": 34.019,
+ "points": [
+  1280,
+  720
+ ],
+ "events": [
+  {
+   "t": 0.501,
+   "action": "goto",
+   "x": null,
+   "y": null,
+   "text": null,
+   "end": 0.515
+  },
+  {
+   "t": 17.492,
+   "action": "move",
+   "x": 544,
+   "y": 687,
+   "text": null,
+   "end": 17.739
+  },
+  {
+   "t": 17.989,
+   "action": "click",
+   "x": 544,
+   "y": 687,
+   "text": null,
+   "end": 18.248
+  },
+  {
+   "t": 18.488,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 18.762
+  },
+  {
+   "t": 28.995,
+   "action": "move",
+   "x": 1184,
+   "y": 32,
+   "text": null,
+   "end": 29.286
+  },
+  {
+   "t": 29.502,
+   "action": "click",
+   "x": 1184,
+   "y": 32,
+   "text": null,
+   "end": 29.817
+  },
+  {
+   "t": 29.993,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 30.327
+  }
+ ]
+}

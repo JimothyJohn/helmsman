@@ -1,0 +1,83 @@
+{
+ "scene": "visualize",
+ "frames": 254,
+ "seconds": 10.999,
+ "points": [
+  1280,
+  720
+ ],
+ "events": [
+  {
+   "t": 0.596,
+   "action": "move",
+   "x": 512,
+   "y": 170,
+   "text": null,
+   "end": 0.98
+  },
+  {
+   "t": 0.993,
+   "action": "click",
+   "x": 512,
+   "y": 170,
+   "text": null,
+   "end": 1.282
+  },
+  {
+   "t": 1.397,
+   "action": "move",
+   "x": 700,
+   "y": 120,
+   "text": null,
+   "end": 1.755
+  },
+  {
+   "t": 3.993,
+   "action": "move",
+   "x": 1100,
+   "y": 140,
+   "text": null,
+   "end": 4.317
+  },
+  {
+   "t": 4.389,
+   "action": "click",
+   "x": 1100,
+   "y": 140,
+   "text": null,
+   "end": 4.66
+  },
+  {
+   "t": 4.992,
+   "action": "move",
+   "x": 975,
+   "y": 370,
+   "text": null,
+   "end": 5.308
+  },
+  {
+   "t": 5.391,
+   "action": "click",
+   "x": 975,
+   "y": 370,
+   "text": null,
+   "end": 5.652
+  },
+  {
+   "t": 6.193,
+   "action": "click",
+   "x": 975,
+   "y": 370,
+   "text": null,
+   "end": 6.454
+  },
+  {
+   "t": 6.99,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 7.285
+  }
+ ]
+}

@@ -1,0 +1,107 @@
+{
+ "scene": "mary",
+ "frames": 354,
+ "seconds": 16.996,
+ "points": [
+  1280,
+  720
+ ],
+ "events": [
+  {
+   "t": 0.79,
+   "action": "move",
+   "x": 1207,
+   "y": 83,
+   "text": null,
+   "end": 1.036
+  },
+  {
+   "t": 1.201,
+   "action": "upload",
+   "x": 1207,
+   "y": 83,
+   "text": null,
+   "end": 1.205
+  },
+  {
+   "t": 2.993,
+   "action": "move",
+   "x": 975,
+   "y": 83,
+   "text": null,
+   "end": 3.287
+  },
+  {
+   "t": 3.397,
+   "action": "click",
+   "x": 975,
+   "y": 83,
+   "text": null,
+   "end": 3.661
+  },
+  {
+   "t": 4.399,
+   "action": "move",
+   "x": 400,
+   "y": 188,
+   "text": null,
+   "end": 4.692
+  },
+  {
+   "t": 5.0,
+   "action": "click",
+   "x": 400,
+   "y": 188,
+   "text": null,
+   "end": 5.276
+  },
+  {
+   "t": 5.601,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 5.9
+  },
+  {
+   "t": 8.591,
+   "action": "move",
+   "x": 927,
+   "y": 450,
+   "text": null,
+   "end": 8.925
+  },
+  {
+   "t": 9.001,
+   "action": "down",
+   "x": 927,
+   "y": 450,
+   "text": null,
+   "end": 9.05
+  },
+  {
+   "t": 9.198,
+   "action": "move",
+   "x": 830,
+   "y": 450,
+   "text": null,
+   "end": 10.17
+  },
+  {
+   "t": 10.17,
+   "action": "up",
+   "x": null,
+   "y": null,
+   "text": null,
+   "end": 10.172
+  },
+  {
+   "t": 10.172,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 10.467
+  }
+ ]
+}

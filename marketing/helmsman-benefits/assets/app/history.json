@@ -1,0 +1,99 @@
+{
+ "scene": "history",
+ "frames": 1121,
+ "seconds": 41.038,
+ "points": [
+  1280,
+  720
+ ],
+ "events": [
+  {
+   "t": 0.615,
+   "action": "move",
+   "x": 154,
+   "y": 125,
+   "text": null,
+   "end": 0.888
+  },
+  {
+   "t": 1.019,
+   "action": "click",
+   "x": 154,
+   "y": 125,
+   "text": null,
+   "end": 1.278
+  },
+  {
+   "t": 1.415,
+   "action": "type",
+   "x": null,
+   "y": null,
+   "text": "Now, not only should the lamp go high, the motor should spin at one revolution a second while it's active.",
+   "end": 8.608
+  },
+  {
+   "t": 8.608,
+   "action": "key",
+   "x": null,
+   "y": null,
+   "text": "Enter",
+   "end": 8.932
+  },
+  {
+   "t": 8.932,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 9.214
+  },
+  {
+   "t": 30.012,
+   "action": "move",
+   "x": 115,
+   "y": 166,
+   "text": null,
+   "end": 30.33
+  },
+  {
+   "t": 30.407,
+   "action": "click",
+   "x": 115,
+   "y": 166,
+   "text": null,
+   "end": 30.67
+  },
+  {
+   "t": 33.411,
+   "action": "click",
+   "x": 189,
+   "y": 166,
+   "text": null,
+   "end": 33.665
+  },
+  {
+   "t": 36.014,
+   "action": "move",
+   "x": 40,
+   "y": 166,
+   "text": null,
+   "end": 36.255
+  },
+  {
+   "t": 36.416,
+   "action": "click",
+   "x": 40,
+   "y": 166,
+   "text": null,
+   "end": 36.682
+  },
+  {
+   "t": 37.017,
+   "action": "move",
+   "x": 640,
+   "y": 12,
+   "text": null,
+   "end": 37.275
+  }
+ ]
+}

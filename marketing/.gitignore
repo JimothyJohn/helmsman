@@ -12,8 +12,7 @@ helmsman-device/assets/footage/
 helmsman-device/assets/real/
 # 2K takes, 77 MB: kept beside the repo, see helmsman-device/README.md.
 helmsman-device/footage/finals/
-# The benefit films' app footage is recorded by helmsman-benefits/tools/record.py (see its README).
-helmsman-benefits/assets/app/
+# The benefit films: written by build.py; the bench shots are cut from Nick's OBS recording by tools/bench.sh.
 helmsman-benefits/loop-*/
 helmsman-benefits/reel/
 helmsman-benefits/assets/bench/
