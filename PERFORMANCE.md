@@ -1,11 +1,14 @@
 # How big a machine can one Skipper run?
 
-> **Overnight Saturday 2026-11-28: Fable works on this.** A one-time cloud
-> run on claude-fable-5-2 starts at 23:00 CT (05:00 UTC Sunday 11-29):
-> https://claude.ai/code/routines/trig_01XKVQnwAr2SURLndDm25hnG . It
-> reads this file, checks it against the code, appends "The plan" below
-> and the build cards to TODO.md (card `node-capacity`), and opens a
-> DRAFT pull request into `dev` for Nick by Sunday morning.
+> **Saturday 2026-11-28, overnight: a local Fable session on the Studio,
+> with the bench.** It has to measure on the Skipper itself, so it is not a
+> cloud run. Nick starts it around 21:00 CT (a reminder fires then). In
+> tmux on the Studio: `cd ~/github/helmsman && claude --model
+> claude-fable-5-2`, then paste: *Work the TODO card `node-capacity`: read
+> PERFORMANCE.md and follow its section "Brief for the Saturday run".* It
+> appends "The plan" to this file, adds the build cards under
+> `node-capacity` in TODO.md, and opens a DRAFT pull request into `dev` by
+> Sunday morning.
 
 A problem statement, written 2026-11-26 from a question of Nick's: "How many
 devices could this unit realistically run? Are we talking about 16 servo
@@ -166,3 +169,63 @@ large machines by station and hand off through `share`.
 - A real MDrive and E1213 on EtherNet/IP from one node together.
 - The per-axis point count above is the MDrive profile's; another drive
   will differ.
+
+## Brief for the Saturday run
+
+You are the strategist for this one question, in a local session on the
+Studio with the bench, while Nick sleeps. Answer the three questions at the
+top with a ranked plan and the measurements that settle it.
+
+1. **Setup.** A worktree from `origin/dev` under `.claude/worktrees/`, on
+   a branch `strategy/node-capacity-<date>`. Read the main checkout's
+   `.claude/handoff.md` first: it holds the bench as it stands (the
+   Skipper's address and token, the image and map on it, the serial port,
+   what the box is doing) and whether another session holds the bench. If
+   one is mid-run on it, do the host work only and say so.
+2. **Read**, in this order: this file; `CLAUDE.md`; `docs/EDGE.md`; the
+   TODO.md cards `node-capacity`, `node-multi-device` and
+   `node-p4-followups`; then the code the limits live in
+   (`crates/helmsman-nodecore` iomap.rs, program.rs, dial.rs;
+   `crates/helmsman-node-p4` bin/node.rs, io.rs, partitions.csv; the
+   compiled form in `crates/helmsman-iec`). Check every limit and figure
+   above against the code before you build on it, and correct what is
+   wrong, saying what changed. Argue with the earlier reading where the
+   evidence is against it.
+3. **Measure on the board** what "What nobody has measured" lists and the
+   plan depends on: 16 devices with half absent (simulated Modbus servers on
+   Studio address aliases, never a stranger's address), heap, peak, PSRAM
+   and scan time with the 12 KB cell and 16 devices, and what running from
+   PSRAM costs a scan. Flash with `scripts/node-flash.sh` as the cards'
+   notes say; a cargo-built binary cannot reach the LAN from a session, so
+   talk to the board and the devices with `curl` or `/usr/bin/python3`.
+   Before you change what is on the Skipper, record its image, map and
+   program from its API, and put them back before you stop; say what it
+   holds at the end. Host measurements are welcome too (`cargo run
+   --release -p helmsman-iec --example trace_bench`, a realistic 16-axis
+   program compiled on the host). Label every number measured (with the
+   command) or estimated (with the reasoning).
+4. **No motion and no new outputs.** Read the MDrive; never enable it or
+   start a move (that waits for Nick). Drive no physical output beyond what
+   the program already on the Skipper drives.
+5. **Write it down.** Append `## The plan (strategist, <date>)` below this
+   brief: each change, what it buys in axes, points or program lines, its
+   cost (RAM, flash, compatibility, safety), how the bench proves it, the
+   order; the rule for splitting a big machine across Skippers or onto a
+   box, and what that split still lacks. Under `node-capacity` in TODO.md,
+   one card per build step in the board's format (`result:`, `needs:`,
+   `depends:`, `est:`, `difficulty:`, `id:`, `asked:`, `by: strategist
+   node-capacity`). What only Nick can decide (money, hardware, a changed
+   public interface or a removal, breaking stored maps or programs) goes
+   under "Open questions for Nick" as a question card with the options and
+   your pick. Do not tick `node-capacity` and never write an `answer:`.
+6. **Limits.** Change only `PERFORMANCE.md` and `TODO.md`; measurement
+   scratch stays under `scratch/`, uncommitted. No code, test, CI or
+   dependency change. Run `./scripts/lint.sh` and `cargo test --workspace
+   --locked` before the push and read their exit status (a timing test that
+   fails under load and passes alone is load: say so). One DRAFT pull
+   request into `dev`, `docs: Skipper capacity plan (strategist)`. Never
+   push to `dev`, `staging` or `master`.
+7. **End.** One push notification when done or blocked. In the PR and the
+   session: the ranked steps a line each, one Skipper's ceiling today and
+   after the plan (axes, points, program lines), measured versus
+   estimated, the questions for Nick, and what the Skipper holds now.
