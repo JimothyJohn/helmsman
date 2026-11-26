@@ -268,6 +268,9 @@ pub struct Chrome {
     pub files_fold_mine: bool,
     /// The Files tab's Examples section is folded away. Remembered.
     pub files_fold_examples: bool,
+    /// Help › Show hotkeys: every control with a shortcut wears it as a
+    /// superscript, to teach it. Remembered.
+    pub hotkeys: bool,
 }
 
 impl Default for Chrome {
@@ -303,6 +306,7 @@ impl Default for Chrome {
             io_fold_out: false,
             files_fold_mine: false,
             files_fold_examples: false,
+            hotkeys: false,
         }
     }
 }
@@ -347,7 +351,7 @@ impl Chrome {
             format!(" hidden={}", list(&self.hidden))
         };
         format!(
-            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} msgs={} light={} wrap={} advanced={} iogrid={} iofold={}{} filefold={}{}{colors}",
+            "dock=2 left={} right={} lefts={} pane={}{rights}{hidden} scan={} trend={} msgs={} light={} wrap={} advanced={} iogrid={} iofold={}{} filefold={}{} hotkeys={}{colors}",
             u8::from(self.left),
             u8::from(self.right),
             list(&self.lefts),
@@ -362,7 +366,8 @@ impl Chrome {
             u8::from(self.io_fold_in),
             u8::from(self.io_fold_out),
             u8::from(self.files_fold_mine),
-            u8::from(self.files_fold_examples)
+            u8::from(self.files_fold_examples),
+            u8::from(self.hotkeys)
         )
     }
 
@@ -386,6 +391,7 @@ impl Chrome {
                 Some(("light", v)) => c.light = v == "1",
                 Some(("wrap", v)) => c.wrap = v == "1",
                 Some(("advanced", v)) => c.advanced = v == "1",
+                Some(("hotkeys", v)) => c.hotkeys = v == "1",
                 Some(("iogrid", v)) => c.io_grid = v == "1",
                 Some(("iofold", v)) => {
                     c.io_fold_in = v.starts_with('1');

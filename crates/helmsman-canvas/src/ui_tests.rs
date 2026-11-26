@@ -8337,6 +8337,7 @@ mod diagram_menu;
 mod files_tab;
 mod find_replace;
 mod front;
+mod hotkeys;
 mod io_cards;
 mod io_names;
 mod label_overlap;

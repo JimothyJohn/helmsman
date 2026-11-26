@@ -5,6 +5,7 @@
 
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, Vec2};
 
+use crate::hotkeys::Action;
 use crate::st_view::TAP;
 use crate::st_view::brand::{GREEN, RED, YELLOW};
 use crate::theme::theme;
@@ -176,6 +177,7 @@ pub fn deploy(ui: &mut egui::Ui, enabled: bool) -> Response {
         Icon::Deploy,
         ink,
     );
+    badge(ui, rect, Some(Action::Deploy));
     r
 }
 
@@ -189,6 +191,21 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, on: bool, tip: &str)
     button_sized(ui, icon, SIZE, enabled, on, tip)
 }
 
+/// [`button`] for a control whose shortcut is not its glyph's usual one:
+/// `key` is the action Help › Show hotkeys writes on it, or none.
+pub fn button_keyed(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    enabled: bool,
+    on: bool,
+    tip: &str,
+    key: Option<Action>,
+) -> Response {
+    let r = button_raw(ui, icon, SIZE, enabled, on, tip);
+    badge(ui, r.rect, key);
+    r
+}
+
 /// [`button`] at `size` points a side: a glyph in a text row takes the
 /// row's height, not the toolbar's.
 pub fn button_sized(
@@ -199,6 +216,12 @@ pub fn button_sized(
     on: bool,
     tip: &str,
 ) -> Response {
+    let r = button_raw(ui, icon, size, enabled, on, tip);
+    badge(ui, r.rect, button_action(icon));
+    r
+}
+
+fn button_raw(ui: &mut egui::Ui, icon: Icon, size: f32, enabled: bool, on: bool, tip: &str) -> Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), sense);
     let r = r.on_hover_text(tip);
@@ -268,8 +291,98 @@ pub fn tab_sensed(
             Stroke::new(2.0, if alarm.is_some() { red } else { t.accent }),
         );
     }
+    badge(ui, rect, tab_action(icon));
     r
 }
+
+/// The shortcut a glyph button's icon stands for. Stop is left out: the
+/// simulation's, a box's and the Agent's differ, so its caller says
+/// ([`button_keyed`]).
+const fn button_action(icon: Icon) -> Option<Action> {
+    match icon {
+        Icon::Run | Icon::Pause => Some(Action::RunStop),
+        Icon::Step => Some(Action::Step),
+        Icon::Save => Some(Action::Save),
+        Icon::Deploy => Some(Action::Deploy),
+        Icon::Find => Some(Action::Find),
+        _ => None,
+    }
+}
+
+/// The view a tab's icon opens.
+const fn tab_action(icon: Icon) -> Option<Action> {
+    match icon {
+        Icon::Files => Some(Action::Files),
+        Icon::Devices => Some(Action::Devices),
+        Icon::Code => Some(Action::St),
+        Icon::Agent => Some(Action::Describe),
+        Icon::Io => Some(Action::Io),
+        Icon::Messages => Some(Action::Messages),
+        _ => None,
+    }
+}
+
+/// The id of the flag [`set_hotkeys`] sets and the list [`badges`] reads.
+fn flag() -> egui::Id {
+    egui::Id::NULL.with("show-hotkeys")
+}
+
+/// Called at the start of each frame with Help › Show hotkeys: clears the
+/// last frame's badges and says whether this frame draws any.
+pub fn set_hotkeys(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| {
+        d.insert_temp(flag(), on);
+        d.insert_temp(flag().with("list"), Vec::<(Action, String, Rect)>::new());
+    });
+}
+
+/// The superscripts drawn this frame: the action, its text and where.
+#[must_use]
+#[cfg(test)]
+pub fn badges(ctx: &egui::Context) -> Vec<(Action, String, Rect)> {
+    ctx.data(|d| d.get_temp(flag().with("list"))).unwrap_or_default()
+}
+
+/// Writes `action`'s shortcut over the top-right corner of `rect`, while
+/// Help › Show hotkeys is on: every glyph control draws through here, so
+/// one that gains a shortcut shows it with no new code. Painted over, on
+/// an opaque chip, and no widget: nothing moves and no click is eaten.
+pub fn badge(ui: &egui::Ui, rect: Rect, action: Option<Action>) {
+    let ctx = ui.ctx();
+    let Some(action) = action else { return };
+    if !ctx.data(|d| d.get_temp::<bool>(flag())).unwrap_or(false) {
+        return;
+    }
+    let text = crate::hotkeys::short(ctx, action);
+    if text.is_empty() {
+        return;
+    }
+    let t = theme(ui);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.clone(), egui::FontId::proportional(BADGE), t.accent);
+    let chip = Rect::from_min_size(
+        Pos2::new(rect.right() - galley.size().x - 6.0, rect.top() - 3.0),
+        galley.size() + Vec2::new(6.0, 2.0),
+    );
+    let p = ui.painter().with_clip_rect(ctx.content_rect());
+    p.rect_filled(chip, CornerRadius::same(4), t.bg);
+    p.rect_stroke(
+        chip,
+        CornerRadius::same(4),
+        Stroke::new(1.0, t.accent.gamma_multiply(0.6)),
+        egui::StrokeKind::Inside,
+    );
+    p.galley(chip.min + Vec2::new(3.0, 1.0), galley, t.accent);
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<(Action, String, Rect)>>(flag().with("list"))
+            .push((action, text, chip));
+    });
+}
+
+/// The superscript's text size, points: smaller than the page's text,
+/// which it is no part of, and a chip on a glyph.
+const BADGE: f32 = 13.0;
 
 /// `icon` drawn in `rect` in `color`, outside a button (the header's
 /// signed-in role).
