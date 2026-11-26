@@ -459,35 +459,39 @@ FACTS = [
 
 
 def reel() -> Film:
-    # Third pass, 2026-11-26: 30 s, the three moments only (say it, run it, plug it in). No claims:
-    # every caption is something the viewer can check on screen (the sentence, 11 s, 400 ms, Hz, the
-    # device it found, its channel count and protocols).
-    f = Film("reel", "Helmsman: say it, run it, plug it in", 30.0)
+    # Fourth pass, 2026-11-26, in Nick's order: plug it in, scan for devices, control devices, save your
+    # progress, and how little of it was the user's work. Captions are only what is on screen; the
+    # song is heard, from the real motor in Nick's demo (assets/bench/tune.wav, tools/bench.sh).
+    f = Film("reel", "Helmsman: plug it in, scan, control, save", 34.5)
     f.open(1.5)
-    # 1. Say it: Nick's sentence from the end of his demo, typed and sent (take 1.4-7.9)...
-    f.app(1.5, 6.2, "song", 1.6, views=[(0, *FULL), (0.8, 1.15, 0, 0)])
-    f.caps(1.5, 6.2, [(0.5, "One sentence, plain English", "w")], kicker="1  Say it", right=True)
-    # ...then what came back 11 s later: the program, its diagram, already running (take 19.6).
-    f.app(7.7, 3.0, "song", 19.6, views=[(0, *FULL)])
-    f.later(7.7, 1.2, "11 s later")
-    f.caps(7.7, 3.0, [(0.2, "Program written", "y"), (0.8, "Diagram drawn", "y"), (1.4, "Running", "y")], right=True)
-    f.sfx(7.75, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
-    # 2. Run it: the input on (take 26.6); the speed steps one note every 400 ms, in Hz.
-    f.app(10.7, 8.5, "song", 26.0, views=[(0, *FULL)])
-    # Captions on the left, over the chat reply, so the trace and its Hz readout stay clear.
-    f.caps(10.7, 8.5, [(0.8, "play = 1", "w"), (2.0, "A note every 400 ms", "w"),
-                       (3.6, "Mary had a little lamb", "y"), (5.4, "No motor plugged in", "w")],
-           kicker="2  Run it")
-    f.sfx(11.3, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
-    # 3. Plug it in: the controller (Skipper render until Nick's mockups exist), then the scan.
-    f.bench(19.2, 1.8, "skipper", folder="product")
-    f.caps(19.2, 1.8, [(0.1, "Skipper controller, 81 x 95 x 26 mm", "y")], kicker="3  Plug it in")
-    f.app(21.0, 6.0, "scan", 0.5, views=[(0, 1.1, 0, 0)])
-    f.caps(21.0, 6.0, [(0.4, "Scan: Moxa ioLogik E1213", "w"), (2.0, "40 channels, EtherNet/IP + Modbus TCP", "w"),
-                       (4.0, "Wired in one click", "y")], right=True)
-    f.sfx(25.0, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
-    f.end(27.0)
-    f.bed(0, 30.0, 0, 0.8, fade=1.2)
+    # 1. Plug it in: the Skipper on a panel, a hand plugs in its one cable, the LED goes green (H3 take).
+    f.bench(1.5, 6.0, "plug", media=1.0, zoom=(1.0, 1.04), folder="product")
+    f.caps(1.5, 6.0, [(4.2, "One cable: power and network", "y")], kicker="1  Plug it in")
+    # 2. Scan for devices: Scan, Add, Add (take 1.0, 3.8, 5.2), then it is wired.
+    f.app(7.5, 5.0, "scan", 0.8, views=[(0, *FULL)])
+    f.caps(7.5, 5.0, [(0.3, "Scan the network", "w"), (3.0, "Found one, 40 channels", "w"), (4.5, "Wired", "y")],
+           kicker="2  Scan for devices", right=True)
+    # 3. Control devices: the end of Nick's sentence going in (take 3.8-7.8), the program 11 s later...
+    f.app(12.5, 4.0, "song", 3.8, views=[(0, *FULL)])
+    f.caps(12.5, 4.0, [(0.3, "Say what it should do", "w")], kicker="3  Control devices", right=True)
+    f.app(16.5, 2.0, "song", 19.6, views=[(0, *FULL)])
+    f.later(16.5, 1.2, "11 s later")
+    f.sfx(16.55, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
+    # ...then the input on (take 26.6) and the song, heard from the real motor: its first note
+    # (0.4 s into tune.wav) lands on the trace's first step (take ~26.7).
+    f.app(18.5, 7.0, "song", 26.2, views=[(0, *FULL)])
+    f.caps(18.5, 7.0, [(0.6, "Sound: the real motor", "w")], right=True)
+    f.sfx(18.5 + (26.7 - 26.2) - 0.4, "bench/tune.wav", 7.4, 1.0, fade=0.5)
+    # 4. Save your progress: one step back (take 30.4), then every saved version (33.4).
+    f.app(25.5, 3.8, "history", 30.0, views=[(0, *FULL)])
+    f.caps(25.5, 3.8, [(0.4, "Back one version", "w"), (3.4, "Every change saved", "y")],
+           kicker="4  Save your progress", right=True)
+    # 5. How little of that was the user's: counted from the takes above.
+    f.stack(29.3, 2.7, "Your part", ["1 cable", "3 clicks", "1 sentence"])
+    f.end(32.0)
+    # The bed under everything but the song, which plays alone; back in on its own downbeat after.
+    f.bed(0, 18.5, 0, 0.8, fade=0.4)
+    f.bed(25.5, 9.0, 0, 0.8, fade=1.2)
     return f
 
 

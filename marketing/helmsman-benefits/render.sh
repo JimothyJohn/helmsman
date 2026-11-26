@@ -15,10 +15,10 @@ quality="${1:-delivery}"
 shift || true
 films=("$@")
 [ ${#films[@]} -gt 0 ] || films=(describe visualize test history typo connect install reel)
-# Only the test and connect loops use the bench shots; the reel renders without them.
+# The test and connect loops use the bench shots; the reel uses the tune's sound.
 for film in "${films[@]}"; do
     case "$film" in
-    test | connect) [ -f assets/bench/tune.wav ] || tools/bench.sh ;;
+    test | connect | reel) [ -f assets/bench/tune.wav ] || tools/bench.sh ;;
     esac
 done
 python3 build.py "${films[@]}"
