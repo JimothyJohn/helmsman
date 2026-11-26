@@ -459,45 +459,35 @@ FACTS = [
 
 
 def reel() -> Film:
-    # Revised 2026-11-26 from Nick's notes, then his second pass: slower, the app less cropped, built
-    # on three moments that make people sit up: SAY it (one sentence becomes the song program), RUN it
-    # (it plays Mary had a little lamb with no machine), PLUG it in (scan, and a device is wired).
-    f = Film("reel", "Helmsman: the benefits, shown in the app itself", 55.0)
-    f.open(3.0)
-    f.claim(3.0, 3.0, ["Say", "what", "it", "/", "should", "do"], "Say", "See it work")
-    # 1. Say it: Nick's sentence from the end of the demo, typed and sent (take 1.0-8.2)...
-    f.app(6.0, 7.2, "song", 1.0, views=[(0, *FULL), (0.6, 1.2, 0, 0)])
-    f.caps(6.0, 7.2, [(0.4, "Describe it in your own words", "w")], right=True)
-    # ...then the program it wrote, already running (the answer lands at take 19.0).
-    f.app(13.2, 5.3, "song", 19.6, views=[(0, 1.2, 0, 0)])
-    f.later(13.2, 1.5, "11 s later")
-    f.caps(13.2, 5.3, [(0.3, "It writes the program", "y"), (1.4, "and draws the diagram", "w")], right=True)
-    f.sfx(13.25, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
-    # 2. Run it: the input on (take 26.6), the speed steps through the notes, in Hz.
-    f.app(18.5, 10.0, "song", 25.4, views=[(0, 1.2, 0, 0), (1.9, 1.12, 120, 130)])
-    f.caps(18.5, 10.0, [(0.5, "Flip the input", "w"), (2.4, "It plays Mary had a little lamb", "y"),
-                        (5.0, "No machine connected", "w")], right=True)
-    f.sfx(20.75, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
-    f.gripes(28.5, 4.5, "What engineers are tired of", [
-        "Programming is hard",
-        "Crappy interfaces",
-        "Can't test without hardware",
-        "No version control",
-    ])
-    # Version control
-    f.app(33.0, 6.0, "history", 29.6, views=[(0, 1.12, 0, 0)])
-    f.caps(33.0, 6.0, [(0.3, "Version control, built in", "y"), (1.4, "Step back, see what changed", "w")], right=True)
-    # 3. Plug it in: the controller (a render of the Skipper case until Nick's mockups exist), then the scan.
-    f.bench(39.0, 2.0, "skipper", folder="product")
-    f.caps(39.0, 2.0, [(0.1, "Low-cost controller", "y")], kicker="The Skipper")
-    f.app(41.0, 6.5, "scan", 0.5, views=[(0, 1.12, 0, 0)])
-    f.caps(41.0, 6.5, [(0.3, "Scan the network", "w"), (2.9, "It knows the device", "w"), (4.4, "Wired in one click", "y")], right=True)
-    f.sfx(45.4, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
-    f.stack(47.5, 4.0, "What is built", FACTS)
-    f.end(51.5)
-    # The bed is 32.5 s with its first beat on frame 0: it starts again on bar 15 (28.0), under the complaints.
-    f.bed(0, 28.5, 0, 0.8)
-    f.bed(28.5, 26.5, 0, 0.8, fade=1.2)
+    # Third pass, 2026-11-26: 30 s, the three moments only (say it, run it, plug it in). No claims:
+    # every caption is something the viewer can check on screen (the sentence, 11 s, 400 ms, Hz, the
+    # device it found, its channel count and protocols).
+    f = Film("reel", "Helmsman: say it, run it, plug it in", 30.0)
+    f.open(1.5)
+    # 1. Say it: Nick's sentence from the end of his demo, typed and sent (take 1.4-7.9)...
+    f.app(1.5, 6.2, "song", 1.6, views=[(0, *FULL), (0.8, 1.15, 0, 0)])
+    f.caps(1.5, 6.2, [(0.5, "One sentence, plain English", "w")], kicker="1  Say it", right=True)
+    # ...then what came back 11 s later: the program, its diagram, already running (take 19.6).
+    f.app(7.7, 3.0, "song", 19.6, views=[(0, *FULL)])
+    f.later(7.7, 1.2, "11 s later")
+    f.caps(7.7, 3.0, [(0.2, "Program written", "y"), (0.8, "Diagram drawn", "y"), (1.4, "Running", "y")], right=True)
+    f.sfx(7.75, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
+    # 2. Run it: the input on (take 26.6); the speed steps one note every 400 ms, in Hz.
+    f.app(10.7, 8.5, "song", 26.0, views=[(0, *FULL)])
+    # Captions on the left, over the chat reply, so the trace and its Hz readout stay clear.
+    f.caps(10.7, 8.5, [(0.8, "play = 1", "w"), (2.0, "A note every 400 ms", "w"),
+                       (3.6, "Mary had a little lamb", "y"), (5.4, "No motor plugged in", "w")],
+           kicker="2  Run it")
+    f.sfx(11.3, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
+    # 3. Plug it in: the controller (Skipper render until Nick's mockups exist), then the scan.
+    f.bench(19.2, 1.8, "skipper", folder="product")
+    f.caps(19.2, 1.8, [(0.1, "Skipper controller, 81 x 95 x 26 mm", "y")], kicker="3  Plug it in")
+    f.app(21.0, 6.0, "scan", 0.5, views=[(0, 1.1, 0, 0)])
+    f.caps(21.0, 6.0, [(0.4, "Scan: Moxa ioLogik E1213", "w"), (2.0, "40 channels, EtherNet/IP + Modbus TCP", "w"),
+                       (4.0, "Wired in one click", "y")], right=True)
+    f.sfx(25.0, "sfx/impact-bass-1.mp3", 1.6, 0.55, fade=0.6)
+    f.end(27.0)
+    f.bed(0, 30.0, 0, 0.8, fade=1.2)
     return f
 
 
